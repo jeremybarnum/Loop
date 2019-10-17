@@ -13,6 +13,7 @@ import LoopCore
 
 /**
     Carb correction algorithm calculates the amount of carbs (in grams) needed to treat a predicted low (blood glucose predicted to fall below suspend threshold level). The calculation is based on glucose forecast scenarios, which include the effect of suspension of insulin delivery by setting the temporary basal rate to zero. If it is found that zero temping is insufficient to prevent the low, the algorithm issues a Carb Correction Notification, which includes a suggested amount of carbs needed to treat the predicted low.
+ Everything below down to line 459 is part of the Carb Correction Class, an object that I guess does all of the relevant work, i.e. calculate the predictions, determine whether a warnings is warranted, and issue the warnings
  */
 class CarbCorrection {
     
@@ -31,7 +32,7 @@ class CarbCorrection {
     /// Math is performed with glucose expressed in mg/dL
     private let unit = HKUnit.milligramsPerDeciliter
     
-    /// Effects must be set in LoopDataManager (Q: is there a cleaner way to do this?)
+    /*Effects must be set in LoopDataManager (Q: is there a cleaner way to do this?) JB Question: what is happening here? Are these variables not mostly already defined elsewhere?; if the things in brackets are data types or whatever and those are defined elsewhere,then why are those available and the variables not?*/
     public var insulinEffect: [GlucoseEffect]?
     public var carbEffect: [GlucoseEffect]?
     public var carbEffectFutureFood: [GlucoseEffect]?
@@ -56,8 +57,8 @@ class CarbCorrection {
     private var timeToLow: TimeInterval = TimeInterval.minutes(0.0)
     private var timeToLowExpiredCarbs: TimeInterval = TimeInterval.minutes(0.0)
     private var timeToLowExcessInsulin: TimeInterval = TimeInterval.minutes(0.0)
-    private var carbCorrectionNotification: CarbCorrectionNotification
-    private var counteraction: Counteraction?
+    private var carbCorrectionNotification: CarbCorrectionNotification //so is this a data type, and if so, where is that defined?
+    private var counteraction: Counteraction? //where are all these seemingly loop-specific types defined?
     private var modeledCarbEffectValue: Double?
     private var currentAbsorbingFraction: Double = 0.0
     private var averageAbsorbingFraction: Double = 0.0
@@ -75,14 +76,14 @@ class CarbCorrection {
      - Returns: Carb Correction customized with carb correction absorption time
      */
     init(_ carbCorrectionAbsorptionTime: TimeInterval) {
-        self.carbCorrectionAbsorptionTime = carbCorrectionAbsorptionTime
+        self.carbCorrectionAbsorptionTime = carbCorrectionAbsorptionTime /*oh I think I get the self thing.  To the extent that a class takes parameters that need initialization, and that you might want to initialize them by setting them to be equal to variables with the same name, you use self. thing to specify which is the property of the class or object */
         self.carbCorrectionNotification.grams = 0
         self.carbCorrectionNotification.lowPredictedIn = .minutes(0.0)
         self.carbCorrectionNotification.gramsRemaining = 0
         self.carbCorrectionNotification.type = .noCorrection
         self.lastNotificationDate = Date().addingTimeInterval(-notificationSnoozeTime)
     }
-    
+    //I still don't understand exactly why you need initializers but this is setting some initial values for the absorption class
     /**
      Calculates suggested carb correction and issues notification if need be
      - Parameters:
@@ -90,7 +91,7 @@ class CarbCorrection {
      - Returns:
      - suggestedCarbCorrection: Suggested carb correction in grams, if needed
      */
-    public func updateCarbCorrection(_ glucose: GlucoseValue) throws -> Int? {
+    public func updateCarbCorrection(_ glucose: GlucoseValue) throws -> Int? { //why the underscore there? something about the parameter name not being necessary/being ignored
 
         self.glucose = glucose
         suggestedCarbCorrection = nil
@@ -99,7 +100,7 @@ class CarbCorrection {
             carbCorrectionStatus = "Error: momentum effects not available"
             throw LoopError.missingDataError(.momentumEffect)
         }
-        
+       
         guard carbEffect != nil else {
             carbCorrectionStatus = "Error: carb effects not available"
             throw LoopError.missingDataError(.carbEffect)
@@ -160,8 +161,8 @@ class CarbCorrection {
         slowAbsorbingCheck = "No"
         excessInsulinAction = "No"
         if modeledCarbEffect > 0.0 {
-            currentAbsorbingFraction = currentCounteraction / modeledCarbEffect
-            averageAbsorbingFraction = averageCounteraction / modeledCarbEffect
+            currentAbsorbingFraction = currentCounteraction / modeledCarbEffect //here he is figuring out if absorption is less than half of the expected amount on a spot basis
+            averageAbsorbingFraction = averageCounteraction / modeledCarbEffect//and here he is doing the same on an average basis
             if (currentAbsorbingFraction < 0.5 * expireCarbsThresholdFraction && averageAbsorbingFraction < expireCarbsThresholdFraction) {
                 slowAbsorbingCheck = "Yes"
                 if useRetrospection {
@@ -170,7 +171,7 @@ class CarbCorrection {
                     effects = [.unexpiredCarbs, .insulin, .momentum, .zeroTemp]
                 }
                 do {
-                    (carbCorrectionExpiredCarbs, timeToLowExpiredCarbs) = try carbsRequired(effects)
+                    (carbCorrectionExpiredCarbs, timeToLowExpiredCarbs) = try carbsRequired(effects) //I don't get this
                 } catch {
                     carbCorrectionStatus = "Error: glucose prediction failed with effects: \(effects)."
                     throw LoopError.invalidData(details: "Could not compute carbs required when past carbs expired, updateCarbCorrection failed")
@@ -189,7 +190,7 @@ class CarbCorrection {
                     carbCorrectionStatus = "Error: glucose prediction failed with effects: \(effects)."
                     throw LoopError.invalidData(details: "Could not compute carbs required when excess insulin detected, updateCarbCorrection failed")
                 }
-                carbCorrection = carbCorrectionExcessInsulin
+                carbCorrection = carbCorrectionExcessInsulin // I don't understand why there is a different approach needed for slow absorbing versus excess insulin.  Seems insufficiently generic.
                 timeToLow = timeToLowExcessInsulin
             }
         }
@@ -297,19 +298,19 @@ class CarbCorrection {
         
         let startDate = currentDate.addingTimeInterval(carbCorrectionSkipInterval)
         let endDate = currentDate.addingTimeInterval(insulinActionDuration)
-        let predictedLowGlucose = predictedGlucoseForCarbCorrection.filter{ $0.startDate >= startDate && $0.startDate <= endDate && $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold}
-        if predictedLowGlucose.count > 0 {
+        let predictedLowGlucose = predictedGlucoseForCarbCorrection.filter{ $0.startDate >= startDate && $0.startDate <= endDate && $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold} //ok this is the key point - it checks if any parts of the future prediction are below the suspend threshold; I think this returns an array of times and values that are below the threshold - that must be what the filter does
+        if predictedLowGlucose.count > 0 { // I think this is looping through the array and for each low value doing something -  sort of an area under the curve thing to figure out how many carbs
             for glucose in predictedLowGlucose {
-                let glucoseTime = glucose.startDate.timeIntervalSince(currentDate)
-                let anticipatedAbsorbedFraction = min(1.0, glucoseTime.minutes / carbCorrectionAbsorptionTime.minutes)
+                let glucoseTime = glucose.startDate.timeIntervalSince(currentDate) //so I think for each low BG, it's calculating the distance from now.  This dot syntax on these variables are confusing
+                let anticipatedAbsorbedFraction = min(1.0, glucoseTime.minutes / carbCorrectionAbsorptionTime.minutes) //ok this is critical - he is making some statement about how quickly you want to come back up, I think.  But what is glucoseTime? oh right - he's saying - if I take the correction now, how much will have absorbed by that point. And he's saying - if all the carbs are absorbed before the first low, then fine, I can count all the carbs.  But if not, I need to assume only a fraction absorbs, which is equal to the earliest low.  But is there a problem? because if there is a lower low later,
                 let requiredCorrection = (( suspendThreshold - glucose.quantity.doubleValue(for: .milligramsPerDeciliter)) / anticipatedAbsorbedFraction) * carbRatio / sensitivity
                 if requiredCorrection > carbCorrection {
-                    carbCorrection = requiredCorrection
+                    carbCorrection = requiredCorrection // ah ok he loops through all the potential corrections and if the next one is bigger, he sets it to that.  So it's basically the max of the array.  It's a recognition that a less severe low that comes sooner is harder to treat; but usually, if you get enough warning, you can count on full absorption, and so you just treat the lowest low
                 }
             }
             if let lowGlucose = predictedGlucoseForCarbCorrection.first( where:
                 {$0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold} ) {
-                timeToLow = lowGlucose.startDate.timeIntervalSince(currentDate)
+                timeToLow = lowGlucose.startDate.timeIntervalSince(currentDate) // this is clear - computing the time to the first glucose below the suspend threshold
             }
         }
 
@@ -323,6 +324,8 @@ class CarbCorrection {
      - Returns:
      - prediction: Timeline of predicted glucose values
      - Throws: LoopError.missingDataError if glucose is missing or LoopError.configurationError(.insulinModel) if insulin model undefined
+     
+     is this the same prediction functions as usual? why is it fileprivate?
      */
     fileprivate func predictGlucose(using inputs: PredictionInputEffect) throws -> [GlucoseValue] {
         
@@ -361,7 +364,7 @@ class CarbCorrection {
             effects.append(self.zeroTempEffect!)
         }
         
-        var prediction = LoopMath.predictGlucose(startingAt: glucose, momentum: momentum, effects: effects)
+        var prediction = LoopMath.predictGlucose(startingAt: glucose, momentum: momentum, effects: effects)// this is key, so the prediction is the sum of the effects, which are calculated in their own functions
         
         let finalDate = glucose.startDate.addingTimeInterval(model.effectDuration)
         if let last = prediction.last, last.startDate < finalDate {
