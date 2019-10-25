@@ -418,28 +418,28 @@ class CarbCorrection {
      */
     fileprivate func recentInsulinCounteraction() -> Counteraction {
         
-        var counteraction: Counteraction
+        //var counteraction: Counteraction it's complaining this this isn't initialized before use.  It's supposed to be a tuple of recent and average counteraction.  But it's not clear how to initialize. in the meantime I just made the error handling bad.
         
         guard let latestGlucoseDate = glucose?.startDate else {
-            return( counteraction )
+            return(counteraction ?? (0,0)) //to do - this is some sort of error handling.  After fixing the chained optional in line 439 I replaced prior "return(counteraction)" with this thing.  I need to figure out what's actually going on and do it properly.  This is error handling anyway so not sure we need all these optionals.
         }
         
         guard let counterActions = insulinCounteractionEffects?.filterDateRange(latestGlucoseDate.addingTimeInterval(.minutes(-20)), latestGlucoseDate) else {
-            return( counteraction )
+            return( counteraction ?? (0,0))
         }
         
         let counteractionValues = counterActions.map( { $0.effect.quantity.doubleValue(for: unit) } )
         let counteractionTimes = counterActions.map( { $0.effect.startDate.timeIntervalSince(latestGlucoseDate).minutes } )
 
         guard counteractionValues.count > 2 else {
-            return( counteraction )
+            return( counteraction ?? (0,0) )
         }
         
         let insulinCounteractionFit = linearRegression(counteractionTimes, counteractionValues)
-        counteraction.currentCounteraction = insulinCounteractionFit(0.0)
-        counteraction.averageCounteraction = average( counteractionValues )
+        counteraction?.currentCounteraction = insulinCounteractionFit(0.0) //in this line and the line below I fixed some optional chaining thing per xcode suggesting by adding the question mark after counteraction.
+        counteraction?.averageCounteraction = average( counteractionValues )
         
-        return( counteraction )
+        return( counteraction ?? (0,0) )
     }
     
     fileprivate func average(_ input: [Double]) -> Double {
