@@ -831,26 +831,23 @@ extension LoopDataManager {
         // carb correction recommendation
         /* if suggestedCarbCorrection == nil {
             // wip-remove-LoopDataManager-implmentation try updateCarbCorrection()
-            carbCorrection.insulinEffect = insulinEffect
-            carbCorrection.carbEffect = carbEffect
-            carbCorrection.carbEffectFutureFood = carbEffectFutureFood
-            carbCorrection.glucoseMomentumEffect = glucoseMomentumEffect
-            carbCorrection.zeroTempEffect = zeroTempEffect
-            carbCorrection.insulinCounteractionEffects = insulinCounteractionEffects
-            carbCorrection.retrospectiveGlucoseEffect = retrospectiveGlucoseEffect
-            if let latestGlucose = self.glucoseStore.latestGlucose {
-                do {
-                     try suggestedCarbCorrection = carbCorrection.updateCarbCorrection(latestGlucose)
-                } catch let error {
-                    logger.error(error)
-                }
-            }
-        } */
-        do {
-                   try updateCarbCorrection()
-               } catch let error {
-                   logger.error(error)
-               }
+            CarbCorrection.insulinEffect = insulinEffect
+            CarbCorrection.carbEffect = carbEffect
+            CarbCorrection.carbEffectFutureFood = carbEffectFutureFood
+            CarbCorrection.glucoseMomentumEffect = glucoseMomentumEffect
+            CarbCorrection.zeroTempEffect = zeroTempEffect
+            CarbCorrection.insulinCounteractionEffects = insulinCounteractionEffects
+            CarbCorrection.retrospectiveGlucoseEffect = retrospectiveGlucoseEffect
+           
+        }
+*/
+        if let latestGlucose = self.glucoseStore.latestGlucose {
+                       do {
+                            try suggestedCarbCorrection = CarbCorrection.updateCarbCorrection(latestGlucose)
+                       } catch let error {
+                           logger.error(error)
+                       }
+                   }
     }
 
     private func notify(forChange context: LoopUpdateContext) {
