@@ -27,7 +27,7 @@ class CarbCorrection {
     private let carbCorrectionThreshold: Int = 3
     private let carbCorrectionSkipFraction: Double = 0.33
     private let expireCarbsThresholdFraction: Double = 0.7
-    private let notificationSnoozeTime: TimeInterval = .minutes(19)
+    private let notificationSnoozeTime: TimeInterval = .minutes(4)
     
     /// Math is performed with glucose expressed in mg/dL
     private let unit = HKUnit.milligramsPerDeciliter
