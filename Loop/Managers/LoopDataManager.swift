@@ -200,6 +200,8 @@ final class LoopDataManager {
         }
     }
     private var retrospectiveGlucoseDiscrepanciesSummed: [GlucoseChange]?
+    
+    private var zeroTempEffect: [GlucoseEffect] = []
 
     fileprivate var predictedGlucose: [PredictedGlucoseValue]? {
         didSet {
