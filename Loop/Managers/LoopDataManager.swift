@@ -32,6 +32,10 @@ final class LoopDataManager {
     weak var delegate: LoopDataManagerDelegate?
 
     private let standardCorrectionEffectDuration = TimeInterval.minutes(60.0)
+    
+    private let carbCorrection: CarbCorrection
+    
+    var suggestedCarbCorrection: Int?
 
     private let logger: CategoryLogger
 
@@ -89,6 +93,10 @@ final class LoopDataManager {
         )
 
         glucoseStore = GlucoseStore(healthStore: healthStore, cacheStore: cacheStore, cacheLength: .hours(24))
+        
+        let carbCorrectionAbsorptionTime: TimeInterval = carbStore.defaultAbsorptionTimes.fast * carbStore.absorptionTimeOverrun
+        
+        carbCorrection = CarbCorrection(carbCorrectionAbsorptionTime)
 
         retrospectiveCorrection = settings.enabledRetrospectiveCorrectionAlgorithm
 
@@ -156,6 +164,7 @@ final class LoopDataManager {
                 self.insulinEffect = nil
             }
             UserDefaults.appGroup?.loopSettings = settings
+            suggestedCarbCorrection = nil
             notify(forChange: .preferences)
             AnalyticsManager.shared.didChangeLoopSettings(from: oldValue, to: settings)
         }
@@ -238,6 +247,7 @@ final class LoopDataManager {
         }
         set {
             lockedLastLoopCompleted.value = newValue
+            self.suggestedCarbCorrection = nil
         }
     }
     private let lockedLastLoopCompleted: Locked<Date?>
@@ -829,21 +839,21 @@ extension LoopDataManager {
             }
         }
         // carb correction recommendation
-        /* if suggestedCarbCorrection == nil {
+         if suggestedCarbCorrection == nil {
             // wip-remove-LoopDataManager-implmentation try updateCarbCorrection()
-            CarbCorrection.insulinEffect = insulinEffect
-            CarbCorrection.carbEffect = carbEffect
-            CarbCorrection.carbEffectFutureFood = carbEffectFutureFood
-            CarbCorrection.glucoseMomentumEffect = glucoseMomentumEffect
-            CarbCorrection.zeroTempEffect = zeroTempEffect
-            CarbCorrection.insulinCounteractionEffects = insulinCounteractionEffects
-            CarbCorrection.retrospectiveGlucoseEffect = retrospectiveGlucoseEffect
+            carbCorrection.insulinEffect = insulinEffect
+            carbCorrection.carbEffect = carbEffect
+            carbCorrection.carbEffectFutureFood = carbEffectFutureFood
+            carbCorrection.glucoseMomentumEffect = glucoseMomentumEffect
+            carbCorrection.zeroTempEffect = zeroTempEffect
+            carbCorrection.insulinCounteractionEffects = insulinCounteractionEffects
+            carbCorrection.retrospectiveGlucoseEffect = retrospectiveGlucoseEffect
            
         }
-*/
+
         if let latestGlucose = self.glucoseStore.latestGlucose {
                        do {
-                            try suggestedCarbCorrection = CarbCorrection.updateCarbCorrection(latestGlucose)
+                            try suggestedCarbCorrection = carbCorrection.updateCarbCorrection(latestGlucose)
                        } catch let error {
                            logger.error(error)
                        }
