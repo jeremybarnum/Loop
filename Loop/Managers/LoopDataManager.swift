@@ -176,7 +176,7 @@ final class LoopDataManager {
         }
     }
     
-    private var carbEffectFutureFood: [GlucoseEffect]? //for carb correction purposes 
+    private var carbEffectFutureFood: [GlucoseEffect]? //for carb correction purposes
     
     private var insulinEffect: [GlucoseEffect]? {
         didSet {
@@ -809,7 +809,14 @@ extension LoopDataManager {
                 logger.error(error)
             }
         }
-
+//this do catch is added to update zero temp efects for carb correction purposes
+        
+        do {
+            try updateZeroTempEffect()
+        } catch let error {
+            logger.error(error)
+        }
+        
         if predictedGlucose == nil {
             do {
                 try updatePredictedGlucoseAndRecommendedBasalAndBolus()
@@ -817,6 +824,24 @@ extension LoopDataManager {
                 logger.error(error)
 
                 throw error
+            }
+        }
+        // carb correction recommendation
+        if suggestedCarbCorrection == nil {
+            // wip-remove-LoopDataManager-implmentation try updateCarbCorrection()
+            carbCorrection.insulinEffect = insulinEffect
+            carbCorrection.carbEffect = carbEffect
+            carbCorrection.carbEffectFutureFood = carbEffectFutureFood
+            carbCorrection.glucoseMomentumEffect = glucoseMomentumEffect
+            carbCorrection.zeroTempEffect = zeroTempEffect
+            carbCorrection.insulinCounteractionEffects = insulinCounteractionEffects
+            carbCorrection.retrospectiveGlucoseEffect = retrospectiveGlucoseEffect
+            if let latestGlucose = self.glucoseStore.latestGlucose {
+                do {
+                     try suggestedCarbCorrection = carbCorrection.updateCarbCorrection(latestGlucose)
+                } catch let error {
+                    logger.error(error)
+                }
             }
         }
     }
@@ -943,6 +968,30 @@ extension LoopDataManager {
         )
     }
 
+    /// Generates a glucose prediction effect of zero temping over duration of insulin action starting at current date
+    ///
+    /// - Throws: LoopError.configurationError
+    private func updateZeroTempEffect() throws {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+
+        // Get settings, otherwise clear effect and throw error
+        guard
+            let insulinModel = insulinModelSettings?.model,
+            let insulinSensitivity = insulinSensitivitySchedule,
+            let basalRateSchedule = basalRateSchedule
+            else {
+                zeroTempEffect = []
+                throw LoopError.configurationError(.generalSettings)
+        }
+
+        let insulinActionDuration = insulinModel.effectDuration
+
+        // use the new LoopKit method tempBasalGlucoseEffects to generate zero temp effects
+        let startZeroTempDose = Date()
+        let endZeroTempDose = startZeroTempDose.addingTimeInterval(insulinActionDuration)
+        let zeroTemp = DoseEntry(type: .tempBasal, startDate: startZeroTempDose, endDate: endZeroTempDose, value: 0.0, unit: DoseUnit.unitsPerHour)
+        zeroTempEffect = zeroTemp.tempBasalGlucoseEffects(insulinModel: insulinModel, insulinSensitivity: insulinSensitivity, basalRateSchedule: basalRateSchedule).filterDateRange(startZeroTempDose, endZeroTempDose)
+    }
     /// Runs the glucose prediction on the latest effect data.
     ///
     /// - Throws:
