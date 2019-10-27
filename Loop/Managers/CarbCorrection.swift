@@ -32,7 +32,7 @@ class CarbCorrection {
     /// Math is performed with glucose expressed in mg/dL
     private let unit = HKUnit.milligramsPerDeciliter
     
-    /*Effects must be set in LoopDataManager (Q: is there a cleaner way to do this?) JB Question: what is happening here? Are these variables not mostly already defined elsewhere?; if the things in brackets are data types or whatever and those are defined elsewhere,then why are those available and the variables not? Seems like maybe he stoppe this in the middle - when he was trying to figure out if he could implement this as a call to the function */
+    /*Effects must be set in LoopDataManager (Q: is there a cleaner way to do this?) JB Question: what is happening here? There seems to be some sort of choice between implementing in here and re-implementing the effects generation in LoopDataManager */
     public var insulinEffect: [GlucoseEffect]?
     public var carbEffect: [GlucoseEffect]?
     public var carbEffectFutureFood: [GlucoseEffect]?
