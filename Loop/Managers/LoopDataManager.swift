@@ -175,6 +175,9 @@ final class LoopDataManager {
             retrospectiveGlucoseDiscrepancies = nil
         }
     }
+    
+    private var carbEffectFutureFood: [GlucoseEffect]? //for carb correction purposes 
+    
     private var insulinEffect: [GlucoseEffect]? {
         didSet {
             predictedGlucose = nil
