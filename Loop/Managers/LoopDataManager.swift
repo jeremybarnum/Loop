@@ -762,6 +762,25 @@ extension LoopDataManager {
 
                 updateGroup.leave()
             }
+            
+            // effects due to future food entries, for carb-correction purposes
+            let sampleStart = lastGlucoseDate.addingTimeInterval(.minutes(-20.0))
+            updateGroup.enter()
+            carbStore.getGlucoseEffects(
+                start: sampleStart,
+                sampleStart: sampleStart,
+                effectVelocities: settings.dynamicCarbAbsorptionEnabled ? insulinCounteractionEffects : nil
+            ) { (result) -> Void in
+                switch result {
+                case .failure(let error):
+                    self.logger.error(error)
+                    self.carbEffectFutureFood = nil
+                case .success(let effects):
+                    self.carbEffectFutureFood = effects
+                }
+
+                updateGroup.leave()
+            }
         }
 
         if carbsOnBoard == nil {
