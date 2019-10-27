@@ -829,7 +829,7 @@ extension LoopDataManager {
             }
         }
         // carb correction recommendation
-        if suggestedCarbCorrection == nil {
+        /* if suggestedCarbCorrection == nil {
             // wip-remove-LoopDataManager-implmentation try updateCarbCorrection()
             carbCorrection.insulinEffect = insulinEffect
             carbCorrection.carbEffect = carbEffect
@@ -845,7 +845,12 @@ extension LoopDataManager {
                     logger.error(error)
                 }
             }
-        }
+        } */
+        do {
+                   try updateCarbCorrection()
+               } catch let error {
+                   logger.error(error)
+               }
     }
 
     private func notify(forChange context: LoopUpdateContext) {
