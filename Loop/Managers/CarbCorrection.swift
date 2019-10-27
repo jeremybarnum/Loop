@@ -361,7 +361,7 @@ class CarbCorrection {
         }
         
         if inputs.contains(.zeroTemp) {
-            effects.append(self.zeroTempEffect!)
+            effects.append(self.zeroTempEffect!) //TO DO: why is this force unwrapped? seems bad
         }
         
         var prediction = LoopMath.predictGlucose(startingAt: glucose, momentum: momentum, effects: effects)// this is key, so the prediction is the sum of the effects, which are calculated in their own functions
@@ -378,6 +378,8 @@ class CarbCorrection {
      Calculates modeled carb absorption
      - Returns:
      - modeledCarbEffect: modeled carb effect expressed as impact on blood glucose in mg/dL over the next 5 minutes
+     
+        I think he needs this to estimate future impact of partially absorbing carbs 
      */
     fileprivate func modeledCarbAbsorption() -> Double? {
         let effects: PredictionInputEffect = [.carbs]
