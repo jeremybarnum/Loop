@@ -1132,27 +1132,6 @@ extension LoopDataManager {
     }
 }
 
-/// Describes retrospective correction interface
-protocol RetrospectiveCorrection {
-    /// Standard effect duration, nominally set to 60 min
-    var standardEffectDuration: TimeInterval { get }
-
-    /// Overall retrospective correction effect
-    var totalGlucoseCorrectionEffect: HKQuantity? { get }
-
-    /**
-     Calculates overall correction effect based on timeline of discrepancies, and updates glucoseCorrectionEffect
-
-     - Parameters:
-        - glucose: Most recent glucose
-        - retrospectiveGlucoseDiscrepanciesSummed: Timeline of past discepancies
-
-     - Returns:
-        - retrospectiveGlucoseEffect: Glucose correction effects
-     */
-    func updateRetrospectiveCorrectionEffect(_ glucose: GlucoseValue, _ retrospectiveGlucoseDiscrepanciesSummed: [GlucoseChange]?) -> [GlucoseEffect]
-}
-
 /// Describes a view into the loop state
 protocol LoopState {
     /// The last-calculated carbs on board
