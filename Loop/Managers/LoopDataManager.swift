@@ -95,7 +95,11 @@ final class LoopDataManager {
         glucoseStore = GlucoseStore(healthStore: healthStore, cacheStore: cacheStore, cacheLength: .hours(24))
 
         retrospectiveCorrection = settings.enabledRetrospectiveCorrectionAlgorithm
+        
+        let carbCorrectionAbsorptionTime: TimeInterval = carbStore.defaultAbsorptionTimes.fast * carbStore.absorptionTimeOverrun
 
+        carbCorrection = CarbCorrection(carbCorrectionAbsorptionTime)
+        
         overrideHistory.delegate = self
         cacheStore.delegate = self
 
