@@ -75,8 +75,6 @@ final class LoopDataManager {
             overrideHistory: overrideHistory
         )
 
-        totalRetrospectiveCorrection = nil
-
         doseStore = DoseStore(
             healthStore: healthStore,
             cacheStore: cacheStore,
@@ -219,6 +217,7 @@ final class LoopDataManager {
         }
         set {
             self.logger.debug("Updating basalDeliveryState to \(String(describing: newValue))")
+            
             lockedBasalDeliveryState.value = newValue
         }
     }
@@ -954,7 +953,6 @@ extension LoopDataManager {
         guard let carbEffects = self.carbEffect else {
             retrospectiveGlucoseDiscrepancies = nil
             retrospectiveGlucoseEffect = []
-            totalRetrospectiveCorrection = nil
             throw LoopError.missingDataError(.carbEffect)
         }
 
