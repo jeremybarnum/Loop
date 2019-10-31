@@ -415,28 +415,28 @@ class CarbCorrection {
      */
     fileprivate func recentInsulinCounteraction() -> Counteraction {
         
-        var counteraction: Counteraction
+        var counteraction: Counteraction = (0,0) //JBQuestion: check decision.  Xcode was complaining the variable wasn't initialized before being used
         
         guard let latestGlucoseDate = glucose?.startDate else {
-            return( counteraction )
+            return(counteraction)
         }
         
         guard let counterActions = insulinCounteractionEffects?.filterDateRange(latestGlucoseDate.addingTimeInterval(.minutes(-20)), latestGlucoseDate) else {
-            return( counteraction )
+            return(counteraction)
         }
         
         let counteractionValues = counterActions.map( { $0.effect.quantity.doubleValue(for: unit) } )
         let counteractionTimes = counterActions.map( { $0.effect.startDate.timeIntervalSince(latestGlucoseDate).minutes } )
 
         guard counteractionValues.count > 2 else {
-            return( counteraction )
+            return(counteraction)
         }
         
         let insulinCounteractionFit = linearRegression(counteractionTimes, counteractionValues)
         counteraction.currentCounteraction = insulinCounteractionFit(0.0)
         counteraction.averageCounteraction = average( counteractionValues )
         
-        return( counteraction )
+        return(counteraction)
     }
     
     fileprivate func average(_ input: [Double]) -> Double {

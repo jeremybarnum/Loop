@@ -282,12 +282,12 @@ struct NotificationManager {
             notification.body = String(format: NSLocalizedString("--", comment: "Error format string"))
         }
 
-        notification.sound = UNNotificationSound.default()
-        notification.categoryIdentifier = Category.carbCorrectionRecommended.rawValue
+        notification.sound = .default
+        notification.categoryIdentifier = LoopNotificationCategory.carbCorrectionRecommended.rawValue
         notification.badge = NSNumber(value: gramsSuggested)
 
         let request = UNNotificationRequest(
-            identifier: Category.carbCorrectionRecommended.rawValue,
+            identifier: LoopNotificationCategory.carbCorrectionRecommended.rawValue,
             content: notification,
             trigger: nil
         )
@@ -297,25 +297,25 @@ struct NotificationManager {
 
     static func clearCarbCorrectionNotification() {
         let notification = UNMutableNotificationContent()
-        notification.categoryIdentifier = Category.carbCorrectionRecommended.rawValue
+        notification.categoryIdentifier = LoopNotificationCategory.carbCorrectionRecommended.rawValue
         notification.badge = NSNumber(value: 0)
         notification.sound = nil
         let clearBadge = UNNotificationRequest(
-            identifier: Category.carbCorrectionRecommended.rawValue,
+            identifier: LoopNotificationCategory.carbCorrectionRecommended.rawValue,
             content: notification,
             trigger: nil
         )
         UNUserNotificationCenter.current().add(clearBadge)
-        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [Category.carbCorrectionRecommended.rawValue])
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [LoopNotificationCategory.carbCorrectionRecommended.rawValue])
     }
 
     static func sendCarbCorrectionNotificationBadge(_ grams: Int) {
         let notification = UNMutableNotificationContent()
-        notification.categoryIdentifier = Category.carbCorrectionRecommended.rawValue
+        notification.categoryIdentifier = LoopNotificationCategory.carbCorrectionRecommended.rawValue
         notification.badge = NSNumber(value: grams)
         notification.sound = nil
         let setBadge = UNNotificationRequest(
-            identifier: Category.carbCorrectionRecommended.rawValue,
+            identifier: LoopNotificationCategory.carbCorrectionRecommended.rawValue,
             content: notification,
             trigger: nil
         )
