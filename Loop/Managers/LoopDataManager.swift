@@ -31,7 +31,7 @@ final class LoopDataManager {
 
     weak var delegate: LoopDataManagerDelegate?
 
-    private let carbCorrection: CarbCorrection
+    private let carbCorrection: CarbCorrection? //added question mark to test whether this solves the problem
 
     private let logger: CategoryLogger
 
