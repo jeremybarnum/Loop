@@ -1,7 +1,7 @@
 github "jeremybarnum/LoopKit" "dev-CCN"
-github "LoopKit/CGMBLEKit" "dev"
+github "jeremybarnum/CGMBLEKit" "dev-CCN"
 github "i-schuetz/SwiftCharts" == 0.6.5
-github "LoopKit/dexcom-share-client-swift" "dev"
-github "LoopKit/G4ShareSpy" "dev"
-github "ps2/rileylink_ios" "dev"
+github "jeremybarnum/dexcom-share-client-swift" "dev-CCN"
+github "jeremybarnum/G4ShareSpy" "dev-CCN"
+github "jeremybarnum/rileylink_ios" "dev-CCN"
 github "LoopKit/Amplitude-iOS" "decreepify"
