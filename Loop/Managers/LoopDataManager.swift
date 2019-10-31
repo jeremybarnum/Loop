@@ -248,6 +248,7 @@ final class LoopDataManager {
         }
         set {
             lockedLastLoopCompleted.value = newValue
+             self.suggestedCarbCorrection = nil
         }
     }
     private let lockedLastLoopCompleted: Locked<Date?>
