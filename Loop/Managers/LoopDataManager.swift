@@ -31,12 +31,6 @@ final class LoopDataManager {
 
     weak var delegate: LoopDataManagerDelegate?
 
-    private let standardCorrectionEffectDuration = TimeInterval.minutes(60.0)
-
-    private let integralRC: IntegralRetrospectiveCorrection
-
-    private let standardRC: StandardRetrospectiveCorrection
-
     private let carbCorrection: CarbCorrection
 
     private let logger: CategoryLogger
@@ -785,7 +779,7 @@ extension LoopDataManager {
             updateGroup.enter()
             carbStore.getGlucoseEffects(
                 start: sampleStart,
-                sampleStart: sampleStart,
+                //sampleStart: sampleStart, JB: check this merge decision
                 effectVelocities: settings.dynamicCarbAbsorptionEnabled ? insulinCounteractionEffects : nil
             ) { (result) -> Void in
                 switch result {
@@ -1365,11 +1359,6 @@ extension LoopDataManager {
                 String(reflecting: self.retrospectiveCorrection),
                 "",
             ]
-
-            self.integralRC.generateDiagnosticReport { (report) in
-                entries.append(report)
-                entries.append("")
-            }
 
             self.carbCorrection.generateDiagnosticReport { (report) in
                 entries.append(report)
