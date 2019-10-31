@@ -45,6 +45,13 @@ final class LoopDataManager {
             NotificationCenter.default.removeObserver(observer)
         }
     }
+    
+    // dm61 variables for mean square error calculation
+    var meanSquareError: Double = 0
+    var nMSE: Double = 0.0
+    var currentGlucoseValue: Double = 0
+    var previouslyPredictedGlucoseValue: Double = 0
+    var previouslyPredictedGlucose: GlucoseValue? = nil
 
     init(
         lastLoopCompleted: Date?,
