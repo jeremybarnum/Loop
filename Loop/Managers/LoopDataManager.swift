@@ -986,6 +986,31 @@ extension LoopDataManager {
             retrospectiveCorrectionGroupingInterval: settings.retrospectiveCorrectionGroupingInterval
         )
     }
+    
+    /// Generates a glucose prediction effect of zero temping over duration of insulin action starting at current date
+    ///
+    /// - Throws: LoopError.configurationError
+    private func updateZeroTempEffect() throws {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+
+        // Get settings, otherwise clear effect and throw error
+        guard
+            let insulinModel = insulinModelSettings?.model,
+            let insulinSensitivity = insulinSensitivitySchedule,
+            let basalRateSchedule = basalRateSchedule
+            else {
+                zeroTempEffect = []
+                throw LoopError.configurationError(.generalSettings)
+        }
+
+        let insulinActionDuration = insulinModel.effectDuration
+
+        // use the new LoopKit method tempBasalGlucoseEffects to generate zero temp effects
+        let startZeroTempDose = Date()
+        let endZeroTempDose = startZeroTempDose.addingTimeInterval(insulinActionDuration)
+        let zeroTemp = DoseEntry(type: .tempBasal, startDate: startZeroTempDose, endDate: endZeroTempDose, value: 0.0, unit: DoseUnit.unitsPerHour)
+        zeroTempEffect = zeroTemp.tempBasalGlucoseEffects(insulinModel: insulinModel, insulinSensitivity: insulinSensitivity, basalRateSchedule: basalRateSchedule).filterDateRange(startZeroTempDose, endZeroTempDose)
+    }
 
     /// Runs the glucose prediction on the latest effect data.
     ///
