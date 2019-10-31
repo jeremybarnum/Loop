@@ -186,12 +186,6 @@ class PredictionTableViewController: ChartsTableViewController, IdentifiableClas
         case inputs
     }
 
-    fileprivate enum SettingsRow: Int, CaseCountable {
-        case integralRetrospectiveCorrection
-
-        static let count = 1
-    }
-
     private var eventualGlucoseDescription: String?
 
     private var availableInputs: [PredictionInputEffect] = [.carbs, .insulin, .momentum, .retrospection, .zeroTemp]
