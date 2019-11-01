@@ -13,7 +13,7 @@ public struct LoopSettings: Equatable {
 
     public let dynamicCarbAbsorptionEnabled = true
 
-    public static let defaultCarbAbsorptionTimes: CarbStore.DefaultAbsorptionTimes = (fast: .hours(2), medium: .hours(3), slow: .hours(4))
+    public static let defaultCarbAbsorptionTimes: CarbStore.DefaultAbsorptionTimes = (fast: .hours(1.5), medium: .hours(3), slow: .hours(5))
 
     public var glucoseTargetRangeSchedule: GlucoseRangeSchedule?
 
@@ -66,7 +66,7 @@ public struct LoopSettings: Equatable {
     public func allowedSensitivityValues(for unit: HKUnit) -> [Double] {
         switch unit {
         case HKUnit.milligramsPerDeciliter:
-            return (10...500).map { Double($0) }
+            return (30...150).map { Double($0) }
         case HKUnit.millimolesPerLiter:
             return (6...270).map { Double($0) / 10.0 }
         default:
@@ -77,7 +77,7 @@ public struct LoopSettings: Equatable {
     public func allowedCorrectionRangeValues(for unit: HKUnit) -> [Double] {
         switch unit {
         case HKUnit.milligramsPerDeciliter:
-            return (60...180).map { Double($0) }
+            return (60...150).map { Double($0) }
         case HKUnit.millimolesPerLiter:
             return (33...100).map { Double($0) / 10.0 }
         default:
