@@ -33,6 +33,8 @@ final class LoopDataManager {
 
     private let carbCorrection: CarbCorrection
     
+    private let standardCorrectionEffectDuration = TimeInterval.minutes(60.0)
+
     private let logger: CategoryLogger
 
     var suggestedCarbCorrection: Int?
@@ -52,6 +54,9 @@ final class LoopDataManager {
     var currentGlucoseValue: Double = 0
     var previouslyPredictedGlucoseValue: Double = 0
     var previouslyPredictedGlucose: GlucoseValue? = nil
+
+    // Make overall retrospective effect available for display to the user
+    var totalRetrospectiveCorrection: HKQuantity?
 
     init(
         lastLoopCompleted: Date?,
@@ -81,6 +86,8 @@ final class LoopDataManager {
             insulinSensitivitySchedule: insulinSensitivitySchedule,
             overrideHistory: overrideHistory
         )
+
+        totalRetrospectiveCorrection = nil
 
         doseStore = DoseStore(
             healthStore: healthStore,
@@ -968,17 +975,21 @@ extension LoopDataManager {
         guard let carbEffects = self.carbEffect else {
             retrospectiveGlucoseDiscrepancies = nil
             retrospectiveGlucoseEffect = []
+            totalRetrospectiveCorrection = nil
             throw LoopError.missingDataError(.carbEffect)
         }
 
         // Get most recent glucose, otherwise clear effect and throw error
         guard let glucose = self.glucoseStore.latestGlucose else {
             retrospectiveGlucoseEffect = []
+            totalRetrospectiveCorrection = nil
             throw LoopError.missingDataError(.glucose)
         }
 
         // Get timeline of glucose discrepancies
         retrospectiveGlucoseDiscrepancies = insulinCounteractionEffects.subtracting(carbEffects, withUniformInterval: carbStore.delta)
+
+        retrospectiveCorrection = settings.enabledRetrospectiveCorrectionAlgorithm
 
         // Calculate retrospective correction
         retrospectiveGlucoseEffect = retrospectiveCorrection.computeEffect(
