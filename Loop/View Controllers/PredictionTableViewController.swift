@@ -244,7 +244,7 @@ class PredictionTableViewController: ChartsTableViewController, IdentifiableClas
             switch SettingsRow(rawValue: indexPath.row)! {
             case .integralRetrospectiveCorrection:
                 switchCell.textLabel?.text = NSLocalizedString("Integral Retrospective Correction", comment: "Title of the switch which toggles integral retrospective correction effects")
-                // switchCell.detailTextLabel?.text = NSLocalizedString("Respond more aggressively to persistent discrepancies between observed glucose movement and predictions based on carbohydrate and insulin models.", comment: "The description of the switch which toggles integral retrospective correction effects")
+                switchCell.detailTextLabel?.text = NSLocalizedString("Respond more aggressively to persistent discrepancies between observed glucose movement and predictions based on carbohydrate and insulin models.", comment: "The description of the switch which toggles integral retrospective correction effects")
                 switchCell.switch?.isOn = deviceManager.loopManager.settings.integralRetrospectiveCorrectionEnabled
                 switchCell.switch?.addTarget(self, action: #selector(integralRetrospectiveCorrectionSwitchChanged(_:)), for: .valueChanged)
 
