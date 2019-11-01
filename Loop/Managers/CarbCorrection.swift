@@ -27,6 +27,7 @@ class CarbCorrection {
     private let carbCorrectionSkipFraction: Double = 0.33
     private let expireCarbsThresholdFraction: Double = 0.7
     private let notificationSnoozeTime: TimeInterval = .minutes(19)
+    private let suppressDistantLowNotification: TimeInterval = .minutes(45) //TO DO: don't warn if low won't happen for 45 minutes
     
     /// Math is performed with glucose expressed in mg/dL
     private let unit = HKUnit.milligramsPerDeciliter
