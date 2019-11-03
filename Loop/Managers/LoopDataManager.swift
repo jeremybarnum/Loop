@@ -103,7 +103,7 @@ final class LoopDataManager {
 
         retrospectiveCorrection = settings.enabledRetrospectiveCorrectionAlgorithm
         
-        let carbCorrectionAbsorptionTime: TimeInterval = carbStore.defaultAbsorptionTimes.fast * carbStore.absorptionTimeOverrun
+        let carbCorrectionAbsorptionTime: TimeInterval = carbStore.defaultAbsorptionTimes.fast //* carbStore.absorptionTimeOverrun remove factor of 1.5 in assumption about absorption time of rescue carbs 
 
         carbCorrection = CarbCorrection(carbCorrectionAbsorptionTime)
         
