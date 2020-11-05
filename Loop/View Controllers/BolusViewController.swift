@@ -526,7 +526,7 @@ final class BolusViewController: ChartsTableViewController, IdentifiableClass, U
 
         let context = LAContext()
 
-        if context.canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) {
+        if false && context.canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) {
             context.evaluatePolicy(.deviceOwnerAuthentication,
                                    localizedReason: String(format: NSLocalizedString("Authenticate to Bolus %@ Units", comment: "The message displayed during a device authentication prompt for bolus specification"), amountString),
                                    reply: { (success, error) in
