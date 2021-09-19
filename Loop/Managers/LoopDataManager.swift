@@ -58,7 +58,7 @@ final class LoopDataManager: LoopSettingsAlerterDelegate {
             NotificationCenter.default.removeObserver(observer)
         }
     }
-
+    
     init(
         lastLoopCompleted: Date?,
         basalDeliveryState: PumpManagerStatus.BasalDeliveryState?,
@@ -105,7 +105,15 @@ final class LoopDataManager: LoopSettingsAlerterDelegate {
 
         self.automaticDosingStatus = automaticDosingStatus
 
-        retrospectiveCorrection = settings.enabledRetrospectiveCorrectionAlgorithm
+
+        /// Creates an instance of the enabled retrospective correction implementation
+        // retrospectiveCorrection = settings.enabledRetrospectiveCorrectionAlgorithm
+        switch settings.retrospectiveCorrection {
+        case .standardRetrospectiveCorrection:
+            retrospectiveCorrection = StandardRetrospectiveCorrection(effectDuration: LoopSettings.retrospectiveCorrectionEffectDuration)
+        case .integralRetrospectiveCorrection:
+            retrospectiveCorrection = StandardRetrospectiveCorrection(effectDuration: LoopSettings.retrospectiveCorrectionEffectDuration)
+        }
 
         loopSettingsAlerter = LoopSettingsAlerter(alertIssuer: alertIssuer)
         loopSettingsAlerter.delegate = self
