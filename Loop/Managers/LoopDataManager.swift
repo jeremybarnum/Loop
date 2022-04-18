@@ -342,6 +342,8 @@ final class LoopDataManager {
             predictedGlucose = nil
         }
     }
+    
+    private var zeroTempEffect: [GlucoseEffect] = []
 
     /// When combining retrospective glucose discrepancies, extend the window slightly as a buffer.
     private let retrospectiveCorrectionGroupingIntervalMultiplier = 1.01
@@ -1041,6 +1043,13 @@ extension LoopDataManager {
                 warnings.append(.fetchDataWarning(.retrospectiveGlucoseEffect(error: error)))
             }
         }
+        
+        do {
+            try updateZeroTempEffect()
+        } catch let error {
+            logger.error("%{public}@", String(describing: error))
+            warnings.append(.fetchDataWarning(.insulinEffect(error: error)))
+        }
 
         dosingDecision.appendWarnings(warnings.value)
 
@@ -1239,6 +1248,11 @@ extension LoopDataManager {
                 effects.append(retrospectiveGlucoseEffect)
             }
         }
+        
+        if inputs.contains(.zeroTemp) {
+            effects.append(zeroTempEffect)
+        }
+
 
         var prediction = LoopMath.predictGlucose(startingAt: glucose, momentum: momentum, effects: effects)
 
@@ -1497,6 +1511,33 @@ extension LoopDataManager {
             glucoseCorrectionRangeSchedule: settings.glucoseTargetRangeSchedule,
             retrospectiveCorrectionGroupingInterval: LoopConstants.retrospectiveCorrectionGroupingInterval
         )
+    }
+    
+    /// Generates a glucose prediction effect of zero temping over duration of insulin action starting at current date
+    ///
+    /// - Throws: LoopError.configurationError
+    private func updateZeroTempEffect() throws {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+
+        // Get settings, otherwise clear effect and throw error
+        guard
+            let insulinSensitivity = insulinSensitivityScheduleApplyingOverrideHistory,
+            let basalRateSchedule = basalRateScheduleApplyingOverrideHistory
+            else {
+                zeroTempEffect = []
+            throw LoopError.missingDataError(.insulinEffect)//not the best error but good enough 
+        }
+        
+        let insulinModelProvider = doseStore.insulinModelProvider
+        let insulinActionDuration = insulinModelProvider.model(for: pumpInsulinType).effectDuration
+
+        // generate effect of suspending insulin delivery by setting temp basal rate to zero
+        let startZeroTempDose = Date()// my attempt to replace now()
+        let endZeroTempDose = startZeroTempDose.addingTimeInterval(insulinActionDuration)
+        let zeroTemp = DoseEntry(type: .tempBasal, startDate: startZeroTempDose, endDate: endZeroTempDose, value: 0.0, unit: DoseUnit.unitsPerHour)
+        
+        zeroTempEffect = zeroTemp.tempBasalGlucoseEffects(insulinModelProvider: insulinModelProvider, longestEffectDuration: insulinActionDuration, insulinSensitivity: insulinSensitivity, basalRateSchedule: basalRateSchedule)
+        
     }
 
     /// Runs the glucose prediction on the latest effect data.
@@ -2029,6 +2070,13 @@ extension LoopDataManager {
                 "* GlucoseChange(start, end, mg/dL)",
                 (manager.retrospectiveGlucoseDiscrepanciesSummed ?? []).reduce(into: "", { (entries, entry) in
                     entries.append("* \(entry.startDate), \(entry.endDate), \(entry.quantity.doubleValue(for: .milligramsPerDeciliter))\n")
+                }),
+                "]",
+                
+                "zeroTempEffect: [",
+                "* GlucoseEffect(start, mg/dL)",
+                (manager.zeroTempEffect ).reduce(into: "", { (entries, entry) in
+                entries.append("* \(entry.startDate), \(entry.quantity.doubleValue(for: .milligramsPerDeciliter))\n")
                 }),
                 "]",
 
