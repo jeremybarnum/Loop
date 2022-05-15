@@ -33,9 +33,9 @@ final class StatusTableViewController: LoopChartsTableViewController {
     var onboardingManager: OnboardingManager!
 
     var closedLoopStatus: ClosedLoopStatus!
-    
+
     var alertPermissionsChecker: AlertPermissionsChecker!
-    
+
     var supportManager: SupportManager!
 
     lazy private var cancellables = Set<AnyCancellable>()
@@ -131,7 +131,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
         addScenarioStepGestureRecognizers()
 
         tableView.backgroundColor = .secondarySystemBackground
-    
+
     }
 
     override func didReceiveMemoryWarning() {
@@ -151,7 +151,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
         navigationController?.setToolbarHidden(false, animated: animated)
 
         alertPermissionsChecker.checkNow()
-        
+
         updateBolusProgress()
 
         onboardingManager.$isComplete
@@ -203,7 +203,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
     // MARK: - State
 
-    // This reflects whether the application is active 
+    // This reflects whether the application is active
     override var active: Bool {
         didSet {
             hudView?.loopCompletionHUD.assertTimer(active)
@@ -286,7 +286,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
         log.debug("[reloadData] for HealthKit unit preference change")
         refreshContext = RefreshContext.all
     }
-    
+
     private func registerCGMManager() {
         deviceManager.cgmManager?.removeStatusObserver(self)
         deviceManager.cgmManager?.addStatusObserver(self, queue: .main)
@@ -298,7 +298,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
         deviceManager.pumpManager?.removeStatusObserver(self)
         deviceManager.pumpManager?.addStatusObserver(self, queue: .main)
     }
-    
+
     private lazy var statusCharts = StatusChartsManager(colors: .primary, settings: .default, traitCollection: traitCollection)
 
     override func createChartsManager() -> ChartsManager {
@@ -688,7 +688,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
         return statusRowMode
     }
-    
+
     private func updateBannerRow(animated: Bool) {
         let warningWasVisible = tableView.numberOfRows(inSection: Section.alertPermissionsDisabledWarning.rawValue) != 0
         let showWarning = alertPermissionsChecker.showWarning
@@ -717,7 +717,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
         hudView?.cgmStatusHUD?.isVisible = hudIsVisible
 
         tableView.beginUpdates()
-        
+
         updateBannerRow(animated: animated)
 
         switch (hudWasVisible, hudIsVisible) {
@@ -824,7 +824,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
     }
 
     private class AlertPermissionsDisabledWarningCell: UITableViewCell {
-         
+
         override func updateConfiguration(using state: UICellConfigurationState) {
             super.updateConfiguration(using: state)
             let content = NSLocalizedString("Review Alert Permissions", comment: "Warning text for when Notifications or Critical Alerts Permissions is disabled")
@@ -842,7 +842,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
             accessoryType = .disclosureIndicator
         }
     }
-    
+
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         switch Section(rawValue: indexPath.section)! {
         case .alertPermissionsDisabledWarning:
@@ -1416,6 +1416,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
                                           isClosedLoopAllowed: closedLoopStatus.$isClosedLoopAllowed,
                                           supportInfoProvider: deviceManager,
                                           automaticDosingStrategy: deviceManager.loopManager.settings.automaticDosingStrategy,
+                                          isIntegralRetrospectiveCorrectionEnabled: deviceManager.loopManager.settings.isIntegralRetrospectiveCorrectionEnabled,
                                           availableSupports: supportManager.availableSupports,
                                           isOnboardingComplete: onboardingManager.isComplete,
                                           therapySettingsViewModelDelegate: deviceManager,
@@ -1973,7 +1974,7 @@ extension StatusTableViewController {
             log.error("Failure to setup pump manager: incomplete settings")
             return
         }
-        
+
         let settings = PumpManagerSetupSettings(maxBasalRateUnitsPerHour: maximumBasalRate,
                                                 maxBolusUnits: maxBolus,
                                                 basalSchedule: basalSchedule)
@@ -2005,13 +2006,20 @@ extension StatusTableViewController: SettingsViewModelDelegate {
     var closedLoopDescriptiveText: String? {
         return deviceManager.closedLoopDisallowedLocalizedDescription
     }
-
+    
     func dosingEnabledChanged(_ value: Bool) {
         deviceManager.loopManager.mutateSettings { settings in
             settings.dosingEnabled = value
         }
     }
+
     
+    func isIntegralRetrospectiveCorrectionEnabledChanged(_ value: Bool) { // I dont' know what this function is doing 
+        deviceManager.loopManager.mutateSettings { settings in
+            settings.isIntegralRetrospectiveCorrectionEnabled = value
+        }
+    }
+
     func dosingStrategyChanged(_ strategy: AutomaticDosingStrategy) {
         self.deviceManager.loopManager.mutateSettings { settings in
             settings.automaticDosingStrategy = strategy

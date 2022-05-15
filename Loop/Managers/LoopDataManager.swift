@@ -52,7 +52,7 @@ final class LoopDataManager {
 
     // References to registered notification center observers
     private var notificationObservers: [Any] = []
-    
+
     private var overrideIntentObserver: NSKeyValueObservation? = nil
 
     weak var presetActivationObserver: PresetActivationObserver?
@@ -100,12 +100,14 @@ final class LoopDataManager {
         self.now = now
 
         self.latestStoredSettingsProvider = latestStoredSettingsProvider
-        
+
         self.lockedPumpInsulinType = Locked(pumpInsulinType)
 
         self.automaticDosingStatus = automaticDosingStatus
 
-        retrospectiveCorrection = settings.enabledRetrospectiveCorrectionAlgorithm
+
+        //loopSettingsAlerter = LoopSettingsAlerter(alertIssuer: alertIssuer)
+        //loopSettingsAlerter.delegate = self
 
         overrideIntentObserver = UserDefaults.appGroup?.observe(\.intentExtensionOverrideToSet, options: [.new], changeHandler: {[weak self] (defaults, change) in
             guard let name = change.newValue??.lowercased(), let appGroup = UserDefaults.appGroup else {
@@ -116,7 +118,7 @@ final class LoopDataManager {
                 self?.logger.error("Override Intent: Unable to find override named '%s'", String(describing: name))
                 return
             }
-            
+
             self?.logger.default("Override Intent: setting override named '%s'", String(describing: name))
             self?.mutateSettings { settings in
                 if let oldPreset = settings.scheduleOverride {
@@ -190,6 +192,21 @@ final class LoopDataManager {
                 self.cancelActiveTempBasal(for: .closedLoopDisabled)
             } }
             .store(in: &cancellables)
+    }
+    
+    // Confined to dataAccessQueue
+    /// Creates an instance of the enabled retrospective correction implementation
+    fileprivate var retrospectiveCorrection: RetrospectiveCorrection {
+        
+        if (settings.isIntegralRetrospectiveCorrectionEnabled) {
+            
+            return IntegralRetrospectiveCorrection(effectDuration: TimeInterval(hours: 1))
+
+        } else {
+            
+            return StandardRetrospectiveCorrection(effectDuration: TimeInterval(hours: 1))
+        }
+        
     }
 
     /// Loop-related settings
@@ -274,6 +291,10 @@ final class LoopDataManager {
             }
         }
 
+        if newValue.isIntegralRetrospectiveCorrectionEnabled != oldValue.isIntegralRetrospectiveCorrectionEnabled {
+            self.retrospectiveGlucoseDiscrepancies = nil // unclear if this is working
+        }
+
         notify(forChange: .preferences)
         analyticsServicesManager.didChangeLoopSettings(from: oldValue, to: newValue)
     }
@@ -356,7 +377,7 @@ final class LoopDataManager {
         }
     }
     private let lockedBasalDeliveryState: Locked<PumpManagerStatus.BasalDeliveryState?>
-    
+
     var pumpInsulinType: InsulinType? {
         get {
             return lockedPumpInsulinType.value
@@ -390,8 +411,6 @@ final class LoopDataManager {
         }
     }
 
-    // Confined to dataAccessQueue
-    private var retrospectiveCorrection: RetrospectiveCorrection
 
     // MARK: - Background task management
 
@@ -499,7 +518,7 @@ extension LoopDataManager {
             }
         }
     }
-    
+
     /// Take actions to address how insulin is delivered when the CGM data is unreliable
     ///
     /// An active high temp basal (greater than the basal schedule) is cancelled when the CGM data is unreliable.
@@ -510,7 +529,7 @@ extension LoopDataManager {
         {
             return
         }
-              
+
         // Cancel active high temp basal
         cancelActiveTempBasal(for: .unreliableCGMData)
     }
@@ -520,7 +539,7 @@ extension LoopDataManager {
         case unreliableCGMData
         case maximumBasalRateChanged
     }
-    
+
     /// Cancel the active temp basal if it was automatically issued
     private func cancelActiveTempBasal(for reason: CancelActiveTempBasalReason) {
         guard case .tempBasal(let dose) = basalDeliveryState, (dose.automatic ?? true) else { return }
@@ -529,7 +548,7 @@ extension LoopDataManager {
             self.cancelActiveTempBasal(for: reason, completion: nil)
         }
     }
-    
+
     private func cancelActiveTempBasal(for reason: CancelActiveTempBasalReason, completion: ((Error?) -> Void)?) {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
 
@@ -657,7 +676,7 @@ extension LoopDataManager {
     func addPumpEvents(_ events: [NewPumpEvent], lastReconciliation: Date?, completion: @escaping (_ error: DoseStore.DoseStoreError?) -> Void) {
         doseStore.addPumpEvents(events, lastReconciliation: lastReconciliation) { (error) in
             completion(error)
-            
+
             self.dataAccessQueue.async {
                 if error == nil {
                     self.insulinEffect = nil
@@ -665,7 +684,7 @@ extension LoopDataManager {
             }
         }
     }
-    
+
     /// Logs a new external bolus insulin dose in the DoseStore and HealthKit
     ///
     /// - Parameters:
@@ -749,9 +768,9 @@ extension LoopDataManager {
     /// Executes an analysis of the current data, and recommends an adjustment to the current
     /// temporary basal rate.
     func loop() {
-        
+
         dataAccessQueue.async {
-            
+
             // Ensure Loop does not happen more than once every 4.5 minutes; this is important for correct usage of automatic bolus
             // partial application factor
             if let lastLoopCompleted = self.lastLoopCompleted, Date().timeIntervalSince(lastLoopCompleted) < TimeInterval(minutes: 4.5) {
@@ -1035,7 +1054,12 @@ extension LoopDataManager {
             return (dosingDecision, nil)
         }
 
+        print("EnableIRC:",settings.isIntegralRetrospectiveCorrectionEnabled, "RetrospectiveType:",retrospectiveCorrection)
+
+
         return updatePredictedGlucoseAndRecommendedDose(with: dosingDecision)
+
+
     }
 
     private func notify(forChange context: LoopUpdateContext) {
@@ -1376,7 +1400,7 @@ extension LoopDataManager {
 
         return try recommendManualBolus(forPrediction: predictedGlucose, consideringPotentialCarbEntry: potentialCarbEntry)
     }
-    
+
     /// - Throws: LoopError.configurationError
     private func recommendManualBolus<Sample: GlucoseValue>(forPrediction predictedGlucose: [Sample],
                                                       consideringPotentialCarbEntry potentialCarbEntry: NewCarbEntry?) throws -> ManualBolusRecommendation? {
@@ -1401,7 +1425,7 @@ extension LoopDataManager {
         let volumeRounder = { (_ units: Double) in
             return self.delegate?.loopDataManager(self, roundBolusVolume: units) ?? units
         }
-        
+
         let model = doseStore.insulinModelProvider.model(for: pumpInsulinType)
 
         return predictedGlucose.recommendedManualBolus(
@@ -1648,7 +1672,7 @@ extension LoopDataManager {
         guard abs(recommendedDose.date.timeIntervalSince(now())) < TimeInterval(minutes: 5) else {
             return LoopError.recommendationExpired(date: recommendedDose.date)
         }
-        
+
         if case .suspended = basalDeliveryState {
             return LoopError.pumpSuspended
         }
@@ -1666,16 +1690,16 @@ extension LoopDataManager {
         if delegateError == nil {
             self.recommendedAutomaticDose = nil
         }
-        
+
         return delegateError
     }
-    
+
     /// Ensures that the current temp basal is at or below the proposed max temp basal, and if not, cancel it before proceeding.
     /// Calls the completion with `nil` if successful, or an `error` if canceling the active temp basal fails.
     func maxTempBasalSavePreflight(unitsPerHour: Double?, completion: @escaping (_ error: Error?) -> Void) {
         guard let unitsPerHour = unitsPerHour else {
             completion(nil)
-            return 
+            return
         }
         dataAccessQueue.async {
             switch self.basalDeliveryState {
@@ -1881,11 +1905,11 @@ extension LoopDataManager {
             handler(self, LoopStateView(loopDataManager: self, updateError: updateError))
         }
     }
-    
+
     func generateSimpleBolusRecommendation(at date: Date, mealCarbs: HKQuantity?, manualGlucose: HKQuantity?) -> BolusDosingDecision? {
-        
+
         var dosingDecision = BolusDosingDecision(for: .simpleBolus)
-        
+
         var activeInsulin: Double? = nil
         let semaphore = DispatchSemaphore(value: 0)
         doseStore.insulinOnBoard(at: Date()) { (result) in
@@ -1896,7 +1920,7 @@ extension LoopDataManager {
             semaphore.signal()
         }
         semaphore.wait()
-        
+
         guard let iob = activeInsulin,
             let suspendThreshold = settings.suspendThreshold?.quantity,
             let carbRatioSchedule = carbStore.carbRatioScheduleApplyingOverrideHistory,
@@ -1906,13 +1930,13 @@ extension LoopDataManager {
             // Settings incomplete; should never get here; remove when therapy settings non-optional
             return nil
         }
-        
+
         if let scheduleOverride = settings.scheduleOverride, !scheduleOverride.hasFinished() {
             dosingDecision.scheduleOverride = settings.scheduleOverride
         }
 
         dosingDecision.glucoseTargetRangeSchedule = correctionRangeSchedule
-        
+
         var notice: BolusRecommendationNotice? = nil
         if let manualGlucose = manualGlucose {
             let glucoseValue = SimpleGlucoseValue(startDate: date, quantity: manualGlucose)
@@ -1925,7 +1949,7 @@ extension LoopDataManager {
                 }
             }
         }
-        
+
         let bolusAmount = SimpleBolusCalculator.recommendedInsulin(
             mealCarbs: mealCarbs,
             manualGlucose: manualGlucose,
@@ -1934,10 +1958,10 @@ extension LoopDataManager {
             correctionRangeSchedule: correctionRangeSchedule,
             sensitivitySchedule: sensitivitySchedule,
             at: date)
-        
+
         dosingDecision.manualBolusRecommendation = ManualBolusRecommendationWithDate(recommendation: ManualBolusRecommendation(amount: bolusAmount.doubleValue(for: .internationalUnit()), pendingInsulin: 0, notice: notice),
                                                                                      date: Date())
-        
+
         return dosingDecision
     }
 }
@@ -2198,7 +2222,7 @@ extension LoopDataManager {
                             basalRateSchedule: settings.basalRateSchedule,
                             defaultRapidActingModel: settings.defaultRapidActingModel)
         }
-        
+
         set {
             mutateSettings { settings in
                 settings.defaultRapidActingModel = newValue.defaultRapidActingModel
