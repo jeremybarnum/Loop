@@ -46,6 +46,7 @@ public struct SettingsView: View {
                 if FeatureFlags.automaticBolusEnabled {
                     dosingStrategySection
                 }
+                retrospectiveCorrectionSection
                 alertPermissionsSection
                 if viewModel.pumpManagerSettingsViewModel.isSetUp() {
                     therapySettingsSection
@@ -120,6 +121,10 @@ extension SettingsView {
         }
     }
 
+    private var retrospectiveCorrectionSection: some View {
+        Toggle (isOn: $viewModel.isIntegralRetrospectiveCorrectionEnabled) {Text ("Enable Integral Retrospective Correction")
+        }
+    }
     private var alertPermissionsSection: some View {
         Section {
             NavigationLink(destination:

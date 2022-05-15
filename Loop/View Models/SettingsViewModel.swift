@@ -51,6 +51,7 @@ public typealias PumpManagerViewModel = DeviceViewModel<PumpManagerDescriptor>
 
 public protocol SettingsViewModelDelegate: AnyObject {
     func dosingEnabledChanged(_: Bool)
+    func isIntegralRetrospectiveCorrectionEnabledChanged(_:Bool)
     func dosingStrategyChanged(_: DosingStrategy)
     func didTapIssueReport(title: String)
 }
@@ -84,6 +85,8 @@ public class SettingsViewModel: ObservableObject {
             delegate?.dosingStrategyChanged(dosingStrategy)
         }
     }
+    
+    @Published var isIntegralRetrospectiveCorrectionEnabled: Bool
 
     var closedLoopPreference: Bool {
        didSet {
@@ -105,6 +108,7 @@ public class SettingsViewModel: ObservableObject {
                 isClosedLoopAllowed: Published<Bool>.Publisher,
                 supportInfoProvider: SupportInfoProvider,
                 dosingStrategy: DosingStrategy,
+                isIntegralRetrospectiveCorrectionEnabled: Bool,
                 availableSupports: [SupportUI],
                 isOnboardingComplete: Bool,
                 therapySettingsViewModelDelegate: TherapySettingsViewModelDelegate?,
@@ -121,6 +125,7 @@ public class SettingsViewModel: ObservableObject {
         self.closedLoopPreference = initialDosingEnabled
         self.isClosedLoopAllowed = false
         self.dosingStrategy = dosingStrategy
+        self.isIntegralRetrospectiveCorrectionEnabled = isIntegralRetrospectiveCorrectionEnabled
         self.supportInfoProvider = supportInfoProvider
         self.availableSupports = availableSupports
         self.isOnboardingComplete = isOnboardingComplete
@@ -182,6 +187,7 @@ extension SettingsViewModel {
                                  isClosedLoopAllowed: FakeClosedLoopAllowedPublisher().$mockIsClosedLoopAllowed,
                                  supportInfoProvider: MockSupportInfoProvider(),
                                  dosingStrategy: .automaticBolus,
+                                 isIntegralRetrospectiveCorrectionEnabled: true,
                                  availableSupports: [],
                                  isOnboardingComplete: false,
                                  therapySettingsViewModelDelegate: nil,

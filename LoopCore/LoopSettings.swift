@@ -75,6 +75,8 @@ public struct LoopSettings: Equatable {
     public var suspendThreshold: GlucoseThreshold? = nil
     
     public var dosingStrategy: DosingStrategy = .tempBasalOnly
+    
+    public var isIntegralRetrospectiveCorrectionEnabled = true
 
     public var glucoseUnit: HKUnit? {
         return glucoseTargetRangeSchedule?.unit

@@ -1416,6 +1416,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
                                           isClosedLoopAllowed: closedLoopStatus.$isClosedLoopAllowed,
                                           supportInfoProvider: deviceManager,
                                           dosingStrategy: deviceManager.loopManager.settings.dosingStrategy,
+                                          isIntegralRetrospectiveCorrectionEnabled: deviceManager.loopManager.settings.isIntegralRetrospectiveCorrectionEnabled,
                                           availableSupports: supportManager.availableSupports,
                                           isOnboardingComplete: onboardingManager.isComplete,
                                           therapySettingsViewModelDelegate: deviceManager,
@@ -1993,9 +1994,16 @@ extension StatusTableViewController: BluetoothObserver {
 
 // MARK: - SettingsViewModel delegation
 extension StatusTableViewController: SettingsViewModelDelegate {
+    
     func dosingEnabledChanged(_ value: Bool) {
         deviceManager.loopManager.mutateSettings { settings in
             settings.dosingEnabled = value
+        }
+    }
+    
+    func isIntegralRetrospectiveCorrectionEnabledChanged(_ value: Bool) {
+        deviceManager.loopManager.mutateSettings { settings in
+            settings.isIntegralRetrospectiveCorrectionEnabled = value
         }
     }
     
