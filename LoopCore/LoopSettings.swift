@@ -76,7 +76,7 @@ public struct LoopSettings: Equatable {
     
     public var dosingStrategy: DosingStrategy = .tempBasalOnly
     
-    public var isIntegralRetrospectiveCorrectionEnabled = true
+    public var isIntegralRetrospectiveCorrectionEnabled: Bool
 
     public var glucoseUnit: HKUnit? {
         return glucoseTargetRangeSchedule?.unit
@@ -113,13 +113,15 @@ public struct LoopSettings: Equatable {
         glucoseTargetRangeSchedule: GlucoseRangeSchedule? = nil,
         maximumBasalRatePerHour: Double? = nil,
         maximumBolus: Double? = nil,
-        suspendThreshold: GlucoseThreshold? = nil
+        suspendThreshold: GlucoseThreshold? = nil,
+        isIntegralRetrospectiveCorrectionEnabled: Bool
     ) {
         self.dosingEnabled = dosingEnabled
         self.glucoseTargetRangeSchedule = glucoseTargetRangeSchedule
         self.maximumBasalRatePerHour = maximumBasalRatePerHour
         self.maximumBolus = maximumBolus
         self.suspendThreshold = suspendThreshold
+        self.isIntegralRetrospectiveCorrectionEnabled = isIntegralRetrospectiveCorrectionEnabled
     }
 }
 
@@ -246,7 +248,10 @@ extension LoopSettings: RawRepresentable {
         if let dosingEnabled = rawValue["dosingEnabled"] as? Bool {
             self.dosingEnabled = dosingEnabled
         }
-
+        
+        self.isIntegralRetrospectiveCorrectionEnabled = rawValue["isIntegralRetrospectiveCorrectionEnabled"] as? Bool
+           
+        
         if let glucoseRangeScheduleRawValue = rawValue["glucoseTargetRangeSchedule"] as? GlucoseRangeSchedule.RawValue {
             self.glucoseTargetRangeSchedule = GlucoseRangeSchedule(rawValue: glucoseRangeScheduleRawValue)
 
@@ -314,6 +319,7 @@ extension LoopSettings: RawRepresentable {
         raw["maximumBolus"] = maximumBolus
         raw["minimumBGGuard"] = suspendThreshold?.rawValue
         raw["dosingStrategy"] = dosingStrategy.rawValue
+        raw["isIntegralRetrospectiveCorrectionEnabled"] = isIntegralRetrospectiveCorrectionEnabled.rawValue
 
         return raw
     }
