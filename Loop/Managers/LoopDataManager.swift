@@ -233,6 +233,10 @@ final class LoopDataManager: LoopSettingsAlerterDelegate {
             self.carbsOnBoard = nil
             self.insulinEffect = nil
         }
+        
+        if newValue.isIntegralRetrospectiveCorrectionEnabled != oldValue.isIntegralRetrospectiveCorrectionEnabled {
+            self.retrospectiveGlucoseDiscrepancies = nil
+        }
 
         UserDefaults.appGroup?.loopSettings = newValue
         notify(forChange: .preferences)
