@@ -235,7 +235,7 @@ final class LoopDataManager: LoopSettingsAlerterDelegate {
         }
         
         if newValue.isIntegralRetrospectiveCorrectionEnabled != oldValue.isIntegralRetrospectiveCorrectionEnabled {
-            self.retrospectiveGlucoseDiscrepancies = nil
+            self.retrospectiveGlucoseDiscrepancies = nil // unclear if this is working 
         }
 
         UserDefaults.appGroup?.loopSettings = newValue
