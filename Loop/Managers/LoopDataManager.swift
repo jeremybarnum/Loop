@@ -1077,8 +1077,13 @@ extension LoopDataManager {
 
             return (dosingDecision, nil)
         }
+        
+        print("EnableIRC:",settings.isIntegralRetrospectiveCorrectionEnabled, "RetrospectiveType:",retrospectiveCorrection)
 
+        
         return updatePredictedGlucoseAndRecommendedDose(with: dosingDecision)
+        
+ 
     }
 
     private func notify(forChange context: LoopUpdateContext) {
