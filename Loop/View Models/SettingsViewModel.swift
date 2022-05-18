@@ -86,7 +86,11 @@ public class SettingsViewModel: ObservableObject {
         }
     }
     
-    @Published var isIntegralRetrospectiveCorrectionEnabled: Bool
+    @Published var isIntegralRetrospectiveCorrectionEnabled: Bool {
+        didSet {
+            delegate?.isIntegralRetrospectiveCorrectionEnabledChanged(isIntegralRetrospectiveCorrectionEnabled)
+        }
+    }
 
     var closedLoopPreference: Bool {
        didSet {
