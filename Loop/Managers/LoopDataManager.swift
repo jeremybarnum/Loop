@@ -104,16 +104,13 @@ final class LoopDataManager: LoopSettingsAlerterDelegate {
         self.lockedPumpInsulinType = Locked(pumpInsulinType)
 
         self.automaticDosingStatus = automaticDosingStatus
-
-
+        
         /// Creates an instance of the enabled retrospective correction implementation
-        // retrospectiveCorrection = settings.enabledRetrospectiveCorrectionAlgorithm
-        switch settings.retrospectiveCorrection {
-        case .standardRetrospectiveCorrection:
-            retrospectiveCorrection = StandardRetrospectiveCorrection(effectDuration: LoopSettings.retrospectiveCorrectionEffectDuration)
-        case .integralRetrospectiveCorrection:
-            retrospectiveCorrection = StandardRetrospectiveCorrection(effectDuration: LoopSettings.retrospectiveCorrectionEffectDuration)
-        }
+            if (settings.isIntegralRetrospectiveCorrectionEnabled) {
+                retrospectiveCorrection = IntegralRetrospectiveCorrection(effectDuration: TimeInterval(hours:3))
+            } else {
+                retrospectiveCorrection = StandardRetrospectiveCorrection(effectDuration: LoopSettings.retrospectiveCorrectionEffectDuration)
+            }
 
         loopSettingsAlerter = LoopSettingsAlerter(alertIssuer: alertIssuer)
         loopSettingsAlerter.delegate = self
