@@ -24,6 +24,22 @@ public extension DosingStrategy {
     }
 }
 
+public enum RetrospectiveCorrection: Int, CaseIterable {
+    case standardRetrospectiveCorrection
+    case integralRetrospectiveCorrection
+}
+
+public extension RetrospectiveCorrection {
+    var title: String {
+        switch self {
+        case .standardRetrospectiveCorrection:
+            return NSLocalizedString("Standard Retrospective Correction", comment: "Title string for standard retrospective correction")
+        case .integralRetrospectiveCorrection:
+            return NSLocalizedString("Integral Retrospective Correction", comment: "Title string for integral retrospective correction")
+        }
+    }
+}
+
 public struct LoopSettings: Equatable {
     public var isScheduleOverrideInfiniteWorkout: Bool {
         guard let scheduleOverride = scheduleOverride else { return false }
