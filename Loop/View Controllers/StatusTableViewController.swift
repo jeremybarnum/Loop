@@ -2001,7 +2001,7 @@ extension StatusTableViewController: SettingsViewModelDelegate {
         }
     }
     
-    func isIntegralRetrospectiveCorrectionEnabledChanged(_ value: Bool) {
+    func isIntegralRetrospectiveCorrectionEnabledChanged(_ value: Bool) { // I dont' know what this function is doing 
         deviceManager.loopManager.mutateSettings { settings in
             settings.isIntegralRetrospectiveCorrectionEnabled = value
         }
