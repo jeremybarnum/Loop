@@ -76,7 +76,7 @@ public struct LoopSettings: Equatable {
     
     public var dosingStrategy: DosingStrategy = .tempBasalOnly
     
-    public var isIntegralRetrospectiveCorrectionEnabled: Bool
+    public var isIntegralRetrospectiveCorrectionEnabled = true
 
     public var glucoseUnit: HKUnit? {
         return glucoseTargetRangeSchedule?.unit
@@ -114,7 +114,7 @@ public struct LoopSettings: Equatable {
         maximumBasalRatePerHour: Double? = nil,
         maximumBolus: Double? = nil,
         suspendThreshold: GlucoseThreshold? = nil,
-        isIntegralRetrospectiveCorrectionEnabled: Bool
+        isIntegralRetrospectiveCorrectionEnabled: Bool = true
     ) {
         self.dosingEnabled = dosingEnabled
         self.glucoseTargetRangeSchedule = glucoseTargetRangeSchedule
@@ -246,11 +246,9 @@ extension LoopSettings: RawRepresentable {
         }
 
         if let dosingEnabled = rawValue["dosingEnabled"] as? Bool {
-            self.dosingEnabled = dosingEnabled
-        }
-        
-        self.isIntegralRetrospectiveCorrectionEnabled = rawValue["isIntegralRetrospectiveCorrectionEnabled"] as? Bool
-           
+            self.dosingEnabled = dosingEnabled}
+            
+        if let isIntegralRetrospectiveCorrectionEnabled = rawValue["isIntegralRetrospectiveCorrectionEnabled"] as? Bool {self.isIntegralRetrospectiveCorrectionEnabled = isIntegralRetrospectiveCorrectionEnabled}
         
         if let glucoseRangeScheduleRawValue = rawValue["glucoseTargetRangeSchedule"] as? GlucoseRangeSchedule.RawValue {
             self.glucoseTargetRangeSchedule = GlucoseRangeSchedule(rawValue: glucoseRangeScheduleRawValue)
@@ -306,6 +304,7 @@ extension LoopSettings: RawRepresentable {
         var raw: RawValue = [
             "version": LoopSettings.version,
             "dosingEnabled": dosingEnabled,
+            "isIntegralRetrospectiveCorrectionEnable": isIntegralRetrospectiveCorrectionEnabled,
             "overridePresets": overridePresets.map { $0.rawValue }
         ]
 
@@ -319,7 +318,6 @@ extension LoopSettings: RawRepresentable {
         raw["maximumBolus"] = maximumBolus
         raw["minimumBGGuard"] = suspendThreshold?.rawValue
         raw["dosingStrategy"] = dosingStrategy.rawValue
-        raw["isIntegralRetrospectiveCorrectionEnabled"] = isIntegralRetrospectiveCorrectionEnabled.rawValue
 
         return raw
     }
