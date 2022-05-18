@@ -105,13 +105,6 @@ final class LoopDataManager: LoopSettingsAlerterDelegate {
 
         self.automaticDosingStatus = automaticDosingStatus
         
-        /// Creates an instance of the enabled retrospective correction implementation
-            if (settings.isIntegralRetrospectiveCorrectionEnabled) {
-                retrospectiveCorrection = IntegralRetrospectiveCorrection(effectDuration: TimeInterval(hours:3))
-            } else {
-                retrospectiveCorrection = StandardRetrospectiveCorrection(effectDuration: LoopSettings.retrospectiveCorrectionEffectDuration)
-            }
-
         loopSettingsAlerter = LoopSettingsAlerter(alertIssuer: alertIssuer)
         loopSettingsAlerter.delegate = self
 
@@ -353,8 +346,19 @@ final class LoopDataManager: LoopSettingsAlerterDelegate {
     }
 
     // Confined to dataAccessQueue
-    private var retrospectiveCorrection: RetrospectiveCorrection
+    /// Creates an instance of the enabled retrospective correction implementation
+    fileprivate var retrospectiveCorrection: RetrospectiveCorrection {
+        
+        if (settings.isIntegralRetrospectiveCorrectionEnabled) {
+            
+            return IntegralRetrospectiveCorrection(effectDuration: TimeInterval(hours: 3))
 
+        } else {
+            
+            return StandardRetrospectiveCorrection(effectDuration: TimeInterval(hours: 1))
+        }
+        
+    }
     // MARK: - Background task management
 
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
