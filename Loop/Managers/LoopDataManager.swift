@@ -351,7 +351,7 @@ final class LoopDataManager: LoopSettingsAlerterDelegate {
         
         if (settings.isIntegralRetrospectiveCorrectionEnabled) {
             
-            return IntegralRetrospectiveCorrection(effectDuration: TimeInterval(hours: 3))
+            return IntegralRetrospectiveCorrection(effectDuration: TimeInterval(hours: 1))
 
         } else {
             
