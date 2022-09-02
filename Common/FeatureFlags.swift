@@ -40,7 +40,7 @@ struct FeatureFlagConfiguration: Decodable {
 
     fileprivate init() {
         // Swift compiler config is inverse, since the default state is enabled.
-        #if ADAPTIVE_RATE_NONLINEAR_CARB_MODEL_DISABLED
+        #if ADAPTIVE_RATE_NONLINEAR_DISABLED
         self.adaptiveRateNonlinearCarbModelEnabled = false
         #else
         self.adaptiveRateNonlinearCarbModelEnabled = true
