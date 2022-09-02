@@ -221,7 +221,7 @@ extension FeatureFlagConfiguration : CustomDebugStringConvertible {
             "* afrezzaInsulinModelEnabled: \(afrezzaInsulinModelEnabled)",
             "* includeServicesInSettingsEnabled: \(includeServicesInSettingsEnabled)",
             "* mockTherapySettingsEnabled: \(mockTherapySettingsEnabled)",
-            "* nonlinearCarbModelEnabled: \(nonlinearCarbModelEnabled)",
+            "* adaptiveRateNonlinearCarbModelEnabled: \(adaptiveRateNonlinearCarbModelEnabled)",
             "* observeHealthKitCarbSamplesFromOtherApps: \(observeHealthKitCarbSamplesFromOtherApps)",
             "* observeHealthKitDoseSamplesFromOtherApps: \(observeHealthKitDoseSamplesFromOtherApps)",
             "* observeHealthKitGlucoseSamplesFromOtherApps: \(observeHealthKitGlucoseSamplesFromOtherApps)",
