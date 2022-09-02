@@ -11,6 +11,7 @@ import Foundation
 let FeatureFlags = FeatureFlagConfiguration()
 
 struct FeatureFlagConfiguration: Decodable {
+    let adaptiveRateNonlinearCarbModelEnabled: Bool
     let automaticBolusEnabled: Bool
     let cgmManagerCategorizeManualGlucoseRangeEnabled: Bool
     let criticalAlertsEnabled: Bool
@@ -22,7 +23,6 @@ struct FeatureFlagConfiguration: Decodable {
     let manualDoseEntryEnabled: Bool
     let insulinDeliveryReservoirViewEnabled: Bool
     let mockTherapySettingsEnabled: Bool
-    let nonlinearCarbModelEnabled: Bool
     let observeHealthKitCarbSamplesFromOtherApps: Bool
     let observeHealthKitDoseSamplesFromOtherApps: Bool
     let observeHealthKitGlucoseSamplesFromOtherApps: Bool
@@ -39,6 +39,13 @@ struct FeatureFlagConfiguration: Decodable {
 
 
     fileprivate init() {
+        // Swift compiler config is inverse, since the default state is enabled.
+        #if ADAPTIVE_RATE_NONLINEAR_CARB_MODEL_DISABLED
+        self.adaptiveRateNonlinearCarbModelEnabled = false
+        #else
+        self.adaptiveRateNonlinearCarbModelEnabled = true
+        #endif
+        
         // Swift compiler config is inverse, since the default state is enabled.
         #if AUTOMATIC_BOLUS_DISABLED
         self.automaticBolusEnabled = false
@@ -120,12 +127,7 @@ struct FeatureFlagConfiguration: Decodable {
         self.mockTherapySettingsEnabled = false
         #endif
         
-        // Swift compiler config is inverse, since the default state is enabled.
-        #if NONLINEAR_CARB_MODEL_DISABLED
-        self.nonlinearCarbModelEnabled = false
-        #else
-        self.nonlinearCarbModelEnabled = true
-        #endif
+
         
         #if OBSERVE_HEALTH_KIT_CARB_SAMPLES_FROM_OTHER_APPS_ENABLED
         self.observeHealthKitCarbSamplesFromOtherApps = true
