@@ -60,7 +60,7 @@ public struct SettingsView: View {
                     servicesSection
                 }
                 supportSection
-                //TODO: why do I get a too many calls error.  It's as if body has a specified number of members
+
                if let profileExpiration = Bundle.main.profileExpiration, FeatureFlags.profileExpirationSettingsViewEnabled {
                     profileExpirationSection(profileExpiration: profileExpiration)
                 }
