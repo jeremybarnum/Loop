@@ -36,7 +36,7 @@ public struct SettingsView: View {
         self.versionUpdateViewModel = viewModel.versionUpdateViewModel
     }
     
-    public var body: some View {
+ /*   public var body: some View {
         NavigationView {
             List {
                 loopSection
@@ -46,8 +46,8 @@ public struct SettingsView: View {
                 if FeatureFlags.automaticBolusEnabled {
                     dosingStrategySection
                 }
-                //TODO: adding this makes it complain about too many arguments somewhere
-                //retrospectiveCorrectionSection
+                //TODO: adding retrospectiveCorrectionSection makes it complain about too many arguments; removing any section fixes it.  It seems as if the List has a maximum number of members.  Where is that specified?
+                retrospectiveCorrectionSection
                 alertManagementSection
                 if viewModel.pumpManagerSettingsViewModel.isSetUp() {
                     configurationSection
@@ -70,7 +70,48 @@ public struct SettingsView: View {
             .navigationBarItems(trailing: dismissButton)
         }
     }
+    */
     
+    public var body: some View {
+        NavigationView {
+            VStack {
+                List {
+                    loopSection
+                    if versionUpdateViewModel.softwareUpdateAvailable {
+                        softwareUpdateSection
+                    }
+                    if FeatureFlags.automaticBolusEnabled {
+                        dosingStrategySection
+                    }
+                    retrospectiveCorrectionSection
+                    alertManagementSection
+                    if viewModel.pumpManagerSettingsViewModel.isSetUp() {
+                        configurationSection
+                    }
+                }
+                .insetGroupedListStyle()
+
+                List {
+                    deviceSettingsSection
+                    if viewModel.pumpManagerSettingsViewModel.isTestingDevice || viewModel.cgmManagerSettingsViewModel.isTestingDevice {
+                        deleteDataSection
+                    }
+                    if viewModel.servicesViewModel.showServices {
+                        servicesSection
+                    }
+                    supportSection
+
+                    if let profileExpiration = Bundle.main.profileExpiration, FeatureFlags.profileExpirationSettingsViewEnabled {
+                        profileExpirationSection(profileExpiration: profileExpiration)
+                    }
+                }
+                .insetGroupedListStyle()
+            }
+            .navigationBarTitle(Text(NSLocalizedString("Settings", comment: "Settings screen title")))
+            .navigationBarItems(trailing: dismissButton)
+        }
+    }
+
     private var closedLoopToggleState: Binding<Bool> {
         Binding(
             get: { self.viewModel.isClosedLoopAllowed && self.viewModel.closedLoopPreference },
