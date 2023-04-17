@@ -122,6 +122,7 @@ public class SettingsViewModel: ObservableObject {
                 isClosedLoopAllowed: Published<Bool>.Publisher,
                 supportInfoProvider: SupportInfoProvider,
                 automaticDosingStrategy: AutomaticDosingStrategy,
+                isIntegralRetrospectiveCorrectionEnabled: Bool,
                 availableSupports: [SupportUI],
                 isOnboardingComplete: Bool,
                 therapySettingsViewModelDelegate: TherapySettingsViewModelDelegate?,
@@ -139,6 +140,7 @@ public class SettingsViewModel: ObservableObject {
         self.closedLoopPreference = initialDosingEnabled
         self.isClosedLoopAllowed = false
         self.automaticDosingStrategy = automaticDosingStrategy
+        self.isIntegralRetrospectiveCorrectionEnabled = isIntegralRetrospectiveCorrectionEnabled
         self.supportInfoProvider = supportInfoProvider
         self.availableSupports = availableSupports
         self.isOnboardingComplete = isOnboardingComplete
@@ -201,6 +203,7 @@ extension SettingsViewModel {
                                  isClosedLoopAllowed: FakeClosedLoopAllowedPublisher().$mockIsClosedLoopAllowed,
                                  supportInfoProvider: MockSupportInfoProvider(),
                                  automaticDosingStrategy: .automaticBolus,
+                                 isIntegralRetrospectiveCorrectionEnabled: true,
                                  availableSupports: [],
                                  isOnboardingComplete: false,
                                  therapySettingsViewModelDelegate: nil,
