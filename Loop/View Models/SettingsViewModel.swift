@@ -94,6 +94,12 @@ public class SettingsViewModel: ObservableObject {
             delegate?.dosingStrategyChanged(automaticDosingStrategy)
         }
     }
+    
+    @Published var isIntegralRetrospectiveCorrectionEnabled: Bool {
+        didSet {
+            delegate?.isIntegralRetrospectiveCorrectionEnabledChanged(isIntegralRetrospectiveCorrectionEnabled)
+        }
+    }
 
     var closedLoopPreference: Bool {
        didSet {
