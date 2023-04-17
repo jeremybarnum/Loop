@@ -1464,6 +1464,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
                                           isClosedLoopAllowed: closedLoopStatus.$isClosedLoopAllowed,
                                           supportInfoProvider: deviceManager,
                                           automaticDosingStrategy: deviceManager.loopManager.settings.automaticDosingStrategy,
+                                          isIntegralRetrospectiveCorrectionEnabled: deviceManager.loopManager.settings.isIntegralRetrospectiveCorrectionEnabled,
                                           availableSupports: supportManager.availableSupports,
                                           isOnboardingComplete: onboardingManager.isComplete,
                                           therapySettingsViewModelDelegate: deviceManager,
@@ -2059,7 +2060,11 @@ extension StatusTableViewController: SettingsViewModelDelegate {
             settings.dosingEnabled = value
         }
     }
-    
+    func isIntegralRetrospectiveCorrectionEnabledChanged(_ value: Bool) { // I dont' know what this function is doing
+        deviceManager.loopManager.mutateSettings { settings in
+            settings.isIntegralRetrospectiveCorrectionEnabled = value
+        }
+    }
     func dosingStrategyChanged(_ strategy: AutomaticDosingStrategy) {
         self.deviceManager.loopManager.mutateSettings { settings in
             settings.automaticDosingStrategy = strategy
