@@ -19,6 +19,11 @@ public extension AutomaticDosingStrategy {
     }
 }
 
+public enum RetrospectiveCorrection: Int, CaseIterable {
+    case standardRetrospectiveCorrection
+    case integralRetrospectiveCorrection
+}
+
 public struct LoopSettings: Equatable {
     public var isScheduleOverrideInfiniteWorkout: Bool {
         guard let scheduleOverride = scheduleOverride else { return false }
@@ -78,6 +83,10 @@ public struct LoopSettings: Equatable {
     public var glucoseUnit: HKUnit? {
         return glucoseTargetRangeSchedule?.unit
     }
+    
+    public var retrospectiveCorrection: RetrospectiveCorrection = .integralRetrospectiveCorrection
+
+    public var isIntegralRetrospectiveCorrectionEnabled = true
 
     public init(
         dosingEnabled: Bool = false,
@@ -94,7 +103,8 @@ public struct LoopSettings: Equatable {
         maximumBolus: Double? = nil,
         suspendThreshold: GlucoseThreshold? = nil,
         automaticDosingStrategy: AutomaticDosingStrategy = .tempBasalOnly,
-        defaultRapidActingModel: ExponentialInsulinModelPreset? = nil
+        defaultRapidActingModel: ExponentialInsulinModelPreset? = nil,
+        isIntegralRetrospectiveCorrectionEnabled: Bool = true
     ) {
         self.dosingEnabled = dosingEnabled
         self.glucoseTargetRangeSchedule = glucoseTargetRangeSchedule
@@ -111,6 +121,7 @@ public struct LoopSettings: Equatable {
         self.suspendThreshold = suspendThreshold
         self.automaticDosingStrategy = automaticDosingStrategy
         self.defaultRapidActingModel = defaultRapidActingModel
+        self.isIntegralRetrospectiveCorrectionEnabled = isIntegralRetrospectiveCorrectionEnabled
     }
 }
 
@@ -229,6 +240,8 @@ extension LoopSettings: RawRepresentable {
         if let dosingEnabled = rawValue["dosingEnabled"] as? Bool {
             self.dosingEnabled = dosingEnabled
         }
+        
+        if let isIntegralRetrospectiveCorrectionEnabled = rawValue["isIntegralRetrospectiveCorrectionEnabled"] as? Bool {self.isIntegralRetrospectiveCorrectionEnabled = isIntegralRetrospectiveCorrectionEnabled}
 
         if let glucoseRangeScheduleRawValue = rawValue["glucoseTargetRangeSchedule"] as? GlucoseRangeSchedule.RawValue {
             self.glucoseTargetRangeSchedule = GlucoseRangeSchedule(rawValue: glucoseRangeScheduleRawValue)
@@ -283,7 +296,8 @@ extension LoopSettings: RawRepresentable {
         var raw: RawValue = [
             "version": LoopSettings.version,
             "dosingEnabled": dosingEnabled,
-            "overridePresets": overridePresets.map { $0.rawValue }
+            "overridePresets": overridePresets.map { $0.rawValue },
+            "isIntegralRetrospectiveCorrectionEnabled": isIntegralRetrospectiveCorrectionEnabled
         ]
 
         raw["glucoseTargetRangeSchedule"] = glucoseTargetRangeSchedule?.rawValue
@@ -295,6 +309,7 @@ extension LoopSettings: RawRepresentable {
         raw["maximumBolus"] = maximumBolus
         raw["minimumBGGuard"] = suspendThreshold?.rawValue
         raw["dosingStrategy"] = automaticDosingStrategy.rawValue
+        
 
         return raw
     }
