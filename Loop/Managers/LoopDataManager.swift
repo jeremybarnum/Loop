@@ -456,7 +456,7 @@ final class LoopDataManager {
     }
 
     // Confined to dataAccessQueue
-    private var retrospectiveCorrection: RetrospectiveCorrection
+   // private var retrospectiveCorrection: RetrospectiveCorrection
 
     // MARK: - Background task management
 
