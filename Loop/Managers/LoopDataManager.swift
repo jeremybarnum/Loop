@@ -123,7 +123,7 @@ final class LoopDataManager {
 
         self.trustedTimeOffset = trustedTimeOffset
 
-        retrospectiveCorrection = settings.enabledRetrospectiveCorrectionAlgorithm
+        //retrospectiveCorrection = settings.enabledRetrospectiveCorrectionAlgorithm
 
         overrideIntentObserver = UserDefaults.appGroup?.observe(\.intentExtensionOverrideToSet, options: [.new], changeHandler: {[weak self] (defaults, change) in
             guard let name = change.newValue??.lowercased(), let appGroup = UserDefaults.appGroup else {
@@ -220,6 +220,21 @@ final class LoopDataManager {
             } }
             .store(in: &cancellables)
     }
+    
+    // Confined to dataAccessQueue
+    /// Creates an instance of the enabled retrospective correction implementation
+    fileprivate var retrospectiveCorrection: RetrospectiveCorrection {
+        
+        if (settings.isIntegralRetrospectiveCorrectionEnabled) {
+            
+            return IntegralRetrospectiveCorrection(effectDuration: TimeInterval(hours: 1))
+
+        } else {
+            
+            return StandardRetrospectiveCorrection(effectDuration: TimeInterval(hours: 1))
+        }
+        
+    }
 
     /// Loop-related settings
 
@@ -247,6 +262,10 @@ final class LoopDataManager {
         if newValue.preMealOverride != oldValue.preMealOverride {
             // The prediction isn't actually invalid, but a target range change requires recomputing recommended doses
             predictedGlucose = nil
+        }
+        
+        if newValue.isIntegralRetrospectiveCorrectionEnabled != oldValue.isIntegralRetrospectiveCorrectionEnabled {
+            self.retrospectiveGlucoseDiscrepancies = nil // unclear if this is working
         }
 
         if newValue.scheduleOverride != oldValue.scheduleOverride {
