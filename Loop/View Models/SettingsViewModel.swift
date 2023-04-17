@@ -52,6 +52,7 @@ public typealias PumpManagerViewModel = DeviceViewModel<PumpManagerDescriptor>
 public protocol SettingsViewModelDelegate: AnyObject {
     func dosingEnabledChanged(_: Bool)
     func dosingStrategyChanged(_: AutomaticDosingStrategy)
+    func isIntegralRetrospectiveCorrectionEnabledChanged(_:Bool)
     func didTapIssueReport(title: String)
     var closedLoopDescriptiveText: String? { get }
 }
