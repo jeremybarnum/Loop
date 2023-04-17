@@ -46,7 +46,8 @@ public struct SettingsView: View {
                 if FeatureFlags.automaticBolusEnabled {
                     dosingStrategySection
                 }
-                retrospectiveCorrectionSection
+                //TODO: adding this makes it complain about too many arguments somewhere
+                //retrospectiveCorrectionSection
                 alertManagementSection
                 if viewModel.pumpManagerSettingsViewModel.isSetUp() {
                     configurationSection
@@ -59,7 +60,8 @@ public struct SettingsView: View {
                     servicesSection
                 }
                 supportSection
-                if let profileExpiration = Bundle.main.profileExpiration, FeatureFlags.profileExpirationSettingsViewEnabled {
+                //TODO: why do I get a too many calls error.  It's as if body has a specified number of members
+               if let profileExpiration = Bundle.main.profileExpiration, FeatureFlags.profileExpirationSettingsViewEnabled {
                     profileExpirationSection(profileExpiration: profileExpiration)
                 }
             }
