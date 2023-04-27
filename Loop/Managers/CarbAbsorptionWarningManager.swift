@@ -125,9 +125,9 @@ class CarbCorrection {
      - Returns:
      - counteraction: tuple of (currentCounteraction, averageCounteraction) representing current counteraction computed using linear regression over the past 20 min and evaluate at latest glucose time, and average counteraction computed over the past 20 min
      */
-    fileprivate func recentInsulinCounteraction() -> Counteraction {
+    fileprivate func recentInsulinCounteraction() -> Double? {
         
-        var counteraction: Counteraction = (0,0) //JBQuestion: check decision.  Xcode was complaining the variable wasn't initialized before being used
+       // var counteraction: Counteraction = (0,0) //JBQuestion: check decision.  Xcode was complaining the variable wasn't initialized before being used
         
         guard let latestGlucoseDate = glucose?.startDate else {
             return(counteraction)
