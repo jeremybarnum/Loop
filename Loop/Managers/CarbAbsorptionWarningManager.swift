@@ -258,62 +258,6 @@ class CarbCorrection {
         return( suggestedCarbCorrection )
     }
     
-    /**
-     Calculates suggested carb correction required given considered effects
-     - Parameters:
-     - effects: Effects contribution to glucose forecast
-     - Returns:
-     - (carbCorrection, timeToLow) tuple of grams required and time interval to predicted low
-     - Throws: error if settings are not available
-     */
-    private func carbsRequired(_ effects: PredictionInputEffect) throws -> (Double, TimeInterval) {
-        
-        var carbCorrection: Double = 0.0
-        var timeToLow: TimeInterval = TimeInterval.minutes(0.0)
-        let carbRatioSchedule: CarbRatioSchedule? = UserDefaults.appGroup?.carbRatioSchedule
-        let insulinSensitivitySchedule: InsulinSensitivitySchedule? = UserDefaults.appGroup?.insulinSensitivitySchedule
-        let insulinModelSettings: InsulinModelSettings? = UserDefaults.appGroup?.insulinModelSettings
-        let settings: LoopSettings = UserDefaults.appGroup?.loopSettings ?? LoopSettings()
-        
-        // Get settings, otherwise throw error
-        guard
-            let insulinActionDuration = insulinModelSettings?.model.effectDuration,
-            let suspendThreshold = settings.suspendThreshold?.quantity.doubleValue(for: .milligramsPerDeciliter),
-            let sensitivity = insulinSensitivitySchedule?.averageValue(),
-            let carbRatio = carbRatioSchedule?.averageValue()
-            else {
-                self.suggestedCarbCorrection = nil
-                throw LoopError.invalidData(details: "Settings not available, updateCarbCorrection failed")
-        }
-        
-        // ignore dips below suspend threshold within the initial skip interval
-        let carbCorrectionSkipInterval: TimeInterval = self.carbCorrectionSkipFraction * carbCorrectionAbsorptionTime
-        
-        let predictedGlucoseForCarbCorrection = try predictGlucose(using: effects)
-        guard let currentDate = predictedGlucoseForCarbCorrection.first?.startDate else {
-            throw LoopError.invalidData(details: "Glucose prediction failed, updateCarbCorrection failed")
-        }
-        
-        let startDate = currentDate.addingTimeInterval(carbCorrectionSkipInterval)
-        let endDate = currentDate.addingTimeInterval(insulinActionDuration)
-        let predictedLowGlucose = predictedGlucoseForCarbCorrection.filter{ $0.startDate >= startDate && $0.startDate <= endDate && $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold}
-        if predictedLowGlucose.count > 0 {
-            for glucose in predictedLowGlucose {
-                let glucoseTime = glucose.startDate.timeIntervalSince(currentDate)
-                let anticipatedAbsorbedFraction = min(1.0, glucoseTime.minutes / carbCorrectionAbsorptionTime.minutes)
-                let requiredCorrection = (( suspendThreshold - glucose.quantity.doubleValue(for: .milligramsPerDeciliter)) / anticipatedAbsorbedFraction) * carbRatio / sensitivity
-                if requiredCorrection > carbCorrection {
-                    carbCorrection = requiredCorrection
-                }
-            }
-            if let lowGlucose = predictedGlucoseForCarbCorrection.first( where:
-                {$0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold} ) {
-                timeToLow = lowGlucose.startDate.timeIntervalSince(currentDate)
-            }
-        }
-
-        return (carbCorrection, timeToLow)
-    }
 
     /**
      Calculates suggested carb correction required given considered effects
@@ -510,3 +454,61 @@ extension CarbCorrection {
     }
     
 }
+
+/**
+ Calculates suggested carb correction required given considered effects
+ - Parameters:
+ - effects: Effects contribution to glucose forecast
+ - Returns:
+ - (carbCorrection, timeToLow) tuple of grams required and time interval to predicted low
+ - Throws: error if settings are not available
+ 
+private func carbsRequired(_ effects: PredictionInputEffect) throws -> (Double, TimeInterval) {
+    
+    var carbCorrection: Double = 0.0
+    var timeToLow: TimeInterval = TimeInterval.minutes(0.0)
+    let carbRatioSchedule: CarbRatioSchedule? = UserDefaults.appGroup?.carbRatioSchedule
+    let insulinSensitivitySchedule: InsulinSensitivitySchedule? = UserDefaults.appGroup?.insulinSensitivitySchedule
+    let insulinModelSettings: InsulinModelSettings? = UserDefaults.appGroup?.insulinModelSettings
+    let settings: LoopSettings = UserDefaults.appGroup?.loopSettings ?? LoopSettings()
+    
+    // Get settings, otherwise throw error
+    guard
+        let insulinActionDuration = insulinModelSettings?.model.effectDuration,
+        let suspendThreshold = settings.suspendThreshold?.quantity.doubleValue(for: .milligramsPerDeciliter),
+        let sensitivity = insulinSensitivitySchedule?.averageValue(),
+        let carbRatio = carbRatioSchedule?.averageValue()
+        else {
+            self.suggestedCarbCorrection = nil
+            throw LoopError.invalidData(details: "Settings not available, updateCarbCorrection failed")
+    }
+    
+    // ignore dips below suspend threshold within the initial skip interval
+    let carbCorrectionSkipInterval: TimeInterval = self.carbCorrectionSkipFraction * carbCorrectionAbsorptionTime
+    
+    let predictedGlucoseForCarbCorrection = try predictGlucose(using: effects)
+    guard let currentDate = predictedGlucoseForCarbCorrection.first?.startDate else {
+        throw LoopError.invalidData(details: "Glucose prediction failed, updateCarbCorrection failed")
+    }
+    
+    let startDate = currentDate.addingTimeInterval(carbCorrectionSkipInterval)
+    let endDate = currentDate.addingTimeInterval(insulinActionDuration)
+    let predictedLowGlucose = predictedGlucoseForCarbCorrection.filter{ $0.startDate >= startDate && $0.startDate <= endDate && $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold}
+    if predictedLowGlucose.count > 0 {
+        for glucose in predictedLowGlucose {
+            let glucoseTime = glucose.startDate.timeIntervalSince(currentDate)
+            let anticipatedAbsorbedFraction = min(1.0, glucoseTime.minutes / carbCorrectionAbsorptionTime.minutes)
+            let requiredCorrection = (( suspendThreshold - glucose.quantity.doubleValue(for: .milligramsPerDeciliter)) / anticipatedAbsorbedFraction) * carbRatio / sensitivity
+            if requiredCorrection > carbCorrection {
+                carbCorrection = requiredCorrection
+            }
+        }
+        if let lowGlucose = predictedGlucoseForCarbCorrection.first( where:
+            {$0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold} ) {
+            timeToLow = lowGlucose.startDate.timeIntervalSince(currentDate)
+        }
+    }
+
+    return (carbCorrection, timeToLow)
+}
+*/*
