@@ -13,17 +13,18 @@ import LoopCore
 /**
     Carb correction algorithm calculates the amount of carbs (in grams) needed to treat a predicted low (blood glucose predicted to fall below suspend threshold level). The calculation is based on glucose forecast scenarios, which include the effect of suspension of insulin delivery by setting the temporary basal rate to zero. If it is found that zero temping is insufficient to prevent the low, the algorithm issues a Carb Correction Notification, which includes a suggested amount of carbs needed to treat the predicted low.
  */
-class CarbCorrection {
+class CarbAbsorptionWarning {
     
     /**
-     Carb correction algorithm parameters:
-     - carbCorrectionThreshold: Do not issue notifications if grams required are below this value, only set the badge notification to the grams required
+     Carb absorption warning algorithm parameters:
+    [ignore this for now:  - carbCorrectionThreshold: Do not issue notifications if grams required are below this value, only set the badge notification to the grams required
      - carbCorrectionSkipFraction: Suggested correction grams required calculated bring predicted glucose above suspend threshold after this fraction of assumed correciton carb absorption time equal to carbCorrectionAbsorptionTime
+     ]
      - expireCarbsThreshold: observed insulin counteraction below below this fraction of modeled carb absorption triggers consideration of slow carb absorption scenario
      - notificationSnoozeTime: snooze notifications within this time interval, with an exception of badge notification
      */
-    private let carbCorrectionThreshold: Int = 3
-    private let carbCorrectionSkipFraction: Double = 0.33
+    //private let carbCorrectionThreshold: Int = 3
+    //private let carbCorrectionSkipFraction: Double = 0.33
     private let expireCarbsThresholdFraction: Double = 0.7
     private let notificationSnoozeTime: TimeInterval = .minutes(19)
     
@@ -38,49 +39,12 @@ class CarbCorrection {
     public var zeroTempEffect: [GlucoseEffect]?
     public var retrospectiveGlucoseEffect: [GlucoseEffect]?
     public var insulinCounteractionEffects: [GlucoseEffectVelocity]?
+    public var averageCounteraction: Double = 0.0
     
     /// Suggested carb correction in grams
-    private var suggestedCarbCorrection: Int?
+    //private var suggestedCarbCorrection: Int?
     /// Current glucose
     private var glucose: GlucoseValue?
-    
-    /// Absorption time for correction carbs
-    private let carbCorrectionAbsorptionTime: TimeInterval
-    
-    /// State variables for diagnostic report
-    private var carbCorrection: Double = 0.0
-    private var carbCorrectionExpiredCarbs: Double = 0.0
-    private var carbCorrectionExcessInsulin: Double = 0.0
-    private var carbCorrectionStatus: String = "-"
-    private var timeToLow: TimeInterval = TimeInterval.minutes(0.0)
-    private var timeToLowExpiredCarbs: TimeInterval = TimeInterval.minutes(0.0)
-    private var timeToLowExcessInsulin: TimeInterval = TimeInterval.minutes(0.0)
-    private var carbCorrectionNotification: CarbCorrectionNotification
-    private var averageCounteraction: Double = 0.0
-    private var modeledCarbEffectValue: Double?
-    private var currentAbsorbingFraction: Double = 0.0
-    private var averageAbsorbingFraction: Double = 0.0
-    private var slowAbsorbingCheck: String = "No"
-    private var excessInsulinAction: String = "No"
-    private var usingRetrospection: String = "No"
-    private var predictedGlucoseUnexpiredCarbs: [GlucoseValue] = []
-    private var lastNotificationDate: Date
-    private var timeSinceLastNotification: TimeInterval = TimeInterval.minutes(0.0)
-    
-    /**
-     Initialize
-     - Parameters:
-     - carbCorrectionAbsorptionTime: Absorption time for correction carbs
-     - Returns: Carb Correction customized with carb correction absorption time
-     */
-    init(_ carbCorrectionAbsorptionTime: TimeInterval) {
-        self.carbCorrectionAbsorptionTime = carbCorrectionAbsorptionTime
-        self.carbCorrectionNotification.grams = 0
-        self.carbCorrectionNotification.lowPredictedIn = .minutes(0.0)
-        self.carbCorrectionNotification.gramsRemaining = 0
-        self.carbCorrectionNotification.type = .noCorrection
-        self.lastNotificationDate = Date().addingTimeInterval(-notificationSnoozeTime)
-    }
     
     /**
      Calculates suggested carb correction required given considered effects
@@ -91,8 +55,6 @@ class CarbCorrection {
      - Throws: LoopError.missingDataError if glucose is missing or LoopError.configurationError(.insulinModel) if insulin model undefined
      */
     fileprivate func predictGlucose(using inputs: PredictionInputEffect) throws -> [GlucoseValue] {
-        
-
         
         guard let glucose = self.glucose else {
             throw LoopError.missingDataError(.glucose)
@@ -105,10 +67,10 @@ class CarbCorrection {
             effects.append(carbEffect)
         }
         
-       //TODO: this is only needed if we want the function to work when carbs that haven't even started absorbing are inputted
+        //TODO: this is only needed if we want the function to work when carbs that haven't even started absorbing are inputted
         /*if inputs.contains(.unexpiredCarbs), let futureCarbEffect = self.carbEffectFutureFood {
-            effects.append(futureCarbEffect)
-        }*/
+         effects.append(futureCarbEffect)
+         }*/
         
         if inputs.contains(.insulin), let insulinEffect = self.insulinEffect {
             effects.append(insulinEffect)
@@ -128,17 +90,17 @@ class CarbCorrection {
         
         var prediction = LoopMath.predictGlucose(startingAt: glucose, momentum: momentum, effects: effects)
         
-       /*I don't know why this is necessary but it's annoying so i'm getting rid of it.  Model is only needed for effect duration, and I'm not sure why we need effect duration.
-        
-        guard let model = UserDefaults.appGroup?.insulinModelSettings?.model else {
-            throw LoopError.configurationError(.insulinModel)
-        }
-        
-        let finalDate = glucose.startDate.addingTimeInterval(model.effectDuration)
-        if let last = prediction.last, last.startDate < finalDate {
-            prediction.append(PredictedGlucoseValue(startDate: finalDate, quantity: last.quantity))
-        }
-        */
+        /*I don't know why this is necessary but it's annoying so i'm getting rid of it.  Model is only needed for effect duration, and I'm not sure why we need effect duration.
+         
+         guard let model = UserDefaults.appGroup?.insulinModelSettings?.model else {
+         throw LoopError.configurationError(.insulinModel)
+         }
+         
+         let finalDate = glucose.startDate.addingTimeInterval(model.effectDuration)
+         if let last = prediction.last, last.startDate < finalDate {
+         prediction.append(PredictedGlucoseValue(startDate: finalDate, quantity: last.quantity))
+         }
+         */
         
         return prediction
     }
@@ -179,7 +141,7 @@ class CarbCorrection {
         }
         return( modeledCarbEffect )
     }
-  
+    
     /**
      Calculates recent insulin counteraction
      - Returns:
@@ -197,13 +159,13 @@ class CarbCorrection {
         
         let counteractionValues = counterActions.map( { $0.effect.quantity.doubleValue(for: unit) } )
         //let counteractionTimes = counterActions.map( { $0.effect.startDate.timeIntervalSince(latestGlucoseDate).minutes } )
-
+        
         guard counteractionValues.count > 2 else {
             return(averageCounteraction)
         }
         
-       // let insulinCounteractionFit = linearRegression(counteractionTimes, counteractionValues)
-       // counteraction.currentCounteraction = insulinCounteractionFit(0.0)
+        // let insulinCounteractionFit = linearRegression(counteractionTimes, counteractionValues)
+        // counteraction.currentCounteraction = insulinCounteractionFit(0.0)
         averageCounteraction = average( counteractionValues )
         
         return(averageCounteraction)
@@ -223,13 +185,14 @@ class CarbCorrection {
         static let noCorrection = CarbCorrectionNotificationOption(rawValue: 1 << 0)
         static let correction = CarbCorrectionNotificationOption(rawValue: 1 << 1)
         static let warning = CarbCorrectionNotificationOption(rawValue: 1 << 2)
-
+        
         static let correctionPlusWarning: CarbCorrectionNotificationOption = [.correction, .warning]
     }
-
+    
     typealias CarbCorrectionNotification = (grams: Int, lowPredictedIn: TimeInterval, gramsRemaining: Int, type: CarbCorrectionNotificationOption)
     
-    
+}
+
 /*    fileprivate func linearRegression(_ xs: [Double], _ ys: [Double]) -> (Double) -> Double {
         let sum1 = average(multiply(ys, xs)) - average(xs) * average(ys)
         let sum2 = average(multiply(xs, xs)) - pow(average(xs), 2)
@@ -238,8 +201,47 @@ class CarbCorrection {
         return { x in intercept + slope * x }
     }
 */
-}
 
+
+/// Absorption time for correction carbs
+//private let carbCorrectionAbsorptionTime: TimeInterval
+
+/* State variables for diagnostic report
+private var carbCorrection: Double = 0.0
+private var carbCorrectionExpiredCarbs: Double = 0.0
+private var carbCorrectionExcessInsulin: Double = 0.0
+private var carbCorrectionStatus: String = "-"
+private var timeToLow: TimeInterval = TimeInterval.minutes(0.0)
+private var timeToLowExpiredCarbs: TimeInterval = TimeInterval.minutes(0.0)
+private var timeToLowExcessInsulin: TimeInterval = TimeInterval.minutes(0.0)
+private var carbCorrectionNotification: CarbCorrectionNotification
+private var averageCounteraction: Double = 0.0
+private var modeledCarbEffectValue: Double?
+private var currentAbsorbingFraction: Double = 0.0
+private var averageAbsorbingFraction: Double = 0.0
+private var slowAbsorbingCheck: String = "No"
+private var excessInsulinAction: String = "No"
+private var usingRetrospection: String = "No"
+private var predictedGlucoseUnexpiredCarbs: [GlucoseValue] = []
+private var lastNotificationDate: Date
+private var timeSinceLastNotification: TimeInterval = TimeInterval.minutes(0.0)
+
+/**
+ Initialize
+ - Parameters:
+ - carbCorrectionAbsorptionTime: Absorption time for correction carbs
+ - Returns: Carb Correction customized with carb correction absorption time
+ */
+init(_ carbCorrectionAbsorptionTime: TimeInterval) {
+    self.carbCorrectionAbsorptionTime = carbCorrectionAbsorptionTime
+    self.carbCorrectionNotification.grams = 0
+    self.carbCorrectionNotification.lowPredictedIn = .minutes(0.0)
+    self.carbCorrectionNotification.gramsRemaining = 0
+    self.carbCorrectionNotification.type = .noCorrection
+    self.lastNotificationDate = Date().addingTimeInterval(-notificationSnoozeTime)
+}
+ 
+ */
 /*    /**
      Calculates suggested carb correction and issues notification if need be
      - Parameters:
