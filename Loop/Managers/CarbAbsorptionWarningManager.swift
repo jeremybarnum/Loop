@@ -127,7 +127,7 @@ class CarbCorrection {
      */
     fileprivate func recentInsulinCounteraction() -> Double? {
         
-       // var counteraction: Counteraction = (0,0) //JBQuestion: check decision.  Xcode was complaining the variable wasn't initialized before being used
+        var averageCounteraction = 0.0
         
         guard let latestGlucoseDate = glucose?.startDate else {
             return(counteraction)
