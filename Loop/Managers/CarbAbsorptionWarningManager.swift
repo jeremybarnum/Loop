@@ -12,6 +12,9 @@ import LoopCore
 
 /**
     Carb correction algorithm calculates the amount of carbs (in grams) needed to treat a predicted low (blood glucose predicted to fall below suspend threshold level). The calculation is based on glucose forecast scenarios, which include the effect of suspension of insulin delivery by setting the temporary basal rate to zero. If it is found that zero temping is insufficient to prevent the low, the algorithm issues a Carb Correction Notification, which includes a suggested amount of carbs needed to treat the predicted low.
+ 
+    however this simple version simply attempts to generate a warning when carbs are absorbing slowly
+ 
  */
 class CarbAbsorptionWarning {
     
@@ -25,7 +28,8 @@ class CarbAbsorptionWarning {
      */
     //private let carbCorrectionThreshold: Int = 3
     //private let carbCorrectionSkipFraction: Double = 0.33
-    private let expireCarbsThresholdFraction: Double = 0.7
+    //private let expireCarbsThresholdFraction: Double = 0.7
+    private let warningThreshold = 0.7
     private let notificationSnoozeTime: TimeInterval = .minutes(19)
     
     /// Math is performed with glucose expressed in mg/dL
@@ -46,6 +50,19 @@ class CarbAbsorptionWarning {
     /// Current glucose
     private var glucose: GlucoseValue?
     
+    
+    public func update() {
+        var currentAbsorbingFraction = recentInsulinCounteraction() / modeledCarbAbsorption()
+        
+        if currentAbsorbingFraction < warningThreshold {
+            generateWarning()
+            print(currentAbsorbingFraction)
+        }
+    }
+    
+    public func generateWarning() {
+        print("carb absorption below threshold")
+    }
     /**
      Calculates suggested carb correction required given considered effects
      - Parameters:
@@ -110,10 +127,10 @@ class CarbAbsorptionWarning {
      - Returns:
      - modeledCarbEffect: modeled carb effect expressed as impact on blood glucose in mg/dL over the next 5 minutes
      */
-    fileprivate func modeledCarbAbsorption() -> Double? {
+    fileprivate func modeledCarbAbsorption() -> Double {
         let effects: PredictionInputEffect = [.carbs]
         var predictedGlucose: [GlucoseValue]?
-        var modeledCarbEffect: Double?
+        var modeledCarbEffect = 0.0
         
         do {
             predictedGlucose = try predictGlucose(using: effects)
@@ -147,7 +164,9 @@ class CarbAbsorptionWarning {
      - Returns:
      - counteraction: tuple of (currentCounteraction, averageCounteraction) representing current counteraction computed using linear regression over the past 20 min and evaluate at latest glucose time, and average counteraction computed over the past 20 min
      */
-    fileprivate func recentInsulinCounteraction() -> Double? {
+    fileprivate func recentInsulinCounteraction() -> Double {
+        
+        var averageCounteraction = 0.0
         
         guard let latestGlucoseDate = glucose?.startDate else {
             return(averageCounteraction)
