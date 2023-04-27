@@ -82,6 +82,93 @@ class CarbCorrection {
         self.lastNotificationDate = Date().addingTimeInterval(-notificationSnoozeTime)
     }
     
+    
+    /**
+     Calculates modeled carb absorption
+     - Returns:
+     - modeledCarbEffect: modeled carb effect expressed as impact on blood glucose in mg/dL over the next 5 minutes
+     */
+    fileprivate func modeledCarbAbsorption() -> Double? {
+        let effects: PredictionInputEffect = [.carbs]
+        var predictedGlucose: [GlucoseValue]?
+        var modeledCarbEffect: Double?
+        
+        do {
+            predictedGlucose = try predictGlucose(using: effects)
+        }
+        catch {
+            return( modeledCarbEffect )
+        }
+        
+        guard let modeledCarbOnlyGlucose = predictedGlucose else {
+            return( modeledCarbEffect )
+        }
+        
+        if modeledCarbOnlyGlucose.count < 2 {
+            return( modeledCarbEffect )
+        }
+        
+        if modeledCarbOnlyGlucose.count == 2 {
+            let glucose1 = modeledCarbOnlyGlucose[0].quantity.doubleValue(for: unit)
+            let glucose2 = modeledCarbOnlyGlucose[1].quantity.doubleValue(for: unit)
+            modeledCarbEffect = glucose2 - glucose1
+        } else {
+            let glucose1 = modeledCarbOnlyGlucose[1].quantity.doubleValue(for: unit)
+            let glucose2 = modeledCarbOnlyGlucose[2].quantity.doubleValue(for: unit)
+            modeledCarbEffect = glucose2 - glucose1
+        }
+        return( modeledCarbEffect )
+    }
+  
+    /**
+     Calculates recent insulin counteraction
+     - Returns:
+     - counteraction: tuple of (currentCounteraction, averageCounteraction) representing current counteraction computed using linear regression over the past 20 min and evaluate at latest glucose time, and average counteraction computed over the past 20 min
+     */
+    fileprivate func recentInsulinCounteraction() -> Counteraction {
+        
+        var counteraction: Counteraction = (0,0) //JBQuestion: check decision.  Xcode was complaining the variable wasn't initialized before being used
+        
+        guard let latestGlucoseDate = glucose?.startDate else {
+            return(counteraction)
+        }
+        
+        guard let counterActions = insulinCounteractionEffects?.filterDateRange(latestGlucoseDate.addingTimeInterval(.minutes(-20)), latestGlucoseDate) else {
+            return(counteraction)
+        }
+        
+        let counteractionValues = counterActions.map( { $0.effect.quantity.doubleValue(for: unit) } )
+        //let counteractionTimes = counterActions.map( { $0.effect.startDate.timeIntervalSince(latestGlucoseDate).minutes } )
+
+        guard counteractionValues.count > 2 else {
+            return(counteraction)
+        }
+        
+       // let insulinCounteractionFit = linearRegression(counteractionTimes, counteractionValues)
+       // counteraction.currentCounteraction = insulinCounteractionFit(0.0)
+        counteraction.averageCounteraction = average( counteractionValues )
+        
+        return(counteraction)
+    }
+    
+    fileprivate func average(_ input: [Double]) -> Double {
+        return input.reduce(0, +) / Double(input.count)
+    }
+    
+    fileprivate func multiply(_ a: [Double], _ b: [Double]) -> [Double] {
+        return zip(a,b).map(*)
+    }
+    
+    fileprivate func linearRegression(_ xs: [Double], _ ys: [Double]) -> (Double) -> Double {
+        let sum1 = average(multiply(ys, xs)) - average(xs) * average(ys)
+        let sum2 = average(multiply(xs, xs)) - pow(average(xs), 2)
+        let slope = sum1 / sum2
+        let intercept = average(ys) - slope * average(xs)
+        return { x in intercept + slope * x }
+    }
+
+}
+
     /**
      Calculates suggested carb correction and issues notification if need be
      - Parameters:
@@ -314,92 +401,7 @@ class CarbCorrection {
         return prediction
     }
     
-    /**
-     Calculates modeled carb absorption
-     - Returns:
-     - modeledCarbEffect: modeled carb effect expressed as impact on blood glucose in mg/dL over the next 5 minutes
-     */
-    fileprivate func modeledCarbAbsorption() -> Double? {
-        let effects: PredictionInputEffect = [.carbs]
-        var predictedGlucose: [GlucoseValue]?
-        var modeledCarbEffect: Double?
-        
-        do {
-            predictedGlucose = try predictGlucose(using: effects)
-        }
-        catch {
-            return( modeledCarbEffect )
-        }
-        
-        guard let modeledCarbOnlyGlucose = predictedGlucose else {
-            return( modeledCarbEffect )
-        }
-        
-        if modeledCarbOnlyGlucose.count < 2 {
-            return( modeledCarbEffect )
-        }
-        
-        if modeledCarbOnlyGlucose.count == 2 {
-            let glucose1 = modeledCarbOnlyGlucose[0].quantity.doubleValue(for: unit)
-            let glucose2 = modeledCarbOnlyGlucose[1].quantity.doubleValue(for: unit)
-            modeledCarbEffect = glucose2 - glucose1
-        } else {
-            let glucose1 = modeledCarbOnlyGlucose[1].quantity.doubleValue(for: unit)
-            let glucose2 = modeledCarbOnlyGlucose[2].quantity.doubleValue(for: unit)
-            modeledCarbEffect = glucose2 - glucose1
-        }
-        return( modeledCarbEffect )
-    }
   
-    /**
-     Calculates recent insulin counteraction
-     - Returns:
-     - counteraction: tuple of (currentCounteraction, averageCounteraction) representing current counteraction computed using linear regression over the past 20 min and evaluate at latest glucose time, and average counteraction computed over the past 20 min
-     */
-    fileprivate func recentInsulinCounteraction() -> Counteraction {
-        
-        var counteraction: Counteraction = (0,0) //JBQuestion: check decision.  Xcode was complaining the variable wasn't initialized before being used
-        
-        guard let latestGlucoseDate = glucose?.startDate else {
-            return(counteraction)
-        }
-        
-        guard let counterActions = insulinCounteractionEffects?.filterDateRange(latestGlucoseDate.addingTimeInterval(.minutes(-20)), latestGlucoseDate) else {
-            return(counteraction)
-        }
-        
-        let counteractionValues = counterActions.map( { $0.effect.quantity.doubleValue(for: unit) } )
-        let counteractionTimes = counterActions.map( { $0.effect.startDate.timeIntervalSince(latestGlucoseDate).minutes } )
-
-        guard counteractionValues.count > 2 else {
-            return(counteraction)
-        }
-        
-        let insulinCounteractionFit = linearRegression(counteractionTimes, counteractionValues)
-        counteraction.currentCounteraction = insulinCounteractionFit(0.0)
-        counteraction.averageCounteraction = average( counteractionValues )
-        
-        return(counteraction)
-    }
-    
-    fileprivate func average(_ input: [Double]) -> Double {
-        return input.reduce(0, +) / Double(input.count)
-    }
-    
-    fileprivate func multiply(_ a: [Double], _ b: [Double]) -> [Double] {
-        return zip(a,b).map(*)
-    }
-    
-    fileprivate func linearRegression(_ xs: [Double], _ ys: [Double]) -> (Double) -> Double {
-        let sum1 = average(multiply(ys, xs)) - average(xs) * average(ys)
-        let sum2 = average(multiply(xs, xs)) - pow(average(xs), 2)
-        let slope = sum1 / sum2
-        let intercept = average(ys) - slope * average(xs)
-        return { x in intercept + slope * x }
-    }
-
-}
-
 struct CarbCorrectionNotificationOption: OptionSet {
     let rawValue: Int
     
