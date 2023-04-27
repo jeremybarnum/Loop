@@ -14,9 +14,24 @@ import LoopCore
     Carb correction algorithm calculates the amount of carbs (in grams) needed to treat a predicted low (blood glucose predicted to fall below suspend threshold level). The calculation is based on glucose forecast scenarios, which include the effect of suspension of insulin delivery by setting the temporary basal rate to zero. If it is found that zero temping is insufficient to prevent the low, the algorithm issues a Carb Correction Notification, which includes a suggested amount of carbs needed to treat the predicted low.
  
     however this simple version simply attempts to generate a warning when carbs are absorbing slowly
- 
+
  */
+
+//TODO: call this from LoopDataManager; it will be around row 1100.  Analogous to missed meal.
+//QUESTION: the whole attempt to run a prediction instead of operating on carb effects and ICE directly.  Is that just to get the benefit of DCA? Could we just get those from a the carb absorption graph perhaps?
+
 class CarbAbsorptionWarning {
+    internal init(insulinEffect: [GlucoseEffect]? = nil, carbEffect: [GlucoseEffect]? = nil, glucoseMomentumEffect: [GlucoseEffect]? = nil, zeroTempEffect: [GlucoseEffect]? = nil, retrospectiveGlucoseEffect: [GlucoseEffect]? = nil, insulinCounteractionEffects: [GlucoseEffectVelocity]? = nil, averageCounteraction: Double = 0.0, glucose: GlucoseValue? = nil) {
+        self.insulinEffect = insulinEffect
+        self.carbEffect = carbEffect
+        self.glucoseMomentumEffect = glucoseMomentumEffect
+        self.zeroTempEffect = zeroTempEffect
+        self.retrospectiveGlucoseEffect = retrospectiveGlucoseEffect
+        self.insulinCounteractionEffects = insulinCounteractionEffects
+        self.averageCounteraction = averageCounteraction
+        self.glucose = glucose
+    }
+    
     
     /**
      Carb absorption warning algorithm parameters:
@@ -38,7 +53,7 @@ class CarbAbsorptionWarning {
     /// Effects must be set in LoopDataManager (Q: is there a cleaner way to do this?)
     public var insulinEffect: [GlucoseEffect]?
     public var carbEffect: [GlucoseEffect]?
-    public var carbEffectFutureFood: [GlucoseEffect]?
+    //public var carbEffectFutureFood: [GlucoseEffect]?
     public var glucoseMomentumEffect: [GlucoseEffect]?
     public var zeroTempEffect: [GlucoseEffect]?
     public var retrospectiveGlucoseEffect: [GlucoseEffect]?

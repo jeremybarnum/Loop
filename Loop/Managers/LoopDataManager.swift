@@ -915,6 +915,7 @@ extension LoopDataManager {
                     return self.delegate?.loopDataManager(self, estimateBolusDuration: bolusAmount)
                 }
             )
+            //TODO: this seems like a natural place to put the carbAbsorptionWarning
         }
 
         // 5 second delay to allow stores to cache data before it is read by widget
