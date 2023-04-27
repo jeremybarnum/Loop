@@ -82,6 +82,66 @@ class CarbCorrection {
         self.lastNotificationDate = Date().addingTimeInterval(-notificationSnoozeTime)
     }
     
+    /**
+     Calculates suggested carb correction required given considered effects
+     - Parameters:
+     - effects: Effects contribution to glucose forecast
+     - Returns:
+     - prediction: Timeline of predicted glucose values
+     - Throws: LoopError.missingDataError if glucose is missing or LoopError.configurationError(.insulinModel) if insulin model undefined
+     */
+    fileprivate func predictGlucose(using inputs: PredictionInputEffect) throws -> [GlucoseValue] {
+        
+
+        
+        guard let glucose = self.glucose else {
+            throw LoopError.missingDataError(.glucose)
+        }
+        
+        var momentum: [GlucoseEffect] = []
+        var effects: [[GlucoseEffect]] = []
+        
+        if inputs.contains(.carbs), let carbEffect = self.carbEffect {
+            effects.append(carbEffect)
+        }
+        
+       //TODO: this is only needed if we want the function to work when carbs that haven't even started absorbing are inputted
+        /*if inputs.contains(.unexpiredCarbs), let futureCarbEffect = self.carbEffectFutureFood {
+            effects.append(futureCarbEffect)
+        }*/
+        
+        if inputs.contains(.insulin), let insulinEffect = self.insulinEffect {
+            effects.append(insulinEffect)
+        }
+        
+        if inputs.contains(.retrospection), let retrospectionEffect = self.retrospectiveGlucoseEffect {
+            effects.append(retrospectionEffect)
+        }
+        
+        if inputs.contains(.momentum), let momentumEffect = self.glucoseMomentumEffect {
+            momentum = momentumEffect
+        }
+        
+        if inputs.contains(.zeroTemp) {
+            effects.append(self.zeroTempEffect!)
+        }
+        
+        var prediction = LoopMath.predictGlucose(startingAt: glucose, momentum: momentum, effects: effects)
+        
+       /*I don't know why this is necessary but it's annoying so i'm getting rid of it.  Model is only needed for effect duration, and I'm not sure why we need effect duration.
+        
+        guard let model = UserDefaults.appGroup?.insulinModelSettings?.model else {
+            throw LoopError.configurationError(.insulinModel)
+        }
+        
+        let finalDate = glucose.startDate.addingTimeInterval(model.effectDuration)
+        if let last = prediction.last, last.startDate < finalDate {
+            prediction.append(PredictedGlucoseValue(startDate: finalDate, quantity: last.quantity))
+        }
+        */
+        
+        return prediction
+    }
     
     /**
      Calculates modeled carb absorption
@@ -357,67 +417,10 @@ class CarbCorrection {
     }
     
 */
-    /**
-     Calculates suggested carb correction required given considered effects
-     - Parameters:
-     - effects: Effects contribution to glucose forecast
-     - Returns:
-     - prediction: Timeline of predicted glucose values
-     - Throws: LoopError.missingDataError if glucose is missing or LoopError.configurationError(.insulinModel) if insulin model undefined
-     */
-    fileprivate func predictGlucose(using inputs: PredictionInputEffect) throws -> [GlucoseValue] {
-        
-        guard let model = UserDefaults.appGroup?.insulinModelSettings?.model else {
-            throw LoopError.configurationError(.insulinModel)
-        }
-        
-        guard let glucose = self.glucose else {
-            throw LoopError.missingDataError(.glucose)
-        }
-        
-        var momentum: [GlucoseEffect] = []
-        var effects: [[GlucoseEffect]] = []
-        
-        if inputs.contains(.carbs), let carbEffect = self.carbEffect {
-            effects.append(carbEffect)
-        }
-        
-        if inputs.contains(.unexpiredCarbs), let futureCarbEffect = self.carbEffectFutureFood {
-            effects.append(futureCarbEffect)
-        }
-        
-        if inputs.contains(.insulin), let insulinEffect = self.insulinEffect {
-            effects.append(insulinEffect)
-        }
-        
-        if inputs.contains(.retrospection), let retrospectionEffect = self.retrospectiveGlucoseEffect {
-            effects.append(retrospectionEffect)
-        }
-        
-        if inputs.contains(.momentum), let momentumEffect = self.glucoseMomentumEffect {
-            momentum = momentumEffect
-        }
-        
-        if inputs.contains(.zeroTemp) {
-            effects.append(self.zeroTempEffect!)
-        }
-        
-        var prediction = LoopMath.predictGlucose(startingAt: glucose, momentum: momentum, effects: effects)
-        
-        let finalDate = glucose.startDate.addingTimeInterval(model.effectDuration)
-        if let last = prediction.last, last.startDate < finalDate {
-            prediction.append(PredictedGlucoseValue(startDate: finalDate, quantity: last.quantity))
-        }
-        
-        return prediction
-    }
-    
-
-
-
+   
 //typealias Counteraction = (currentCounteraction: Double?, averageCounteraction: Double?)
 
-extension CarbCorrection {
+/* extension CarbCorrection {
     /// Generates a diagnostic report about the current state
     ///
     /// - parameter completion: A closure called once the report has been generated. The closure takes a single argument of the report string.
@@ -458,7 +461,6 @@ extension CarbCorrection {
     
 }
 
-/**
  Calculates suggested carb correction required given considered effects
  - Parameters:
  - effects: Effects contribution to glucose forecast
@@ -514,4 +516,4 @@ private func carbsRequired(_ effects: PredictionInputEffect) throws -> (Double, 
 
     return (carbCorrection, timeToLow)
 }
-*/*
+*/
