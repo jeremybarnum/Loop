@@ -414,7 +414,7 @@ struct CarbCorrectionNotificationOption: OptionSet {
 
 typealias CarbCorrectionNotification = (grams: Int, lowPredictedIn: TimeInterval, gramsRemaining: Int, type: CarbCorrectionNotificationOption)
 
-typealias Counteraction = (currentCounteraction: Double?, averageCounteraction: Double?)
+//typealias Counteraction = (currentCounteraction: Double?, averageCounteraction: Double?)
 
 extension CarbCorrection {
     /// Generates a diagnostic report about the current state
