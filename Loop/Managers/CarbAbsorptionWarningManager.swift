@@ -56,7 +56,7 @@ class CarbCorrection {
     private var timeToLowExpiredCarbs: TimeInterval = TimeInterval.minutes(0.0)
     private var timeToLowExcessInsulin: TimeInterval = TimeInterval.minutes(0.0)
     private var carbCorrectionNotification: CarbCorrectionNotification
-    private var counteraction: Counteraction?
+    private var averageCounteraction: Double = 0.0
     private var modeledCarbEffectValue: Double?
     private var currentAbsorbingFraction: Double = 0.0
     private var averageAbsorbingFraction: Double = 0.0
@@ -127,28 +127,26 @@ class CarbCorrection {
      */
     fileprivate func recentInsulinCounteraction() -> Double? {
         
-        var averageCounteraction = 0.0
-        
         guard let latestGlucoseDate = glucose?.startDate else {
-            return(counteraction)
+            return(averageCounteraction)
         }
         
         guard let counterActions = insulinCounteractionEffects?.filterDateRange(latestGlucoseDate.addingTimeInterval(.minutes(-20)), latestGlucoseDate) else {
-            return(counteraction)
+            return(averageCounteraction)
         }
         
         let counteractionValues = counterActions.map( { $0.effect.quantity.doubleValue(for: unit) } )
         //let counteractionTimes = counterActions.map( { $0.effect.startDate.timeIntervalSince(latestGlucoseDate).minutes } )
 
         guard counteractionValues.count > 2 else {
-            return(counteraction)
+            return(averageCounteraction)
         }
         
        // let insulinCounteractionFit = linearRegression(counteractionTimes, counteractionValues)
        // counteraction.currentCounteraction = insulinCounteractionFit(0.0)
-        counteraction.averageCounteraction = average( counteractionValues )
+        averageCounteraction = average( counteractionValues )
         
-        return(counteraction)
+        return(averageCounteraction)
     }
     
     fileprivate func average(_ input: [Double]) -> Double {
@@ -159,17 +157,30 @@ class CarbCorrection {
         return zip(a,b).map(*)
     }
     
-    fileprivate func linearRegression(_ xs: [Double], _ ys: [Double]) -> (Double) -> Double {
+    struct CarbCorrectionNotificationOption: OptionSet {
+        let rawValue: Int
+        
+        static let noCorrection = CarbCorrectionNotificationOption(rawValue: 1 << 0)
+        static let correction = CarbCorrectionNotificationOption(rawValue: 1 << 1)
+        static let warning = CarbCorrectionNotificationOption(rawValue: 1 << 2)
+
+        static let correctionPlusWarning: CarbCorrectionNotificationOption = [.correction, .warning]
+    }
+
+    typealias CarbCorrectionNotification = (grams: Int, lowPredictedIn: TimeInterval, gramsRemaining: Int, type: CarbCorrectionNotificationOption)
+    
+    
+/*    fileprivate func linearRegression(_ xs: [Double], _ ys: [Double]) -> (Double) -> Double {
         let sum1 = average(multiply(ys, xs)) - average(xs) * average(ys)
         let sum2 = average(multiply(xs, xs)) - pow(average(xs), 2)
         let slope = sum1 / sum2
         let intercept = average(ys) - slope * average(xs)
         return { x in intercept + slope * x }
     }
-
+*/
 }
 
-    /**
+/*    /**
      Calculates suggested carb correction and issues notification if need be
      - Parameters:
      - glucose: Most recent glucose
@@ -345,7 +356,7 @@ class CarbCorrection {
         return( suggestedCarbCorrection )
     }
     
-
+*/
     /**
      Calculates suggested carb correction required given considered effects
      - Parameters:
@@ -401,18 +412,8 @@ class CarbCorrection {
         return prediction
     }
     
-  
-struct CarbCorrectionNotificationOption: OptionSet {
-    let rawValue: Int
-    
-    static let noCorrection = CarbCorrectionNotificationOption(rawValue: 1 << 0)
-    static let correction = CarbCorrectionNotificationOption(rawValue: 1 << 1)
-    static let warning = CarbCorrectionNotificationOption(rawValue: 1 << 2)
 
-    static let correctionPlusWarning: CarbCorrectionNotificationOption = [.correction, .warning]
-}
 
-typealias CarbCorrectionNotification = (grams: Int, lowPredictedIn: TimeInterval, gramsRemaining: Int, type: CarbCorrectionNotificationOption)
 
 //typealias Counteraction = (currentCounteraction: Double?, averageCounteraction: Double?)
 
