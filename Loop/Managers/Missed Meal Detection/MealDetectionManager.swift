@@ -93,9 +93,9 @@ class MealDetectionManager {
         carbEffectCount = Double(filteredCarbEffects.dropFirst().count)
         
         var averageCarbEffect = carbEffectValueCache / carbEffectCount / delta //I want it to match the units on the graph, so I'm using mg/dL/minute
+        print("*Test CarbEffects:",filteredCarbEffects)
         
         print("*Test CarbEffect Sum:",carbEffectValueCache,"CarbEffectCount:",carbEffectCount,"CarbEffectAverage:",averageCarbEffect)
-        print("*Test CarbEffects:",filteredCarbEffects)
 
         let filteredICE = insulinCounteractionEffects
             .filterDateRange(intervalStart, now)
