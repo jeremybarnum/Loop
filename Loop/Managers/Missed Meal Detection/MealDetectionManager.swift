@@ -92,7 +92,7 @@ class MealDetectionManager {
         }
         carbEffectCount = Double(filteredCarbEffects.dropFirst().count)
         
-        var averageCarbEffect = carbEffectValueCache / carbEffectCount / delta //I want it to match the units on the graph, so I'm using mg/dL/minute
+        let averageCarbEffect = carbEffectValueCache / carbEffectCount / delta //I want it to match the units on the graph, so I'm using mg/dL/minute
         print("*Test CarbEffects:",filteredCarbEffects)
         
         print("*Test CarbEffect Sum:",carbEffectValueCache,"CarbEffectCount:",carbEffectCount,"CarbEffectAverage:",averageCarbEffect)
@@ -106,8 +106,12 @@ class MealDetectionManager {
         }
         
         ICECount = Double(filteredICE.count)
-        var averageICE = ICEValueCache / ICECount
+        let averageICE = ICEValueCache / ICECount
         print("*Test ICESUm:",ICEValueCache,"ICE COunt:",ICECount,"ICE Average:",averageICE)
+        
+        var absorptionRatio = averageCarbEffect / averageICE
+        
+        print("*Test Absorption Ratio:", absorptionRatio)
     }
     
     // MARK: Meal Detection
