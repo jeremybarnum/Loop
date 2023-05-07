@@ -18,7 +18,7 @@ struct PredictionInputEffect: OptionSet {
     static let momentum         = PredictionInputEffect(rawValue: 1 << 2)
     static let retrospection    = PredictionInputEffect(rawValue: 1 << 3)
     static let zeroTemp         = PredictionInputEffect(rawValue: 1 << 4)
-    static let slowAbsorptionAdjustment   = PredictionInputEffect(rawValue: 1 << 5)
+    static let slowAbsorptionEffect   = PredictionInputEffect(rawValue: 1 << 5)
 
     static let all: PredictionInputEffect = [.carbs, .insulin, .momentum, .retrospection]
 
@@ -34,7 +34,7 @@ struct PredictionInputEffect: OptionSet {
             return NSLocalizedString("Retrospective Correction", comment: "Title of the prediction input effect for retrospective correction")
         case [.zeroTemp]:
             return NSLocalizedString("Zero Temping", comment: "Title of the prediction input effect for Zero Temping")
-        case [.slowAbsorptionAdjustment]:
+        case [.slowAbsorptionEffect]:
             return NSLocalizedString("Slow Absorption", comment: "Title of the prediction input effect for slow absorbing carbs")
             
         default:
@@ -54,7 +54,7 @@ struct PredictionInputEffect: OptionSet {
             return NSLocalizedString("30 min comparison of glucose prediction vs actual, continued with decay over 60 min", comment: "Description of the prediction input effect for retrospective correction")
         case [.zeroTemp]:
             return NSLocalizedString("Zero Temping", comment: "Title of the prediction input effect for Zero Temping")
-        case [.slowAbsorptionAdjustment]:
+        case [.slowAbsorptionEffect]:
             return NSLocalizedString("Impact of Slow Absorption of Carbs", comment: "Title of the prediction input effect for slow absorption of carbs")
         default:
             return nil

@@ -385,6 +385,8 @@ final class LoopDataManager {
     
     private var zeroTempEffect: [GlucoseEffect] = []
 
+    private var slowAbsorptionEffect: [GlucoseEffect] = []
+    
     /// When combining retrospective glucose discrepancies, extend the window slightly as a buffer.
     private let retrospectiveCorrectionGroupingIntervalMultiplier = 1.01
 
@@ -1328,6 +1330,9 @@ extension LoopDataManager {
             effects.append(zeroTempEffect)
         }
 
+        if inputs.contains(.slowAbsorptionEffect) {
+            effects.append(slowAbsorptionEffect)
+        }
 
         var prediction = LoopMath.predictGlucose(startingAt: glucose, momentum: momentum, effects: effects)
 
