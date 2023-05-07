@@ -229,7 +229,7 @@ extension NotificationManager {
         /// Notifications should expire after the missed meal is no longer relevant
         //let expirationDate = mealStart.addingTimeInterval(LoopCoreConstants.defaultCarbAbsorptionTimes.slow)
 
-        notification.title =  String(format: NSLocalizedString("Carbs absorbing slowly", comment: "The notification title for a slow carb absorption situation"))
+        notification.title =  String(format: NSLocalizedString("Carbs absorbing at \(absorptionRatio)% of expected", comment: "The notification title for a slow carb absorption situation"))
         notification.body = String(format: NSLocalizedString("Carbs are absorbing slowly but Loop hasn't adjusted yet. If you edit down and check zero temp effects, you can see whether you will crash.", comment: "The notification description for a slow absorbing scenario"))
         notification.sound = .default
         
