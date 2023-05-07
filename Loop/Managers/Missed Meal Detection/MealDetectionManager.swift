@@ -110,7 +110,7 @@ class MealDetectionManager {
         
         ICECount = Double(filteredICE.count)
         let averageICE = ICEValueCache / ICECount
-        print("*Test ICESUm:",ICEValueCache,"ICE COunt:",ICECount,"ICE Average:",averageICE)
+        print("*Test ICESUm:",ICEValueCache,"ICE Count:",ICECount,"ICE Average:",averageICE)
         
         absorptionRatio = averageICE / averageCarbEffect
         
@@ -128,8 +128,6 @@ class MealDetectionManager {
             let newQuantity = HKQuantity(unit: carbUnit, doubleValue: value)
             return GlucoseEffect(startDate: effect.startDate, quantity: newQuantity)
         }
-        
-        let ratioAdjustedPrediction =
 
     }
     
