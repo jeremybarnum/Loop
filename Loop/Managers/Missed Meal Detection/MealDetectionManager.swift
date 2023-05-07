@@ -64,7 +64,7 @@ class MealDetectionManager {
     }
     
     // MARK: SlowAbsorption Detection
-    //TODO: if ICE is a velocity and carb effect is a glucose effect array, some changes may be needed 
+
     func detectSlowAbsorption(insulinCounteractionEffects: [GlucoseEffectVelocity], carbEffects: [GlucoseEffect]) {
 
         let intervalStart = currentDate(timeIntervalSinceNow: -TimeInterval(minutes: 20)) //only consider last 20 minutes
@@ -72,12 +72,15 @@ class MealDetectionManager {
         let delta = 5.0 //the standard loop 5 minute interval
         
         /// Effect caching inspired by `LoopMath.predictGlucose`
+       
+        let carbUnit = HKUnit.milligramsPerDeciliter
+        let ICEUnit = HKUnit.milligramsPerDeciliterPerMinute
         var carbEffectValueCache = 0.0
         var ICEValueCache = 0.0
         var carbEffectCount = 0.0
         var ICECount = 0.0
-        let carbUnit = HKUnit.milligramsPerDeciliter
-        let ICEUnit = HKUnit.milligramsPerDeciliterPerMinute
+        var absorptionRatio = 0.0
+        
         
         let filteredCarbEffects = carbEffects.filterDateRange(intervalStart, now)
         
@@ -109,7 +112,7 @@ class MealDetectionManager {
         let averageICE = ICEValueCache / ICECount
         print("*Test ICESUm:",ICEValueCache,"ICE COunt:",ICECount,"ICE Average:",averageICE)
         
-        var absorptionRatio = averageCarbEffect / averageICE
+        absorptionRatio = averageCarbEffect / averageICE
         
         print("*Test Absorption Ratio:", absorptionRatio)
     }

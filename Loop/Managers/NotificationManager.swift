@@ -224,6 +224,38 @@ extension NotificationManager {
         UNUserNotificationCenter.current().add(request)
     }
     
+    static func sendSlowAbsorptionNotification(absorptionRatio: Double, delay: TimeInterval? = nil) {
+        let notification = UNMutableNotificationContent()
+        /// Notifications should expire after the missed meal is no longer relevant
+        //let expirationDate = mealStart.addingTimeInterval(LoopCoreConstants.defaultCarbAbsorptionTimes.slow)
+
+        notification.title =  String(format: NSLocalizedString("Carbs absorbing slowly", comment: "The notification title for a slow carb absorption situation"))
+        notification.body = String(format: NSLocalizedString("Carbs are absorbing slowly but loop hasn't adjusted yet. If you edit down and check zero temp effects, you can see whether you will crash.", comment: "The notification description for a slow absorbing scenario"))
+        notification.sound = .default
+        
+      /*  notification.userInfo = [
+            LoopNotificationUserInfoKey.missedMealTime.rawValue: mealStart,
+            LoopNotificationUserInfoKey.missedMealCarbAmount.rawValue: amountInGrams,
+            LoopNotificationUserInfoKey.expirationDate.rawValue: expirationDate
+        ]
+        */
+        //not sure if we need this
+        
+        var notificationTrigger: UNTimeIntervalNotificationTrigger? = nil
+        if let delay {
+            notificationTrigger = UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false)
+        }
+
+        let request = UNNotificationRequest(
+            /// We use the same `identifier` for all requests so a newer missed meal notification will replace a current one (if it exists)
+            identifier: LoopNotificationCategory.slowAbsorption.rawValue,
+            content: notification,
+            trigger: notificationTrigger
+        )
+
+        UNUserNotificationCenter.current().add(request)
+    }
+    
     static func sendMissedMealNotification(mealStart: Date, amountInGrams: Double, delay: TimeInterval? = nil) {
         let notification = UNMutableNotificationContent()
         /// Notifications should expire after the missed meal is no longer relevant
