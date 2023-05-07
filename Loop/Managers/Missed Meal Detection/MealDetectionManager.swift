@@ -116,7 +116,7 @@ class MealDetectionManager {
         
         if absorptionRatio < 0.7 {
             NotificationManager.sendSlowAbsorptionNotification(absorptionRatio: absorptionRatio)
-            print("Sent notification request")
+            print("*Test Sent notification request")
             
         }
         
