@@ -1624,6 +1624,30 @@ extension LoopDataManager {
         zeroTempEffect = zeroTemp.tempBasalGlucoseEffects(insulinModelProvider: insulinModelProvider, longestEffectDuration: insulinActionDuration, insulinSensitivity: insulinSensitivity, basalRateSchedule: basalRateSchedule)
         
     }
+    
+    private func updateSlowAbsorptionEffect() throws {   //TODO: make this work
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+
+        // Get settings, otherwise clear effect and throw error
+        guard
+            let insulinSensitivity = insulinSensitivityScheduleApplyingOverrideHistory,
+            let basalRateSchedule = basalRateScheduleApplyingOverrideHistory
+            else {
+                zeroTempEffect = []
+            throw LoopError.missingDataError(.insulinEffect)//not the best error but good enough
+        }
+        
+        let insulinModelProvider = doseStore.insulinModelProvider
+        let insulinActionDuration = insulinModelProvider.model(for: pumpInsulinType).effectDuration
+
+        // generate effect of suspending insulin delivery by setting temp basal rate to zero
+        let startZeroTempDose = Date()// my attempt to replace now()
+        let endZeroTempDose = startZeroTempDose.addingTimeInterval(insulinActionDuration)
+        let zeroTemp = DoseEntry(type: .tempBasal, startDate: startZeroTempDose, endDate: endZeroTempDose, value: 0.0, unit: DoseUnit.unitsPerHour)
+        
+        zeroTempEffect = zeroTemp.tempBasalGlucoseEffects(insulinModelProvider: insulinModelProvider, longestEffectDuration: insulinActionDuration, insulinSensitivity: insulinSensitivity, basalRateSchedule: basalRateSchedule)
+        
+    }
 
     /// Runs the glucose prediction on the latest effect data.
     ///
@@ -2182,7 +2206,7 @@ extension LoopDataManager {
                 }),
                 "]",
                 
-                "zeroTempEffect: [",
+                "zeroTempEffect: [",  //TODO: maybe add slow absorption effect here too 
                 "* GlucoseEffect(start, mg/dL)",
                 (manager.zeroTempEffect ).reduce(into: "", { (entries, entry) in
                 entries.append("* \(entry.startDate), \(entry.quantity.doubleValue(for: .milligramsPerDeciliter))\n")
