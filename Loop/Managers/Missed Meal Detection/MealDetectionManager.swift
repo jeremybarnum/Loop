@@ -121,6 +121,16 @@ class MealDetectionManager {
         }
         
         print("*Test Absorption Ratio:", absorptionRatio)
+        
+        // Assuming carbUnit and absorptionRatio are already defined
+        let ratioAdjustedCarbEffects: [GlucoseEffect] = carbEffects.map { effect in
+            let value = effect.quantity.doubleValue(for: carbUnit) * absorptionRatio
+            let newQuantity = HKQuantity(unit: carbUnit, doubleValue: value)
+            return GlucoseEffect(startDate: effect.startDate, quantity: newQuantity)
+        }
+        
+        let ratioAdjustedPrediction =
+
     }
     
     // MARK: Meal Detection
