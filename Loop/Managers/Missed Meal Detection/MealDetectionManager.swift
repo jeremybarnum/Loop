@@ -67,33 +67,43 @@ class MealDetectionManager {
     //TODO: if ICE is a velocity and carb effect is a glucose effect array, some changes may be needed 
     func detectSlowAbsorption(insulinCounteractionEffects: [GlucoseEffectVelocity], carbEffects: [GlucoseEffect]) {
 
-        let intervalStart = currentDate(timeIntervalSinceNow: -TimeInterval(minutes: 15)) //only consider last 15 minutes
+        let intervalStart = currentDate(timeIntervalSinceNow: -TimeInterval(minutes: 20)) //only consider last 20 minutes
         let now = self.currentDate
         let delta = 5.0 //the standard loop 5 minute interval
 
-        let filteredCarbEffects = carbEffects.filterDateRange(intervalStart, now)
+      
             
         /// Effect caching inspired by `LoopMath.predictGlucose`
-        var carbEffectValueCache: [Date: Double] = [:]
-        var ICEValueCache: [Date: Double] = [:]
+        var carbEffectValueCache = 0.0
+        var ICEValueCache = 0.0
+        var carbEffectCount = 0
+        var ICECount = 0
         let carbUnit = HKUnit.milligramsPerDeciliter
         let ICEUnit = HKUnit.milligramsPerDeciliterPerMinute
-
+        
+        let filteredCarbEffects = carbEffects.filterDateRange(intervalStart, now)
+        
+        /// Carb effects are cumulative, so we have to subtract the previous effect value
+        var previousEffectValue: Double = filteredCarbEffects.first?.quantity.doubleValue(for: carbUnit) ?? 0
+        
         for effect in filteredCarbEffects {
-            let value = effect.quantity.doubleValue(for: carbUnit)
-            carbEffectValueCache[effect.startDate] = value
+            let value = effect.quantity.doubleValue(for: carbUnit) - previousEffectValue
+            carbEffectValueCache += value
+            carbEffectCount = filteredCarbEffects.count
+            previousEffectValue = value
         }
-        print("*Test CarbEffectDoubles:",carbEffectValueCache)
-        print("*Test CarbEffects:",carbEffects)
+        print("*Test CarbEffect Sum:",carbEffectValueCache,"CarbEffectCount:",carbEffectCount)
+        print("*Test CarbEffects:",filteredCarbEffects)
 
         let filteredICE = insulinCounteractionEffects
             .filterDateRange(intervalStart, now)
 
         for effect in filteredICE {
-            let value = effect.quantity.doubleValue(for: ICEUnit)
-            ICEValueCache[effect.startDate] = value * delta //because ICE is a velocity, I'm converting it to a carbEffect equivalent BG value by multiplying by the 5 minute interval
+            let value = effect.quantity.doubleValue(for: ICEUnit) * delta //because ICE is a velocity, I'm converting it to a carbEffect equivalent BG value by multiplying by the 5 minute interval
+            ICEValueCache += value
+            ICECount = filteredICE.count
         }
-        print("*Test ICEDoubles:",ICEValueCache)
+        print("*Test ICESUm:",ICEValueCache,"ICE COunt:",ICECount)
     }
     
     // MARK: Meal Detection
