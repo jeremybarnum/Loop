@@ -84,6 +84,7 @@ class MealDetectionManager {
             carbEffectValueCache[effect.startDate] = value
         }
         print("*Test CarbEffectDoubles:",carbEffectValueCache)
+        print("*Test CarbEffects:",carbEffects)
 
         let filteredICE = insulinCounteractionEffects
             .filterDateRange(intervalStart, now)

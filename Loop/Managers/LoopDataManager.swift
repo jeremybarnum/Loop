@@ -916,7 +916,6 @@ extension LoopDataManager {
                 }
             )
             self.mealDetectionManager.detectSlowAbsorption(insulinCounteractionEffects: self.insulinCounteractionEffects, carbEffects: carbEffects)
-            //TODO: this seems like a natural place to put the carbAbsorptionWarning
         }
 
         // 5 second delay to allow stores to cache data before it is read by widget
