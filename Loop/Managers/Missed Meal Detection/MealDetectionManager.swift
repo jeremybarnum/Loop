@@ -70,9 +70,7 @@ class MealDetectionManager {
         let intervalStart = currentDate(timeIntervalSinceNow: -TimeInterval(minutes: 20)) //only consider last 20 minutes
         let now = self.currentDate
         let delta = 5.0 //the standard loop 5 minute interval
-
-      
-            
+        
         /// Effect caching inspired by `LoopMath.predictGlucose`
         var carbEffectValueCache = 0.0
         var ICEValueCache = 0.0
@@ -86,9 +84,10 @@ class MealDetectionManager {
         /// Carb effects are cumulative, so we have to subtract the previous effect value
         var previousEffectValue: Double = filteredCarbEffects.first?.quantity.doubleValue(for: carbUnit) ?? 0
         
-        for effect in filteredCarbEffects {
-            let value = effect.quantity.doubleValue(for: carbUnit) - previousEffectValue
-            carbEffectValueCache += value
+        for effect in filteredCarbEffects.dropFirst() {
+            let value = effect.quantity.doubleValue(for: carbUnit)
+            let difference = value - previousEffectValue
+            carbEffectValueCache += difference
             carbEffectCount = filteredCarbEffects.count
             previousEffectValue = value
         }
