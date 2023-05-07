@@ -74,35 +74,40 @@ class MealDetectionManager {
         /// Effect caching inspired by `LoopMath.predictGlucose`
         var carbEffectValueCache = 0.0
         var ICEValueCache = 0.0
-        var carbEffectCount = 0
-        var ICECount = 0
+        var carbEffectCount = 0.0
+        var ICECount = 0.0
         let carbUnit = HKUnit.milligramsPerDeciliter
         let ICEUnit = HKUnit.milligramsPerDeciliterPerMinute
         
         let filteredCarbEffects = carbEffects.filterDateRange(intervalStart, now)
         
         /// Carb effects are cumulative, so we have to subtract the previous effect value
-        var previousEffectValue: Double = filteredCarbEffects.first?.quantity.doubleValue(for: carbUnit) ?? 0
+        var previousEffectValue: Double = filteredCarbEffects.first?.quantity.doubleValue(for: carbUnit) ?? 0//I'm worried this zero could create weird carb effects
         
         for effect in filteredCarbEffects.dropFirst() {
             let value = effect.quantity.doubleValue(for: carbUnit)
             let difference = value - previousEffectValue
             carbEffectValueCache += difference
-            carbEffectCount = filteredCarbEffects.count
             previousEffectValue = value
         }
-        print("*Test CarbEffect Sum:",carbEffectValueCache,"CarbEffectCount:",carbEffectCount)
+        carbEffectCount = Double(filteredCarbEffects.dropFirst().count)
+        
+        var averageCarbEffect = carbEffectValueCache / carbEffectCount / delta //I want it to match the units on the graph, so I'm using mg/dL/minute
+        
+        print("*Test CarbEffect Sum:",carbEffectValueCache,"CarbEffectCount:",carbEffectCount,"CarbEffectAverage:",averageCarbEffect)
         print("*Test CarbEffects:",filteredCarbEffects)
 
         let filteredICE = insulinCounteractionEffects
             .filterDateRange(intervalStart, now)
 
         for effect in filteredICE {
-            let value = effect.quantity.doubleValue(for: ICEUnit) * delta //because ICE is a velocity, I'm converting it to a carbEffect equivalent BG value by multiplying by the 5 minute interval
+            let value = effect.quantity.doubleValue(for: ICEUnit)
             ICEValueCache += value
-            ICECount = filteredICE.count
         }
-        print("*Test ICESUm:",ICEValueCache,"ICE COunt:",ICECount)
+        
+        ICECount = Double(filteredICE.count)
+        var averageICE = ICEValueCache / ICECount
+        print("*Test ICESUm:",ICEValueCache,"ICE COunt:",ICECount,"ICE Average:",averageICE)
     }
     
     // MARK: Meal Detection
