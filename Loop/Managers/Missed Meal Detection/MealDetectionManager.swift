@@ -98,7 +98,7 @@ class MealDetectionManager {
         print("*Test CarbEffect Sum:",carbEffectValueCache,"CarbEffectCount:",carbEffectCount,"CarbEffectAverage:",averageCarbEffect)
 
         let filteredICE = insulinCounteractionEffects
-            .filterDateRange(intervalStart, now)
+            .filterDateRange(intervalStart, now).dropFirst()
 
         for effect in filteredICE {
             let value = effect.quantity.doubleValue(for: ICEUnit)
