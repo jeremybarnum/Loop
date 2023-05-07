@@ -69,16 +69,18 @@ class MealDetectionManager {
 
         let intervalStart = currentDate(timeIntervalSinceNow: -TimeInterval(minutes: 15)) //only consider last 15 minutes
         let now = self.currentDate
+        let delta = 5.0 //the standard loop 5 minute interval
 
         let filteredCarbEffects = carbEffects.filterDateRange(intervalStart, now)
             
         /// Effect caching inspired by `LoopMath.predictGlucose`
         var carbEffectValueCache: [Date: Double] = [:]
         var ICEValueCache: [Date: Double] = [:]
-        let unit = HKUnit.milligramsPerDeciliter
+        let carbUnit = HKUnit.milligramsPerDeciliter
+        let ICEUnit = HKUnit.milligramsPerDeciliterPerMinute
 
         for effect in filteredCarbEffects {
-            let value = effect.quantity.doubleValue(for: unit)
+            let value = effect.quantity.doubleValue(for: carbUnit)
             carbEffectValueCache[effect.startDate] = value
         }
         print("CarbEffectDoubles:",carbEffectValueCache)
@@ -87,8 +89,8 @@ class MealDetectionManager {
             .filterDateRange(intervalStart, now)
 
         for effect in filteredICE {
-            let value = effect.quantity.doubleValue(for: unit)
-            ICEValueCache[effect.startDate] = value
+            let value = effect.quantity.doubleValue(for: ICEUnit)
+            ICEValueCache[effect.startDate] = value * delta //because ICE is a velocity, I'm converting it to a carbEffect equivalent BG value by multiplying by the 5 minute interval
         }
         print("ICEDoubles:",ICEValueCache)
     }
