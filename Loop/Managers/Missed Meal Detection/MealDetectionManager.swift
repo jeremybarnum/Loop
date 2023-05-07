@@ -64,7 +64,8 @@ class MealDetectionManager {
     }
     
     // MARK: SlowAbsorption Detection
-    func detectSlowAbsorption(insulinCounteractionEffects: [GlucoseEffectVelocity], carbEffects: [GlucoseEffect], completion: @escaping (MissedMealStatus) -> Void) {
+    //TODO: if ICE is a velocity and carb effect is a glucose effect array, some changes may be needed 
+    func detectSlowAbsorption(insulinCounteractionEffects: [GlucoseEffectVelocity], carbEffects: [GlucoseEffect]) {
 
         let intervalStart = currentDate(timeIntervalSinceNow: -TimeInterval(minutes: 15)) //only consider last 15 minutes
         let now = self.currentDate

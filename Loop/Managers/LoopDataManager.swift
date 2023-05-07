@@ -915,6 +915,7 @@ extension LoopDataManager {
                     return self.delegate?.loopDataManager(self, estimateBolusDuration: bolusAmount)
                 }
             )
+            self.mealDetectionManager.detectSlowAbsorption(insulinCounteractionEffects: self.insulinCounteractionEffects, carbEffects: carbEffects)
             //TODO: this seems like a natural place to put the carbAbsorptionWarning
         }
 
