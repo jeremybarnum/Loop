@@ -112,7 +112,7 @@ class MealDetectionManager {
         let averageICE = ICEValueCache / ICECount
         print("*Test ICESUm:",ICEValueCache,"ICE COunt:",ICECount,"ICE Average:",averageICE)
         
-        absorptionRatio = averageCarbEffect / averageICE
+        absorptionRatio = averageICE / averageCarbEffect
         
         if absorptionRatio < 0.7 {
             NotificationManager.sendSlowAbsorptionNotification(absorptionRatio: absorptionRatio)
