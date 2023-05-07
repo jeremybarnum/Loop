@@ -83,7 +83,7 @@ class MealDetectionManager {
             let value = effect.quantity.doubleValue(for: carbUnit)
             carbEffectValueCache[effect.startDate] = value
         }
-        print("CarbEffectDoubles:",carbEffectValueCache)
+        print("*Test CarbEffectDoubles:",carbEffectValueCache)
 
         let filteredICE = insulinCounteractionEffects
             .filterDateRange(intervalStart, now)
@@ -92,7 +92,7 @@ class MealDetectionManager {
             let value = effect.quantity.doubleValue(for: ICEUnit)
             ICEValueCache[effect.startDate] = value * delta //because ICE is a velocity, I'm converting it to a carbEffect equivalent BG value by multiplying by the 5 minute interval
         }
-        print("ICEDoubles:",ICEValueCache)
+        print("*Test ICEDoubles:",ICEValueCache)
     }
     
     // MARK: Meal Detection
