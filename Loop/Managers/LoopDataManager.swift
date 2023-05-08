@@ -1625,15 +1625,16 @@ extension LoopDataManager {
         
     }
     
-    private func updateSlowAbsorptionEffect() throws {   //TODO: make this work
+    private func updateSlowAbsorptionEffect(slowAbsorptionRatio: Double) throws {   //TODO: make this work
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
 
         // Get settings, otherwise clear effect and throw error
         guard
             let insulinSensitivity = insulinSensitivityScheduleApplyingOverrideHistory,
             let basalRateSchedule = basalRateScheduleApplyingOverrideHistory
+                let carbEffects = self.carbEffect
             else {
-                zeroTempEffect = []
+                slowAbsorptionEffect = []
             throw LoopError.missingDataError(.insulinEffect)//not the best error but good enough
         }
         
@@ -2206,7 +2207,7 @@ extension LoopDataManager {
                 }),
                 "]",
                 
-                "zeroTempEffect: [",  //TODO: maybe add slow absorption effect here too 
+                "zeroTempEffect: [",  //TODO: maybe add slow absorption effect here too
                 "* GlucoseEffect(start, mg/dL)",
                 (manager.zeroTempEffect ).reduce(into: "", { (entries, entry) in
                 entries.append("* \(entry.startDate), \(entry.quantity.doubleValue(for: .milligramsPerDeciliter))\n")

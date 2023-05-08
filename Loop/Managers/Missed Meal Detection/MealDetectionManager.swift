@@ -65,8 +65,8 @@ class MealDetectionManager {
     
     // MARK: SlowAbsorption Detection
 
-    func detectSlowAbsorption(insulinCounteractionEffects: [GlucoseEffectVelocity], carbEffects: [GlucoseEffect]) {
-
+    func observedAbsorption(insulinCounteractionEffects: [GlucoseEffectVelocity], carbEffects: [GlucoseEffect])->[GlucoseEffect] {
+//computes recent empirical ratio of observed to modeled absorption and generates an effect for the adjustment
         let intervalStart = currentDate(timeIntervalSinceNow: -TimeInterval(minutes: 20)) //only consider last 20 minutes
         let now = self.currentDate
         let delta = 5.0 //the standard loop 5 minute interval
@@ -123,12 +123,12 @@ class MealDetectionManager {
         print("*Test Absorption Ratio:", absorptionRatio)
         
         // Assuming carbUnit and absorptionRatio are already defined
-        let slowAbsorptionAdjustmentEffect: [GlucoseEffect] = carbEffects.map { effect in
+        let observedAbsorptionEffect: [GlucoseEffect] = carbEffects.map { effect in
             let value = effect.quantity.doubleValue(for: carbUnit) * (absorptionRatio - 1.0)
             let newQuantity = HKQuantity(unit: carbUnit, doubleValue: value)
             return GlucoseEffect(startDate: effect.startDate, quantity: newQuantity)
         }
-
+        return observedAbsorptionEffect
     }
     
     // MARK: Meal Detection
