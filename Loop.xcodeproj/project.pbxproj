@@ -332,6 +332,7 @@
 		89F9119624358E6900ECCAF3 /* BolusPickerValues.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89F9119524358E6900ECCAF3 /* BolusPickerValues.swift */; };
 		89FE21AD24AC57E30033F501 /* Collection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89FE21AC24AC57E30033F501 /* Collection.swift */; };
 		9917EAFC29FAE98000343394 /* CarbAbsorptionWarningManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9917EAFB29FAE98000343394 /* CarbAbsorptionWarningManager.swift */; };
+		9917EAFE2A097B4900343394 /* ObservedAbsorptionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9917EAFD2A097B4900343394 /* ObservedAbsorptionManager.swift */; };
 		99601DE629ECE98B00BC0FA6 /* IntegralRetrospectiveCorrection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99601DE529ECE98B00BC0FA6 /* IntegralRetrospectiveCorrection.swift */; };
 		A90EF53C25DEF06200F32D61 /* PluginManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16DA84122E8E112008624C2 /* PluginManager.swift */; };
 		A90EF54425DEF0A000F32D61 /* OSLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4374B5EE209D84BE00D17AA8 /* OSLog.swift */; };
@@ -1322,6 +1323,7 @@
 		89F9119524358E6900ECCAF3 /* BolusPickerValues.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BolusPickerValues.swift; sourceTree = "<group>"; };
 		89FE21AC24AC57E30033F501 /* Collection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Collection.swift; sourceTree = "<group>"; };
 		9917EAFB29FAE98000343394 /* CarbAbsorptionWarningManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarbAbsorptionWarningManager.swift; sourceTree = "<group>"; };
+		9917EAFD2A097B4900343394 /* ObservedAbsorptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservedAbsorptionManager.swift; sourceTree = "<group>"; };
 		99601DE529ECE98B00BC0FA6 /* IntegralRetrospectiveCorrection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegralRetrospectiveCorrection.swift; sourceTree = "<group>"; };
 		A900531A28D60862000BC15B /* Loop.shortcut */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop.shortcut; sourceTree = "<group>"; };
 		A900531B28D608CA000BC15B /* Cancel Override.shortcut */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Cancel Override.shortcut"; sourceTree = "<group>"; };
@@ -2414,6 +2416,7 @@
 			children = (
 				B42D124228D371C400E43D22 /* AlertMuter.swift */,
 				1D6B1B6626866D89009AC446 /* AlertPermissionsChecker.swift */,
+				9917EAFD2A097B4900343394 /* ObservedAbsorptionManager.swift */,
 				439897361CD2F80600223065 /* AnalyticsServicesManager.swift */,
 				B4F3D25024AF890C0095CE44 /* BluetoothStateManager.swift */,
 				439BED291E76093C00B0AED5 /* CGMManager.swift */,
@@ -3861,6 +3864,7 @@
 				897A5A9924C22DE800C4E71D /* BolusEntryViewModel.swift in Sources */,
 				4374B5EF209D84BF00D17AA8 /* OSLog.swift in Sources */,
 				1DB619AC270BAD3D006C9D07 /* VersionUpdateViewModel.swift in Sources */,
+				9917EAFE2A097B4900343394 /* ObservedAbsorptionManager.swift in Sources */,
 				A9C62D882331703100535612 /* Service.swift in Sources */,
 				89CAB36324C8FE96009EE3CE /* PredictedGlucoseChartView.swift in Sources */,
 				4F6663941E905FD2009E74FC /* ChartColorPalette+Loop.swift in Sources */,

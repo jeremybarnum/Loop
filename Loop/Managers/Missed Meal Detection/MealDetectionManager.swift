@@ -83,7 +83,11 @@ class MealDetectionManager {
         
         
         let recentCarbEffects = carbEffects.filterDateRange(intervalStart, now)
-        let futureCarbEffects = carbEffects.filterDateRange(now, currentDate(timeIntervalSinceNow: -TimeInterval(hours: 2)))
+        print("Carb Effects unfiltered:",carbEffects)
+        print("now:",now)
+        print("2 hour interval:",currentDate(timeIntervalSinceNow: TimeInterval(hours: 2)))
+        
+        let futureCarbEffects = carbEffects.filterDateRange(now, currentDate(timeIntervalSinceNow: TimeInterval(hours: 2)))
         
         /// Carb effects are cumulative, so we have to subtract the previous effect value
         var previousEffectValue: Double = recentCarbEffects.first?.quantity.doubleValue(for: carbUnit) ?? 0//I'm worried this zero could create weird carb effects
@@ -123,7 +127,7 @@ class MealDetectionManager {
         
         print("*Test Absorption Ratio:", absorptionRatio)
         
-        // Assuming carbUnit and absorptionRatio are already defined
+
         let observedAbsorptionEffect: [GlucoseEffect] = futureCarbEffects.map { effect in
             let value = effect.quantity.doubleValue(for: carbUnit) * (absorptionRatio - 1.0)
             let newQuantity = HKQuantity(unit: carbUnit, doubleValue: value)
