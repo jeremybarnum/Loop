@@ -128,7 +128,7 @@ class ObservedAbsorptionManager {
     /// Generates a diagnostic report about the current state
     ///
     /// - parameter completionHandler: A closure called once the report has been generated. The closure takes a single argument of the report string.
-    /* func generateDiagnosticReport(_ completionHandler: @escaping (_ report: String) -> Void) {
+    /*lo func generateDiagnosticReport(_ completionHandler: @escaping (_ report: String) -> Void) {
         let report = [
             "## ObservedAbsorptionManager",
             "",

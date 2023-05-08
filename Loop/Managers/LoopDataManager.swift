@@ -32,6 +32,8 @@ final class LoopDataManager {
     private let carbStore: CarbStoreProtocol
     
     private let mealDetectionManager: MealDetectionManager
+    
+    private let observedAbsorptionManager: ObservedAbsorptionManager
 
     private let doseStore: DoseStoreProtocol
 
@@ -117,13 +119,13 @@ final class LoopDataManager {
             maximumBolus: settings.maximumBolus
         )
         
+        self.observedAbsorptionManager = ObservedAbsorptionManager(carbRatioScheduleApplyingOverrideHistory: carbStore.carbRatioScheduleApplyingOverrideHistory, insulinSensitivityScheduleApplyingOverrideHistory: carbStore.insulinSensitivityScheduleApplyingOverrideHistory)
+        
         self.lockedPumpInsulinType = Locked(pumpInsulinType)
 
         self.automaticDosingStatus = automaticDosingStatus
 
         self.trustedTimeOffset = trustedTimeOffset
-
-        //retrospectiveCorrection = settings.enabledRetrospectiveCorrectionAlgorithm
 
         overrideIntentObserver = UserDefaults.appGroup?.observe(\.intentExtensionOverrideToSet, options: [.new], changeHandler: {[weak self] (defaults, change) in
             guard let name = change.newValue??.lowercased(), let appGroup = UserDefaults.appGroup else {
