@@ -63,9 +63,7 @@ class ObservedAbsorptionManager {
         
         
         let recentCarbEffects = carbEffects.filterDateRange(intervalStart, now)
-        
-        let futureCarbEffects = carbEffects.filterDateRange(now, currentDate(timeIntervalSinceNow: TimeInterval(hours: 2)))//TODO: make this the end of the carbEffects
-        
+
         /// Carb effects are cumulative, so we have to subtract the previous effect value
         var previousEffectValue: Double = recentCarbEffects.first?.quantity.doubleValue(for: carbUnit) ?? 0//TODO: figure this out I'm worried this zero could create weird carb effects
         
