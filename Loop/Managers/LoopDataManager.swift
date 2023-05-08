@@ -922,22 +922,8 @@ extension LoopDataManager {
                     return self.delegate?.loopDataManager(self, estimateBolusDuration: bolusAmount)
                 }
             )
-
-        }
-        
-        carbStore.getGlucoseEffects(start: carbEffectStart, end: nil, effectVelocities: insulinCounteractionEffects) {[weak self] result in
-            guard
-                let self = self,
-                case .success((_, let carbEffects)) = result
-            else {
-                if case .failure(let error) = result {
-                    self?.logger.error("Failed to fetch glucose effects to check for observed absorption: %{public}@", String(describing: error))
-                }
-                return
-            }
             
-        absorptionRatio = self.observedAbsorptionManager.computeObservedAbsorptionRatioAndNotifyIfSlow(insulinCounteractionEffects: self.insulinCounteractionEffects, carbEffects: carbEffects) //TODO: these carb effects are the same as for missed meal which I guess is OK
-            
+            absorptionRatio = self.observedAbsorptionManager.computeObservedAbsorptionRatioAndNotifyIfSlow(insulinCounteractionEffects: self.insulinCounteractionEffects, carbEffects: carbEffects) //TODO: these carb effects are the same as for missed meal which I guess is OK
         }
 
         // 5 second delay to allow stores to cache data before it is read by widget
@@ -1150,7 +1136,7 @@ extension LoopDataManager {
         }
         
         do {
-            self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffect )//TODO: the two function calls need to differentiate
+            try updateObservedAbsorptionEffect()
         }
         catch let error {
             logger.error("%{public}@", String(describing: error))
@@ -1663,16 +1649,13 @@ extension LoopDataManager {
 
         // Get settings, otherwise clear effect and throw error
         guard
-            let insulinSensitivity = insulinSensitivityScheduleApplyingOverrideHistory,
-            let basalRateSchedule = basalRateScheduleApplyingOverrideHistory
+            let currentCarbEffects = carbEffect
             else {
                 observedAbsorptionEffect = []
             throw LoopError.missingDataError(.insulinEffect)//not the best error but good enough
         }
-        
-       //need to get current carb effects here  if let carbEffect {currentCarbEffect = carbEffect}
        
-        observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffect )//TODO: the two function calls need to differentiate
+        observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: currentCarbEffects )//TODO: the two function calls need to differentiate
         
     }
 
