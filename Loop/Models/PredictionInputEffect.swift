@@ -55,7 +55,7 @@ struct PredictionInputEffect: OptionSet {
         case [.zeroTemp]:
             return NSLocalizedString("Zero Temping", comment: "Title of the prediction input effect for Zero Temping")
         case [.observedAbsorptionEffect]:
-            return NSLocalizedString("Impact of Slow Absorption of Carbs", comment: "Title of the prediction input effect for slow absorption of carbs")
+            return NSLocalizedString("Impact of Observed Absorption of Carbs", comment: "Title of the prediction input effect for observed absorption of carbs")
         default:
             return nil
         }
