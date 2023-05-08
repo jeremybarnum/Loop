@@ -385,7 +385,7 @@ final class LoopDataManager {
     
     private var zeroTempEffect: [GlucoseEffect] = []
 
-    private var slowAbsorptionEffect: [GlucoseEffect] = []
+    private var observedAbsorptionEffect: [GlucoseEffect] = []
     
     /// When combining retrospective glucose discrepancies, extend the window slightly as a buffer.
     private let retrospectiveCorrectionGroupingIntervalMultiplier = 1.01
@@ -917,7 +917,7 @@ extension LoopDataManager {
                     return self.delegate?.loopDataManager(self, estimateBolusDuration: bolusAmount)
                 }
             )
-            self.mealDetectionManager.detectSlowAbsorption(insulinCounteractionEffects: self.insulinCounteractionEffects, carbEffects: carbEffects)
+            self.mealDetectionManager.observedAbsorption(insulinCounteractionEffects: self.insulinCounteractionEffects, carbEffects: carbEffects)
         }
 
         // 5 second delay to allow stores to cache data before it is read by widget
@@ -1330,8 +1330,8 @@ extension LoopDataManager {
             effects.append(zeroTempEffect)
         }
 
-        if inputs.contains(.slowAbsorptionEffect) {
-            effects.append(slowAbsorptionEffect)
+        if inputs.contains(.observedAbsorptionEffect) {
+            effects.append(observedAbsorptionEffect)
         }
 
         var prediction = LoopMath.predictGlucose(startingAt: glucose, momentum: momentum, effects: effects)
@@ -1625,30 +1625,6 @@ extension LoopDataManager {
         
     }
     
-    private func updateSlowAbsorptionEffect(slowAbsorptionRatio: Double) throws {   //TODO: make this work
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-
-        // Get settings, otherwise clear effect and throw error
-        guard
-            let insulinSensitivity = insulinSensitivityScheduleApplyingOverrideHistory,
-            let basalRateSchedule = basalRateScheduleApplyingOverrideHistory
-                let carbEffects = self.carbEffect
-            else {
-                slowAbsorptionEffect = []
-            throw LoopError.missingDataError(.insulinEffect)//not the best error but good enough
-        }
-        
-        let insulinModelProvider = doseStore.insulinModelProvider
-        let insulinActionDuration = insulinModelProvider.model(for: pumpInsulinType).effectDuration
-
-        // generate effect of suspending insulin delivery by setting temp basal rate to zero
-        let startZeroTempDose = Date()// my attempt to replace now()
-        let endZeroTempDose = startZeroTempDose.addingTimeInterval(insulinActionDuration)
-        let zeroTemp = DoseEntry(type: .tempBasal, startDate: startZeroTempDose, endDate: endZeroTempDose, value: 0.0, unit: DoseUnit.unitsPerHour)
-        
-        zeroTempEffect = zeroTemp.tempBasalGlucoseEffects(insulinModelProvider: insulinModelProvider, longestEffectDuration: insulinActionDuration, insulinSensitivity: insulinSensitivity, basalRateSchedule: basalRateSchedule)
-        
-    }
 
     /// Runs the glucose prediction on the latest effect data.
     ///
