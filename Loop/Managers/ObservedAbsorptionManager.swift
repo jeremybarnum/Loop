@@ -116,7 +116,7 @@ class ObservedAbsorptionManager {
             return GlucoseEffect(startDate: effect.startDate, quantity: newQuantity)
         }
         
-        print("*Test Observed Absorption Effect:", observedAbsorptionEffect)
+       // print("*Test Observed Absorption Effect:", observedAbsorptionEffect)
         
         return observedAbsorptionEffect
         
