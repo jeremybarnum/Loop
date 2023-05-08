@@ -78,9 +78,9 @@ class ObservedAbsorptionManager {
         carbEffectCount = Double(recentCarbEffects.dropFirst().count)
         
         let averageCarbEffect = carbEffectValueCache / carbEffectCount / delta //I want it to match the units on the graph, so I'm using mg/dL/minute
-        print("*Test FutureCarbEffects:",futureCarbEffects)
+        //print("*Test FutureCarbEffects:",futureCarbEffects)
         
-        print("*Test CarbEffect Sum:",carbEffectValueCache,"CarbEffectCount:",carbEffectCount,"CarbEffectAverage:",averageCarbEffect)
+        //print("*Test CarbEffect Sum:",carbEffectValueCache,"CarbEffectCount:",carbEffectCount,"CarbEffectAverage:",averageCarbEffect)
 
         let filteredICE = insulinCounteractionEffects
             .filterDateRange(intervalStart, now).dropFirst()
@@ -92,7 +92,7 @@ class ObservedAbsorptionManager {
         
         ICECount = Double(filteredICE.count)
         let averageICE = ICEValueCache / ICECount
-        print("*Test ICESUm:",ICEValueCache,"ICE Count:",ICECount,"ICE Average:",averageICE)
+        //print("*Test ICESUm:",ICEValueCache,"ICE Count:",ICECount,"ICE Average:",averageICE)
         
         absorptionRatio = averageICE / averageCarbEffect
         
