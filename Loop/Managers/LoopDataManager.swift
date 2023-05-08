@@ -1123,6 +1123,7 @@ extension LoopDataManager {
         
         do {
             try updateZeroTempEffect()
+          //  print("*Test ZeroTempEffect:",zeroTempEffect)
         } catch let error {
             logger.error("%{public}@", String(describing: error))
             warnings.append(.fetchDataWarning(.insulinEffect(error: error)))

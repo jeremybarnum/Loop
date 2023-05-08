@@ -82,21 +82,22 @@ class MealDetectionManager {
         var absorptionRatio = 0.0
         
         
-        let filteredCarbEffects = carbEffects.filterDateRange(intervalStart, now)
+        let recentCarbEffects = carbEffects.filterDateRange(intervalStart, now)
+        let futureCarbEffects = carbEffects.filterDateRange(now, carbEffects.last?.startDate)
         
         /// Carb effects are cumulative, so we have to subtract the previous effect value
-        var previousEffectValue: Double = filteredCarbEffects.first?.quantity.doubleValue(for: carbUnit) ?? 0//I'm worried this zero could create weird carb effects
+        var previousEffectValue: Double = recentCarbEffects.first?.quantity.doubleValue(for: carbUnit) ?? 0//I'm worried this zero could create weird carb effects
         
-        for effect in filteredCarbEffects.dropFirst() {
+        for effect in recentCarbEffects.dropFirst() {
             let value = effect.quantity.doubleValue(for: carbUnit)
             let difference = value - previousEffectValue
             carbEffectValueCache += difference
             previousEffectValue = value
         }
-        carbEffectCount = Double(filteredCarbEffects.dropFirst().count)
+        carbEffectCount = Double(recentCarbEffects.dropFirst().count)
         
         let averageCarbEffect = carbEffectValueCache / carbEffectCount / delta //I want it to match the units on the graph, so I'm using mg/dL/minute
-        print("*Test CarbEffects:",filteredCarbEffects)
+        print("*Test FutureCarbEffects:",futureCarbEffects)
         
         print("*Test CarbEffect Sum:",carbEffectValueCache,"CarbEffectCount:",carbEffectCount,"CarbEffectAverage:",averageCarbEffect)
 
@@ -123,7 +124,7 @@ class MealDetectionManager {
         print("*Test Absorption Ratio:", absorptionRatio)
         
         // Assuming carbUnit and absorptionRatio are already defined
-        let observedAbsorptionEffect: [GlucoseEffect] = carbEffects.map { effect in
+        let observedAbsorptionEffect: [GlucoseEffect] = futureCarbEffects.map { effect in
             let value = effect.quantity.doubleValue(for: carbUnit) * (absorptionRatio - 1.0)
             let newQuantity = HKQuantity(unit: carbUnit, doubleValue: value)
             return GlucoseEffect(startDate: effect.startDate, quantity: newQuantity)
