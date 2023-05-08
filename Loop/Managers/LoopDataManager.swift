@@ -288,7 +288,7 @@ final class LoopDataManager {
             // Invalidate cached effects affected by the override
             invalidateCachedEffects = true
             
-            // Update the affected schedules
+            // Update the affected schedules TODO: do I need to do this for the absorption too?
             mealDetectionManager.carbRatioScheduleApplyingOverrideHistory = carbRatioScheduleApplyingOverrideHistory
             mealDetectionManager.insulinSensitivityScheduleApplyingOverrideHistory = insulinSensitivityScheduleApplyingOverrideHistory
         }
@@ -385,9 +385,12 @@ final class LoopDataManager {
         }
     }
     
-    private var zeroTempEffect: [GlucoseEffect] = []
+    private var zeroTempEffect: [GlucoseEffect] = [] //TODO: how do I know I don't have to do the didset thing?
+    
+    private var absorptionRatio = 0.0
 
-    private var observedAbsorptionEffect: [GlucoseEffect] = []
+    private var observedAbsorptionEffect: [GlucoseEffect] = []  //TODO: how do I know I don't have to do the didset thing?
+
     
     /// When combining retrospective glucose discrepancies, extend the window slightly as a buffer.
     private let retrospectiveCorrectionGroupingIntervalMultiplier = 1.01
@@ -919,7 +922,22 @@ extension LoopDataManager {
                     return self.delegate?.loopDataManager(self, estimateBolusDuration: bolusAmount)
                 }
             )
-            self.mealDetectionManager.observedAbsorption(insulinCounteractionEffects: self.insulinCounteractionEffects, carbEffects: carbEffects)
+
+        }
+        
+        carbStore.getGlucoseEffects(start: carbEffectStart, end: nil, effectVelocities: insulinCounteractionEffects) {[weak self] result in
+            guard
+                let self = self,
+                case .success((_, let carbEffects)) = result
+            else {
+                if case .failure(let error) = result {
+                    self?.logger.error("Failed to fetch glucose effects to check for observed absorption: %{public}@", String(describing: error))
+                }
+                return
+            }
+            
+        absorptionRatio = self.observedAbsorptionManager.computeObservedAbsorptionRatioAndNotifyIfSlow(insulinCounteractionEffects: self.insulinCounteractionEffects, carbEffects: carbEffects) //TODO: these carb effects are the same as for missed meal which I guess is OK
+            
         }
 
         // 5 second delay to allow stores to cache data before it is read by widget
@@ -1130,6 +1148,15 @@ extension LoopDataManager {
             logger.error("%{public}@", String(describing: error))
             warnings.append(.fetchDataWarning(.insulinEffect(error: error)))
         }
+        
+        do {
+            self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffect )//TODO: the two function calls need to differentiate
+        }
+        catch let error {
+            logger.error("%{public}@", String(describing: error))
+            warnings.append(.fetchDataWarning(.insulinEffect(error: error)))
+        }
+
 
         dosingDecision.appendWarnings(warnings.value)
 
@@ -1628,6 +1655,26 @@ extension LoopDataManager {
         
     }
     
+    /// Generates a glucose prediction effect of applying observed carb absorptionRatio to currentCarbEffects
+    ///
+    /// - Throws: LoopError.configurationError
+    private func updateObservedAbsorptionEffect() throws {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+
+        // Get settings, otherwise clear effect and throw error
+        guard
+            let insulinSensitivity = insulinSensitivityScheduleApplyingOverrideHistory,
+            let basalRateSchedule = basalRateScheduleApplyingOverrideHistory
+            else {
+                observedAbsorptionEffect = []
+            throw LoopError.missingDataError(.insulinEffect)//not the best error but good enough
+        }
+        
+       //need to get current carb effects here  if let carbEffect {currentCarbEffect = carbEffect}
+       
+        observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffect )//TODO: the two function calls need to differentiate
+        
+    }
 
     /// Runs the glucose prediction on the latest effect data.
     ///
