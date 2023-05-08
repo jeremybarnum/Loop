@@ -197,7 +197,7 @@ class PredictionTableViewController: LoopChartsTableViewController, Identifiable
 
     private var eventualGlucoseDescription: String?
 
-    private var availableInputs: [PredictionInputEffect] = [.zeroTemp, .carbs, .insulin, .momentum, .retrospection, .observedAbsorptionEffect]
+    private var availableInputs: [PredictionInputEffect] = [.zeroTemp,.observedAbsorptionEffect, .carbs, .insulin, .momentum, .retrospection ]
 
     private var selectedInputs = PredictionInputEffect.all
 

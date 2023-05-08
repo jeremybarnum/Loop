@@ -2189,6 +2189,13 @@ extension LoopDataManager {
                 entries.append("* \(entry.startDate), \(entry.quantity.doubleValue(for: .milligramsPerDeciliter))\n")
                 }),
                 "]",
+                
+                "observedAbsorptionEffect: [",  
+                "* GlucoseEffect(start, mg/dL)",
+                (manager.observedAbsorptionEffect ).reduce(into: "", { (entries, entry) in
+                entries.append("* \(entry.startDate), \(entry.quantity.doubleValue(for: .milligramsPerDeciliter))\n")
+                }),
+                "]",
 
                 "glucoseMomentumEffect: \(manager.glucoseMomentumEffect ?? [])",
                 "retrospectiveGlucoseEffect: \(manager.retrospectiveGlucoseEffect)",

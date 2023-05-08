@@ -128,7 +128,12 @@ class MealDetectionManager {
             let newQuantity = HKQuantity(unit: carbUnit, doubleValue: value)
             return GlucoseEffect(startDate: effect.startDate, quantity: newQuantity)
         }
+        
+        print("*Test Observed Absorption Effect:", observedAbsorptionEffect)
+        
         return observedAbsorptionEffect
+        
+        
     }
     
     // MARK: Meal Detection
