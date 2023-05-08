@@ -46,7 +46,7 @@ class ObservedAbsorptionManager {
     
     // MARK: SlowAbsorption Detection
 
-    func observedAbsorption(insulinCounteractionEffects: [GlucoseEffectVelocity], carbEffects: [GlucoseEffect])-> Double {
+    func computeObservedAbsorptionRatioAndNotifyIfSlow(insulinCounteractionEffects: [GlucoseEffectVelocity], carbEffects: [GlucoseEffect])-> Double {
 //computes recent empirical ratio of observed to modeled absorption and generates an effect for the adjustment
         let intervalStart = currentDate(timeIntervalSinceNow: -TimeInterval(minutes: 20)) //only consider last 20 minutes
         let now = self.currentDate
@@ -96,7 +96,7 @@ class ObservedAbsorptionManager {
         
         absorptionRatio = averageICE / averageCarbEffect
         
-        if absorptionRatio < 0.7 {
+        if absorptionRatio < 0.7 {//TODO: make this not be hard coded
             NotificationManager.sendSlowAbsorptionNotification(absorptionRatio: absorptionRatio)
             print("*Test Sent notification request")
             
@@ -111,7 +111,7 @@ class ObservedAbsorptionManager {
         
         
         let observedAbsorptionEffect: [GlucoseEffect] = carbEffects.map { effect in
-            let value = effect.quantity.doubleValue(for: carbUnit) * (absorptionRatio - 1.0)
+            let value = effect.quantity.doubleValue(for: carbUnit) * (absorptionRatio - 1.0) //this computes the amount that needs to be subtracted from the carb effect to create the adjusted carb effect
             let newQuantity = HKQuantity(unit: carbUnit, doubleValue: value)
             return GlucoseEffect(startDate: effect.startDate, quantity: newQuantity)
         }
@@ -122,69 +122,79 @@ class ObservedAbsorptionManager {
         
     }
     
-    
-    // MARK: Notification Generation
-    /// Searches for any potential missed meals and sends a notification.
 
-    
-    
-    /* Internal for unit testing
-    func manageMealNotifications(for status: MissedMealStatus, pendingAutobolusUnits: Double? = nil, bolusDurationEstimator getBolusDuration: (Double) -> TimeInterval?) {
-        // We should remove expired notifications regardless of whether or not there was a meal
-        NotificationManager.removeExpiredMealNotifications()
-        
-        // Figure out if we should deliver a notification
-        let now = self.currentDate
-        let notificationTimeTooRecent = now.timeIntervalSince(lastMissedMealNotification?.deliveryTime ?? .distantPast) < (MissedMealSettings.maxRecency - MissedMealSettings.minRecency)
-        
-        guard
-            case .hasMissedMeal(let startTime, let carbAmount) = status,
-            !notificationTimeTooRecent,
-            UserDefaults.standard.missedMealNotificationsEnabled
-        else {
-            // No notification needed!
-            return
-        }
-        
-        var clampedCarbAmount = carbAmount
-        if
-            let maxBolus = maximumBolus,
-            let currentCarbRatio = carbRatioScheduleApplyingOverrideHistory?.quantity(at: now).doubleValue(for: .gram())
-        {
-            let maxAllowedCarbAutofill = maxBolus * currentCarbRatio
-            clampedCarbAmount = min(clampedCarbAmount, maxAllowedCarbAutofill)
-        }
-        
-        log.debug("Delivering a missed meal notification")
-
-        /// Coordinate the missed meal notification time with any pending autoboluses that `update` may have started
-        /// so that the user doesn't have to cancel the current autobolus to bolus in response to the missed meal notification
-        if
-            let pendingAutobolusUnits,
-            pendingAutobolusUnits > 0,
-            let estimatedBolusDuration = getBolusDuration(pendingAutobolusUnits),
-            estimatedBolusDuration < MissedMealSettings.maxNotificationDelay
-        {
-            NotificationManager.sendMissedMealNotification(mealStart: startTime, amountInGrams: clampedCarbAmount, delay: estimatedBolusDuration)
-            lastMissedMealNotification = MissedMealNotification(deliveryTime: now.advanced(by: estimatedBolusDuration),
-                                                  carbAmount: clampedCarbAmount)
-        } else {
-            NotificationManager.sendMissedMealNotification(mealStart: startTime, amountInGrams: clampedCarbAmount)
-            lastMissedMealNotification = MissedMealNotification(deliveryTime: now, carbAmount: clampedCarbAmount)
-        }
-    }
-    
     // MARK: Logging
     
     /// Generates a diagnostic report about the current state
     ///
     /// - parameter completionHandler: A closure called once the report has been generated. The closure takes a single argument of the report string.
-    func generateDiagnosticReport(_ completionHandler: @escaping (_ report: String) -> Void) {
+    /* func generateDiagnosticReport(_ completionHandler: @escaping (_ report: String) -> Void) {
         let report = [
-          
-        ]
+            "## ObservedAbsorptionManager",
+            "",
+     "* carbAbsorptionRatio: \(String(describing: compute)",
+            "* lastMissedMealCarbEstimate: \(String(describing: lastMissedMealNotification?.carbAmount))",
+            "* lastEvaluatedMissedMealTimeline:",
+     lastEvaluatedMissedMealTimeline.reduce(into: "", { (entries, entry) in
+         entries.append("  * date: \(entry.date), unexpectedDeviation: \(entry.unexpectedDeviation ?? -1), meal-based threshold: \(entry.mealThreshold ?? -1), change-based threshold: \(entry.rateOfChangeThreshold ?? -1) \n")
+     }),
+            "* lastDetectedMissedMealTimeline:",
+     lastDetectedMissedMealTimeline.reduce(into: "", { (entries, entry) in
+         entries.append("  * date: \(entry.date), unexpectedDeviation: \(entry.unexpectedDeviation ?? -1), meal-based threshold: \(entry.mealThreshold ?? -1), change-based threshold: \(entry.rateOfChangeThreshold ?? -1) \n")
+     })
+   ]
         
         completionHandler(report.joined(separator: "\n"))
     }
-     */
-}
+   */
+   
+   //TODO: stuff that might be useful for unit testing
+        
+        /* Internal for unit testing
+        func manageMealNotifications(for status: MissedMealStatus, pendingAutobolusUnits: Double? = nil, bolusDurationEstimator getBolusDuration: (Double) -> TimeInterval?) {
+            // We should remove expired notifications regardless of whether or not there was a meal
+            NotificationManager.removeExpiredMealNotifications()
+            
+            // Figure out if we should deliver a notification
+            let now = self.currentDate
+            let notificationTimeTooRecent = now.timeIntervalSince(lastMissedMealNotification?.deliveryTime ?? .distantPast) < (MissedMealSettings.maxRecency - MissedMealSettings.minRecency)
+            
+            guard
+                case .hasMissedMeal(let startTime, let carbAmount) = status,
+                !notificationTimeTooRecent,
+                UserDefaults.standard.missedMealNotificationsEnabled
+            else {
+                // No notification needed!
+                return
+            }
+            
+            var clampedCarbAmount = carbAmount
+            if
+                let maxBolus = maximumBolus,
+                let currentCarbRatio = carbRatioScheduleApplyingOverrideHistory?.quantity(at: now).doubleValue(for: .gram())
+            {
+                let maxAllowedCarbAutofill = maxBolus * currentCarbRatio
+                clampedCarbAmount = min(clampedCarbAmount, maxAllowedCarbAutofill)
+            }
+            
+            log.debug("Delivering a missed meal notification")
+            
+            /// Coordinate the missed meal notification time with any pending autoboluses that `update` may have started
+            /// so that the user doesn't have to cancel the current autobolus to bolus in response to the missed meal notification
+            if
+                let pendingAutobolusUnits,
+                pendingAutobolusUnits > 0,
+                let estimatedBolusDuration = getBolusDuration(pendingAutobolusUnits),
+                estimatedBolusDuration < MissedMealSettings.maxNotificationDelay
+            {
+                NotificationManager.sendMissedMealNotification(mealStart: startTime, amountInGrams: clampedCarbAmount, delay: estimatedBolusDuration)
+                lastMissedMealNotification = MissedMealNotification(deliveryTime: now.advanced(by: estimatedBolusDuration),
+                                                                    carbAmount: clampedCarbAmount)
+            } else {
+                NotificationManager.sendMissedMealNotification(mealStart: startTime, amountInGrams: clampedCarbAmount)
+                lastMissedMealNotification = MissedMealNotification(deliveryTime: now, carbAmount: clampedCarbAmount)
+            }
+        }
+        */
+        
+    }
