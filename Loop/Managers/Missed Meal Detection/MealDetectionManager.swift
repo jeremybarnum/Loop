@@ -83,7 +83,7 @@ class MealDetectionManager {
         
         
         let recentCarbEffects = carbEffects.filterDateRange(intervalStart, now)
-        let futureCarbEffects = carbEffects.filterDateRange(now, carbEffects.last?.startDate)
+        let futureCarbEffects = carbEffects.filterDateRange(now, currentDate(timeIntervalSinceNow: -TimeInterval(hours: 2)))
         
         /// Carb effects are cumulative, so we have to subtract the previous effect value
         var previousEffectValue: Double = recentCarbEffects.first?.quantity.doubleValue(for: carbUnit) ?? 0//I'm worried this zero could create weird carb effects
