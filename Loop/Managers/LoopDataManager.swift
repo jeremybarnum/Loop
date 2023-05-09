@@ -1667,9 +1667,8 @@ extension LoopDataManager {
             let inputs: PredictionInputEffect = [.all, .observedAbsorptionEffect]
             do {
                 self.predictionWithObservedAbsorption = try state.predictGlucose(using: inputs, includingPendingInsulin: true)
-                print("*Test predictionwithObservedAbsorption", self.predictionWithObservedAbsorption[5])
             } catch {
-                print("error")
+                print("error") //TODO: need a better error
             }
         }
     }
