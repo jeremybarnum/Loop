@@ -391,7 +391,7 @@ final class LoopDataManager {
     
     private var absorptionRatio = 0.0
 
-    private var observedAbsorptionEffect: [GlucoseEffect] = []  //TODO: how do I know I don't have to do the didset thing?
+    public var observedAbsorptionEffect: [GlucoseEffect] = []  //TODO: how do I know I don't have to do the didset thing?
 
     
     /// When combining retrospective glucose discrepancies, extend the window slightly as a buffer.
