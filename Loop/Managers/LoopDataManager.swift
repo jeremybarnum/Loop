@@ -385,13 +385,13 @@ final class LoopDataManager {
         }
     }
     
-    private var zeroTempEffect: [GlucoseEffect] = [] //TODO: how do I know I don't have to do the didset thing?
+    private var zeroTempEffect: [GlucoseEffect] = [] //TODO: how do I know I don't have to do the didset thing? didSet says, if this variable changes, what do I need to do.  In theory, for zeroTemp, it would just be the settings (basal rate and CSF) but it's not really worth it.
     
     private var predictionWithObservedAbsorption: [GlucoseValue] = []
     
     private var absorptionRatio = 0.0
 
-    public var observedAbsorptionEffect: [GlucoseEffect] = []  //TODO: how do I know I don't have to do the didset thing?
+    public var observedAbsorptionEffect: [GlucoseEffect] = []  //TODO: how do I know I don't have to do the didset thing? In theory, this should be nullified when carbEffects or ICE change, but again, it doesn't really matter.
 
     
     /// When combining retrospective glucose discrepancies, extend the window slightly as a buffer.
@@ -935,7 +935,7 @@ extension LoopDataManager {
             WidgetCenter.shared.reloadAllTimelines()
         }
         predictWithObservedAbsorption()
-        print("*Test predictionwithObservedAbsorption", predictionWithObservedAbsorption) 
+        print("*Test predictionwithObservedAbsorption", predictionWithObservedAbsorption)//TODO: for some reason it takes several runs of the loop for this to be updated.  But fine, for now. 
         updateRemoteRecommendation()
     }
 
@@ -1662,10 +1662,8 @@ extension LoopDataManager {
         
     }
     
-    func predictWithObservedAbsorption() {
+    func predictWithSpecifiedEffectsFromState(inputs: PredictionInputEffect) {
         self.getLoopState { (manager, state) in
-            // Generate new prediction using prediction input effects
-            let inputs: PredictionInputEffect = [.all, .observedAbsorptionEffect]
             do {
                 self.predictionWithObservedAbsorption = try state.predictGlucose(using: inputs, includingPendingInsulin: true)
                           }
