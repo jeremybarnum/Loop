@@ -1655,9 +1655,24 @@ extension LoopDataManager {
             throw LoopError.missingDataError(.insulinEffect)//not the best error but good enough
         }
        
-        observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: currentCarbEffects )//TODO: the two function calls need to differentiate
+        observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: currentCarbEffects )
         
     }
+    
+    func predictWithObservedAbsorption() {
+        self.getLoopState { (manager, state) in
+            // Generate new prediction using prediction input effects
+            let inputs: PredictionInputEffect = [.all, .observedAbsorptionEffect]
+            do {
+                let predictedGlucose = try state.predictGlucose(using: inputs, includingPendingInsulin: true)
+                print("Test* predictionwithObservedAbsorption", predictedGlucose)
+            } catch {
+                print("error")
+            }
+        }
+    }
+    
+
 
     /// Runs the glucose prediction on the latest effect data.
     ///

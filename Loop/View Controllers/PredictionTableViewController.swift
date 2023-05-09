@@ -126,34 +126,34 @@ class PredictionTableViewController: LoopChartsTableViewController, Identifiable
             }
         }
 
-        // For now, do this every time
-        _ = self.refreshContext.remove(.status)
-        reloadGroup.enter()
-        deviceManager.loopManager.getLoopState { (manager, state) in
-            self.retrospectiveGlucoseDiscrepancies = state.retrospectiveGlucoseDiscrepancies
-            totalRetrospectiveCorrection = state.totalRetrospectiveCorrection
-            self.glucoseChart.setPredictedGlucoseValues(state.predictedGlucoseIncludingPendingInsulin ?? [])
+            // For now, do this every time
+            _ = self.refreshContext.remove(.status)
+            reloadGroup.enter()
+            deviceManager.loopManager.getLoopState { (manager, state) in
+                self.retrospectiveGlucoseDiscrepancies = state.retrospectiveGlucoseDiscrepancies
+                totalRetrospectiveCorrection = state.totalRetrospectiveCorrection
+                self.glucoseChart.setPredictedGlucoseValues(state.predictedGlucoseIncludingPendingInsulin ?? [])
 
-            do {
-                let glucose = try state.predictGlucose(using: self.selectedInputs, includingPendingInsulin: true)
-                self.glucoseChart.setAlternatePredictedGlucoseValues(glucose)
-            } catch {
-                self.refreshContext.update(with: .status)
-                self.glucoseChart.setAlternatePredictedGlucoseValues([])
+                do {
+                    let glucose = try state.predictGlucose(using: self.selectedInputs, includingPendingInsulin: true)
+                    self.glucoseChart.setAlternatePredictedGlucoseValues(glucose)
+                } catch {
+                    self.refreshContext.update(with: .status)
+                    self.glucoseChart.setAlternatePredictedGlucoseValues([])
+                }
+
+                if let lastPoint = self.glucoseChart.alternatePredictedGlucosePoints?.last?.y {
+                    self.eventualGlucoseDescription = String(describing: lastPoint)
+                } else {
+                    self.eventualGlucoseDescription = nil
+                }
+
+                if self.refreshContext.remove(.targets) != nil {
+                    self.glucoseChart.targetGlucoseSchedule = manager.settings.glucoseTargetRangeSchedule
+                }
+
+                reloadGroup.leave()
             }
-
-            if let lastPoint = self.glucoseChart.alternatePredictedGlucosePoints?.last?.y {
-                self.eventualGlucoseDescription = String(describing: lastPoint)
-            } else {
-                self.eventualGlucoseDescription = nil
-            }
-
-            if self.refreshContext.remove(.targets) != nil {
-                self.glucoseChart.targetGlucoseSchedule = manager.settings.glucoseTargetRangeSchedule
-            }
-
-            reloadGroup.leave()
-        }
 
         reloadGroup.notify(queue: .main) {
             if let glucoseSamples = glucoseSamples {
