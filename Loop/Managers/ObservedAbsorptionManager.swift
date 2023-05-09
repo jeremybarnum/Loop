@@ -14,10 +14,8 @@ import LoopKit
 
 
 class ObservedAbsorptionManager {
-    private let log = OSLog(category: "MealDetectionManager")
-    
-    public var carbRatioScheduleApplyingOverrideHistory: CarbRatioSchedule? //TODO: I don't think we need these 
-    public var insulinSensitivityScheduleApplyingOverrideHistory: InsulinSensitivitySchedule?
+    private let log = OSLog(category: "ObservedAbsorptionManager")
+
     
     /// Allows for controlling uses of the system date in unit testing
     internal var test_currentDate: Date?
@@ -32,12 +30,9 @@ class ObservedAbsorptionManager {
     }
     
     public init(
-        carbRatioScheduleApplyingOverrideHistory: CarbRatioSchedule?,
-        insulinSensitivityScheduleApplyingOverrideHistory: InsulinSensitivitySchedule?,
         test_currentDate: Date? = nil
     ) {
-        self.carbRatioScheduleApplyingOverrideHistory = carbRatioScheduleApplyingOverrideHistory
-        self.insulinSensitivityScheduleApplyingOverrideHistory = insulinSensitivityScheduleApplyingOverrideHistory
+
         self.test_currentDate = test_currentDate
     }
     

@@ -119,7 +119,7 @@ final class LoopDataManager {
             maximumBolus: settings.maximumBolus
         )
         
-        self.observedAbsorptionManager = ObservedAbsorptionManager(carbRatioScheduleApplyingOverrideHistory: carbStore.carbRatioScheduleApplyingOverrideHistory, insulinSensitivityScheduleApplyingOverrideHistory: carbStore.insulinSensitivityScheduleApplyingOverrideHistory)
+        self.observedAbsorptionManager = ObservedAbsorptionManager()
         
         self.lockedPumpInsulinType = Locked(pumpInsulinType)
 
