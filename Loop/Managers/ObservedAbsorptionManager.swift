@@ -96,7 +96,7 @@ class ObservedAbsorptionManager {
         }
         
         print("*Test Absorption Ratio:", absorptionRatio)
-        print("*Test predictionwithObservedAbsorption", LoopDataManager.predictionWithObservedAbsorption[5])
+
         
         return absorptionRatio
     }

@@ -387,7 +387,7 @@ final class LoopDataManager {
     
     private var zeroTempEffect: [GlucoseEffect] = [] //TODO: how do I know I don't have to do the didset thing?
     
-    public var predictionWithObservedAbsorption: [GlucoseValue] = []
+    private var predictionWithObservedAbsorption: [GlucoseValue] = []
     
     private var absorptionRatio = 0.0
 
@@ -935,6 +935,7 @@ extension LoopDataManager {
             WidgetCenter.shared.reloadAllTimelines()
         }
         predictWithObservedAbsorption()
+        print("*Test predictionwithObservedAbsorption", predictionWithObservedAbsorption) 
         updateRemoteRecommendation()
     }
 
@@ -1667,7 +1668,8 @@ extension LoopDataManager {
             let inputs: PredictionInputEffect = [.all, .observedAbsorptionEffect]
             do {
                 self.predictionWithObservedAbsorption = try state.predictGlucose(using: inputs, includingPendingInsulin: true)
-            } catch {
+                          }
+            catch {
                 print("error") //TODO: need a better error
             }
         }

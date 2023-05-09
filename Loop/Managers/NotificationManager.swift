@@ -224,7 +224,7 @@ extension NotificationManager {
         UNUserNotificationCenter.current().add(request)
     }
     
-    static func sendSlowAbsorptionNotification(absorptionRatio: Double, delay: TimeInterval? = nil) {
+    static func sendSlowAbsorptionNotification(absorptionRatio: Double, delay: TimeInterval? = nil) {//TODO: this function should accept whether or not you will go low, when, and whether zero temp will fix the problem.  COnsider also quantifying rescue carbs per dragan's approach, but could be a bit pedantic.  Also - should it be three separate warnings, depending? Like Dragan did? maybe.  I shouldn't be stubborn about plagiarizing.
         let notification = UNMutableNotificationContent()
         /// Notifications should expire after the missed meal is no longer relevant
         //let expirationDate = mealStart.addingTimeInterval(LoopCoreConstants.defaultCarbAbsorptionTimes.slow)
