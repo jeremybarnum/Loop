@@ -288,7 +288,7 @@ final class LoopDataManager {
             // Invalidate cached effects affected by the override
             invalidateCachedEffects = true
             
-            // Update the affected schedules TODO: do I need to do this for the absorption too?
+            // Update the affected schedules TODO: do I need to do this for the absorption too? Probably not because absorption doesn't depend on these 
             mealDetectionManager.carbRatioScheduleApplyingOverrideHistory = carbRatioScheduleApplyingOverrideHistory
             mealDetectionManager.insulinSensitivityScheduleApplyingOverrideHistory = insulinSensitivityScheduleApplyingOverrideHistory
         }
@@ -386,6 +386,8 @@ final class LoopDataManager {
     }
     
     private var zeroTempEffect: [GlucoseEffect] = [] //TODO: how do I know I don't have to do the didset thing?
+    
+    private var predictionWithObservedAbsorption: [GlucoseValue] = []
     
     private var absorptionRatio = 0.0
 
@@ -1664,8 +1666,8 @@ extension LoopDataManager {
             // Generate new prediction using prediction input effects
             let inputs: PredictionInputEffect = [.all, .observedAbsorptionEffect]
             do {
-                let predictedGlucose = try state.predictGlucose(using: inputs, includingPendingInsulin: true)
-                print("*Test predictionwithObservedAbsorption", predictedGlucose)
+                self.predictionWithObservedAbsorption = try state.predictGlucose(using: inputs, includingPendingInsulin: true)
+                print("*Test predictionwithObservedAbsorption", self.predictionWithObservedAbsorption[5])
             } catch {
                 print("error")
             }
