@@ -387,7 +387,7 @@ final class LoopDataManager {
     
     private var zeroTempEffect: [GlucoseEffect] = [] //TODO: how do I know I don't have to do the didset thing?
     
-    private var predictionWithObservedAbsorption: [GlucoseValue] = []
+    public var predictionWithObservedAbsorption: [GlucoseValue] = []
     
     private var absorptionRatio = 0.0
 
