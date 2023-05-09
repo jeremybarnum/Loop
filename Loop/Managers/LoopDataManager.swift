@@ -924,6 +924,7 @@ extension LoopDataManager {
             )
             
             absorptionRatio = self.observedAbsorptionManager.computeObservedAbsorptionRatioAndNotifyIfSlow(insulinCounteractionEffects: self.insulinCounteractionEffects, carbEffects: carbEffects) //TODO: these carb effects are the same as for missed meal which I guess is OK
+            
         }
 
         // 5 second delay to allow stores to cache data before it is read by widget
@@ -1142,6 +1143,8 @@ extension LoopDataManager {
             logger.error("%{public}@", String(describing: error))
             warnings.append(.fetchDataWarning(.insulinEffect(error: error)))
         }
+        
+        predictWithObservedAbsorption()
 
 
         dosingDecision.appendWarnings(warnings.value)
