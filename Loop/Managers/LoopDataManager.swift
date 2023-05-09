@@ -932,7 +932,7 @@ extension LoopDataManager {
             self.widgetLog.default("Refreshing widget. Reason: Loop completed")
             WidgetCenter.shared.reloadAllTimelines()
         }
-
+        predictWithObservedAbsorption()
         updateRemoteRecommendation()
     }
 
@@ -1143,9 +1143,6 @@ extension LoopDataManager {
             logger.error("%{public}@", String(describing: error))
             warnings.append(.fetchDataWarning(.insulinEffect(error: error)))
         }
-        
-        predictWithObservedAbsorption()
-
 
         dosingDecision.appendWarnings(warnings.value)
 
@@ -1668,7 +1665,7 @@ extension LoopDataManager {
             let inputs: PredictionInputEffect = [.all, .observedAbsorptionEffect]
             do {
                 let predictedGlucose = try state.predictGlucose(using: inputs, includingPendingInsulin: true)
-                print("Test* predictionwithObservedAbsorption", predictedGlucose)
+                print("*Test predictionwithObservedAbsorption", predictedGlucose)
             } catch {
                 print("error")
             }
