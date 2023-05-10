@@ -87,9 +87,9 @@ class ObservedAbsorptionManager {
         let averageICE = ICEValueCache / ICECount
         //print("*Test ICESUm:",ICEValueCache,"ICE Count:",ICECount,"ICE Average:",averageICE)
         
-        absorptionRatio = averageICE / averageCarbEffect
+        if carbEffectCount < 3 {absorptionRatio = 1} else {absorptionRatio = averageICE / averageCarbEffect}
         
-        print("*Test Absorption Ratio:", absorptionRatio)
+        print("*Test Absorption Ratio:", absorptionRatio,"*Test carbEffectCount:", carbEffectCount)
 
         
         return absorptionRatio
