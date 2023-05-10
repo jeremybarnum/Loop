@@ -391,7 +391,7 @@ final class LoopDataManager {
     private var predictionWithObservedAbsorptionAndZeroTemp: [GlucoseValue] = []
     private var predictionWithObservedAbsorptionAndZeroTempNoIRC: [GlucoseValue] = []
     
-    private var absorptionRatio = 0.0
+    private var absorptionRatio = 1.0
 
     public var observedAbsorptionEffect: [GlucoseEffect] = []  //TODO: how do I know I don't have to do the didset thing? In theory, this should be nullified when carbEffects or ICE change, but again, it doesn't really matter.
 
@@ -927,8 +927,11 @@ extension LoopDataManager {
                 }
             )
             
-            absorptionRatio = self.observedAbsorptionManager.computeObservedAbsorptionRatioAndNotifyIfSlow(insulinCounteractionEffects: self.insulinCounteractionEffects, carbEffects: carbEffects) //TODO: these carb effects are the same as for missed meal which I guess is OK
+            absorptionRatio = self.observedAbsorptionManager.computeObservedAbsorptionRatio(insulinCounteractionEffects: self.insulinCounteractionEffects, carbEffects: carbEffects) //TODO: these carb effects are the same as for missed meal which I guess is OK
             
+            updateObservedAbsorptionPredictions()
+            
+            checkForLowAndNotifyIfNeeded() //need to maybe rewrite to return nothing, but returning nil is useful for the notification
         }
 
         // 5 second delay to allow stores to cache data before it is read by widget
@@ -936,10 +939,6 @@ extension LoopDataManager {
             self.widgetLog.default("Refreshing widget. Reason: Loop completed")
             WidgetCenter.shared.reloadAllTimelines()
         }
-        
-        updateObservedAbsorptionPredictions()
-        
-        checkForLowAndNotifyIfNeeded() //need to maybe rewrite to return nothing, but returning nil is useful for the notification
         
         print("*Test predictionwithObservedAbsorption", predictionWithObservedAbsorption)//TODO: for some reason it takes several runs of the loop for this to be updated.  But fine, for now.
         
