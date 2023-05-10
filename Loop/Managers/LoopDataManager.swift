@@ -1688,6 +1688,20 @@ extension LoopDataManager {
             }
         }
     }
+    
+    func checkForLow() -> TimeInterval? {
+        let currentDate = Date()
+        guard let suspendThreshold = settings.suspendThreshold?.quantity.doubleValue(for: .milligramsPerDeciliter) else {
+            return nil
+        }
+        let predictedLowGlucose = predictionWithObservedAbsorption.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }
+        guard let timeToLow = predictedLowGlucose.first?.startDate.timeIntervalSince(currentDate) else {
+            return nil
+        }
+        print("Time to Low:",timeToLow)
+        return timeToLow
+    }
+
 
 
     /// Runs the glucose prediction on the latest effect data.
