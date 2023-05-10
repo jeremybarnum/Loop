@@ -939,8 +939,13 @@ extension LoopDataManager {
             self.widgetLog.default("Refreshing widget. Reason: Loop completed")
             WidgetCenter.shared.reloadAllTimelines()
         }
-        
-        print("*Test predictionwithObservedAbsorption", predictionWithObservedAbsorption[12])//TODO: for some reason it takes several runs of the loop for this to be updated.  But fine, for now.
+          
+        if !predictionWithObservedAbsorption.isEmpty {
+            print("*Test predictionWithObservedAbsorption", predictionWithObservedAbsorption[5]) }
+            else {
+                print("*test predictionWithObservedAbsorption is empty")}
+
+       //TODO: for some reason it takes several runs of the loop for this to be updated.  But fine, for now.
         
         updateRemoteRecommendation()
     }

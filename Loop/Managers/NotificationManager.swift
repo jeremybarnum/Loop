@@ -232,7 +232,7 @@ extension NotificationManager {
         print("*Test Time to low in minutes:",timeToLowInMinutes,"*Test time to low zero temp:", timeToLowInMinutesZeroTemp)
 
         notification.title = String(format: NSLocalizedString("Crash coming in %@ minutes", comment: "The notification title for a slow carb absorption situation"),timeToLowInMinutes)
-        notification.body = String(format: NSLocalizedString("If carb entry is edited down and Loop zero temps: %@",comment: "The notification description for a slow absorbing scenario"), timeToLowInMinutesZeroTemp)
+        notification.body = String(format: NSLocalizedString("If carb entry is edited down and Loop zero temps: %@ minutes",comment: "The notification description for a slow absorbing scenario"), timeToLowInMinutesZeroTemp)
         notification.sound = .default
         
       /*  notification.userInfo = [
