@@ -119,12 +119,6 @@ class MealDetectionManager {
         
         absorptionRatio = averageICE / averageCarbEffect
         
-        if absorptionRatio < 0.7 {
-            NotificationManager.sendSlowAbsorptionNotification(absorptionRatio: absorptionRatio)
-            print("*Test Sent notification request")
-            
-        }
-        
         print("*Test Absorption Ratio:", absorptionRatio)
         
 
@@ -137,7 +131,6 @@ class MealDetectionManager {
         print("*Test Observed Absorption Effect:", observedAbsorptionEffect)
         
         return observedAbsorptionEffect
-        
         
     }
     

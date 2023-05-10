@@ -224,14 +224,14 @@ extension NotificationManager {
         UNUserNotificationCenter.current().add(request)
     }
     
-    static func sendSlowAbsorptionNotification(absorptionRatio: Double, timeToLow: TimeInterval, delay: TimeInterval? = nil) {//TODO: this function should accept whether or not you will go low, when, and whether zero temp will fix the problem.  COnsider also quantifying rescue carbs per dragan's approach, but could be a bit pedantic.  Also - should it be three separate warnings, depending? Like Dragan did? maybe.  I shouldn't be stubborn about plagiarizing.
+    static func sendSlowAbsorptionNotification(timeToLow: TimeInterval, delay: TimeInterval? = nil) {//TODO: this function should accept whether or not you will go low, when, and whether zero temp will fix the problem.  COnsider also quantifying rescue carbs per dragan's approach, but could be a bit pedantic.  Also - should it be three separate warnings, depending? Like Dragan did? maybe.  I shouldn't be stubborn about plagiarizing.
         let notification = UNMutableNotificationContent()
         /// Notifications should expire after the missed meal is no longer relevant
         //let expirationDate = mealStart.addingTimeInterval(LoopCoreConstants.defaultCarbAbsorptionTimes.slow)
-        let formattedAbsorptionRatio = String(format:"%.0f%%", absorptionRatio*100)
+        //let formattedAbsorptionRatio = String(format:"%.0f%%", absorptionRatio*100)
         //print("*test formatted absorption ratio",formattedAbsorptionRatio)
-        notification.title = String(format: NSLocalizedString("Carbs absorbing at %@ of expected", comment: "The notification title for a slow carb absorption situation"), formattedAbsorptionRatio)
-        notification.body = String(format: NSLocalizedString("Time to low:%@. Time to low if carb entry is edited and Loop zero temps: %@",comment: "The notification description for a slow absorbing scenario"),timeToLow)// need to differentiate between the two times to low
+        notification.title = String(format: NSLocalizedString("Carbs absorbing slowly - crash coming in %@", comment: "The notification title for a slow carb absorption situation"),timeToLow)
+        notification.body = String(format: NSLocalizedString("Time to low:%@. Time to low if carb entry is edited and Loop zero temps: %@",comment: "The notification description for a slow absorbing scenario"),timeToLow)// TODO: need to differentiate between the two times to low
         notification.sound = .default
         
       /*  notification.userInfo = [
