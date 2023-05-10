@@ -228,7 +228,7 @@ extension NotificationManager {
         let notification = UNMutableNotificationContent()
 
         let timeToLowInMinutes = String(Int(round(timeToLow.0 / 60)))
-        let timeToLowInMinutesZeroTemp = String(Int(round(timeToLow.0 / 60))) ).rounded())
+        let timeToLowInMinutesZeroTemp = String(Int(round(timeToLow.1 / 60)))
         print("*Test Time to low in minutes:",timeToLowInMinutes,"*Test time to low zero temp:", timeToLowInMinutesZeroTemp)
 
         notification.title = String(format: NSLocalizedString("Crash coming in %@ minutes", comment: "The notification title for a slow carb absorption situation"),timeToLowInMinutes)
