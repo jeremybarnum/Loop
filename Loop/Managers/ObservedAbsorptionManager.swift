@@ -41,7 +41,7 @@ class ObservedAbsorptionManager {
     
     // MARK: SlowAbsorption Detection
 
-    func computeObservedAbsorptionRatioAndNotifyIfSlow(insulinCounteractionEffects: [GlucoseEffectVelocity], carbEffects: [GlucoseEffect])-> Double {
+    func computeObservedAbsorptionRatio(insulinCounteractionEffects: [GlucoseEffectVelocity], carbEffects: [GlucoseEffect])-> Double {
 //computes recent empirical ratio of observed to modeled absorption and generates an effect for the adjustment
         let intervalStart = currentDate(timeIntervalSinceNow: -TimeInterval(minutes: 20)) //only consider last 20 minutes
         let now = self.currentDate
