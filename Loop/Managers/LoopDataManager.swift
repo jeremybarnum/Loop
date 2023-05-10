@@ -389,7 +389,7 @@ final class LoopDataManager {
     
     private var predictionWithObservedAbsorption: [GlucoseValue] = []
     private var predictionWithObservedAbsorptionAndZeroTemp: [GlucoseValue] = []
-    private var predictionWithObservedAbsorptionAndZeroTempNoIRC: [GlucoseValue] = []
+    private var predictionWithObservedAbsorptionAndZeroTempAndNoIRC: [GlucoseValue] = [] 
     
     private var absorptionRatio = 1.0
 
@@ -1672,23 +1672,26 @@ extension LoopDataManager {
     
     func updateObservedAbsorptionPredictions() {
         self.getLoopState { (manager, state) in
-            
+
             let observedAbsorptionInputs: PredictionInputEffect = [.all, .observedAbsorptionEffect]
             let observedAbsorptionAndZeroTempInputs: PredictionInputEffect = [.all, .observedAbsorptionEffect, .zeroTemp]
             let observedAbsorptionAndZeroTempInputsAndNoIRC: PredictionInputEffect = [.insulin, .carbs,.momentum, .observedAbsorptionEffect, .zeroTemp]
             
             do {
-                self.predictionWithObservedAbsorption = try state.predictGlucose(using: observedAbsorptionInputs, includingPendingInsulin: true)
-                self.predictionWithObservedAbsorption = try state.predictGlucose(using: observedAbsorptionAndZeroTempInputs, includingPendingInsulin: true)
-                self.predictionWithObservedAbsorption = try state.predictGlucose(using: observedAbsorptionAndZeroTempInputsAndNoIRC, includingPendingInsulin: true)
+                let prediction1 = try state.predictGlucose(using: observedAbsorptionInputs, includingPendingInsulin: true)
+                let prediction2 = try state.predictGlucose(using: observedAbsorptionAndZeroTempInputs, includingPendingInsulin: true)
+                let prediction3 = try state.predictGlucose(using: observedAbsorptionAndZeroTempInputsAndNoIRC, includingPendingInsulin: true)
                 
-            }
-            
-            catch {
+                self.predictionWithObservedAbsorption = prediction1
+                self.predictionWithObservedAbsorptionAndZeroTemp = prediction2
+                self.predictionWithObservedAbsorptionAndZeroTempAndNoIRC = prediction3
+                
+            } catch {
                 print("error")
             }
         }
     }
+
     
     func checkForLowAndNotifyIfNeeded() -> TimeInterval? {
         let currentDate = Date()
