@@ -1693,20 +1693,24 @@ extension LoopDataManager {
     }
 
     
-    func checkForLowAndNotifyIfNeeded() -> TimeInterval? {
+    func checkForLowAndNotifyIfNeeded() -> (TimeInterval?,TimeInterval?) {
         let currentDate = Date()
         guard let suspendThreshold = settings.suspendThreshold?.quantity.doubleValue(for: .milligramsPerDeciliter) else {
-            return nil
+            return (nil,nil)
         }
         let predictedLowGlucose = predictionWithObservedAbsorption.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }
         guard let timeToLow = predictedLowGlucose.first?.startDate.timeIntervalSince(currentDate) else {
-            return nil
+            return (nil,nil)
         }
-        print("Time to Low:",timeToLow,"NotificationTriggered")
-        
-        NotificationManager.sendSlowAbsorptionNotification(timeToLow: timeToLow)
-        
-        return timeToLow
+        let predictedLowGlucoseWithZeroTemp = predictionWithObservedAbsorptionAndZeroTemp.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }
+        guard let timeToLowZeroTemp = predictedLowGlucoseWithZeroTemp.first?.startDate.timeIntervalSince(currentDate) else {
+            return (nil,nil)}
+            
+            print("Time to Low:",timeToLow,"TimetoLowZeroTemp", "NotificationTriggered")
+            
+            NotificationManager.sendSlowAbsorptionNotification(timeToLow: (timeToLow,timeToLowZeroTemp))
+            
+            return (timeToLow, timeToLowZeroTemp)
     }
 
 
