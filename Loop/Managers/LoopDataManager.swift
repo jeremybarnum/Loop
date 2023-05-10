@@ -940,7 +940,7 @@ extension LoopDataManager {
             WidgetCenter.shared.reloadAllTimelines()
         }
         
-        print("*Test predictionwithObservedAbsorption", predictionWithObservedAbsorption)//TODO: for some reason it takes several runs of the loop for this to be updated.  But fine, for now.
+        print("*Test predictionwithObservedAbsorption", predictionWithObservedAbsorption[12])//TODO: for some reason it takes several runs of the loop for this to be updated.  But fine, for now.
         
         updateRemoteRecommendation()
     }
