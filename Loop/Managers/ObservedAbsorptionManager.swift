@@ -70,6 +70,7 @@ class ObservedAbsorptionManager {
         }
         carbEffectCount = Double(recentCarbEffects.dropFirst().filter { $0.quantity.doubleValue(for: carbUnit) != 0.0 }.count)
 //TODO: check how the effect delay works.  For a new entry, this should mean we don't start for 25-30 minutes
+        //TODO: very important.  Overalapping carb entries create problems.  More recent carb entries should potentially be privileged
         
         let averageCarbEffect = carbEffectValueCache / carbEffectCount / delta //I want it to match the units on the graph, so I'm using mg/dL/minute
         //print("*Test FutureCarbEffects:",futureCarbEffects)
@@ -88,7 +89,7 @@ class ObservedAbsorptionManager {
         let averageICE = ICEValueCache / ICECount
         //print("*Test ICESUm:",ICEValueCache,"ICE Count:",ICECount,"ICE Average:",averageICE)
         
-        if carbEffectCount < 2 {absorptionRatio = 1} else {absorptionRatio = averageICE / averageCarbEffect} // if the carb entry is new and there is less than 15 minutes (3 loops) of recent data, don't adjust the carb effect.  It's clunky to do this by setting the absorptionRatio to 1, but it works and is simple. 
+        if carbEffectCount < 2 {absorptionRatio = 1} else {absorptionRatio = averageICE / averageCarbEffect} // if the carb entry is new and there is less than 15 minutes (3 loops) of recent data, don't adjust the carb effect.  It's clunky to do this by setting the absorptionRatio to 1, but it works and is simple.
         
         print("*Test Absorption Ratio:", absorptionRatio,"*Test carbEffectCount:", carbEffectCount)
 
