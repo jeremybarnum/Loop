@@ -89,12 +89,6 @@ class ObservedAbsorptionManager {
         
         absorptionRatio = averageICE / averageCarbEffect
         
-        if absorptionRatio < 0.7 {//TODO: make this not be hard coded
-            NotificationManager.sendSlowAbsorptionNotification(absorptionRatio: absorptionRatio)
-            print("*Test Sent notification request")
-            
-        }
-        
         print("*Test Absorption Ratio:", absorptionRatio)
 
         
