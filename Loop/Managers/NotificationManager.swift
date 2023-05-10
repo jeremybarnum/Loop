@@ -229,10 +229,10 @@ extension NotificationManager {
 
         let timeToLowInMinutes = String((timeToLow.0 / 60 ).rounded())
         let timeToLowInMinutesZeroTemp = String((timeToLow.1 / 60 ).rounded())
-        print("Test* Time to low tuple:",timeToLow)
+        print("Test* Time to low in minutes:",timeToLowInMinutes,"Test* time to low zero temp:", timeToLowInMinutesZeroTemp)
 
         notification.title = String(format: NSLocalizedString("Crash coming in %@ minutes", comment: "The notification title for a slow carb absorption situation"),timeToLowInMinutes)
-        notification.body = String(format: NSLocalizedString("Time to low if carb entry is edited down and Loop zero temps in response: %@",comment: "The notification description for a slow absorbing scenario"),timeToLowInMinutes, timeToLowInMinutesZeroTemp)
+        notification.body = String(format: NSLocalizedString("Time to low if carb entry is edited down and Loop zero temps in response: %@",comment: "The notification description for a slow absorbing scenario"), timeToLowInMinutesZeroTemp)
         notification.sound = .default
         
       /*  notification.userInfo = [
