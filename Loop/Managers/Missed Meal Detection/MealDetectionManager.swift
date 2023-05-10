@@ -65,7 +65,7 @@ class MealDetectionManager {
     
     // MARK: SlowAbsorption Detection
 
-    func observedAbsorption(insulinCounteractionEffects: [GlucoseEffectVelocity], carbEffects: [GlucoseEffect])->[GlucoseEffect] {
+ /*   func observedAbsorption(insulinCounteractionEffects: [GlucoseEffectVelocity], carbEffects: [GlucoseEffect])->[GlucoseEffect] {
 //computes recent empirical ratio of observed to modeled absorption and generates an effect for the adjustment
         let intervalStart = currentDate(timeIntervalSinceNow: -TimeInterval(minutes: 20)) //only consider last 20 minutes
         let now = self.currentDate
@@ -134,6 +134,7 @@ class MealDetectionManager {
         
     }
     
+    */
     // MARK: Meal Detection
     func hasMissedMeal(insulinCounteractionEffects: [GlucoseEffectVelocity], carbEffects: [GlucoseEffect], completion: @escaping (MissedMealStatus) -> Void) {
         let delta = TimeInterval(minutes: 5)
