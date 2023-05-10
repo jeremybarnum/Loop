@@ -388,6 +388,8 @@ final class LoopDataManager {
     private var zeroTempEffect: [GlucoseEffect] = [] //TODO: how do I know I don't have to do the didset thing? didSet says, if this variable changes, what do I need to do.  In theory, for zeroTemp, it would just be the settings (basal rate and CSF) but it's not really worth it.
     
     private var predictionWithObservedAbsorption: [GlucoseValue] = []
+    private var predictionWithObservedAbsorptionAndZeroTemp: [GlucoseValue] = []
+    private var predictionWithObservedAbsorptionAndZeroTempNoIRC: [GlucoseValue] = []
     
     private var absorptionRatio = 0.0
 
@@ -934,8 +936,11 @@ extension LoopDataManager {
             self.widgetLog.default("Refreshing widget. Reason: Loop completed")
             WidgetCenter.shared.reloadAllTimelines()
         }
-        predictWithObservedAbsorption()
-        print("*Test predictionwithObservedAbsorption", predictionWithObservedAbsorption)//TODO: for some reason it takes several runs of the loop for this to be updated.  But fine, for now. 
+        
+        updateObservedAbsorptionPredictions()
+        
+        print("*Test predictionwithObservedAbsorption", predictionWithObservedAbsorption)//TODO: for some reason it takes several runs of the loop for this to be updated.  But fine, for now.
+        
         updateRemoteRecommendation()
     }
 
@@ -1662,17 +1667,27 @@ extension LoopDataManager {
         
     }
     
-    func predictWithSpecifiedEffectsFromState(inputs: PredictionInputEffect) {
+ 
+    
+    func updateObservedAbsorptionPredictions() {
         self.getLoopState { (manager, state) in
+            
+            let observedAbsorptionInputs: PredictionInputEffect = [.all, .observedAbsorptionEffect]
+            let observedAbsorptionAndZeroTempInputs: PredictionInputEffect = [.all, .observedAbsorptionEffect, .zeroTemp]
+            let observedAbsorptionAndZeroTempInputsAndNoIRC: PredictionInputEffect = [.insulin, .carbs,.momentum, .observedAbsorptionEffect, .zeroTemp]
+            
             do {
-                self.predictionWithObservedAbsorption = try state.predictGlucose(using: inputs, includingPendingInsulin: true)
-                          }
+                self.predictionWithObservedAbsorption = try state.predictGlucose(using: observedAbsorptionInputs, includingPendingInsulin: true)
+                self.predictionWithObservedAbsorption = try state.predictGlucose(using: observedAbsorptionAndZeroTempInputs, includingPendingInsulin: true)
+                self.predictionWithObservedAbsorption = try state.predictGlucose(using: observedAbsorptionAndZeroTempInputsAndNoIRC, includingPendingInsulin: true)
+                
+            }
+            
             catch {
-                print("error") //TODO: need a better error
+                print("error")
             }
         }
     }
-    
 
 
     /// Runs the glucose prediction on the latest effect data.

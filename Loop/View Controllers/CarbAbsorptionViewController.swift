@@ -29,6 +29,7 @@ final class CarbAbsorptionViewController: LoopChartsTableViewController, Identif
     var isOnboardingComplete: Bool = true
 
     var closedLoopStatus: ClosedLoopStatus!
+    
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -102,6 +103,7 @@ final class CarbAbsorptionViewController: LoopChartsTableViewController, Identif
     private var carbTotal: CarbValue?
 
     // MARK: - Data loading
+    
 
     private let carbEffectChart = CarbEffectChart()
 
