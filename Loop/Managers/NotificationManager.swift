@@ -227,8 +227,8 @@ extension NotificationManager {
     static func sendSlowAbsorptionNotification(timeToLow: (TimeInterval,TimeInterval), delay: TimeInterval? = nil) {//TODO: COnsider also quantifying rescue carbs per dragan's approach, but could be a bit pedantic.  Also - should it be three separate warnings, depending? Like Dragan did? maybe.
         let notification = UNMutableNotificationContent()
 
-        let timeToLowInMinutes = String((timeToLow.0 / 60 ).rounded())
-        let timeToLowInMinutesZeroTemp = String((timeToLow.1 / 60 ).rounded())
+        let timeToLowInMinutes = String(Int(round(timeToLow.0 / 60)))
+        let timeToLowInMinutesZeroTemp = String(Int(round(timeToLow.0 / 60))) ).rounded())
         print("*Test Time to low in minutes:",timeToLowInMinutes,"*Test time to low zero temp:", timeToLowInMinutesZeroTemp)
 
         notification.title = String(format: NSLocalizedString("Crash coming in %@ minutes", comment: "The notification title for a slow carb absorption situation"),timeToLowInMinutes)
