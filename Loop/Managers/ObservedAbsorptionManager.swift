@@ -68,7 +68,8 @@ class ObservedAbsorptionManager {
             carbEffectValueCache += difference
             previousEffectValue = value
         }
-        carbEffectCount = Double(recentCarbEffects.dropFirst().count)
+        carbEffectCount = Double(recentCarbEffects.dropFirst().filter { $0.quantity.doubleValue(for: carbUnit) != 0.0 }.count)
+//TODO: carb effects automatically looks back into the past, so it will count 3 even if they are all zeros.
         
         let averageCarbEffect = carbEffectValueCache / carbEffectCount / delta //I want it to match the units on the graph, so I'm using mg/dL/minute
         //print("*Test FutureCarbEffects:",futureCarbEffects)
