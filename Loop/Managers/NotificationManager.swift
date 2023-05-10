@@ -233,8 +233,8 @@ extension NotificationManager {
         let timeToLowInMinutes = String((timeToLow.0 / 60 ).rounded())
         let timeToLowInMinutesZeroTemp = String((timeToLow.1 / 60 ).rounded())
 
-        notification.title = String(format: NSLocalizedString("Slow Absorption - crash in %@ minutes", comment: "The notification title for a slow carb absorption situation"),timeToLowInMinutes)
-        notification.body = String(format: NSLocalizedString("Time to low:%@. Time to low if carb entry is edited and Loop zero temps: %@",comment: "The notification description for a slow absorbing scenario"),timeToLowInMinutes, timeToLowInMinutesZeroTemp)
+        notification.title = String(format: NSLocalizedString("Crash coming in %@ minutes", comment: "The notification title for a slow carb absorption situation"),timeToLowInMinutes)
+        notification.body = String(format: NSLocalizedString("Time to low if carb entry is edited down and Loop zero temps in response: %@",comment: "The notification description for a slow absorbing scenario"),timeToLowInMinutes, timeToLowInMinutesZeroTemp)
         notification.sound = .default
         
       /*  notification.userInfo = [
