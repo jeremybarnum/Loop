@@ -939,6 +939,8 @@ extension LoopDataManager {
         
         updateObservedAbsorptionPredictions()
         
+        checkForLowAndNotifyIfNeeded() //need to maybe rewrite to return nothing, but returning nil is useful for the notification
+        
         print("*Test predictionwithObservedAbsorption", predictionWithObservedAbsorption)//TODO: for some reason it takes several runs of the loop for this to be updated.  But fine, for now.
         
         updateRemoteRecommendation()
