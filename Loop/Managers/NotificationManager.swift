@@ -224,15 +224,18 @@ extension NotificationManager {
         UNUserNotificationCenter.current().add(request)
     }
     
-    static func sendSlowAbsorptionNotification(timeToLow: (TimeInterval,TimeInterval), delay: TimeInterval? = nil) {//TODO: COnsider also quantifying rescue carbs per dragan's approach, but could be a bit pedantic.  Also - should it be three separate warnings, depending? Like Dragan did? maybe.
+    static func sendSlowAbsorptionNotification(timeToLow: (TimeInterval,TimeInterval, Double), delay: TimeInterval? = nil) {//TODO: COnsider also quantifying rescue carbs per dragan's approach, but could be a bit pedantic.  Also - should it be three separate warnings, depending? Like Dragan did? maybe.
         let notification = UNMutableNotificationContent()
 
         let timeToLowInMinutes = String(Int(round(timeToLow.0 / 60)))
         let timeToLowInMinutesZeroTemp = String(Int(round(timeToLow.1 / 60)))
+        let minimumBloodGlucoseDuringLow = String(Int(round(timeToLow.2)))
+        let rescueCarbs = String(Int(round((75.0 - timeToLow.2) / (timeToLow.1 / 60) / 10)))//TODO: refactor this to be cleaner and make it relative to time to min min rather than first low
+        
         print("*Test Time to low in minutes:",timeToLowInMinutes,"*Test time to low zero temp:", timeToLowInMinutesZeroTemp)
 
-        notification.title = String(format: NSLocalizedString("Crash coming in %@ minutes", comment: "The notification title for a slow carb absorption situation"),timeToLowInMinutes)
-        notification.body = String(format: NSLocalizedString("If carb entry is edited down and Loop zero temps: %@ minutes",comment: "The notification description for a slow absorbing scenario"), timeToLowInMinutesZeroTemp)
+        notification.title = String(format: NSLocalizedString("Low in %@ minutes", comment: "The notification title for a slow carb absorption situation"),timeToLowInMinutes)
+        notification.body = String(format: NSLocalizedString("Lowest BG of %@ if carb entry is edited down and Loop zero temps. %@ of rescue carbs.",comment: "The notification description for a slow absorbing scenario"), timeToLowInMinutesZeroTemp, rescueCarbs)
         notification.sound = .default
         notification.interruptionLevel = .timeSensitive // making the notification interrupt
         

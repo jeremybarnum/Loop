@@ -1698,18 +1698,18 @@ extension LoopDataManager {
     }
 
 
-    func checkForLowAndNotifyIfNeeded() -> (TimeInterval?,TimeInterval?) {
+    func checkForLowAndNotifyIfNeeded() -> (TimeInterval?,TimeInterval?, Double?) {
         let currentDate = Date()
         guard let suspendThreshold = settings.suspendThreshold?.quantity.doubleValue(for: .milligramsPerDeciliter) else {
-            return (nil,nil)
+            return (nil,nil, nil)
         }
         let predictedLowGlucose = predictionWithObservedAbsorption.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }
         guard let timeToLow = predictedLowGlucose.first?.startDate.timeIntervalSince(currentDate) else {
-            return (nil,nil)
+            return (nil,nil,nil)
         }
         let predictedLowGlucoseWithZeroTemp = predictionWithObservedAbsorptionAndZeroTemp.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }
         guard let timeToLowZeroTemp = predictedLowGlucoseWithZeroTemp.first?.startDate.timeIntervalSince(currentDate) else {
-            return (nil,nil)}
+            return (nil,nil, nil)}
         
         let lowestBGwithZeroTemp = predictedLowGlucoseWithZeroTemp.map { $0.quantity.doubleValue(for: .milligramsPerDeciliter) }.min()
 
@@ -1717,7 +1717,7 @@ extension LoopDataManager {
 
         print("*Test Time to Low:",timeToLow,"TimetoLowZeroTemp", "NotificationTriggered")
             
-            NotificationManager.sendSlowAbsorptionNotification(timeToLow: (timeToLow,timeToLowZeroTemp))
+            NotificationManager.sendSlowAbsorptionNotification(timeToLow: (timeToLow,timeToLowZeroTemp, lowestBGwithZeroTemp))
             
             return (timeToLow, timeToLowZeroTemp, lowestBGwithZeroTemp)
     }
