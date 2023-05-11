@@ -91,7 +91,7 @@ class ObservedAbsorptionManager {
         
         if carbEffectCount < 2 {absorptionRatio = 1} else {absorptionRatio = averageICE / averageCarbEffect} // if the carb entry is new and there is less than 15 minutes (3 loops) of recent data, don't adjust the carb effect.  It's clunky to do this by setting the absorptionRatio to 1, but it works and is simple.
         
-        print("*Test Absorption Ratio:", absorptionRatio,"*Test carbEffectCount:", carbEffectCount)
+        print("*Test Absorption Ratio:", absorptionRatio," carbEffectCount:", carbEffectCount,"Time:",Date())
 
         
         return absorptionRatio
