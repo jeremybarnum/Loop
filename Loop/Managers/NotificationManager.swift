@@ -224,7 +224,6 @@ extension NotificationManager {
         UNUserNotificationCenter.current().add(request)
     }
     
-    @MainActor
     static func sendSlowAbsorptionNotification(timeToLow: (TimeInterval,TimeInterval), delay: TimeInterval? = nil) {//TODO: COnsider also quantifying rescue carbs per dragan's approach, but could be a bit pedantic.  Also - should it be three separate warnings, depending? Like Dragan did? maybe.
         let notification = UNMutableNotificationContent()
 
