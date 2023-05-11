@@ -1697,7 +1697,7 @@ extension LoopDataManager {
         }
     }
 
-    @MainActor
+
     func checkForLowAndNotifyIfNeeded() -> (TimeInterval?,TimeInterval?) {
         let currentDate = Date()
         guard let suspendThreshold = settings.suspendThreshold?.quantity.doubleValue(for: .milligramsPerDeciliter) else {
@@ -1719,7 +1719,7 @@ extension LoopDataManager {
             
             NotificationManager.sendSlowAbsorptionNotification(timeToLow: (timeToLow,timeToLowZeroTemp))
             
-            return (timeToLow, timeToLowZeroTemp)
+            return (timeToLow, timeToLowZeroTemp, lowestBGwithZeroTemp)
     }
 
 
