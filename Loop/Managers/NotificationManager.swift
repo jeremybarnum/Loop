@@ -224,6 +224,7 @@ extension NotificationManager {
         UNUserNotificationCenter.current().add(request)
     }
     
+    @MainActor
     static func sendSlowAbsorptionNotification(timeToLow: (TimeInterval,TimeInterval), delay: TimeInterval? = nil) {//TODO: COnsider also quantifying rescue carbs per dragan's approach, but could be a bit pedantic.  Also - should it be three separate warnings, depending? Like Dragan did? maybe.
         let notification = UNMutableNotificationContent()
 
@@ -234,6 +235,7 @@ extension NotificationManager {
         notification.title = String(format: NSLocalizedString("Crash coming in %@ minutes", comment: "The notification title for a slow carb absorption situation"),timeToLowInMinutes)
         notification.body = String(format: NSLocalizedString("If carb entry is edited down and Loop zero temps: %@ minutes",comment: "The notification description for a slow absorbing scenario"), timeToLowInMinutesZeroTemp)
         notification.sound = .default
+        notification.interruptionLevel = .timeSensitive // making the notification interrupt
         
       /*  notification.userInfo = [
             LoopNotificationUserInfoKey.missedMealTime.rawValue: mealStart,

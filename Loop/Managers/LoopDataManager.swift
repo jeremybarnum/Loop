@@ -1710,8 +1710,12 @@ extension LoopDataManager {
         let predictedLowGlucoseWithZeroTemp = predictionWithObservedAbsorptionAndZeroTemp.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }
         guard let timeToLowZeroTemp = predictedLowGlucoseWithZeroTemp.first?.startDate.timeIntervalSince(currentDate) else {
             return (nil,nil)}
-            
-            print("Time to Low:",timeToLow,"TimetoLowZeroTemp", "NotificationTriggered")
+        
+        let lowestBGwithZeroTemp = predictedLowGlucoseWithZeroTemp.map { $0.quantity.doubleValue(for: .milligramsPerDeciliter) }.min()
+
+        print("*Test lowestBGwithZeroTemp:", lowestBGwithZeroTemp ?? 0.0)
+
+        print("*Test Time to Low:",timeToLow,"TimetoLowZeroTemp", "NotificationTriggered")
             
             NotificationManager.sendSlowAbsorptionNotification(timeToLow: (timeToLow,timeToLowZeroTemp))
             
