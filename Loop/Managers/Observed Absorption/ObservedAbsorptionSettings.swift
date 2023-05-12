@@ -14,5 +14,12 @@ public struct ObservedAbsorptionSettings {
     
     /// don't notify if the low is coming later than this.  it's far away, things might change, and there is plenty of time for rescue carbs
     public static let dontNotifyIfLater = TimeInterval(minutes: 45)
+    //we need to make an assumption about how fast burning the carbs are when estimating the needed rescue carbs
+    
+    public static let assumedRescueCarbAbsorptionTimeMinutes = 60.0
+    
+    public static let flooredTimeForRescueCarbs = 10.0
+    
+    //public static let  assumedCSF = 10.0 // this is actually dynamic and should be picked up from settings in LDM
     
 }
