@@ -36,40 +36,6 @@ public struct SettingsView: View {
         self.versionUpdateViewModel = viewModel.versionUpdateViewModel
     }
     
- /*   public var body: some View {
-        NavigationView {
-            List {
-                loopSection
-                if versionUpdateViewModel.softwareUpdateAvailable {
-                    softwareUpdateSection
-                }
-                if FeatureFlags.automaticBolusEnabled {
-                    dosingStrategySection
-                }
-                retrospectiveCorrectionSection
-                alertManagementSection
-                if viewModel.pumpManagerSettingsViewModel.isSetUp() {
-                    configurationSection
-                }
-                deviceSettingsSection
-                if viewModel.pumpManagerSettingsViewModel.isTestingDevice || viewModel.cgmManagerSettingsViewModel.isTestingDevice {
-                    deleteDataSection
-                }
-                if viewModel.servicesViewModel.showServices {
-                    servicesSection
-                }
-                supportSection
-
-               if let profileExpiration = Bundle.main.profileExpiration, FeatureFlags.profileExpirationSettingsViewEnabled {
-                    profileExpirationSection(profileExpiration: profileExpiration)
-                }
-            }
-            .insetGroupedListStyle()
-            .navigationBarTitle(Text(NSLocalizedString("Settings", comment: "Settings screen title")))
-            .navigationBarItems(trailing: dismissButton)
-        }
-    }
-    */
     
     public var body: some View {
         NavigationView {
