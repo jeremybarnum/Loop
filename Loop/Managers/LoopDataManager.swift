@@ -940,11 +940,11 @@ extension LoopDataManager {
             WidgetCenter.shared.reloadAllTimelines()
         }
           
-        if !predictionWithObservedAbsorption.isEmpty {
+       /* if !predictionWithObservedAbsorption.isEmpty {
             print("*Test predictionWithObservedAbsorption", predictionWithObservedAbsorption[5]) }
             else {
                 print("*test predictionWithObservedAbsorption is empty")}
-
+*/
        //TODO: for some reason it takes several runs of the loop for this to be updated.  But fine, for now.
         
         updateRemoteRecommendation()
@@ -1716,8 +1716,15 @@ extension LoopDataManager {
         
         guard let timeToLowestBGwithZeroTemp = predictedLowGlucoseWithZeroTemp.first(where: { $0.quantity.doubleValue(for: .milligramsPerDeciliter) == lowestBGwithZeroTemp })?.startDate.timeIntervalSince(currentDate) else {
             return}
+        
+        guard let lowestBG = predictedLowGlucose.map({ $0.quantity.doubleValue(for: .milligramsPerDeciliter) }).min() else {
+            return}
+        
+        guard let timeToLowestBG = predictedLowGlucose.first(where: { $0.quantity.doubleValue(for: .milligramsPerDeciliter) == lowestBG })?.startDate.timeIntervalSince(currentDate) else {
+            return}
+        
 
-        print("*Test Time to Low:",timeToLow,"TimetoLowZeroTemp:", timeToLowZeroTemp,"lowestBGwithZeroTemp:", lowestBGwithZeroTemp,"Time to min BG:", timeToLowestBGwithZeroTemp, "NotificationTriggered")
+        print("*Test With Zero temp: Time to Low:",timeToLow, "TimetoLowZeroTemp:", timeToLowZeroTemp,"lowest BG", lowestBG, "lowestBGwithZeroTemp:", lowestBGwithZeroTemp,"Time to min BG:",timeToLowestBG ,"Time to lowestBG with zero temp:", timeToLowestBGwithZeroTemp, "NotificationTriggered")
             
             NotificationManager.sendSlowAbsorptionNotification(timeToLow: timeToLow, timetoLowZeroTemp: timeToLowZeroTemp, lowestBGwithZeroTemp: lowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: timeToLowestBGwithZeroTemp, suspendThreshold: suspendThreshold)
             

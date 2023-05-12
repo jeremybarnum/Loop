@@ -232,13 +232,14 @@ extension NotificationManager {
         //let timeToLowInMinutesZeroTemp = String(Int(round(timetoLowZeroTemp / 60)))
         let formattedLowestBGwithZeroTemp = String(Int(round(lowestBGwithZeroTemp)))
         let assumedRescueCarbAbsorptionTimeMinutes = 60.0
-        let absorptionFraction = max(1.0, max(10.0, timeToLowestBGwithZeroTemp / 60.0) / assumedRescueCarbAbsorptionTimeMinutes)
+        let flooredTimeToLowestBG = max(10.0, timeToLowestBGwithZeroTemp / 60.0)
+        let absorptionFraction = min(1.0, flooredTimeToLowestBG / assumedRescueCarbAbsorptionTimeMinutes)
         let assumedCSF = 10.0
         let rescueCarbs = (suspendThreshold - lowestBGwithZeroTemp) / assumedCSF
         let formattedRescueCarbs = String(Int(round(rescueCarbs)))
         let formattedTimeToLowestBGwithZeroTemp = String(Int(round(timeToLowestBGwithZeroTemp / 60)))
         
-        print("*Test AbsorptionFraction:", absorptionFraction, "rescueCarbs:", rescueCarbs)
+        //print("*Test AbsorptionFraction:", absorptionFraction, "rescueCarbs:", rescueCarbs)
 
         notification.title = String(format: NSLocalizedString("Low in %@ minutes. %@ fast carbs needed.", comment: "The notification title for a slow carb absorption situation"),timeToLowInMinutes, formattedRescueCarbs)
         notification.body = String(format: NSLocalizedString("Min BG of %@ in %@ assuming carb entry edited.",comment: "The notification description for a slow absorbing scenario"), formattedLowestBGwithZeroTemp, formattedTimeToLowestBGwithZeroTemp)
