@@ -1702,12 +1702,12 @@ extension LoopDataManager {
             return
         }
         
-    //TODO: i'm not sure this is right below; check use of date 
+    //TODO: i'm not sure this is right below; check use of date
         guard let ISF = settings.insulinSensitivitySchedule?.value(at: Date()) else {return}
         
         guard let CR = settings.carbRatioSchedule?.value(at: Date()) else {return}
         
-        print("ISF:",ISF,"CR:", CR)
+        //print("*test ISF:",ISF,"CR:", CR)
         
         let CSF = ISF / CR
         

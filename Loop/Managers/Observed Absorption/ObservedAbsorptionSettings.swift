@@ -20,6 +20,6 @@ public struct ObservedAbsorptionSettings {
     
     public static let flooredTimeForRescueCarbs = 10.0
     
-    //public static let  assumedCSF = 10.0 // this is actually dynamic and should be picked up from settings in LDM
+    //things to add: minimum time between alerts 
     
 }
