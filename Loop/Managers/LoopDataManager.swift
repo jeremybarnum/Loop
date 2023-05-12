@@ -1702,9 +1702,12 @@ extension LoopDataManager {
             return
         }
         
-        guard let ISF = settings.insulinSensitivitySchedule.quantity.doubleValue(for:) else {return}
+    //TODO: i'm not sure this is right below
+        guard let ISF = settings.insulinSensitivitySchedule?.quantity(at: Date()).doubleValue(for: .milligramsPerDeciliter) else {return}
         
-        guard let CR = settings.carbRatioSchedule.quantity.doubleValue(for:) / else {return}
+        guard let CR = settings.carbRatioSchedule?.quantity(at: Date()).doubleValue(for: .gram()) else {return}
+        
+        print("ISF:",ISF,"CR:", CR)
         
         let CSF = ISF / CR
         
