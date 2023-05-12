@@ -288,7 +288,7 @@ final class LoopDataManager {
             // Invalidate cached effects affected by the override
             invalidateCachedEffects = true
             
-            // Update the affected schedules TODO: do I need to do this for the absorption too? Probably not because absorption doesn't depend on these 
+            // Update the affected schedules
             mealDetectionManager.carbRatioScheduleApplyingOverrideHistory = carbRatioScheduleApplyingOverrideHistory
             mealDetectionManager.insulinSensitivityScheduleApplyingOverrideHistory = insulinSensitivityScheduleApplyingOverrideHistory
         }
@@ -2295,7 +2295,7 @@ extension LoopDataManager {
                 }),
                 "]",
                 
-                "zeroTempEffect: [",  //TODO: maybe add slow absorption effect here too
+                "zeroTempEffect: [",
                 "* GlucoseEffect(start, mg/dL)",
                 (manager.zeroTempEffect ).reduce(into: "", { (entries, entry) in
                 entries.append("* \(entry.startDate), \(entry.quantity.doubleValue(for: .milligramsPerDeciliter))\n")

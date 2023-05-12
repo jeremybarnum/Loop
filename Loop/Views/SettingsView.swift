@@ -46,7 +46,6 @@ public struct SettingsView: View {
                 if FeatureFlags.automaticBolusEnabled {
                     dosingStrategySection
                 }
-                //TODO: adding retrospectiveCorrectionSection makes it complain about too many arguments; removing any section fixes it.  It seems as if the List has a maximum number of members.  Where is that specified?
                 retrospectiveCorrectionSection
                 alertManagementSection
                 if viewModel.pumpManagerSettingsViewModel.isSetUp() {

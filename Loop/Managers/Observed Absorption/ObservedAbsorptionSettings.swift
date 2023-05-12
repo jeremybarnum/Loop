@@ -14,4 +14,5 @@ public struct ObservedAbsorptionSettings {
     
     /// don't notify if the low is coming later than this.  it's far away, things might change, and there is plenty of time for rescue carbs
     public static let dontNotifyIfLater = TimeInterval(minutes: 45)
+    
 }
