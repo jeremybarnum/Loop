@@ -225,7 +225,7 @@ extension NotificationManager {
     }
     
     
-    static func sendSlowAbsorptionNotification(timeToLow: TimeInterval,timetoLowZeroTemp: TimeInterval, lowestBGwithZeroTemp: Double, timeToLowestBGwithZeroTemp: Double, suspendThreshold: Double) {//TODO: should it be three separate warnings, depending? Like Dragan did? maybe.
+    static func sendSlowAbsorptionNotification(timeToLow: TimeInterval,timetoLowZeroTemp: TimeInterval, lowestBGwithZeroTemp: Double, timeToLowestBGwithZeroTemp: Double, suspendThreshold: Double, CSF: Double) {//TODO: should it be three separate warnings, depending? Like Dragan did? maybe.
         let notification = UNMutableNotificationContent()
         let timeToLowInMinutes = String(Int(round(timeToLow / 60)))
         //let timeToLowInMinutesZeroTemp = String(Int(round(timetoLowZeroTemp / 60))) // not necessary if I'm not going to use it
@@ -233,8 +233,7 @@ extension NotificationManager {
         let assumedRescueCarbAbsorptionTimeMinutes = ObservedAbsorptionSettings.assumedRescueCarbAbsorptionTimeMinutes
         let flooredTimeToLowestBG = max(ObservedAbsorptionSettings.flooredTimeForRescueCarbs, timeToLowestBGwithZeroTemp / 60.0)
         let absorptionFraction = min(1.0, flooredTimeToLowestBG / assumedRescueCarbAbsorptionTimeMinutes)
-        let assumedCSF = 10.0
-        let rescueCarbs = (suspendThreshold - lowestBGwithZeroTemp) / assumedCSF / absorptionFraction
+        let rescueCarbs = (suspendThreshold - lowestBGwithZeroTemp) / CSF / absorptionFraction
         let formattedRescueCarbs = String(Int(round(rescueCarbs)))
         let formattedTimeToLowestBGwithZeroTemp = String(Int(round(timeToLowestBGwithZeroTemp / 60)))
         
