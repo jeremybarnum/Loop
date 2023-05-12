@@ -1698,28 +1698,35 @@ extension LoopDataManager {
     }
 
 
-    func checkForLowAndNotifyIfNeeded() -> (TimeInterval?,TimeInterval?, Double?) {
+    func checkForLowAndNotifyIfNeeded() {
         let currentDate = Date()
         guard let suspendThreshold = settings.suspendThreshold?.quantity.doubleValue(for: .milligramsPerDeciliter) else {
-            return (nil,nil, nil)
+            return
         }
         let predictedLowGlucose = predictionWithObservedAbsorption.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }
+        
         guard let timeToLow = predictedLowGlucose.first?.startDate.timeIntervalSince(currentDate) else {
-            return (nil,nil,nil)
+            return
         }
         let predictedLowGlucoseWithZeroTemp = predictionWithObservedAbsorptionAndZeroTemp.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }
-        guard let timeToLowZeroTemp = predictedLowGlucoseWithZeroTemp.first?.startDate.timeIntervalSince(currentDate) else {
-            return (nil,nil, nil)}
         
-        let lowestBGwithZeroTemp = predictedLowGlucoseWithZeroTemp.map { $0.quantity.doubleValue(for: .milligramsPerDeciliter) }.min()
+        guard let timeToLowZeroTemp = predictedLowGlucoseWithZeroTemp.first?.startDate.timeIntervalSince(currentDate) else {
+            return}
+        
+        guard let lowestBGwithZeroTemp = predictedLowGlucoseWithZeroTemp.map({ $0.quantity.doubleValue(for: .milligramsPerDeciliter) }).min() else {
+            return}
+        
+        guard let timeLowestBGwithZeroTemp = predictedLowGlucoseWithZeroTemp.first(where: { $0.quantity.doubleValue(for: .milligramsPerDeciliter) == lowestBGwithZeroTemp })?.startDate.timeIntervalSince(currentDate) else {
+            return}
+        
 
-        print("*Test lowestBGwithZeroTemp:", lowestBGwithZeroTemp ?? 0.0)
+        print("*Test lowestBGwithZeroTemp:", lowestBGwithZeroTemp )
 
         print("*Test Time to Low:",timeToLow,"TimetoLowZeroTemp", "NotificationTriggered")
             
-            NotificationManager.sendSlowAbsorptionNotification(timeToLow: (timeToLow,timeToLowZeroTemp, lowestBGwithZeroTemp))
+            NotificationManager.sendSlowAbsorptionNotification(timeToLow: (timeToLow, timeToLowZeroTemp, lowestBGwithZeroTemp))
             
-            return (timeToLow, timeToLowZeroTemp, lowestBGwithZeroTemp)
+            return
     }
 
 
