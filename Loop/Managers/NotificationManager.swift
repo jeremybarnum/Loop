@@ -236,7 +236,7 @@ extension NotificationManager {
         let assumedCSF = 10.0
         let rescueCarbs = (suspendThreshold - lowestBGwithZeroTemp) / absorptionFraction / assumedCSF
         let formattedRescueCarbs = String(Int(round(rescueCarbs)))
-        let formattedTimeToLowestBGwithZeroTemp = String(Int(round(timeToLowestBGwithZeroTemp)))
+        let formattedTimeToLowestBGwithZeroTemp = String(Int(round(timeToLowestBGwithZeroTemp / 60)))
         
         print("*Test AbsorptionFraction:", absorptionFraction, "rescueCarbs:", rescueCarbs)
 
