@@ -230,7 +230,7 @@ extension NotificationManager {
         let notification = UNMutableNotificationContent()
 
         let timeToLowInMinutes = String(Int(round(timeToLow)))
-        let timeToLowInMinutesZeroTemp = String(Int(round(timetoLowZeroTemp / 60)))
+        //let timeToLowInMinutesZeroTemp = String(Int(round(timetoLowZeroTemp / 60)))
         //let formattedLowestBGwithZeroTemp = String(Int(round(lowestBGwithZeroTemp)))
         let assumedRescueCarbAbsorptionTimeMinutes = 60.0
         let absorptionFraction = max(10*60, timeToLowestBGwithZeroTemp) / assumedRescueCarbAbsorptionTimeMinutes
@@ -251,7 +251,7 @@ extension NotificationManager {
         */
         //not sure if we need this
         
-        var notificationTrigger: UNTimeIntervalNotificationTrigger? = nil
+        let notificationTrigger: UNTimeIntervalNotificationTrigger? = nil
 
         let request = UNNotificationRequest(
             /// We use the same `identifier` for all requests so a newer missed meal notification will replace a current one (if it exists)
