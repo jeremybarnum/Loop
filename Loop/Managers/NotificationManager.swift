@@ -230,17 +230,18 @@ extension NotificationManager {
         let notification = UNMutableNotificationContent()
         let timeToLowInMinutes = String(Int(round(timeToLow / 60)))
         //let timeToLowInMinutesZeroTemp = String(Int(round(timetoLowZeroTemp / 60)))
-        //let formattedLowestBGwithZeroTemp = String(Int(round(lowestBGwithZeroTemp)))
+        let formattedLowestBGwithZeroTemp = String(Int(round(lowestBGwithZeroTemp)))
         let assumedRescueCarbAbsorptionTimeMinutes = 60.0
         let absorptionFraction = max(10, timeToLowestBGwithZeroTemp / 60) / assumedRescueCarbAbsorptionTimeMinutes
         let assumedCSF = 10.0
         let rescueCarbs = (suspendThreshold - lowestBGwithZeroTemp) / absorptionFraction / assumedCSF
         let formattedRescueCarbs = String(Int(round(rescueCarbs)))
+        let formattedTimeToLowestBGwithZeroTemp = String(Int(round(timeToLowestBGwithZeroTemp)))
         
         print("*Test AbsorptionFraction:", absorptionFraction, "rescueCarbs:", rescueCarbs)
 
-        notification.title = String(format: NSLocalizedString("Low in %@ minutes", comment: "The notification title for a slow carb absorption situation"),timeToLowInMinutes)
-        notification.body = String(format: NSLocalizedString("Low in %@ minutes. %@ carbs needed.",comment: "The notification description for a slow absorbing scenario"), timeToLowInMinutes, formattedRescueCarbs)
+        notification.title = String(format: NSLocalizedString("Low in %@ minutes. %@ fast carbs needed.", comment: "The notification title for a slow carb absorption situation"),timeToLowInMinutes, formattedRescueCarbs)
+        notification.body = String(format: NSLocalizedString("Min BG of %@ in %@ assuming carb entry edited.",comment: "The notification description for a slow absorbing scenario"), formattedLowestBGwithZeroTemp, formattedTimeToLowestBGwithZeroTemp)
         notification.sound = .default
         notification.interruptionLevel = .timeSensitive // making the notification interrupt
         
