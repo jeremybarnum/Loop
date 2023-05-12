@@ -1721,7 +1721,7 @@ extension LoopDataManager {
 
         print("*Test Time to Low:",timeToLow,"TimetoLowZeroTemp:", timeToLowZeroTemp,"lowestBGwithZeroTemp:", lowestBGwithZeroTemp,"Time to min BG:", timeToLowestBGwithZeroTemp, "NotificationTriggered")
             
-            NotificationManager.sendSlowAbsorptionNotification(timeToLow: (timeToLow, timeToLowZeroTemp, lowestBGwithZeroTemp))
+            NotificationManager.sendSlowAbsorptionNotification(timeToLow: timeToLow, timetoLowZeroTemp: timeToLowZeroTemp, lowestBGwithZeroTemp: lowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: timeToLowestBGwithZeroTemp, suspendThreshold: suspendThreshold)
             
             return
     }
