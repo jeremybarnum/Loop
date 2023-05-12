@@ -941,9 +941,9 @@ extension LoopDataManager {
         }
           
        /* if !predictionWithObservedAbsorption.isEmpty {
-            print("*Test predictionWithObservedAbsorption", predictionWithObservedAbsorption[5]) }
+           // print("*Test predictionWithObservedAbsorption", predictionWithObservedAbsorption[5]) }
             else {
-                print("*test predictionWithObservedAbsorption is empty")}
+               // print("*test predictionWithObservedAbsorption is empty")}
 */
        //TODO: for some reason it takes several runs of the loop for this to be updated.  But fine, for now.
         
