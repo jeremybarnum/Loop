@@ -1673,8 +1673,6 @@ extension LoopDataManager {
         
     }
     
- 
-    
     func updateObservedAbsorptionPredictions() {
         self.getLoopState { (manager, state) in
 

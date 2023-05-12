@@ -231,7 +231,7 @@ extension NotificationManager {
 
         let timeToLowInMinutes = String(Int(round(timeToLow)))
         let timeToLowInMinutesZeroTemp = String(Int(round(timetoLowZeroTemp / 60)))
-        let formattedLowestBGwithZeroTemp = String(Int(round(lowestBGwithZeroTemp)))
+        //let formattedLowestBGwithZeroTemp = String(Int(round(lowestBGwithZeroTemp)))
         let assumedRescueCarbAbsorptionTimeMinutes = 60.0
         let absorptionFraction = max(10*60, timeToLowestBGwithZeroTemp) / assumedRescueCarbAbsorptionTimeMinutes
         let assumedCSF = 10.0
@@ -239,7 +239,7 @@ extension NotificationManager {
         let formattedRescueCarbs = String(Int(round(rescueCarbs)))
 
         notification.title = String(format: NSLocalizedString("Low in %@ minutes", comment: "The notification title for a slow carb absorption situation"),timeToLowInMinutes)
-        notification.body = String(format: NSLocalizedString("Low in %@ minutes. %@ carbs needed.",comment: "The notification description for a slow absorbing scenario"), timeToLowInMinutesZeroTemp, rescueCarbs)
+        notification.body = String(format: NSLocalizedString("Low in %@ minutes. %@ carbs needed.",comment: "The notification description for a slow absorbing scenario"), timeToLowInMinutes, formattedRescueCarbs)
         notification.sound = .default
         notification.interruptionLevel = .timeSensitive // making the notification interrupt
         
