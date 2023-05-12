@@ -229,7 +229,7 @@ extension NotificationManager {
     static func sendSlowAbsorptionNotification(timeToLow: TimeInterval,timetoLowZeroTemp: TimeInterval, lowestBGwithZeroTemp: Double, timeToLowestBGwithZeroTemp: Double, suspendThreshold: Double) {//TODO: should it be three separate warnings, depending? Like Dragan did? maybe.
         let notification = UNMutableNotificationContent()
 
-        let timeToLowInMinutes = String(Int(round(timeToLow)))
+        let timeToLowInMinutes = String(Int(round(timeToLow / 60)))
         //let timeToLowInMinutesZeroTemp = String(Int(round(timetoLowZeroTemp / 60)))
         //let formattedLowestBGwithZeroTemp = String(Int(round(lowestBGwithZeroTemp)))
         let assumedRescueCarbAbsorptionTimeMinutes = 60.0
