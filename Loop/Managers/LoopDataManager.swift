@@ -1701,6 +1701,13 @@ extension LoopDataManager {
         guard let suspendThreshold = settings.suspendThreshold?.quantity.doubleValue(for: .milligramsPerDeciliter) else {
             return
         }
+        
+        guard let ISF = settings.insulinSensitivitySchedule.quantity.doubleValue(for:) else {return}
+        
+        guard let CR = settings.carbRatioSchedule.quantity.doubleValue(for:) / else {return}
+        
+        let CSF = ISF / CR
+        
         let predictedLowGlucose = predictionWithObservedAbsorption.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }
         
         guard let timeToLow = predictedLowGlucose.first?.startDate.timeIntervalSince(currentDate) else {
@@ -1731,7 +1738,7 @@ extension LoopDataManager {
         let dontNotifyIfSooner = ObservedAbsorptionSettings.dontNotifyIfSooner
         let dontNotifyIfLater = ObservedAbsorptionSettings.dontNotifyIfLater //only notify if low is between 5 and 45 minutes in the future.  Earlier is obvious and annoying, later is too alarmist.
         
-        if timeToLow > dontNotifyIfSooner && timeToLow < dontNotifyIfLater { NotificationManager.sendSlowAbsorptionNotification(timeToLow: timeToLow, timetoLowZeroTemp: timeToLowZeroTemp, lowestBGwithZeroTemp: lowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: timeToLowestBGwithZeroTemp, suspendThreshold: suspendThreshold) } else {return}
+        if timeToLow > dontNotifyIfSooner && timeToLow < dontNotifyIfLater { NotificationManager.sendSlowAbsorptionNotification(timeToLow: timeToLow, timetoLowZeroTemp: timeToLowZeroTemp, lowestBGwithZeroTemp: lowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: timeToLowestBGwithZeroTemp, suspendThreshold: suspendThreshold, CSF: CSF) } else {return}
             
             return
     }
