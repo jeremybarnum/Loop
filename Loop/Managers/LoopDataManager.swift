@@ -1716,13 +1716,10 @@ extension LoopDataManager {
         guard let lowestBGwithZeroTemp = predictedLowGlucoseWithZeroTemp.map({ $0.quantity.doubleValue(for: .milligramsPerDeciliter) }).min() else {
             return}
         
-        guard let timeLowestBGwithZeroTemp = predictedLowGlucoseWithZeroTemp.first(where: { $0.quantity.doubleValue(for: .milligramsPerDeciliter) == lowestBGwithZeroTemp })?.startDate.timeIntervalSince(currentDate) else {
+        guard let timeToLowestBGwithZeroTemp = predictedLowGlucoseWithZeroTemp.first(where: { $0.quantity.doubleValue(for: .milligramsPerDeciliter) == lowestBGwithZeroTemp })?.startDate.timeIntervalSince(currentDate) else {
             return}
-        
 
-        print("*Test lowestBGwithZeroTemp:", lowestBGwithZeroTemp )
-
-        print("*Test Time to Low:",timeToLow,"TimetoLowZeroTemp", "NotificationTriggered")
+        print("*Test Time to Low:",timeToLow,"TimetoLowZeroTemp:", timeToLowZeroTemp,"lowestBGwithZeroTemp:", lowestBGwithZeroTemp,"Time to min BG:", timeToLowestBGwithZeroTemp, "NotificationTriggered")
             
             NotificationManager.sendSlowAbsorptionNotification(timeToLow: (timeToLow, timeToLowZeroTemp, lowestBGwithZeroTemp))
             
