@@ -365,7 +365,7 @@ final class DeviceDataManager {
             }
         }
 
-        //TODO The instantiation of these non-device related managers should be moved to LoopAppManager, and then LoopAppManager can wire up the connections between them.
+        //🥰☺️ The instantiation of these non-device related managers should be moved to LoopAppManager, and then LoopAppManager can wire up the connections between them.
         statusExtensionManager = ExtensionDataManager(deviceDataManager: self, closedLoopStatus: closedLoopStatus)
 
         loopManager = LoopDataManager(
