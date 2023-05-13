@@ -58,6 +58,15 @@ struct AlertManagementView: View {
             }
         )
     }
+    
+    private var slowAbsorptionNotificationsEnabled: Binding<Bool> {
+        Binding(
+            get: { UserDefaults.standard.slowAbsorptionNotificationsEnabled },
+            set: { enabled in
+                UserDefaults.standard.slowAbsorptionNotificationsEnabled = enabled
+            }
+        )
+    }
 
     public init(checker: AlertPermissionsChecker, alertMuter: AlertMuter = AlertMuter()) {
         self.checker = checker
@@ -124,11 +133,18 @@ struct AlertManagementView: View {
             Toggle(NSLocalizedString("Missed Meal Notifications", comment: "Title for missed meal notifications toggle"), isOn: missedMealNotificationsEnabled)
         }
     }
+    
+    private var slowAbsorptionAlertSection: some View {
+        Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop can notify you when it sees carbs absorbing slowly, risking a crash.", comment: "Description of slow absorption notifications."))) {
+            Toggle(NSLocalizedString("Slow Absorption Notifications", comment: "Title for slow absorption notification toggle"), isOn: slowAbsorptionNotificationsEnabled)
+        }
+    }
 }
 
 extension UserDefaults {
     private enum Key: String {
         case missedMealNotificationsEnabled = "com.loopkit.Loop.MissedMealNotificationsEnabled"
+        case slowAbsorptionNotificationsEnabled = "com.loopkit.Loop.slowAbsorptionNotificationsEnabled"
     }
     
     var missedMealNotificationsEnabled: Bool {
@@ -137,6 +153,15 @@ extension UserDefaults {
         }
         set {
             set(newValue, forKey: Key.missedMealNotificationsEnabled.rawValue)
+        }
+    }
+    
+    var slowAbsorptionNotificationsEnabled: Bool {
+        get {
+            return object(forKey: Key.slowAbsorptionNotificationsEnabled.rawValue) as? Bool ?? false
+        }
+        set {
+            set(newValue, forKey: Key.slowAbsorptionNotificationsEnabled.rawValue)
         }
     }
 }
