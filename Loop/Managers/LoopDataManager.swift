@@ -1737,9 +1737,6 @@ extension LoopDataManager {
         guard let timeToLowestBG = predictedLowGlucose.first(where: { $0.quantity.doubleValue(for: .milligramsPerDeciliter) == lowestBG })?.startDate.timeIntervalSince(currentDate) else {
             return}
         
-        
-
-        
         //print("*Test* both with absorption: no zero temp prediction:", predictionWithObservedAbsorption, "prediction with zero temp:", predictionWithObservedAbsorptionAndZeroTemp )
         
         let dontNotifyIfSooner = ObservedAbsorptionSettings.dontNotifyIfSooner
@@ -1748,7 +1745,7 @@ extension LoopDataManager {
         
         if lastNotificationTime == nil || Date() > (lastNotificationTime! + notificationInterval) {
             notificationIntervalExceeded = true
-        } else {return}
+        } else {return} //if prior notification time is nil, it means no notification has been sent, so it should be sent.  Otherwise check that it hasn't been sent too recently
                 
         if timeToLow > dontNotifyIfSooner && timeToLow < dontNotifyIfLater && notificationIntervalExceeded { NotificationManager.sendSlowAbsorptionNotification(timeToLow: timeToLow, timetoLowZeroTemp: timeToLowZeroTemp, lowestBGwithZeroTemp: lowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: timeToLowestBGwithZeroTemp, suspendThreshold: suspendThreshold, CSF: CSF) } else {return}
         
