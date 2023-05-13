@@ -84,6 +84,7 @@ struct AlertManagementView: View {
                 }
             }
             missedMealAlertSection
+            slowAbsorptionAlertSection
         }
         .navigationTitle(NSLocalizedString("Alert Management", comment: "Title of alert management screen"))
     }
