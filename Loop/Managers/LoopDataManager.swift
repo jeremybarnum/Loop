@@ -68,6 +68,8 @@ final class LoopDataManager {
     private var timeBasedDoseApplicationFactor: Double = 1.0
 
     private var insulinOnBoard: InsulinValue?
+    
+    var lastNotificationTime: Date? = nil //this is for slow carb absorption.  seems wrong to have it here, but what can you do
 
     deinit {
         for observer in notificationObservers {
@@ -931,7 +933,7 @@ extension LoopDataManager {
             
             updateObservedAbsorptionPredictions()
             
-            checkForLowAndNotifyIfNeeded() //need to maybe rewrite to return nothing, but returning nil is useful for the notification
+            checkForLowAndNotifyIfNeeded()
         }
 
         // 5 second delay to allow stores to cache data before it is read by widget
@@ -1694,15 +1696,13 @@ extension LoopDataManager {
             }
         }
     }
-
-
+    
     func checkForLowAndNotifyIfNeeded() {
         let currentDate = Date()
         guard let suspendThreshold = settings.suspendThreshold?.quantity.doubleValue(for: .milligramsPerDeciliter) else {
             return
         }
-        var lastNotificationTime: Date? = nil
-        
+       
         var notificationIntervalExceeded = true
         
         let notificationInterval = ObservedAbsorptionSettings.notificationInterval
@@ -1738,23 +1738,23 @@ extension LoopDataManager {
             return}
         
         
-        print("*Test With Absorption: Time to Low:",timeToLow, "TimetoLowZeroTemp:", timeToLowZeroTemp,"lowest BG", lowestBG, "lowestBGwithZeroTemp:", lowestBGwithZeroTemp,"Time to min BG:",timeToLowestBG ,"Time to lowestBG with zero temp:", timeToLowestBGwithZeroTemp, "NotificationTriggered at", Date())
+
         
         //print("*Test* both with absorption: no zero temp prediction:", predictionWithObservedAbsorption, "prediction with zero temp:", predictionWithObservedAbsorptionAndZeroTemp )
         
         let dontNotifyIfSooner = ObservedAbsorptionSettings.dontNotifyIfSooner
         let dontNotifyIfLater = ObservedAbsorptionSettings.dontNotifyIfLater //only notify if low is between 5 and 45 minutes in the future.  Earlier is obvious and annoying, later is too alarmist.
         
-        //if Date() > (lastNotificationTime + notificationInterval) {notificationIntervalExceeded = true} else {notificationIntervalExceeded = false}
         
         if lastNotificationTime == nil || Date() > (lastNotificationTime! + notificationInterval) {
             notificationIntervalExceeded = true
         } else {return}
-
                 
         if timeToLow > dontNotifyIfSooner && timeToLow < dontNotifyIfLater && notificationIntervalExceeded { NotificationManager.sendSlowAbsorptionNotification(timeToLow: timeToLow, timetoLowZeroTemp: timeToLowZeroTemp, lowestBGwithZeroTemp: lowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: timeToLowestBGwithZeroTemp, suspendThreshold: suspendThreshold, CSF: CSF) } else {return}
         
         lastNotificationTime = Date()
+        
+        print("*Test With Absorption: Time to Low:",timeToLow, "TimetoLowZeroTemp:", timeToLowZeroTemp,"lowest BG", lowestBG, "lowestBGwithZeroTemp:", lowestBGwithZeroTemp,"Time to min BG:",timeToLowestBG ,"Time to lowestBG with zero temp:", timeToLowestBGwithZeroTemp, "NotificationTriggered at", Date())
             
             return
     }
