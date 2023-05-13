@@ -1699,62 +1699,105 @@ extension LoopDataManager {
     
     func checkForLowAndNotifyIfNeeded() {
         
+        print("*test starting low absorption notification process")
         guard UserDefaults.standard.slowAbsorptionNotificationsEnabled else {return}
+        print("*test toggle button is",UserDefaults.standard.slowAbsorptionNotificationsEnabled)
         
         let currentDate = Date()
-        guard let suspendThreshold = settings.suspendThreshold?.quantity.doubleValue(for: .milligramsPerDeciliter) else {
-            return
-        }
-       
+        guard let suspendThreshold = settings.suspendThreshold?.quantity.doubleValue(for: .milligramsPerDeciliter) else {return}
+        print("*test suspend threshold is ",suspendThreshold)
+    
         var notificationIntervalExceeded = true
-        
+            
         let notificationInterval = ObservedAbsorptionSettings.notificationInterval
+        print("*test notification interval is:",notificationInterval)
         
+        let assumedRescueCarbAbsorptionTimeMinutes = ObservedAbsorptionSettings.assumedRescueCarbAbsorptionTimeMinutes
+
         guard let ISF = settings.insulinSensitivitySchedule?.value(at: Date()) else {return}
         
         guard let CR = settings.carbRatioSchedule?.value(at: Date()) else {return}
         
-        //print("*test ISF:",ISF,"CR:", CR)
-        
         let CSF = ISF / CR
+        
+        var timeToLowZeroTemp: TimeInterval?
+        
+        var lowestBGwithZeroTemp: Double?
+        
+        var timeToLowestBGwithZeroTemp: TimeInterval?
+        
+        var flooredTimeToLowestBG: TimeInterval?
+        
+        var absorptionFraction: Double
+        
+        var rescueCarbs: Double?
+        
+        print("*test ISF:",ISF,"CR:", CR)
+
         
         let predictedLowGlucose = predictionWithObservedAbsorption.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }
         
         guard let timeToLow = predictedLowGlucose.first?.startDate.timeIntervalSince(currentDate) else {
             return
+            
+        } // exit the context if there is no low in the future.  The rest of the function becomes pointless.
+        
+        print("*test basic time to low:",timeToLow)
+        
+        let predictedLowGlucoseWithZeroTemp = predictionWithObservedAbsorptionAndZeroTemp.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }//this could be empty if a low that would otherwise take place is avoided by zero temping.  It's rare but not impossible.  Maybe more common in real world scenarios
+        
+        if let value = predictedLowGlucoseWithZeroTemp.first?.startDate.timeIntervalSince(currentDate)
+        
+        {
+            timeToLowZeroTemp = value
+            
+            lowestBGwithZeroTemp = predictedLowGlucoseWithZeroTemp.map({ $0.quantity.doubleValue(for: .milligramsPerDeciliter) }).min() // cannot be empty if it survives initial unwrappin of the low
+            
+            timeToLowestBGwithZeroTemp = predictedLowGlucoseWithZeroTemp.first(where: { $0.quantity.doubleValue(for: .milligramsPerDeciliter) == lowestBGwithZeroTemp })?.startDate.timeIntervalSince(currentDate) // same deal - nil if the array is empty
+            
+            flooredTimeToLowestBG = max(ObservedAbsorptionSettings.flooredTimeForRescueCarbs, timeToLowestBGwithZeroTemp! / 60.0)
+            
+            absorptionFraction = min(1.0, flooredTimeToLowestBG! / assumedRescueCarbAbsorptionTimeMinutes)
+            
+            rescueCarbs = (suspendThreshold - lowestBGwithZeroTemp!) / CSF / absorptionFraction
         }
-        let predictedLowGlucoseWithZeroTemp = predictionWithObservedAbsorptionAndZeroTemp.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }
         
-        guard let timeToLowZeroTemp = predictedLowGlucoseWithZeroTemp.first?.startDate.timeIntervalSince(currentDate) else {
-            return}
+        print("*test timetoLowZeroTemp",timeToLowZeroTemp)
         
-        guard let lowestBGwithZeroTemp = predictedLowGlucoseWithZeroTemp.map({ $0.quantity.doubleValue(for: .milligramsPerDeciliter) }).min() else {
-            return}
+       print("*test lowestBGwithZeroTemp:", lowestBGwithZeroTemp)
+
         
-        guard let timeToLowestBGwithZeroTemp = predictedLowGlucoseWithZeroTemp.first(where: { $0.quantity.doubleValue(for: .milligramsPerDeciliter) == lowestBGwithZeroTemp })?.startDate.timeIntervalSince(currentDate) else {
-            return}
+        let lowestBG = predictedLowGlucose.map({ $0.quantity.doubleValue(for: .milligramsPerDeciliter) }).min()
         
-        guard let lowestBG = predictedLowGlucose.map({ $0.quantity.doubleValue(for: .milligramsPerDeciliter) }).min() else {
-            return}
+        print("*test lowestBG:", lowestBG)
         
-        guard let timeToLowestBG = predictedLowGlucose.first(where: { $0.quantity.doubleValue(for: .milligramsPerDeciliter) == lowestBG })?.startDate.timeIntervalSince(currentDate) else {
-            return}
+        let timeToLowestBG = predictedLowGlucose.first(where: { $0.quantity.doubleValue(for: .milligramsPerDeciliter) == lowestBG })?.startDate.timeIntervalSince(currentDate)
         
-        //print("*Test* both with absorption: no zero temp prediction:", predictionWithObservedAbsorption, "prediction with zero temp:", predictionWithObservedAbsorptionAndZeroTemp )
+        print("*test timeToLowestBG:", timeToLowestBG)
         
+
         let dontNotifyIfSooner = ObservedAbsorptionSettings.dontNotifyIfSooner
         let dontNotifyIfLater = ObservedAbsorptionSettings.dontNotifyIfLater //only notify if low is between 5 and 45 minutes in the future.  Earlier is obvious and annoying, later is too alarmist.
-        
         
         if lastNotificationTime == nil || Date() > (lastNotificationTime! + notificationInterval) {
             notificationIntervalExceeded = true
         } else {return} //if prior notification time is nil, it means no notification has been sent, so it should be sent.  Otherwise check that it hasn't been sent too recently
+        
+        //formatting for notification reuquest
+        let timeToLowInMinutes = String(Int(round(timeToLow / 60)))
+        let timeToLowInMinutesZeroTemp = String(Int(round(timeToLowZeroTemp! / 60)))
+        let formattedLowestBGwithZeroTemp = String(Int(round(lowestBGwithZeroTemp!)))
+        let formattedRescueCarbs = String(Int(round(rescueCarbs!)))
+        let formattedTimeToLowestBGwithZeroTemp = String(Int(round(timeToLowestBGwithZeroTemp! / 60)))
+    
                 
-        if timeToLow > dontNotifyIfSooner && timeToLow < dontNotifyIfLater && notificationIntervalExceeded { NotificationManager.sendSlowAbsorptionNotification(timeToLow: timeToLow, timetoLowZeroTemp: timeToLowZeroTemp, lowestBGwithZeroTemp: lowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: timeToLowestBGwithZeroTemp, suspendThreshold: suspendThreshold, CSF: CSF) } else {return}
+        if timeToLow > dontNotifyIfSooner && timeToLow < dontNotifyIfLater && notificationIntervalExceeded { NotificationManager.sendSlowAbsorptionNotification(timeToLow: timeToLowInMinutes, timetoLowZeroTemp: timeToLowInMinutesZeroTemp, lowestBGwithZeroTemp: formattedLowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: formattedTimeToLowestBGwithZeroTemp, rescueCarbs: formattedRescueCarbs)} else {return}
         
         lastNotificationTime = Date()
         
-        print("*Test With Absorption: Time to Low:",timeToLow, "TimetoLowZeroTemp:", timeToLowZeroTemp,"lowest BG", lowestBG, "lowestBGwithZeroTemp:", lowestBGwithZeroTemp,"Time to min BG:",timeToLowestBG ,"Time to lowestBG with zero temp:", timeToLowestBGwithZeroTemp, "NotificationTriggered at", Date())
+        print("*Test Notification Triggered. lastNotificationTime:", Date())
+        
+        //print("*Test With Absorption: Time to Low:",timeToLow, "TimetoLowZeroTemp:", timeToLowZeroTemp,"lowest BG", lowestBG, "lowestBGwithZeroTemp:", lowestBGwithZeroTemp,"Time to min BG:",timeToLowestBG ,"Time to lowestBG with zero temp:", timeToLowestBGwithZeroTemp, "NotificationTriggered at", Date())
             
             return
     }

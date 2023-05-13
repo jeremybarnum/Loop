@@ -225,32 +225,16 @@ extension NotificationManager {
     }
     
     
-    static func sendSlowAbsorptionNotification(timeToLow: TimeInterval,timetoLowZeroTemp: TimeInterval, lowestBGwithZeroTemp: Double, timeToLowestBGwithZeroTemp: Double, suspendThreshold: Double, CSF: Double) {//TODO: should it be three separate warnings, depending? Like Dragan did? maybe.
+    static func sendSlowAbsorptionNotification(timeToLow: String,timetoLowZeroTemp: String, lowestBGwithZeroTemp: String, timeToLowestBGwithZeroTemp: String, rescueCarbs: String) {//TODO: should it be three separate warnings, depending? Like Dragan did? maybe.
         let notification = UNMutableNotificationContent()
-        let timeToLowInMinutes = String(Int(round(timeToLow / 60)))
-        //let timeToLowInMinutesZeroTemp = String(Int(round(timetoLowZeroTemp / 60))) // not necessary if I'm not going to use it
-        let formattedLowestBGwithZeroTemp = String(Int(round(lowestBGwithZeroTemp)))
-        let assumedRescueCarbAbsorptionTimeMinutes = ObservedAbsorptionSettings.assumedRescueCarbAbsorptionTimeMinutes
-        let flooredTimeToLowestBG = max(ObservedAbsorptionSettings.flooredTimeForRescueCarbs, timeToLowestBGwithZeroTemp / 60.0)
-        let absorptionFraction = min(1.0, flooredTimeToLowestBG / assumedRescueCarbAbsorptionTimeMinutes)
-        let rescueCarbs = (suspendThreshold - lowestBGwithZeroTemp) / CSF / absorptionFraction
-        let formattedRescueCarbs = String(Int(round(rescueCarbs)))
-        let formattedTimeToLowestBGwithZeroTemp = String(Int(round(timeToLowestBGwithZeroTemp / 60)))
-        
-        //print("*Test AbsorptionFraction:", absorptionFraction, "rescueCarbs:", rescueCarbs)
+       
+        print("Notification Triggered at time:",Date())
 
-        notification.title = String(format: NSLocalizedString("Low in %@ minutes. %@ fast carbs needed.", comment: "The notification title for a slow carb absorption situation"),timeToLowInMinutes, formattedRescueCarbs)
-        notification.body = String(format: NSLocalizedString("Min BG of %@ in %@ minutes assuming edited carb entry.",comment: "The notification description for a slow absorbing scenario"), formattedLowestBGwithZeroTemp, formattedTimeToLowestBGwithZeroTemp)
+        notification.title = String(format: NSLocalizedString("Low in %@ minutes. %@ fast carbs needed.", comment: "The notification title for a slow carb absorption situation"),timeToLow, rescueCarbs)
+        notification.body = String(format: NSLocalizedString("Min BG of %@ in %@ minutes assuming edited carb entry.",comment: "The notification description for a slow absorbing scenario"),lowestBGwithZeroTemp,timeToLowestBGwithZeroTemp)
         notification.sound = .default
         notification.interruptionLevel = .timeSensitive // making the notification interrupt
-        
-      /*  notification.userInfo = [
-            LoopNotificationUserInfoKey.missedMealTime.rawValue: mealStart,
-            LoopNotificationUserInfoKey.missedMealCarbAmount.rawValue: amountInGrams,
-            LoopNotificationUserInfoKey.expirationDate.rawValue: expirationDate
-        ]
-        */
-        //not sure if we need this
+
         
         let notificationTrigger: UNTimeIntervalNotificationTrigger? = nil
 
