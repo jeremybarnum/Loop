@@ -485,6 +485,7 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
              LoopNotificationCategory.remoteBolusFailure.rawValue,
              LoopNotificationCategory.remoteCarbs.rawValue,
              LoopNotificationCategory.remoteCarbsFailure.rawValue,
+             LoopNotificationCategory.slowAbsorption.rawValue,
              LoopNotificationCategory.missedMeal.rawValue:
             completionHandler([.badge, .sound, .list, .banner])
         default:

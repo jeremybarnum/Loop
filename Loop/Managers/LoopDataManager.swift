@@ -1698,6 +1698,9 @@ extension LoopDataManager {
     }
     
     func checkForLowAndNotifyIfNeeded() {
+        
+        guard UserDefaults.standard.slowAbsorptionNotificationsEnabled else {return}
+        
         let currentDate = Date()
         guard let suspendThreshold = settings.suspendThreshold?.quantity.doubleValue(for: .milligramsPerDeciliter) else {
             return
