@@ -60,7 +60,7 @@ class ObservedAbsorptionManager {
         let recentCarbEffects = carbEffects.filterDateRange(intervalStart, now)
 
         /// Carb effects are cumulative, so we have to subtract the previous effect value
-        var previousEffectValue: Double = recentCarbEffects.first?.quantity.doubleValue(for: carbUnit) ?? 0//TODO: figure this out I'm worried this zero could create weird carb effects
+        var previousEffectValue: Double = recentCarbEffects.first?.quantity.doubleValue(for: carbUnit) ?? 0//TODO: figure this out I'm worried this zero could create weird carb effects.  I think it's ok because it's only zero when there are no carb effects in which case it's fine.  
         
         for effect in recentCarbEffects.dropFirst() {
             let value = effect.quantity.doubleValue(for: carbUnit)
