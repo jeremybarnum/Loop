@@ -1694,18 +1694,18 @@ extension LoopDataManager {
     
     func checkForLowAndNotifyIfNeeded() {
         
-        print("*test starting low absorption notification process at:", Date())
+        //print("*test starting low absorption notification process at:", Date())
         guard UserDefaults.standard.slowAbsorptionNotificationsEnabled else {return}
-        print("*test toggle button is",UserDefaults.standard.slowAbsorptionNotificationsEnabled)
+        //print("*test toggle button is",UserDefaults.standard.slowAbsorptionNotificationsEnabled)
         
         let currentDate = Date()
         guard let suspendThreshold = settings.suspendThreshold?.quantity.doubleValue(for: .milligramsPerDeciliter) else {return}
-        print("*test suspend threshold is ",suspendThreshold)
+        //print("*test suspend threshold is ",suspendThreshold)
     
         var notificationIntervalExceeded = true
             
         let notificationInterval = ObservedAbsorptionSettings.notificationInterval
-        print("*test notification interval is:",notificationInterval)
+       // print("*test notification interval is:",notificationInterval)
         
         let assumedRescueCarbAbsorptionTimeMinutes = ObservedAbsorptionSettings.assumedRescueCarbAbsorptionTimeMinutes
 
@@ -1727,7 +1727,7 @@ extension LoopDataManager {
         
         var rescueCarbs: Double?
         
-        print("*test ISF:",ISF,"CR:", CR)
+        //print("*test ISF:",ISF,"CR:", CR)
 
         
         let predictedLowGlucose = predictionWithObservedAbsorption.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }
@@ -1766,7 +1766,7 @@ extension LoopDataManager {
         
         if lastNotificationTime == nil || Date() > (lastNotificationTime! + notificationInterval) {
             notificationIntervalExceeded = true
-            print("*Test notificationIntervalExceeded:", notificationIntervalExceeded)
+           // print("*Test notificationIntervalExceeded:", notificationIntervalExceeded)
         } else {return} //if prior notification time is nil, it means no notification has been sent, so it should be sent.  Otherwise check that it hasn't been sent too recently
         
         
@@ -1774,8 +1774,8 @@ extension LoopDataManager {
         let timeToLowInMinutes = String(Int(round(timeToLow / 60)))
         let absorptionRatioFormatted = String(format: "%.0f%%", absorptionRatio * 100)
         
-        print("*Test Basic Time to Low in Minutes:", timeToLowInMinutes)
-        print("*test absorptionRatio",absorptionRatioFormatted)
+        //print("*Test Basic Time to Low in Minutes:", timeToLowInMinutes)
+        //print("*test absorptionRatio",absorptionRatioFormatted)
                 
         if timeToLow > dontNotifyIfSooner && timeToLow < dontNotifyIfLater && notificationIntervalExceeded && timeToLowZeroTemp != nil {
             let timeToLowInMinutesZeroTemp = String(Int(round(timeToLowZeroTemp! / 60)))
@@ -1785,7 +1785,7 @@ extension LoopDataManager {
             
             NotificationManager.sendRescueCarbsNeededNotification(timeToLow: timeToLowInMinutes, timetoLowZeroTemp: timeToLowInMinutesZeroTemp, lowestBGwithZeroTemp: formattedLowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: timeToLowestBGInMinuteswithZeroTemp, rescueCarbs: formattedRescueCarbs, absorptionRatio: absorptionRatioFormatted)
             lastNotificationTime = Date()
-            print("*Test Rescue Carb Notification Triggered. lastNotificationTime:",lastNotificationTime)
+           // print("*Test Rescue Carb Notification Triggered. lastNotificationTime:",lastNotificationTime)
         } // trying to only trigger this one if rescue carbs are needed.  I'm totally converging to Dragan's approach.
         
         if timeToLow > dontNotifyIfSooner && timeToLow < dontNotifyIfLater && notificationIntervalExceeded && timeToLowZeroTemp == nil {
@@ -1793,7 +1793,7 @@ extension LoopDataManager {
             let formattedLowestBG = String(Int(round(lowestBG!)))
             NotificationManager.sendCarbEntryEditingNeededNotification(timeToLow: timeToLowInMinutes, lowestBG: formattedLowestBG, timeToLowestBG: timeInMinutesToLowestBG, absorptionRatio: absorptionRatioFormatted)
             lastNotificationTime = Date()
-            print("*Test ZeroTempOnly Notification Triggered. lastNotificationTime:",lastNotificationTime)
+           // print("*Test ZeroTempOnly Notification Triggered. lastNotificationTime:",lastNotificationTime)
         } // this one triggers just to edit the carbs.  After that the zero temp avoids the low, so there are no glucose values below suspend threshold in the zeroTempedPrediction
             
             return
