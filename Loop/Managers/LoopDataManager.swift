@@ -1783,18 +1783,27 @@ extension LoopDataManager {
             notificationIntervalExceeded = true
         } else {return} //if prior notification time is nil, it means no notification has been sent, so it should be sent.  Otherwise check that it hasn't been sent too recently
         
-        //formatting for notification reuquest
+        
+        //formatting for notification request
         let timeToLowInMinutes = String(Int(round(timeToLow / 60)))
-        let timeToLowInMinutesZeroTemp = String(Int(round(timeToLowZeroTemp! / 60)))
-        let formattedLowestBGwithZeroTemp = String(Int(round(lowestBGwithZeroTemp!)))
-        let formattedRescueCarbs = String(Int(round(rescueCarbs!)))
-        let formattedTimeToLowestBGwithZeroTemp = String(Int(round(timeToLowestBGwithZeroTemp! / 60)))
-    
+ 
                 
-        if timeToLow > dontNotifyIfSooner && timeToLow < dontNotifyIfLater && notificationIntervalExceeded { NotificationManager.sendSlowAbsorptionNotification(timeToLow: timeToLowInMinutes, timetoLowZeroTemp: timeToLowInMinutesZeroTemp, lowestBGwithZeroTemp: formattedLowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: formattedTimeToLowestBGwithZeroTemp, rescueCarbs: formattedRescueCarbs)} else {return}
+        if timeToLow > dontNotifyIfSooner && timeToLow < dontNotifyIfLater && notificationIntervalExceeded && timeToLowZeroTemp != nil {
+            let timeToLowInMinutesZeroTemp = String(Int(round(timeToLowZeroTemp! / 60)))
+            let formattedLowestBGwithZeroTemp = String(Int(round(lowestBGwithZeroTemp!)))
+            let formattedRescueCarbs = String(Int(round(rescueCarbs!)))
+            let timeToLowestBGInMinuteswithZeroTemp = String(Int(round(timeToLowestBGwithZeroTemp! / 60)))
+            
+            NotificationManager.sendRescueCarbsNeededNotification(timeToLow: timeToLowInMinutes, timetoLowZeroTemp: timeToLowInMinutesZeroTemp, lowestBGwithZeroTemp: formattedLowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: timeToLowestBGInMinuteswithZeroTemp, rescueCarbs: formattedRescueCarbs)
+            lastNotificationTime = Date() } // trying to only trigger this one if rescue carbs are needed.  I'm totally converging to Dragan's approach.
         
-        lastNotificationTime = Date()
+        if timeToLow > dontNotifyIfSooner && timeToLow < dontNotifyIfLater && notificationIntervalExceeded && timeToLowZeroTemp == nil {
+            let timeInMinutesToLowestBG = String(Int(round(timeToLowestBG! / 60)))
+            let formattedLowestBG = String(Int(round(lowestBG!)))
+            NotificationManager.sendCarbEntryEditingNeededNotification(timeToLow: timeToLowInMinutes, lowestBG: formattedLowestBG, timeToLowestBG: timeInMinutesToLowestBG)
+            lastNotificationTime = Date()} // this one triggers just to edit the carbs.  After that the zero temp avoids the low, so there are no glucose values below suspend threshold in the zeroTempedPrediction
         
+      
         print("*Test Notification Triggered. lastNotificationTime:", Date())
         
         //print("*Test With Absorption: Time to Low:",timeToLow, "TimetoLowZeroTemp:", timeToLowZeroTemp,"lowest BG", lowestBG, "lowestBGwithZeroTemp:", lowestBGwithZeroTemp,"Time to min BG:",timeToLowestBG ,"Time to lowestBG with zero temp:", timeToLowestBGwithZeroTemp, "NotificationTriggered at", Date())

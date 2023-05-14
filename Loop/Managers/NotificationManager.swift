@@ -224,11 +224,10 @@ extension NotificationManager {
         UNUserNotificationCenter.current().add(request)
     }
     
-    
-    static func sendSlowAbsorptionNotification(timeToLow: String,timetoLowZeroTemp: String, lowestBGwithZeroTemp: String, timeToLowestBGwithZeroTemp: String, rescueCarbs: String) {//TODO: should it be three separate warnings, depending? Like Dragan did? maybe.
+    static func sendRescueCarbsNeededNotification(timeToLow: String,timetoLowZeroTemp: String, lowestBGwithZeroTemp: String, timeToLowestBGwithZeroTemp: String, rescueCarbs: String) {//TODO: should it be three separate warnings, depending? Like Dragan did? maybe.
         let notification = UNMutableNotificationContent()
        
-        print("Notification Triggered at time:",Date())
+        print("Rescue Carbs Needed Notification Triggered at time:",Date())
 
         notification.title = String(format: NSLocalizedString("Low in %@ minutes. %@ fast carbs needed.", comment: "The notification title for a slow carb absorption situation"),timeToLow, rescueCarbs)
         notification.body = String(format: NSLocalizedString("Min BG of %@ in %@ minutes assuming edited carb entry.",comment: "The notification description for a slow absorbing scenario"),lowestBGwithZeroTemp,timeToLowestBGwithZeroTemp)
@@ -247,6 +246,32 @@ extension NotificationManager {
 
         UNUserNotificationCenter.current().add(request)
     }
+    
+    
+    static func sendCarbEntryEditingNeededNotification(timeToLow: String, lowestBG: String, timeToLowestBG: String) {
+        let notification = UNMutableNotificationContent()
+       
+        print("Carb Editing Only Notification Triggered at time:",Date())
+
+        notification.title = String(format: NSLocalizedString("Low in %@ minutes. Edit carbs down trigger zero temp.", comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),timeToLow)
+        notification.body = String(format: NSLocalizedString("Min BG of %@ in %@ minutes unless carbs edited.",comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),lowestBG,timeToLowestBG)
+        notification.sound = .default
+        notification.interruptionLevel = .timeSensitive // making the notification interrupt
+
+        
+        let notificationTrigger: UNTimeIntervalNotificationTrigger? = nil
+
+        let request = UNNotificationRequest(
+            /// We use the same `identifier` for all requests so a newer missed meal notification will replace a current one (if it exists)
+            identifier: LoopNotificationCategory.slowAbsorption.rawValue,
+            content: notification,
+            trigger: notificationTrigger
+        )
+
+        UNUserNotificationCenter.current().add(request)
+    }
+    
+    //TODO: consider a third notification that's insulin only
     
     static func sendMissedMealNotification(mealStart: Date, amountInGrams: Double, delay: TimeInterval? = nil) {
         let notification = UNMutableNotificationContent()
