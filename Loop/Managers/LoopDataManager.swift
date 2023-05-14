@@ -1699,7 +1699,7 @@ extension LoopDataManager {
     
     func checkForLowAndNotifyIfNeeded() {
         
-        print("*test starting low absorption notification process")
+        print("*test starting low absorption notification process at:", Date())
         guard UserDefaults.standard.slowAbsorptionNotificationsEnabled else {return}
         print("*test toggle button is",UserDefaults.standard.slowAbsorptionNotificationsEnabled)
         
@@ -1742,8 +1742,6 @@ extension LoopDataManager {
             
         } // exit the context if there is no low in the future.  The rest of the function becomes pointless.
         
-        print("*test basic time to low:",timeToLow)
-        
         let predictedLowGlucoseWithZeroTemp = predictionWithObservedAbsorptionAndZeroTemp.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }//this could be empty if a low that would otherwise take place is avoided by zero temping.  It's rare but not impossible.  Maybe more common in real world scenarios
         
         if let value = predictedLowGlucoseWithZeroTemp.first?.startDate.timeIntervalSince(currentDate)
@@ -1761,20 +1759,12 @@ extension LoopDataManager {
             
             rescueCarbs = (suspendThreshold - lowestBGwithZeroTemp!) / CSF / absorptionFraction
         }
-        
-        print("*test timetoLowZeroTemp",timeToLowZeroTemp)
-        
-       print("*test lowestBGwithZeroTemp:", lowestBGwithZeroTemp)
-
-        
+                
         let lowestBG = predictedLowGlucose.map({ $0.quantity.doubleValue(for: .milligramsPerDeciliter) }).min()
         
-        print("*test lowestBG:", lowestBG)
         
         let timeToLowestBG = predictedLowGlucose.first(where: { $0.quantity.doubleValue(for: .milligramsPerDeciliter) == lowestBG })?.startDate.timeIntervalSince(currentDate)
-        
-        print("*test timeToLowestBG:", timeToLowestBG)
-        
+
 
         let dontNotifyIfSooner = ObservedAbsorptionSettings.dontNotifyIfSooner
         let dontNotifyIfLater = ObservedAbsorptionSettings.dontNotifyIfLater //only notify if low is between 5 and 45 minutes in the future.  Earlier is obvious and annoying, later is too alarmist.
@@ -1786,7 +1776,7 @@ extension LoopDataManager {
         
         //formatting for notification request
         let timeToLowInMinutes = String(Int(round(timeToLow / 60)))
- 
+        print("Basic Time to Low in Minutes:", timeToLowInMinutes)
                 
         if timeToLow > dontNotifyIfSooner && timeToLow < dontNotifyIfLater && notificationIntervalExceeded && timeToLowZeroTemp != nil {
             let timeToLowInMinutesZeroTemp = String(Int(round(timeToLowZeroTemp! / 60)))
@@ -1795,16 +1785,18 @@ extension LoopDataManager {
             let timeToLowestBGInMinuteswithZeroTemp = String(Int(round(timeToLowestBGwithZeroTemp! / 60)))
             
             NotificationManager.sendRescueCarbsNeededNotification(timeToLow: timeToLowInMinutes, timetoLowZeroTemp: timeToLowInMinutesZeroTemp, lowestBGwithZeroTemp: formattedLowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: timeToLowestBGInMinuteswithZeroTemp, rescueCarbs: formattedRescueCarbs)
-            lastNotificationTime = Date() } // trying to only trigger this one if rescue carbs are needed.  I'm totally converging to Dragan's approach.
+            lastNotificationTime = Date()
+            print("*Test Rescue Carb Notification Triggered. lastNotificationTime:",lastNotificationTime)
+        } // trying to only trigger this one if rescue carbs are needed.  I'm totally converging to Dragan's approach.
         
         if timeToLow > dontNotifyIfSooner && timeToLow < dontNotifyIfLater && notificationIntervalExceeded && timeToLowZeroTemp == nil {
             let timeInMinutesToLowestBG = String(Int(round(timeToLowestBG! / 60)))
             let formattedLowestBG = String(Int(round(lowestBG!)))
             NotificationManager.sendCarbEntryEditingNeededNotification(timeToLow: timeToLowInMinutes, lowestBG: formattedLowestBG, timeToLowestBG: timeInMinutesToLowestBG)
-            lastNotificationTime = Date()} // this one triggers just to edit the carbs.  After that the zero temp avoids the low, so there are no glucose values below suspend threshold in the zeroTempedPrediction
+            lastNotificationTime = Date()
+            print("*Test ZeroTempOnly Notification Triggered. lastNotificationTime:",lastNotificationTime)
+        } // this one triggers just to edit the carbs.  After that the zero temp avoids the low, so there are no glucose values below suspend threshold in the zeroTempedPrediction
         
-      
-        print("*Test Notification Triggered. lastNotificationTime:", Date())
         
         //print("*Test With Absorption: Time to Low:",timeToLow, "TimetoLowZeroTemp:", timeToLowZeroTemp,"lowest BG", lowestBG, "lowestBGwithZeroTemp:", lowestBGwithZeroTemp,"Time to min BG:",timeToLowestBG ,"Time to lowestBG with zero temp:", timeToLowestBGwithZeroTemp, "NotificationTriggered at", Date())
             
