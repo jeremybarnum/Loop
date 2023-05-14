@@ -1775,6 +1775,7 @@ extension LoopDataManager {
         let absorptionRatioFormatted = String(format: "%.0f%%", absorptionRatio * 100)
         
         print("*Test Basic Time to Low in Minutes:", timeToLowInMinutes)
+        print("*test absorptionRatio",absorptionRatioFormatted)
                 
         if timeToLow > dontNotifyIfSooner && timeToLow < dontNotifyIfLater && notificationIntervalExceeded && timeToLowZeroTemp != nil {
             let timeToLowInMinutesZeroTemp = String(Int(round(timeToLowZeroTemp! / 60)))
