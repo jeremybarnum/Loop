@@ -1792,9 +1792,6 @@ extension LoopDataManager {
             lastNotificationTime = Date()
             print("*Test ZeroTempOnly Notification Triggered. lastNotificationTime:",lastNotificationTime)
         } // this one triggers just to edit the carbs.  After that the zero temp avoids the low, so there are no glucose values below suspend threshold in the zeroTempedPrediction
-        
-        
-        //print("*Test With Absorption: Time to Low:",timeToLow, "TimetoLowZeroTemp:", timeToLowZeroTemp,"lowest BG", lowestBG, "lowestBGwithZeroTemp:", lowestBGwithZeroTemp,"Time to min BG:",timeToLowestBG ,"Time to lowestBG with zero temp:", timeToLowestBGwithZeroTemp, "NotificationTriggered at", Date())
             
             return
     }
