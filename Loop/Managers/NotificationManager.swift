@@ -251,7 +251,7 @@ extension NotificationManager {
     static func sendCarbEntryEditingNeededNotification(timeToLow: String, lowestBG: String, timeToLowestBG: String, absorptionRatio: String) {
         let notification = UNMutableNotificationContent()
        
-        print("Carb Editing Only Notification Triggered at time:",Date())
+        print("*Test Carb Editing Only Notification Triggered at time:",Date())
 
         notification.title = String(format: NSLocalizedString("Low in %@ minutes. If you edit carbs to trigger zero temp, no rescue carbs needed.", comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),timeToLow)
         notification.body = String(format: NSLocalizedString("Carbs absorpbing at %@% of expectation.  Edit amount and/or absorption time to trigger updated prediction and zero temp.",comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),absorptionRatio)
