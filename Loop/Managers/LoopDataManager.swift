@@ -941,12 +941,7 @@ extension LoopDataManager {
             self.widgetLog.default("Refreshing widget. Reason: Loop completed")
             WidgetCenter.shared.reloadAllTimelines()
         }
-          
-       /* if !predictionWithObservedAbsorption.isEmpty {
-           // print("*Test predictionWithObservedAbsorption", predictionWithObservedAbsorption[5]) }
-            else {
-               // print("*test predictionWithObservedAbsorption is empty")}
-*/
+
        //TODO: for some reason it takes several runs of the loop for this to be updated.  But fine, for now.
         
         updateRemoteRecommendation()
@@ -1771,12 +1766,13 @@ extension LoopDataManager {
         
         if lastNotificationTime == nil || Date() > (lastNotificationTime! + notificationInterval) {
             notificationIntervalExceeded = true
+            print("*Test notificationIntervalExceeded:", notificationIntervalExceeded)
         } else {return} //if prior notification time is nil, it means no notification has been sent, so it should be sent.  Otherwise check that it hasn't been sent too recently
         
         
         //formatting for notification request
         let timeToLowInMinutes = String(Int(round(timeToLow / 60)))
-        print("Basic Time to Low in Minutes:", timeToLowInMinutes)
+        print("*Test Basic Time to Low in Minutes:", timeToLowInMinutes)
                 
         if timeToLow > dontNotifyIfSooner && timeToLow < dontNotifyIfLater && notificationIntervalExceeded && timeToLowZeroTemp != nil {
             let timeToLowInMinutesZeroTemp = String(Int(round(timeToLowZeroTemp! / 60)))
