@@ -230,7 +230,7 @@ extension NotificationManager {
         print("*Test Rescue Carbs Needed Notification Triggered at time:",Date())
 
         notification.title = String(format: NSLocalizedString("Low in %@ minutes. %@ fast carbs needed.", comment: "The notification title for a slow carb absorption situation"),timeToLow, rescueCarbs)
-        notification.body = String(format: NSLocalizedString("Carbs absorbing at %@ of expectation.  Edit amount and/or absorption time."),absorptionRatio)
+        notification.body = String(format: NSLocalizedString("Carbs absorbing at %@ of expectation.  Edit amount and/or absorption time.", comment:  "The notification title for a slow carb absorption situation that requires rescue carbs"),absorptionRatio)
         notification.sound = .default
         notification.interruptionLevel = .timeSensitive // making the notification interrupt
 

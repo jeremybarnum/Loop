@@ -1782,7 +1782,7 @@ extension LoopDataManager {
             let formattedRescueCarbs = String(Int(round(rescueCarbs!)))
             let timeToLowestBGInMinuteswithZeroTemp = String(Int(round(timeToLowestBGwithZeroTemp! / 60)))
             
-            NotificationManager.sendRescueCarbsNeededNotification(timeToLow: timeToLowInMinutes, timetoLowZeroTemp: timeToLowInMinutesZeroTemp, lowestBGwithZeroTemp: formattedLowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: timeToLowestBGInMinuteswithZeroTemp, rescueCarbs: formattedRescueCarbs)
+            NotificationManager.sendRescueCarbsNeededNotification(timeToLow: timeToLowInMinutes, timetoLowZeroTemp: timeToLowInMinutesZeroTemp, lowestBGwithZeroTemp: formattedLowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: timeToLowestBGInMinuteswithZeroTemp, rescueCarbs: formattedRescueCarbs, absorptionRatio: absorptionRatioFormatted)
             lastNotificationTime = Date()
             print("*Test Rescue Carb Notification Triggered. lastNotificationTime:",lastNotificationTime)
         } // trying to only trigger this one if rescue carbs are needed.  I'm totally converging to Dragan's approach.
@@ -1790,7 +1790,7 @@ extension LoopDataManager {
         if timeToLow > dontNotifyIfSooner && timeToLow < dontNotifyIfLater && notificationIntervalExceeded && timeToLowZeroTemp == nil {
             let timeInMinutesToLowestBG = String(Int(round(timeToLowestBG! / 60)))
             let formattedLowestBG = String(Int(round(lowestBG!)))
-            NotificationManager.sendCarbEntryEditingNeededNotification(timeToLow: timeToLowInMinutes, lowestBG: formattedLowestBG, timeToLowestBG: timeInMinutesToLowestBG)
+            NotificationManager.sendCarbEntryEditingNeededNotification(timeToLow: timeToLowInMinutes, lowestBG: formattedLowestBG, timeToLowestBG: timeInMinutesToLowestBG, absorptionRatio: absorptionRatioFormatted)
             lastNotificationTime = Date()
             print("*Test ZeroTempOnly Notification Triggered. lastNotificationTime:",lastNotificationTime)
         } // this one triggers just to edit the carbs.  After that the zero temp avoids the low, so there are no glucose values below suspend threshold in the zeroTempedPrediction
