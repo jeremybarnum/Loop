@@ -20,6 +20,6 @@ public struct ObservedAbsorptionSettings {
     
     public static let flooredTimeForRescueCarbs = 10.0
     
-    public static let notificationInterval = TimeInterval(minutes: 3)
+    public static let notificationInterval = TimeInterval(minutes: 8)
 
 }
