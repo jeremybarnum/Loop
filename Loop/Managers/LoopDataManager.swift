@@ -1772,7 +1772,7 @@ extension LoopDataManager {
         
         //formatting for notification request
         let timeToLowInMinutes = String(Int(round(timeToLow / 60)))
-        let absorptionRatioFormatted = String(Int(round(absorptionRatio)))
+        let absorptionRatioFormatted = String(format: "%.0f%%", absorptionRatio * 100)
         
         print("*Test Basic Time to Low in Minutes:", timeToLowInMinutes)
                 
