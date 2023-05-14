@@ -224,13 +224,13 @@ extension NotificationManager {
         UNUserNotificationCenter.current().add(request)
     }
     
-    static func sendRescueCarbsNeededNotification(timeToLow: String,timetoLowZeroTemp: String, lowestBGwithZeroTemp: String, timeToLowestBGwithZeroTemp: String, rescueCarbs: String) {//TODO: should it be three separate warnings, depending? Like Dragan did? maybe.
+    static func sendRescueCarbsNeededNotification(timeToLow: String,timetoLowZeroTemp: String, lowestBGwithZeroTemp: String, timeToLowestBGwithZeroTemp: String, rescueCarbs: String, absorptionRate: String) {//TODO: should it be three separate warnings, depending? Like Dragan did? maybe.
         let notification = UNMutableNotificationContent()
        
-        print("Rescue Carbs Needed Notification Triggered at time:",Date())
+        print("*Test Rescue Carbs Needed Notification Triggered at time:",Date())
 
         notification.title = String(format: NSLocalizedString("Low in %@ minutes. %@ fast carbs needed.", comment: "The notification title for a slow carb absorption situation"),timeToLow, rescueCarbs)
-        notification.body = String(format: NSLocalizedString("Min BG of %@ in %@ minutes assuming edited carb entry.",comment: "The notification description for a slow absorbing scenario"),lowestBGwithZeroTemp,timeToLowestBGwithZeroTemp)
+        notification.body = String(format: NSLocalizedString("Carbs absorbing at %@ of expectation.  Edit amount and/or absorption time."),absorptionRate)
         notification.sound = .default
         notification.interruptionLevel = .timeSensitive // making the notification interrupt
 
@@ -248,13 +248,13 @@ extension NotificationManager {
     }
     
     
-    static func sendCarbEntryEditingNeededNotification(timeToLow: String, lowestBG: String, timeToLowestBG: String) {
+    static func sendCarbEntryEditingNeededNotification(timeToLow: String, lowestBG: String, timeToLowestBG: String, absorptionRate: String) {
         let notification = UNMutableNotificationContent()
        
         print("Carb Editing Only Notification Triggered at time:",Date())
 
-        notification.title = String(format: NSLocalizedString("Low in %@ minutes. Edit carbs down trigger zero temp.", comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),timeToLow)
-        notification.body = String(format: NSLocalizedString("Min BG of %@ in %@ minutes unless carbs edited.",comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),lowestBG,timeToLowestBG)
+        notification.title = String(format: NSLocalizedString("Low in %@ minutes. If you edit carbs to trigger zero temp, no rescue carbs needed.", comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),timeToLow)
+        notification.body = String(format: NSLocalizedString("Carbs absorpbing at %@ of expectation.  Edit amount and/or absorption time to trigger updated prediction and zero temp.",comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),absorptionRate)
         notification.sound = .default
         notification.interruptionLevel = .timeSensitive // making the notification interrupt
 
