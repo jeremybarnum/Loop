@@ -24,4 +24,6 @@ public struct ObservedAbsorptionSettings {
     
     public static let observationWindow = TimeInterval(minutes: 30)
     
+    public static let recentAndFutureCarbExclusionWindow = TimeInterval(minutes: 15)
+    
 }
