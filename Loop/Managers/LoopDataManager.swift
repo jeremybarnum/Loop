@@ -928,12 +928,7 @@ extension LoopDataManager {
                     return self.delegate?.loopDataManager(self, estimateBolusDuration: bolusAmount)
                 }
             )
-            
-            absorptionRatio = self.observedAbsorptionManager.computeObservedAbsorptionRatio(insulinCounteractionEffects: self.insulinCounteractionEffects, carbEffects: carbEffects) //TODO: these carb effects are the same as for missed meal which I guess is OK
-            
-            updateObservedAbsorptionPredictions()
-            
-            checkForLowAndNotifyIfNeeded()
+ 
         }
 
         // 5 second delay to allow stores to cache data before it is read by widget
@@ -943,6 +938,31 @@ extension LoopDataManager {
         }
 
        //TODO: for some reason it takes several runs of the loop for this to be updated.  But fine, for now.
+        
+    let observedAbsorptionStart = now().addingTimeInterval(-ObservedAbsorptionSettings.observationWindow)
+             
+        carbStore.getGlucoseEffects(start: observedAbsorptionStart, end: now(), effectVelocities: insulinCounteractionEffects) {[weak self] result in
+            guard
+                let self = self,
+                case .success((_, let observedAbsorptionCarbEffects)) = result
+            else {
+                if case .failure(let error) = result {
+                    self?.logger.error("Failed to fetch glucose effects to check for missed meal: %{public}@", String(describing: error))
+                }
+                return
+            }
+            
+            
+            absorptionRatio = self.observedAbsorptionManager.computeObservedAbsorptionRatio(insulinCounteractionEffects: self.insulinCounteractionEffects, carbEffects: observedAbsorptionCarbEffects)
+            
+            updateObservedAbsorptionPredictions()
+            
+            checkForLowAndNotifyIfNeeded()
+
+            
+        }
+        //TODO: these carb effects are the same as for missed meal which I guess is OK: Done
+        
         
         updateRemoteRecommendation()
     }
