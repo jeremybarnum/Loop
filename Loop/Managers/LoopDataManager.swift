@@ -1677,26 +1677,24 @@ extension LoopDataManager {
     /// - Throws: LoopError.configurationError
     private func updateObservedAbsorptionEffect() throws {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-        
-       /* let filteredPastCarbEffects = try carbStore.glucoseEffects(
-            of: entries,
-            startingAt: retrospectiveStart,
-            endingAt: nil,
-            effectVelocities: FeatureFlags.dynamicCarbAbsorptionEnabled ? insulinCounteractionEffects : nil
-        )
-        */
-
-        // Get settings, otherwise clear effect and throw error
-        guard
-            let currentCarbEffects = carbEffect
+            
+        let excludeCarbEntriesAfterThistime = now().addingTimeInterval(ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)  // 20 minutes ago
+        let carbEffectStart = now().addingTimeInterval(-carbStore.maximumAbsorptionTimeInterval)
+            
+        carbStore.getGlucoseEffects(start: carbEffectStart, end: excludeCarbEntriesAfterThistime, effectVelocities: insulinCounteractionEffects) {[weak self] result in
+            guard
+                let self = self,
+                case .success((_, let carbEffects)) = result
             else {
-                observedAbsorptionEffect = []
-            throw LoopError.missingDataError(.insulinEffect)//not the best error but good enough
+                if case .failure(let error) = result {
+                    self?.logger.error("Failed to fetch glucose effects to check for missed meal: %{public}@", String(describing: error))
+                }
+                return
+            }
+            observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffects )
         }
-       
-        observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: currentCarbEffects )
-        
     }
+
     
     func updateObservedAbsorptionPredictions() {
         self.getLoopState { (manager, state) in
