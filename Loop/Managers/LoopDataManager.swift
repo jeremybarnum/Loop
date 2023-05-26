@@ -1680,8 +1680,11 @@ extension LoopDataManager {
             
         let excludeCarbEntriesAfterThistime = now().addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)  // 20 minutes ago
         let carbEffectStart = now().addingTimeInterval(-carbStore.maximumAbsorptionTimeInterval)
-            
-        carbStore.getGlucoseEffects(start: carbEffectStart, end: excludeCarbEntriesAfterThistime, effectVelocities: insulinCounteractionEffects) {[weak self] result in
+           
+        //TODO: it seems that when I change this, it breaks the predictions for some reason.  It may actually be changing the official prediction, which is scary.
+        
+        
+       carbStore.getGlucoseEffects(start: carbEffectStart, end: excludeCarbEntriesAfterThistime, effectVelocities: insulinCounteractionEffects) {[weak self] result in
             guard
                 let self = self,
                 case .success((_, let carbEffects)) = result
@@ -1691,7 +1694,8 @@ extension LoopDataManager {
                 }
                 return
             }
-            observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffects )
+        
+        observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffects ) // TODO: toggle this back and forth
         }
     }
 
