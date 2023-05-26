@@ -1704,8 +1704,9 @@ extension LoopDataManager {
             }
            
         
-        observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffects ) // TODO: toggle this back and forth
+
         }
+        observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffects ) // TODO: toggle this back and forth
     }
 
     
