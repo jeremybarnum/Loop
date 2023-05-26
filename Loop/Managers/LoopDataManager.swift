@@ -1802,6 +1802,8 @@ extension LoopDataManager {
         if let mostRecentCarbEntryTime = recentCarbEntries?.last?.startDate {
             timeSinceMostRecentCarbEntry = now().timeIntervalSince(mostRecentCarbEntryTime)
         }
+        var enoughTimeElapsedSinceMostRecentCarbEntry = false
+        if timeSinceMostRecentCarbEntry > ObservedAbsorptionSettings.warningDelay {enoughTimeElapsedSinceMostRecentCarbEntry = true}
         
         var snoozePeriodExceeded = false
         if timeSinceMostRecentCarbEntry ?? TimeInterval(minutes: ObservedAbsorptionSettings.warningDelay) >= ObservedAbsorptionSettings.warningDelay {snoozePeriodExceeded = true} //trying to build out where it doesn't warn if there are recent carbs absorbing, but if there are no carbs, it goes ahead and warns.
@@ -1811,8 +1813,8 @@ extension LoopDataManager {
         print("*Test notificationIntervalExceeded:", notificationIntervalExceeded)
         } //if prior notification time is nil, it means no notification has been sent, so it should be sent.  Otherwise check that it hasn't been sent too recently
         
-        guard notificationIntervalExceeded, snoozePeriodExceeded,farEnough,notTooFar else {
-            print("*test some conditions not met",notificationIntervalExceeded,snoozePeriodExceeded,farEnough,notTooFar)
+        guard notificationIntervalExceeded, snoozePeriodExceeded,farEnough,notTooFar, enoughTimeElapsedSinceMostRecentCarbEntry else {
+            print("*test some conditions not met",notificationIntervalExceeded,snoozePeriodExceeded,farEnough,notTooFar, enoughTimeElapsedSinceMostRecentCarbEntry)
             return}
         
         print("*test all conditions met")
