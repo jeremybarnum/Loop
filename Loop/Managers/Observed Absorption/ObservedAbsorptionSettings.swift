@@ -22,7 +22,7 @@ public struct ObservedAbsorptionSettings {
     public static let flooredTimeForRescueCarbs = 10.0
     
     //to avoid repeating warnings, don't warn if the warning has happened more recently than this
-    public static let notificationInterval = TimeInterval(minutes: 6)
+    public static let notificationInterval = TimeInterval(minutes: 1)
     
     //when calculating the observedAbsorption ratio, use a recent observation window that is this number
     public static let observationWindow = TimeInterval(minutes: 30)
