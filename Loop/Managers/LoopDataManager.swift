@@ -1803,10 +1803,7 @@ extension LoopDataManager {
             timeSinceMostRecentCarbEntry = now().timeIntervalSince(mostRecentCarbEntryTime)
         }
         var enoughTimeElapsedSinceMostRecentCarbEntry = false
-        if timeSinceMostRecentCarbEntry > ObservedAbsorptionSettings.warningDelay {enoughTimeElapsedSinceMostRecentCarbEntry = true}
-        
-        var snoozePeriodExceeded = false
-        if timeSinceMostRecentCarbEntry ?? TimeInterval(minutes: ObservedAbsorptionSettings.warningDelay) >= ObservedAbsorptionSettings.warningDelay {snoozePeriodExceeded = true} //trying to build out where it doesn't warn if there are recent carbs absorbing, but if there are no carbs, it goes ahead and warns.
+        if timeSinceMostRecentCarbEntry! > ObservedAbsorptionSettings.warningDelay {enoughTimeElapsedSinceMostRecentCarbEntry = true} //TODO: force unwrap is dangerous
 
         if lastNotificationTime == nil || Date() > (lastNotificationTime! + notificationInterval) {
             notificationIntervalExceeded = true
