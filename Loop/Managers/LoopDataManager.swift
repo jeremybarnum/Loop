@@ -1685,12 +1685,11 @@ extension LoopDataManager {
                 observedAbsorptionEffect = []
             throw LoopError.missingDataError(.insulinEffect)//not the best error but good enough
         }
-            
-        let excludeCarbEntriesAfterThistime = now().addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)  // 20 minutes ago
-        let carbEffectStart = now().addingTimeInterval(-carbStore.maximumAbsorptionTimeInterval)
-           
+        
         //TODO: it seems that when I change this, it breaks the predictions for some reason.  It may actually be changing the official prediction, which is scary.
         
+        let excludeCarbEntriesAfterThistime = now().addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)  // 20 minutes ago
+        let carbEffectStart = now().addingTimeInterval(-carbStore.maximumAbsorptionTimeInterval)
         
        carbStore.getGlucoseEffects(start: carbEffectStart, end: excludeCarbEntriesAfterThistime, effectVelocities: insulinCounteractionEffects) {[weak self] result in
             guard
@@ -1702,11 +1701,9 @@ extension LoopDataManager {
                 }
                 return
             }
-           
-        
-
         }
-        observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffects ) // TODO: toggle this back and forth
+        
+        observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: currentCarbEffects ) // TODO: toggle this back and forth
     }
 
     
