@@ -1677,6 +1677,14 @@ extension LoopDataManager {
     /// - Throws: LoopError.configurationError
     private func updateObservedAbsorptionEffect() throws {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+        
+       /* let filteredPastCarbEffects = try carbStore.glucoseEffects(
+            of: entries,
+            startingAt: retrospectiveStart,
+            endingAt: nil,
+            effectVelocities: FeatureFlags.dynamicCarbAbsorptionEnabled ? insulinCounteractionEffects : nil
+        )
+        */
 
         // Get settings, otherwise clear effect and throw error
         guard

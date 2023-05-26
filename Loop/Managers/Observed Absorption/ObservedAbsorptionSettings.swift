@@ -14,16 +14,23 @@ public struct ObservedAbsorptionSettings {
     
     /// don't notify if the low is coming later than this.  it's far away, things might change, and there is plenty of time for rescue carbs
     public static let dontNotifyIfLater = TimeInterval(minutes: 45)
+    
     //we need to make an assumption about how fast burning the carbs are when estimating the needed rescue carbs
-    
     public static let assumedRescueCarbAbsorptionTimeMinutes = 60.0
-    
+ 
+    //when proposing rescue carbs, it's not reasonable to try to take enough to cure a low that is going to happen inside of this window
     public static let flooredTimeForRescueCarbs = 10.0
     
+    //to avoid repeating warnings, don't warn if the warning has happened more recently than this
     public static let notificationInterval = TimeInterval(minutes: 6)
     
+    //when calculating the observedAbsorption ratio, use a recent observation window that is this
     public static let observationWindow = TimeInterval(minutes: 30)
     
+    //when adjusting future carb absorption, don't adjust very recent carb entries or entries in the future, since these may well be rescue carbs.  Some overlap between this setting and the warning delay
     public static let recentAndFutureCarbExclusionWindow = TimeInterval(minutes: 15)
+    
+    //don't warn if the carbs have been taken inside on this window, to avoid warnings in low confidence situations
+    public static let warningDelay = TimeInterval(minutes: 30)
     
 }
