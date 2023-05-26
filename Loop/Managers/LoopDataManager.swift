@@ -1677,6 +1677,14 @@ extension LoopDataManager {
     /// - Throws: LoopError.configurationError
     private func updateObservedAbsorptionEffect() throws {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+        
+        // Get settings, otherwise clear effect and throw error
+        guard
+            let currentCarbEffects = carbEffect
+            else {
+                observedAbsorptionEffect = []
+            throw LoopError.missingDataError(.insulinEffect)//not the best error but good enough
+        }
             
         let excludeCarbEntriesAfterThistime = now().addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)  // 20 minutes ago
         let carbEffectStart = now().addingTimeInterval(-carbStore.maximumAbsorptionTimeInterval)
@@ -1694,6 +1702,7 @@ extension LoopDataManager {
                 }
                 return
             }
+           
         
         observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffects ) // TODO: toggle this back and forth
         }
