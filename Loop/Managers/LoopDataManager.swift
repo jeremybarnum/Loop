@@ -1729,14 +1729,14 @@ extension LoopDataManager {
         let currentDate = Date()
         guard let suspendThreshold = settings.suspendThreshold?.quantity.doubleValue(for: .milligramsPerDeciliter) else {return}
         print("*test suspend threshold is ",suspendThreshold)
-    
+        
         var notificationIntervalExceeded = false
-            
+        
         let notificationInterval = ObservedAbsorptionSettings.notificationInterval
-       print("*test notification interval is:",notificationInterval)
+        print("*test notification interval is:",notificationInterval)
         
         let assumedRescueCarbAbsorptionTimeMinutes = ObservedAbsorptionSettings.assumedRescueCarbAbsorptionTimeMinutes
-
+        
         guard let ISF = settings.insulinSensitivitySchedule?.value(at: Date()) else {return}
         
         guard let CR = settings.carbRatioSchedule?.value(at: Date()) else {return}
@@ -1756,7 +1756,7 @@ extension LoopDataManager {
         var rescueCarbs: Double?
         
         //print("*test ISF:",ISF,"CR:", CR)
-
+        
         
         let predictedLowGlucose = predictionWithObservedAbsorption.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }
         
@@ -1769,7 +1769,7 @@ extension LoopDataManager {
         let predictedLowGlucoseWithZeroTemp = predictionWithObservedAbsorptionAndZeroTemp.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }//this could be empty if a low that would otherwise take place is avoided by zero temping.  It's rare but not impossible.  Maybe more common in real world scenarios
         
         if let value = predictedLowGlucoseWithZeroTemp.first?.startDate.timeIntervalSince(currentDate)
-        
+            
         {
             timeToLowZeroTemp = value
             
@@ -1783,35 +1783,37 @@ extension LoopDataManager {
             
             rescueCarbs = (suspendThreshold - lowestBGwithZeroTemp!) / CSF / absorptionFraction
         }
-                
+        
         let lowestBG = predictedLowGlucose.map({ $0.quantity.doubleValue(for: .milligramsPerDeciliter) }).min()
         
         
         let timeToLowestBG = predictedLowGlucose.first(where: { $0.quantity.doubleValue(for: .milligramsPerDeciliter) == lowestBG })?.startDate.timeIntervalSince(currentDate)
-
-
+        
+        
         let dontNotifyIfSooner = ObservedAbsorptionSettings.dontNotifyIfSooner
         let dontNotifyIfLater = ObservedAbsorptionSettings.dontNotifyIfLater //only notify if low is between 5 and 45 minutes in the future.  Earlier is obvious and annoying, later is too alarmist.
         var farEnough = false
         var notTooFar = false
         if timeToLow > dontNotifyIfSooner {farEnough = true}
         if timeToLow < dontNotifyIfLater {notTooFar = true}
-
         
-        var timeSinceMostRecentCarbEntry: TimeInterval?
-        if let mostRecentCarbEntryTime = recentCarbEntries?.last?.startDate {
-            timeSinceMostRecentCarbEntry = now().timeIntervalSince(mostRecentCarbEntryTime)
-        }
+        
         var enoughTimeElapsedSinceMostRecentCarbEntry = false
-        if timeSinceMostRecentCarbEntry! > ObservedAbsorptionSettings.warningDelay {enoughTimeElapsedSinceMostRecentCarbEntry = true} //TODO: force unwrap is dangerous
+        if let mostRecentCarbEntryTime = recentCarbEntries?.last?.startDate {
+            let timeSinceMostRecentCarbEntry = now().timeIntervalSince(mostRecentCarbEntryTime)
+            enoughTimeElapsedSinceMostRecentCarbEntry = timeSinceMostRecentCarbEntry > ObservedAbsorptionSettings.warningDelay
+        } else {
+             enoughTimeElapsedSinceMostRecentCarbEntry = true
+        }
+
 
         if lastNotificationTime == nil || Date() > (lastNotificationTime! + notificationInterval) {
             notificationIntervalExceeded = true
         print("*Test notificationIntervalExceeded:", notificationIntervalExceeded)
         } //if prior notification time is nil, it means no notification has been sent, so it should be sent.  Otherwise check that it hasn't been sent too recently
         
-        guard notificationIntervalExceeded, snoozePeriodExceeded,farEnough,notTooFar, enoughTimeElapsedSinceMostRecentCarbEntry else {
-            print("*test some conditions not met",notificationIntervalExceeded,snoozePeriodExceeded,farEnough,notTooFar, enoughTimeElapsedSinceMostRecentCarbEntry)
+        guard notificationIntervalExceeded,farEnough,notTooFar, enoughTimeElapsedSinceMostRecentCarbEntry else {
+            print("*test some conditions not met",notificationIntervalExceeded,farEnough,notTooFar, enoughTimeElapsedSinceMostRecentCarbEntry)
             return}
         
         print("*test all conditions met")
