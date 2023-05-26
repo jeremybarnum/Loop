@@ -396,6 +396,8 @@ final class LoopDataManager {
     private var absorptionRatio = 1.0
 
     public var observedAbsorptionEffect: [GlucoseEffect] = []  //TODO: how do I know I don't have to do the didset thing? In theory, this should be nullified when carbEffects or ICE change, but again, it doesn't really matter.
+    
+    private var carbEffectExcludeRecentAndFutureEntries: [GlucoseEffect]? = [] //TODO: Check about optionals, etc.  And public or private?
 
     
     /// When combining retrospective glucose discrepancies, extend the window slightly as a buffer.
@@ -1680,7 +1682,7 @@ extension LoopDataManager {
         
         // Get settings, otherwise clear effect and throw error
         guard
-            let currentCarbEffects = carbEffect
+            let currentCarbEffects = carbEffectExcludeRecentAndFutureEntries
             else {
                 observedAbsorptionEffect = []
             throw LoopError.missingDataError(.insulinEffect)//not the best error but good enough
