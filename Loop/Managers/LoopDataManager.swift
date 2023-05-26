@@ -1678,7 +1678,7 @@ extension LoopDataManager {
     private func updateObservedAbsorptionEffect() throws {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
             
-        let excludeCarbEntriesAfterThistime = now().addingTimeInterval(ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)  // 20 minutes ago
+        let excludeCarbEntriesAfterThistime = now().addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)  // 20 minutes ago
         let carbEffectStart = now().addingTimeInterval(-carbStore.maximumAbsorptionTimeInterval)
             
         carbStore.getGlucoseEffects(start: carbEffectStart, end: excludeCarbEntriesAfterThistime, effectVelocities: insulinCounteractionEffects) {[weak self] result in
