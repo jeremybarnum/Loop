@@ -1761,6 +1761,7 @@ extension LoopDataManager {
         let predictedLowGlucose = predictionWithObservedAbsorption.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }
         
         guard let timeToLow = predictedLowGlucose.first?.startDate.timeIntervalSince(currentDate) else {
+            print("*test no low predicted")
             return
             
         } // exit the context if there is no low in the future.  The rest of the function becomes pointless.
@@ -1791,6 +1792,10 @@ extension LoopDataManager {
 
         let dontNotifyIfSooner = ObservedAbsorptionSettings.dontNotifyIfSooner
         let dontNotifyIfLater = ObservedAbsorptionSettings.dontNotifyIfLater //only notify if low is between 5 and 45 minutes in the future.  Earlier is obvious and annoying, later is too alarmist.
+        var farEnough = false
+        var notTooFar = false
+        if timeToLow > dontNotifyIfSooner {farEnough = true}
+        if timeToLow < dontNotifyIfLater {notTooFar = true}
 
         
         var timeSinceMostRecentCarbEntry: TimeInterval?
@@ -1806,7 +1811,9 @@ extension LoopDataManager {
         print("*Test notificationIntervalExceeded:", notificationIntervalExceeded)
         } //if prior notification time is nil, it means no notification has been sent, so it should be sent.  Otherwise check that it hasn't been sent too recently
         
-        guard notificationIntervalExceeded, snoozePeriodExceeded,timeToLow > dontNotifyIfSooner,timeToLow < dontNotifyIfLater else {return}
+        guard notificationIntervalExceeded, snoozePeriodExceeded,farEnough,notTooFar else {
+            print("*test some conditions not met",notificationIntervalExceeded,snoozePeriodExceeded,farEnough,notTooFar)
+            return}
         
         print("*test all conditions met")
         
