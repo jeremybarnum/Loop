@@ -1682,7 +1682,7 @@ extension LoopDataManager {
         
         // Get settings, otherwise clear effect and throw error
         guard
-            let currentCarbEffects = carbEffectExcludeRecentAndFutureEntries
+            let currentCarbEffects = carbEffect // carbEffectExcludeRecentAndFutureEntries
             else {
                 observedAbsorptionEffect = []
             throw LoopError.missingDataError(.insulinEffect)//not the best error but good enough
@@ -1690,22 +1690,23 @@ extension LoopDataManager {
         
         //TODO: it seems that when I change this, it breaks the predictions for some reason.  It may actually be changing the official prediction, which is scary.
         
-        let excludeCarbEntriesAfterThistime = now().addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)  // 20 minutes ago
+       let excludeCarbEntriesAfterThistime = now().addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)  // 20 minutes ago
         let carbEffectStart = now().addingTimeInterval(-carbStore.maximumAbsorptionTimeInterval)
         
-       carbStore.getGlucoseEffects(start: carbEffectStart, end: excludeCarbEntriesAfterThistime, effectVelocities: insulinCounteractionEffects) {[weak self] result in
-            guard
-                let self = self,
-                case .success((_, let carbEffects)) = result
+        carbStore.getGlucoseEffects(start: carbEffectStart, end: excludeCarbEntriesAfterThistime, effectVelocities: insulinCounteractionEffects) {[weak self] result in
+            guard let self = self,
+                  case .success((_, let carbEffectExcludeRecentAndFutureEntries)) = result
+                    
             else {
                 if case .failure(let error) = result {
                     self?.logger.error("Failed to fetch glucose effects to check for missed meal: %{public}@", String(describing: error))
                 }
                 return
             }
+            observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffectExcludeRecentAndFutureEntries )
         }
         
-        observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: currentCarbEffects ) // TODO: toggle this back and forth
+ // TODO: why does it want me to unwrap when it's been checked for validity above?
     }
 
     
