@@ -1681,12 +1681,12 @@ extension LoopDataManager {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
         
         // Get settings, otherwise clear effect and throw error
-        guard
-            let currentCarbEffects = carbEffect // carbEffectExcludeRecentAndFutureEntries
+       /* guard
+            let currentCarbEffects = carbEffectExcludeRecentAndFutureEntries
             else {
                 observedAbsorptionEffect = []
             throw LoopError.missingDataError(.insulinEffect)//not the best error but good enough
-        }
+        }*/
         
         //TODO: it seems that when I change this, it breaks the predictions for some reason.  It may actually be changing the official prediction, which is scary.
         
