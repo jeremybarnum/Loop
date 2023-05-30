@@ -1681,33 +1681,37 @@ extension LoopDataManager {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
         
         // Get settings, otherwise clear effect and throw error
-       /* guard
+        /* guard
             let currentCarbEffects = carbEffectExcludeRecentAndFutureEntries
             else {
                 observedAbsorptionEffect = []
             throw LoopError.missingDataError(.insulinEffect)//not the best error but good enough
         }*/
         
-        //TODO: it seems that when I change this, it breaks the predictions for some reason.  It may actually be changing the official prediction, which is scary.
+        let excludeCarbEntriesAfterThisTime = now().addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)  // 20 minutes ago
         
-       let excludeCarbEntriesAfterThistime = now().addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)  // 20 minutes ago
         let carbEffectStart = now().addingTimeInterval(-carbStore.maximumAbsorptionTimeInterval)
         
-        carbStore.getGlucoseEffects(start: carbEffectStart, end: excludeCarbEntriesAfterThistime, effectVelocities: insulinCounteractionEffects) {[weak self] result in
-            guard let self = self,
-                  case .success((_, let carbEffectExcludeRecentAndFutureEntries)) = result
-                    
-            else {
-                if case .failure(let error) = result {
-                    self?.logger.error("Failed to fetch glucose effects to check for missed meal: %{public}@", String(describing: error))
-                }
-                return
-            }
-            observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffectExcludeRecentAndFutureEntries )
+        print("*test carbEffectStart", carbEffectStart)
+        
+        guard let recentCarbEntries = recentCarbEntries else {
+            return
         }
         
- // TODO: why does it want me to unwrap when it's been checked for validity above?
+        let carbEntriesExcludingVeryRecentAndFuture = recentCarbEntries.filter { $0.startDate <= excludeCarbEntriesAfterThisTime }
+        
+        let carbEffectExcludeRecentAndFutureEntries = try carbStore.glucoseEffects(
+            of: carbEntriesExcludingVeryRecentAndFuture,
+            startingAt: carbEffectStart,
+            endingAt: nil,
+            effectVelocities: FeatureFlags.dynamicCarbAbsorptionEnabled ? insulinCounteractionEffects : nil
+        )
+        
+        print("*test adjustedCarb effects", carbEffectExcludeRecentAndFutureEntries[100])
+        
+        observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffectExcludeRecentAndFutureEntries )
     }
+
 
     
     func updateObservedAbsorptionPredictions() {
