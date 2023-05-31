@@ -41,7 +41,7 @@ class ObservedAbsorptionManager {
     
     // MARK: SlowAbsorption Detection
 
-    func computeObservedAbsorptionRatio(insulinCounteractionEffects: [GlucoseEffectVelocity], carbEffects: [GlucoseEffect])-> Double {
+    func computeObservedAbsorptionRatio(insulinCounteractionEffects: [GlucoseEffectVelocity], observedAbsorptionEffects: [GlucoseEffect])-> Double {
 //computes recent empirical ratio of observed to modeled absorption and generates an effect for the adjustment
         let intervalStart = currentDate(timeIntervalSinceNow: -TimeInterval(minutes: 20)) //only consider last 20 minutes
         let now = self.currentDate
@@ -57,7 +57,7 @@ class ObservedAbsorptionManager {
         var absorptionRatio = 1.0
         
         
-        let recentCarbEffects = carbEffects.filterDateRange(intervalStart, now)
+        let recentCarbEffects = observedAbsorptionEffects.filterDateRange(intervalStart, now)
 
         /// Carb effects are cumulative, so we have to subtract the previous effect value
         var previousEffectValue: Double = recentCarbEffects.first?.quantity.doubleValue(for: carbUnit) ?? 0//TODO: figure this out I'm worried this zero could create weird carb effects.  I think it's ok because it's only zero when there are no carb effects in which case it's fine.  
