@@ -955,7 +955,7 @@ extension LoopDataManager {
             }
             
             
-            absorptionRatio = self.observedAbsorptionManager.computeObservedAbsorptionRatio(insulinCounteractionEffects: self.insulinCounteractionEffects, carbEffects: observedAbsorptionCarbEffects)
+            absorptionRatio = self.observedAbsorptionManager.computeObservedAbsorptionRatio(insulinCounteractionEffects: self.insulinCounteractionEffects, observedAbsorptionEffects: observedAbsorptionCarbEffects)
             
             updateObservedAbsorptionPredictions()
             
