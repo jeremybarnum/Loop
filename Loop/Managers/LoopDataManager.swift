@@ -1830,6 +1830,7 @@ extension LoopDataManager {
             print("*test some conditions not met","notificatin interval",notificationIntervalExceeded,"far enough",farEnough,"not too far",notTooFar, "carb entry aged",enoughTimeElapsedSinceMostRecentCarbEntry)
             return}
         
+        
         print("*test all conditions met")
         
         //formatting for notification request
@@ -1838,6 +1839,7 @@ extension LoopDataManager {
         
         //print("*Test Basic Time to Low in Minutes:", timeToLowInMinutes)
         //print("*test absorptionRatio",absorptionRatioFormatted)
+        
                 
         if timeToLowZeroTemp != nil {
             let timeToLowInMinutesZeroTemp = String(Int(round(timeToLowZeroTemp! / 60)))
@@ -1845,7 +1847,13 @@ extension LoopDataManager {
             let formattedRescueCarbs = String(Int(round(rescueCarbs!)))
             let timeToLowestBGInMinuteswithZeroTemp = String(Int(round(timeToLowestBGwithZeroTemp! / 60)))
             
-            NotificationManager.sendRescueCarbsNeededNotification(timeToLow: timeToLowInMinutes, timetoLowZeroTemp: timeToLowInMinutesZeroTemp, lowestBGwithZeroTemp: formattedLowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: timeToLowestBGInMinuteswithZeroTemp, rescueCarbs: formattedRescueCarbs, absorptionRatio: absorptionRatioFormatted)
+        //TODO: deal with optionals
+            if self.carbsOnBoard != nil && self.carbsOnBoard! > 0
+            {NotificationManager.sendCarbsDefinitelyNeededNotification(timeToLow: timeToLowInMinutes, lowestBG: formattedLowestBGwithZeroTemp, timeToLowestBG: timeToLowestBGInMinuteswithZeroTemp, rescueCarbs: formattedRescueCarbs)}
+                
+            else {NotificationManager.sendRescueCarbsNeededNotification(timeToLow: timeToLowInMinutes, timetoLowZeroTemp: timeToLowInMinutesZeroTemp, lowestBGwithZeroTemp: formattedLowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: timeToLowestBGInMinuteswithZeroTemp, rescueCarbs: formattedRescueCarbs, absorptionRatio: absorptionRatioFormatted)}
+                  
+                
             lastNotificationTime = Date()
         print("*Test Rescue Carb Notification Triggered. lastNotificationTime:",lastNotificationTime)
         } // trying to only trigger this one if rescue carbs are needed.  I'm totally converging to Dragan's approach.
