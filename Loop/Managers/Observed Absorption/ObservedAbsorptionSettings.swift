@@ -36,6 +36,9 @@ public struct ObservedAbsorptionSettings {
     //don't produce observed absorption efects until there are at least 3 observed carb effects 
     public static let minCarbEffectCount = 3.0
     
+    //toggle betweeen insulin-centric notification and carb centric notification.  If COB is Nil or very low, the assumption is it's all insulin driven, and if zero temping isn't enough, rescue carbs are defiitely needed.
+    public static let minCOBforRescueCarbsDefinitelyNeeed = 4.0
+    
     
 
     
