@@ -271,6 +271,29 @@ extension NotificationManager {
         UNUserNotificationCenter.current().add(request)
     }
     
+    static func sendCarbsDefinitelyNeededNotification(timeToLow: String, lowestBG: String, timeToLowestBG: String, rescueCarbs: String) {
+        let notification = UNMutableNotificationContent()
+       
+        //print("*Excess insulin Notification Triggered at time:",Date())
+
+        notification.title = String(format: NSLocalizedString("Likely low in %@ minutes, not absorption-related. Carbs needed.", comment: "The notification title for an excess insulin situtaion that definitely requires rescue carbs"),timeToLow)
+        notification.body = String(format: NSLocalizedString("Loop is already zero temping but it won't be enough. After, check settings for crashiness.",comment: "The notification body for a likely carbs needed situation"),rescueCarbs)
+        notification.sound = .default
+        notification.interruptionLevel = .timeSensitive // making the notification interrupt
+
+        
+        let notificationTrigger: UNTimeIntervalNotificationTrigger? = nil
+
+        let request = UNNotificationRequest(
+            /// We use the same `identifier` for all requests so a newer missed meal notification will replace a current one (if it exists)
+            identifier: LoopNotificationCategory.slowAbsorption.rawValue,
+            content: notification,
+            trigger: notificationTrigger
+        )
+
+        UNUserNotificationCenter.current().add(request)
+    }
+    
     //TODO: consider a third notification that's insulin only
     
     static func sendMissedMealNotification(mealStart: Date, amountInGrams: Double, delay: TimeInterval? = nil) {
