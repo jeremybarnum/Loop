@@ -19,7 +19,7 @@ public struct ObservedAbsorptionSettings {
     public static let assumedRescueCarbAbsorptionTimeMinutes = 60.0
  
     //when proposing rescue carbs, it only credits the amount that will get absorbed before the low hits.  But it gets exponential if the low is too soon, so this rescue carb multiplier effect needs to be limited
-    public static let flooredTimeForRescueCarbs = 10.0
+    public static let flooredTimeForRescueCarbs = 20.0
     
     //to avoid repeating warnings, don't warn if the warning has happened more recently than this
     public static let notificationInterval = TimeInterval(minutes: 9)
