@@ -89,7 +89,7 @@ class ObservedAbsorptionManager {
         let averageICE = ICEValueCache / ICECount
         //print("*Test ICESUm:",ICEValueCache,"ICE Count:",ICECount,"ICE Average:",averageICE)
         
-        if carbEffectCount < 2 {absorptionRatio = 1} else {absorptionRatio = max(averageICE / averageCarbEffect, 0)} // if the carb entry is new and there is less than 15 minutes (3 loops) of recent data, don't adjust the carb effect.  It's clunky to do this by setting the absorptionRatio to 1, but it works and is simple.  Also floor the absorption ratio at 0 so that if ICE is negative, it's not double counting too much.  This could be debated.  
+        if carbEffectCount < ObservedAbsorptionSettings.minCarbEffectCount {absorptionRatio = 1} else {absorptionRatio = max(averageICE / averageCarbEffect, 0)} // if the carb entry is new and there is less than 15 minutes (3 loops) of recent data, don't adjust the carb effect.  It's clunky to do this by setting the absorptionRatio to 1, but it works and is simple.  Also floor the absorption ratio at 0 so that if ICE is negative, it's not double counting too much.  This could be debated.
         
         //print("*Test Absorption Ratio:", absorptionRatio," carbEffectCount:", carbEffectCount,"Time:",Date())
 

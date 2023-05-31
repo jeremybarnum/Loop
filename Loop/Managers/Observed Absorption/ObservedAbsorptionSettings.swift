@@ -34,7 +34,7 @@ public struct ObservedAbsorptionSettings {
     public static let warningDelay = TimeInterval(minutes: 30)
     
     //don't produce observed absorption efects until there are at least 3 observed carb effects 
-    public static let minCarbEffectCount = 3
+    public static let minCarbEffectCount = 3.0
     
     
 
