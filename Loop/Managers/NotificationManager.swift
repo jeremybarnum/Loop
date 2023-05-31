@@ -230,7 +230,7 @@ extension NotificationManager {
         //print("*Test Rescue Carbs Needed Notification Triggered at time:",Date())
 
         notification.title = String(format: NSLocalizedString("Potential low in %@ minutes.", comment: "The notification title for a slow carb absorption situation"),timeToLow, rescueCarbs)
-        notification.body = String(format: NSLocalizedString("Carbs absorbing at %@%% of expectation.  Consider editing settings and/or carb entry. After decision, check prediction and consider taking carbs.", comment:  "The notification title for a slow carb absorption situation that requires rescue carbs"),absorptionRatio)
+        notification.body = String(format: NSLocalizedString("Carbs absorbing at %@ of expectation.  Consider editing settings and/or carb entry. After decision, check prediction and consider taking carbs.", comment:  "The notification title for a slow carb absorption situation that requires rescue carbs"),absorptionRatio)
         notification.sound = .default
         notification.interruptionLevel = .timeSensitive // making the notification interrupt
 
@@ -254,7 +254,7 @@ extension NotificationManager {
         //print("*Test Carb Editing Only Notification Triggered at time:",Date())
 
         notification.title = String(format: NSLocalizedString("Potential low in %@ minutes. Only editing needed.", comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),timeToLow)
-        notification.body = String(format: NSLocalizedString("Carbs absorbing at %@%% of expectation.  Edit carb amount, absorption time and/or settings to trigger updated prediction and zero temp.",comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),absorptionRatio)
+        notification.body = String(format: NSLocalizedString("Carbs absorbing at %@% of expectation.  Edit carb amount, absorption time and/or settings to trigger updated prediction and zero temp.",comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),absorptionRatio)
         notification.sound = .default
         notification.interruptionLevel = .timeSensitive // making the notification interrupt
 
@@ -276,7 +276,7 @@ extension NotificationManager {
        
         //print("*Excess insulin Notification Triggered at time:",Date())
 
-        notification.title = String(format: NSLocalizedString("Low in %@ mins. May need %@ carbs.", comment: "The notification title for an excess insulin situation that definitely requires rescue carbs"),timeToLow, rescueCarbs)
+        notification.title = String(format: NSLocalizedString("Low in %@ mins. Take %@ carbs.", comment: "The notification title for an excess insulin situation that definitely requires rescue carbs"),timeToLow, rescueCarbs)
         notification.body = String(format: NSLocalizedString("Loop is already zero temping but it won't be enough and there are minimal future carbs that might hit. Take carbs and check settings for crashiness.",comment: "The notification body for a likely carbs needed situation"),rescueCarbs)
         notification.sound = .default
         notification.interruptionLevel = .timeSensitive // making the notification interrupt
