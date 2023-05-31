@@ -54,7 +54,7 @@ class ObservedAbsorptionManager {
         var ICEValueCache = 0.0
         var carbEffectCount = 0.0
         var ICECount = 0.0
-        var absorptionRatio = 0.0
+        var absorptionRatio = 1.0
         
         
         let recentCarbEffects = carbEffects.filterDateRange(intervalStart, now)
