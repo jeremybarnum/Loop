@@ -13,7 +13,7 @@ public struct ObservedAbsorptionSettings {
     public static let dontNotifyIfSooner = TimeInterval(minutes: 10)
     
     /// don't notify if the low is coming later than this.  it's far away, things might change, and there is plenty of time for rescue carbs
-    public static let dontNotifyIfLater = TimeInterval(minutes: 90)
+    public static let dontNotifyIfLater = TimeInterval(minutes: 30)
     
     //we need to make an assumption about how fast burning the carbs are when estimating the needed rescue carbs
     public static let assumedRescueCarbAbsorptionTimeMinutes = 60.0
@@ -22,7 +22,7 @@ public struct ObservedAbsorptionSettings {
     public static let flooredTimeForRescueCarbs = 10.0
     
     //to avoid repeating warnings, don't warn if the warning has happened more recently than this
-    public static let notificationInterval = TimeInterval(minutes: 1)
+    public static let notificationInterval = TimeInterval(minutes: 9)
     
     //when calculating the observedAbsorption ratio, use a recent observation window that is this number
     public static let observationWindow = TimeInterval(minutes: 30)
@@ -32,5 +32,8 @@ public struct ObservedAbsorptionSettings {
     
     //don't warn if the carbs have been taken inside on this window, to avoid warnings in low confidence situations
     public static let warningDelay = TimeInterval(minutes: 30)
+    
+    //don't apply observed abosorption to future carbs or carbs that have been consumed very recently, since these might have been rescue carbs and there is also no reason to believe that slow recent absorption would affect future carbs 
+    public static let excludeCarbsAfter = TimeInterval(minutes: 15)
     
 }
