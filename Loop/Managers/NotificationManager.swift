@@ -276,7 +276,7 @@ extension NotificationManager {
        
         //print("*Excess insulin Notification Triggered at time:",Date())
 
-        notification.title = String(format: NSLocalizedString("Likely low in %@ minutes, not absorption-related. Carbs needed.", comment: "The notification title for an excess insulin situtaion that definitely requires rescue carbs"),timeToLow)
+        notification.title = String(format: NSLocalizedString("Likely low in %@ minutes, not absorption-related. Carbs needed.", comment: "The notification title for an excess insulin situation that definitely requires rescue carbs"),timeToLow)
         notification.body = String(format: NSLocalizedString("Loop is already zero temping but it won't be enough. After, check settings for crashiness.",comment: "The notification body for a likely carbs needed situation"),rescueCarbs)
         notification.sound = .default
         notification.interruptionLevel = .timeSensitive // making the notification interrupt
