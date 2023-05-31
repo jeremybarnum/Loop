@@ -1736,6 +1736,8 @@ extension LoopDataManager {
     
     func checkForLowAndNotifyIfNeeded() {
         
+        //TODO: why does the first loop not generate the right prediction 
+        
         print("*test starting low absorption notification process at:", Date())
         guard UserDefaults.standard.slowAbsorptionNotificationsEnabled else {return}
         print("*test toggle button is",UserDefaults.standard.slowAbsorptionNotificationsEnabled)
