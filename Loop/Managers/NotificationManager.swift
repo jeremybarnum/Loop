@@ -253,8 +253,8 @@ extension NotificationManager {
        
         //print("*Test Carb Editing Only Notification Triggered at time:",Date())
 
-        notification.title = String(format: NSLocalizedString("Potential low in %@ minutes. Editing the carb entry or changing settings to trigger zero temp should be enough.", comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),timeToLow)
-        notification.body = String(format: NSLocalizedString("Carbs absorbing at %@% of expectation.  Edit amount and/or absorption time to trigger updated prediction and zero temp.",comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),absorptionRatio)
+        notification.title = String(format: NSLocalizedString("Potential low in %@ minutes. Only editing needed.", comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),timeToLow)
+        notification.body = String(format: NSLocalizedString("Carbs absorbing at %@% of expectation.  Edit carb amount, absorption time and/or settings to trigger updated prediction and zero temp.",comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),absorptionRatio)
         notification.sound = .default
         notification.interruptionLevel = .timeSensitive // making the notification interrupt
 
@@ -276,8 +276,8 @@ extension NotificationManager {
        
         //print("*Excess insulin Notification Triggered at time:",Date())
 
-        notification.title = String(format: NSLocalizedString("Likely low in %@ minutes, not absorption-related. Carbs needed.", comment: "The notification title for an excess insulin situation that definitely requires rescue carbs"),timeToLow)
-        notification.body = String(format: NSLocalizedString("Loop is already zero temping but it won't be enough. After, check settings for crashiness.",comment: "The notification body for a likely carbs needed situation"),rescueCarbs)
+        notification.title = String(format: NSLocalizedString("Low in %@ minutes. %@ carbs probably needed.", comment: "The notification title for an excess insulin situation that definitely requires rescue carbs"),timeToLow, rescueCarbs)
+        notification.body = String(format: NSLocalizedString("Loop is already zero temping but it won't be enough and there are no future carbs that might hit. Take carbs and check settings for crashiness.",comment: "The notification body for a likely carbs needed situation"),rescueCarbs)
         notification.sound = .default
         notification.interruptionLevel = .timeSensitive // making the notification interrupt
 
