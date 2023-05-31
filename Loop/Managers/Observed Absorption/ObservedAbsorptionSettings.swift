@@ -32,8 +32,6 @@ public struct ObservedAbsorptionSettings {
     
     //don't warn if the carbs have been taken inside on this window, to avoid warnings in low confidence situations
     public static let warningDelay = TimeInterval(minutes: 30)
-    
-    //don't apply observed abosorption to future carbs or carbs that have been consumed very recently, since these might have been rescue carbs and there is also no reason to believe that slow recent absorption would affect future carbs 
-    public static let excludeCarbsAfter = TimeInterval(minutes: 15)
+
     
 }
