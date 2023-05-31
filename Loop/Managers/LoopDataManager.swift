@@ -963,7 +963,7 @@ extension LoopDataManager {
 
             
         }
-        //TODO: these carb effects are the same as for missed meal which I guess is OK: Done
+        //TODO: there is something off about these carb effects.  Weird array full of 20s
         
         
         updateRemoteRecommendation()
@@ -1827,7 +1827,7 @@ extension LoopDataManager {
         } //if prior notification time is nil, it means no notification has been sent, so it should be sent.  Otherwise check that it hasn't been sent too recently
         
         guard notificationIntervalExceeded,farEnough,notTooFar, enoughTimeElapsedSinceMostRecentCarbEntry else {
-            print("*test some conditions not met","notificatin interval",notificationIntervalExceeded,"far enough",farEnough,"not too far",notTooFar, "carb entry aged",enoughTimeElapsedSinceMostRecentCarbEntry)
+            print("*test some conditions not met:","notification interval:",notificationIntervalExceeded,"far enough:",farEnough,"not too far:",notTooFar, "carb entry aged:",enoughTimeElapsedSinceMostRecentCarbEntry)
             return}
         
         

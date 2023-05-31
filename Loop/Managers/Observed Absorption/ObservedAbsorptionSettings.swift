@@ -13,7 +13,7 @@ public struct ObservedAbsorptionSettings {
     public static let dontNotifyIfSooner = TimeInterval(minutes: 10)
     
     /// don't notify if the low is coming later than this.  it's far away, things might change, and there is plenty of time for rescue carbs
-    public static let dontNotifyIfLater = TimeInterval(minutes: 30)
+    public static let dontNotifyIfLater = TimeInterval(minutes: 60)
     
     //we need to make an assumption about how fast burning the carbs are when estimating the needed rescue carbs
     public static let assumedRescueCarbAbsorptionTimeMinutes = 60.0
