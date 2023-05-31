@@ -75,7 +75,7 @@ class ObservedAbsorptionManager {
         let averageCarbEffect = carbEffectValueCache / carbEffectCount / delta //I want it to match the units on the graph, so I'm using mg/dL/minute
         //print("*Test FutureCarbEffects:",futureCarbEffects)
         
-        //print("*Test CarbEffect Sum:",carbEffectValueCache,"CarbEffectCount:",carbEffectCount,"CarbEffectAverage:",averageCarbEffect)
+        print("*Test carbEffectCount",carbEffectCount, "CarbEffectAverage:",averageCarbEffect)
 
         let filteredICE = insulinCounteractionEffects
             .filterDateRange(intervalStart, now).dropFirst()
@@ -89,9 +89,9 @@ class ObservedAbsorptionManager {
         let averageICE = ICEValueCache / ICECount
         //print("*Test ICESUm:",ICEValueCache,"ICE Count:",ICECount,"ICE Average:",averageICE)
         
-        if carbEffectCount < ObservedAbsorptionSettings.minCarbEffectCount {absorptionRatio = 1} else {absorptionRatio = max(averageICE / averageCarbEffect, 0)} // if the carb entry is new and there is less than 15 minutes (3 loops) of recent data, don't adjust the carb effect.  It's clunky to do this by setting the absorptionRatio to 1, but it works and is simple.  Also floor the absorption ratio at 0 so that if ICE is negative, it's not double counting too much.  This could be debated.
+        if carbEffectCount < ObservedAbsorptionSettings.minCarbEffectCount {absorptionRatio = 1} else {absorptionRatio = max(averageICE / averageCarbEffect, 0)} // if the carb entry is new and there is less than 15 minutes (3 loops) of recent data, don't adjust the carb effect.  It's clunky to do this by setting the absorptionRatio to 1, but it works and is simple.  Also floor the absorption ratio at 0 so that if ICE is negative, it's not double counting too much.  This could be debated.  Also TODO: what is the overlap between this and carb entry aging.  If absorption doesn't start for 10 minutes, and we are waiting till the third entry to calculate absorptionRatio, then that's 25 minutes anyway.  Perhaps this is an overlapping entries issue.
         
-        //print("*Test Absorption Ratio:", absorptionRatio," carbEffectCount:", carbEffectCount,"Time:",Date())
+        print("*Test Absorption Ratio:", absorptionRatio," carbEffectCount:", carbEffectCount,"Time:",Date())
 
         
         return absorptionRatio
