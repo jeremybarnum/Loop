@@ -1827,7 +1827,7 @@ extension LoopDataManager {
         } //if prior notification time is nil, it means no notification has been sent, so it should be sent.  Otherwise check that it hasn't been sent too recently
         
         guard notificationIntervalExceeded,farEnough,notTooFar, enoughTimeElapsedSinceMostRecentCarbEntry else {
-            print("*test some conditions not met",notificationIntervalExceeded,farEnough,notTooFar, enoughTimeElapsedSinceMostRecentCarbEntry)
+            print("*test some conditions not met","notificatin interval",notificationIntervalExceeded,"far enough",farEnough,"not too far",notTooFar, "carb entry aged",enoughTimeElapsedSinceMostRecentCarbEntry)
             return}
         
         print("*test all conditions met")
