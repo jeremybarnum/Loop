@@ -1679,20 +1679,16 @@ extension LoopDataManager {
     /// - Throws: LoopError.configurationError
     private func updateObservedAbsorptionEffect() throws {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+        //TODO: I don't understand what dispatchPrecondition is doing, it's just copy pasta
         
-        // Get settings, otherwise clear effect and throw error
-        /* guard
-            let currentCarbEffects = carbEffectExcludeRecentAndFutureEntries
-            else {
-                observedAbsorptionEffect = []
-            throw LoopError.missingDataError(.insulinEffect)//not the best error but good enough
-        }*/
+  //TODO: determine whether I need to bother to validate settings here
+
         
         let excludeCarbEntriesAfterThisTime = now().addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)  // 20 minutes ago
         
         let carbEffectStart = now().addingTimeInterval(-carbStore.maximumAbsorptionTimeInterval)
         
-        print("*test carbEffectStart", carbEffectStart)
+        //print("*test carbEffectStart", carbEffectStart)
         
         guard let recentCarbEntries = recentCarbEntries else {
             return
@@ -1707,9 +1703,11 @@ extension LoopDataManager {
             effectVelocities: FeatureFlags.dynamicCarbAbsorptionEnabled ? insulinCounteractionEffects : nil
         )
         
-        print("*test adjustedCarb effects", carbEffectExcludeRecentAndFutureEntries[100])
+        //print("*test adjustedCarb effects", carbEffectExcludeRecentAndFutureEntries[100])
         
         observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffectExcludeRecentAndFutureEntries )
+        
+       // print("*Test observedAbsorptionEffect", observedAbsorptionEffect[100])
     }
 
 
