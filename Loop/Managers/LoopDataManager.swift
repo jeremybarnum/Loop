@@ -1848,10 +1848,21 @@ extension LoopDataManager {
             let timeToLowestBGInMinuteswithZeroTemp = String(Int(round(timeToLowestBGwithZeroTemp! / 60)))
             
         //TODO: deal with optionals
-            if self.carbsOnBoard != nil && self.carbsOnBoard! > 0
-            {NotificationManager.sendCarbsDefinitelyNeededNotification(timeToLow: timeToLowInMinutes, lowestBG: formattedLowestBGwithZeroTemp, timeToLowestBG: timeToLowestBGInMinuteswithZeroTemp, rescueCarbs: formattedRescueCarbs)}
+            if let COB = self.carbsOnBoard?.quantity.doubleValue(for: .gram()) { if COB > 4.0
+                {NotificationManager.sendRescueCarbsNeededNotification(timeToLow: timeToLowInMinutes, timetoLowZeroTemp: timeToLowInMinutesZeroTemp, lowestBGwithZeroTemp: formattedLowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: timeToLowestBGInMinuteswithZeroTemp, rescueCarbs: formattedRescueCarbs, absorptionRatio: absorptionRatioFormatted)
                 
-            else {NotificationManager.sendRescueCarbsNeededNotification(timeToLow: timeToLowInMinutes, timetoLowZeroTemp: timeToLowInMinutesZeroTemp, lowestBGwithZeroTemp: formattedLowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: timeToLowestBGInMinuteswithZeroTemp, rescueCarbs: formattedRescueCarbs, absorptionRatio: absorptionRatioFormatted)}
+                print("*Test Carbs Possibly Needed Notification Triggered. lastNotificationTime:",lastNotificationTime)
+            }
+                
+                
+                else
+                
+                {NotificationManager.sendCarbsDefinitelyNeededNotification(timeToLow: timeToLowInMinutes, lowestBG: formattedLowestBGwithZeroTemp, timeToLowestBG: timeToLowestBGInMinuteswithZeroTemp, rescueCarbs: formattedRescueCarbs)
+                    
+                    print("*Test Carbs Definitely Needed Notification Triggered. lastNotificationTime:",lastNotificationTime)
+                }
+                
+            }
                   
                 
             lastNotificationTime = Date()
