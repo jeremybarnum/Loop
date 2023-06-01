@@ -963,7 +963,7 @@ extension LoopDataManager {
 
             
         }
-        //TODO: there is something off about these carb effects.  Weird array full of 20s
+        //TODO: there is something off about these carb effects.  Weird array full of 20s.  Also, the native prediction with observed absorption array is tiny.  Why is the base prediction so off?  This is because loop was open and there were no carb effects or insulin effects or momentum effects, so the basic prediction array was tiny. Also it's not clear that i'm specifically using a count of 3 carb absorption observations - it's more like the last 20 minutes or 3 absorptions whichever is bigger, but something doesn't make sense where 20 minutes produces 8 absorptions.  Also why is the last element of the array of observed absorption effects nan if the early members are 0? In this iteration of the loop predicted glucose is nil.  Maybe that's part of the issue.  Also why does carbEffect have one value of 100.  Need to check how that gets initialized.
         
         
         updateRemoteRecommendation()
