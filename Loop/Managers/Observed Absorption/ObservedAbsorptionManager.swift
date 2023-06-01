@@ -45,7 +45,7 @@ class ObservedAbsorptionManager {
 //computes recent empirical ratio of observed to modeled absorption and generates an effect for the adjustment
         let intervalStart = currentDate(timeIntervalSinceNow: -TimeInterval(minutes: 20)) //only consider last 20 minutes
         let now = self.currentDate
-        let delta = 5.0 //the standard loop 5 minute interval
+        let delta = 5.0 //the standard loop 5 minute interval TODO: when testing, does using the other interval mess things up
         
         /// Effect caching inspired by `LoopMath.predictGlucose`
        
@@ -65,17 +65,19 @@ class ObservedAbsorptionManager {
         for effect in recentCarbEffects.dropFirst() {
             let value = effect.quantity.doubleValue(for: carbUnit)
             let difference = value - previousEffectValue
+            print("*test carbEffect added to cache")
             carbEffectValueCache += difference
             previousEffectValue = value
         }
         carbEffectCount = Double(recentCarbEffects.dropFirst().filter { $0.quantity.doubleValue(for: carbUnit) != 0.0 }.count)
 //TODO: check how the effect delay works.  For a new entry, this should mean we don't start for 25-30 minutes
         //TODO: very important.  Overalapping carb entries create problems.  More recent carb entries should potentially be privileged
+        //TODO: why does carb effect average go to zero, creating infinite absorption ratio, at the third effect count
         
         let averageCarbEffect = carbEffectValueCache / carbEffectCount / delta //I want it to match the units on the graph, so I'm using mg/dL/minute
         //print("*Test FutureCarbEffects:",futureCarbEffects)
         
-        print("*Test carbEffectCount",carbEffectCount, "CarbEffectAverage:",averageCarbEffect)
+        print("*Test carbEffectCount",carbEffectCount, "carbEffectValueCache", carbEffectValueCache, "CarbEffectAverage:",averageCarbEffect)
 
         let filteredICE = insulinCounteractionEffects
             .filterDateRange(intervalStart, now).dropFirst()

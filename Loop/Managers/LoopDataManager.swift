@@ -1740,16 +1740,16 @@ extension LoopDataManager {
         
         print("*test starting low absorption notification process at:", Date())
         guard UserDefaults.standard.slowAbsorptionNotificationsEnabled else {return}
-        print("*test toggle button is",UserDefaults.standard.slowAbsorptionNotificationsEnabled)
+        //print("*test toggle button is",UserDefaults.standard.slowAbsorptionNotificationsEnabled)
         
         let currentDate = Date()
         guard let suspendThreshold = settings.suspendThreshold?.quantity.doubleValue(for: .milligramsPerDeciliter) else {return}
-        print("*test suspend threshold is ",suspendThreshold)
+        //print("*test suspend threshold is ",suspendThreshold)
         
         var notificationIntervalExceeded = false
         
         let notificationInterval = ObservedAbsorptionSettings.notificationInterval
-        print("*test notification interval is:",notificationInterval)
+        //print("*test notification interval:",notificationInterval)
         
         let assumedRescueCarbAbsorptionTimeMinutes = ObservedAbsorptionSettings.assumedRescueCarbAbsorptionTimeMinutes
         
