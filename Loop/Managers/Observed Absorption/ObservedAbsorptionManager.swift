@@ -68,8 +68,9 @@ class ObservedAbsorptionManager {
             print("*test carbEffect added to cache")
             carbEffectValueCache += difference
             previousEffectValue = value
+            if difference != 0 {carbEffectCount += 1}
         }
-        carbEffectCount = Double(recentCarbEffects.dropFirst().filter { $0.quantity.doubleValue(for: carbUnit) != 0.0 }.count) //TODO:it would be better to count differences.  There is the weird case where the array is populate to the same non-zero value.  It's a corner case, but.
+        //carbEffectCount = Double(recentCarbEffects.dropFirst().filter { $0.quantity.doubleValue(for: carbUnit) != 0.0 }.count) //TODO:it would be better to count differences.  There is the weird case where the array is populate to the same non-zero value.  It's a corner case, but.
 //TODO: check how the effect delay works.  For a new entry, this should mean we don't start for 25-30 minutes  This is true.
         //TODO: very important.  Overalapping carb entries create problems.  More recent carb entries should potentially be privileged
         //TODO: why does carb effect average go to zero, creating infinite absorption ratio, at the third effect count.  I can't reproduce this problem.  It might be limited to the corner case of carb effect populated with constant nonzero value 
