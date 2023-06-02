@@ -17,12 +17,12 @@ public struct ObservedAbsorptionSettings {
     
     //we need to make an assumption about how fast burning the carbs are when estimating the needed rescue carbs
     public static let assumedRescueCarbAbsorptionTimeMinutes = 60.0
- 
+    
     //when proposing rescue carbs, it only credits the amount that will get absorbed before the low hits.  But it gets exponential if the low is too soon, so this rescue carb multiplier effect needs to be limited
     public static let flooredTimeForRescueCarbs = 20.0
     
     //to avoid repeating warnings, don't warn if the warning has happened more recently than this
-    public static let notificationInterval = TimeInterval(minutes: 1)
+    public static let notificationInterval = TimeInterval(minutes: 10)
     
     //when calculating the observedAbsorption ratio, use a recent observation window that is this number
     public static let observationWindow = TimeInterval(minutes: 30)
@@ -33,13 +33,19 @@ public struct ObservedAbsorptionSettings {
     //don't warn if the carbs have been taken inside on this window, to avoid warnings in low confidence situations
     public static let warningDelay = TimeInterval(minutes: 30)
     
-    //don't produce observed absorption efects until there are at least 3 observed carb effects 
+    //don't produce observed absorption efects until there are at least 3 observed carb effects
     public static let minCarbEffectCount = 3.0
     
     //toggle betweeen insulin-centric notification and carb centric notification.  If COB is Nil or very low, the assumption is it's all insulin driven, and if zero temping isn't enough, rescue carbs are defiitely needed.
     public static let minCOBforRescueCarbsDefinitelyNeeed = 4.0
     
+    //user can decide how much OAE they want to add to IRC.  0% is like turning off warning, 100% is probably a lot of double count
+    public static let IRC_OCA_blend = 0.7
     
-
+    //user can decide how much OAE they want to add to IRC.  Below 25% is like turning off the warnings.
+    public static let lowEndOfIRC_OCASlider = 0.25
+    
+    //user can decide how much OAE they want to add to IRC.  Above 75% is probably a lot of double counting and will lead to overwarning.
+    public static let highEndOfIRC_OCASlider = 0.80
     
 }
