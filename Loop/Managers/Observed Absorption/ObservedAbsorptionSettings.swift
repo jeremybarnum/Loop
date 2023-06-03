@@ -31,7 +31,7 @@ public struct ObservedAbsorptionSettings {
     public static let recentAndFutureCarbExclusionWindow = TimeInterval(minutes: 15)
     
     //don't warn if the carbs have been taken inside on this window, to avoid warnings in low confidence situations
-    public static let warningDelay = TimeInterval(minutes: 40)
+    public static let warningDelay = TimeInterval(minutes: 35)
     
     //don't produce observed absorption efects until there are at least 3 observed carb effects
     public static let minCarbEffectCount = 3.0
