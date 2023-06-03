@@ -46,6 +46,6 @@ public struct ObservedAbsorptionSettings {
     public static let lowEndOfIRC_OCASlider = 0.25
     
     //user can decide how much OAE they want to add to IRC.  Above 75% is probably a lot of double counting and will lead to overwarning.
-    public static let highEndOfIRC_OCASlider = 0.80
+    public static let highEndOfIRC_OCASlider = 0.75
     
 }
