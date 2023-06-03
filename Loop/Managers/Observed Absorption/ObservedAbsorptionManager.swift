@@ -104,7 +104,7 @@ class ObservedAbsorptionManager {
         
         
         let observedAbsorptionEffect: [GlucoseEffect] = carbEffects.map { effect in
-            let value = effect.quantity.doubleValue(for: carbUnit) * (absorptionRatio - 1.0) //this computes the amount that needs to be subtracted from the carb effect to create the adjusted carb effect
+            let value = effect.quantity.doubleValue(for: carbUnit) * (absorptionRatio - 1.0) * ObservedAbsorptionSettings.IRC_OCA_blend //this computes the amount that needs to be subtracted from the carb effect to create the adjusted carb effect.  IRC_OCA_blend handles the IRC OCA double count risk by keeping IRC in all the calcs, and deciding how much OCA to add.  When carbs aren't absorbing, that means it's basically just IRC, which is what you want to capture exercise and settings issues.  When carbs are absorbing, it punches it up a little without fully double counting.
             let newQuantity = HKQuantity(unit: carbUnit, doubleValue: value)
             return GlucoseEffect(startDate: effect.startDate, quantity: newQuantity)
         }
