@@ -216,7 +216,7 @@ extension NotificationManager {
 
          let request = UNNotificationRequest(
              /// We use the same `identifier` for all requests so a newer missed meal notification will replace a current one (if it exists)
-             identifier: LoopNotificationCategory.slowAbsorption.rawValue,
+             identifier: LoopNotificationCategory.missedMeal.rawValue,//TODO: this avoids editing the enum in Loopkit and I don't think it matters
              content: notification,
              trigger: notificationTrigger
          )
@@ -240,7 +240,7 @@ extension NotificationManager {
 
          let request = UNNotificationRequest(
              /// We use the same `identifier` for all requests so a newer missed meal notification will replace a current one (if it exists)
-             identifier: LoopNotificationCategory.slowAbsorption.rawValue,
+             identifier: LoopNotificationCategory.missedMeal.rawValue,//TODO: this avoids editing the enum in Loopkit and I don't think it matters
              content: notification,
              trigger: notificationTrigger
          )
@@ -263,7 +263,7 @@ extension NotificationManager {
 
          let request = UNNotificationRequest(
              /// We use the same `identifier` for all requests so a newer missed meal notification will replace a current one (if it exists)
-             identifier: LoopNotificationCategory.slowAbsorption.rawValue,
+             identifier: LoopNotificationCategory.missedMeal.rawValue,//TODO: this avoids editing the enum in Loopkit and I don't think it matters
              content: notification,
              trigger: notificationTrigger
          )
