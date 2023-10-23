@@ -201,6 +201,78 @@ extension NotificationManager {
         UNUserNotificationCenter.current().add(request)
     }
     
+    static func sendRescueCarbsNeededNotification(timeToLow: String,timetoLowZeroTemp: String, lowestBGwithZeroTemp: String, timeToLowestBGwithZeroTemp: String, rescueCarbs: String, absorptionRatio: String) {//TODO: should it be three separate warnings, depending? Like Dragan did? maybe.
+         let notification = UNMutableNotificationContent()
+        
+         //print("*Test Rescue Carbs Needed Notification Triggered at time:",Date())
+
+         notification.title = String(format: NSLocalizedString("Potential low in %@ minutes.", comment: "The notification title for a slow carb absorption situation"),timeToLow, rescueCarbs)
+         notification.body = String(format: NSLocalizedString("Carbs absorbing at %@ of expectation.  Consider editing settings and/or carb entry. After decision, check prediction and consider taking %@ carbs.", comment:  "The notification title for a slow carb absorption situation that requires rescue carbs"),absorptionRatio, rescueCarbs)
+         notification.sound = .default
+         notification.interruptionLevel = .timeSensitive // making the notification interrupt
+
+         
+         let notificationTrigger: UNTimeIntervalNotificationTrigger? = nil
+
+         let request = UNNotificationRequest(
+             /// We use the same `identifier` for all requests so a newer missed meal notification will replace a current one (if it exists)
+             identifier: LoopNotificationCategory.slowAbsorption.rawValue,
+             content: notification,
+             trigger: notificationTrigger
+         )
+
+         UNUserNotificationCenter.current().add(request)
+     }
+     
+     
+     static func sendCarbEntryEditingNeededNotification(timeToLow: String, lowestBG: String, timeToLowestBG: String, absorptionRatio: String) {
+         let notification = UNMutableNotificationContent()
+        
+         //print("*Test Carb Editing Only Notification Triggered at time:",Date())
+
+         notification.title = String(format: NSLocalizedString("Potential low in %@ minutes. Only editing needed.", comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),timeToLow)
+         notification.body = String(format: NSLocalizedString("Carbs absorbing at %@% of expectation.  Edit carb amount, absorption time and/or settings to trigger updated prediction and zero temp.",comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),absorptionRatio)
+         notification.sound = .default
+         notification.interruptionLevel = .timeSensitive // making the notification interrupt
+
+         
+         let notificationTrigger: UNTimeIntervalNotificationTrigger? = nil
+
+         let request = UNNotificationRequest(
+             /// We use the same `identifier` for all requests so a newer missed meal notification will replace a current one (if it exists)
+             identifier: LoopNotificationCategory.slowAbsorption.rawValue,
+             content: notification,
+             trigger: notificationTrigger
+         )
+
+         UNUserNotificationCenter.current().add(request)
+     }
+     
+     static func sendCarbsDefinitelyNeededNotification(timeToLow: String, lowestBG: String, timeToLowestBG: String, rescueCarbs: String) {
+         let notification = UNMutableNotificationContent()
+        
+         //print("*Excess insulin Notification Triggered at time:",Date())
+
+         notification.title = String(format: NSLocalizedString("Low in %@ mins. Take %@ carbs.", comment: "The notification title for an excess insulin situation that definitely requires rescue carbs"),timeToLow, rescueCarbs)
+         notification.body = String(format: NSLocalizedString("Loop is already zero temping but it won't be enough and there are minimal future carbs that might hit. Take carbs and check settings for crashiness.",comment: "The notification body for a likely carbs needed situation"),rescueCarbs)
+         notification.sound = .default
+         notification.interruptionLevel = .timeSensitive // making the notification interrupt
+
+         
+         let notificationTrigger: UNTimeIntervalNotificationTrigger? = nil
+
+         let request = UNNotificationRequest(
+             /// We use the same `identifier` for all requests so a newer missed meal notification will replace a current one (if it exists)
+             identifier: LoopNotificationCategory.slowAbsorption.rawValue,
+             content: notification,
+             trigger: notificationTrigger
+         )
+
+         UNUserNotificationCenter.current().add(request)
+     }
+     
+     //TODO: consider a third notification that's insulin only
+    
     static func sendMissedMealNotification(mealStart: Date, amountInGrams: Double, delay: TimeInterval? = nil) {
         let notification = UNMutableNotificationContent()
         /// Notifications should expire after the missed meal is no longer relevant
