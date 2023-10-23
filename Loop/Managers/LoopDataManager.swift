@@ -1761,8 +1761,8 @@ extension LoopDataManager {
             self.getLoopState { (manager, state) in
 
                 let observedAbsorptionInputs: PredictionInputEffect = [.all, .observedAbsorptionEffect]
-                let observedAbsorptionAndZeroTempInputs: PredictionInputEffect = [.all, .observedAbsorptionEffect, .zeroTemp]
-                let observedAbsorptionAndZeroTempInputsAndNoIRC: PredictionInputEffect = [.insulin, .carbs,.momentum, .observedAbsorptionEffect, .zeroTemp]
+                let observedAbsorptionAndZeroTempInputs: PredictionInputEffect = [.all, .observedAbsorptionEffect, .suspend]
+                let observedAbsorptionAndZeroTempInputsAndNoIRC: PredictionInputEffect = [.insulin, .carbs,.momentum, .observedAbsorptionEffect, .suspend]
                 
                 do {
                     let prediction1 = try state.predictGlucose(using: observedAbsorptionInputs, includingPendingInsulin: true)
