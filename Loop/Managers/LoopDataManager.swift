@@ -1745,7 +1745,7 @@ extension LoopDataManager {
                 of: carbEntriesExcludingVeryRecentAndFuture,
                 startingAt: carbEffectStart,
                 endingAt: nil,
-                effectVelocities: FeatureFlags.dynamicCarbAbsorptionEnabled ? insulinCounteractionEffects : nil
+                effectVelocities: insulinCounteractionEffects
             )
             
             //print("*test adjustedCarb effects", carbEffectExcludeRecentAndFutureEntries[100])
