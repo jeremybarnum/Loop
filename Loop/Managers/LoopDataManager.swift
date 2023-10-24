@@ -1748,11 +1748,11 @@ extension LoopDataManager {
                 effectVelocities: insulinCounteractionEffects
             )
             
-            //print("*test adjustedCarb effects", carbEffectExcludeRecentAndFutureEntries[100])
+          //  print("*test adjustedCarb effects", carbEffectExcludeRecentAndFutureEntries[5])//TODO: addressing arrays is dangerous, be careful to get rid of these
             
             observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffectExcludeRecentAndFutureEntries )
             
-           // print("*Test observedAbsorptionEffect", observedAbsorptionEffect[100])
+           // print("*Test observedAbsorptionEffect", observedAbsorptionEffect[5])
         }
 
 
@@ -1794,7 +1794,7 @@ extension LoopDataManager {
             var notificationIntervalExceeded = false
             
             let notificationInterval = ObservedAbsorptionSettings.notificationInterval
-            //print("*test notification interval:",notificationInterval)
+            print("*test notification interval:",notificationInterval)
             
             let assumedRescueCarbAbsorptionTimeMinutes = ObservedAbsorptionSettings.assumedRescueCarbAbsorptionTimeMinutes
             
@@ -1885,7 +1885,7 @@ extension LoopDataManager {
             let absorptionRatioFormatted = String(format: "%.0f%%", absorptionRatio * 100)
             
             print("*Test Basic Time to Low in Minutes:", timeToLowInMinutes)
-            //print("*test absorptionRatio",absorptionRatioFormatted)
+            print("*test absorptionRatio",absorptionRatioFormatted)
             
                     
             if timeToLowZeroTemp != nil {
