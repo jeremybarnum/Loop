@@ -74,10 +74,7 @@ struct AlertManagementView: View {
             alertPermissionsSection
             if FeatureFlags.criticalAlertsEnabled {
                 muteAlertsSection
-
-                if alertMuter.configuration.shouldMute {
-                    mutePeriodSection
-                }
+                
             }
             missedMealAlertSection
             slowAbsorptionAlertSection
