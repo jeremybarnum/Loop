@@ -251,7 +251,7 @@ extension NotificationManager {
      static func sendCarbsDefinitelyNeededNotification(timeToLow: String, lowestBG: String, timeToLowestBG: String, rescueCarbs: String) {
          let notification = UNMutableNotificationContent()
         
-         //print("*Excess insulin Notification Triggered at time:",Date())
+         print("*Excess insulin Notification Triggered at time:",Date())
 
          notification.title = String(format: NSLocalizedString("Low in %@ mins. Take %@ carbs.", comment: "The notification title for an excess insulin situation that definitely requires rescue carbs"),timeToLow, rescueCarbs)
          notification.body = String(format: NSLocalizedString("Loop is already zero temping but it won't be enough and there are minimal future carbs that might hit. Take carbs and check settings for crashiness.",comment: "The notification body for a likely carbs needed situation"),rescueCarbs)
