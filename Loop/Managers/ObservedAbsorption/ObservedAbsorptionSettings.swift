@@ -10,7 +10,7 @@ import Foundation
 
 public struct ObservedAbsorptionSettings {
     /// don't notify if the low is coming sooner than this.  it's obvious and will annoy the user.
-    public static let dontNotifyIfSooner = TimeInterval(minutes: 10)
+    public static let dontNotifyIfSooner = TimeInterval(minutes: 1)
     
     /// don't notify if the low is coming later than this.  it's far away, things might change, and there is plenty of time for rescue carbs
     public static let dontNotifyIfLater = TimeInterval(minutes: 35)
@@ -22,7 +22,7 @@ public struct ObservedAbsorptionSettings {
     public static let flooredTimeForRescueCarbs = 30.0
     
     //to avoid repeating warnings, don't warn if the warning has happened more recently than this
-    public static let notificationInterval = TimeInterval(minutes: 9)
+    public static let notificationInterval = TimeInterval(minutes: 1)
     
     //when calculating the observedAbsorption ratio, use a recent observation window that is this number
     public static let observationWindow = TimeInterval(minutes: 30)
