@@ -139,7 +139,7 @@ final class CarbAbsorptionViewController: LoopChartsTableViewController, Identif
         charts.updateEndDate(chartStartDate.addingTimeInterval(.hours(totalHours+1))) // When there is no data, this allows presenting current hour + 1
 
         let midnight = Calendar.current.startOfDay(for: Date())
-        let listStart = min(midnight, chartStartDate, Date(timeIntervalSinceNow: -deviceManager.carbStore.maximumAbsorptionTimeInterval))
+        let listStart = min(midnight, chartStartDate, Date(timeIntervalSinceNow: -TimeInterval(days:1)))
 
         let reloadGroup = DispatchGroup()
         let shouldUpdateGlucose = currentContext.contains(.glucose)
