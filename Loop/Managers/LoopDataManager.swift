@@ -1389,6 +1389,11 @@ extension LoopDataManager {
         if inputs.contains(.suspend) {
             effects.append(suspendInsulinDeliveryEffect)
         }
+        
+        // Append effect of projecting observed carb absorption forward when selected by the user on the Predicted Glucose screen (for information purposes only)
+        if inputs.contains(.observedAbsorptionEffect) {
+            effects.append(observedAbsorptionEffect)
+        }
 
         var prediction = LoopMath.predictGlucose(startingAt: glucose, momentum: momentum, effects: effects)
 
