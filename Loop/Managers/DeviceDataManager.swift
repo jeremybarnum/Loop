@@ -292,7 +292,7 @@ final class DeviceDataManager {
             carbRatioSchedule: settingsManager.latestSettings.carbRatioSchedule,
             insulinSensitivitySchedule: sensitivitySchedule,
             overrideHistory: overrideHistory,
-            carbAbsorptionModel: FeatureFlags.nonlinearCarbModelEnabled ? .nonlinear : .linear,
+            carbAbsorptionModel: .adaptiveRateNonlinear,//FeatureFlags.nonlinearCarbModelEnabled ? .nonlinear : .linear,
             provenanceIdentifier: HKSource.default().bundleIdentifier
         )
 
