@@ -62,7 +62,7 @@ final class CarbEntryViewModel: ObservableObject {
         get { date.addingTimeInterval(.hours(-12)) }
     }
     var maximumDate: Date {
-        get { date.addingTimeInterval(.hours(1)) }
+        get { date.addingTimeInterval(.hours(2)) }
     }
     
     @Published var foodType = ""
