@@ -339,7 +339,7 @@ final class BolusEntryViewModel: ObservableObject {
                              carbAmount: carbAmountString,
                              carbAbsorptionTime: absorptionTimeString
                          )
-                         print("**prebolus detected")
+                        // print("**prebolus detected")
                      }
                  }
              }
