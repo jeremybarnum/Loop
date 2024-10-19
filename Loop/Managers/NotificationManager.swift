@@ -339,3 +339,31 @@ extension NotificationManager {
         return String(format: NSLocalizedString("Remote Carbs Entry: %d grams", comment: "The carb amount message for a remote carbs entry notification. (1: Carb amount in grams)"), Int(amountInGrams))
     }
 }
+
+extension NotificationManager {
+    static func scheduleCarbAlert(for alertTime: Date, carbAmount: String, carbAbsorptionTime: String, identifier: String) {
+        let notification = UNMutableNotificationContent()
+        notification.title = "Reminder to eat"
+        notification.body = String(format: NSLocalizedString("You declared %@ carbs with a %@hr absorption time.", comment: ""), carbAmount, carbAbsorptionTime)
+        notification.sound = .default
+        notification.interruptionLevel = .timeSensitive
+
+        let triggerDate = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: alertTime)
+        let trigger = UNCalendarNotificationTrigger(dateMatching: triggerDate, repeats: false)
+
+        let request = UNNotificationRequest(
+            identifier: identifier,  // Use syncIdentifier as the unique identifier
+            content: notification,
+            trigger: trigger
+        )
+
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                print("Failed to schedule carb alert: \(error.localizedDescription)")
+            }
+        }
+    }
+    static func cancelNotification(for identifiers: [String]) {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
+    }
+}

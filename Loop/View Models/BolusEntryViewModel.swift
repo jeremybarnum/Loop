@@ -320,8 +320,10 @@ final class BolusEntryViewModel: ObservableObject {
 
     // returns true if action succeeded
     func didPressActionButton() async -> Bool {
+
         enacting = true
         if await saveAndDeliver() {
+            
             return true
         } else {
             enacting = false
