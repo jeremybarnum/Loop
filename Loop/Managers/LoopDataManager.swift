@@ -172,8 +172,7 @@ final class LoopDataManager {
                 queue: nil
             ) { (note) -> Void in
                 self.dataAccessQueue.async {
-                    self.logger.default("Received notification of carb entries changing")
-
+                    self.logger.default("**[PREBOLUS] Carb entries changed, clearing cached values")
                     self.carbEffect = nil
                     self.carbsOnBoard = nil
                     self.recentCarbEntries = nil
@@ -181,6 +180,7 @@ final class LoopDataManager {
                     self.notify(forChange: .carbs)
                 }
             },
+            
             NotificationCenter.default.addObserver(
                 forName: GlucoseStore.glucoseSamplesDidChange,
                 object: self.glucoseStore,
@@ -705,10 +705,19 @@ extension LoopDataManager {
             carbStore.addCarbEntry(carbEntry, completion: addCompletion)
         }
     }
-
+//TODO: considering how important delete carb entry is, should I put the logic in the view instead.  This seems safe, but...
     func deleteCarbEntry(_ oldEntry: StoredCarbEntry, completion: @escaping (_ result: CarbStoreResult<Bool>) -> Void) {
+        // Ensure the syncIdentifier exists and cancel the notification
+        if let syncIdentifier = oldEntry.syncIdentifier {
+            NotificationManager.cancelNotification(for: [syncIdentifier])  // Wrap in an array
+            logger.default("**Canceled notification for carb entry: %@", syncIdentifier)
+        } else {
+            logger.error("**Failed to cancel notification: Missing syncIdentifier for entry")
+        }
+
+        // Proceed with deleting the carb entry
         carbStore.deleteCarbEntry(oldEntry) { result in
-            completion(result)
+            completion(result)  // Notify caller of the deletion result
         }
     }
 
@@ -1124,8 +1133,13 @@ extension LoopDataManager {
                     self.recentCarbEntries = nil
                     warnings.append(.fetchDataWarning(.carbEffect(error: error)))
                 case .success(let (entries, effects)):
+                    self.logger.default("**[PREBOLUS] Got glucose effects with %{public}d entries", entries.count)
                     self.carbEffect = effects
                     self.recentCarbEntries = entries
+                    
+                    // Reschedule pre-bolus reminders to reflect current carb entries
+                    self.schedulePreBolusRemindersForAllFutureCarbEntries(entries)
+
                 }
 
                 updateGroup.leave()
@@ -1211,6 +1225,7 @@ extension LoopDataManager {
         }
 
         return updatePredictedGlucoseAndRecommendedDose(with: dosingDecision)
+      
     }
 
     private func notify(forChange context: LoopUpdateContext) {
@@ -1934,6 +1949,47 @@ extension LoopDataManager {
                 return
         }
 
+    private func schedulePreBolusRemindersForAllFutureCarbEntries(_ entries: [StoredCarbEntry]) {
+        self.logger.default("**[PREBOLUS] Checking %{public}d entries for prebolus reminders", entries.count)
+        if UserDefaults.standard.preBolusReminderEnabled {
+            self.logger.default("**[PREBOLUS] Prebolus reminders are enabled")
+            // Always start from a clean slate so edits or deletions do not leave stale notifications queued
+            NotificationManager.cancelNotificationsForCategory(.prebolusReminder)
+            for entry in entries {
+                let now = Date()
+                let prebolusDelayCriterion: TimeInterval = Double(UserDefaults.standard.prebolusDelayCriterion) * 60 // Convert minutes to seconds
+                
+                // Only schedule notifications for future carb entries that meet the threshold
+                guard entry.startDate > entry.userCreatedDate?.addingTimeInterval(prebolusDelayCriterion) ?? now else {
+                    continue }
+                
+                guard entry.startDate > now else {continue}
+                
+                // Ensure the syncIdentifier is valid
+                guard let syncIdentifier = entry.syncIdentifier, !syncIdentifier.isEmpty else {
+                    logger.error("**Invalid or missing syncIdentifier for entry: %@", String(describing: entry))
+                    continue
+                }
+                
+                // Prepare notification content
+                let alertTime = entry.startDate
+                let carbAmountString = String(format: "%.0f", entry.quantity.doubleValue(for: .gram()))
+                let absorptionTimeString = String(format: "%.1f", entry.absorptionTime! / 3600)
+                
+                // Schedule the notification
+                self.logger.default("**[PREBOLUS] Scheduling reminder for entry at %{public}@", String(describing: alertTime))
+                NotificationManager.schedulePreBolusReminder(
+                    for: alertTime,
+                    carbAmount: carbAmountString,
+                    carbAbsorptionTime: absorptionTimeString,
+                    identifier: syncIdentifier
+                )
+                
+                logger.default("**Scheduled notification for carb entry: %@ at %@", syncIdentifier, alertTime as CVarArg)
+            }
+        }
+    }
+
     /// Runs the glucose prediction on the latest effect data.
     ///
     /// - Throws:
@@ -2562,12 +2618,12 @@ extension LoopDataManager {
                                     entries.append("")
 
                                     completion(entries.joined(separator: "\n"))
-                                }
-                            }
-                        }
-                    }
                 }
             }
+        }
+    }
+                }
+}
         }
     }
 }

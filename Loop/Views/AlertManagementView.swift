@@ -19,6 +19,8 @@ struct AlertManagementView: View {
 
     @State private var showMuteAlertOptions: Bool = false
     @State private var showHowMuteAlertWork: Bool = false
+    @State private var isPreBolusReminderEnabled: Bool = UserDefaults.standard.preBolusReminderEnabled // Local state
+
 
     private var formatter: DateComponentsFormatter = {
         let formatter = DateComponentsFormatter()
@@ -63,6 +65,24 @@ struct AlertManagementView: View {
             }
         )
     }
+    
+    private var preBolusReminderEnabled: Binding<Bool> {
+        Binding(
+            get: { UserDefaults.standard.preBolusReminderEnabled },
+            set: { enabled in
+                UserDefaults.standard.preBolusReminderEnabled = enabled
+            }
+        )
+    }
+    
+    private var prebolusDelayCriterion: Binding<Int> {
+        Binding(
+            get: { UserDefaults.standard.prebolusDelayCriterion },
+            set: { newValue in
+                UserDefaults.standard.prebolusDelayCriterion = newValue
+            }
+        )
+    }
 
     public init(checker: AlertPermissionsChecker, alertMuter: AlertMuter = AlertMuter()) {
         self.checker = checker
@@ -78,8 +98,14 @@ struct AlertManagementView: View {
             }
             missedMealAlertSection
             slowAbsorptionAlertSection
+            preBolusReminderSection
+            testNotificationSection
         }
+        .onAppear {
+                    isPreBolusReminderEnabled = UserDefaults.standard.preBolusReminderEnabled // Sync local state on appear
+                }
         .navigationTitle(NSLocalizedString("Alert Management", comment: "Title of alert management screen"))
+        
     }
     
     private var footerView: some View {
@@ -257,12 +283,65 @@ struct AlertManagementView: View {
             Toggle(NSLocalizedString("Slow Absorption Notifications", comment: "Title for slow absorption notification toggle"), isOn: slowAbsorptionNotificationsEnabled)
         }
     }
+    private var preBolusReminderSection: some View {
+        Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop will note you when you prebolus and remind you to eat.", comment: "Description of prebolus notifications."))) {
+            Toggle(NSLocalizedString("Pre-bolus reminders", comment: "Title for pre-bolus reminders toggle"), isOn: $isPreBolusReminderEnabled) // Bind to local state
+                .onChange(of: isPreBolusReminderEnabled) { newValue in // Use local state for change tracking
+                    UserDefaults.standard.preBolusReminderEnabled = newValue // Update UserDefaults
+                }
+            if isPreBolusReminderEnabled { // Check local state
+                HStack {
+                    Text(NSLocalizedString("Prebolus Definition", comment: "Label for prebolus delay criterion"))
+                    Spacer()
+                    Picker("Delay Criterion", selection: prebolusDelayCriterion) {
+                        ForEach(1..<39) {
+                            Text("\($0) min").tag($0)
+                        }
+                    }//starting at 1 to help with testing 
+                    .pickerStyle(WheelPickerStyle())
+                    .frame(height: 80) // Set the desired height
+                }
+            }
+        }
+    }
+    private var testNotificationSection: some View {
+        Section(footer: DescriptiveText(label: NSLocalizedString("Test notifications to verify they appear in both foreground and background.", comment: "Description of test notifications."))) {
+            Button(action: {
+                // Test prebolus reminder notification
+                let notification = UNMutableNotificationContent()
+                notification.title = "Reminder to eat"
+                notification.body = String(format: NSLocalizedString("You declared %@ carbs with a %@hr absorption time.", comment: ""), "50", "2.0")
+                notification.sound = .default
+                notification.interruptionLevel = .timeSensitive
+                notification.categoryIdentifier = LoopNotificationCategory.prebolusReminder.rawValue
+                
+                let request = UNNotificationRequest(
+                    identifier: "test-prebolus-reminder",
+                    content: notification,
+                    trigger: nil  // Immediate notification
+                )
+                
+                UNUserNotificationCenter.current().add(request)
+            }) {
+                HStack {
+                    Text(NSLocalizedString("Send Test Notification", comment: "Button to test notifications"))
+                    Spacer()
+                    Image(systemName: "bell.badge.fill")
+                        .foregroundColor(.accentColor)
+                }
+            }
+        }
+    }
 }
 
 extension UserDefaults {
     private enum Key: String {
         case missedMealNotificationsEnabled = "com.loopkit.Loop.MissedMealNotificationsEnabled"
         case slowAbsorptionNotificationsEnabled = "com.loopkit.Loop.slowAbsorptionNotificationsEnabled"
+        case preBolusReminderEnabled = "com.loopkit.Loop.preBolusReminderEnabled"
+        case prebolusDelayCriterion = "com.loopkit.Loop.prebolusDelayCriterion"
+
+        
     }
     
     var missedMealNotificationsEnabled: Bool {
@@ -282,6 +361,24 @@ extension UserDefaults {
             set(newValue, forKey: Key.slowAbsorptionNotificationsEnabled.rawValue)
         }
     }
+    var preBolusReminderEnabled: Bool {
+        get {
+            return object(forKey: Key.preBolusReminderEnabled.rawValue) as? Bool ?? false
+        }
+        set {
+            set(newValue, forKey: Key.preBolusReminderEnabled.rawValue)
+        }
+    }
+    
+    var prebolusDelayCriterion: Int {
+        get {
+            return object(forKey: Key.prebolusDelayCriterion.rawValue) as? Int ?? 14 // Default value
+        }
+        set {
+            set(newValue, forKey: Key.prebolusDelayCriterion.rawValue)
+        }
+    }
+
 }
 
 struct AlertManagementView_Previews: PreviewProvider {
