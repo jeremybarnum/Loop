@@ -180,7 +180,8 @@ final class CarbEntryViewModel: ObservableObject {
             setBolusViewModel()
         }
     }
-        
+   
+    
     @MainActor private func setBolusViewModel() {
         let viewModel = BolusEntryViewModel(
             delegate: delegate,
