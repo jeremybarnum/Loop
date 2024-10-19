@@ -324,14 +324,14 @@ final class BolusEntryViewModel: ObservableObject {
              if let newCarbEntry = potentialCarbEntry { // Use potentialCarbEntry directly
                  let nagWindow: TimeInterval = 7 * 60
                  let now = Date()
+                 let preferredCarbUnit = HKUnit.gram()
                  // Check if this is a pre-bolus
                  if newCarbEntry.startDate > now {
                      let alertTime = newCarbEntry.startDate.addingTimeInterval(nagWindow)
 
                      // Schedule the notification only if the alert time is in the future
                      if alertTime > now {
-                         // Assuming preferredCarbUnit is defined somewhere
-                         let carbAmountString = String(format: "%.0f", newCarbEntry.quantity.doubleValue(for: HKUnit.gram()))//TODO: handle units properly
+                         let carbAmountString = String(format: "%.0f", newCarbEntry.quantity.doubleValue(for: preferredCarbUnit))//
                          let absorptionTimeString = String(format: "%.1f", newCarbEntry.absorptionTime! / 3600)
 
                          NotificationManager.scheduleCarbAlert(
@@ -339,7 +339,7 @@ final class BolusEntryViewModel: ObservableObject {
                              carbAmount: carbAmountString,
                              carbAbsorptionTime: absorptionTimeString
                          )
-                        // print("**prebolus detected")
+                         log.info("**Prebolus Detected, Notification Scheduled")
                      }
                  }
              }
