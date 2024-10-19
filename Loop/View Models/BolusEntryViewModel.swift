@@ -320,8 +320,32 @@ final class BolusEntryViewModel: ObservableObject {
 
     // returns true if action succeeded
     func didPressActionButton() async -> Bool {
+        // Trigger the notification here
+             if let newCarbEntry = potentialCarbEntry { // Use potentialCarbEntry directly
+                 let nagWindow: TimeInterval = 7 * 60
+                 let now = Date()
+                 // Check if this is a pre-bolus
+                 if newCarbEntry.startDate > now {
+                     let alertTime = newCarbEntry.startDate.addingTimeInterval(nagWindow)
+
+                     // Schedule the notification only if the alert time is in the future
+                     if alertTime > now {
+                         // Assuming preferredCarbUnit is defined somewhere
+                         let carbAmountString = String(format: "%.0f", newCarbEntry.quantity.doubleValue(for: HKUnit.gram()))//TODO: handle units properly
+                         let absorptionTimeString = String(format: "%.1f", newCarbEntry.absorptionTime! / 3600)
+
+                         NotificationManager.scheduleCarbAlert(
+                             for: alertTime,
+                             carbAmount: carbAmountString,
+                             carbAbsorptionTime: absorptionTimeString
+                         )
+                         print("**prebolus detected")
+                     }
+                 }
+             }
         enacting = true
         if await saveAndDeliver() {
+            
             return true
         } else {
             enacting = false
