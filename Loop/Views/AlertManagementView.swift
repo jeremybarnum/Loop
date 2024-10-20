@@ -63,6 +63,15 @@ struct AlertManagementView: View {
             }
         )
     }
+    
+    private var preBolusReminderEnabled: Binding<Bool> {
+        Binding(
+            get: { UserDefaults.standard.preBolusReminderEnabled },
+            set: { enabled in
+                UserDefaults.standard.preBolusReminderEnabled = enabled
+            }
+        )
+    }
 
     public init(checker: AlertPermissionsChecker, alertMuter: AlertMuter = AlertMuter()) {
         self.checker = checker
@@ -259,8 +268,8 @@ struct AlertManagementView: View {
         }
     }
     private var preBolusReminderSection: some View {
-        Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop can notify you when it sees carbs absorbing slowly, risking a crash.", comment: "Description of slow absorption notifications."))) {
-            Toggle(NSLocalizedString("Slow Absorption Notifications", comment: "Title for slow absorption notification toggle"), isOn: slowAbsorptionNotificationsEnabled)
+        Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop will notifify you when you prebolus and remind you to eat.", comment: "Description of prebolus notifications."))) {
+            Toggle(NSLocalizedString("Pre-bolus notifications", comment: "Title for pre-bolus notification toggle"), isOn: preBolusReminderEnabled)
         }
     }
 }
