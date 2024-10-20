@@ -78,6 +78,7 @@ struct AlertManagementView: View {
             }
             missedMealAlertSection
             slowAbsorptionAlertSection
+            preBolusReminderSection
         }
         .navigationTitle(NSLocalizedString("Alert Management", comment: "Title of alert management screen"))
     }
@@ -257,12 +258,19 @@ struct AlertManagementView: View {
             Toggle(NSLocalizedString("Slow Absorption Notifications", comment: "Title for slow absorption notification toggle"), isOn: slowAbsorptionNotificationsEnabled)
         }
     }
+    private var preBolusReminderSection: some View {
+        Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop can notify you when it sees carbs absorbing slowly, risking a crash.", comment: "Description of slow absorption notifications."))) {
+            Toggle(NSLocalizedString("Slow Absorption Notifications", comment: "Title for slow absorption notification toggle"), isOn: slowAbsorptionNotificationsEnabled)
+        }
+    }
 }
 
 extension UserDefaults {
     private enum Key: String {
         case missedMealNotificationsEnabled = "com.loopkit.Loop.MissedMealNotificationsEnabled"
         case slowAbsorptionNotificationsEnabled = "com.loopkit.Loop.slowAbsorptionNotificationsEnabled"
+        case preBolusReminderEnabled = "com.loopkit.Loop.preBolusReminderEnabled"
+        
     }
     
     var missedMealNotificationsEnabled: Bool {
@@ -282,6 +290,15 @@ extension UserDefaults {
             set(newValue, forKey: Key.slowAbsorptionNotificationsEnabled.rawValue)
         }
     }
+    var preBolusReminderEnabled: Bool {
+        get {
+            return object(forKey: Key.preBolusReminderEnabled.rawValue) as? Bool ?? false
+        }
+        set {
+            set(newValue, forKey: Key.preBolusReminderEnabled.rawValue)
+        }
+    }
+
 }
 
 struct AlertManagementView_Previews: PreviewProvider {
