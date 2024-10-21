@@ -336,10 +336,10 @@ extension UserDefaults {
     
     var prebolusDelayCriterion: Int {
         get {
-            return object(forKey: "com.loopkit.Loop.prebolusDelayCriterion") as? Int ?? 0 // Default value
+            return object(forKey: Key.prebolusDelayCriterion.rawValue) as? Int ?? 14 // Default value
         }
         set {
-            set(newValue, forKey: "com.loopkit.Loop.prebolusDelayCriterion")
+            set(newValue, forKey: Key.prebolusDelayCriterion.rawValue)
         }
     }
 
