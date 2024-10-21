@@ -282,7 +282,7 @@ struct AlertManagementView: View {
 
             if preBolusReminderEnabled.wrappedValue {
                 HStack {
-                    Text(NSLocalizedString("Prebolus Delay Criterion", comment: "Label for prebolus delay criterion"))
+                    Text(NSLocalizedString("Prebolus Definition", comment: "Label for prebolus delay criterion"))
                     Spacer()
                     // Here you would implement the scroll wheel UI for selecting the value.
                     // Assuming it's an Int, replace this with the actual scroll wheel implementation.
