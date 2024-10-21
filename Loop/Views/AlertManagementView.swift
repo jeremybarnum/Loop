@@ -287,7 +287,7 @@ struct AlertManagementView: View {
                 .onChange(of: isPreBolusReminderEnabled) { newValue in
                                   UserDefaults.standard.preBolusReminderEnabled = newValue // Update UserDefaults
                               }
-            if preBolusReminderEnabled.wrappedValue {
+            if isPreBolusReminderEnabled {
                 HStack {
                     Text(NSLocalizedString("Prebolus Definition", comment: "Label for prebolus delay criterion"))
                     Spacer()
