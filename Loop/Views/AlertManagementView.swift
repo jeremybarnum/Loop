@@ -297,7 +297,7 @@ struct AlertManagementView: View {
                         }
                     }
                     .pickerStyle(WheelPickerStyle())
-                    .frame(height: 70) // Set the desired height
+                    .frame(height: 80) // Set the desired height
                 }
             }
         }
