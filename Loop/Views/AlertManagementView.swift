@@ -282,8 +282,8 @@ struct AlertManagementView: View {
         }
     }
     private var preBolusReminderSection: some View {
-        Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop will notify you when you prebolus and remind you to eat.", comment: "Description of prebolus notifications."))) {
-            Toggle(NSLocalizedString("Pre-bolus notifications", comment: "Title for pre-bolus notification toggle"), isOn: $isPreBolusReminderEnabled) // Bind to local state
+        Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop will note you when you prebolus and remind you to eat.", comment: "Description of prebolus notifications."))) {
+            Toggle(NSLocalizedString("Pre-bolus reminders", comment: "Title for pre-bolus reminders toggle"), isOn: $isPreBolusReminderEnabled) // Bind to local state
                 .onChange(of: isPreBolusReminderEnabled) { newValue in // Use local state for change tracking
                     UserDefaults.standard.preBolusReminderEnabled = newValue // Update UserDefaults
                 }
