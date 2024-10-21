@@ -321,24 +321,26 @@ final class BolusEntryViewModel: ObservableObject {
     // returns true if action succeeded
     func didPressActionButton() async -> Bool {
         // Trigger the notification here
-             if let newCarbEntry = potentialCarbEntry { // Use potentialCarbEntry directly
-                 let nagWindow: TimeInterval = 0 * 60
-                 let now = Date()
-                 let preferredCarbUnit = HKUnit.gram()
-                 let prebolusDelayCriterion: TimeInterval = 15 * 60
-                 // Check if this is a pre-bolus
-                 if newCarbEntry.startDate > now.addingTimeInterval(prebolusDelayCriterion) {
-                     let alertTime = newCarbEntry.startDate.addingTimeInterval(nagWindow)
-                     let carbAmountString = String(format: "%.0f", newCarbEntry.quantity.doubleValue(for: preferredCarbUnit))//
-                     let absorptionTimeString = String(format: "%.1f", newCarbEntry.absorptionTime! / 3600)
-                            NotificationManager.scheduleCarbAlert(
-                             for: alertTime,
-                             carbAmount: carbAmountString,
-                             carbAbsorptionTime: absorptionTimeString
-                         )
+        if UserDefaults.standard.preBolusReminderEnabled {
+            if let newCarbEntry = potentialCarbEntry { // Use potentialCarbEntry directly
+                let nagWindow: TimeInterval = 0 * 60
+                let now = Date()
+                let preferredCarbUnit = HKUnit.gram()
+                let prebolusDelayCriterion: TimeInterval = 15 * 60
+                // Check if this is a pre-bolus
+                if newCarbEntry.startDate > now.addingTimeInterval(prebolusDelayCriterion) {
+                    let alertTime = newCarbEntry.startDate.addingTimeInterval(nagWindow)
+                    let carbAmountString = String(format: "%.0f", newCarbEntry.quantity.doubleValue(for: preferredCarbUnit))//
+                    let absorptionTimeString = String(format: "%.1f", newCarbEntry.absorptionTime! / 3600)
+                    NotificationManager.scheduleCarbAlert(
+                        for: alertTime,
+                        carbAmount: carbAmountString,
+                        carbAbsorptionTime: absorptionTimeString
+                    )
                     
-                     log.info("**Prebolus Detected, Notification Scheduled")
-                     }
+                    log.info("**Prebolus Detected, Notification Scheduled")
+                }
+            }
              }
         enacting = true
         if await saveAndDeliver() {
