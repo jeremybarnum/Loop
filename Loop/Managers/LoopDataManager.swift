@@ -235,6 +235,10 @@ final class LoopDataManager {
         lockedSettings.value
     }
 
+    func updateCurrentProfileName () {
+        notify(forChange: .preferences)
+    }
+    
     func mutateSettings(_ changes: (_ settings: inout LoopSettings) -> Void) {
         var oldValue: LoopSettings!
         let newValue = lockedSettings.mutate { settings in
