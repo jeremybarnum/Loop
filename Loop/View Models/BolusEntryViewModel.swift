@@ -338,8 +338,8 @@ final class BolusEntryViewModel: ObservableObject {
                         carbAbsorptionTime: absorptionTimeString
                     )
             
-                    print("**Prebolus Detected, Notification Scheduled")
-                    print("**Pre-bolus delay criterion: \(UserDefaults.standard.prebolusDelayCriterion)")
+                   // print("**Prebolus Detected, Notification Scheduled")
+                    //print("**Pre-bolus delay criterion: \(UserDefaults.standard.prebolusDelayCriterion)")
                 }
             }
              }
