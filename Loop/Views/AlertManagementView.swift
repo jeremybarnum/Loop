@@ -72,6 +72,15 @@ struct AlertManagementView: View {
             }
         )
     }
+    
+    private var prebolusDelayCriterion: Binding<Int> {
+        Binding(
+            get: { UserDefaults.standard.prebolusDelayCriterion },
+            set: { newValue in
+                UserDefaults.standard.prebolusDelayCriterion = newValue
+            }
+        )
+    }
 
     public init(checker: AlertPermissionsChecker, alertMuter: AlertMuter = AlertMuter()) {
         self.checker = checker
@@ -268,8 +277,23 @@ struct AlertManagementView: View {
         }
     }
     private var preBolusReminderSection: some View {
-        Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop will notifify you when you prebolus and remind you to eat.", comment: "Description of prebolus notifications."))) {
+        Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop will notify you when you prebolus and remind you to eat.", comment: "Description of prebolus notifications."))) {
             Toggle(NSLocalizedString("Pre-bolus notifications", comment: "Title for pre-bolus notification toggle"), isOn: preBolusReminderEnabled)
+
+            if preBolusReminderEnabled.wrappedValue {
+                HStack {
+                    Text(NSLocalizedString("Prebolus Delay Criterion", comment: "Label for prebolus delay criterion"))
+                    Spacer()
+                    // Here you would implement the scroll wheel UI for selecting the value.
+                    // Assuming it's an Int, replace this with the actual scroll wheel implementation.
+                    Picker("Delay Criterion", selection: prebolusDelayCriterion) {
+                        ForEach(0..<61) { // Example range from 0 to 60 minutes
+                            Text("\($0) min").tag($0)
+                        }
+                    }
+                    .pickerStyle(MenuPickerStyle())
+                }
+            }
         }
     }
 }
@@ -279,6 +303,8 @@ extension UserDefaults {
         case missedMealNotificationsEnabled = "com.loopkit.Loop.MissedMealNotificationsEnabled"
         case slowAbsorptionNotificationsEnabled = "com.loopkit.Loop.slowAbsorptionNotificationsEnabled"
         case preBolusReminderEnabled = "com.loopkit.Loop.preBolusReminderEnabled"
+        case prebolusDelayCriterion = "com.loopkit.Loop.prebolusDelayCriterion"
+
         
     }
     
@@ -305,6 +331,15 @@ extension UserDefaults {
         }
         set {
             set(newValue, forKey: Key.preBolusReminderEnabled.rawValue)
+        }
+    }
+    
+    var prebolusDelayCriterion: Int {
+        get {
+            return object(forKey: "com.loopkit.Loop.prebolusDelayCriterion") as? Int ?? 0 // Default value
+        }
+        set {
+            set(newValue, forKey: "com.loopkit.Loop.prebolusDelayCriterion")
         }
     }
 
