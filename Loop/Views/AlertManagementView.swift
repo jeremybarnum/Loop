@@ -287,11 +287,12 @@ struct AlertManagementView: View {
                     // Here you would implement the scroll wheel UI for selecting the value.
                     // Assuming it's an Int, replace this with the actual scroll wheel implementation.
                     Picker("Delay Criterion", selection: prebolusDelayCriterion) {
-                        ForEach(1..<31) { // Example range from 0 to 60 minutes
+                        ForEach(1..<31) {
                             Text("\($0) min").tag($0)
                         }
                     }
                     .pickerStyle(WheelPickerStyle())
+                    .frame(height: 100) // Set the desired height
                 }
             }
         }
