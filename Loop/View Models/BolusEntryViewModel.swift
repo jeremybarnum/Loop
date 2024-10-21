@@ -326,7 +326,7 @@ final class BolusEntryViewModel: ObservableObject {
                 let nagWindow: TimeInterval = 0 * 60
                 let now = Date()
                 let preferredCarbUnit = HKUnit.gram()
-                let prebolusDelayCriterion: TimeInterval = 1 * 60
+                let prebolusDelayCriterion: TimeInterval = 14 * 60
                 // Check if this is a pre-bolus
                 if newCarbEntry.startDate > now.addingTimeInterval(prebolusDelayCriterion) {
                     let alertTime = newCarbEntry.startDate.addingTimeInterval(nagWindow)
