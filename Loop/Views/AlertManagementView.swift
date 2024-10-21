@@ -19,6 +19,8 @@ struct AlertManagementView: View {
 
     @State private var showMuteAlertOptions: Bool = false
     @State private var showHowMuteAlertWork: Bool = false
+    @State private var isPreBolusReminderEnabled: Bool = UserDefaults.standard.preBolusReminderEnabled // Local state
+
 
     private var formatter: DateComponentsFormatter = {
         let formatter = DateComponentsFormatter()
@@ -98,6 +100,9 @@ struct AlertManagementView: View {
             slowAbsorptionAlertSection
             preBolusReminderSection
         }
+        .onAppear {
+                    isPreBolusReminderEnabled = UserDefaults.standard.preBolusReminderEnabled // Sync local state on appear
+                }
         .navigationTitle(NSLocalizedString("Alert Management", comment: "Title of alert management screen"))
     }
     
@@ -279,7 +284,9 @@ struct AlertManagementView: View {
     private var preBolusReminderSection: some View {
         Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop will notify you when you prebolus and remind you to eat.", comment: "Description of prebolus notifications."))) {
             Toggle(NSLocalizedString("Pre-bolus notifications", comment: "Title for pre-bolus notification toggle"), isOn: preBolusReminderEnabled)
-
+                .onChange(of: isPreBolusReminderEnabled) { newValue in
+                                  UserDefaults.standard.preBolusReminderEnabled = newValue // Update UserDefaults
+                              }
             if preBolusReminderEnabled.wrappedValue {
                 HStack {
                     Text(NSLocalizedString("Prebolus Definition", comment: "Label for prebolus delay criterion"))
@@ -295,7 +302,9 @@ struct AlertManagementView: View {
                     .frame(height: 100) // Set the desired height
                 }
             }
+            
         }
+        
     }
 }
 
