@@ -339,8 +339,8 @@ final class BolusEntryViewModel: ObservableObject {
                         identifier: "placeholder"//waiting to figure out how to get the sync id
                     )
             
-                   // print("**Prebolus Detected, Notification Scheduled")
-                    //print("**Pre-bolus delay criterion: \(UserDefaults.standard.prebolusDelayCriterion)")
+                    print("**Prebolus Detected, Notification Scheduled")
+                    print("**Pre-bolus delay criterion: \(UserDefaults.standard.prebolusDelayCriterion)")
                 }
             }
              }
