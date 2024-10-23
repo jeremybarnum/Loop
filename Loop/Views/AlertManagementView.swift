@@ -292,10 +292,10 @@ struct AlertManagementView: View {
                     Text(NSLocalizedString("Prebolus Definition", comment: "Label for prebolus delay criterion"))
                     Spacer()
                     Picker("Delay Criterion", selection: prebolusDelayCriterion) {
-                        ForEach(9..<39) {
+                        ForEach(1..<39) {
                             Text("\($0) min").tag($0)
                         }
-                    }
+                    }//starting at 1 to help with testing 
                     .pickerStyle(WheelPickerStyle())
                     .frame(height: 80) // Set the desired height
                 }
