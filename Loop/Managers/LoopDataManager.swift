@@ -1971,7 +1971,7 @@ extension LoopDataManager {
                 identifier: syncIdentifier
             )
 
-            logger.default("Scheduled notification for carb entry: %@", syncIdentifier)
+            logger.default("**Scheduled notification for carb entry: %@", syncIdentifier)
         }
     }
 
