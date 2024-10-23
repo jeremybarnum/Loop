@@ -335,7 +335,8 @@ final class BolusEntryViewModel: ObservableObject {
                     NotificationManager.scheduleCarbAlert(
                         for: alertTime,
                         carbAmount: carbAmountString,
-                        carbAbsorptionTime: absorptionTimeString
+                        carbAbsorptionTime: absorptionTimeString,
+                        identifier: "placeholder"//waiting to figure out how to get the sync id
                     )
             
                    // print("**Prebolus Detected, Notification Scheduled")
