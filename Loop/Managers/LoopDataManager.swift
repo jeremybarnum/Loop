@@ -1130,6 +1130,8 @@ extension LoopDataManager {
                 case .success(let (entries, effects)):
                     self.carbEffect = effects
                     self.recentCarbEntries = entries
+                    
+                    self.scheduleNotificationsForCarbEntries(entries) // this is where the notifications are scheduled
                 }
 
                 updateGroup.leave()
@@ -1937,6 +1939,41 @@ extension LoopDataManager {
                 
                 return
         }
+    
+    //helper function to schedule notfications for carb entries
+    
+    private func scheduleNotificationsForCarbEntries(_ entries: [StoredCarbEntry]) {
+        for entry in entries {
+            let now = Date()
+            let prebolusDelayCriterion: TimeInterval = Double(UserDefaults.standard.prebolusDelayCriterion) * 60 // Convert minutes to seconds
+
+            // Only schedule notifications for future carb entries that meet the threshold
+            guard entry.startDate > now.addingTimeInterval(prebolusDelayCriterion) else {
+                continue
+            }
+
+            // Ensure the syncIdentifier is valid
+            guard let syncIdentifier = entry.syncIdentifier, !syncIdentifier.isEmpty else {
+                logger.error("Invalid or missing syncIdentifier for entry: %@", String(describing: entry))
+                continue
+            }
+
+            // Prepare notification content
+            let alertTime = entry.startDate
+            let carbAmountString = String(format: "%.0f", entry.quantity.doubleValue(for: .gram()))
+            let absorptionTimeString = String(format: "%.1f", entry.absorptionTime! / 3600)
+
+            // Schedule the notification
+            NotificationManager.scheduleCarbAlert(
+                for: alertTime,
+                carbAmount: carbAmountString,
+                carbAbsorptionTime: absorptionTimeString,
+                identifier: syncIdentifier
+            )
+
+            logger.default("Scheduled notification for carb entry: %@", syncIdentifier)
+        }
+    }
 
     /// Runs the glucose prediction on the latest effect data.
     ///
