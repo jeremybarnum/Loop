@@ -364,6 +364,7 @@ extension NotificationManager {
         }
     }
     static func cancelNotification(for identifiers: [String]) {
-        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: identifiers)
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
+        //print("**notification Canceled")
     }
 }

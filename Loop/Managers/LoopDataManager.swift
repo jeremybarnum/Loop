@@ -709,10 +709,19 @@ extension LoopDataManager {
             carbStore.addCarbEntry(carbEntry, completion: addCompletion)
         }
     }
-
+//TODO: considering how important delete carb entry is, should I put the logic in the view instead.  This seems safe, but...
     func deleteCarbEntry(_ oldEntry: StoredCarbEntry, completion: @escaping (_ result: CarbStoreResult<Bool>) -> Void) {
+        // Ensure the syncIdentifier exists and cancel the notification
+        if let syncIdentifier = oldEntry.syncIdentifier {
+            NotificationManager.cancelNotification(for: [syncIdentifier])  // Wrap in an array
+            print("**Cancelled notification for entry: \(syncIdentifier)")
+        } else {
+            logger.error("**Failed to cancel notification: Missing syncIdentifier for entry")
+        }
+
+        // Proceed with deleting the carb entry
         carbStore.deleteCarbEntry(oldEntry) { result in
-            completion(result)
+            completion(result)  // Notify caller of the deletion result
         }
     }
 
@@ -1130,8 +1139,7 @@ extension LoopDataManager {
                 case .success(let (entries, effects)):
                     self.carbEffect = effects
                     self.recentCarbEntries = entries
-                    
-                    if reason == .updateRemoteRecommendation {
+                    if reason == .updateRemoteRecommendation { //would love to improve this to trigger only when needed
                         self.scheduleNotificationsForCarbEntries(entries)
                         print("**requested notification, reason was\(reason)") } else {print("**did not request, reason was \(reason)")
                     } // this is where the notifications are scheduled.
@@ -1943,37 +1951,39 @@ extension LoopDataManager {
                 return
         }
     
-    
+//TODO:  And the bolus criterion needs to be linked to the original entry time, not the latest one, if that's possible.
     private func scheduleNotificationsForCarbEntries(_ entries: [StoredCarbEntry]) {
-        for entry in entries {
-            let now = Date()
-            let prebolusDelayCriterion: TimeInterval = Double(UserDefaults.standard.prebolusDelayCriterion) * 60 // Convert minutes to seconds
-
-            // Only schedule notifications for future carb entries that meet the threshold
-            guard entry.startDate > now.addingTimeInterval(prebolusDelayCriterion) else {
-                continue
+        if UserDefaults.standard.preBolusReminderEnabled {
+            for entry in entries {
+                let now = Date()
+                let prebolusDelayCriterion: TimeInterval = Double(UserDefaults.standard.prebolusDelayCriterion) * 60 // Convert minutes to seconds
+                
+                // Only schedule notifications for future carb entries that meet the threshold
+                guard entry.startDate > now.addingTimeInterval(prebolusDelayCriterion) else {
+                    continue
+                }
+                
+                // Ensure the syncIdentifier is valid
+                guard let syncIdentifier = entry.syncIdentifier, !syncIdentifier.isEmpty else {
+                    logger.error("Invalid or missing syncIdentifier for entry: %@", String(describing: entry))
+                    continue
+                }
+                
+                // Prepare notification content
+                let alertTime = entry.startDate
+                let carbAmountString = String(format: "%.0f", entry.quantity.doubleValue(for: .gram()))
+                let absorptionTimeString = String(format: "%.1f", entry.absorptionTime! / 3600)
+                
+                // Schedule the notification
+                NotificationManager.scheduleCarbAlert(
+                    for: alertTime,
+                    carbAmount: carbAmountString,
+                    carbAbsorptionTime: absorptionTimeString,
+                    identifier: syncIdentifier
+                )
+                
+                logger.default("**Scheduled notification for carb entry: %@", syncIdentifier)
             }
-
-            // Ensure the syncIdentifier is valid
-            guard let syncIdentifier = entry.syncIdentifier, !syncIdentifier.isEmpty else {
-                logger.error("Invalid or missing syncIdentifier for entry: %@", String(describing: entry))
-                continue
-            }
-
-            // Prepare notification content
-            let alertTime = entry.startDate
-            let carbAmountString = String(format: "%.0f", entry.quantity.doubleValue(for: .gram()))
-            let absorptionTimeString = String(format: "%.1f", entry.absorptionTime! / 3600)
-
-            // Schedule the notification
-            NotificationManager.scheduleCarbAlert(
-                for: alertTime,
-                carbAmount: carbAmountString,
-                carbAbsorptionTime: absorptionTimeString,
-                identifier: syncIdentifier
-            )
-
-            logger.default("**Scheduled notification for carb entry: %@", syncIdentifier)
         }
     }
 
