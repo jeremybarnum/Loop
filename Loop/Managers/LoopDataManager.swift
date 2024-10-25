@@ -714,7 +714,7 @@ extension LoopDataManager {
         // Ensure the syncIdentifier exists and cancel the notification
         if let syncIdentifier = oldEntry.syncIdentifier {
             NotificationManager.cancelNotification(for: [syncIdentifier])  // Wrap in an array
-            //print("**Cancelled notification for entry: \(syncIdentifier)")
+            logger.default("**Canceled notification for carb entry: %@", syncIdentifier)
         } else {
             logger.error("**Failed to cancel notification: Missing syncIdentifier for entry")
         }
