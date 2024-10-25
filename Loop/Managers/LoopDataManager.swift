@@ -1131,7 +1131,10 @@ extension LoopDataManager {
                     self.carbEffect = effects
                     self.recentCarbEntries = entries
                     
-                    self.scheduleNotificationsForCarbEntries(entries) // this is where the notifications are scheduled
+                    if reason == .updateRemoteRecommendation {
+                        self.scheduleNotificationsForCarbEntries(entries)
+                        print("**requested notification, reason was\(reason)") } else {print("**did not request, reason was \(reason)")
+                    } // this is where the notifications are scheduled.
                 }
 
                 updateGroup.leave()
@@ -1940,7 +1943,6 @@ extension LoopDataManager {
                 return
         }
     
-    //helper function to schedule notfications for carb entries
     
     private func scheduleNotificationsForCarbEntries(_ entries: [StoredCarbEntry]) {
         for entry in entries {
