@@ -1141,7 +1141,7 @@ extension LoopDataManager {
                     self.recentCarbEntries = entries
                     if reason == .updateRemoteRecommendation { //would love to improve this to trigger only when needed
                         self.scheduleNotificationsForCarbEntries(entries)
-                        //print("**requested notification, reason was\(reason)") } else {print("**did not request, reason was \(reason)")
+                        print("**requested notification, reason was\(reason)") } else {print("**did not request, reason was \(reason)")
                     } // this is where the notifications are scheduled.
                 }
 
