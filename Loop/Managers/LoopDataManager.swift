@@ -1962,7 +1962,7 @@ extension LoopDataManager {
                 
                 // Ensure the syncIdentifier is valid
                 guard let syncIdentifier = entry.syncIdentifier, !syncIdentifier.isEmpty else {
-                    logger.error("Invalid or missing syncIdentifier for entry: %@", String(describing: entry))
+                    logger.error("**Invalid or missing syncIdentifier for entry: %@", String(describing: entry))
                     continue
                 }
                 
