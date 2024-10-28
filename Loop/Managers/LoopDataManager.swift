@@ -1957,8 +1957,9 @@ extension LoopDataManager {
                 
                 // Only schedule notifications for future carb entries that meet the threshold
                 guard entry.startDate > entry.userCreatedDate?.addingTimeInterval(prebolusDelayCriterion) ?? now else {
-                    continue
-                }
+                    continue }
+                
+                guard entry.startDate > now else {continue}
                 
                 // Ensure the syncIdentifier is valid
                 guard let syncIdentifier = entry.syncIdentifier, !syncIdentifier.isEmpty else {
