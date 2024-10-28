@@ -172,8 +172,7 @@ final class LoopDataManager {
                 queue: nil
             ) { (note) -> Void in
                 self.dataAccessQueue.async {
-                    self.logger.default("Received notification of carb entries changing")
-
+                    self.logger.default("**Received notification of carb entries changing")
                     self.carbEffect = nil
                     self.carbsOnBoard = nil
                     self.recentCarbEntries = nil
@@ -1139,10 +1138,8 @@ extension LoopDataManager {
                 case .success(let (entries, effects)):
                     self.carbEffect = effects
                     self.recentCarbEntries = entries
-                    if reason == .updateRemoteRecommendation { //would love to improve this to trigger only when needed
-                        self.scheduleNotificationsForCarbEntries(entries)
-                        print("**requested notification, reason was\(reason)") } else {print("**did not request, reason was \(reason)")
-                    } // this is where the notifications are scheduled.
+                    self.scheduleNotificationsForCarbEntries(entries)
+
                 }
 
                 updateGroup.leave()
@@ -1228,6 +1225,7 @@ extension LoopDataManager {
         }
 
         return updatePredictedGlucoseAndRecommendedDose(with: dosingDecision)
+      
     }
 
     private func notify(forChange context: LoopUpdateContext) {
@@ -1950,8 +1948,7 @@ extension LoopDataManager {
                 
                 return
         }
-    
-//TODO:  And the bolus criterion needs to be linked to the original entry time, not the latest one, if that's possible.
+
     private func scheduleNotificationsForCarbEntries(_ entries: [StoredCarbEntry]) {
         if UserDefaults.standard.preBolusReminderEnabled {
             for entry in entries {
