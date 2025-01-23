@@ -245,6 +245,11 @@ class TemporaryPresetsManager {
             syncIdentifier: UUID()
         )
     }
+    
+    public func endPreMealOverride() {
+        preMealOverride?.scheduledEndDate = .now
+        clearOverride(matching: .preMeal)
+    }
 
     public func clearOverride(matching context: TemporaryScheduleOverride.Context? = nil) {
         if context == .preMeal {
