@@ -73,6 +73,24 @@ struct PresetStatsView: View {
         let lowerClassification = guardrail?.classification(for: target.lowerBound) ?? .withinRecommendedRange
         let upperClassification = guardrail?.classification(for: target.upperBound) ?? .withinRecommendedRange
 
+        var accessibilityId = "text_PresetCorrectionRange_"
+        
+        switch (lowerClassification, upperClassification) {
+        case (.withinRecommendedRange, .withinRecommendedRange):
+            accessibilityId += "WithinRange"
+        case (.withinRecommendedRange, .outsideRecommendedRange):
+            accessibilityId += "UpperWarning"
+            accessibilityId += upperColor == .red ? "Red" : "Orange"
+        case (.outsideRecommendedRange, .outsideRecommendedRange):
+            accessibilityId += "LowerWarning"
+            accessibilityId += lowerColor == .red ? "Red" : "Orange"
+            accessibilityId += "UpperWarning"
+            accessibilityId += upperColor == .red ? "Red" : "Orange"
+        case (.outsideRecommendedRange, .withinRecommendedRange):
+            accessibilityId += "LowerWarning"
+            accessibilityId += lowerColor == .red ? "Red" : "Orange"
+        }
+        
         return Group {
             switch (lowerClassification, upperClassification) {
             case (.withinRecommendedRange, .withinRecommendedRange):
@@ -84,7 +102,7 @@ struct PresetStatsView: View {
             case (.outsideRecommendedRange, .withinRecommendedRange):
                 warningSymbol.foregroundStyle(lowerColor) + lower + Text("-") + upper + units
             }
-        }
+        }.accessibilityIdentifier(accessibilityId)
     }
 
     var correctionRangeView: some View {
