@@ -175,27 +175,21 @@ class SettingsViewModel {
         self.isOnboardingComplete = isOnboardingComplete
         self.therapySettingsViewModelDelegate = therapySettingsViewModelDelegate
         self.presetHistory = presetHistory
-        
-        var preMealGuardrail: Guardrail<LoopQuantity>?
-        var legacyWorkoutPresetGuardrail: Guardrail<LoopQuantity>?
-        if let scheduleRange = therapySettings().glucoseTargetRangeSchedule?.scheduleRange() {
-            preMealGuardrail = Guardrail.correctionRangeOverride(
-                for: .preMeal,
-                correctionRangeScheduleRange: scheduleRange,
-                suspendThreshold: therapySettings().suspendThreshold
-            )
-            self.preMealGuardrail = preMealGuardrail
-            self.legacyWorkoutPresetGuardrail = legacyWorkoutPresetGuardrail
-        }
-        
+
+
         self.presetsViewModel = PresetsViewModel(
             customPresets: therapySettings().overridePresets ?? [],
-            correctionRangeOverrides: therapySettings().correctionRangeOverrides,
+            premealRange: therapySettings().correctionRangeOverrides?.preMeal,
+            workoutRange:therapySettings().correctionRangeOverrides?.workout,
+            workoutDuration: therapySettings().correctionRangeOverrides?.workoutDuration ?? .indefinite,
             presetsHistory: presetHistory,
-            preMealGuardrail: preMealGuardrail,
-            legacyWorkoutGuardrail: legacyWorkoutPresetGuardrail,
-            temporaryPresetsManager: temporaryPresetsManager
+            preMealGuardrail: therapySettings().preMealGuardrail,
+            legacyWorkoutGuardrail: therapySettings().legacyWorkoutPresetGuardrail,
+            temporaryPresetsManager: temporaryPresetsManager,
+            scheduledRange: therapySettings().glucoseTargetRangeSchedule!.quantityRange(at: Date())
         )
+
+        self.presetsViewModel.presetWasEdited = savePreset
 
         // This strangeness ensures the composed ViewModels' (ObservableObjects') changes get reported to this ViewModel (ObservableObject)
         lastLoopCompletion
@@ -207,6 +201,26 @@ class SettingsViewModel {
         mostRecentPumpDataDate
             .assign(to: \.mostRecentPumpDataDate, on: self)
             .store(in: &cancellables)
+    }
+
+    func savePreset(_ preset: SelectablePreset) throws {
+        var therapySettings = therapySettings()
+        var preMealRange = therapySettings.correctionRangeOverrides?.ranges[.preMeal]
+        var workoutRange = therapySettings.correctionRangeOverrides?.ranges[.workout]
+        var workoutDuration = therapySettings.correctionRangeOverrides?.workoutDuration
+
+        switch(preset) {
+        case .preMeal(let range, _):
+            preMealRange = range
+        case .legacyWorkout(let range, let duration, _):
+            workoutRange = range
+            workoutDuration = duration.presetDuration
+        default:
+            // TODO: editing of custom presets
+            break
+        }
+        therapySettings.correctionRangeOverrides = CorrectionRangeOverrides(preMeal: preMealRange, workout: workoutRange, workoutDuration: workoutDuration)
+        therapySettingsViewModelDelegate?.saveCompletion(therapySettings: therapySettings)
     }
 }
 

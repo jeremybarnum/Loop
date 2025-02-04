@@ -61,7 +61,7 @@ struct PresetsView: View {
     }
 
     var body: some View {
-        NavigationView {
+        NavigationStack(path: $viewModel.editPreset) {
             ScrollView {
                 VStack(spacing: 20) {
                     if !viewModel.hasCompletedTraining {
@@ -164,6 +164,11 @@ struct PresetsView: View {
             .background(Color(UIColor.secondarySystemBackground))
             .navigationTitle(Text("Presets", comment: "Presets screen title"))
             .navigationBarItems(trailing: dismissButton)
+            .navigationDestination(for: String.self) { presetId in
+                EditPresetView(preset: viewModel.allPresets.first { $0.id == presetId }!, scheduledRange: viewModel.scheduledRange) { preset in
+                    viewModel.savePreset(preset)
+                }
+            }
         }
         .sheet(item: $viewModel.pendingPreset) { preset in
             PresetDetentView(
