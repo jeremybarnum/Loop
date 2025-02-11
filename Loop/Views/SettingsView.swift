@@ -361,7 +361,7 @@ extension SettingsView {
                 imageView: Image("Presets Icon"),
                 label: NSLocalizedString("Presets", comment: "Title text for button to Preset Settings"),
                 descriptiveText: NSLocalizedString("Temporary Settings Adjustments", comment: "Descriptive text for Preset Settings")
-            )
+            ).accessibilityIdentifier("button_Presets")
         }
     }
 
