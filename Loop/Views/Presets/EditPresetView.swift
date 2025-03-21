@@ -12,57 +12,14 @@ import SwiftUI
 import LoopKitUI
 import LoopAlgorithm
 
-struct CompactSection<Content: View, Header: View, Footer: View>: View {
-    let header: Header?
-    let footer: Footer?
-    let content: Content
-
-    // Initializer for custom view header
-    init(@ViewBuilder content: () -> Content, @ViewBuilder header: () -> Header, @ViewBuilder footer: () -> Footer) {
-        self.content = content()
-        self.header = header()
-        self.footer = footer()
-    }
-
-    // Initializer for string header
-    init(_ headerText: String? = nil, @ViewBuilder content: () -> Content, footerText: String? = nil) where Header == Text, Footer == Text {
-        self.content = content()
-        self.header = headerText.map { Text($0) }
-        self.footer = footerText.map { Text($0) }
-    }
-
-    // Initializer for no header
-    init(@ViewBuilder content: () -> Content) where Header == Text, Footer == Text {
-        self.content = content()
-        self.header = nil
-        self.footer = nil
-    }
-
-    var body: some View {
-        Section {
-            content
-        } header: {
-            if let header {
-                header
-                    .padding([.leading, .trailing], -10)
-            }
-        } footer: {
-            if let footer {
-                footer
-            }
-        }
-        .listRowInsets(EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10))
-    }
-}
-
-
 struct EditPresetView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.guidanceColors) private var guidanceColors
+    @Environment(\.settingsManager) private var settingsManager
     @EnvironmentObject var displayGlucosePreference: DisplayGlucosePreference
 
-    @State private var presetName: String
     @State private var preset: SelectablePreset
+
 
     private var originalPreset: SelectablePreset
     private var scheduledRange: ClosedRange<LoopQuantity>
@@ -70,47 +27,17 @@ struct EditPresetView: View {
 
     @State private var showingPicker = false
     @State private var navigateToCorrectionRangeEditor = false
+    @FocusState private var isTextFieldFocused: Bool
 
     init(preset: SelectablePreset, scheduledRange: ClosedRange<LoopQuantity>, onSave: @escaping ((SelectablePreset) throws -> Void)) {
         self.preset = preset
         self.originalPreset = preset
-        self.presetName = preset.name
         self.scheduledRange = scheduledRange
         self.onSave = onSave
     }
 
-    func boundText(for bound: LoopQuantity) -> Text {
-        let color = preset.guardrail.color(for: bound, guidanceColors: guidanceColors)
-        let text = displayGlucosePreference.format(bound, includeUnit: false)
-        switch preset.guardrail.classification(for: bound) {
-        case .withinRecommendedRange:
-            return Text(text)
-                .foregroundColor(.accentColor)
-                .font(.system(size: 34, weight: .bold))
-        case .outsideRecommendedRange:
-            return (
-                Text(text)
-                    .foregroundColor(color)
-                    .font(.system(size: 34, weight: .bold))
-                )
-        }
-    }
-
-    func correctionRangeLabel(range: ClosedRange<LoopQuantity>) -> Text {
-        boundText(for: (preset.correctionRange ?? scheduledRange).lowerBound) +
-        Text("-").foregroundColor(.secondary)
-            .font(.system(size: 34, weight: .light))
-        +
-        boundText(for: (preset.correctionRange ?? scheduledRange).upperBound) +
-        Text(" ") +
-        Text(displayGlucosePreference.unit.localizedShortUnitString)
-            .font(.system(.body))
-            .foregroundColor(.secondary)
-            .baselineOffset(12)
-    }
-
     var sensitivitySection: some View {
-        CompactSection("Temporary Settings Adjustments") {
+        CardSection("Temporary Settings Adjustments") {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Overall Insulin")
                     .font(.system(.title3, weight: .semibold))
@@ -135,135 +62,89 @@ struct EditPresetView: View {
                         .padding(.top, 4)
                 }
             }
-            .listRowInsets(EdgeInsets(top: 16, leading: 16, bottom: 16, trailing: 16))
         }
     }
-
-    private var correctionRangeCrossedThresholds: [SafetyClassification.Threshold] {
-        guard let range = preset.correctionRange else { return [] }
-
-        let guardrail = preset.guardrail
-        let thresholds: [SafetyClassification.Threshold] = [range.lowerBound, range.upperBound].compactMap { bound in
-            switch guardrail.classification(for: bound) {
-            case .withinRecommendedRange:
-                return nil
-            case .outsideRecommendedRange(let threshold):
-                return threshold
-            }
-        }
-
-        return thresholds
-    }
-
-    private var guardrailWarningIfNecessary: some View {
-        let crossedThresholds = self.correctionRangeCrossedThresholds
-        let severity = crossedThresholds.map { $0.severity }.max()
-
-        return Group {
-            if let severity, !crossedThresholds.isEmpty {
-                let color: Color = severity > .default ? guidanceColors.critical : guidanceColors.warning
-                HStack(alignment: .top, spacing: 12) {
-                    Text(Image(systemName: "exclamationmark.triangle.fill"))
-                        .foregroundColor(color)
-                    Text(SafetyClassification.captionForCrossedThresholds(crossedThresholds, isRange: true));
-                }
-                .padding(12)
-                .background(color.opacity(0.1))
-                .cornerRadius(12)
-            }
-        }
-    }
-
-
-    var correctionSection: some View {
-        CompactSection {
-            Button {
-                navigateToCorrectionRangeEditor = true;
-            } label: {
-                VStack(alignment: .center, spacing: 12) {
-                    HStack {
-                        Text("Correction Range")
-                            .font(.system(size: 17, weight: .semibold))
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .foregroundColor(.secondary)
-                    }.padding(.bottom, 10)
-                    VStack(spacing: 4) {
-                        if let range = preset.correctionRange {
-                            correctionRangeLabel(range: range)
-                            Text("Adjusted Range")
-                        } else {
-                            correctionRangeLabel(range: scheduledRange)
-                            Text("Scheduled Range")
-                        }
-                    }
-                    guardrailWarningIfNecessary
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(.primary)
-                        .padding(.bottom, 5)
-                        .padding(.horizontal, 2)
-                }
-                .foregroundColor(.primary)
-            }
-        }
-        .navigationDestination(isPresented: $navigateToCorrectionRangeEditor) {
-            EditPresetRangeView(
-                range: $preset.correctionRange,
-                guardrail: preset.guardrail,
-                scheduledRange: scheduledRange,
-                isPreMeal: preset.isPreMeal
-            )
-        }
-    }
-
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Form {
-                Section {} header: {
-                    presetTitle
+        CardSectionScrollView {
+            presetTitle
+
+            sensitivitySection
+
+            CardSection {
+                Button {
+                    navigateToCorrectionRangeEditor = true;
+                } label: {
+                    CorrectionRangePreview(
+                        range: $preset.correctionRange,
+                        guardrail: settingsManager.guardrailForPreset(preset),
+                        scheduledRange: scheduledRange,
+                        allowsScheduledRange: preset.canAdjustSensitivity,
+                        showDisclosure: true
+                    )
                 }
-                .listRowInsets(EdgeInsets(top: 5, leading: 0, bottom: 0, trailing: 0))
-                .textCase(nil)
+            }
 
-                sensitivitySection
-
-                correctionSection
-
-                CompactSection("PRESET DETAILS") {
-                    HStack {
-                        Text("Name")
-                        Spacer()
-                        Text(presetName)
+            CardSection("Preset Details") {
+                HStack {
+                    Text("Name")
+                    Spacer()
+                    if preset.canChangeName {
+                        TextField("", text: $preset.name, prompt: Text("Required"))
+                            .multilineTextAlignment(.trailing)
+                            .focused($isTextFieldFocused)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text(preset.name)
                             .foregroundColor(.secondary)
                     }
                 }
-
-                CompactSection(
-                    content: {
-                        Button(action: {
-                            showingPicker = true
-                        }) {
-                            HStack {
-                                Text("Duration")
-                                    .foregroundColor(.primary)
-                                Spacer()
-                                Text(preset.duration.localizedTitle)
-                                    .foregroundColor(.secondary)
-                                if preset.canAdjustDuration {
-                                    Image(systemName: "chevron.right")
-                                        .foregroundColor(.gray)
-                                }
-                            }
-                        }.disabled(!preset.canAdjustDuration)
-                    },
-                    footerText: preset.canAdjustDuration ? nil : "Duration and Name not configurable for this preset.")
             }
-            .listSectionSpacing(16)
+
+            CardSection(
+                content: {
+                    Button(action: {
+                        showingPicker = true
+                    }) {
+                        HStack {
+                            Text("Duration")
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Text(preset.duration.localizedTitle)
+                                .foregroundColor(.secondary)
+                            if preset.canAdjustDuration {
+                                Image(systemName: "chevron.right")
+                                    .foregroundColor(.gray)
+                            }
+                        }
+                    }.disabled(!preset.canAdjustDuration)
+                },
+                footerText: preset.canAdjustDuration ? nil : "Duration and Name not configurable for this preset."
+            )
         }
         .sheet(isPresented: $showingPicker) {
-            DurationPickerView(durationType: $preset.duration)
-            .presentationDetents([.height(300)])
+            VStack(alignment: .center, spacing: 24) {
+                HStack {
+                    Text("Duration")
+                    Spacer()
+                    Text("Required")
+                        .foregroundColor(.gray)
+                }
+                DurationPickerView(durationType: $preset.duration)
+                    .presentationDetents([.height(300)])
+            }
+            .padding()
+            .background(Color(.systemBackground))
+            .cornerRadius(10)
+        }
+        .navigationDestination(isPresented: $navigateToCorrectionRangeEditor) {
+            ExistingPresetRangeEdit(
+                range: $preset.correctionRange,
+                guardrail: settingsManager.guardrailForPreset(preset),
+                scheduledRange: scheduledRange,
+                allowsScheduledRange: preset.canAdjustSensitivity,
+                isPreMeal: preset.isPreMeal
+            )
         }
         .onChange(of: preset, {
             do {
@@ -289,7 +170,7 @@ struct EditPresetView: View {
                     .frame(width: UIFontMetrics.default.scaledValue(for: 34), height: UIFontMetrics.default.scaledValue(for: 34))
             }
 
-            Text(presetName)
+            Text(preset.name)
                 .font(.system(size: 34, weight: .semibold))
                 .foregroundColor(.primary)
         }

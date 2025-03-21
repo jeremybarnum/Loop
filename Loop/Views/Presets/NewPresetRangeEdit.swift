@@ -1,0 +1,124 @@
+//
+//  CreatePresetEditRangeView.swift
+//  Loop
+//
+//  Created by Pete Schwamb on 2/26/25.
+//  Copyright © 2025 LoopKit Authors. All rights reserved.
+//
+
+import SwiftUI
+import LoopAlgorithm
+import LoopKit
+import LoopKitUI
+
+struct NewPresetRangeEdit: View {
+    @Environment(\.dismiss) private var dismiss
+
+    @Binding var preset: NewCustomPreset
+    @Binding var path: NavigationPath
+    var guardrail: Guardrail<LoopQuantity>
+    var scheduledRange: ClosedRange<LoopQuantity>
+    var onCancel: () -> Void
+
+    @State private var editedRange: ClosedRange<LoopQuantity>?
+
+    var body: some View {
+        CardSectionScrollView {
+            CardSection {
+                PresetRangeEditor(
+                    range: $editedRange,
+                    guardrail: guardrail,
+                    scheduledRange: scheduledRange,
+                    isPreMeal: false
+                )
+            }
+        } actionArea: {
+            guardrailWarningIfNecessary
+            actionButton
+        }
+
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("Create a Preset")
+        .navigationBarItems(
+            trailing: cancelButton
+        )
+    }
+
+    private var cancelButton: some View {
+        Button("Cancel") {
+            onCancel()
+        }
+        .foregroundColor(.blue)
+    }
+
+    private var actionButtonText: String {
+        if editedRange == nil {
+            NSLocalizedString("Continue", comment: "Continue button for new preset range edit when range is not edited")
+        } else {
+            NSLocalizedString("Continue with adjusted range", comment: "Continue button for new preset range edit when range edited")
+        }
+    }
+
+    private var actionButton: some View {
+        Button(actionButtonText) {
+            preset.correctionRange = editedRange
+            path.append(CreatePresetPage.nameAndSchedule)
+        }
+        .disabled(preset.insulinMultiplier == 1 && editedRange == nil)
+        .buttonStyle(ActionButtonStyle(.primary))
+        .padding()
+    }
+
+
+    var crossedThresholds: [SafetyClassification.Threshold] {
+        if let range = editedRange ?? preset.correctionRange {
+            let lowerBound = range.lowerBound
+            let upperBound = range.upperBound
+            return [lowerBound, upperBound].compactMap { (bound) -> SafetyClassification.Threshold? in
+                switch guardrail.classification(for: bound) {
+                case .withinRecommendedRange:
+                    return nil
+                case .outsideRecommendedRange(let threshold):
+                    return threshold
+                }
+            }
+        } else {
+            return []
+        }
+    }
+
+    var guardrailWarningIfNecessary: some View {
+        let crossedThresholds = self.crossedThresholds
+        return Group {
+            if !crossedThresholds.isEmpty {
+                CorrectionRangeGuardrailWarning(crossedThresholds: crossedThresholds)
+            }
+        }.padding()
+    }
+}
+
+private struct CorrectionRangeGuardrailWarning: View {
+    var crossedThresholds: [SafetyClassification.Threshold]
+
+    var body: some View {
+        assert(!crossedThresholds.isEmpty)
+        return GuardrailWarning(
+            therapySetting: .glucoseTargetRange,
+            title: crossedThresholds.count == 1 ? singularWarningTitle(for: crossedThresholds.first!) : multipleWarningTitle,
+            thresholds: crossedThresholds
+        )
+    }
+
+    private func singularWarningTitle(for threshold: SafetyClassification.Threshold) -> Text {
+        switch threshold {
+        case .minimum, .belowRecommended:
+            return Text("Low Correction Value", comment: "Title text for the low correction value warning")
+        case .aboveRecommended, .maximum:
+            return Text("High Correction Value", comment: "Title text for the high correction value warning")
+        }
+    }
+
+    private var multipleWarningTitle: Text {
+        Text("Correction Values", comment: "Title text for multi-value correction value warning")
+    }
+}
