@@ -140,6 +140,12 @@ public final class CGMStatusHUDView: DeviceStatusHUDView, NibLoadable {
         presentStatusHighlight(viewModel.statusHighlight)
         
         accessibilityValue = viewModel.accessibilityString
+        accessibilityIdentifier =
+        if viewModel.glucoseValueString == "LOW" || viewModel.glucoseValueString == "HIGH" {
+            "glucoseHUDView_\(viewModel.glucoseValueString)"
+        } else {
+            "glucoseHUDView"
+        }
     }
     
     func updateTrendIcon() {

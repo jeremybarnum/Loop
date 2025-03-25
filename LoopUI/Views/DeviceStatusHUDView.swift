@@ -51,10 +51,12 @@ import LoopKitUI
                 resetProgress()
                 return
             }
-             
+            
             progressView.isHidden = false
             progressView.progress = Float(lifecycleProgress.percentComplete.clamped(to: 0...1))
             progressView.tintColor = lifecycleProgress.progressState.color
+            progressView.accessibilityIdentifier =
+                "progressBar_State_\(lifecycleProgress.progressState.rawValue)"
         }
     }
     
@@ -97,8 +99,8 @@ import LoopKitUI
     }
     
     private func presentStatusHighlight(withMessage message: String,
-                                       image: UIImage?,
-                                       color: UIColor)
+                                        image: UIImage?,
+                                        color: UIColor)
     {
         statusHighlightView.messageLabel.text = message
         statusHighlightView.messageLabel.tintColor = .label
