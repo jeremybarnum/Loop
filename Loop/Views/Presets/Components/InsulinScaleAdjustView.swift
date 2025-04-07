@@ -24,30 +24,6 @@ public struct InsulinScaleAdjustView: View {
         get { return (insulinMultiplier * 100).rounded() }
     }
 
-    var basalRate: Double? {
-        if let baseValue = settingsManager.settings.basalRateSchedule?.value(at: Date()) {
-            return baseValue * insulinMultiplier
-        } else {
-            return nil
-        }
-    }
-    var carbRatio: Double? {
-        if let baseValue = settingsManager.settings.carbRatioSchedule?.value(at: Date()) {
-            return baseValue / insulinMultiplier
-        } else {
-            return nil
-        }
-    }
-    var isf: LoopQuantity? {
-        if let baseQuantity = settingsManager.settings.insulinSensitivitySchedule?.quantity(at: Date()) {
-            let value = baseQuantity.doubleValue(for: .milligramsPerDeciliter)
-            let adjustedValue = value / insulinMultiplier
-            return LoopQuantity(unit: .milligramsPerDeciliterPerInternationalUnit, doubleValue: adjustedValue)
-        } else {
-            return nil
-        }
-    }
-
     public var body: some View {
         // Header Section
         VStack(spacing: 16) {
@@ -179,10 +155,11 @@ public struct InsulinScaleAdjustView: View {
 
     private var exampleSettings: some View {
         Group {
-            if let basalRate = basalRate, let carbRatio = carbRatio, let isf = isf {
+            let impact = settingsManager.therapySettings.impact(for: insulinMultiplier)
+            if let basalRate = impact.basalRate, let carbRatio = impact.carbRatio, let isf = impact.isf {
                 HStack(spacing: 0) {
                     SettingAdjustmentPreview(
-                        value: LoopQuantity(unit: .internationalUnitsPerHour, doubleValue: basalRate),
+                        value: basalRate,
                         displayUnit: .internationalUnitsPerHour,
                         name: "Basal Rate",
                         highlighted: insulinPercentage != 100
@@ -191,8 +168,7 @@ public struct InsulinScaleAdjustView: View {
                     Spacer()
 
                     SettingAdjustmentPreview(
-                        value: LoopQuantity(unit: .gramsPerUnit, doubleValue: carbRatio),
-                        displayUnit: .gramsPerUnit,
+                        value: carbRatio,
                         name: "Carb Ratio",
                         highlighted: insulinPercentage != 100
                     )
@@ -201,7 +177,7 @@ public struct InsulinScaleAdjustView: View {
 
                     SettingAdjustmentPreview(
                         value: isf,
-                        displayUnit: sensitivityUnit,
+                        displayUnit: displayGlucosePreference.unit.unitDivided(by: .internationalUnit),
                         name: "ISF",
                         highlighted: insulinPercentage != 100
                     )

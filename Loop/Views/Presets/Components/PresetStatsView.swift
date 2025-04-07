@@ -20,7 +20,7 @@ struct PresetStatsView: View {
     @Environment(\.guidanceColors) private var guidanceColors
     @EnvironmentObject var displayGlucosePreference: DisplayGlucosePreference
     
-    let insulinSensitivityMultiplier: Double?
+    let insulinMultiplier: Double?
     let correctionRange: ClosedRange<LoopQuantity>?
     let guardrail: Guardrail<LoopQuantity>?
     let therapySettingsImpactDisplayState: TherapySettingsImpactDisplayState
@@ -38,7 +38,7 @@ struct PresetStatsView: View {
                 .foregroundColor(.secondary)
                 .accessibilitySortPriority(2)
 
-            let percent = numberFormatter.string(from: 1.0/(insulinSensitivityMultiplier ?? 1))!
+            let percent = numberFormatter.string(from: insulinMultiplier ?? 1)!
             Group { Text(percent).bold() + Text(" of scheduled") }
                 .font(.subheadline)
                 .accessibilitySortPriority(1)
@@ -132,72 +132,6 @@ struct PresetStatsView: View {
         .accessibilityElement(children: .contain)
     }
     
-    @ViewBuilder
-    func basalRateView(basalRateValue: String, condensed: Bool) -> some View {
-        let label = Text("Basal Rate").font(.subheadline)
-        let value = Group {
-            Text(basalRateValue).bold() +
-            Text(" \(LoopUnit.internationalUnitsPerHour.unitString)")
-        }.font(.subheadline)
-        
-        if condensed {
-            HStack {
-                label + Text(": ")
-                value
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 4) {
-                value
-                label
-            }
-        }
-    }
-    
-    @ViewBuilder
-    func carbRatioView(carbRatioValue: String, condensed: Bool) -> some View {
-        let label = Text("Carb Ratio").font(.subheadline)
-        let value = Group {
-            Text(carbRatioValue).bold() +
-            Text(" \(LoopUnit.gram.unitString)")
-        }.font(.subheadline)
-        
-        if condensed {
-            HStack {
-                label + Text(": ")
-                value
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 4) {
-                value
-                label
-            }
-        }
-    }
-    
-    @ViewBuilder
-    func isfView(isfValue: String, condensed: Bool) -> some View {
-        let label = Text("ISF").font(.subheadline)
-        let value = Group {
-            Text(isfValue).bold() +
-            Text(" \(displayGlucosePreference.unit.unitString)")
-        }.font(.subheadline)
-        
-        if condensed {
-            HStack {
-                label + Text(": ")
-                value
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 4) {
-                value
-                label
-            }
-        }
-    }
-    
-    private let basalRateFormatter = QuantityFormatter(for: .internationalUnitsPerHour)
-    private let carbRatioFormatter = QuantityFormatter(for: .gram)
-    
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             ViewThatFits(in: .horizontal) {
@@ -213,7 +147,7 @@ struct PresetStatsView: View {
                 }
             }
             
-            if case let .show(insulinMultiplierImpact) = therapySettingsImpactDisplayState, (insulinSensitivityMultiplier ?? 1) != 1 {
+            if case let .show(insulinMultiplierImpact) = therapySettingsImpactDisplayState, (insulinMultiplier ?? 1) != 1, let basalRate = insulinMultiplierImpact.basalRate, let carbRatio = insulinMultiplierImpact.carbRatio, let isf = insulinMultiplierImpact.isf {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Settings Impact")
                         .font(.subheadline)
@@ -221,33 +155,23 @@ struct PresetStatsView: View {
                     
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: 0) {
-                            if let basalRate = insulinMultiplierImpact.basalRate, let basalRateValue = basalRateFormatter.string(from: basalRate, includeUnit: false) {
-                                basalRateView(basalRateValue: basalRateValue, condensed: false)
-                                Spacer()
-                            }
+                            SettingAdjustmentPreview(value: basalRate, displayUnit: .internationalUnitsPerHour, name: "Basal Rate", highlighted: false)
                             
-                            if let carbRatio = insulinMultiplierImpact.carbRatio, let carbRatioValue = carbRatioFormatter.string(from: carbRatio, includeUnit: false) {
-                                carbRatioView(carbRatioValue: carbRatioValue, condensed: false)
-                                Spacer()
-                            }
+                            Spacer()
                             
-                            if let isf = insulinMultiplierImpact.isf, let isfValue = displayGlucosePreference.formatter.string(from: isf, includeUnit: false) {
-                                isfView(isfValue: isfValue, condensed: false)
-                            }
+                            SettingAdjustmentPreview(value: carbRatio, name: "Carb Ratio", highlighted: false)
+                        
+                            Spacer()
+                            
+                            SettingAdjustmentPreview(value: isf, displayUnit: displayGlucosePreference.unit.unitDivided(by: .internationalUnit), name: "ISF", highlighted: false)
                         }
                         
                         VStack(alignment: .leading, spacing: 8) {
-                            if let basalRate = insulinMultiplierImpact.basalRate, let basalRateValue = basalRateFormatter.string(from: basalRate, includeUnit: false) {
-                                basalRateView(basalRateValue: basalRateValue, condensed: true)
-                            }
+                            SettingAdjustmentPreview(value: basalRate, displayUnit: .internationalUnitsPerHour, name: "Basal Rate", highlighted: false)
                             
-                            if let carbRatio = insulinMultiplierImpact.carbRatio, let carbRatioValue = carbRatioFormatter.string(from: carbRatio, includeUnit: false)  {
-                                carbRatioView(carbRatioValue: carbRatioValue, condensed: true)
-                            }
+                            SettingAdjustmentPreview(value: carbRatio, name: "Carb Ratio", highlighted: false)
                             
-                            if let isf = insulinMultiplierImpact.isf, let isfValue = displayGlucosePreference.formatter.string(from: isf, includeUnit: false) {
-                                isfView(isfValue: isfValue, condensed: true)
-                            }
+                            SettingAdjustmentPreview(value: isf, displayUnit: displayGlucosePreference.unit.unitDivided(by: .internationalUnit), name: "ISF", highlighted: false)
                         }
                     }
                 }
