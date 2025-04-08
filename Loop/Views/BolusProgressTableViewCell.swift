@@ -94,10 +94,12 @@ public class BolusProgressTableViewCell: UITableViewCell {
             tapToStopLabel.isHidden = true
             
             progressLabel.text = NSLocalizedString("Starting Bolus", comment: "The title of the cell indicating a bolus is being sent")
+            progressLabel.accessibilityIdentifier = "text_BolusStarting"
         case let .bolusing(delivered, totalVolume):
             progressIndicator.isHidden = false
             activityIndicator.isHidden = true
             tapToStopLabel.isHidden = false
+            tapToStopLabel.accessibilityIdentifier = "text_TapToStop"
             
             let totalUnitsQuantity = LoopQuantity(unit: .internationalUnit, doubleValue: totalVolume)
             let totalUnitsString = insulinFormatter.string(from: totalUnitsQuantity) ?? ""
@@ -107,6 +109,7 @@ public class BolusProgressTableViewCell: UITableViewCell {
                 let deliveredUnitsString = insulinFormatter.string(from: deliveredUnitsQuantity, includeUnit: false) ?? ""
                 
                 progressLabel.text = String(format: NSLocalizedString("Bolused %1$@ of %2$@", comment: "The format string for bolus progress. (1: delivered volume)(2: total volume)"), deliveredUnitsString, totalUnitsString)
+                progressLabel.accessibilityIdentifier = "text_BolusingProgress"
                 
                 let progress = delivered / totalVolume
                 
@@ -115,6 +118,7 @@ public class BolusProgressTableViewCell: UITableViewCell {
                 }
             } else {
                 progressLabel.text = String(format: NSLocalizedString("Bolusing %1$@", comment: "The format string for bolus in progress showing total volume. (1: total volume)"), totalUnitsString)
+                progressLabel.accessibilityIdentifier = "text_BolusingProgress"
             }
         case .canceling:
             progressIndicator.isHidden = true
@@ -122,6 +126,7 @@ public class BolusProgressTableViewCell: UITableViewCell {
             tapToStopLabel.isHidden = true
             
             progressLabel.text = NSLocalizedString("Canceling Bolus", comment: "The title of the cell indicating a bolus is being canceled")
+            progressLabel.accessibilityIdentifier = "text_BolusCanceling"
         case let .canceled(delivered, totalVolume):
             progressIndicator.isHidden = true
             activityIndicator.isHidden = true
@@ -134,6 +139,7 @@ public class BolusProgressTableViewCell: UITableViewCell {
             let deliveredUnitsString = insulinFormatter.string(from: deliveredUnitsQuantity, includeUnit: false) ?? ""
             
             progressLabel.text = String(format: NSLocalizedString("Bolus Canceled: Delivered %1$@ of %2$@", comment: "The title of the cell indicating a bolus has been canceled. (1: delivered volume)(2: total volume)"), deliveredUnitsString, totalUnitsString)
+            progressLabel.accessibilityIdentifier = "text_BolusCanceled"
         }
     }
 

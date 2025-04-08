@@ -46,6 +46,7 @@ struct CarbEntryView: View, HorizontalSizeClassOverride {
                         
                         ToolbarItem(placement: .navigationBarTrailing) {
                             continueButton
+                                .accessibilityIdentifier("button_Continue")
                         }
                     }
             }
