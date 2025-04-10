@@ -133,6 +133,7 @@ struct SimpleBolusView: View {
             .padding([.top, .bottom], 5)
             .fixedSize()
             .modifier(LabelBackground())
+            .accessibilityIdentifier("Carbohydrates Field")
         }
     }
 
@@ -154,6 +155,7 @@ struct SimpleBolusView: View {
                 .onAppear {
                     shouldGlucoseEntryBecomeFirstResponder = true
                 }
+                .accessibilityIdentifier("Current Glucose Field")
 
                 glucoseUnitsLabel
             }
@@ -172,6 +174,7 @@ struct SimpleBolusView: View {
                         .font(.title)
                         .foregroundColor(Color(.label))
                         .padding([.top, .bottom], 4)
+                        .accessibilityIdentifier("Recommended Bolus Amount")
                     bolusUnitsLabel
                 }
             }
@@ -216,6 +219,7 @@ struct SimpleBolusView: View {
             }
             .fixedSize()
             .modifier(LabelBackground())
+            .accessibilityIdentifier("Bolus Field")
         }
     }
 
