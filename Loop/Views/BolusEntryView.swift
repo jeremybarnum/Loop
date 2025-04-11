@@ -263,6 +263,7 @@ struct BolusEntryView: View {
                 )
                 bolusUnitsLabel
             }
+            .accessibilityIdentifier("textField_Bolus")
         }
     }
 
