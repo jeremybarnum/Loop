@@ -99,11 +99,13 @@ struct AlertManagementView: View {
             missedMealAlertSection
             slowAbsorptionAlertSection
             preBolusReminderSection
+            testNotificationSection
         }
         .onAppear {
                     isPreBolusReminderEnabled = UserDefaults.standard.preBolusReminderEnabled // Sync local state on appear
                 }
         .navigationTitle(NSLocalizedString("Alert Management", comment: "Title of alert management screen"))
+        
     }
     
     private var footerView: some View {
@@ -298,6 +300,20 @@ struct AlertManagementView: View {
                     }//starting at 1 to help with testing 
                     .pickerStyle(WheelPickerStyle())
                     .frame(height: 80) // Set the desired height
+                }
+            }
+        }
+    }
+    private var testNotificationSection: some View {
+        Section(footer: DescriptiveText(label: NSLocalizedString("Test notifications to verify they appear in both foreground and background.", comment: "Description of test notifications."))) {
+            Button(action: {
+                NotificationManager.sendCarbEntryEditingNeededNotification(timeToLow: "test", lowestBG: "test", timeToLowestBG: "test", absorptionRatio: "test")
+            }) {
+                HStack {
+                    Text(NSLocalizedString("Send Test Notification", comment: "Button to test notifications"))
+                    Spacer()
+                    Image(systemName: "bell.badge.fill")
+                        .foregroundColor(.accentColor)
                 }
             }
         }
