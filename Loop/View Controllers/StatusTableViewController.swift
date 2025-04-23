@@ -1217,8 +1217,10 @@ final class StatusTableViewController: LoopChartsTableViewController {
                     subtitle.append(eventualGlucose)
                     
                     cell.setSubtitleLabel(label: subtitle)
+                    cell.setTitleLabelAccessibilityIdentifier("Glucose")
                 } else {
                     cell.setSubtitleLabel(label: nil)
+                    cell.setTitleLabelAccessibilityIdentifier("Glucose")
                 }
                 cell.doesNavigate = automaticDosingStatus.automaticDosingEnabled || !FeatureFlags.simpleBolusCalculatorEnabled
             case .iob:
@@ -1230,6 +1232,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
             case .cob:
                 if let currentCOB = currentCOBDescription {
                     cell.setSubtitleLabel(label: currentCOB)
+                    cell.setTitleLabelAccessibilityIdentifier("ActiveCarbs_\(currentCOB.string)")
                 } else {
                     cell.setSubtitleLabel(label: nil)
                 }

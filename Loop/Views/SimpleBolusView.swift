@@ -133,7 +133,7 @@ struct SimpleBolusView: View {
             .padding([.top, .bottom], 5)
             .fixedSize()
             .modifier(LabelBackground())
-            .accessibilityIdentifier("Carbohydrates Field")
+            .accessibilityIdentifier("textField_Carbohydrates")
         }
     }
 
@@ -155,7 +155,7 @@ struct SimpleBolusView: View {
                 .onAppear {
                     shouldGlucoseEntryBecomeFirstResponder = true
                 }
-                .accessibilityIdentifier("Current Glucose Field")
+                .accessibilityIdentifier("textField_CurrentGlucose")
 
                 glucoseUnitsLabel
             }
@@ -174,7 +174,7 @@ struct SimpleBolusView: View {
                         .font(.title)
                         .foregroundColor(Color(.label))
                         .padding([.top, .bottom], 4)
-                        .accessibilityIdentifier("Recommended Bolus Amount")
+                        .accessibilityIdentifier("staticText_RecommendedBolus")
                     bolusUnitsLabel
                 }
             }
@@ -219,7 +219,7 @@ struct SimpleBolusView: View {
             }
             .fixedSize()
             .modifier(LabelBackground())
-            .accessibilityIdentifier("Bolus Field")
+            .accessibilityIdentifier("textField_Bolus")
         }
     }
 
@@ -280,6 +280,7 @@ struct SimpleBolusView: View {
         .disabled(viewModel.actionButtonDisabled)
         .buttonStyle(ActionButtonStyle(.primary))
         .padding()
+        .accessibilityIdentifier("button_bolusAction")
     }
     
     private func alert(for alert: SimpleBolusViewModel.Alert) -> SwiftUI.Alert {

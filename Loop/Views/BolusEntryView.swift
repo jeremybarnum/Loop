@@ -89,7 +89,7 @@ struct BolusEntryView: View {
         Section {
             VStack(spacing: 8) {
                 HStack(spacing: 0) {
-                    activeCarbsLabel
+                    activeCarbsLabel.accessibilityIdentifier("text_ActiveCarbs")
                     Spacer(minLength: 8)
                     activeInsulinLabel
                 }
@@ -263,6 +263,7 @@ struct BolusEntryView: View {
                 )
                 bolusUnitsLabel
             }
+            .accessibilityIdentifier("textField_Bolus")
         }
     }
 
