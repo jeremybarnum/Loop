@@ -1127,13 +1127,15 @@ final class StatusTableViewController: LoopChartsTableViewController {
                 case .pumpSuspended(let resuming):
                     let cell = getTitleSubtitleCell()
                     cell.titleLabel.text = NSLocalizedString("Insulin Suspended", comment: "The title of the cell indicating the pump is suspended")
-
+                    cell.titleLabel.accessibilityIdentifier = "text_InsulinSuspended"
+                    
                     if resuming {
                         let indicatorView = UIActivityIndicatorView(style: .default)
                         indicatorView.startAnimating()
                         cell.accessoryView = indicatorView
                     } else {
                         cell.subtitleLabel.text = NSLocalizedString("Tap to Resume", comment: "The subtitle of the cell displaying an action to resume insulin delivery")
+                        cell.subtitleLabel.accessibilityIdentifier = "text_InsulinTapToResume"
                     }
                     cell.selectionStyle = .default
                     return cell
