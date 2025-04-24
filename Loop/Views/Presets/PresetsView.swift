@@ -178,10 +178,13 @@ struct PresetsView: View {
             .navigationTitle(Text("Presets", comment: "Presets screen title"))
             .navigationBarItems(trailing: dismissButton)
             .navigationDestination(for: String.self) { presetId in
-                if let scheduledRange {
-                    EditPresetView(preset: temporaryPresetsManager.selectablePresets.first { $0.id == presetId }!, scheduledRange: scheduledRange) { preset in
-                        settingsManager.savePreset(preset)
-                    }
+                if let scheduledRange, let preset = temporaryPresetsManager.selectablePresets.first(where: { $0.id == presetId}) {
+                    EditPresetView(
+                        preset: preset,
+                        scheduledRange: scheduledRange,
+                        onSave: { preset in settingsManager.savePreset(preset) },
+                        onDelete: { preset in settingsManager.deletePreset(preset) },
+                    )
                 }
             }
         }
@@ -270,7 +273,7 @@ extension PresetCard {
             icon: preset.icon,
             presetName: preset.name,
             duration: preset.duration,
-            insulinMultiplier: preset.insulinMultiplier,
+            insulinMultiplier: preset.insulinNeedsScaleFactor,
             correctionRange: preset.correctionRange,
             guardrail: guardrail,
             expectedEndTime: expectedEndTime
