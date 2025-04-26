@@ -307,7 +307,21 @@ struct AlertManagementView: View {
     private var testNotificationSection: some View {
         Section(footer: DescriptiveText(label: NSLocalizedString("Test notifications to verify they appear in both foreground and background.", comment: "Description of test notifications."))) {
             Button(action: {
-                NotificationManager.sendCarbEntryEditingNeededNotification(timeToLow: "test", lowestBG: "test", timeToLowestBG: "test", absorptionRatio: "test")
+                // Test prebolus reminder notification
+                let notification = UNMutableNotificationContent()
+                notification.title = "Reminder to eat"
+                notification.body = String(format: NSLocalizedString("You declared %@ carbs with a %@hr absorption time.", comment: ""), "50", "2.0")
+                notification.sound = .default
+                notification.interruptionLevel = .timeSensitive
+                notification.categoryIdentifier = LoopNotificationCategory.prebolusReminder.rawValue
+                
+                let request = UNNotificationRequest(
+                    identifier: "test-prebolus-reminder",
+                    content: notification,
+                    trigger: nil  // Immediate notification
+                )
+                
+                UNUserNotificationCenter.current().add(request)
             }) {
                 HStack {
                     Text(NSLocalizedString("Send Test Notification", comment: "Button to test notifications"))

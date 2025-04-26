@@ -172,7 +172,7 @@ final class LoopDataManager {
                 queue: nil
             ) { (note) -> Void in
                 self.dataAccessQueue.async {
-                    self.logger.default("**Received notification of carb entries changing")
+                    self.logger.default("**[PREBOLUS] Carb entries changed, clearing cached values")
                     self.carbEffect = nil
                     self.carbsOnBoard = nil
                     self.recentCarbEntries = nil
@@ -180,6 +180,7 @@ final class LoopDataManager {
                     self.notify(forChange: .carbs)
                 }
             },
+            
             NotificationCenter.default.addObserver(
                 forName: GlucoseStore.glucoseSamplesDidChange,
                 object: self.glucoseStore,
@@ -1132,9 +1133,12 @@ extension LoopDataManager {
                     self.recentCarbEntries = nil
                     warnings.append(.fetchDataWarning(.carbEffect(error: error)))
                 case .success(let (entries, effects)):
+                    self.logger.default("**[PREBOLUS] Got glucose effects with %{public}d entries", entries.count)
                     self.carbEffect = effects
                     self.recentCarbEntries = entries
-                    self.scheduleNotificationsForCarbEntries(entries)
+                    
+                    // Reschedule pre-bolus reminders to reflect current carb entries
+                    self.schedulePreBolusRemindersForAllFutureCarbEntries(entries)
 
                 }
 
@@ -1945,8 +1949,12 @@ extension LoopDataManager {
                 return
         }
 
-    private func scheduleNotificationsForCarbEntries(_ entries: [StoredCarbEntry]) {
+    private func schedulePreBolusRemindersForAllFutureCarbEntries(_ entries: [StoredCarbEntry]) {
+        self.logger.default("**[PREBOLUS] Checking %{public}d entries for prebolus reminders", entries.count)
         if UserDefaults.standard.preBolusReminderEnabled {
+            self.logger.default("**[PREBOLUS] Prebolus reminders are enabled")
+            // Always start from a clean slate so edits or deletions do not leave stale notifications queued
+            NotificationManager.cancelNotificationsForCategory(.prebolusReminder)
             for entry in entries {
                 let now = Date()
                 let prebolusDelayCriterion: TimeInterval = Double(UserDefaults.standard.prebolusDelayCriterion) * 60 // Convert minutes to seconds
@@ -1969,7 +1977,8 @@ extension LoopDataManager {
                 let absorptionTimeString = String(format: "%.1f", entry.absorptionTime! / 3600)
                 
                 // Schedule the notification
-                NotificationManager.scheduleCarbAlert(
+                self.logger.default("**[PREBOLUS] Scheduling reminder for entry at %{public}@", String(describing: alertTime))
+                NotificationManager.schedulePreBolusReminder(
                     for: alertTime,
                     carbAmount: carbAmountString,
                     carbAbsorptionTime: absorptionTimeString,
@@ -2609,12 +2618,12 @@ extension LoopDataManager {
                                     entries.append("")
 
                                     completion(entries.joined(separator: "\n"))
-                                }
-                            }
-                        }
-                    }
                 }
             }
+        }
+    }
+                }
+}
         }
     }
 }

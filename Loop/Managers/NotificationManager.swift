@@ -49,6 +49,22 @@ extension NotificationManager {
             options: .customDismissAction
         ))
 
+        // Add prebolus reminder category
+        categories.append(UNNotificationCategory(
+            identifier: LoopNotificationCategory.prebolusReminder.rawValue,
+            actions: [acknowledgeAlertAction],
+            intentIdentifiers: [],
+            options: .customDismissAction
+        ))
+
+        // Add slow absorption warning category
+        categories.append(UNNotificationCategory(
+            identifier: LoopNotificationCategory.slowAbsorptionWarning.rawValue,
+            actions: [acknowledgeAlertAction],
+            intentIdentifiers: [],
+            options: .customDismissAction
+        ))
+
         return Set(categories)
     }
 
@@ -216,7 +232,7 @@ extension NotificationManager {
 
          let request = UNNotificationRequest(
              /// We use the same `identifier` for all requests so a newer missed meal notification will replace a current one (if it exists)
-             identifier: "slowAbsorption",//TODO: this avoids editing the enum in Loopkit and I don't think it matters
+             identifier: LoopNotificationCategory.slowAbsorptionWarning.rawValue,
              content: notification,
              trigger: notificationTrigger
          )
@@ -234,13 +250,14 @@ extension NotificationManager {
          notification.body = String(format: NSLocalizedString("Carbs absorbing at %@% of expectation.  Edit carb amount, absorption time and/or settings to trigger updated prediction and zero temp.",comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),absorptionRatio)
          notification.sound = .default
          notification.interruptionLevel = .timeSensitive // making the notification interrupt
+         notification.categoryIdentifier = LoopNotificationCategory.slowAbsorptionWarning.rawValue
 
          
          let notificationTrigger = UNTimeIntervalNotificationTrigger(timeInterval: 2, repeats: false)//the delay is just for testing purposes
 
          let request = UNNotificationRequest(
              /// We use the same `identifier` for all requests so a newer missed meal notification will replace a current one (if it exists)
-            identifier: LoopNotificationCategory.missedMeal.rawValue,//TODO: this avoids editing the enum in Loopkit and I don't think it matters
+            identifier: LoopNotificationCategory.slowAbsorptionWarning.rawValue,
              content: notification,
              trigger: notificationTrigger
          )
@@ -257,13 +274,14 @@ extension NotificationManager {
          notification.body = String(format: NSLocalizedString("Loop is already zero temping but it won't be enough and there are minimal future carbs that might hit. Take carbs and check settings for crashiness.",comment: "The notification body for a likely carbs needed situation"),rescueCarbs)
          notification.sound = .default
          notification.interruptionLevel = .timeSensitive // making the notification interrupt
+         notification.categoryIdentifier = LoopNotificationCategory.slowAbsorptionWarning.rawValue
 
          
          let notificationTrigger: UNTimeIntervalNotificationTrigger? = nil
 
          let request = UNNotificationRequest(
              /// We use the same `identifier` for all requests so a newer missed meal notification will replace a current one (if it exists)
-             identifier: "slowAbsorption",//TODO: this avoids editing the enum in Loopkit and I don't think it matters
+             identifier: LoopNotificationCategory.slowAbsorptionWarning.rawValue,
              content: notification,
              trigger: notificationTrigger
          )
@@ -341,18 +359,19 @@ extension NotificationManager {
 }
 
 extension NotificationManager {
-    static func scheduleCarbAlert(for alertTime: Date, carbAmount: String, carbAbsorptionTime: String, identifier: String) {
+    static func schedulePreBolusReminder(for alertTime: Date, carbAmount: String, carbAbsorptionTime: String, identifier: String) {
         let notification = UNMutableNotificationContent()
         notification.title = "Reminder to eat"
         notification.body = String(format: NSLocalizedString("You declared %@ carbs with a %@hr absorption time.", comment: ""), carbAmount, carbAbsorptionTime)
         notification.sound = .default
         notification.interruptionLevel = .timeSensitive
+        notification.categoryIdentifier = LoopNotificationCategory.prebolusReminder.rawValue
 
         let triggerDate = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: alertTime)
         let trigger = UNCalendarNotificationTrigger(dateMatching: triggerDate, repeats: false)
-
+        
         let request = UNNotificationRequest(
-            identifier: identifier,  // Use syncIdentifier as the unique identifier
+            identifier: identifier,
             content: notification,
             trigger: trigger
         )
@@ -365,5 +384,15 @@ extension NotificationManager {
     }
     static func cancelNotification(for identifiers: [String]) {
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
+    }
+    
+    static func cancelNotificationsForCategory(_ category: LoopNotificationCategory) {
+        UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
+            let identifiersToRemove = requests.filter { $0.content.categoryIdentifier == category.rawValue }.map { $0.identifier }
+            if category == .prebolusReminder {
+                print("**[PREBOLUS] Cancelling \(identifiersToRemove.count) pending reminders")
+            }
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiersToRemove)
+        }
     }
 }
