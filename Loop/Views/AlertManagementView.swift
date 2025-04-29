@@ -3,7 +3,7 @@
 //  Loop
 //
 //  Created by Nathaniel Hamming on 2022-09-09.
-//  Copyright © 2022 LoopKit Authors. All rights reserved.
+//  Copyright 2022 LoopKit Authors. All rights reserved.
 //
 
 import SwiftUI
@@ -100,6 +100,7 @@ struct AlertManagementView: View {
             slowAbsorptionAlertSection
             preBolusReminderSection
             testNotificationSection
+            nightscoutTestSection
         }
         .onAppear {
                     isPreBolusReminderEnabled = UserDefaults.standard.preBolusReminderEnabled // Sync local state on appear
@@ -329,6 +330,16 @@ struct AlertManagementView: View {
                     Image(systemName: "bell.badge.fill")
                         .foregroundColor(.accentColor)
                 }
+            }
+        }
+    }
+    
+    private var nightscoutTestSection: some View {
+        Section(header: Text("Nightscout Test")) {
+            Button(action: {
+                print("Nightscout test button tapped")
+            }) {
+                Text("Test Nightscout")
             }
         }
     }
