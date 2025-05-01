@@ -337,7 +337,13 @@ struct AlertManagementView: View {
     private var nightscoutTestSection: some View {
         Section(header: Text("Nightscout Test")) {
             Button(action: {
-                print("Nightscout test button tapped")
+                let notificationName  = Notification.Name.testWarning
+                print("**Posting notification: \(notificationName.rawValue) (Minimal) ---")
+                NotificationCenter.default.post(
+                    name: notificationName, // The name you defined
+                    object: nil            // Sending nil as the object simplifies things
+                    // No userInfo dictionary is passed
+                )
             }) {
                 Text("Test Nightscout")
             }
