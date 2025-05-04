@@ -500,15 +500,6 @@ final class LoopDataManager {
         dosingDecisionStore.storeDosingDecision(dosingDecision) {}
 
         NotificationCenter.default.post(name: .LoopCompleted, object: self)
-        NotificationCenter.default.post(
-            name: Notification.Name.slowAbsorptionWarning, // The name you defined
-            object: nil,            // Sending nil as the object simplifies things
-            userInfo: [
-                "messagePayload": "**test from LDM",
-                "messageTime": Date()
-        ]
-            
-        )
     }
 
     private func loopDidError(date: Date, error: LoopError, dosingDecision: StoredDosingDecision, duration: TimeInterval) {
@@ -1792,15 +1783,18 @@ extension LoopDataManager {
                 let observedAbsorptionInputs: PredictionInputEffect = [.all, .observedAbsorptionEffect]
                 let observedAbsorptionAndZeroTempInputs: PredictionInputEffect = [.all, .observedAbsorptionEffect, .suspend]
                 let observedAbsorptionAndZeroTempInputsAndNoIRC: PredictionInputEffect = [.insulin, .carbs,.momentum, .observedAbsorptionEffect, .suspend]
+                let zeroTemp: PredictionInputEffect = [.all, .suspend]
                 
                 do {
                     let prediction1 = try state.predictGlucose(using: observedAbsorptionInputs, includingPendingInsulin: true)
                     let prediction2 = try state.predictGlucose(using: observedAbsorptionAndZeroTempInputs, includingPendingInsulin: true)
                     let prediction3 = try state.predictGlucose(using: observedAbsorptionAndZeroTempInputsAndNoIRC, includingPendingInsulin: true)
-                    
+                    let prediction4 = try state.predictGlucose(using: zeroTemp, includingPendingInsulin: true)
+
                     self.predictionWithObservedAbsorption = prediction1
                     self.predictionWithObservedAbsorptionAndZeroTemp = prediction2
                     self.predictionWithObservedAbsorptionAndZeroTempAndNoIRC = prediction3
+                    self.predictionWithZeroTemp = prediction4
                     
                 } catch {
                     print("error")
@@ -1881,7 +1875,6 @@ extension LoopDataManager {
             
             let timeToLowestBG = predictedLowGlucose.first(where: { $0.quantity.doubleValue(for: .milligramsPerDeciliter) == lowestBG })?.startDate.timeIntervalSince(currentDate)
             
-            
             let dontNotifyIfSooner = ObservedAbsorptionSettings.dontNotifyIfSooner
             let dontNotifyIfLater = ObservedAbsorptionSettings.dontNotifyIfLater //only notify if low is between 5 and 45 minutes in the future.  Earlier is obvious and annoying, later is too alarmist.
             var farEnough = false
@@ -1952,11 +1945,24 @@ extension LoopDataManager {
                 let formattedLowestBG = String(Int(round(lowestBG!)))
                 NotificationManager.sendCarbEntryEditingNeededNotification(timeToLow: timeToLowInMinutes, lowestBG: formattedLowestBG, timeToLowestBG: timeInMinutesToLowestBG, absorptionRatio: absorptionRatioFormatted)
                 lastNotificationTime = Date()
+                let warningMesssagePayload = "Time to Low: \(timeToLowInMinutes) Time to lowest: \(timeInMinutesToLowestBG). Lowest BG: \(formattedLowestBG) Absorption Ratio: \(absorptionRatioFormatted)"
+                postSlowAbsorptionNotification(payload: warningMesssagePayload, time: Date())
               // print("*Test ZeroTempOnly Notification Triggered. lastNotificationTime:",lastNotificationTime)
             } // this one triggers just to edit the carbs.  After that the zero temp avoids the low, so there are no glucose values below suspend threshold in the zeroTempedPrediction
                 
                 return
         }
+    
+    func postSlowAbsorptionNotification(payload: String, time: Date) { NotificationCenter.default.post(
+        name: Notification.Name.slowAbsorptionWarning,
+        object: nil,
+        userInfo: [
+            "messagePayload": payload,
+            "messageTime": time
+        ]
+        
+    )
+    }
 
     private func schedulePreBolusRemindersForAllFutureCarbEntries(_ entries: [StoredCarbEntry]) {
         self.logger.default("**[PREBOLUS] Checking %{public}d entries for prebolus reminders", entries.count)
