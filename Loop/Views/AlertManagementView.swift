@@ -338,16 +338,23 @@ struct AlertManagementView: View {
         Section(header: Text("Nightscout Test")) {
             Button(action: {
                 let notificationName  = Notification.Name.testWarning
-                print("**Posting notification: \(notificationName.rawValue) (Minimal) ---")
+                let messagePayload = "Test Message"
+                let messageTime = Date()
+                let userInfo: [String: Any] = [
+                    "messagePayload": messagePayload,
+                    "messageTime": messageTime
+            ]
                 NotificationCenter.default.post(
                     name: notificationName, // The name you defined
-                    object: nil            // Sending nil as the object simplifies things
-                    // No userInfo dictionary is passed
+                    object: nil,            // Sending nil as the object simplifies things
+                    userInfo: userInfo
                 )
+                print("**Posting notification: \(userInfo)-")
             }) {
                 Text("Test Nightscout")
             }
         }
+        
     }
 }
 
