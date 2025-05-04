@@ -500,6 +500,15 @@ final class LoopDataManager {
         dosingDecisionStore.storeDosingDecision(dosingDecision) {}
 
         NotificationCenter.default.post(name: .LoopCompleted, object: self)
+        NotificationCenter.default.post(
+            name: Notification.Name.slowAbsorptionWarning, // The name you defined
+            object: nil,            // Sending nil as the object simplifies things
+            userInfo: [
+                "messagePayload": "**test from LDM",
+                "messageTime": Date()
+        ]
+            
+        )
     }
 
     private func loopDidError(date: Date, error: LoopError, dosingDecision: StoredDosingDecision, duration: TimeInterval) {
