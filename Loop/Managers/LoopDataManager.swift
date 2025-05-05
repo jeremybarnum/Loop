@@ -369,7 +369,7 @@ final class LoopDataManager {
         
     private var predictionWithObservedAbsorption: [GlucoseValue] = []
     private var predictionWithObservedAbsorptionAndZeroTemp: [GlucoseValue] = []
-    private var predictionWithObservedAbsorptionAndZeroTempAndNoIRC: [GlucoseValue] = []
+    private var predictionWithObservedAbsorptionAndZeroTempAndNoIRC: [GlucoseValue] = [] //I think IRC doesn't accumulate during DCA therefore this is unnecessary
     private var predictionWithZeroTemp: [GlucoseValue] = []
         
     private var absorptionRatio = 1.0
