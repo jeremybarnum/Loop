@@ -1766,265 +1766,6 @@ extension LoopDataManager {
         suspendInsulinDeliveryEffect = suspendDoses.glucoseEffects(insulinModelProvider: doseStore.insulinModelProvider, longestEffectDuration: doseStore.longestEffectDuration, insulinSensitivity: insulinSensitivity).filterDateRange(startSuspend, endSuspend)
     }
     
-    /// Generates a glucose prediction effect of applying observed carb absorptionRatio to currentCarbEffects
-        ///
-        /// - Throws: LoopError.configurationError
-        private func updateObservedAbsorptionEffect() throws {
-            dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-            //TODO: I don't understand what dispatchPrecondition is doing, it's just copy pasta
-            
-      //TODO: determine whether I need to bother to validate settings here
-
-            
-            let excludeCarbEntriesAfterThisTime = now().addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)  // 15 minutes ago
-            
-            let carbEffectStart = now().addingTimeInterval(-carbStore.maximumAbsorptionTimeInterval)
-            
-            //print("*test carbEffectStart", carbEffectStart)
-            
-            guard let recentCarbEntries = recentCarbEntries else {
-                return
-            }
-            
-            let carbEntriesExcludingVeryRecentAndFuture = recentCarbEntries.filter { $0.startDate <= excludeCarbEntriesAfterThisTime }
-            
-            let carbEffectExcludeRecentAndFutureEntries = try carbStore.glucoseEffects(
-                of: carbEntriesExcludingVeryRecentAndFuture,
-                startingAt: carbEffectStart,
-                endingAt: nil,
-                effectVelocities: insulinCounteractionEffects
-            )
-            
-          //  print("*test adjustedCarb effects", carbEffectExcludeRecentAndFutureEntries[5])//TODO: addressing arrays is dangerous, be careful to get rid of these
-            
-            observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffectExcludeRecentAndFutureEntries )
-            
-           // print("*Test observedAbsorptionEffect", observedAbsorptionEffect[5])
-        }
-
-    private func updateObservedAbsorptionPredictions() throws {
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-
-        // This function uses self.predictGlucose(...), which will internally use:
-        // - self.glucoseStore.latestGlucose
-        // - Current LDM effect properties (self.insulinEffectIncludingPendingInsulin,
-        //   self.carbEffect, self.glucoseMomentumEffect, self.retrospectiveGlucoseEffect,
-        //   self.suspendInsulinDeliveryEffect) based on the 'inputs' flags.
-        // - Crucially, it will also use self.observedAbsorptionEffect if the flag is set.
-        // Ensure self.observedAbsorptionEffect is up-to-date *before* this function is called.
-
-        let usePendingInsulin = true // Consistent with your original intent
-
-        // --- Prediction 1: self.predictionWithObservedAbsorption ---
-        // Standard effects MINUS .carbs PLUS .observedAbsorptionEffect
-        // .all = [.carbs, .insulin, .momentum, .retrospection]
-        var inputs1: PredictionInputEffect = .all
-        inputs1.remove(.carbs)
-        inputs1.insert(.observedAbsorptionEffect)
-        // Resulting inputs1: [.insulin, .momentum, .retrospection, .observedAbsorptionEffect]
-        self.predictionWithObservedAbsorption = try self.predictGlucose(
-            using: inputs1,
-            includingPendingInsulin: usePendingInsulin
-        )
-        self.logger.debug("Generated predictionWithObservedAbsorption using inputs")
-
-        // --- Prediction 2: self.predictionWithObservedAbsorptionAndZeroTemp ---
-        // Effects from Prediction 1 PLUS .suspend
-        var inputs2 = inputs1 // Start with effects from prediction 1
-        inputs2.insert(.suspend)
-        // Resulting inputs2: [.insulin, .momentum, .retrospection, .observedAbsorptionEffect, .suspend]
-        self.predictionWithObservedAbsorptionAndZeroTemp = try self.predictGlucose(
-            using: inputs2,
-            includingPendingInsulin: usePendingInsulin
-        )
-        self.logger.debug("Generated predictionWithObservedAbsorptionAndZeroTemp using inputs")
-
-        // --- Prediction 3: self.predictionWithObservedAbsorptionAndZeroTempAndNoIRC ---
-        // Effects: Insulin, Momentum, ObservedAbsorptionEffect, Suspend (NO Retrospection/IRC)
-        var inputs3: PredictionInputEffect = [.insulin, .momentum, .observedAbsorptionEffect, .suspend]
-        // If you want to be absolutely sure .carbs isn't included if it was part of another base set:
-        inputs3.remove(.carbs)
-        self.predictionWithObservedAbsorptionAndZeroTempAndNoIRC = try self.predictGlucose(
-            using: inputs3,
-            includingPendingInsulin: usePendingInsulin
-        )
-        self.logger.debug("Generated predictionWithObservedAbsorptionAndZeroTempAndNoIRC using inputs")
-
-        // --- Prediction 4: self.predictionWithZeroTemp (Standard Zero Temp) ---
-        // Effects: All standard effects PLUS .suspend
-        let inputs4: PredictionInputEffect = [.all, .suspend]
-        // Resulting inputs4: [.carbs, .insulin, .momentum, .retrospection, .suspend]
-        self.predictionWithZeroTemp = try self.predictGlucose(
-            using: inputs4,
-            includingPendingInsulin: usePendingInsulin
-        )
-        self.logger.debug("Generated predictionWithZeroTemp using inputs")
-    }
-        
-      /*  func checkForLowAndNotifyIfNeeded() {
-            
-            //TODO: why does the first loop not generate the right prediction
-            
-           //print("*test starting low absorption notification process at:", Date())
-            
-            guard UserDefaults.standard.slowAbsorptionNotificationsEnabled else {return}
-            
-            //print("*test toggle button is",UserDefaults.standard.slowAbsorptionNotificationsEnabled)
-            
-            let currentDate = Date()
-            guard let suspendThreshold = settings.suspendThreshold?.quantity.doubleValue(for: .milligramsPerDeciliter) else {return}
-            //print("*test suspend threshold is ",suspendThreshold)
-            
-            var notificationIntervalExceeded = false
-            
-            let notificationInterval = ObservedAbsorptionSettings.notificationInterval
-            //print("*test notification interval:",notificationInterval)
-            
-            let assumedRescueCarbAbsorptionTimeMinutes = ObservedAbsorptionSettings.assumedRescueCarbAbsorptionTimeMinutes
-            
-            guard let ISF = settings.insulinSensitivitySchedule?.value(at: Date()) else {return}
-            
-            guard let CR = settings.carbRatioSchedule?.value(at: Date()) else {return}
-            
-            let CSF = ISF / CR
-            
-            var timeToLowZeroTemp: TimeInterval?
-            
-            var lowestBGwithZeroTemp: Double?
-            
-            var timeToLowestBGwithZeroTemp: TimeInterval?
-            
-            var flooredTimeToLowestBG: TimeInterval?
-            
-            var absorptionFraction: Double
-            
-            var rescueCarbs: Double?
-            
-            //print("*test ISF:",ISF,"CR:", CR)
-            
-            
-            let predictedLowGlucose = predictionWithObservedAbsorption.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }
-            
-            guard let timeToLow = predictedLowGlucose.first?.startDate.timeIntervalSince(currentDate) else {
-                //print("*test no low predicted")
-                return
-                
-            } // exit the context if there is no low in the future.  The rest of the function becomes pointless.
-            
-            let predictedLowGlucoseWithZeroTemp = predictionWithObservedAbsorptionAndZeroTemp.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }//this could be empty if a low that would otherwise take place is avoided by zero temping.  It's rare but not impossible.  Maybe more common in real world scenarios
-            
-            if let value = predictedLowGlucoseWithZeroTemp.first?.startDate.timeIntervalSince(currentDate)
-                
-            {
-                timeToLowZeroTemp = value
-                
-                lowestBGwithZeroTemp = predictedLowGlucoseWithZeroTemp.map({ $0.quantity.doubleValue(for: .milligramsPerDeciliter) }).min() // cannot be empty if it survives initial unwrappin of the low
-                
-                timeToLowestBGwithZeroTemp = predictedLowGlucoseWithZeroTemp.first(where: { $0.quantity.doubleValue(for: .milligramsPerDeciliter) == lowestBGwithZeroTemp })?.startDate.timeIntervalSince(currentDate) // same deal - nil if the array is empty
-                
-                flooredTimeToLowestBG = max(ObservedAbsorptionSettings.flooredTimeForRescueCarbs, timeToLowestBGwithZeroTemp! / 60.0)
-                
-                absorptionFraction = min(1.0, flooredTimeToLowestBG! / assumedRescueCarbAbsorptionTimeMinutes)
-                
-                rescueCarbs = (suspendThreshold - lowestBGwithZeroTemp!) / CSF / absorptionFraction
-            }
-            
-            let lowestBG = predictedLowGlucose.map({ $0.quantity.doubleValue(for: .milligramsPerDeciliter) }).min()
-            
-            
-            let timeToLowestBG = predictedLowGlucose.first(where: { $0.quantity.doubleValue(for: .milligramsPerDeciliter) == lowestBG })?.startDate.timeIntervalSince(currentDate)
-            
-            let dontNotifyIfSooner = ObservedAbsorptionSettings.dontNotifyIfSooner
-            let dontNotifyIfLater = ObservedAbsorptionSettings.dontNotifyIfLater //only notify if low is between 5 and 45 minutes in the future.  Earlier is obvious and annoying, later is too alarmist.
-            var farEnough = false
-            var notTooFar = false
-            if timeToLow > dontNotifyIfSooner {farEnough = true}
-            if timeToLow < dontNotifyIfLater {notTooFar = true}
-            
-            
-            var enoughTimeElapsedSinceMostRecentCarbEntry = false
-            if let mostRecentCarbEntryTime = recentCarbEntries?.last?.startDate {
-                let timeSinceMostRecentCarbEntry = now().timeIntervalSince(mostRecentCarbEntryTime)
-                enoughTimeElapsedSinceMostRecentCarbEntry = timeSinceMostRecentCarbEntry > ObservedAbsorptionSettings.warningDelay
-            } else {
-                 enoughTimeElapsedSinceMostRecentCarbEntry = true
-            }
-
-
-            if lastNotificationTime == nil || Date() > (lastNotificationTime! + notificationInterval) {
-                notificationIntervalExceeded = true
-           // print("*Test notificationIntervalExceeded:", notificationIntervalExceeded)
-            } //if prior notification time is nil, it means no notification has been sent, so it should be sent.  Otherwise check that it hasn't been sent too recently
-            
-            guard notificationIntervalExceeded,farEnough,notTooFar, enoughTimeElapsedSinceMostRecentCarbEntry else {
-               // print("*test some conditions not met:","notification interval:",notificationIntervalExceeded,"far enough:",farEnough,"not too far:",notTooFar, "carb entry aged:",enoughTimeElapsedSinceMostRecentCarbEntry)
-                return}
-            
-            
-            //print("*test all conditions met")
-            
-            //formatting for notification request
-            let timeToLowInMinutes = String(Int(round(timeToLow / 60)))
-            let absorptionRatioFormatted = String(format: "%.0f%%", absorptionRatio * 100)
-            
-           // print("*Test Basic Time to Low in Minutes:", timeToLowInMinutes)
-            //print("*test absorptionRatio",absorptionRatioFormatted)
-            
-                    
-            if timeToLowZeroTemp != nil {
-                let timeToLowInMinutesZeroTemp = String(Int(round(timeToLowZeroTemp! / 60)))
-                let formattedLowestBGwithZeroTemp = String(Int(round(lowestBGwithZeroTemp!)))
-                let formattedRescueCarbs = String(Int(round(rescueCarbs!)))
-                let timeToLowestBGInMinuteswithZeroTemp = String(Int(round(timeToLowestBGwithZeroTemp! / 60)))
-                
-            //TODO: deal with optionals
-                if let COB = self.carbsOnBoard?.quantity.doubleValue(for: .gram()) { if COB > 4.0
-                    {NotificationManager.sendRescueCarbsNeededNotification(timeToLow: timeToLowInMinutes, timetoLowZeroTemp: timeToLowInMinutesZeroTemp, lowestBGwithZeroTemp: formattedLowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: timeToLowestBGInMinuteswithZeroTemp, rescueCarbs: formattedRescueCarbs, absorptionRatio: absorptionRatioFormatted)
-                    
-                    //print("*Test Carbs Possibly Needed Notification Triggered. lastNotificationTime:",lastNotificationTime)
-                }
-                    
-                    
-                    else
-                    
-                    {NotificationManager.sendCarbsDefinitelyNeededNotification(timeToLow: timeToLowInMinutes, lowestBG: formattedLowestBGwithZeroTemp, timeToLowestBG: timeToLowestBGInMinuteswithZeroTemp, rescueCarbs: formattedRescueCarbs)
-                        
-                        //print("*Test Carbs Definitely Needed Notification Triggered. lastNotificationTime:",lastNotificationTime)
-                    }
-                    
-                }
-                      
-                    
-                lastNotificationTime = Date()
-            //print("*Test Rescue Carb Notification Triggered. lastNotificationTime:",lastNotificationTime)
-            } // trying to only trigger this one if rescue carbs are needed.  I'm totally converging to Dragan's approach.
-            
-            if timeToLowZeroTemp == nil {
-                let timeInMinutesToLowestBG = String(Int(round(timeToLowestBG! / 60)))
-                let formattedLowestBG = String(Int(round(lowestBG!)))
-                NotificationManager.sendCarbEntryEditingNeededNotification(timeToLow: timeToLowInMinutes, lowestBG: formattedLowestBG, timeToLowestBG: timeInMinutesToLowestBG, absorptionRatio: absorptionRatioFormatted)
-                lastNotificationTime = Date()
-                let warningMesssagePayload = "Time to Low: \(timeToLowInMinutes) Time to lowest: \(timeInMinutesToLowestBG). Lowest BG: \(formattedLowestBG) Absorption Ratio: \(absorptionRatioFormatted)"
-                postSlowAbsorptionNotification(payload: warningMesssagePayload, time: Date())
-              // print("*Test ZeroTempOnly Notification Triggered. lastNotificationTime:",lastNotificationTime)
-            } // this one triggers just to edit the carbs.  After that the zero temp avoids the low, so there are no glucose values below suspend threshold in the zeroTempedPrediction
-                
-                return
-        }
-       
-       */
-    
-    func postSlowAbsorptionNotification(payload: String, time: Date) { NotificationCenter.default.post(
-        name: Notification.Name.lowBGWarning,
-        object: nil,
-        userInfo: [
-            "messagePayload": payload,
-            "messageTime": time
-        ]
-        
-    )
-    }
-
     private func schedulePreBolusRemindersForAllFutureCarbEntries(_ entries: [StoredCarbEntry]) {
         self.logger.default("**[PREBOLUS] Checking %{public}d entries for prebolus reminders", entries.count)
         if UserDefaults.standard.preBolusReminderEnabled {
@@ -3037,6 +2778,101 @@ extension LoopDataManager {
         case carbsDefinitelyNeeded(timeToLow: String, lowBG: String, rescueAmt: String, ratio: String)
         case editCarbEntrySuggested(timeToLow: String, lowBG: String, ratio: String)
     }
+    
+    /// Generates a glucose prediction effect of applying observed carb absorptionRatio to currentCarbEffects
+        ///
+        /// - Throws: LoopError.configurationError
+        private func updateObservedAbsorptionEffect() throws {
+            dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+            //TODO: I don't understand what dispatchPrecondition is doing, it's just copy pasta
+            
+      //TODO: determine whether I need to bother to validate settings here
+
+            
+            let excludeCarbEntriesAfterThisTime = now().addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)  // 15 minutes ago
+            
+            let carbEffectStart = now().addingTimeInterval(-carbStore.maximumAbsorptionTimeInterval)
+            
+            //print("*test carbEffectStart", carbEffectStart)
+            
+            guard let recentCarbEntries = recentCarbEntries else {
+                return
+            }
+            
+            let carbEntriesExcludingVeryRecentAndFuture = recentCarbEntries.filter { $0.startDate <= excludeCarbEntriesAfterThisTime }
+            
+            let carbEffectExcludeRecentAndFutureEntries = try carbStore.glucoseEffects(
+                of: carbEntriesExcludingVeryRecentAndFuture,
+                startingAt: carbEffectStart,
+                endingAt: nil,
+                effectVelocities: insulinCounteractionEffects
+            )
+            
+          //  print("*test adjustedCarb effects", carbEffectExcludeRecentAndFutureEntries[5])//TODO: addressing arrays is dangerous, be careful to get rid of these
+            
+            observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffectExcludeRecentAndFutureEntries )
+            
+           // print("*Test observedAbsorptionEffect", observedAbsorptionEffect[5])
+        }
+    
+    private func updateObservedAbsorptionPredictions() throws {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+
+        // This function uses self.predictGlucose(...), which will internally use:
+        // - self.glucoseStore.latestGlucose
+        // - Current LDM effect properties (self.insulinEffectIncludingPendingInsulin,
+        //   self.carbEffect, self.glucoseMomentumEffect, self.retrospectiveGlucoseEffect,
+        //   self.suspendInsulinDeliveryEffect) based on the 'inputs' flags.
+        // - Crucially, it will also use self.observedAbsorptionEffect if the flag is set.
+        // Ensure self.observedAbsorptionEffect is up-to-date *before* this function is called.
+
+        let usePendingInsulin = true // Consistent with your original intent
+
+        // --- Prediction 1: self.predictionWithObservedAbsorption ---
+        // Standard effects MINUS .carbs PLUS .observedAbsorptionEffect
+        // .all = [.carbs, .insulin, .momentum, .retrospection]
+        var inputs1: PredictionInputEffect = .all
+        inputs1.remove(.carbs)
+        inputs1.insert(.observedAbsorptionEffect)
+        // Resulting inputs1: [.insulin, .momentum, .retrospection, .observedAbsorptionEffect]
+        self.predictionWithObservedAbsorption = try self.predictGlucose(
+            using: inputs1,
+            includingPendingInsulin: usePendingInsulin
+        )
+        self.logger.debug("Generated predictionWithObservedAbsorption using inputs")
+
+        // --- Prediction 2: self.predictionWithObservedAbsorptionAndZeroTemp ---
+        // Effects from Prediction 1 PLUS .suspend
+        var inputs2 = inputs1 // Start with effects from prediction 1
+        inputs2.insert(.suspend)
+        // Resulting inputs2: [.insulin, .momentum, .retrospection, .observedAbsorptionEffect, .suspend]
+        self.predictionWithObservedAbsorptionAndZeroTemp = try self.predictGlucose(
+            using: inputs2,
+            includingPendingInsulin: usePendingInsulin
+        )
+        self.logger.debug("Generated predictionWithObservedAbsorptionAndZeroTemp using inputs")
+
+        // --- Prediction 3: self.predictionWithObservedAbsorptionAndZeroTempAndNoIRC ---
+        // Effects: Insulin, Momentum, ObservedAbsorptionEffect, Suspend (NO Retrospection/IRC)
+        var inputs3: PredictionInputEffect = [.insulin, .momentum, .observedAbsorptionEffect, .suspend]
+        // If you want to be absolutely sure .carbs isn't included if it was part of another base set:
+        inputs3.remove(.carbs)
+        self.predictionWithObservedAbsorptionAndZeroTempAndNoIRC = try self.predictGlucose(
+            using: inputs3,
+            includingPendingInsulin: usePendingInsulin
+        )
+        self.logger.debug("Generated predictionWithObservedAbsorptionAndZeroTempAndNoIRC using inputs")
+
+        // --- Prediction 4: self.predictionWithZeroTemp (Standard Zero Temp) ---
+        // Effects: All standard effects PLUS .suspend
+        let inputs4: PredictionInputEffect = [.all, .suspend]
+        // Resulting inputs4: [.carbs, .insulin, .momentum, .retrospection, .suspend]
+        self.predictionWithZeroTemp = try self.predictGlucose(
+            using: inputs4,
+            includingPendingInsulin: usePendingInsulin
+        )
+        self.logger.debug("Generated predictionWithZeroTemp using inputs")
+    }
 
     // MARK: - Analysis & Decision Logic
 
@@ -3264,6 +3100,17 @@ extension LoopDataManager {
             postWarningNotificationToApp(payload: message, time: currentTimestamp)
         }
     }
+    
+    func postSlowAbsorptionNotification(payload: String, time: Date) { NotificationCenter.default.post(
+        name: Notification.Name.lowBGWarning,
+        object: nil,
+        userInfo: [
+            "messagePayload": payload,
+            "messageTime": time
+        ]
+        
+    )
+    }
 
     // MARK: - Notification Posting Helper
 
@@ -3336,3 +3183,158 @@ extension LoopDataManager {
     }
 
 } // End of LoopDataManager Extension // End of LoopDataManager Extension
+
+
+
+/*  func checkForLowAndNotifyIfNeeded() {
+      
+      //TODO: why does the first loop not generate the right prediction
+      
+     //print("*test starting low absorption notification process at:", Date())
+      
+      guard UserDefaults.standard.slowAbsorptionNotificationsEnabled else {return}
+      
+      //print("*test toggle button is",UserDefaults.standard.slowAbsorptionNotificationsEnabled)
+      
+      let currentDate = Date()
+      guard let suspendThreshold = settings.suspendThreshold?.quantity.doubleValue(for: .milligramsPerDeciliter) else {return}
+      //print("*test suspend threshold is ",suspendThreshold)
+      
+      var notificationIntervalExceeded = false
+      
+      let notificationInterval = ObservedAbsorptionSettings.notificationInterval
+      //print("*test notification interval:",notificationInterval)
+      
+      let assumedRescueCarbAbsorptionTimeMinutes = ObservedAbsorptionSettings.assumedRescueCarbAbsorptionTimeMinutes
+      
+      guard let ISF = settings.insulinSensitivitySchedule?.value(at: Date()) else {return}
+      
+      guard let CR = settings.carbRatioSchedule?.value(at: Date()) else {return}
+      
+      let CSF = ISF / CR
+      
+      var timeToLowZeroTemp: TimeInterval?
+      
+      var lowestBGwithZeroTemp: Double?
+      
+      var timeToLowestBGwithZeroTemp: TimeInterval?
+      
+      var flooredTimeToLowestBG: TimeInterval?
+      
+      var absorptionFraction: Double
+      
+      var rescueCarbs: Double?
+      
+      //print("*test ISF:",ISF,"CR:", CR)
+      
+      
+      let predictedLowGlucose = predictionWithObservedAbsorption.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }
+      
+      guard let timeToLow = predictedLowGlucose.first?.startDate.timeIntervalSince(currentDate) else {
+          //print("*test no low predicted")
+          return
+          
+      } // exit the context if there is no low in the future.  The rest of the function becomes pointless.
+      
+      let predictedLowGlucoseWithZeroTemp = predictionWithObservedAbsorptionAndZeroTemp.filter { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < suspendThreshold }//this could be empty if a low that would otherwise take place is avoided by zero temping.  It's rare but not impossible.  Maybe more common in real world scenarios
+      
+      if let value = predictedLowGlucoseWithZeroTemp.first?.startDate.timeIntervalSince(currentDate)
+          
+      {
+          timeToLowZeroTemp = value
+          
+          lowestBGwithZeroTemp = predictedLowGlucoseWithZeroTemp.map({ $0.quantity.doubleValue(for: .milligramsPerDeciliter) }).min() // cannot be empty if it survives initial unwrappin of the low
+          
+          timeToLowestBGwithZeroTemp = predictedLowGlucoseWithZeroTemp.first(where: { $0.quantity.doubleValue(for: .milligramsPerDeciliter) == lowestBGwithZeroTemp })?.startDate.timeIntervalSince(currentDate) // same deal - nil if the array is empty
+          
+          flooredTimeToLowestBG = max(ObservedAbsorptionSettings.flooredTimeForRescueCarbs, timeToLowestBGwithZeroTemp! / 60.0)
+          
+          absorptionFraction = min(1.0, flooredTimeToLowestBG! / assumedRescueCarbAbsorptionTimeMinutes)
+          
+          rescueCarbs = (suspendThreshold - lowestBGwithZeroTemp!) / CSF / absorptionFraction
+      }
+      
+      let lowestBG = predictedLowGlucose.map({ $0.quantity.doubleValue(for: .milligramsPerDeciliter) }).min()
+      
+      
+      let timeToLowestBG = predictedLowGlucose.first(where: { $0.quantity.doubleValue(for: .milligramsPerDeciliter) == lowestBG })?.startDate.timeIntervalSince(currentDate)
+      
+      let dontNotifyIfSooner = ObservedAbsorptionSettings.dontNotifyIfSooner
+      let dontNotifyIfLater = ObservedAbsorptionSettings.dontNotifyIfLater //only notify if low is between 5 and 45 minutes in the future.  Earlier is obvious and annoying, later is too alarmist.
+      var farEnough = false
+      var notTooFar = false
+      if timeToLow > dontNotifyIfSooner {farEnough = true}
+      if timeToLow < dontNotifyIfLater {notTooFar = true}
+      
+      
+      var enoughTimeElapsedSinceMostRecentCarbEntry = false
+      if let mostRecentCarbEntryTime = recentCarbEntries?.last?.startDate {
+          let timeSinceMostRecentCarbEntry = now().timeIntervalSince(mostRecentCarbEntryTime)
+          enoughTimeElapsedSinceMostRecentCarbEntry = timeSinceMostRecentCarbEntry > ObservedAbsorptionSettings.warningDelay
+      } else {
+           enoughTimeElapsedSinceMostRecentCarbEntry = true
+      }
+
+
+      if lastNotificationTime == nil || Date() > (lastNotificationTime! + notificationInterval) {
+          notificationIntervalExceeded = true
+     // print("*Test notificationIntervalExceeded:", notificationIntervalExceeded)
+      } //if prior notification time is nil, it means no notification has been sent, so it should be sent.  Otherwise check that it hasn't been sent too recently
+      
+      guard notificationIntervalExceeded,farEnough,notTooFar, enoughTimeElapsedSinceMostRecentCarbEntry else {
+         // print("*test some conditions not met:","notification interval:",notificationIntervalExceeded,"far enough:",farEnough,"not too far:",notTooFar, "carb entry aged:",enoughTimeElapsedSinceMostRecentCarbEntry)
+          return}
+      
+      
+      //print("*test all conditions met")
+      
+      //formatting for notification request
+      let timeToLowInMinutes = String(Int(round(timeToLow / 60)))
+      let absorptionRatioFormatted = String(format: "%.0f%%", absorptionRatio * 100)
+      
+     // print("*Test Basic Time to Low in Minutes:", timeToLowInMinutes)
+      //print("*test absorptionRatio",absorptionRatioFormatted)
+      
+              
+      if timeToLowZeroTemp != nil {
+          let timeToLowInMinutesZeroTemp = String(Int(round(timeToLowZeroTemp! / 60)))
+          let formattedLowestBGwithZeroTemp = String(Int(round(lowestBGwithZeroTemp!)))
+          let formattedRescueCarbs = String(Int(round(rescueCarbs!)))
+          let timeToLowestBGInMinuteswithZeroTemp = String(Int(round(timeToLowestBGwithZeroTemp! / 60)))
+          
+      //TODO: deal with optionals
+          if let COB = self.carbsOnBoard?.quantity.doubleValue(for: .gram()) { if COB > 4.0
+              {NotificationManager.sendRescueCarbsNeededNotification(timeToLow: timeToLowInMinutes, timetoLowZeroTemp: timeToLowInMinutesZeroTemp, lowestBGwithZeroTemp: formattedLowestBGwithZeroTemp, timeToLowestBGwithZeroTemp: timeToLowestBGInMinuteswithZeroTemp, rescueCarbs: formattedRescueCarbs, absorptionRatio: absorptionRatioFormatted)
+              
+              //print("*Test Carbs Possibly Needed Notification Triggered. lastNotificationTime:",lastNotificationTime)
+          }
+              
+              
+              else
+              
+              {NotificationManager.sendCarbsDefinitelyNeededNotification(timeToLow: timeToLowInMinutes, lowestBG: formattedLowestBGwithZeroTemp, timeToLowestBG: timeToLowestBGInMinuteswithZeroTemp, rescueCarbs: formattedRescueCarbs)
+                  
+                  //print("*Test Carbs Definitely Needed Notification Triggered. lastNotificationTime:",lastNotificationTime)
+              }
+              
+          }
+                
+              
+          lastNotificationTime = Date()
+      //print("*Test Rescue Carb Notification Triggered. lastNotificationTime:",lastNotificationTime)
+      } // trying to only trigger this one if rescue carbs are needed.  I'm totally converging to Dragan's approach.
+      
+      if timeToLowZeroTemp == nil {
+          let timeInMinutesToLowestBG = String(Int(round(timeToLowestBG! / 60)))
+          let formattedLowestBG = String(Int(round(lowestBG!)))
+          NotificationManager.sendCarbEntryEditingNeededNotification(timeToLow: timeToLowInMinutes, lowestBG: formattedLowestBG, timeToLowestBG: timeInMinutesToLowestBG, absorptionRatio: absorptionRatioFormatted)
+          lastNotificationTime = Date()
+          let warningMesssagePayload = "Time to Low: \(timeToLowInMinutes) Time to lowest: \(timeInMinutesToLowestBG). Lowest BG: \(formattedLowestBG) Absorption Ratio: \(absorptionRatioFormatted)"
+          postSlowAbsorptionNotification(payload: warningMesssagePayload, time: Date())
+        // print("*Test ZeroTempOnly Notification Triggered. lastNotificationTime:",lastNotificationTime)
+      } // this one triggers just to edit the carbs.  After that the zero temp avoids the low, so there are no glucose values below suspend threshold in the zeroTempedPrediction
+          
+          return
+  }
+ 
+ */
