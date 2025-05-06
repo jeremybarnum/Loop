@@ -955,46 +955,67 @@ extension LoopDataManager {
             }
         }
 
-        // 5 second delay to allow stores to cache data before it is read by widget
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-            self.widgetLog.default("Refreshing widget. Reason: Loop completed")
-            WidgetCenter.shared.reloadAllTimelines()
-        }
-        
-        //TODO: for some reason it takes several runs of the loop for this to be updated.  But fine, for now.
-              
-          let observedAbsorptionStart = now().addingTimeInterval(-ObservedAbsorptionSettings.observationWindow)
-                   
-              carbStore.getGlucoseEffects(start: observedAbsorptionStart, end: now(), effectVelocities: insulinCounteractionEffects) {[weak self] result in
-                  guard
-                      let self = self,
-                      case .success((_, let observedAbsorptionCarbEffects)) = result
-                  else {
-                      if case .failure(let error) = result {
-                          self?.logger.error("Failed to fetch glucose effects to check for missed meal: %{public}@", String(describing: error))
-                      }
-                      return
-                  }
-                  
-                  
-                  absorptionRatio = self.observedAbsorptionManager.computeObservedAbsorptionRatio(insulinCounteractionEffects: self.insulinCounteractionEffects, observedAbsorptionEffects: observedAbsorptionCarbEffects)
-                  
-                  updateObservedAbsorptionPredictions()
-                  
-                //  checkForLowAndNotifyIfNeeded()
-                  
-                  // Determine the outcome based on the new logic
-                  let warningOutcome = determineWarningOutcome()
-                  // Handle the outcome (send notifications, etc.)
-                  handleWarningOutcome(warningOutcome)
+        // Inside finishLoop(...)
 
-                  
-              }
-              //TODO: there is something off about these carb effects.  Weird array full of 20s.  Also, the native prediction with observed absorption array is tiny.  Why is the base prediction so off?  This is because loop was open and there were no carb effects or insulin effects or momentum effects, so the basic prediction array was tiny. Also it's not clear that i'm specifically using a count of 3 carb absorption observations - it's more like the last 20 minutes or 3 absorptions whichever is bigger, but something doesn't make sense where 20 minutes produces 8 absorptions.  Also why is the last element of the array of observed absorption effects nan if the early members are 0? In this iteration of the loop predicted glucose is nil.  Maybe that's part of the issue.  Also why does carbEffect have one value of 100.  Need to check how that gets initialized.
-           
+                // ... (widget update code from your snippet) ...
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                    self.widgetLog.default("Refreshing widget. Reason: Loop completed")
+                    WidgetCenter.shared.reloadAllTimelines()
+                }
+                    
+                let observedAbsorptionStart = now().addingTimeInterval(-ObservedAbsorptionSettings.observationWindow)
+                        
+                carbStore.getGlucoseEffects(start: observedAbsorptionStart, end: now(), effectVelocities: insulinCounteractionEffects) {[weak self] result in
+                    guard let self = self else { return } // Safely unwrap self
 
-        updateRemoteRecommendation()
-    }
+                    // *** Wrap the entire subsequent logic in dataAccessQueue.async ***
+                    self.dataAccessQueue.async {
+                        guard case .success((_, let observedWindowCarbEffects)) = result else { // Renamed for clarity
+                            if case .failure(let error) = result {
+                                // Use self.logger here as self is now guaranteed non-nil
+                                self.logger.error("Failed to fetch glucose effects for observed absorption: %{public}@", String(describing: error))
+                            }
+                            return // Exit this async block
+                        }
+                        
+                        // 1. Calculate and set self.absorptionRatio
+                        self.absorptionRatio = self.observedAbsorptionManager.computeObservedAbsorptionRatio(
+                            insulinCounteractionEffects: self.insulinCounteractionEffects,
+                            observedAbsorptionEffects: observedWindowCarbEffects // Use the fetched effects
+                        )
+                        self.logger.debug("Calculated absorptionRatio: %{public}.2f", self.absorptionRatio)
+
+                        // 2. Update self.observedAbsorptionEffect (the [GlucoseEffect] array)
+                        //    This uses the new self.absorptionRatio.
+                        do {
+                            try self.updateObservedAbsorptionEffect() // This updates self.observedAbsorptionEffect
+                            self.logger.debug("Updated self.observedAbsorptionEffect using new ratio.")
+                        } catch {
+                            self.logger.error("Error calling updateObservedAbsorptionEffect: %{public}@", String(describing: error))
+                            return // Critical if this fails, so exit this async block
+                        }
+                        
+                        // 3. Call the REFACTORED updateObservedAbsorptionPredictions()
+                        //    This will now use the fresh self.observedAbsorptionEffect.
+                        do {
+                            try self.updateObservedAbsorptionPredictions() // This is the refactored version
+                            self.logger.debug("Updated specialized predictions (predictionWithObservedAbsorption, etc.) for warnings.")
+                        } catch {
+                             self.logger.error("Error updating observed absorption predictions: %{public}@", String(describing: error))
+                             return // If predictions fail, exit this async block
+                        }
+                            
+                        // 4. Determine and handle the warning outcome
+                        //    These functions will now be called on dataAccessQueue.
+                        let warningOutcome = self.determineWarningOutcome()
+                        self.handleWarningOutcome(warningOutcome)
+                        
+                    } // --- End of self.dataAccessQueue.async block ---
+                } // --- End of carbStore.getGlucoseEffects completion handler ---
+                
+                // ... (updateRemoteRecommendation() call from your original finishLoop) ...
+                updateRemoteRecommendation()
+            } // End of finishLoop function
 
     fileprivate enum UpdateReason: String {
         case loop
@@ -1781,32 +1802,64 @@ extension LoopDataManager {
            // print("*Test observedAbsorptionEffect", observedAbsorptionEffect[5])
         }
 
+    private func updateObservedAbsorptionPredictions() throws {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
 
-        
-        func updateObservedAbsorptionPredictions() {
-            self.getLoopState { (manager, state) in
+        // This function uses self.predictGlucose(...), which will internally use:
+        // - self.glucoseStore.latestGlucose
+        // - Current LDM effect properties (self.insulinEffectIncludingPendingInsulin,
+        //   self.carbEffect, self.glucoseMomentumEffect, self.retrospectiveGlucoseEffect,
+        //   self.suspendInsulinDeliveryEffect) based on the 'inputs' flags.
+        // - Crucially, it will also use self.observedAbsorptionEffect if the flag is set.
+        // Ensure self.observedAbsorptionEffect is up-to-date *before* this function is called.
 
-                let observedAbsorptionInputs: PredictionInputEffect = [.all, .observedAbsorptionEffect]
-                let observedAbsorptionAndZeroTempInputs: PredictionInputEffect = [.all, .observedAbsorptionEffect, .suspend]
-                let observedAbsorptionAndZeroTempInputsAndNoIRC: PredictionInputEffect = [.insulin, .carbs,.momentum, .observedAbsorptionEffect, .suspend]
-                let zeroTemp: PredictionInputEffect = [.all, .suspend]
-                
-                do {
-                    let prediction1 = try state.predictGlucose(using: observedAbsorptionInputs, includingPendingInsulin: true)
-                    let prediction2 = try state.predictGlucose(using: observedAbsorptionAndZeroTempInputs, includingPendingInsulin: true)
-                    let prediction3 = try state.predictGlucose(using: observedAbsorptionAndZeroTempInputsAndNoIRC, includingPendingInsulin: true)
-                    let prediction4 = try state.predictGlucose(using: zeroTemp, includingPendingInsulin: true)
+        let usePendingInsulin = true // Consistent with your original intent
 
-                    self.predictionWithObservedAbsorption = prediction1
-                    self.predictionWithObservedAbsorptionAndZeroTemp = prediction2
-                    self.predictionWithObservedAbsorptionAndZeroTempAndNoIRC = prediction3
-                    self.predictionWithZeroTemp = prediction4
-                    
-                } catch {
-                    print("error")
-                }
-            }
-        }
+        // --- Prediction 1: self.predictionWithObservedAbsorption ---
+        // Standard effects MINUS .carbs PLUS .observedAbsorptionEffect
+        // .all = [.carbs, .insulin, .momentum, .retrospection]
+        var inputs1: PredictionInputEffect = .all
+        inputs1.remove(.carbs)
+        inputs1.insert(.observedAbsorptionEffect)
+        // Resulting inputs1: [.insulin, .momentum, .retrospection, .observedAbsorptionEffect]
+        self.predictionWithObservedAbsorption = try self.predictGlucose(
+            using: inputs1,
+            includingPendingInsulin: usePendingInsulin
+        )
+        self.logger.debug("Generated predictionWithObservedAbsorption using inputs")
+
+        // --- Prediction 2: self.predictionWithObservedAbsorptionAndZeroTemp ---
+        // Effects from Prediction 1 PLUS .suspend
+        var inputs2 = inputs1 // Start with effects from prediction 1
+        inputs2.insert(.suspend)
+        // Resulting inputs2: [.insulin, .momentum, .retrospection, .observedAbsorptionEffect, .suspend]
+        self.predictionWithObservedAbsorptionAndZeroTemp = try self.predictGlucose(
+            using: inputs2,
+            includingPendingInsulin: usePendingInsulin
+        )
+        self.logger.debug("Generated predictionWithObservedAbsorptionAndZeroTemp using inputs")
+
+        // --- Prediction 3: self.predictionWithObservedAbsorptionAndZeroTempAndNoIRC ---
+        // Effects: Insulin, Momentum, ObservedAbsorptionEffect, Suspend (NO Retrospection/IRC)
+        var inputs3: PredictionInputEffect = [.insulin, .momentum, .observedAbsorptionEffect, .suspend]
+        // If you want to be absolutely sure .carbs isn't included if it was part of another base set:
+        inputs3.remove(.carbs)
+        self.predictionWithObservedAbsorptionAndZeroTempAndNoIRC = try self.predictGlucose(
+            using: inputs3,
+            includingPendingInsulin: usePendingInsulin
+        )
+        self.logger.debug("Generated predictionWithObservedAbsorptionAndZeroTempAndNoIRC using inputs")
+
+        // --- Prediction 4: self.predictionWithZeroTemp (Standard Zero Temp) ---
+        // Effects: All standard effects PLUS .suspend
+        let inputs4: PredictionInputEffect = [.all, .suspend]
+        // Resulting inputs4: [.carbs, .insulin, .momentum, .retrospection, .suspend]
+        self.predictionWithZeroTemp = try self.predictGlucose(
+            using: inputs4,
+            includingPendingInsulin: usePendingInsulin
+        )
+        self.logger.debug("Generated predictionWithZeroTemp using inputs")
+    }
         
       /*  func checkForLowAndNotifyIfNeeded() {
             
