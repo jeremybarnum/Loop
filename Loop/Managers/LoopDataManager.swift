@@ -981,7 +981,12 @@ extension LoopDataManager {
                   
                   updateObservedAbsorptionPredictions()
                   
-                  checkForLowAndNotifyIfNeeded()
+                //  checkForLowAndNotifyIfNeeded()
+                  
+                  // Determine the outcome based on the new logic
+                  let warningOutcome = determineWarningOutcome()
+                  // Handle the outcome (send notifications, etc.)
+                  handleWarningOutcome(warningOutcome)
 
                   
               }
@@ -1803,7 +1808,7 @@ extension LoopDataManager {
             }
         }
         
-        func checkForLowAndNotifyIfNeeded() {
+      /*  func checkForLowAndNotifyIfNeeded() {
             
             //TODO: why does the first loop not generate the right prediction
             
@@ -1953,6 +1958,8 @@ extension LoopDataManager {
                 
                 return
         }
+       
+       */
     
     func postSlowAbsorptionNotification(payload: String, time: Date) { NotificationCenter.default.post(
         name: Notification.Name.slowAbsorptionWarning,
@@ -2948,3 +2955,331 @@ extension LoopDataManager: ServicesManagerDelegate {
     }
     
 }
+
+// MARK: - Predicted Low Warning Logic
+extension LoopDataManager {
+
+    // MARK: - Supporting Types
+
+    /// Structure to hold the results of analyzing a single prediction curve
+    private struct PredictionMetrics {
+        let minimumGlucoseValue: (any GlucoseValue)? // Full value object (HKQuantity + Date)
+        let timeToMinimumGlucose: TimeInterval? // Relative to 'now'
+        let timeToCrossThreshold: TimeInterval? // Relative to 'now', nil if not crossed
+
+        /// Convenience accessor to get the minimum glucose as Double? in a specific unit.
+        func minimumGlucoseDouble(for unit: HKUnit) -> Double? {
+            return minimumGlucoseValue?.quantity.doubleValue(for: unit)
+        }
+        /// Convenience check: Did the prediction actually cross the threshold?
+        var didCrossThreshold: Bool { return timeToCrossThreshold != nil }
+    }
+
+    /// Enum representing the outcome of the warning check logic
+    private enum PredictedLowWarningOutcome {
+        case noWarningNeeded
+        // Cases hold the *formatted strings* needed for notifications
+        // TODO: Consider passing raw values (Doubles, TimeIntervals) and formatting inside handleWarningOutcome if preferred
+        case rescueCarbsSuggested(timeToLow: String, lowBG: String, rescueAmt: String, ratio: String)
+        case carbsDefinitelyNeeded(timeToLow: String, lowBG: String, rescueAmt: String, ratio: String)
+        case editCarbEntrySuggested(timeToLow: String, lowBG: String, ratio: String)
+    }
+
+    // MARK: - Analysis & Decision Logic
+
+    /// Helper function to analyze a prediction array against a threshold quantity.
+    private func analyzePrediction(prediction: [any GlucoseValue], threshold: HKQuantity, now: Date) -> PredictionMetrics {
+        // Direct HKQuantity comparison handles units automatically.
+        let firstLowElement = prediction.first { $0.quantity < threshold }
+        let timeToCrossThreshold = firstLowElement?.startDate.timeIntervalSince(now)
+
+        let minimumGlucoseValue = prediction.min(by: { $0.quantity < $1.quantity })
+        let timeToMinimumGlucose = minimumGlucoseValue?.startDate.timeIntervalSince(now)
+
+        return PredictionMetrics(
+            minimumGlucoseValue: minimumGlucoseValue,
+            timeToMinimumGlucose: timeToMinimumGlucose,
+            timeToCrossThreshold: timeToCrossThreshold
+        )
+    }
+
+    /// Determines the appropriate warning outcome based on current predictions and settings.
+    /// This function encapsulates the calculation and decision logic, returning an enum case.
+    private func determineWarningOutcome() -> PredictedLowWarningOutcome {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue)) // Ensure correct queue
+
+        // --- Initial Setup & Preconditions ---
+        guard UserDefaults.standard.slowAbsorptionNotificationsEnabled else { return .noWarningNeeded }
+
+        let currentDate = now()
+        guard let suspendThresholdQuantity = settings.suspendThreshold?.quantity,
+              let displayUnit = settings.glucoseUnit, // Needed for formatting/math
+              let ISF = settings.insulinSensitivitySchedule?.value(at: currentDate),
+              let CR = settings.carbRatioSchedule?.value(at: currentDate)
+        else {
+            self.logger.error("Missing critical settings (threshold, unit, ISF, CR) for warning check.")
+            return .noWarningNeeded
+        }
+        let CSF = ISF / CR
+        guard CSF > 0 else {
+            self.logger.error("CSF is zero or negative, cannot calculate rescue carbs.")
+            return .noWarningNeeded
+        }
+
+        // --- Calculation Phase ---
+        self.logger.debug("Running prediction analysis for warnings...")
+
+        // Ensure prediction properties are populated before calling
+        // Consider adding checks here if they might be unexpectedly empty
+        guard !predictionWithObservedAbsorption.isEmpty, !predictionWithObservedAbsorptionAndZeroTemp.isEmpty else {
+             self.logger.info("Prediction arrays empty, skipping warning check.")
+             return .noWarningNeeded
+        }
+
+
+        let normalMetrics = analyzePrediction(
+            prediction: predictionWithObservedAbsorption,
+            threshold: suspendThresholdQuantity,
+            now: currentDate
+        )
+
+        let zeroTempMetrics = analyzePrediction(
+            prediction: predictionWithObservedAbsorptionAndZeroTemp,
+            threshold: suspendThresholdQuantity,
+            now: currentDate
+        )
+
+        // Inside determineWarningOutcome() function
+
+        // ... (after calculating normalMetrics, zeroTempMetrics, CSF, and absorptionRatioFormatted) ...
+
+        // *** REPLACE the old rescueCarbs calculation block with this call: ***
+        let rescueCarbs: Double? = calculateRescueCarbs(
+            from: zeroTempMetrics,
+            suspendThreshold: suspendThresholdQuantity,
+            displayUnit: displayUnit,
+            CSF: CSF
+        )
+        // Log the result from the helper (optional)
+        if let rc = rescueCarbs {
+            self.logger.debug("Rescue carbs determined by helper: %.1f g", rc)
+        } else {
+            self.logger.debug("Rescue carbs determined by helper: nil (not applicable or calculation failed).")
+        }
+
+        // The 'absorptionRatioFormatted' calculation can remain as it was:
+        // let absorptionRatioFormatted = String(format: "%.0f%%", absorptionRatio * 100)
+        // (It should already be present before the rescueCarbs calculation)
+
+        let absorptionRatioFormatted = String(format: "%.0f%%", absorptionRatio * 100)
+
+        // --- Precondition Check Phase ---
+        guard let timeToNormalLow = normalMetrics.timeToCrossThreshold else {
+            self.logger.debug("Normal prediction does not cross threshold. No warning needed.")
+            return .noWarningNeeded
+        }
+
+        var notificationIntervalExceeded = false
+        let notificationInterval = ObservedAbsorptionSettings.notificationInterval
+        if let lastTime = lastNotificationTime {
+            notificationIntervalExceeded = currentDate.timeIntervalSince(lastTime) > notificationInterval
+        } else {
+            notificationIntervalExceeded = true
+        }
+
+        let dontNotifyIfSooner = ObservedAbsorptionSettings.dontNotifyIfSooner
+        let dontNotifyIfLater = ObservedAbsorptionSettings.dontNotifyIfLater
+        let farEnough = timeToNormalLow > dontNotifyIfSooner
+        let notTooFar = timeToNormalLow < dontNotifyIfLater
+
+        var enoughTimeElapsedSinceMostRecentCarbEntry = false
+        if let mostRecentCarbEntryTime = recentCarbEntries?.last?.startDate {
+            let timeSinceMostRecentCarbEntry = currentDate.timeIntervalSince(mostRecentCarbEntryTime)
+            enoughTimeElapsedSinceMostRecentCarbEntry = timeSinceMostRecentCarbEntry > ObservedAbsorptionSettings.warningDelay
+        } else {
+            enoughTimeElapsedSinceMostRecentCarbEntry = true
+        }
+
+        guard notificationIntervalExceeded, farEnough, notTooFar, enoughTimeElapsedSinceMostRecentCarbEntry else {
+            self.logger.debug("Preconditions not met (Interval:%{public}d, FarEnough:%{public}d, NotTooFar:%{public}d, CarbAge:%{public}d). No warning needed.",
+                              notificationIntervalExceeded, farEnough, notTooFar, enoughTimeElapsedSinceMostRecentCarbEntry)
+            return .noWarningNeeded
+        }
+
+        // --- Decision Phase ---
+        // Format common values needed for messages
+        let timeToLowInMinutes = String(Int(round(timeToNormalLow / 60)))
+
+        // Scenario A: Low still predicted even with zero temp
+        if zeroTempMetrics.didCrossThreshold {
+             // Safely get required values for this branch
+             // Note: We use the min BG from the *zero temp* prediction here for the message
+             guard let lowestBGZValue = zeroTempMetrics.minimumGlucoseDouble(for: displayUnit),
+                   let timeToLowestBGZ = zeroTempMetrics.timeToMinimumGlucose,
+                   let rescueAmt = rescueCarbs // Rescue carbs should have been calculated if we got here
+             else {
+                 self.logger.error("Missing expected values for rescue carb outcome.")
+                 return .noWarningNeeded
+             }
+
+             let formattedLowestBGwithZeroTemp = String(Int(round(lowestBGZValue)))
+             let formattedRescueCarbs = String(Int(round(rescueAmt)))
+             // Optional: Format timeToLowestBGInMinuteswithZeroTemp if needed by NotificationManager
+             // let timeToLowestBGInMinuteswithZeroTemp = String(Int(round(timeToLowestBGZ / 60)))
+
+             let cobValue = self.carbsOnBoard?.quantity.doubleValue(for: .gram()) ?? 0.0
+
+             if cobValue > 4.0 { // Consider using a named constant
+                 return .rescueCarbsSuggested(
+                             timeToLow: timeToLowInMinutes, // How soon the primary prediction crosses
+                             lowBG: formattedLowestBGwithZeroTemp, // How low the zero-temp curve goes
+                             rescueAmt: formattedRescueCarbs,
+                             ratio: absorptionRatioFormatted
+                         )
+             } else {
+                 return .carbsDefinitelyNeeded(
+                            timeToLow: timeToLowInMinutes,
+                            lowBG: formattedLowestBGwithZeroTemp,
+                            rescueAmt: formattedRescueCarbs,
+                            ratio: absorptionRatioFormatted
+                        )
+             }
+        }
+        // Scenario B: Low avoided by zero temp
+        else {
+             // Safely get required values for this branch
+             // Note: We use the min BG from the *normal* prediction here
+             guard let lowestBGValue = normalMetrics.minimumGlucoseDouble(for: displayUnit)
+                   // Optional: Also get timeToLowestBG if needed by NotificationManager
+                   // let timeToLowestBG = normalMetrics.timeToMinimumGlucose
+             else {
+                 self.logger.error("Missing expected values for carb edit outcome.")
+                 return .noWarningNeeded
+             }
+
+             // Format needed values
+             let formattedLowestBG = String(Int(round(lowestBGValue)))
+             // Optional: Format timeInMinutesToLowestBG if needed
+             // let timeInMinutesToLowestBG = String(Int(round(timeToLowestBG! / 60))) // Use safe unwrap
+
+             return .editCarbEntrySuggested(
+                         timeToLow: timeToLowInMinutes,
+                         lowBG: formattedLowestBG, // How low the normal prediction would have gone
+                         ratio: absorptionRatioFormatted
+                     )
+         }
+    }
+
+    // MARK: - Action Handling
+
+    /// Takes the outcome of the warning check and performs necessary actions (notifications, NS upload)
+    private func handleWarningOutcome(_ outcome: PredictedLowWarningOutcome) {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue)) // Ensure correct queue
+
+        let nsMessage: String? // Message for Nightscout Note payload
+        let currentTimestamp = Date()
+
+        switch outcome {
+        case .noWarningNeeded:
+            nsMessage = nil // No action needed
+
+        case .rescueCarbsSuggested(let timeToLow, let lowBG, let rescueAmt, let ratio):
+            self.logger.info("Warning Triggered: Rescue Carbs Suggested")
+            // TODO: Verify parameter names/types match the updated NotificationManager function signature
+            NotificationManager.sendRescueCarbsNeededNotification(timeToLow: timeToLow, timetoLowZeroTemp: "?", lowestBGwithZeroTemp: lowBG, timeToLowestBGwithZeroTemp: "?", rescueCarbs: rescueAmt, absorptionRatio: ratio)
+            nsMessage = "Slow Abs (\(ratio)): Rescue May Be Needed. Low=\(lowBG) w/0 temp. Rec=\(rescueAmt)g."
+            self.lastNotificationTime = currentTimestamp
+
+        case .carbsDefinitelyNeeded(let timeToLow, let lowBG, let rescueAmt, let ratio):
+            self.logger.info("Warning Triggered: Carbs Definitely Needed")
+            // TODO: Verify parameter names/types match the updated NotificationManager function signature
+            NotificationManager.sendCarbsDefinitelyNeededNotification(timeToLow: timeToLow, lowestBG: lowBG, timeToLowestBG: "?", rescueCarbs: rescueAmt)
+            nsMessage = "Slow Abs (\(ratio)): Carbs Definitely Needed. Low=\(lowBG) w/0 temp. Rec=\(rescueAmt)g."
+            self.lastNotificationTime = currentTimestamp
+
+        case .editCarbEntrySuggested(let timeToLow, let lowBG, let ratio):
+            self.logger.info("Warning Triggered: Edit Carb Entry Suggested")
+            // TODO: Verify parameter names/types match the updated NotificationManager function signature
+            NotificationManager.sendCarbEntryEditingNeededNotification(timeToLow: timeToLow, lowestBG: lowBG, timeToLowestBG: "?", absorptionRatio: ratio)
+            nsMessage = "Slow Abs (\(ratio)): Carb Edit May Be Needed. Low=\(lowBG) (avoided by 0 temp)."
+            self.lastNotificationTime = currentTimestamp
+        }
+
+        // Post to Nightscout if a warning message was generated
+        if let message = nsMessage {
+            // Use the helper function to post the notification that NightscoutService is observing
+            postWarningNotificationToApp(payload: message, time: currentTimestamp)
+        }
+    }
+
+    // MARK: - Notification Posting Helper
+
+    /// Posts the warning notification to NotificationCenter for other parts of the app (like NightscoutService) to observe.
+    // Renamed for clarity
+    private func postWarningNotificationToApp(payload: String, time: Date) {
+        let notificationName = Notification.Name.slowAbsorptionWarning // Use the name observer listens for
+        let userInfo: [String: Any] = [
+            "warningMessage": payload,
+            "warningTimestamp": time
+        ]
+        NotificationCenter.default.post(
+            name: notificationName,
+            object: self, // LoopDataManager is posting
+            userInfo: userInfo
+        )
+        self.logger.info("Posted '%{public}@' notification with payload: %{public}@", notificationName.rawValue, payload)
+    }
+    
+    // Inside LoopDataManager extension
+
+    private func calculateRescueCarbs(
+        from zeroTempMetrics: PredictionMetrics,
+        suspendThreshold: HKQuantity,
+        displayUnit: HKUnit, // Unit for calculations
+        CSF: Double          // Carb Sensitivity Factor (ISF/CR)
+    ) -> Double? {
+
+        // Preconditions for rescue carb calculation:
+        // 1. The zero-temp prediction must actually have a minimum glucose value.
+        // 2. That minimum must be below the suspend threshold.
+        // 3. There must be a time associated with that minimum.
+        guard let minGlucoseZeroTempQty = zeroTempMetrics.minimumGlucoseValue?.quantity,
+              minGlucoseZeroTempQty < suspendThreshold, // Check if zero-temp prediction still goes low
+              let timeToMinZeroTemp = zeroTempMetrics.timeToMinimumGlucose
+        else {
+            self.logger.debug("Preconditions for rescue carb calculation not met (e.g., zero temp does not go below threshold or min BG/time missing).")
+            return nil // Rescue carbs not applicable
+        }
+
+        // Convert the minimum glucose in the zero-temp prediction to a Double for calculation
+        let minGlucoseZeroTempValue = minGlucoseZeroTempQty.doubleValue(for: displayUnit)
+
+        // Get absorption settings
+        let assumedRescueCarbAbsorptionTimeMinutes = ObservedAbsorptionSettings.assumedRescueCarbAbsorptionTimeMinutes
+        let flooredTimeForRescueCarbs = ObservedAbsorptionSettings.flooredTimeForRescueCarbs
+
+        // Calculate effective time for rescue carb absorption
+        let flooredTimeToLowestBG = max(flooredTimeForRescueCarbs, timeToMinZeroTemp / 60.0) // timeToMinZeroTemp is in seconds
+
+        // Check for valid divisors
+        guard assumedRescueCarbAbsorptionTimeMinutes > 0 else {
+            self.logger.error("Assumed rescue carb absorption time is zero or negative. Cannot calculate rescue carbs.")
+            return nil
+        }
+        let absorptionFraction = min(1.0, flooredTimeToLowestBG / assumedRescueCarbAbsorptionTimeMinutes)
+        guard absorptionFraction > 0 else {
+            self.logger.info("Rescue carb absorption fraction is zero or negative. Cannot calculate rescue carbs.")
+            return nil
+        }
+        // CSF > 0 is already checked before calling determineWarningOutcome,
+        // but ensuring it here if this function were used elsewhere would be good.
+
+        let thresholdValue = suspendThreshold.doubleValue(for: displayUnit)
+        let calculatedCarbs = (thresholdValue - minGlucoseZeroTempValue) / CSF / absorptionFraction
+        
+        let result = max(0, calculatedCarbs) // Ensure rescue carbs are not negative
+        self.logger.debug("Helper function calculated rescue carbs: %{public}.1f g", result)
+        return result
+    }
+
+} // End of LoopDataManager Extension // End of LoopDataManager Extension
