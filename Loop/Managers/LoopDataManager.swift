@@ -2015,7 +2015,7 @@ extension LoopDataManager {
        */
     
     func postSlowAbsorptionNotification(payload: String, time: Date) { NotificationCenter.default.post(
-        name: Notification.Name.slowAbsorptionWarning,
+        name: Notification.Name.lowBGWarning,
         object: nil,
         userInfo: [
             "messagePayload": payload,
@@ -3270,7 +3270,7 @@ extension LoopDataManager {
     /// Posts the warning notification to NotificationCenter for other parts of the app (like NightscoutService) to observe.
     // Renamed for clarity
     private func postWarningNotificationToApp(payload: String, time: Date) {
-        let notificationName = Notification.Name.slowAbsorptionWarning // Use the name observer listens for
+        let notificationName = Notification.Name.lowBGWarning // Use the name observer listens for
         let userInfo: [String: Any] = [
             "warningMessage": payload,
             "warningTimestamp": time

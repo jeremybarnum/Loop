@@ -538,7 +538,7 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
              LoopNotificationCategory.remoteCarbsFailure.rawValue,
              LoopNotificationCategory.missedMeal.rawValue,
              LoopNotificationCategory.prebolusReminder.rawValue,
-             LoopNotificationCategory.slowAbsorptionWarning.rawValue:
+             LoopNotificationCategory.lowBGWarning.rawValue:
             completionHandler([.badge, .sound, .list, .banner])
         default:
             // For all others, banners are not to be displayed while in the foreground

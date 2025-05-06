@@ -59,7 +59,7 @@ extension NotificationManager {
 
         // Add slow absorption warning category
         categories.append(UNNotificationCategory(
-            identifier: LoopNotificationCategory.slowAbsorptionWarning.rawValue,
+            identifier: LoopNotificationCategory.lowBGWarning.rawValue,
             actions: [acknowledgeAlertAction],
             intentIdentifiers: [],
             options: .customDismissAction
@@ -232,7 +232,7 @@ extension NotificationManager {
 
          let request = UNNotificationRequest(
              /// We use the same `identifier` for all requests so a newer missed meal notification will replace a current one (if it exists)
-             identifier: LoopNotificationCategory.slowAbsorptionWarning.rawValue,
+             identifier: LoopNotificationCategory.lowBGWarning.rawValue,
              content: notification,
              trigger: notificationTrigger
          )
@@ -250,14 +250,14 @@ extension NotificationManager {
          notification.body = String(format: NSLocalizedString("Carbs absorbing at %@% of expectation.  Edit carb amount, absorption time and/or settings to trigger updated prediction and zero temp.",comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),absorptionRatio)
          notification.sound = .default
          notification.interruptionLevel = .timeSensitive // making the notification interrupt
-         notification.categoryIdentifier = LoopNotificationCategory.slowAbsorptionWarning.rawValue
+         notification.categoryIdentifier = LoopNotificationCategory.lowBGWarning.rawValue
 
          
          let notificationTrigger = UNTimeIntervalNotificationTrigger(timeInterval: 2, repeats: false)//the delay is just for testing purposes
 
          let request = UNNotificationRequest(
              /// We use the same `identifier` for all requests so a newer missed meal notification will replace a current one (if it exists)
-            identifier: LoopNotificationCategory.slowAbsorptionWarning.rawValue,
+            identifier: LoopNotificationCategory.lowBGWarning.rawValue,
              content: notification,
              trigger: notificationTrigger
          )
@@ -274,14 +274,14 @@ extension NotificationManager {
          notification.body = String(format: NSLocalizedString("Loop is already zero temping but it won't be enough and there are minimal future carbs that might hit. Take carbs and check settings for crashiness.",comment: "The notification body for a likely carbs needed situation"),rescueCarbs)
          notification.sound = .default
          notification.interruptionLevel = .timeSensitive // making the notification interrupt
-         notification.categoryIdentifier = LoopNotificationCategory.slowAbsorptionWarning.rawValue
+         notification.categoryIdentifier = LoopNotificationCategory.lowBGWarning.rawValue
 
          
          let notificationTrigger: UNTimeIntervalNotificationTrigger? = nil
 
          let request = UNNotificationRequest(
              /// We use the same `identifier` for all requests so a newer missed meal notification will replace a current one (if it exists)
-             identifier: LoopNotificationCategory.slowAbsorptionWarning.rawValue,
+             identifier: LoopNotificationCategory.lowBGWarning.rawValue,
              content: notification,
              trigger: notificationTrigger
          )

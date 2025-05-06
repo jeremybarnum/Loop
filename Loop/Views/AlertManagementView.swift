@@ -337,7 +337,7 @@ struct AlertManagementView: View {
     private var nightscoutTestSection: some View {
         Section(header: Text("Nightscout Test")) {
             Button(action: {
-                let notificationName  = Notification.Name.slowAbsorptionWarning
+                let notificationName  = Notification.Name.lowBGWarning
                 let messagePayload = "Test Message"
                 let messageTime = Date()
                 let userInfo: [String: Any] = [
