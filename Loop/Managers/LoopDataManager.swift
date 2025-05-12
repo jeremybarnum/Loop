@@ -3056,110 +3056,83 @@ extension LoopDataManager {
 
     // MARK: - Action Handling
 
-    /// Takes the outcome of the warning check and performs necessary actions (local notifications, NS upload trigger)
     private func handleWarningOutcome(_ outcome: PotentialWarningType) {
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue)) // Ensure correct queue
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
 
+        var localNotificationTitle: String? = nil
+        var localNotificationBody: String? = nil
         var nsMessage: String? = nil // Message payload for the Nightscout notification
-        let currentTimestamp = Date() // Consistent timestamp for actions
-        var shouldUpdateLastNotificationTime = false // Only update if a warning is actually sent
+        let currentTimestamp = Date()
+        var shouldUpdateLastNotificationTime = false
 
-        // Use a switch to handle the different outcomes determined earlier
         switch outcome {
         case .none:
             self.logger.debug("Handling outcome: No warning needed.")
-            // nsMessage remains nil
+            // All message variables remain nil
 
-        case .carbsDefinitelyNeeded(let context): // Extract context here
+        case .carbsDefinitelyNeeded(let context):
             self.logger.info("Handling outcome: Carbs Definitely Needed.")
             shouldUpdateLastNotificationTime = true
             let unit = context.displayUnit // Use unit from the extracted context
 
-            // --- Prepare data for notifications ---
             let timeToLowStr = context.observedAbsorptionPredictionMetrics.timeToCrossThreshold.map { String(Int(round($0 / 60))) } ?? "?"
             let lowBGStr = context.observedAbsorptionWithSuspendPredictionMetrics.minimumGlucoseDouble(for: unit).map { String(Int(round($0))) } ?? "?"
             let rescueAmtStr = context.calculatedRescueCarbs.map { String(Int(round($0))) } ?? "?"
             let ratioStr = String(format: "%.0f%%", context.absorptionRatio * 100)
-            let timeToLowestBGStr = context.observedAbsorptionWithSuspendPredictionMetrics.timeToMinimumGlucose.map { String(Int(round($0 / 60))) } ?? "?"
+            // let timeToLowestBGStr = context.observedAbsorptionWithSuspendPredictionMetrics.timeToMinimumGlucose.map { String(Int(round($0 / 60))) } ?? "?" // Available if needed
 
-            // --- Trigger Local Notification ---
-            // TODO: Verify parameter names/types match the updated NotificationManager function signature
-            NotificationManager.sendCarbsDefinitelyNeededNotification(
-                timeToLow: timeToLowStr,
-                lowestBG: lowBGStr,
-                timeToLowestBG: timeToLowestBGStr,
-                rescueCarbs: rescueAmtStr
-            )
-
-            // --- Construct Nightscout Message ---
+            localNotificationTitle = String(format: NSLocalizedString("Low Glucose Predicted", comment: "Title for carbs definitely needed warning"), timeToLowStr)
+            localNotificationBody = String(format: NSLocalizedString("Loop predicts a low of %1$@ mg/dL. Zero temp may not be enough. Take at least %2$@g carbs.", comment: "Body for carbs definitely needed warning. (1: predicted low BG), (2: rescue carbs)"), lowBGStr, rescueAmtStr)
+            
             nsMessage = "Slow Abs (\(ratioStr)): Carbs DEFINITELY Needed. Low=\(lowBGStr) w/0 temp. Rec at least \(rescueAmtStr)g."
 
-        case .rescueCarbsLikelyNeeded(let context): // Extract context here
+        case .rescueCarbsLikelyNeeded(let context):
             self.logger.info("Handling outcome: Rescue Carbs Likely Needed.")
             shouldUpdateLastNotificationTime = true
             let unit = context.displayUnit // Use unit from the extracted context
 
-            // --- Prepare data for notifications ---
             let timeToLowStr = context.observedAbsorptionPredictionMetrics.timeToCrossThreshold.map { String(Int(round($0 / 60))) } ?? "?"
             let lowBGStr = context.observedAbsorptionWithSuspendPredictionMetrics.minimumGlucoseDouble(for: unit).map { String(Int(round($0))) } ?? "?"
             let rescueAmtStr = context.calculatedRescueCarbs.map { String(Int(round($0))) } ?? "?"
             let ratioStr = String(format: "%.0f%%", context.absorptionRatio * 100)
-            let timeToLowZeroTempStr = context.observedAbsorptionWithSuspendPredictionMetrics.timeToCrossThreshold.map { String(Int(round($0 / 60))) } ?? "?"
-            let timeToLowestBGZeroTempStr = context.observedAbsorptionWithSuspendPredictionMetrics.timeToMinimumGlucose.map { String(Int(round($0 / 60))) } ?? "?"
 
-            // --- Trigger Local Notification ---
-            // TODO: Verify parameter names/types match the updated NotificationManager function signature
-            NotificationManager.sendRescueCarbsNeededNotification(
-                timeToLow: timeToLowStr,
-                timetoLowZeroTemp: timeToLowZeroTempStr,
-                lowestBGwithZeroTemp: lowBGStr,
-                timeToLowestBGwithZeroTemp: timeToLowestBGZeroTempStr,
-                rescueCarbs: rescueAmtStr,
-                absorptionRatio: ratioStr
-            )
+            localNotificationTitle = String(format: NSLocalizedString("Potential Low Glucose", comment: "Title for rescue carbs likely needed warning"), timeToLowStr)
+            localNotificationBody = String(format: NSLocalizedString("Carbs absorbing at %1$@ of expectation. Loop predicts low of %2$@ mg/dL. Consider taking at least %3$@g carbs and check prediction.", comment: "Body for rescue carbs likely needed warning. (1: absorption ratio), (2: predicted low BG), (3: rescue carbs)"), ratioStr, lowBGStr, rescueAmtStr)
 
-            // --- Construct Nightscout Message ---
             nsMessage = "Slow Abs (\(ratioStr)): Rescue May Be Needed. Low=\(lowBGStr) w/0 temp. Rec at least \(rescueAmtStr)g."
 
-        case .mayAvoidRescueCarbsWithEditing(let context): // Extract context here
+        case .mayAvoidRescueCarbsWithEditing(let context):
             self.logger.info("Handling outcome: May Avoid Rescue Carbs With Editing.")
             shouldUpdateLastNotificationTime = true
             let unit = context.displayUnit // Use unit from the extracted context
 
-            // --- Prepare data for notifications ---
             let timeToLowStr = context.observedAbsorptionPredictionMetrics.timeToCrossThreshold.map { String(Int(round($0 / 60))) } ?? "?"
             let lowBGStr = context.observedAbsorptionPredictionMetrics.minimumGlucoseDouble(for: unit).map { String(Int(round($0))) } ?? "?"
             let ratioStr = String(format: "%.0f%%", context.absorptionRatio * 100)
-            let timeToLowestBGStr = context.observedAbsorptionPredictionMetrics.timeToMinimumGlucose.map { String(Int(round($0 / 60))) } ?? "?"
 
-            // --- Trigger Local Notification ---
-            // TODO: Verify parameter names/types match the updated NotificationManager function signature
-            NotificationManager.sendCarbEntryEditingNeededNotification(
-                timeToLow: timeToLowStr,
-                lowestBG: lowBGStr,
-                timeToLowestBG: timeToLowestBGStr,
-                absorptionRatio: ratioStr
-            )
-
-            // --- Construct Nightscout Message ---
+            localNotificationTitle = String(format: NSLocalizedString("Potential Low Glucose", comment: "Title for carb entry editing needed warning"), timeToLowStr)
+            localNotificationBody = String(format: NSLocalizedString("Carbs absorbing at %1$@ of expectation. Loop predicts low of %2$@ mg/dL. Editing carb entry may allow Loop to avoid this low.", comment: "Body for carb entry editing needed warning. (1: absorption ratio), (2: predicted low BG)"), ratioStr, lowBGStr)
+            
             nsMessage = "Slow Abs (\(ratioStr)): Carb Edit May Be Needed. Low=\(lowBGStr) (avoided by 0 temp)."
 
-        case .considerEditingCarbsUpToAvoidUnnecessarySuspend(let context): // Extract context here
+        case .considerEditingCarbsUpToAvoidUnnecessarySuspend(let context):
             self.logger.info("Handling outcome: Consider Editing Carbs Up.")
             shouldUpdateLastNotificationTime = true
             let unit = context.displayUnit // Use unit from the extracted context
 
-            // --- Prepare data for notifications ---
             let timeToLowStr = context.standardWithSuspendPredictionMetrics.timeToCrossThreshold.map { String(Int(round($0 / 60))) } ?? "?"
             let lowBGStr = context.standardWithSuspendPredictionMetrics.minimumGlucoseDouble(for: unit).map { String(Int(round($0))) } ?? "?"
             let ratioStr = String(format: "%.0f%%", context.absorptionRatio * 100)
 
-            // --- Trigger Local Notification ---
-            self.logger.debug("Local notification for 'considerEditingCarbsUpToAvoidUnnecessarySuspend' not implemented yet.")
-            // TODO: Implement or map to an existing NotificationManager call
+            localNotificationTitle = NSLocalizedString("Check Carb Entry", comment: "Title for consider editing carbs up warning")
+            localNotificationBody = String(format: NSLocalizedString("Observed absorption (%1$@) is faster than expected. Loop's standard prediction shows a low of %2$@ mg/dL in %3$@ min which may be avoided. Consider increasing carb entry if BG is rising unexpectedly.", comment: "Body for consider editing carbs up warning. (1: absorption ratio), (2: predicted low BG), (3: time to low)"), ratioStr, lowBGStr, timeToLowStr)
 
-            // --- Construct Nightscout Message ---
-            nsMessage = "Obs Abs (\(ratioStr)) faster than expected. Std pred low (\(lowBGStr) in \(timeToLowStr)m) may be avoided. Edit carbs up?"
+            nsMessage = "Obs Abs (\(ratioStr)) > Exp. Std pred low (\(lowBGStr) in \(timeToLowStr)m) may be avoided. Edit carbs up?"
+        }
+
+        // Send local notification if title and body were set
+        if let title = localNotificationTitle, let body = localNotificationBody {
+            NotificationManager.sendGenericPredictedLowWarning(title: title, body: body)
         }
 
         // Update last notification time if a warning was processed
@@ -3170,12 +3143,9 @@ extension LoopDataManager {
 
         // Post notification to trigger Nightscout upload if a message was generated
         if let message = nsMessage {
-            // The displayUnitString is no longer needed for postWarningNotificationToApp
-            // as we are not sending fake BG values with the note.
             postWarningNotificationToApp(payload: message, time: currentTimestamp)
         }
     }
-
 
     private func postWarningNotificationToApp(payload: String, time: Date) {
         let notificationName = Notification.Name.lowBGWarning // Ensure this matches NightscoutService observer

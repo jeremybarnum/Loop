@@ -216,73 +216,34 @@ extension NotificationManager {
 
         UNUserNotificationCenter.current().add(request)
     }
-    
-    static func sendRescueCarbsNeededNotification(timeToLow: String,timetoLowZeroTemp: String, lowestBGwithZeroTemp: String, timeToLowestBGwithZeroTemp: String, rescueCarbs: String, absorptionRatio: String) {//TODO: should it be three separate warnings, depending? Like Dragan did? maybe.
-         let notification = UNMutableNotificationContent()
 
-         notification.title = String(format: NSLocalizedString("Potential low in %@ minutes.", comment: "The notification title for a slow carb absorption situation"),timeToLow, rescueCarbs)
-         notification.body = String(format: NSLocalizedString("Carbs absorbing at %@ of expectation.  Consider editing, checking prediction and taking %@ carbs.", comment:  "The notification title for a slow carb absorption situation that requires rescue carbs"),absorptionRatio, rescueCarbs)
-         notification.sound = .default
-         notification.interruptionLevel = .timeSensitive // making the notification interrupt
+        static func sendGenericPredictedLowWarning(title: String, body: String) {
+            let notification = UNMutableNotificationContent()
 
-         
-         let notificationTrigger: UNTimeIntervalNotificationTrigger? = nil
+            notification.title = title
+            notification.body = body
+            notification.sound = .default // Or your preferred sound for these warnings
+            
+            // Consistent with your other low BG warnings
+            notification.interruptionLevel = .timeSensitive
+            notification.categoryIdentifier = LoopNotificationCategory.lowBGWarning.rawValue
 
-         let request = UNNotificationRequest(
-             /// We use the same `identifier` for all requests so a newer missed meal notification will replace a current one (if it exists)
-             identifier: LoopNotificationCategory.lowBGWarning.rawValue,
-             content: notification,
-             trigger: notificationTrigger
-         )
+            // Use the category raw value as the identifier to ensure this notification
+            // replaces any previous one from this same category/system.
+            let request = UNNotificationRequest(
+                identifier: LoopNotificationCategory.lowBGWarning.rawValue,
+                content: notification,
+                trigger: nil // Deliver immediately
+            )
 
-         UNUserNotificationCenter.current().add(request)
-     }
-     
-     
-     static func sendCarbEntryEditingNeededNotification(timeToLow: String, lowestBG: String, timeToLowestBG: String, absorptionRatio: String) {
-         let notification = UNMutableNotificationContent()
+            UNUserNotificationCenter.current().add(request) { error in
+                if let error = error {
+                    // Consider adding logging here if you have a logger available in NotificationManager
+                    print("Error scheduling generic predicted low warning: \(error.localizedDescription)")
+                }
+            }
+        }
 
-         notification.title = String(format: NSLocalizedString("Potential low in %@ minutes. Editing carbs may be enough.", comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),timeToLow)
-         notification.body = String(format: NSLocalizedString("Carbs absorbing at %@% of expectation.  Consider editing to trigger updated prediction and zero temp.",comment: "The notification title for a slow carb absorption situation that can be solved with zero temping only"),absorptionRatio)
-         notification.sound = .default
-         notification.interruptionLevel = .timeSensitive // making the notification interrupt
-         notification.categoryIdentifier = LoopNotificationCategory.lowBGWarning.rawValue
-
-         
-         let notificationTrigger = UNTimeIntervalNotificationTrigger(timeInterval: 2, repeats: false)//the delay is just for testing purposes
-
-         let request = UNNotificationRequest(
-             /// We use the same `identifier` for all requests so a newer missed meal notification will replace a current one (if it exists)
-            identifier: LoopNotificationCategory.lowBGWarning.rawValue,
-             content: notification,
-             trigger: notificationTrigger
-         )
-
-         UNUserNotificationCenter.current().add(request)
-     }
-     
-     static func sendCarbsDefinitelyNeededNotification(timeToLow: String, lowestBG: String, timeToLowestBG: String, rescueCarbs: String) {
-         let notification = UNMutableNotificationContent()
-
-         notification.title = String(format: NSLocalizedString("Low in %@ mins. Take at least %@ carbs.", comment: "The notification title for an excess insulin situation that definitely requires rescue carbs"),timeToLow, rescueCarbs)
-         notification.body = String(format: NSLocalizedString("Loop is already zero temping but it won't be enough. Take carbs and check settings.",comment: "The notification body for a carbs definitely needed situation"),rescueCarbs)
-         notification.sound = .default
-         notification.interruptionLevel = .timeSensitive // making the notification interrupt
-         notification.categoryIdentifier = LoopNotificationCategory.lowBGWarning.rawValue
-
-         
-         let notificationTrigger: UNTimeIntervalNotificationTrigger? = nil
-
-         let request = UNNotificationRequest(
-             /// We use the same `identifier` for all requests so a newer missed meal notification will replace a current one (if it exists)
-             identifier: LoopNotificationCategory.lowBGWarning.rawValue,
-             content: notification,
-             trigger: notificationTrigger
-         )
-
-         UNUserNotificationCenter.current().add(request)
-     }
-    
     static func sendMissedMealNotification(mealStart: Date, amountInGrams: Double, delay: TimeInterval? = nil) {
         let notification = UNMutableNotificationContent()
         /// Notifications should expire after the missed meal is no longer relevant
