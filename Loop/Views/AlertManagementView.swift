@@ -341,8 +341,8 @@ struct AlertManagementView: View {
                 let messagePayload = "Test Message"
                 let messageTime = Date()
                 let userInfo: [String: Any] = [
-                    "messagePayload": messagePayload,
-                    "messageTime": messageTime
+                    "warningMessage": messagePayload,
+                    "warningTimestamp": messageTime
             ]
                 NotificationCenter.default.post(
                     name: notificationName, // The name you defined
