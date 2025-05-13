@@ -705,19 +705,10 @@ extension LoopDataManager {
             carbStore.addCarbEntry(carbEntry, completion: addCompletion)
         }
     }
-//TODO: considering how important delete carb entry is, should I put the logic in the view instead.  This seems safe, but...
-    func deleteCarbEntry(_ oldEntry: StoredCarbEntry, completion: @escaping (_ result: CarbStoreResult<Bool>) -> Void) {
-        // Ensure the syncIdentifier exists and cancel the notification
-        if let syncIdentifier = oldEntry.syncIdentifier {
-            NotificationManager.cancelNotification(for: [syncIdentifier])  // Wrap in an array
-            logger.default("**Canceled notification for carb entry: %@", syncIdentifier)
-        } else {
-            logger.error("**Failed to cancel notification: Missing syncIdentifier for entry")
-        }
 
-        // Proceed with deleting the carb entry
+    func deleteCarbEntry(_ oldEntry: StoredCarbEntry, completion: @escaping (_ result: CarbStoreResult<Bool>) -> Void) {
         carbStore.deleteCarbEntry(oldEntry) { result in
-            completion(result)  // Notify caller of the deletion result
+            completion(result)
         }
     }
 
@@ -3161,3 +3152,4 @@ extension LoopDataManager {
         self.logger.info("**Posted '%{public}@' notification with payload: %{public}@", notificationName.rawValue, payload)
     }
 }
+
