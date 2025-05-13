@@ -2896,9 +2896,43 @@ extension LoopDataManager {
         // 1. Calculate and set self.absorptionRatio
         self.absorptionRatio = self.observedAbsorptionManager.computeObservedAbsorptionRatio(
             insulinCounteractionEffects: self.insulinCounteractionEffects,
-            observedAbsorptionEffects: observedWindowCarbEffects
+            expectedCarbEffects: observedWindowCarbEffects
         )
         self.logger.debug("**Calculated absorptionRatio: %{public}.2f", self.absorptionRatio)
+        
+        // MARK: Detailed Retrospective Absorption Logging
+        let analysisWindow = TimeInterval(hours: 1)
+        let logNow = self.now() // Consistent timestamp for window calculations
+
+        // Filter recentCarbEntries to the analysis window for logging context.
+        // These should be the entries that contributed to `observedWindowCarbEffects`.
+        // If `observedWindowCarbEffects` are derived from a broader set of entries,
+        // adjust this filtering or ensure `self.recentCarbEntries` is appropriately updated.
+        let windowStartForCarbEntries = logNow.addingTimeInterval(-analysisWindow)
+        let relevantCarbEntriesForLog = (self.recentCarbEntries ?? []).filter {
+            $0.startDate >= windowStartForCarbEntries && $0.startDate <= logNow
+        }.sorted(by: { $0.startDate < $1.startDate }) // Sort for consistent log output
+
+        // Filter model and ICE effects to the precise analysis window for logging.
+        // `observedWindowCarbEffects` are used as the "model" effects in the ratio calculation.
+        let effectsStartForLog = logNow.addingTimeInterval(-analysisWindow)
+        let windowedModelEffectsForLog = observedWindowCarbEffects.filter {
+            $0.startDate >= effectsStartForLog && $0.startDate <= logNow
+        }.sorted(by: { $0.startDate < $1.startDate })
+
+        let windowedICEForLog = self.insulinCounteractionEffects.filter {
+            $0.startDate >= effectsStartForLog && $0.startDate <= logNow
+        }.sorted(by: { $0.startDate < $1.startDate })
+
+        self.logRetrospectiveAbsorptionDetails(
+            window: analysisWindow,
+            relevantCarbEntries: relevantCarbEntriesForLog,
+            modelCarbEffects: windowedModelEffectsForLog,      // These are the `observedWindowCarbEffects` used in ratio calc
+            insulinCounteractionEffects: windowedICEForLog,    // These are `self.insulinCounteractionEffects` used in ratio calc
+            absorptionRatio: self.absorptionRatio
+        )
+        // END: Detailed Retrospective Absorption Logging
+
 
         // 2. Update self.observedAbsorptionEffect (the [GlucoseEffect] array)
         //    This uses the new self.absorptionRatio.
@@ -3153,3 +3187,97 @@ extension LoopDataManager {
     }
 }
 
+// MARK: - Retrospective Absorption Logging Details
+
+extension LoopDataManager {
+    private func logRetrospectiveAbsorptionDetails(
+        window: TimeInterval,
+        relevantCarbEntries: [StoredCarbEntry],
+        modelCarbEffects: [GlucoseEffect],          // Predicted effects from carbStore, filtered to relevant window
+        insulinCounteractionEffects: [GlucoseEffectVelocity], // ICE, filtered to relevant window
+        absorptionRatio: Double
+    ) {
+        let logger = self.logger
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "HH:mm:ss"
+        let carbUnit = HKUnit.milligramsPerDeciliter
+        let iceUnit = HKUnit.milligramsPerDeciliterPerMinute
+
+        let logNow = self.now()
+
+        logger.info(" ")
+        logger.info("RETROSPECTIVE ABSORPTION ANALYSIS (Window: %d min ending %{public}@)", Int(window/60), dateFormatter.string(from: logNow))
+        logger.info("======================================================================================")
+        logger.info("Calculated Absorption Ratio: %.2f", absorptionRatio)
+        logger.info(" ")
+
+        logger.info("Contributing Carb Entries (used for modelCarbEffects calculation):")
+        if relevantCarbEntries.isEmpty {
+            logger.info("  None")
+        } else {
+            for entry in relevantCarbEntries {
+                logger.info("  - %.0fg @ %{public}@ (Started %.0f min ago, UID: %{public}@)",
+                            entry.quantity.doubleValue(for: .gram()),
+                            dateFormatter.string(from: entry.startDate),
+                            logNow.timeIntervalSince(entry.startDate) / 60,
+                            entry.syncIdentifier ?? "N/A")
+            }
+        }
+        logger.info(" ")
+
+        logger.info("--- Data Points for Ratio Calculation (Within Window) ---")
+        
+        // Robustly construct the header with explicit padding
+        let hCol1 = "Time".padding(toLength: 10, withPad: " ", startingAt: 0)
+        let hCol2 = "Model Carb (mg/dL)".padding(toLength: 20, withPad: " ", startingAt: 0)
+        let hCol3 = "Carb Δ (mg/dL)".padding(toLength: 20, withPad: " ", startingAt: 0)
+        let hCol4 = "ICE Δ (mg/dL/5min)".padding(toLength: 20, withPad: " ", startingAt: 0)
+        let dataPointHeader = "\(hCol1) | \(hCol2) | \(hCol3) | \(hCol4)"
+        logger.info("%{public}@", dataPointHeader)
+        
+        let separatorLine = String(repeating: "-", count: dataPointHeader.count)
+        logger.info("%{public}@", separatorLine)
+
+        var modelCarbDeltas: [Date: Double] = [:]
+        var lastSeenModelValue: Double? = nil
+        for effect in modelCarbEffects.sorted(by: { $0.startDate < $1.startDate }) {
+            let currentValue = effect.quantity.doubleValue(for: carbUnit)
+            if let lastValue = lastSeenModelValue {
+                modelCarbDeltas[effect.startDate] = currentValue - lastValue
+            } else {
+                modelCarbDeltas[effect.startDate] = currentValue
+            }
+            lastSeenModelValue = currentValue
+        }
+        
+        if modelCarbEffects.isEmpty && insulinCounteractionEffects.isEmpty {
+            logger.info("  No model carb effects or ICE data points within the specified window.")
+        } else {
+            var allTimestampsInWindow = Set<Date>()
+            modelCarbEffects.forEach { allTimestampsInWindow.insert($0.startDate) }
+            insulinCounteractionEffects.forEach { allTimestampsInWindow.insert($0.startDate) }
+            let sortedTimestampsInWindow = allTimestampsInWindow.sorted()
+
+            if sortedTimestampsInWindow.isEmpty {
+                 logger.info("  No combined data points found within the specified window after merging timestamps.")
+            } else {
+                for timestamp in sortedTimestampsInWindow {
+                    let modelEffectAtTimestamp = modelCarbEffects.first(where: { $0.startDate == timestamp })
+                    let iceEffectAtTimestamp = insulinCounteractionEffects.first(where: { $0.startDate == timestamp })
+
+                    let modelCarbValueStr = modelEffectAtTimestamp.map { String(format: "%.1f", $0.quantity.doubleValue(for: carbUnit)) } ?? " "
+                    let modelCarbDeltaValue = modelCarbDeltas[timestamp]
+                    let modelCarbDeltaStr = modelCarbDeltaValue.map { String(format: "%+.1f", $0) } ?? " "
+                    let iceValueTimesFiveStr = iceEffectAtTimestamp.map { String(format: "%.1f", $0.quantity.doubleValue(for: iceUnit) * 5.0) } ?? " "
+                    let timeStr = dateFormatter.string(from: timestamp)
+
+                    let dataRowString = String(format: "%-10@ | %-20@ | %-20@ | %-20@",
+                                               timeStr, modelCarbValueStr, modelCarbDeltaStr, iceValueTimesFiveStr)
+                    logger.info("%{public}@", dataRowString)
+                }
+            }
+        }
+        logger.info("======================================================================================")
+        logger.info(" ")
+    }
+}
