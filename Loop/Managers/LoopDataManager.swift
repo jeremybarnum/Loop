@@ -2770,7 +2770,7 @@ extension LoopDataManager {
         }
         
         let carbEntriesExcludingVeryRecentAndFuture = recentCarbEntries.filter { $0.startDate <= excludeCarbEntriesAfterThisTime }
-        
+            
         let carbEffectExcludeRecentAndFutureEntries = try carbStore.glucoseEffects(
             of: carbEntriesExcludingVeryRecentAndFuture,
             startingAt: carbEffectStart,
@@ -2798,7 +2798,6 @@ extension LoopDataManager {
         // Standard effects MINUS .carbs PLUS .observedAbsorptionEffect
         // .all = [.carbs, .insulin, .momentum, .retrospection]
         var inputs1: PredictionInputEffect = .all
-        inputs1.remove(.carbs)
         inputs1.insert(.observedAbsorptionEffect)
         // Resulting inputs1: [.insulin, .momentum, .retrospection, .observedAbsorptionEffect]
         self.predictionWithObservedAbsorption = try self.predictGlucose(
