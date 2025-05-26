@@ -2882,7 +2882,7 @@ extension LoopDataManager {
         let calculatedCarbs = (thresholdValue - minGlucoseObservedSuspendValue) / CSF / absorptionFraction
         
         let result = max(0, calculatedCarbs)
-        decisionLogger.info("Helper function calculated rescue carbs: %{public}.1f g", result)
+        decisionLogger.info("Helper function calculated rescue carbs: %.1f g", result)
         return result
     }
 
