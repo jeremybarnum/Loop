@@ -36,6 +36,8 @@ final class LoopDataManager {
     private let mealDetectionManager: MealDetectionManager
     
     private let observedAbsorptionManager: ObservedAbsorptionManager
+    
+    private var absorptionRatio = 1.0
 
     private let doseStore: DoseStoreProtocol
 
@@ -49,6 +51,10 @@ final class LoopDataManager {
 
     private let logger = DiagnosticLog(category: "LoopDataManager")
     private let widgetLog = DiagnosticLog(category: "LoopWidgets")
+    
+    // Add this property near your other logger declarations
+    private let predictionLogger = DiagnosticLog(category: "PredictionAnalysis")
+    private let decisionLogger = DiagnosticLog(category: "DecisionAnalysis")
 
     private let analyticsServicesManager: AnalyticsServicesManager
 
@@ -365,18 +371,18 @@ final class LoopDataManager {
         }
     }
     
-    //TODO: just delete. private var zeroTempEffect: [GlucoseEffect] = [] //TODO: how do I know I don't have to do the didset thing? didSet says, if this variable changes, what do I need to do.  In theory, for zeroTemp, it would just be the settings (basal rate and CSF) but it's not really worth it.
+    //TODO: figure out whether these should be optional, and whether any didSets should zero them out
         
     private var predictionWithObservedAbsorption: [GlucoseValue] = []
     private var predictionWithObservedAbsorptionAndZeroTemp: [GlucoseValue] = []
     private var predictionWithZeroTemp: [GlucoseValue] = []
-        
-    private var absorptionRatio = 1.0
-
-    public var observedAbsorptionEffect: [GlucoseEffect] = []  //TODO: how do I know I don't have to do the didset thing? In theory, this should be nullified when carbEffects or ICE change, but again, it doesn't really matter.
-        
-    private var carbEffectExcludeRecentAndFutureEntries: [GlucoseEffect]? = [] //TODO: Check about optionals, etc.  And public or private?
-
+    
+    private var observedAbsorptionEffect: [GlucoseEffect] = [] {
+        didSet {
+            predictionWithObservedAbsorption = []
+            predictionWithObservedAbsorptionAndZeroTemp = []
+        }
+    }
 
     /// When combining retrospective glucose discrepancies, extend the window slightly as a buffer.
     private let retrospectiveCorrectionGroupingIntervalMultiplier = 1.01
@@ -945,36 +951,16 @@ extension LoopDataManager {
             }
         }
 
-        // Inside finishLoop(...)
-
-                // ... (widget update code from your snippet) ...
                 DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
                     self.widgetLog.default("Refreshing widget. Reason: Loop completed")
                     WidgetCenter.shared.reloadAllTimelines()
                 }
- 
-        let observedAbsorptionStart = now().addingTimeInterval(-ObservedAbsorptionSettings.observationWindow)
-                        
-        carbStore.getGlucoseEffects(start: observedAbsorptionStart, end: now(), effectVelocities: insulinCounteractionEffects) { [weak self] (result: CarbStoreResult<(entries: [StoredCarbEntry], effects: [GlucoseEffect])>) in // Explicit type for result
-            guard let self = self else { return }
+        
 
-            self.dataAccessQueue.async {
-                switch result {
-                case .success((_, let observedWindowCarbEffects)):
-                    // Call the new dedicated processing function
-                    self.processObservedAbsorptionAndIssueWarnings(observedWindowCarbEffects: observedWindowCarbEffects)
-                case .failure(let error):
-                    self.logger.error("**Failed to fetch glucose effects for observed absorption: %{public}@", String(describing: error))
-                }
+                
+        updateRemoteRecommendation()
+
             }
-        } // --- End of carbStore.getGlucoseEffects completion handler ---
-                
-        updateRemoteRecommendation() // This was the last line in your original finishLoop
- // --- End of carbStore.getGlucoseEffects completion handler ---
-                
-                // ... (updateRemoteRecommendation() call from your original finishLoop) ...
-                updateRemoteRecommendation()
-            } // End of finishLoop function
 
     fileprivate enum UpdateReason: String {
         case loop
@@ -1178,14 +1164,6 @@ extension LoopDataManager {
         } catch let error {
             logger.error("%{public}@", String(describing: error))
         }
-        
-        do {
-                   try updateObservedAbsorptionEffect()
-               }
-               catch let error {
-                   logger.error("%{public}@", String(describing: error))
-                   warnings.append(.fetchDataWarning(.insulinEffect(error: error)))
-               }
 
         dosingDecision.appendWarnings(warnings.value)
 
@@ -1209,8 +1187,11 @@ extension LoopDataManager {
 
             return (dosingDecision, nil)
         }
-
+        processObservedAbsorptionAndIssueWarnings()
+        
         return updatePredictedGlucoseAndRecommendedDose(with: dosingDecision)
+        
+       
       
     }
 
@@ -1538,8 +1519,7 @@ extension LoopDataManager {
     ///     - LoopError.invalidFutureGlucose
     ///     - LoopError.pumpDataTooOld
     ///     - LoopError.configurationError
-    fileprivate func recommendBolusValidatingDataRecency<Sample: GlucoseValue>(forPrediction predictedGlucose: [Sample],
-                                                                               consideringPotentialCarbEntry potentialCarbEntry: NewCarbEntry?) throws -> ManualBolusRecommendation? {
+    fileprivate func recommendBolusValidatingDataRecency<Sample: GlucoseValue>(forPrediction predictedGlucose: [Sample], consideringPotentialCarbEntry potentialCarbEntry: NewCarbEntry?) throws -> ManualBolusRecommendation? {
         guard let glucose = glucoseStore.latestGlucose else {
             throw LoopError.missingDataError(.glucose)
         }
@@ -1868,7 +1848,7 @@ extension LoopDataManager {
             self.predictedGlucoseIncludingPendingInsulin = predictedGlucoseIncludingPendingInsulin
 
             dosingDecision.predictedGlucose = predictedGlucose
-
+          
             guard lastRequestedBolus == nil
             else {
                 // Don't recommend changes if a bolus was just requested.
@@ -1968,6 +1948,8 @@ extension LoopDataManager {
                 dosingDecision.appendError(loopError)
             }
         }
+        
+        
 
         return (dosingDecision, loopError)
     }
@@ -2770,6 +2752,7 @@ extension LoopDataManager {
         }
         
         let carbEntriesExcludingVeryRecentAndFuture = recentCarbEntries.filter { $0.startDate <= excludeCarbEntriesAfterThisTime }
+
             
         let carbEffectExcludeRecentAndFutureEntries = try carbStore.glucoseEffects(
             of: carbEntriesExcludingVeryRecentAndFuture,
@@ -2778,7 +2761,13 @@ extension LoopDataManager {
             effectVelocities: insulinCounteractionEffects
         )
         
+        let absorptionRatio = self.observedAbsorptionManager.computeObservedAbsorptionRatio(insulinCounteractionEffects: insulinCounteractionEffects, expectedCarbEffects: carbEffect ?? [])
+        
+        //TODO: check the handling of the optional carbEffect
+        
         observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffectExcludeRecentAndFutureEntries )
+        
+        self.absorptionRatio = absorptionRatio // updating class variable with latest value for logging and warning text purposes. the class variable is never an input to a calculation
     }
     
     private func updateObservedAbsorptionPredictions() throws {
@@ -2794,8 +2783,17 @@ extension LoopDataManager {
         
         let usePendingInsulin = true // Consistent with your original intent
         
+        
+        do {
+                   try updateObservedAbsorptionEffect()
+               }
+        
+        catch { predictionLogger.info(" try updateObservedAbsorptionEffect() produced an error ")
+            
+               }
+        
         // --- Prediction 1: self.predictionWithObservedAbsorption ---
-        // Standard effects MINUS .carbs PLUS .observedAbsorptionEffect
+        // Standard effects  PLUS .observedAbsorptionEffect
         // .all = [.carbs, .insulin, .momentum, .retrospection]
         var inputs1: PredictionInputEffect = .all
         inputs1.insert(.observedAbsorptionEffect)
@@ -2804,7 +2802,7 @@ extension LoopDataManager {
             using: inputs1,
             includingPendingInsulin: usePendingInsulin
         )
-        self.logger.debug("**Generated predictionWithObservedAbsorption")
+        predictionLogger.info("**Generated predictionWithObservedAbsorption")
         
         // --- Prediction 2: self.predictionWithObservedAbsorptionAndZeroTemp ---
         // Effects from Prediction 1 PLUS .suspend
@@ -2815,7 +2813,7 @@ extension LoopDataManager {
             using: inputs2,
             includingPendingInsulin: usePendingInsulin
         )
-        self.logger.debug("**Generated predictionWithObservedAbsorptionAndZeroTemp")
+        predictionLogger.info("**Generated predictionWithObservedAbsorptionAndZeroTemp")
         
         
         // --- Prediction 4: self.predictionWithZeroTemp (Standard Zero Temp) ---
@@ -2827,7 +2825,8 @@ extension LoopDataManager {
             using: inputs4,
             includingPendingInsulin: usePendingInsulin
         )
-        self.logger.debug("**Generated predictionWithZeroTemp using inputs")
+        predictionLogger.info("**Generated predictionWithZeroTemp using inputs")
+       
     }
 
     // MARK: - Analysis & Calculation Helpers
@@ -2839,6 +2838,8 @@ extension LoopDataManager {
 
         let minimumGlucoseValue = prediction.min(by: { $0.quantity < $1.quantity })
         let timeToMinimumGlucose = minimumGlucoseValue?.startDate.timeIntervalSince(now)
+        
+        predictionLogger.info("Ran analysePrediction helper function")
 
         return PredictionMetrics(
             minimumGlucoseValue: minimumGlucoseValue,
@@ -2858,7 +2859,7 @@ extension LoopDataManager {
               minGlucoseObservedSuspendQty < suspendThreshold,
               let timeToMinObservedSuspend = observedAbsorptionWithSuspendMetrics.timeToMinimumGlucose
         else {
-            self.logger.debug("Preconditions for rescue carb calculation not met (P3 does not go low or min BG/time missing).")
+            decisionLogger.info("Preconditions for rescue carb calculation not met (P3 does not go low or min BG/time missing).")
             return nil
         }
 
@@ -2873,7 +2874,7 @@ extension LoopDataManager {
         }
         let absorptionFraction = min(1.0, flooredTimeToLowestBG / assumedRescueCarbAbsorptionTimeMinutes)
         guard absorptionFraction > 0 else {
-            self.logger.info("Rescue carb absorption fraction is zero or negative.")
+            predictionLogger.info("Rescue carb absorption fraction is zero or negative.")
             return nil
         }
 
@@ -2881,78 +2882,29 @@ extension LoopDataManager {
         let calculatedCarbs = (thresholdValue - minGlucoseObservedSuspendValue) / CSF / absorptionFraction
         
         let result = max(0, calculatedCarbs)
-        self.logger.debug("Helper function calculated rescue carbs: %{public}.1f g", result)
+        predictionLogger.info("Helper function calculated rescue carbs: %{public}.1f g", result)
         return result
     }
 
     
     // MARK: - Observed Absorption Warning Pipeline
 
-    private func processObservedAbsorptionAndIssueWarnings(observedWindowCarbEffects: [GlucoseEffect]) {
+    private func processObservedAbsorptionAndIssueWarnings() {
         // This function assumes it's already being called on self.dataAccessQueue
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
 
-        // 1. Calculate and set self.absorptionRatio
-        self.absorptionRatio = self.observedAbsorptionManager.computeObservedAbsorptionRatio(
-            insulinCounteractionEffects: self.insulinCounteractionEffects,
-            expectedCarbEffects: observedWindowCarbEffects
-        )
-        self.logger.debug("**Calculated absorptionRatio: %{public}.2f", self.absorptionRatio)
-        
-        // MARK: Detailed Retrospective Absorption Logging
-        let analysisWindow = TimeInterval(hours: 1)
-        let logNow = self.now() // Consistent timestamp for window calculations
-
-        // Filter recentCarbEntries to the analysis window for logging context.
-        // These should be the entries that contributed to `observedWindowCarbEffects`.
-        // If `observedWindowCarbEffects` are derived from a broader set of entries,
-        // adjust this filtering or ensure `self.recentCarbEntries` is appropriately updated.
-        let windowStartForCarbEntries = logNow.addingTimeInterval(-analysisWindow)
-        let relevantCarbEntriesForLog = (self.recentCarbEntries ?? []).filter {
-            $0.startDate >= windowStartForCarbEntries && $0.startDate <= logNow
-        }.sorted(by: { $0.startDate < $1.startDate }) // Sort for consistent log output
-
-        // Filter model and ICE effects to the precise analysis window for logging.
-        // `observedWindowCarbEffects` are used as the "model" effects in the ratio calculation.
-        let effectsStartForLog = logNow.addingTimeInterval(-analysisWindow)
-        let windowedModelEffectsForLog = observedWindowCarbEffects.filter {
-            $0.startDate >= effectsStartForLog && $0.startDate <= logNow
-        }.sorted(by: { $0.startDate < $1.startDate })
-
-        let windowedICEForLog = self.insulinCounteractionEffects.filter {
-            $0.startDate >= effectsStartForLog && $0.startDate <= logNow
-        }.sorted(by: { $0.startDate < $1.startDate })
-
-        self.logRetrospectiveAbsorptionDetails(
-            window: analysisWindow,
-            relevantCarbEntries: relevantCarbEntriesForLog,
-            modelCarbEffects: windowedModelEffectsForLog,      // These are the `observedWindowCarbEffects` used in ratio calc
-            insulinCounteractionEffects: windowedICEForLog,    // These are `self.insulinCounteractionEffects` used in ratio calc
-            absorptionRatio: self.absorptionRatio
-        )
-        // END: Detailed Retrospective Absorption Logging
-
-
-        // 2. Update self.observedAbsorptionEffect (the [GlucoseEffect] array)
-        //    This uses the new self.absorptionRatio.
-        do {
-            try self.updateObservedAbsorptionEffect() // This updates self.observedAbsorptionEffect
-            self.logger.debug("**Updated self.observedAbsorptionEffect using new ratio.")
-        } catch {
-            self.logger.error("**Error calling updateObservedAbsorptionEffect: %{public}@", String(describing: error))
-            return // Critical if this fails, so exit
-        }
-        
-        // 3. Call the REFACTORED updateObservedAbsorptionPredictions()
-        //    This will now use the fresh self.observedAbsorptionEffect.
         do {
             try self.updateObservedAbsorptionPredictions() // This is the refactored version
-            self.logger.debug("**Updated specialized predictions (predictionWithObservedAbsorption, etc.) for warnings.")
+            predictionLogger.info("**Updated specialized predictions (predictionWithObservedAbsorption, etc.) for warnings.")
+            
+            predictionLogger.info("DEBUG: predictedGlucose count: %d", self.predictedGlucose?.count ?? -1)
+            logCombinedAbsorptionAndPredictions()
+            
         } catch {
-             self.logger.error("**Error updating observed absorption predictions: %{public}@", String(describing: error))
+            predictionLogger.info("**Error updating observed absorption predictions: %{public}@", String(describing: error))
              return // If predictions fail
         }
-            
+    
         // 4. Determine and handle the warning outcome
         //    These functions will now be called on dataAccessQueue.
         let warningOutcome = self.determinePotentialWarningType()
@@ -2974,12 +2926,12 @@ extension LoopDataManager {
               let ISF = settings.insulinSensitivitySchedule?.value(at: currentDate),
               let CR = settings.carbRatioSchedule?.value(at: currentDate)
         else {
-            self.logger.error("Missing critical settings for warning check.")
+            decisionLogger.info("Missing critical settings for warning check.")
             return .none
         }
         let CSF = ISF / CR
         guard CSF > 0 else {
-            self.logger.error("CSF is zero or negative.")
+            decisionLogger.info("CSF is zero or negative.")
             return .none
         }
 
@@ -2987,7 +2939,7 @@ extension LoopDataManager {
               !predictionWithObservedAbsorption.isEmpty, // P2
               !predictionWithObservedAbsorptionAndZeroTemp.isEmpty // P3
         else {
-             self.logger.info("Core prediction arrays for warnings are empty. Skipping check.")
+            decisionLogger.info("Core prediction arrays for warnings are empty. Skipping check.")
              return .none
         }
 
@@ -3016,7 +2968,7 @@ extension LoopDataManager {
 
         // Filtering Preconditions (using P2 for initial time-to-low check)
         guard let timeToObservedLow = p2_Metrics.timeToCrossThreshold else {
-            self.logger.debug("Observed Absorption prediction (P2) does not cross threshold. No warning needed.")
+            decisionLogger.info("Observed Absorption prediction (P2) does not cross threshold. No warning needed.")
             return .none
         }
 
@@ -3033,9 +2985,12 @@ extension LoopDataManager {
         if let mostRecentCarbTime = recentCarbEntries?.last?.startDate {
             enoughTimeElapsed = currentDate.timeIntervalSince(mostRecentCarbTime) > ObservedAbsorptionSettings.warningDelay
         } else { enoughTimeElapsed = true }
+        
+        decisionLogger.info("Precondition state (Interval:%{public}d, FarEnough:%{public}d, NotTooFar:%{public}d, CarbAge:%{public}d).",
+                          notificationIntervalExceeded, farEnough, notTooFar, enoughTimeElapsed)
 
         guard notificationIntervalExceeded, farEnough, notTooFar, enoughTimeElapsed else {
-            self.logger.debug("Warning preconditions not met (Interval:%{public}d, FarEnough:%{public}d, NotTooFar:%{public}d, CarbAge:%{public}d).",
+            decisionLogger.info("Warning preconditions not met (Interval:%{public}d, FarEnough:%{public}d, NotTooFar:%{public}d, CarbAge:%{public}d).",
                               notificationIntervalExceeded, farEnough, notTooFar, enoughTimeElapsed)
             return .none
         }
@@ -3046,7 +3001,7 @@ extension LoopDataManager {
             observedAbsorptionPredictionMetrics: p2_Metrics,
             observedAbsorptionWithSuspendPredictionMetrics: p3_Metrics,
             calculatedRescueCarbs: rescueCarbs,
-            absorptionRatio: self.absorptionRatio,
+            absorptionRatio: absorptionRatio,
             displayUnit: displayUnit
         )
 
@@ -3054,6 +3009,9 @@ extension LoopDataManager {
         let p1Crossed = p1_Metrics.didCrossThreshold
         let p2Crossed = p2_Metrics.didCrossThreshold
         let p3Crossed = p3_Metrics.didCrossThreshold
+        
+        decisionLogger.info("Crossed P1: %d, Crossed P2: %d, Crossed P3: %d",
+                           p1Crossed ? 1 : 0, p2Crossed ? 1 : 0, p3Crossed ? 1 : 0)
 
         switch (p1Crossed, p2Crossed, p3Crossed) {
         case (true, true, true):
@@ -3061,7 +3019,7 @@ extension LoopDataManager {
         case (false, true, true), (true, false, true): // P3 crosses, but not all three
             // The (T,F,T) case was noted as unusual, log if desired
             if p1Crossed && !p2Crossed && p3Crossed {
-                self.logger.info("Unexpected prediction pattern (T,F,T) leading to RescueCarbsLikelyNeeded.")
+                decisionLogger.info("Unexpected prediction pattern (T,F,T) leading to RescueCarbsLikelyNeeded.")
             }
             return .rescueCarbsLikelyNeeded(context: context)
         case (false, true, false), (true, true, false): // P2 crosses, P3 does not
@@ -3069,7 +3027,7 @@ extension LoopDataManager {
         case (true, false, false): // P1 crosses, P2 does not
             return .considerEditingCarbsUpToAvoidUnnecessarySuspend(context: context)
         case (false, false, true): // P3 only crosses
-            self.logger.info("Unexpected prediction pattern (F,F,T) - only P3 crossed. No warning issued.")
+            decisionLogger.info("Unexpected prediction pattern (F,F,T) - only P3 crossed. No warning issued.")
             return .none // As per our table
         case (false, false, false):
             return .none
@@ -3091,11 +3049,11 @@ extension LoopDataManager {
 
         switch outcome {
         case .none:
-            self.logger.debug("Handling outcome: No warning needed.")
+            decisionLogger.info("Handling outcome: No warning needed.")
             // All message variables remain nil
 
         case .carbsDefinitelyNeeded(let context):
-            self.logger.info("Handling outcome: Carbs Definitely Needed.")
+            decisionLogger.info("Handling outcome: Carbs Definitely Needed.")
             shouldUpdateLastNotificationTime = true
             let unit = context.displayUnit // Use unit from the extracted context
 
@@ -3111,7 +3069,7 @@ extension LoopDataManager {
             nsMessage = "Slow Abs (\(ratioStr)): Carbs DEFINITELY Needed. Low=\(lowBGStr) w/0 temp. Rec at least \(rescueAmtStr)g."
 
         case .rescueCarbsLikelyNeeded(let context):
-            self.logger.info("Handling outcome: Rescue Carbs Likely Needed.")
+            decisionLogger.info("Handling outcome: Rescue Carbs Likely Needed.")
             shouldUpdateLastNotificationTime = true
             let unit = context.displayUnit // Use unit from the extracted context
 
@@ -3126,7 +3084,7 @@ extension LoopDataManager {
             nsMessage = "Slow Abs (\(ratioStr)): Rescue May Be Needed. Low=\(lowBGStr) w/0 temp. Rec at least \(rescueAmtStr)g."
 
         case .mayAvoidRescueCarbsWithEditing(let context):
-            self.logger.info("Handling outcome: May Avoid Rescue Carbs With Editing.")
+            decisionLogger.info("Handling outcome: May Avoid Rescue Carbs With Editing.")
             shouldUpdateLastNotificationTime = true
             let unit = context.displayUnit // Use unit from the extracted context
 
@@ -3140,7 +3098,7 @@ extension LoopDataManager {
             nsMessage = "Slow Abs (\(ratioStr)): Carb Edit May Be Needed. Low=\(lowBGStr) (avoided by 0 temp)."
 
         case .considerEditingCarbsUpToAvoidUnnecessarySuspend(let context):
-            self.logger.info("Handling outcome: Consider Editing Carbs Up.")
+            decisionLogger.info("Handling outcome: Consider Editing Carbs Up.")
             shouldUpdateLastNotificationTime = true
             let unit = context.displayUnit // Use unit from the extracted context
 
@@ -3162,16 +3120,17 @@ extension LoopDataManager {
         // Update last notification time if a warning was processed
         if shouldUpdateLastNotificationTime {
             self.lastNotificationTime = currentTimestamp
-            self.logger.info("Updated lastNotificationTime to %{public}@", currentTimestamp as NSDate)
+            decisionLogger.info("Updated lastNotificationTime to %{public}@", currentTimestamp as NSDate)
         }
 
         // Post notification to trigger Nightscout upload if a message was generated
         if let message = nsMessage {
-            postWarningNotificationToApp(payload: message, time: currentTimestamp)
+            postWarningNotificationToNightscout(payload: message, time: currentTimestamp)
         }
+
     }
 
-    private func postWarningNotificationToApp(payload: String, time: Date) {
+    private func postWarningNotificationToNightscout(payload: String, time: Date) {
         let notificationName = Notification.Name.lowBGWarning // Ensure this matches NightscoutService observer
         let userInfo: [String: Any] = [
             "warningMessage": payload,
@@ -3182,101 +3141,239 @@ extension LoopDataManager {
             object: self,
             userInfo: userInfo
         )
-        self.logger.info("**Posted '%{public}@' notification with payload: %{public}@", notificationName.rawValue, payload)
+        decisionLogger.info("**Posted '%{public}@' notification with payload: %{public}@", notificationName.rawValue, payload)
     }
 }
 
 // MARK: - Retrospective Absorption Logging Details
 
 extension LoopDataManager {
-    private func logRetrospectiveAbsorptionDetails(
-        window: TimeInterval,
-        relevantCarbEntries: [StoredCarbEntry],
-        modelCarbEffects: [GlucoseEffect],          // Predicted effects from carbStore, filtered to relevant window
-        insulinCounteractionEffects: [GlucoseEffectVelocity], // ICE, filtered to relevant window
+    
+    private func logCombinedAbsorptionAndPredictions() {
+        // Call the moved absorption analysis logging
+        logAbsorptionRatioCalculation(
+            expectedCarbEffects: self.carbEffect ?? [],
+            insulinCounteractionEffects: self.insulinCounteractionEffects,
+            absorptionRatio: self.absorptionRatio
+        )
+        
+        // Immediately follow with prediction arrays
+        logPredictionArrays()
+    }
+    
+    private func logAbsorptionRatioCalculation(
+        expectedCarbEffects: [GlucoseEffect],
+        insulinCounteractionEffects: [GlucoseEffectVelocity],
         absorptionRatio: Double
     ) {
-        let logger = self.logger
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "HH:mm:ss"
+        let logNow = now()
+        
         let carbUnit = HKUnit.milligramsPerDeciliter
-        let iceUnit = HKUnit.milligramsPerDeciliterPerMinute
+        let ICEUnit = HKUnit.milligramsPerDeciliterPerMinute
 
-        let logNow = self.now()
-
-        logger.info(" ")
-        logger.info("RETROSPECTIVE ABSORPTION ANALYSIS (Window: %d min ending %{public}@)", Int(window/60), dateFormatter.string(from: logNow))
-        logger.info("======================================================================================")
-        logger.info("Calculated Absorption Ratio: %.2f", absorptionRatio)
-        logger.info(" ")
-
-        logger.info("Contributing Carb Entries (used for modelCarbEffects calculation):")
-        if relevantCarbEntries.isEmpty {
-            logger.info("  None")
-        } else {
-            for entry in relevantCarbEntries {
-                logger.info("  - %.0fg @ %{public}@ (Started %.0f min ago, UID: %{public}@)",
-                            entry.quantity.doubleValue(for: .gram()),
-                            dateFormatter.string(from: entry.startDate),
-                            logNow.timeIntervalSince(entry.startDate) / 60,
-                            entry.syncIdentifier ?? "N/A")
-            }
-        }
-        logger.info(" ")
-
-        logger.info("--- Data Points for Ratio Calculation (Within Window) ---")
+        // Analysis window and filtering (matching the calculation logic)
+        let analysisWindow = TimeInterval(hours: 1)
+        let effectsStartForLog = logNow.addingTimeInterval(-analysisWindow)
         
-        // Robustly construct the header with explicit padding
-        let hCol1 = "Time".padding(toLength: 10, withPad: " ", startingAt: 0)
-        let hCol2 = "Model Carb (mg/dL)".padding(toLength: 20, withPad: " ", startingAt: 0)
-        let hCol3 = "Carb Δ (mg/dL)".padding(toLength: 20, withPad: " ", startingAt: 0)
-        let hCol4 = "ICE Δ (mg/dL/5min)".padding(toLength: 20, withPad: " ", startingAt: 0)
-        let dataPointHeader = "\(hCol1) | \(hCol2) | \(hCol3) | \(hCol4)"
-        logger.info("%{public}@", dataPointHeader)
-        
-        let separatorLine = String(repeating: "-", count: dataPointHeader.count)
-        logger.info("%{public}@", separatorLine)
+        // Filter to the analysis window for logging
+        let windowedModelEffectsForLog = expectedCarbEffects.filter {
+            $0.startDate >= effectsStartForLog && $0.startDate <= logNow
+        }.sorted(by: { $0.startDate < $1.startDate })
 
+        let windowedICEForLog = insulinCounteractionEffects.filter {
+            $0.startDate >= effectsStartForLog && $0.startDate <= logNow
+        }.sorted(by: { $0.startDate < $1.startDate })
+
+        // Consistent column widths
+        let timeWidth = 8
+        let carbValueWidth = 12
+        let carbDeltaWidth = 12
+        let iceWidth = 12
+        let totalWidth = timeWidth + carbValueWidth + carbDeltaWidth + iceWidth + 12 // 12 for separators
+
+        predictionLogger.info(" ")
+        predictionLogger.info("RETROSPECTIVE ABSORPTION ANALYSIS (Window: %d min ending %{public}@)",
+                    Int(analysisWindow/60), dateFormatter.string(from: logNow))
+        predictionLogger.info("%{public}@", String(repeating: "=", count: totalWidth))
+        predictionLogger.info("Calculated Absorption Ratio: %.2f", absorptionRatio)
+        predictionLogger.info(" ")
+        predictionLogger.info("--- Data Points for Ratio Calculation (Within Window) ---")
+        
+        // Create aligned headers using consistent padding
+        let hTime = "Time".padding(toLength: timeWidth, withPad: " ", startingAt: 0)
+        let hCarbValue = "Carb(mg/dL)".padding(toLength: carbValueWidth, withPad: " ", startingAt: 0)
+        let hCarbDelta = "Carb Δ".padding(toLength: carbDeltaWidth, withPad: " ", startingAt: 0)
+        let hICE = "ICE/5min".padding(toLength: iceWidth, withPad: " ", startingAt: 0)
+        
+        predictionLogger.info("%{public}@ | %{public}@ | %{public}@ | %{public}@", hTime, hCarbValue, hCarbDelta, hICE)
+        predictionLogger.info("%{public}@", String(repeating: "-", count: totalWidth))
+
+        // Calculate carb deltas - all entries show deltas from previous
         var modelCarbDeltas: [Date: Double] = [:]
         var lastSeenModelValue: Double? = nil
-        for effect in modelCarbEffects.sorted(by: { $0.startDate < $1.startDate }) {
+        
+        for effect in windowedModelEffectsForLog.sorted(by: { $0.startDate < $1.startDate }) {
             let currentValue = effect.quantity.doubleValue(for: carbUnit)
             if let lastValue = lastSeenModelValue {
                 modelCarbDeltas[effect.startDate] = currentValue - lastValue
-            } else {
-                modelCarbDeltas[effect.startDate] = currentValue
             }
+            // First entry will have no delta (won't appear in modelCarbDeltas)
             lastSeenModelValue = currentValue
         }
         
-        if modelCarbEffects.isEmpty && insulinCounteractionEffects.isEmpty {
-            logger.info("  No model carb effects or ICE data points within the specified window.")
+        if windowedModelEffectsForLog.isEmpty && windowedICEForLog.isEmpty {
+            predictionLogger.info("  No model carb effects or ICE data points within the specified window.")
         } else {
-            var allTimestampsInWindow = Set<Date>()
-            modelCarbEffects.forEach { allTimestampsInWindow.insert($0.startDate) }
-            insulinCounteractionEffects.forEach { allTimestampsInWindow.insert($0.startDate) }
-            let sortedTimestampsInWindow = allTimestampsInWindow.sorted()
-
-            if sortedTimestampsInWindow.isEmpty {
-                 logger.info("  No combined data points found within the specified window after merging timestamps.")
+            // Create aligned time series by rounding to common intervals
+            let intervalMinutes = 5.0 // Align to 5-minute boundaries
+            var alignedData: [Date: (carbValue: Double?, carbDelta: Double?, iceValue: Double?)] = [:]
+            
+            // Helper function to round time to nearest interval
+            let roundToInterval = { (date: Date) -> Date in
+                let minutes = date.timeIntervalSince1970 / 60.0
+                let roundedMinutes = round(minutes / intervalMinutes) * intervalMinutes
+                return Date(timeIntervalSince1970: roundedMinutes * 60.0)
+            }
+            
+            // Add carb data to aligned structure
+            for effect in windowedModelEffectsForLog {
+                let alignedTime = roundToInterval(effect.startDate)
+                let carbValue = effect.quantity.doubleValue(for: carbUnit)
+                let carbDelta = modelCarbDeltas[effect.startDate]
+                
+                if alignedData[alignedTime] == nil {
+                    alignedData[alignedTime] = (carbValue: carbValue, carbDelta: carbDelta, iceValue: nil)
+                } else {
+                    alignedData[alignedTime]?.carbValue = carbValue
+                    alignedData[alignedTime]?.carbDelta = carbDelta
+                }
+            }
+            
+            // Add ICE data to aligned structure
+            for effect in windowedICEForLog {
+                let alignedTime = roundToInterval(effect.startDate)
+                let iceValue = effect.quantity.doubleValue(for: ICEUnit) * 5.0
+                
+                if alignedData[alignedTime] == nil {
+                    alignedData[alignedTime] = (carbValue: nil, carbDelta: nil, iceValue: iceValue)
+                } else {
+                    alignedData[alignedTime]?.iceValue = iceValue
+                }
+            }
+            
+            let sortedAlignedTimes = alignedData.keys.sorted()
+            
+            if sortedAlignedTimes.isEmpty {
+                predictionLogger.info("  No combined data points found within the specified window.")
             } else {
-                for timestamp in sortedTimestampsInWindow {
-                    let modelEffectAtTimestamp = modelCarbEffects.first(where: { $0.startDate == timestamp })
-                    let iceEffectAtTimestamp = insulinCounteractionEffects.first(where: { $0.startDate == timestamp })
+                for timestamp in sortedAlignedTimes {
+                    guard let data = alignedData[timestamp] else { continue }
+                    
+                    // Format each column consistently
+                    let timeStr = dateFormatter.string(from: timestamp).padding(toLength: timeWidth, withPad: " ", startingAt: 0)
+                    
+                    let carbValueStr = data.carbValue
+                        .map { String(format: "%.1f", $0) }
+                        .map { $0.padding(toLength: carbValueWidth, withPad: " ", startingAt: 0) }
+                        ?? " ".padding(toLength: carbValueWidth, withPad: " ", startingAt: 0)
+                    
+                    let carbDeltaStr = data.carbDelta
+                        .map { String(format: "%+.1f", $0) }
+                        .map { $0.padding(toLength: carbDeltaWidth, withPad: " ", startingAt: 0) }
+                        ?? " ".padding(toLength: carbDeltaWidth, withPad: " ", startingAt: 0)
+                    
+                    let iceStr = data.iceValue
+                        .map { String(format: "%.1f", $0) }
+                        .map { $0.padding(toLength: iceWidth, withPad: " ", startingAt: 0) }
+                        ?? " ".padding(toLength: iceWidth, withPad: " ", startingAt: 0)
 
-                    let modelCarbValueStr = modelEffectAtTimestamp.map { String(format: "%.1f", $0.quantity.doubleValue(for: carbUnit)) } ?? " "
-                    let modelCarbDeltaValue = modelCarbDeltas[timestamp]
-                    let modelCarbDeltaStr = modelCarbDeltaValue.map { String(format: "%+.1f", $0) } ?? " "
-                    let iceValueTimesFiveStr = iceEffectAtTimestamp.map { String(format: "%.1f", $0.quantity.doubleValue(for: iceUnit) * 5.0) } ?? " "
-                    let timeStr = dateFormatter.string(from: timestamp)
-
-                    let dataRowString = String(format: "%-10@ | %-20@ | %-20@ | %-20@",
-                                               timeStr, modelCarbValueStr, modelCarbDeltaStr, iceValueTimesFiveStr)
-                    logger.info("%{public}@", dataRowString)
+                    predictionLogger.info("%{public}@ | %{public}@ | %{public}@ | %{public}@",
+                               timeStr, carbValueStr, carbDeltaStr, iceStr)
                 }
             }
         }
-        logger.info("======================================================================================")
-        logger.info(" ")
+        
+        
+        /*Log the carb entries here
+        guard let contributingCarbEntries else {
+            predictionLogger.info("No carb entries used for observed absorption calculation.")
+            return
+        }
+        predictionLogger.info("Carb entries used for observed absorption calculation:")
+        for entry in contributingCarbEntries {
+            predictionLogger.info("  %{public}@ - %.1fg, %.1fh absorption",
+                                 entry.startDate as CVarArg,
+                                 entry.quantity.doubleValue(for: .gram()),
+                                 (entry.absorptionTime ?? 0) / 3600)
+        }
+        */
+        predictionLogger.info("%{public}@", String(repeating: "=", count: totalWidth))
+        predictionLogger.info(" ")
+    }
+    private func logPredictionArrays() {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "HH:mm:ss"
+        let glucoseUnit = HKUnit.milligramsPerDeciliter
+        
+        let logNow = self.now()
+        let futureWindow: TimeInterval = .hours(2) // Configurable
+        let cutoffTime = logNow.addingTimeInterval(futureWindow)
+        let columnWidth = 8
+        let columnCount = 5
+        let padding = 2
+        
+        predictionLogger.info("PREDICTION ARRAYS (Next %.0f hours from %{public}@)", futureWindow/3600, dateFormatter.string(from: logNow))
+        let titleSeparatorLine = String(repeating: "=", count: (columnWidth + padding) * columnCount) // Adjust based on total width
+        predictionLogger.info("%{public}@", titleSeparatorLine)
+        
+        // Filter predictions to the time window
+        let p0_filtered = (predictedGlucoseIncludingPendingInsulin ?? []).filter { $0.startDate <= cutoffTime }//TODO: this gets nulled out before logging
+        let p1_filtered = predictionWithZeroTemp.filter { $0.startDate <= cutoffTime }
+        let p2_filtered = predictionWithObservedAbsorption.filter { $0.startDate <= cutoffTime }
+        let p3_filtered = predictionWithObservedAbsorptionAndZeroTemp.filter { $0.startDate <= cutoffTime }
+        
+        // Create table header with tighter column widths
+        let hTime = "Time".padding(toLength: columnWidth, withPad: " ", startingAt: 0)
+        let hP0 = "Standard".padding(toLength: columnWidth, withPad: " ", startingAt: 0)
+        let hP1 = "Std+Sus".padding(toLength: columnWidth, withPad: " ", startingAt: 0)
+        let hP2 = "ObsAbs".padding(toLength: columnWidth, withPad: " ", startingAt: 0)
+        let hP3 = "Obs+Sus".padding(toLength: columnWidth, withPad: " ", startingAt: 0)
+        
+        predictionLogger.info("%{public}@ | %{public}@ | %{public}@ | %{public}@ | %{public}@", hTime, hP0, hP1, hP2, hP3)
+        let separatorLine = String(repeating: "-", count: (columnWidth + padding) * columnCount) // Adjust based on total width
+        predictionLogger.info("%{public}@", separatorLine)
+        
+        // Get all unique timestamps from all four predictions
+        var allTimestamps = Set<Date>()
+        p0_filtered.forEach { allTimestamps.insert($0.startDate) }
+        p1_filtered.forEach { allTimestamps.insert($0.startDate) }
+        p2_filtered.forEach { allTimestamps.insert($0.startDate) }
+        p3_filtered.forEach { allTimestamps.insert($0.startDate) }
+        
+        let sortedTimestamps = allTimestamps.sorted()
+        
+        if sortedTimestamps.isEmpty {
+            predictionLogger.info("No prediction data found within the specified window.")
+        } else {
+            for timestamp in sortedTimestamps {
+                let p0Value = p0_filtered.first(where: { $0.startDate == timestamp })
+                let p1Value = p1_filtered.first(where: { $0.startDate == timestamp })
+                let p2Value = p2_filtered.first(where: { $0.startDate == timestamp })
+                let p3Value = p3_filtered.first(where: { $0.startDate == timestamp })
+                
+                let timeStr = dateFormatter.string(from: timestamp)
+                let p0Str = p0Value.map { String(format: "%.0f", $0.quantity.doubleValue(for: glucoseUnit)) } ?? " "
+                let p1Str = p1Value.map { String(format: "%.0f", $0.quantity.doubleValue(for: glucoseUnit)) } ?? " "
+                let p2Str = p2Value.map { String(format: "%.0f", $0.quantity.doubleValue(for: glucoseUnit)) } ?? " "
+                let p3Str = p3Value.map { String(format: "%.0f", $0.quantity.doubleValue(for: glucoseUnit)) } ?? " "
+                
+                let dataRowString = "\(timeStr.padding(toLength: columnWidth, withPad: " ", startingAt: 0)) | \(p0Str.padding(toLength: columnWidth, withPad: " ", startingAt: 0)) | \(p1Str.padding(toLength: columnWidth, withPad: " ", startingAt: 0)) | \(p2Str.padding(toLength: columnWidth, withPad: " ", startingAt: 0)) | \(p3Str.padding(toLength: columnWidth, withPad: " ", startingAt: 0))"
+                predictionLogger.info("%{public}@", dataRowString)
+            }
+        }
+        
+        predictionLogger.info("%{public}@", titleSeparatorLine)
     }
 }

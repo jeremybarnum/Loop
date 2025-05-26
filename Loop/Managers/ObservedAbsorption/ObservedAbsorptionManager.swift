@@ -14,7 +14,8 @@ import LoopKit
 
 
 class ObservedAbsorptionManager {
-    private let log = OSLog(category: "ObservedAbsorptionManager")
+    //private let log = OSLog(category: "ObservedAbsorptionManager")
+    private let predictionLogger = DiagnosticLog(category: "PredictionAnalysis")
 
     
     /// Allows for controlling uses of the system date in unit testing
@@ -41,7 +42,7 @@ class ObservedAbsorptionManager {
     
     // MARK: SlowAbsorption Detection
 
-    func computeObservedAbsorptionRatio(insulinCounteractionEffects: [GlucoseEffectVelocity], expectedCarbEffects: [GlucoseEffect])-> Double {
+    func computeObservedAbsorptionRatio(insulinCounteractionEffects: [GlucoseEffectVelocity], expectedCarbEffects: [GlucoseEffect], contributingCarbEntries: [StoredCarbEntry]? = nil)-> Double {
 //computes recent empirical ratio of observed to modeled absorption and generates an effect for the adjustment
         let intervalStart = currentDate(timeIntervalSinceNow: -TimeInterval(minutes: 20)) //only consider last 20 minutes
         let now = self.currentDate
@@ -78,7 +79,7 @@ class ObservedAbsorptionManager {
         let averageCarbEffect = carbEffectValueCache / carbEffectCount / delta //I want it to match the units on the graph, so I'm using mg/dL/minute
         //print("*Test FutureCarbEffects:",futureCarbEffects)
         
-        //print("*Test carbEffectCount",carbEffectCount, "carbEffectValueCache", carbEffectValueCache, "CarbEffectAverage:",averageCarbEffect)
+        predictionLogger.info("carbEffectValueCache: %.1f, carbEffectCount: %.1f, CarbEffectAverage in mg/dl/minute, so divided by 5: %.1f",carbEffectValueCache, carbEffectCount, averageCarbEffect)
 
         let filteredICE = insulinCounteractionEffects
             .filterDateRange(intervalStart, now).dropFirst()
@@ -90,11 +91,13 @@ class ObservedAbsorptionManager {
         
         ICECount = Double(filteredICE.count)
         let averageICE = ICEValueCache / ICECount
-        //print("*Test ICESUm:",ICEValueCache,"ICE Count:",ICECount,"ICE Average:",averageICE)
+        predictionLogger.info("ICESum: %.1f, ICE Count: %.1f, ICE Average in mg/dl/minute, so divided by 5: %.3f", ICEValueCache * 5, ICECount, averageICE)
+        //TODO: make sure the logging isn't confusing with the averages and the column headers
         
         if carbEffectCount < ObservedAbsorptionSettings.minCarbEffectCount {absorptionRatio = 1} else {absorptionRatio = max(averageICE / averageCarbEffect, 0)} // if the carb entry is new and there is less than 3 loops of recent data, don't adjust the carb effect.  It's clunky to do this by setting the absorptionRatio to 1, but it works and is simple.  Also floor the absorption ratio at 0 so that if ICE is negative, it's not double counting too much.  This could be debated.  Also TODO: what is the overlap between this and carb entry aging.  If absorption doesn't start for 10 minutes, and we are waiting till the third entry to calculate absorptionRatio, then that's 25 minutes anyway.  Perhaps this is an overlapping entries issue.  Also need to test is observed absorption always based on 3 readings or more than that?  Also TODO: need to decide whether I care about the theoretical possibility that a 20 minute lookback could capture 4 observations.  I think I do.  Also, I don't like the hard coding of the 20 minutes.  And it's redundant with the lookback window.
         
-        //print("*Test Absorption Ratio:", absorptionRatio," carbEffectCount:", carbEffectCount,"Time:",Date())
+        predictionLogger.info("Absorption Ratio: %.1f", absorptionRatio )
+
 
         
         return absorptionRatio
@@ -115,33 +118,8 @@ class ObservedAbsorptionManager {
         
     }
     
-    
 
-    // MARK: Logging
-    
-    /// Generates a diagnostic report about the current state
-    ///
-    /// - parameter completionHandler: A closure called once the report has been generated. The closure takes a single argument of the report string.
-    /*lo func generateDiagnosticReport(_ completionHandler: @escaping (_ report: String) -> Void) {
-        let report = [
-            "## ObservedAbsorptionManager",
-            "",
-     "* carbAbsorptionRatio: \(String(describing: compute)",
-            "* lastMissedMealCarbEstimate: \(String(describing: lastMissedMealNotification?.carbAmount))",
-            "* lastEvaluatedMissedMealTimeline:",
-     lastEvaluatedMissedMealTimeline.reduce(into: "", { (entries, entry) in
-         entries.append("  * date: \(entry.date), unexpectedDeviation: \(entry.unexpectedDeviation ?? -1), meal-based threshold: \(entry.mealThreshold ?? -1), change-based threshold: \(entry.rateOfChangeThreshold ?? -1) \n")
-     }),
-            "* lastDetectedMissedMealTimeline:",
-     lastDetectedMissedMealTimeline.reduce(into: "", { (entries, entry) in
-         entries.append("  * date: \(entry.date), unexpectedDeviation: \(entry.unexpectedDeviation ?? -1), meal-based threshold: \(entry.mealThreshold ?? -1), change-based threshold: \(entry.rateOfChangeThreshold ?? -1) \n")
-     })
-   ]
-        
-        completionHandler(report.joined(separator: "\n"))
-    }
-   */
-   
+
    //TODO: stuff that might be useful for unit testing
         
         /* Internal for unit testing
