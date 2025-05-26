@@ -3158,7 +3158,6 @@ extension LoopDataManager {
         // Immediately follow with prediction arrays
         logPredictionArrays()
     }
-    
     private func logAbsorptionRatioCalculation(
         expectedCarbEffects: [GlucoseEffect],
         insulinCounteractionEffects: [GlucoseEffectVelocity],
@@ -3171,145 +3170,73 @@ extension LoopDataManager {
         let carbUnit = HKUnit.milligramsPerDeciliter
         let ICEUnit = HKUnit.milligramsPerDeciliterPerMinute
 
-        // Analysis window and filtering (matching the calculation logic)
+        // Get recent data for both arrays separately
         let analysisWindow = TimeInterval(hours: 1)
         let effectsStartForLog = logNow.addingTimeInterval(-analysisWindow)
         
-        // Filter to the analysis window for logging
-        let windowedModelEffectsForLog = expectedCarbEffects.filter {
+        let recentCarbEffects = expectedCarbEffects.filter {
             $0.startDate >= effectsStartForLog && $0.startDate <= logNow
         }.sorted(by: { $0.startDate < $1.startDate })
 
-        let windowedICEForLog = insulinCounteractionEffects.filter {
+        let recentICE = insulinCounteractionEffects.filter {
             $0.startDate >= effectsStartForLog && $0.startDate <= logNow
         }.sorted(by: { $0.startDate < $1.startDate })
-
-        // Consistent column widths
-        let timeWidth = 8
-        let carbValueWidth = 12
-        let carbDeltaWidth = 12
-        let iceWidth = 12
-        let totalWidth = timeWidth + carbValueWidth + carbDeltaWidth + iceWidth + 12 // 12 for separators
 
         predictionLogger.info(" ")
         predictionLogger.info("RETROSPECTIVE ABSORPTION ANALYSIS (Window: %d min ending %{public}@)",
                     Int(analysisWindow/60), dateFormatter.string(from: logNow))
-        predictionLogger.info("%{public}@", String(repeating: "=", count: totalWidth))
+        predictionLogger.info("========================================")
         predictionLogger.info("Calculated Absorption Ratio: %.2f", absorptionRatio)
         predictionLogger.info(" ")
-        predictionLogger.info("--- Data Points for Ratio Calculation (Within Window) ---")
         
-        // Create aligned headers using consistent padding
-        let hTime = "Time".padding(toLength: timeWidth, withPad: " ", startingAt: 0)
-        let hCarbValue = "Carb(mg/dL)".padding(toLength: carbValueWidth, withPad: " ", startingAt: 0)
-        let hCarbDelta = "Carb Δ".padding(toLength: carbDeltaWidth, withPad: " ", startingAt: 0)
-        let hICE = "ICE/5min".padding(toLength: iceWidth, withPad: " ", startingAt: 0)
+        // Log carb effects and deltas
+        predictionLogger.info("CARB EFFECTS mg/dl/min (Recent %d min):", Int(analysisWindow/60))
+        predictionLogger.info("Time     | Cumulative | Delta")
+        predictionLogger.info("---------|------------|------")
         
-        predictionLogger.info("%{public}@ | %{public}@ | %{public}@ | %{public}@", hTime, hCarbValue, hCarbDelta, hICE)
-        predictionLogger.info("%{public}@", String(repeating: "-", count: totalWidth))
-
-        // Calculate carb deltas - all entries show deltas from previous
-        var modelCarbDeltas: [Date: Double] = [:]
-        var lastSeenModelValue: Double? = nil
-        
-        for effect in windowedModelEffectsForLog.sorted(by: { $0.startDate < $1.startDate }) {
-            let currentValue = effect.quantity.doubleValue(for: carbUnit)
-            if let lastValue = lastSeenModelValue {
-                modelCarbDeltas[effect.startDate] = currentValue - lastValue
-            }
-            // First entry will have no delta (won't appear in modelCarbDeltas)
-            lastSeenModelValue = currentValue
-        }
-        
-        if windowedModelEffectsForLog.isEmpty && windowedICEForLog.isEmpty {
-            predictionLogger.info("  No model carb effects or ICE data points within the specified window.")
+        if recentCarbEffects.isEmpty {
+            predictionLogger.info("No carb effects in window")
         } else {
-            // Create aligned time series by rounding to common intervals
-            let intervalMinutes = 5.0 // Align to 5-minute boundaries
-            var alignedData: [Date: (carbValue: Double?, carbDelta: Double?, iceValue: Double?)] = [:]
-            
-            // Helper function to round time to nearest interval
-            let roundToInterval = { (date: Date) -> Date in
-                let minutes = date.timeIntervalSince1970 / 60.0
-                let roundedMinutes = round(minutes / intervalMinutes) * intervalMinutes
-                return Date(timeIntervalSince1970: roundedMinutes * 60.0)
-            }
-            
-            // Add carb data to aligned structure
-            for effect in windowedModelEffectsForLog {
-                let alignedTime = roundToInterval(effect.startDate)
-                let carbValue = effect.quantity.doubleValue(for: carbUnit)
-                let carbDelta = modelCarbDeltas[effect.startDate]
+            var lastValue: Double? = nil
+            for effect in recentCarbEffects {
+                let timeStr = dateFormatter.string(from: effect.startDate)
+                let cumValue = effect.quantity.doubleValue(for: carbUnit)
                 
-                if alignedData[alignedTime] == nil {
-                    alignedData[alignedTime] = (carbValue: carbValue, carbDelta: carbDelta, iceValue: nil)
+                let deltaStr: String
+                if let last = lastValue {
+                    let delta = (cumValue - last) / 5.0 // Convert to mg/dL/min
+                    deltaStr = String(format: "%+.3f", delta)
                 } else {
-                    alignedData[alignedTime]?.carbValue = carbValue
-                    alignedData[alignedTime]?.carbDelta = carbDelta
+                    deltaStr = "---"
                 }
-            }
-            
-            // Add ICE data to aligned structure
-            for effect in windowedICEForLog {
-                let alignedTime = roundToInterval(effect.startDate)
-                let iceValue = effect.quantity.doubleValue(for: ICEUnit) * 5.0
                 
-                if alignedData[alignedTime] == nil {
-                    alignedData[alignedTime] = (carbValue: nil, carbDelta: nil, iceValue: iceValue)
-                } else {
-                    alignedData[alignedTime]?.iceValue = iceValue
-                }
-            }
-            
-            let sortedAlignedTimes = alignedData.keys.sorted()
-            
-            if sortedAlignedTimes.isEmpty {
-                predictionLogger.info("  No combined data points found within the specified window.")
-            } else {
-                for timestamp in sortedAlignedTimes {
-                    guard let data = alignedData[timestamp] else { continue }
-                    
-                    // Format each column consistently
-                    let timeStr = dateFormatter.string(from: timestamp).padding(toLength: timeWidth, withPad: " ", startingAt: 0)
-                    
-                    let carbValueStr = data.carbValue
-                        .map { String(format: "%.1f", $0) }
-                        .map { $0.padding(toLength: carbValueWidth, withPad: " ", startingAt: 0) }
-                        ?? " ".padding(toLength: carbValueWidth, withPad: " ", startingAt: 0)
-                    
-                    let carbDeltaStr = data.carbDelta
-                        .map { String(format: "%+.1f", $0) }
-                        .map { $0.padding(toLength: carbDeltaWidth, withPad: " ", startingAt: 0) }
-                        ?? " ".padding(toLength: carbDeltaWidth, withPad: " ", startingAt: 0)
-                    
-                    let iceStr = data.iceValue
-                        .map { String(format: "%.1f", $0) }
-                        .map { $0.padding(toLength: iceWidth, withPad: " ", startingAt: 0) }
-                        ?? " ".padding(toLength: iceWidth, withPad: " ", startingAt: 0)
-
-                    predictionLogger.info("%{public}@ | %{public}@ | %{public}@ | %{public}@",
-                               timeStr, carbValueStr, carbDeltaStr, iceStr)
-                }
+                predictionLogger.info("%{public}@ | %10.1f | %{public}@",
+                            timeStr, cumValue, deltaStr)
+                lastValue = cumValue
             }
         }
         
+        predictionLogger.info(" ")
         
-        /*Log the carb entries here
-        guard let contributingCarbEntries else {
-            predictionLogger.info("No carb entries used for observed absorption calculation.")
-            return
+        // Log ICE values
+        predictionLogger.info("ICE VALUES (Recent %d min):", Int(analysisWindow/60))
+        predictionLogger.info("Time     | ICE (mg/dL/min)")
+        predictionLogger.info("---------|---------------")
+        
+        if recentICE.isEmpty {
+            predictionLogger.info("No ICE values in window")
+        } else {
+            for effect in recentICE {
+                let timeStr = dateFormatter.string(from: effect.startDate)
+                let iceValue = effect.quantity.doubleValue(for: ICEUnit)
+                predictionLogger.info("%{public}@ | %13.3f", timeStr, iceValue)
+            }
         }
-        predictionLogger.info("Carb entries used for observed absorption calculation:")
-        for entry in contributingCarbEntries {
-            predictionLogger.info("  %{public}@ - %.1fg, %.1fh absorption",
-                                 entry.startDate as CVarArg,
-                                 entry.quantity.doubleValue(for: .gram()),
-                                 (entry.absorptionTime ?? 0) / 3600)
-        }
-        */
-        predictionLogger.info("%{public}@", String(repeating: "=", count: totalWidth))
+        
+        predictionLogger.info("========================================")
         predictionLogger.info(" ")
     }
+   
     private func logPredictionArrays() {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "HH:mm:ss"
