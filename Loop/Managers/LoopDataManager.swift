@@ -2869,12 +2869,12 @@ extension LoopDataManager {
         let flooredTimeToLowestBG = max(flooredTimeForRescueCarbs, timeToMinObservedSuspend / 60.0)
 
         guard assumedRescueCarbAbsorptionTimeMinutes > 0 else {
-            self.logger.error("Assumed rescue carb absorption time is zero or negative.")
+            decisionLogger.info("Assumed rescue carb absorption time is zero or negative.")
             return nil
         }
         let absorptionFraction = min(1.0, flooredTimeToLowestBG / assumedRescueCarbAbsorptionTimeMinutes)
         guard absorptionFraction > 0 else {
-            predictionLogger.info("Rescue carb absorption fraction is zero or negative.")
+            decisionLogger.info("Rescue carb absorption fraction is zero or negative.")
             return nil
         }
 
@@ -2882,7 +2882,7 @@ extension LoopDataManager {
         let calculatedCarbs = (thresholdValue - minGlucoseObservedSuspendValue) / CSF / absorptionFraction
         
         let result = max(0, calculatedCarbs)
-        predictionLogger.info("Helper function calculated rescue carbs: %{public}.1f g", result)
+        decisionLogger.info("Helper function calculated rescue carbs: %{public}.1f g", result)
         return result
     }
 
@@ -2910,12 +2910,10 @@ extension LoopDataManager {
         let warningOutcome = self.determinePotentialWarningType()
         self.handleWarningOutcome(warningOutcome)
     }
-    
-    // Inside LoopDataManager extension
 
     // MARK: - Warning Determination Logic
 
-    private func determinePotentialWarningType() -> PotentialWarningType { // Renamed to match enum
+    private func determinePotentialWarningType() -> PotentialWarningType {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
 
         guard UserDefaults.standard.slowAbsorptionNotificationsEnabled else { return .none }
@@ -3028,7 +3026,7 @@ extension LoopDataManager {
             return .considerEditingCarbsUpToAvoidUnnecessarySuspend(context: context)
         case (false, false, true): // P3 only crosses
             decisionLogger.info("Unexpected prediction pattern (F,F,T) - only P3 crossed. No warning issued.")
-            return .none // As per our table
+            return .none
         case (false, false, false):
             return .none
         }
@@ -3063,8 +3061,8 @@ extension LoopDataManager {
             let ratioStr = String(format: "%.0f%%", context.absorptionRatio * 100)
             // let timeToLowestBGStr = context.observedAbsorptionWithSuspendPredictionMetrics.timeToMinimumGlucose.map { String(Int(round($0 / 60))) } ?? "?" // Available if needed
 
-            localNotificationTitle = String(format: NSLocalizedString("Low Glucose Predicted", comment: "Title for carbs definitely needed warning"), timeToLowStr)
-            localNotificationBody = String(format: NSLocalizedString("Loop predicts a low of %1$@ mg/dL. Zero temp may not be enough. Take at least %2$@g carbs.", comment: "Body for carbs definitely needed warning. (1: predicted low BG), (2: rescue carbs)"), lowBGStr, rescueAmtStr)
+            localNotificationTitle = String(format: NSLocalizedString("Definite crash predicted in %@ mins", comment: "Title for carbs definitely needed warning"), timeToLowStr)
+            localNotificationBody = String(format: NSLocalizedString("Take at least %2$@g carbs. Too much insulin, nothing to do with carb absorption", comment: "Body for carbs definitely needed warning. (1: predicted low BG), (2: rescue carbs)"), lowBGStr, rescueAmtStr)
             
             nsMessage = "Slow Abs (\(ratioStr)): Carbs DEFINITELY Needed. Low=\(lowBGStr) w/0 temp. Rec at least \(rescueAmtStr)g."
 
@@ -3078,8 +3076,8 @@ extension LoopDataManager {
             let rescueAmtStr = context.calculatedRescueCarbs.map { String(Int(round($0))) } ?? "?"
             let ratioStr = String(format: "%.0f%%", context.absorptionRatio * 100)
 
-            localNotificationTitle = String(format: NSLocalizedString("Potential Low Glucose", comment: "Title for rescue carbs likely needed warning"), timeToLowStr)
-            localNotificationBody = String(format: NSLocalizedString("Carbs absorbing at %1$@ of expectation. Loop predicts low of %2$@ mg/dL. Consider taking at least %3$@g carbs and check prediction.", comment: "Body for rescue carbs likely needed warning. (1: absorption ratio), (2: predicted low BG), (3: rescue carbs)"), ratioStr, lowBGStr, rescueAmtStr)
+            localNotificationTitle = String(format: NSLocalizedString("Likely low in %@ mins", comment: "Title for rescue carbs likely needed warning"), timeToLowStr)
+            localNotificationBody = String(format: NSLocalizedString("Check prediction and consider taking at least %3$@g carbs. Carbs absorbing at %1$@ of expectation.", comment: "Body for rescue carbs likely needed warning. (1: absorption ratio), (2: predicted low BG), (3: rescue carbs)"), ratioStr, lowBGStr, rescueAmtStr)
 
             nsMessage = "Slow Abs (\(ratioStr)): Rescue May Be Needed. Low=\(lowBGStr) w/0 temp. Rec at least \(rescueAmtStr)g."
 
@@ -3092,8 +3090,8 @@ extension LoopDataManager {
             let lowBGStr = context.observedAbsorptionPredictionMetrics.minimumGlucoseDouble(for: unit).map { String(Int(round($0))) } ?? "?"
             let ratioStr = String(format: "%.0f%%", context.absorptionRatio * 100)
 
-            localNotificationTitle = String(format: NSLocalizedString("Potential Low Glucose", comment: "Title for carb entry editing needed warning"), timeToLowStr)
-            localNotificationBody = String(format: NSLocalizedString("Carbs absorbing at %1$@ of expectation. Loop predicts low of %2$@ mg/dL. Editing carb entry may allow Loop to avoid this low.", comment: "Body for carb entry editing needed warning. (1: absorption ratio), (2: predicted low BG)"), ratioStr, lowBGStr)
+            localNotificationTitle = String(format: NSLocalizedString("Potential low in %@ mins", comment: "Title for carb entry editing needed warning"), timeToLowStr)
+            localNotificationBody = String(format: NSLocalizedString("Editing carb entry may allow Loop to avoid this low. Carbs absorbing at %1$@ of expectation.", comment: "Body for carb entry editing needed warning. (1: absorption ratio), (2: predicted low BG)"), ratioStr, lowBGStr)
             
             nsMessage = "Slow Abs (\(ratioStr)): Carb Edit May Be Needed. Low=\(lowBGStr) (avoided by 0 temp)."
 
@@ -3106,7 +3104,7 @@ extension LoopDataManager {
             let lowBGStr = context.standardWithSuspendPredictionMetrics.minimumGlucoseDouble(for: unit).map { String(Int(round($0))) } ?? "?"
             let ratioStr = String(format: "%.0f%%", context.absorptionRatio * 100)
 
-            localNotificationTitle = NSLocalizedString("Check Carb Entry", comment: "Title for consider editing carbs up warning")
+            localNotificationTitle = NSLocalizedString("Consider editing up carbs", comment: "Title for consider editing carbs up warning")
             localNotificationBody = String(format: NSLocalizedString("Observed absorption (%1$@) is faster than expected. Loop's standard prediction shows a low of %2$@ mg/dL in %3$@ min which may be avoided. Consider increasing carb entry if BG is rising unexpectedly.", comment: "Body for consider editing carbs up warning. (1: absorption ratio), (2: predicted low BG), (3: time to low)"), ratioStr, lowBGStr, timeToLowStr)
 
             nsMessage = "Obs Abs (\(ratioStr)) > Exp. Std pred low (\(lowBGStr) in \(timeToLowStr)m) may be avoided. Edit carbs up?"
