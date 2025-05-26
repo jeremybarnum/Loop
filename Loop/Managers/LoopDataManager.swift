@@ -3012,19 +3012,15 @@ extension LoopDataManager {
                            p1Crossed ? 1 : 0, p2Crossed ? 1 : 0, p3Crossed ? 1 : 0)
 
         switch (p1Crossed, p2Crossed, p3Crossed) {
-        case (true, true, true):
+        case (true, true, true), (true, true, false): //lots of extra insulin; second case is extra insulin which is offset by underdeclared carbs which are then edited and then the benefit of lower temping.  Too obscure, better to just privilege the first True and send aggressive warning.
             return .carbsDefinitelyNeeded(context: context)
-        case (false, true, true), (true, false, true): // P3 crosses, but not all three
-            // The (T,F,T) case was noted as unusual, log if desired
-            if p1Crossed && !p2Crossed && p3Crossed {
-                decisionLogger.info("Unexpected prediction pattern (T,F,T) leading to RescueCarbsLikelyNeeded.")
-            }
+        case (false, true, true): // observed absorption sends you low and low temping can't help
             return .rescueCarbsLikelyNeeded(context: context)
-        case (false, true, false), (true, true, false): // P2 crosses, P3 does not
+        case (false, true, false): // observed absorption sends you low and low temping might helpt
             return .mayAvoidRescueCarbsWithEditing(context: context)
-        case (true, false, false): // P1 crosses, P2 does not
+        case (true, false, false), (true, false, true): // underdeclaring carbs means that carbs will absorb as more than loop expects and so loop's low temping may not be needed.  It's not really a low BG situation.  TFT is an essentially impossible corner case.
             return .considerEditingCarbsUpToAvoidUnnecessarySuspend(context: context)
-        case (false, false, true): // P3 only crosses
+        case (false, false, true): // essentialy impossible corner case 
             decisionLogger.info("Unexpected prediction pattern (F,F,T) - only P3 crossed. No warning issued.")
             return .none
         case (false, false, false):
@@ -3061,7 +3057,7 @@ extension LoopDataManager {
             let ratioStr = String(format: "%.0f%%", context.absorptionRatio * 100)
             // let timeToLowestBGStr = context.observedAbsorptionWithSuspendPredictionMetrics.timeToMinimumGlucose.map { String(Int(round($0 / 60))) } ?? "?" // Available if needed
 
-            localNotificationTitle = String(format: NSLocalizedString("Definite crash predicted in %@ mins", comment: "Title for carbs definitely needed warning"), timeToLowStr)
+            localNotificationTitle = String(format: NSLocalizedString("Definite crash in %@ mins", comment: "Title for carbs definitely needed warning"), timeToLowStr)
             localNotificationBody = String(format: NSLocalizedString("Take at least %2$@g carbs. Too much insulin, nothing to do with carb absorption", comment: "Body for carbs definitely needed warning. (1: predicted low BG), (2: rescue carbs)"), lowBGStr, rescueAmtStr)
             
             nsMessage = "Slow Abs (\(ratioStr)): Carbs DEFINITELY Needed. Low=\(lowBGStr) w/0 temp. Rec at least \(rescueAmtStr)g."
