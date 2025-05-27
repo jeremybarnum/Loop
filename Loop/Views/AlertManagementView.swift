@@ -19,6 +19,7 @@ struct AlertManagementView: View {
 
     @State private var showMuteAlertOptions: Bool = false
     @State private var showHowMuteAlertWork: Bool = false
+    @State private var isSlowAbsorptionNotificationEnabled: Bool = UserDefaults.standard.slowAbsorptionNotificationsEnabled //local state
     @State private var isPreBolusReminderEnabled: Bool = UserDefaults.standard.preBolusReminderEnabled // Local state
 
 
@@ -66,6 +67,15 @@ struct AlertManagementView: View {
         )
     }
     
+    private var lowBGWarningThreshold: Binding<Double> {
+        Binding(
+            get: { UserDefaults.standard.lowBGWarningThreshold },
+            set: { newValue in
+                UserDefaults.standard.lowBGWarningThreshold = newValue
+            }
+        )
+    }
+    
     private var preBolusReminderEnabled: Binding<Bool> {
         Binding(
             get: { UserDefaults.standard.preBolusReminderEnabled },
@@ -90,20 +100,22 @@ struct AlertManagementView: View {
     }
 
     var body: some View {
+        
+        
         List {
+            slowAbsorptionAlertSection
+            preBolusReminderSection
             alertPermissionsSection
             if FeatureFlags.criticalAlertsEnabled {
                 muteAlertsSection
-                
-            }
+                }
             missedMealAlertSection
-            slowAbsorptionAlertSection
-            preBolusReminderSection
             testNotificationSection
             nightscoutTestSection
         }
         .onAppear {
                     isPreBolusReminderEnabled = UserDefaults.standard.preBolusReminderEnabled // Sync local state on appear
+                isSlowAbsorptionNotificationEnabled = UserDefaults.standard.slowAbsorptionNotificationsEnabled// Sync local state on appear
                 }
         .navigationTitle(NSLocalizedString("Alert Management", comment: "Title of alert management screen"))
         
@@ -279,11 +291,34 @@ struct AlertManagementView: View {
         }
     }
     
-    private var slowAbsorptionAlertSection: some View {
+    /*private var slowAbsorptionAlertSection: some View {
         Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop can notify you when it sees carbs absorbing slowly, risking a crash.", comment: "Description of slow absorption notifications."))) {
             Toggle(NSLocalizedString("Slow Absorption Notifications", comment: "Title for slow absorption notification toggle"), isOn: slowAbsorptionNotificationsEnabled)
         }
+    }*/
+    
+    private var slowAbsorptionAlertSection: some View {
+        Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop can notify you when it sees carbs absorbing slowly or too much insulin on board, risking a crash.", comment: "Description of low bg notifications."))) {
+            Toggle(NSLocalizedString("Predicted low warnings", comment: "Title for low BG warning enablement"), isOn: $isSlowAbsorptionNotificationEnabled) // Bind to local state
+                .onChange(of: isSlowAbsorptionNotificationEnabled) { newValue in // Use local state for change tracking
+                    UserDefaults.standard.slowAbsorptionNotificationsEnabled = newValue // Update UserDefaults
+                }
+            if isSlowAbsorptionNotificationEnabled { // Check local state
+                HStack {
+                    Text(NSLocalizedString("Warning threshold", comment: "Label for low BG warning threshold"))
+                    Spacer()
+                    Picker("Warning Threshold", selection: lowBGWarningThreshold) {
+                        ForEach(40..<110) {
+                            Text("\($0) mg/dl").tag($0)
+                        }
+                    }
+                    .pickerStyle(WheelPickerStyle())
+                    .frame(height: 40) // Set the desired height
+                }
+            }
+        }
     }
+    
     private var preBolusReminderSection: some View {
         Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop will note you when you prebolus and remind you to eat.", comment: "Description of prebolus notifications."))) {
             Toggle(NSLocalizedString("Pre-bolus reminders", comment: "Title for pre-bolus reminders toggle"), isOn: $isPreBolusReminderEnabled) // Bind to local state
@@ -300,7 +335,7 @@ struct AlertManagementView: View {
                         }
                     }//starting at 1 to help with testing 
                     .pickerStyle(WheelPickerStyle())
-                    .frame(height: 80) // Set the desired height
+                    .frame(height: 40) // Set the desired height
                 }
             }
         }
@@ -364,6 +399,7 @@ extension UserDefaults {
         case slowAbsorptionNotificationsEnabled = "com.loopkit.Loop.slowAbsorptionNotificationsEnabled"
         case preBolusReminderEnabled = "com.loopkit.Loop.preBolusReminderEnabled"
         case prebolusDelayCriterion = "com.loopkit.Loop.prebolusDelayCriterion"
+        case lowBGWarningThreshold = "com.loopkit.Loop.lowBGWarningThreshold"
 
         
     }
@@ -385,6 +421,16 @@ extension UserDefaults {
             set(newValue, forKey: Key.slowAbsorptionNotificationsEnabled.rawValue)
         }
     }
+    
+    var lowBGWarningThreshold: Double {
+            get {
+                return object(forKey: Key.lowBGWarningThreshold.rawValue) as? Double ?? 70.0
+            }
+            set {
+                set(newValue, forKey: Key.lowBGWarningThreshold.rawValue)
+            }
+        }
+    
     var preBolusReminderEnabled: Bool {
         get {
             return object(forKey: Key.preBolusReminderEnabled.rawValue) as? Bool ?? false

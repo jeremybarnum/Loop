@@ -7,11 +7,10 @@
 //
 
 import Foundation
+import LoopKit
 
 public struct ObservedAbsorptionSettings {
-    //level that is considered a low for purposes of warning TODO: figure out HKUnit
-    public static let bloodGlucoseLevelConsideredLowForWarnings = 45.0
-    
+
     /// don't notify if the low is coming sooner than this.  it's obvious and will annoy the user.
     public static let dontNotifyIfSooner = TimeInterval(minutes: 5)
     
