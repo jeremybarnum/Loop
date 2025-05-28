@@ -111,7 +111,7 @@ struct EditPresetView: View {
                                 scheduledRange: scheduledRange,
                                 showDisclosure: true
                             )
-                        }
+                        }.accessibilityIdentifier("button_CorrectionRange")
                     }
 
                     CardSection("Preset Details") {
