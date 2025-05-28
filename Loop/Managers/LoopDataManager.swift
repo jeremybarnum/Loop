@@ -2832,8 +2832,8 @@ extension LoopDataManager {
     // MARK: - Analysis & Calculation Helpers
 
     /// Helper function to analyze a prediction array against a threshold quantity.
-    private func analyzePrediction(prediction: [any GlucoseValue], threshold: Double, now: Date) -> PredictionMetrics {
-        let firstLowElement = prediction.first { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < threshold }
+    private func analyzePrediction(prediction: [any GlucoseValue], threshold: HKQuantity, now: Date) -> PredictionMetrics {
+        let firstLowElement = prediction.first { $0.quantity < threshold }
         let timeToCrossThreshold = firstLowElement?.startDate.timeIntervalSince(now)
 
         let minimumGlucoseValue = prediction.min(by: { $0.quantity < $1.quantity })
@@ -2918,9 +2918,7 @@ extension LoopDataManager {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
 
         guard UserDefaults.standard.lowBGNotificationsEnabled else { return .none }
-        let lowBGWarningThreshold = Double(UserDefaults.standard.lowBGWarningThreshold)
-        print("SET lowBGWarningThreshold in LDM: \(lowBGWarningThreshold)")
-        let currentDate = now()
+              let currentDate = now()
         guard let suspendThresholdQuantity = settings.suspendThreshold?.quantity,
               let displayUnit = settings.glucoseUnit,
               let ISF = settings.insulinSensitivitySchedule?.value(at: currentDate),
@@ -2945,17 +2943,17 @@ extension LoopDataManager {
 
         let p1_Metrics = analyzePrediction(
             prediction: predictionWithZeroTemp,
-            threshold: lowBGWarningThreshold,
+            threshold: suspendThresholdQuantity,
             now: currentDate
         )
         let p2_Metrics = analyzePrediction(
             prediction: predictionWithObservedAbsorption,
-            threshold: lowBGWarningThreshold,
+            threshold: suspendThresholdQuantity,
             now: currentDate
         )
         let p3_Metrics = analyzePrediction(
             prediction: predictionWithObservedAbsorptionAndZeroTemp,
-            threshold: lowBGWarningThreshold,
+            threshold: suspendThresholdQuantity,
             now: currentDate
         )
 
