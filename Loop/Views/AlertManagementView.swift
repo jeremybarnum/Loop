@@ -67,7 +67,7 @@ struct AlertManagementView: View {
         )
     }
     
-    private var lowBGWarningThreshold: Binding<Int> {
+  /*  private var lowBGWarningThreshold: Binding<Int> {
         Binding(
             get: { UserDefaults.standard.lowBGWarningThreshold },
             set: { newValue in
@@ -82,7 +82,7 @@ struct AlertManagementView: View {
             
             )
         
-    }
+    }*/
     private var warningSnooze: Binding<Int> {
         Binding(
             get: { UserDefaults.standard.warningSnooze },
@@ -381,7 +381,7 @@ struct AlertManagementView: View {
             
             // Individual sections for each setting when enabled
             if islowBGNotificationEnabled {
-                Section(footer: DescriptiveText(label: "Warn if prediction drops below this level")) {
+               /* Section(footer: DescriptiveText(label: "Warn if prediction drops below this level")) {
                     HStack {
                         Text("Warning threshold")
                         Spacer()
@@ -393,14 +393,14 @@ struct AlertManagementView: View {
                         .pickerStyle(WheelPickerStyle())
                         .frame(width: 120, height: 40)
                     }.frame(height:30)
-                }
+                }*/
                 
                 Section(footer: DescriptiveText(label: "Wait at least this long between warnings")) {
                     HStack {
                         Text("Warning snooze time")
                         Spacer()
                         Picker("Warning snooze time", selection: warningSnooze) {
-                            ForEach(5..<30) {
+                            ForEach(1..<30) {
                                 Text("\($0) min").tag($0)
                             }
                         }
@@ -436,7 +436,7 @@ struct AlertManagementView: View {
                     }.frame(height:30)
                 }
                 
-                Section(footer: DescriptiveText(label: "Don't warn until this elapsed time post carb entry.")) {
+                Section(footer: DescriptiveText(label: "Wait to start warning until new carbs have some absorption history.")) {
                     HStack {
                         Text("Delay after carb entry")
                         Spacer()
@@ -533,7 +533,7 @@ extension UserDefaults {
         case lowBGNotificationsEnabled = "com.loopkit.Loop.lowBGNotificationsEnabled"
         case preBolusReminderEnabled = "com.loopkit.Loop.preBolusReminderEnabled"
         case prebolusDelayCriterion = "com.loopkit.Loop.prebolusDelayCriterion"
-        case lowBGWarningThreshold = "com.loopkit.Loop.lowBGWarningThreshold"
+       // case lowBGWarningThreshold = "com.loopkit.Loop.lowBGWarningThreshold"
         case warningSnooze = "com.loopkit.Loop.warningSnooze"
         case dontWarnIfLater = "com.loopkit.Loop.dontWarnIfLater"
         case dontWarnIfSooner = "com.loopkit.Loop.dontWarnIfSooner"
@@ -558,14 +558,14 @@ extension UserDefaults {
         }
     }
     
-    var lowBGWarningThreshold: Int {
+    /*var lowBGWarningThreshold: Int {
             get {
                 return object(forKey: Key.lowBGWarningThreshold.rawValue) as? Int ?? 70
             }
             set {
                 set(newValue, forKey: Key.lowBGWarningThreshold.rawValue)
             }
-        }
+        }*/
     
     var warningSnooze: Int {
             get {
