@@ -2832,8 +2832,8 @@ extension LoopDataManager {
     // MARK: - Analysis & Calculation Helpers
 
     /// Helper function to analyze a prediction array against a threshold quantity.
-    private func analyzePrediction(prediction: [any GlucoseValue], threshold: HKQuantity, now: Date) -> PredictionMetrics {
-        let firstLowElement = prediction.first { $0.quantity < threshold }
+    private func analyzePrediction(prediction: [any GlucoseValue], threshold: Double, now: Date) -> PredictionMetrics {
+        let firstLowElement = prediction.first { $0.quantity.doubleValue(for: .milligramsPerDeciliter) < threshold }
         let timeToCrossThreshold = firstLowElement?.startDate.timeIntervalSince(now)
 
         let minimumGlucoseValue = prediction.min(by: { $0.quantity < $1.quantity })
@@ -2848,8 +2848,9 @@ extension LoopDataManager {
         )
     }
 
-    /// Helper function to calculate rescue carbs.
-    private func calculateRescueCarbs(
+    // Helper function to calculate rescue carbs.
+    // TODO: decide what I want the rescue carbs to actually be.  To the threshold? to the target after a certain amount of time?
+    private func calculateRescueCarbs( //TODO: decide what threshold to use
         from observedAbsorptionWithSuspendMetrics: PredictionMetrics, // Use P3 metrics
         suspendThreshold: HKQuantity,
         displayUnit: HKUnit,
@@ -2916,8 +2917,9 @@ extension LoopDataManager {
     private func determinePotentialWarningType() -> PotentialWarningType {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
 
-        guard UserDefaults.standard.slowAbsorptionNotificationsEnabled else { return .none }
-
+        guard UserDefaults.standard.lowBGNotificationsEnabled else { return .none }
+        let lowBGWarningThreshold = Double(UserDefaults.standard.lowBGWarningThreshold)
+        print("SET lowBGWarningThreshold in LDM: \(lowBGWarningThreshold)")
         let currentDate = now()
         guard let suspendThresholdQuantity = settings.suspendThreshold?.quantity,
               let displayUnit = settings.glucoseUnit,
@@ -2943,17 +2945,17 @@ extension LoopDataManager {
 
         let p1_Metrics = analyzePrediction(
             prediction: predictionWithZeroTemp,
-            threshold: suspendThresholdQuantity,
+            threshold: lowBGWarningThreshold,
             now: currentDate
         )
         let p2_Metrics = analyzePrediction(
             prediction: predictionWithObservedAbsorption,
-            threshold: suspendThresholdQuantity,
+            threshold: lowBGWarningThreshold,
             now: currentDate
         )
         let p3_Metrics = analyzePrediction(
             prediction: predictionWithObservedAbsorptionAndZeroTemp,
-            threshold: suspendThresholdQuantity,
+            threshold: lowBGWarningThreshold,
             now: currentDate
         )
 
@@ -2971,17 +2973,17 @@ extension LoopDataManager {
         }
 
         var notificationIntervalExceeded = false
-        let notificationInterval = ObservedAbsorptionSettings.notificationInterval
+        let notificationInterval = Double(UserDefaults.standard.warningSnooze) * 60
         if let lastTime = lastNotificationTime {
             notificationIntervalExceeded = currentDate.timeIntervalSince(lastTime) > notificationInterval
         } else { notificationIntervalExceeded = true }
 
-        let farEnough = timeToObservedLow > ObservedAbsorptionSettings.dontNotifyIfSooner
-        let notTooFar = timeToObservedLow < ObservedAbsorptionSettings.dontNotifyIfLater
+        let farEnough = timeToObservedLow > Double(UserDefaults.standard.dontWarnIfSooner) * 60
+        let notTooFar = timeToObservedLow < Double(UserDefaults.standard.dontWarnIfLater) * 60
 
         var enoughTimeElapsed = false
         if let mostRecentCarbTime = recentCarbEntries?.last?.startDate {
-            enoughTimeElapsed = currentDate.timeIntervalSince(mostRecentCarbTime) > ObservedAbsorptionSettings.warningDelay
+            enoughTimeElapsed = currentDate.timeIntervalSince(mostRecentCarbTime) > Double(UserDefaults.standard.delayAfterCarbEntry) * 60
         } else { enoughTimeElapsed = true }
         
         decisionLogger.info("Precondition state (Interval:%{public}d, FarEnough:%{public}d, NotTooFar:%{public}d, CarbAge:%{public}d).",
@@ -3058,7 +3060,7 @@ extension LoopDataManager {
             // let timeToLowestBGStr = context.observedAbsorptionWithSuspendPredictionMetrics.timeToMinimumGlucose.map { String(Int(round($0 / 60))) } ?? "?" // Available if needed
 
             localNotificationTitle = String(format: NSLocalizedString("Definite crash in %@ mins", comment: "Title for carbs definitely needed warning"), timeToLowStr)
-            localNotificationBody = String(format: NSLocalizedString("Take at least %2$@g carbs. Too much insulin, nothing to do with carb absorption", comment: "Body for carbs definitely needed warning. (1: predicted low BG), (2: rescue carbs)"), lowBGStr, rescueAmtStr)
+            localNotificationBody = String(format: NSLocalizedString("Take at least %2$@g carbs. Too much insulin, even assuming carbs hit as declared.", comment: "Body for carbs definitely needed warning. (1: predicted low BG), (2: rescue carbs)"), lowBGStr, rescueAmtStr)
             
             nsMessage = "Slow Abs (\(ratioStr)): Carbs DEFINITELY Needed. Low=\(lowBGStr) w/0 temp. Rec at least \(rescueAmtStr)g."
 

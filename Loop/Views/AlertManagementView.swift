@@ -7,8 +7,8 @@
 //
 
 import SwiftUI
-import LoopKit
 import LoopKitUI
+import LoopKit
 
 struct AlertManagementView: View {
     @Environment(\.appName) private var appName
@@ -19,7 +19,7 @@ struct AlertManagementView: View {
 
     @State private var showMuteAlertOptions: Bool = false
     @State private var showHowMuteAlertWork: Bool = false
-    @State private var isSlowAbsorptionNotificationEnabled: Bool = UserDefaults.standard.slowAbsorptionNotificationsEnabled //local state
+    @State private var islowBGNotificationEnabled: Bool = UserDefaults.standard.lowBGNotificationsEnabled //local state
     @State private var isPreBolusReminderEnabled: Bool = UserDefaults.standard.preBolusReminderEnabled // Local state
 
 
@@ -58,22 +58,95 @@ struct AlertManagementView: View {
         )
     }
     
-    private var slowAbsorptionNotificationsEnabled: Binding<Bool> {
+    private var lowBGNotificationsEnabled: Binding<Bool> {
         Binding(
-            get: { UserDefaults.standard.slowAbsorptionNotificationsEnabled },
+            get: { UserDefaults.standard.lowBGNotificationsEnabled },
             set: { enabled in
-                UserDefaults.standard.slowAbsorptionNotificationsEnabled = enabled
+                UserDefaults.standard.lowBGNotificationsEnabled = enabled
             }
         )
     }
     
-    private var lowBGWarningThreshold: Binding<Double> {
+    private var lowBGWarningThreshold: Binding<Int> {
         Binding(
             get: { UserDefaults.standard.lowBGWarningThreshold },
             set: { newValue in
                 UserDefaults.standard.lowBGWarningThreshold = newValue
-            }
-        )
+                NotificationCenter.default.post(
+                    name: .LoopDataUpdated,
+                    object: nil,
+                    userInfo: [LoopDataManager.LoopUpdateContextKey: LoopDataManager.LoopUpdateContext.preferences.rawValue]
+                )
+                print("SET lowBGWarningThreshold in View: \(newValue)")
+               }
+            
+            )
+        
+    }
+    private var warningSnooze: Binding<Int> {
+        Binding(
+            get: { UserDefaults.standard.warningSnooze },
+            set: { newValue in
+                UserDefaults.standard.warningSnooze = newValue
+                NotificationCenter.default.post(
+                    name: .LoopDataUpdated,
+                    object: nil,
+                    userInfo: [LoopDataManager.LoopUpdateContextKey: LoopDataManager.LoopUpdateContext.preferences.rawValue]
+                )
+                print("SET warningSnooze in View: \(newValue)")
+               }
+            
+            )
+        
+    }
+    
+    private var dontWarnIfLater: Binding<Int> {
+        Binding(
+            get: { UserDefaults.standard.dontWarnIfLater },
+            set: { newValue in
+                UserDefaults.standard.dontWarnIfLater = newValue
+                NotificationCenter.default.post(
+                    name: .LoopDataUpdated,
+                    object: nil,
+                    userInfo: [LoopDataManager.LoopUpdateContextKey: LoopDataManager.LoopUpdateContext.preferences.rawValue]
+                )
+                print("SET dontWarnIfLater in View: \(newValue)")
+               }
+            
+            )
+        
+    }
+    private var dontWarnIfSooner: Binding<Int> {
+        Binding(
+            get: { UserDefaults.standard.dontWarnIfSooner },
+            set: { newValue in
+                UserDefaults.standard.dontWarnIfSooner = newValue
+                NotificationCenter.default.post(
+                    name: .LoopDataUpdated,
+                    object: nil,
+                    userInfo: [LoopDataManager.LoopUpdateContextKey: LoopDataManager.LoopUpdateContext.preferences.rawValue]
+                )
+                print("SET dontWarnIfSooner in View: \(newValue)")
+               }
+            
+            )
+        
+    }
+    private var delayAfterCarbEntry: Binding<Int> {
+        Binding(
+            get: { UserDefaults.standard.delayAfterCarbEntry },
+            set: { newValue in
+                UserDefaults.standard.delayAfterCarbEntry = newValue
+                NotificationCenter.default.post(
+                    name: .LoopDataUpdated,
+                    object: nil,
+                    userInfo: [LoopDataManager.LoopUpdateContextKey: LoopDataManager.LoopUpdateContext.preferences.rawValue]
+                )
+                print("SET delayAfterCarbEntry in View: \(newValue)")
+               }
+            
+            )
+        
     }
     
     private var preBolusReminderEnabled: Binding<Bool> {
@@ -103,7 +176,7 @@ struct AlertManagementView: View {
         
         
         List {
-            slowAbsorptionAlertSection
+            lowBGAlertSection
             preBolusReminderSection
             alertPermissionsSection
             if FeatureFlags.criticalAlertsEnabled {
@@ -115,7 +188,7 @@ struct AlertManagementView: View {
         }
         .onAppear {
                     isPreBolusReminderEnabled = UserDefaults.standard.preBolusReminderEnabled // Sync local state on appear
-                isSlowAbsorptionNotificationEnabled = UserDefaults.standard.slowAbsorptionNotificationsEnabled// Sync local state on appear
+                islowBGNotificationEnabled = UserDefaults.standard.lowBGNotificationsEnabled// Sync local state on appear
                 }
         .navigationTitle(NSLocalizedString("Alert Management", comment: "Title of alert management screen"))
         
@@ -296,24 +369,85 @@ struct AlertManagementView: View {
             Toggle(NSLocalizedString("Slow Absorption Notifications", comment: "Title for slow absorption notification toggle"), isOn: slowAbsorptionNotificationsEnabled)
         }
     }*/
-    
-    private var slowAbsorptionAlertSection: some View {
-        Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop can notify you when it sees carbs absorbing slowly or too much insulin on board, risking a crash.", comment: "Description of low bg notifications."))) {
-            Toggle(NSLocalizedString("Predicted low warnings", comment: "Title for low BG warning enablement"), isOn: $isSlowAbsorptionNotificationEnabled) // Bind to local state
-                .onChange(of: isSlowAbsorptionNotificationEnabled) { newValue in // Use local state for change tracking
-                    UserDefaults.standard.slowAbsorptionNotificationsEnabled = newValue // Update UserDefaults
-                }
-            if isSlowAbsorptionNotificationEnabled { // Check local state
-                HStack {
-                    Text(NSLocalizedString("Warning threshold", comment: "Label for low BG warning threshold"))
-                    Spacer()
-                    Picker("Warning Threshold", selection: lowBGWarningThreshold) {
-                        ForEach(40..<110) {
-                            Text("\($0) mg/dl").tag($0)
-                        }
+    private var lowBGAlertSection: some View {
+        Group{
+            // First section with toggle and its footer
+            Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop can notify you when it sees carbs absorbing slowly or too much insulin on board, risking a crash.", comment: "Description of low bg notifications."))) {
+                Toggle(NSLocalizedString("Predicted low warnings", comment: "Title for low BG warning enablement"), isOn: $islowBGNotificationEnabled)
+                    .onChange(of: islowBGNotificationEnabled) { newValue in
+                        UserDefaults.standard.lowBGNotificationsEnabled = newValue
                     }
-                    .pickerStyle(WheelPickerStyle())
-                    .frame(height: 40) // Set the desired height
+            }
+            
+            // Individual sections for each setting when enabled
+            if islowBGNotificationEnabled {
+                Section(footer: DescriptiveText(label: "Warn if prediction drops below this level")) {
+                    HStack {
+                        Text("Warning threshold")
+                        Spacer()
+                        Picker("Warning Threshold", selection: lowBGWarningThreshold) {
+                            ForEach(40..<110) {
+                                Text("\($0) mg/dl").tag($0)
+                            }
+                        }
+                        .pickerStyle(WheelPickerStyle())
+                        .frame(width: 120, height: 40)
+                    }.frame(height:30)
+                }
+                
+                Section(footer: DescriptiveText(label: "Wait at least this long between warnings")) {
+                    HStack {
+                        Text("Warning snooze time")
+                        Spacer()
+                        Picker("Warning snooze time", selection: warningSnooze) {
+                            ForEach(5..<30) {
+                                Text("\($0) min").tag($0)
+                            }
+                        }
+                        .pickerStyle(WheelPickerStyle())
+                        .frame(width: 120, height: 40)
+                    }.frame(height:30)
+                }
+                
+                Section(footer: DescriptiveText(label: "Don't warn if low is farther than this - things change")) {
+                    HStack {
+                        Text("Don't warn if farther than")
+                        Spacer()
+                        Picker("Don't warn if farther than", selection: dontWarnIfLater) {
+                            ForEach(20..<60) {
+                                Text("\($0) min").tag($0)
+                            }
+                        }
+                        .pickerStyle(WheelPickerStyle())
+                        .frame(width: 120, height: 40)
+                    }.frame(height:30)
+                }
+                Section(footer: DescriptiveText(label: "Don't warn if low is closer than this - not worth it")) {
+                    HStack {
+                        Text("Don't warn if closer than")
+                        Spacer()
+                        Picker("Don't warn if sooner than", selection: dontWarnIfSooner) {
+                            ForEach(1..<15) {
+                                Text("\($0) min").tag($0)
+                            }
+                        }
+                        .pickerStyle(WheelPickerStyle())
+                        .frame(width: 120, height: 40)
+                    }.frame(height:30)
+                }
+                
+                Section(footer: DescriptiveText(label: "Don't warn until this elapsed time post carb entry.")) {
+                    HStack {
+                        Text("Delay after carb entry")
+                        Spacer()
+                        Picker("Delay after carb entry", selection: delayAfterCarbEntry) {
+                            ForEach(10..<31) {
+                                Text("\($0) min").tag($0)
+                            } //TODO: what if multiple entries?
+                        }
+                        .pickerStyle(WheelPickerStyle())
+                        .frame(width: 120, height: 40)
+                    }.frame(height:30)
                 }
             }
         }
@@ -396,12 +530,14 @@ struct AlertManagementView: View {
 extension UserDefaults {
     private enum Key: String {
         case missedMealNotificationsEnabled = "com.loopkit.Loop.MissedMealNotificationsEnabled"
-        case slowAbsorptionNotificationsEnabled = "com.loopkit.Loop.slowAbsorptionNotificationsEnabled"
+        case lowBGNotificationsEnabled = "com.loopkit.Loop.lowBGNotificationsEnabled"
         case preBolusReminderEnabled = "com.loopkit.Loop.preBolusReminderEnabled"
         case prebolusDelayCriterion = "com.loopkit.Loop.prebolusDelayCriterion"
         case lowBGWarningThreshold = "com.loopkit.Loop.lowBGWarningThreshold"
-
-        
+        case warningSnooze = "com.loopkit.Loop.warningSnooze"
+        case dontWarnIfLater = "com.loopkit.Loop.dontWarnIfLater"
+        case dontWarnIfSooner = "com.loopkit.Loop.dontWarnIfSooner"
+        case delayAfterCarbEntry = "com.loopkit.Loop.delayAfterCarbEntry"
     }
     
     var missedMealNotificationsEnabled: Bool {
@@ -413,21 +549,58 @@ extension UserDefaults {
         }
     }
     
-    var slowAbsorptionNotificationsEnabled: Bool {
+    var lowBGNotificationsEnabled: Bool {
         get {
-            return object(forKey: Key.slowAbsorptionNotificationsEnabled.rawValue) as? Bool ?? false
+            return object(forKey: Key.lowBGNotificationsEnabled.rawValue) as? Bool ?? false
         }
         set {
-            set(newValue, forKey: Key.slowAbsorptionNotificationsEnabled.rawValue)
+            set(newValue, forKey: Key.lowBGNotificationsEnabled.rawValue)
         }
     }
     
-    var lowBGWarningThreshold: Double {
+    var lowBGWarningThreshold: Int {
             get {
-                return object(forKey: Key.lowBGWarningThreshold.rawValue) as? Double ?? 70.0
+                return object(forKey: Key.lowBGWarningThreshold.rawValue) as? Int ?? 70
             }
             set {
                 set(newValue, forKey: Key.lowBGWarningThreshold.rawValue)
+            }
+        }
+    
+    var warningSnooze: Int {
+            get {
+                return object(forKey: Key.warningSnooze.rawValue) as? Int ?? 10
+            }
+            set {
+                set(newValue, forKey: Key.warningSnooze.rawValue)
+            }
+        }
+    
+    var dontWarnIfLater: Int {
+            get {
+                return object(forKey: Key.dontWarnIfLater.rawValue) as? Int ?? 45
+            }
+            set {
+                set(newValue, forKey: Key.dontWarnIfLater.rawValue)
+            }
+        }
+    
+    
+    var dontWarnIfSooner: Int {
+            get {
+                return object(forKey: Key.dontWarnIfSooner.rawValue) as? Int ?? 10
+            }
+            set {
+                set(newValue, forKey: Key.dontWarnIfSooner.rawValue)
+            }
+        }
+    
+    var delayAfterCarbEntry: Int {
+            get {
+                return object(forKey: Key.delayAfterCarbEntry.rawValue) as? Int ?? 30
+            }
+            set {
+                set(newValue, forKey: Key.delayAfterCarbEntry.rawValue)
             }
         }
     
@@ -442,7 +615,7 @@ extension UserDefaults {
     
     var prebolusDelayCriterion: Int {
         get {
-            return object(forKey: Key.prebolusDelayCriterion.rawValue) as? Int ?? 14 // Default value
+            return object(forKey: Key.prebolusDelayCriterion.rawValue) as? Int ?? 5 // Default value
         }
         set {
             set(newValue, forKey: Key.prebolusDelayCriterion.rawValue)
