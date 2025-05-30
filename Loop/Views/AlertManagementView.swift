@@ -414,7 +414,7 @@ struct AlertManagementView: View {
                         Text("Don't warn if farther than")
                         Spacer()
                         Picker("Don't warn if farther than", selection: dontWarnIfLater) {
-                            ForEach(20..<60) {
+                            ForEach(20..<120) {
                                 Text("\($0) min").tag($0)
                             }
                         }
