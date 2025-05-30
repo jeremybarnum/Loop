@@ -1707,13 +1707,13 @@ extension LoopDataManager {
     
     private func schedulePreBolusRemindersForAllFutureCarbEntries(_ entries: [StoredCarbEntry]) {
         self.logger.default("[PREBOLUS] Checking %{public}d entries for prebolus reminders", entries.count)
-        if UserDefaults.standard.preBolusReminderEnabled {
+        if UserDefaults.standard.bool(forKey: "com.loopkit.Loop.prebolusRemindersEnabled") {
             self.logger.default("[PREBOLUS] Prebolus reminders are enabled")
             // Always start from a clean slate so edits or deletions do not leave stale notifications queued
             NotificationManager.cancelNotificationsForCategory(.prebolusReminder)
             for entry in entries {
                 let now = Date()
-                let prebolusDelayCriterion: TimeInterval = Double(UserDefaults.standard.prebolusDelayCriterion) * 60 // Convert minutes to seconds
+                let prebolusDelayCriterion: TimeInterval = Double(UserDefaults.standard.double(forKey: "com.loopkit.Loop.prebolusDelayCriterion")) * 60 // Convert minutes to seconds
                 
                 // Only schedule notifications for future carb entries that meet the threshold
                 guard entry.startDate > entry.userCreatedDate?.addingTimeInterval(prebolusDelayCriterion) ?? now else {
@@ -2936,7 +2936,7 @@ extension LoopDataManager {
     private func determinePotentialWarningType() -> (outcome: PotentialWarningType, context: PredictionWarningContext?) {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
 
-        guard UserDefaults.standard.lowBGNotificationsEnabled else { return (.none, nil) }
+        guard UserDefaults.standard.bool(forKey: "com.loopkit.Loop.lowBGNotificationsEnabled") else { return (.none, nil) }
               let currentDate = now()
         guard let suspendThresholdQuantity = settings.suspendThreshold?.quantity,
               let displayUnit = settings.glucoseUnit,
@@ -2977,7 +2977,7 @@ extension LoopDataManager {
         )
 
         let rescueCarbs = calculateRescueCarbs(
-            from: p3_Metrics, // Based on Observed + Suspend
+            from: p3_Metrics, // Based on Observed + Suspend.  THis could be debated  but the impact on the recommended carb about is tiny
             suspendThreshold: suspendThresholdQuantity,
             displayUnit: displayUnit,
             CSF: CSF
@@ -2988,25 +2988,33 @@ extension LoopDataManager {
             decisionLogger.info("Observed Absorption prediction (P2) does not cross threshold. No warning needed.")
             return (.none, nil)
         }
+        let warningSnooze = UserDefaults.standard.double(forKey: "com.loopkit.Loop.warningSnooze") * 60
+        let dontWarnIfSooner = UserDefaults.standard.double(forKey: "com.loopkit.Loop.dontWarnIfSooner") * 60
+        let dontWarnIfLater = UserDefaults.standard.double(forKey: "com.loopkit.Loop.dontWarnIfLater") * 60
+        let delayAfterCarbEntry = UserDefaults.standard.double(forKey: "com.loopkit.Loop.delayAfterCarbEntry") * 60
 
         var notificationIntervalExceeded = false
-        let notificationInterval = Double(UserDefaults.standard.warningSnooze) * 60
+
         if let lastTime = lastNotificationTime {
-            notificationIntervalExceeded = currentDate.timeIntervalSince(lastTime) > notificationInterval
+            notificationIntervalExceeded = currentDate.timeIntervalSince(lastTime) > warningSnooze
         } else { notificationIntervalExceeded = true }
 
-        let farEnough = timeToObservedLow > Double(UserDefaults.standard.dontWarnIfSooner) * 60
-        let notTooFar = timeToObservedLow < Double(UserDefaults.standard.dontWarnIfLater) * 60
+        let farEnough = timeToObservedLow > dontWarnIfSooner
+        let notTooFar = timeToObservedLow < dontWarnIfLater
 
         var enoughTimeElapsed = false
+   
         if let mostRecentCarbTime = recentCarbEntries?.last?.startDate {
-            enoughTimeElapsed = currentDate.timeIntervalSince(mostRecentCarbTime) > Double(UserDefaults.standard.delayAfterCarbEntry) * 60
+            enoughTimeElapsed = currentDate.timeIntervalSince(mostRecentCarbTime) > delayAfterCarbEntry
         } else { enoughTimeElapsed = true }
+        
+        
+        decisionLogger.info("Notification Interval %.0f FarEnough:%.0f, NotTooFar:%.0f, CarbAge:%.0f", warningSnooze/60, dontWarnIfSooner/60, dontWarnIfLater/60, delayAfterCarbEntry/60)
         
         decisionLogger.info("Precondition state (Interval:%{public}d, FarEnough:%{public}d, NotTooFar:%{public}d, CarbAge:%{public}d).",
                           notificationIntervalExceeded, farEnough, notTooFar, enoughTimeElapsed)
         
-        print("&&&DelayAfterCarbEntry value:",Double(UserDefaults.standard.delayAfterCarbEntry))
+
 
         guard notificationIntervalExceeded, farEnough, notTooFar, enoughTimeElapsed else {
             decisionLogger.info("Warning preconditions not met (Interval:%{public}d, FarEnough:%{public}d, NotTooFar:%{public}d, CarbAge:%{public}d).",
@@ -3038,7 +3046,7 @@ extension LoopDataManager {
             return (.carbsDefinitelyNeeded,context)
         case (false, true, true): // observed absorption sends you low and low temping can't help
             return (.rescueCarbsLikelyNeeded, context)
-        case (false, true, false): // observed absorption sends you low and low temping might helpt
+        case (false, true, false): // observed absorption sends you low and low temping might help
             return (.mayAvoidRescueCarbsWithEditing,context)
         case (true, false, false), (true, false, true): // underdeclaring carbs means that carbs will absorb as more than loop expects and so loop's low temping may not be needed.  It's not really a low BG situation.  TFT is an essentially impossible corner case.
             return (.considerEditingCarbsUpToAvoidUnnecessarySuspend, context)
