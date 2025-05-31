@@ -2718,6 +2718,7 @@ extension LoopDataManager {
         let observedAbsorptionPredictionMetrics: PredictionMetrics    // P2: Observed Absorption (No Suspend assumption)
         let observedAbsorptionWithSuspendPredictionMetrics: PredictionMetrics // P3: Observed Absorption + Suspend
         let calculatedRescueCarbs: (neutralizeVelocity: Double?, treatNadir: Double?, treatAtAbsorptionTime: Double?) // Based on observedAbsorptionWithSuspendPredictionMetrics
+        let rescueCarbMessageStr: String?
         let absorptionRatio: Double
         let displayUnit: HKUnit
         // let currentCOB: Double? // Can be added if needed for message wording
@@ -2827,6 +2828,8 @@ extension LoopDataManager {
         predictionLogger.info("**Generated predictionWithZeroTemp using inputs")
        
     }
+    
+    //TODO: the observed absorption prediction is a little off sometimes need to debug the generation of the effects
 
     // MARK: - Analysis & Calculation Helpers
 
@@ -2895,9 +2898,9 @@ extension LoopDataManager {
 
         let thresholdValue = suspendThreshold.doubleValue(for: displayUnit)
         let treatNadir = (thresholdValue - minGlucoseObservedSuspendValue) / CSF / absorptionFraction
-        let treatAtAbsorptionTime = (100 - (observedAbsorptionWithSuspendMetrics.glucoseValueAtAbsorptionTime?.quantity.doubleValue(for: .milligramsPerDeciliter) ?? 0)) / CSF
-        let carbAbsorptionStartDelay = 10.0 // probably should get this from loopkit, where it's hardcoded
-        let neutralizeVelocity =  (-velocityAtThresholdCrossing + 1) * (assumedRescueCarbAbsorptionTimeMinutes - carbAbsorptionStartDelay) / CSF //magic number but the point is that you want to not only stop going down but probably to go back up.  Maybe the number should be to go back over the court of 20? minutes? so like (target - threshold) / desired time to rise.  With 100, 70 and 30 minutes, that is 1mg/dl/minute, so 1 is a good placeholder.
+        let treatAtAbsorptionTime = (100 - (observedAbsorptionWithSuspendMetrics.glucoseValueAtAbsorptionTime?.quantity.doubleValue(for: .milligramsPerDeciliter) ?? 0)) / CSF //TODO: get the real target
+        let carbAbsorptionStartDelay = 10.0 // TODO: probably should get this from loopkit, where it's hardcoded
+        let neutralizeVelocity =  (-velocityAtThresholdCrossing + 1) * (assumedRescueCarbAbsorptionTimeMinutes - carbAbsorptionStartDelay) / CSF //magic number but the point is that you want to not only stop going down but probably to go back up.  Maybe the number should be to go back over the course of 20? minutes? so like (target - threshold) / desired time to rise.  TODO: With 100, 70 and 30 minutes, that is 1mg/dl/minute, so 1 is a good placeholder.
         
         //let result = max(0, calculatedCarbs)
         decisionLogger.info("Helper function calculated rescue carbs. NeutralizeVelocity %.1f g,TreatNadir %.1f g TreatAtAbsorptionTime %.1f g", neutralizeVelocity,treatNadir, treatAtAbsorptionTime)
@@ -2982,6 +2985,22 @@ extension LoopDataManager {
             displayUnit: displayUnit,
             CSF: CSF
         )
+        
+        let rescueCarbValues = [
+            rescueCarbs.neutralizeVelocity,
+            rescueCarbs.treatNadir,
+            rescueCarbs.treatAtAbsorptionTime
+        ].compactMap { $0 }
+
+        let minRescueCarbs = rescueCarbValues.min() ?? 0
+        let maxRescueCarbs = rescueCarbValues.max() ?? 0
+
+        let rescueCarbMessageStr: String
+        if minRescueCarbs.rounded() == maxRescueCarbs.rounded() {
+           rescueCarbMessageStr = String(format: "%.0fg", minRescueCarbs)
+        } else {
+           rescueCarbMessageStr = String(format: "%.0f and %.0fg", minRescueCarbs, maxRescueCarbs)
+        }
 
         // Filtering Preconditions (using P2 for initial time-to-low check)
         guard let timeToObservedLow = p2_Metrics.timeToCrossThreshold else {
@@ -3016,10 +3035,10 @@ extension LoopDataManager {
         
 
 
-        guard notificationIntervalExceeded, farEnough, notTooFar, enoughTimeElapsed else {
-            decisionLogger.info("Warning preconditions not met (Interval:%{public}d, FarEnough:%{public}d, NotTooFar:%{public}d, CarbAge:%{public}d).",
+        guard notificationIntervalExceeded, farEnough, notTooFar else {
+            decisionLogger.info("Universal warning preconditions not met (Interval:%{public}d, FarEnough:%{public}d, NotTooFar:%{public}d, CarbAge:%{public}d).",
                               notificationIntervalExceeded, farEnough, notTooFar, enoughTimeElapsed)
-            return (.none, nil)
+            return (.none, nil) //**not checking enoughTimeElapsed universally because  whether or not we issue a waring will depending on which type of low we have
         }
         
         
@@ -3029,6 +3048,7 @@ extension LoopDataManager {
             observedAbsorptionPredictionMetrics: p2_Metrics,
             observedAbsorptionWithSuspendPredictionMetrics: p3_Metrics,
             calculatedRescueCarbs: rescueCarbs,
+            rescueCarbMessageStr: rescueCarbMessageStr,
             absorptionRatio: absorptionRatio,
             displayUnit: displayUnit
         )
@@ -3043,18 +3063,30 @@ extension LoopDataManager {
 
         switch (p1Crossed, p2Crossed, p3Crossed) {
         case (true, true, true), (true, true, false): //lots of extra insulin; second case is extra insulin which is offset by underdeclared carbs which are then edited and then the benefit of lower temping.  Too obscure, better to just privilege the first True and send aggressive warning.
-            return (.carbsDefinitelyNeeded,context)
-        case (false, true, true): // observed absorption sends you low and low temping can't help
-            return (.rescueCarbsLikelyNeeded, context)
-        case (false, true, false): // observed absorption sends you low and low temping might help
-            return (.mayAvoidRescueCarbsWithEditing,context)
-        case (true, false, false), (true, false, true): // underdeclaring carbs means that carbs will absorb as more than loop expects and so loop's low temping may not be needed.  It's not really a low BG situation.  TFT is an essentially impossible corner case.
-            return (.considerEditingCarbsUpToAvoidUnnecessarySuspend, context)
-        case (false, false, true): // essentialy impossible corner case
-            decisionLogger.info("Unexpected prediction pattern (F,F,T) - only P3 crossed. No warning issued.")
-            return (.none, nil)
-        case (false, false, false):
-            return (.none, nil)
+            return (.carbsDefinitelyNeeded, context) // always warn here even if the carbs aren't old enough
+            
+        default:
+            // For all other warning types, check if enough time has elapsed since carb entry
+            guard enoughTimeElapsed else {
+                decisionLogger.info("Carbs too recent to warn CarbAge:%{public}d).", enoughTimeElapsed)
+                return (.none, nil)
+            }
+            
+            switch (p1Crossed, p2Crossed, p3Crossed) {
+            case (false, true, true): // observed absorption sends you low and low temping can't help
+                return (.rescueCarbsLikelyNeeded, context)
+            case (false, true, false): // observed absorption sends you low and low temping might help
+                return (.mayAvoidRescueCarbsWithEditing, context)
+            case (true, false, false), (true, false, true): // underdeclaring carbs means that carbs will absorb as more than loop expects and so loop's low temping may not be needed.  It's not really a low BG situation.  TFT is an essentially impossible corner case.
+                return (.considerEditingCarbsUpToAvoidUnnecessarySuspend, context)
+            case (false, false, true): // essentialy impossible corner case
+                decisionLogger.info("Unexpected prediction pattern (F,F,T) - only P3 crossed. No warning issued.")
+                return (.none, nil)
+            case (false, false, false):
+                return (.none, nil)
+            default:
+                return (.none, nil)
+            }
         }
     }
     
@@ -3062,7 +3094,10 @@ extension LoopDataManager {
         // Calculate everything once
         let timeToLow = Int(round((context.observedAbsorptionPredictionMetrics.timeToCrossThreshold ?? 0) / 60))
         let lowBG = Int(round(context.observedAbsorptionWithSuspendPredictionMetrics.minimumGlucoseDouble(for: context.displayUnit) ?? 0))
-        let rescueCarbs = Int(round(context.calculatedRescueCarbs.neutralizeVelocity ?? 0)) // Or whatever you decide
+        let rescueCarbMessageStr = context.rescueCarbMessageStr ?? "rescue carbs"
+        
+
+        
         let ratio = Int(round(context.absorptionRatio * 100))
         
         switch outcome {
@@ -3071,28 +3106,28 @@ extension LoopDataManager {
         case .carbsDefinitelyNeeded:
             return (
                 title: "Definite crash in \(timeToLow) mins",
-                body: "Take at least \(rescueCarbs)g carbs. Low will happen even if carbs fully absorb.",
-                nsMessage: "Slow Abs (\(ratio)%): DEFINITELY needed. Low=\(lowBG). Rec \(rescueCarbs)g."
+                body: "Take between \(rescueCarbMessageStr) carbs. Low will happen even if any old carbs fully absorb.",
+                nsMessage: "Slow Abs (\(ratio)%): DEFINITELY needed. Low=\(lowBG). Rec \(rescueCarbMessageStr)g."
             )
             
         case .rescueCarbsLikelyNeeded:
             return (
                 title: "Likely crash in \(timeToLow) mins",
-                body: "Consider taking \(rescueCarbs)g carbs. Carbs absorbing at \(ratio)% of expectation. Check prediction and edit",
-                nsMessage: "Slow Abs (\(ratio)%): LIKELY needed. Low=\(lowBG). Rec \(rescueCarbs)g."
+                body: "Consider taking \(rescueCarbMessageStr) carbs. Carbs absorbing at \(ratio)% of expectation. Check and consider editing.",
+                nsMessage: "Slow Abs (\(ratio)%): LIKELY needed. Low=\(lowBG). Rec \(rescueCarbMessageStr)g."
             )
             
         case .mayAvoidRescueCarbsWithEditing:
             return (
                 title: "Probable low in \(timeToLow) mins",
-                body: "Editing carb entry may allow Loop to avoid this low. Carbs absorbing at \(ratio)% of expectation",
-                nsMessage: "Slow Abs (\(ratio)%): PROBABLY needed. Low=\(lowBG). Rec \(rescueCarbs)g."
+                body: "Check and consider editing. Low temping may avoid need for rescue carbs. Carbs absorbing at \(ratio)% of expectation",
+                nsMessage: "Slow Abs (\(ratio)%): PROBABLY needed. Low=\(lowBG). Rec \(rescueCarbMessageStr)g."
             )
         case .considerEditingCarbsUpToAvoidUnnecessarySuspend:
             return (
                 title: "Consider editing up carbs.",
-                body: "Weird situation.  Loop thinks you'll go low and is low temping but you probably won't based on carb absorption.",
-                nsMessage: "Slow Abs (\(ratio)%): DEFINITELY needed. Low=\(lowBG). Rec \(rescueCarbs)g."
+                body: "Weird situation.  Loop thinks you'll go low and is low temping but you probably won't, based on carb absorption.",
+                nsMessage: "Slow Abs (\(ratio)%): DEFINITELY needed. Low=\(lowBG). Rec \(rescueCarbMessageStr)g."
             )
         }
     }
