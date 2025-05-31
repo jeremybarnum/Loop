@@ -2830,6 +2830,7 @@ extension LoopDataManager {
     }
     
     //TODO: the observed absorption prediction is a little off sometimes need to debug the generation of the effects
+    //TODO: why are the ICE effects so delayed? they should be at least every 5 minutes
 
     // MARK: - Analysis & Calculation Helpers
 
@@ -2866,8 +2867,7 @@ extension LoopDataManager {
     }
 
     // Helper function to calculate rescue carbs.
-    // TODO: decide what I want the rescue carbs to actually be.  To the threshold? to the target after a certain amount of time?
-    private func calculateRescueCarbs( //TODO: decide what threshold to use
+    private func calculateRescueCarbs(
         from observedAbsorptionWithSuspendMetrics: PredictionMetrics, // Use P3 metrics
         suspendThreshold: HKQuantity,
         displayUnit: HKUnit,
@@ -2895,15 +2895,19 @@ extension LoopDataManager {
             decisionLogger.info("Rescue carb absorption fraction is zero or negative.")
             return (neutralizeVelocity: nil, treatNadir: nil, treatAtAbsorptionTime: nil)
         }
-
+        
+        let correctionTarget = settings.glucoseTargetRangeSchedule?.quantityRange(at: Date(timeIntervalSinceNow: 30 * 60)).lowerBound.doubleValue(for: displayUnit) ?? 100.0
+            
         let thresholdValue = suspendThreshold.doubleValue(for: displayUnit)
         let treatNadir = (thresholdValue - minGlucoseObservedSuspendValue) / CSF / absorptionFraction
-        let treatAtAbsorptionTime = (100 - (observedAbsorptionWithSuspendMetrics.glucoseValueAtAbsorptionTime?.quantity.doubleValue(for: .milligramsPerDeciliter) ?? 0)) / CSF //TODO: get the real target
-        let carbAbsorptionStartDelay = 10.0 // TODO: probably should get this from loopkit, where it's hardcoded
-        let neutralizeVelocity =  (-velocityAtThresholdCrossing + 1) * (assumedRescueCarbAbsorptionTimeMinutes - carbAbsorptionStartDelay) / CSF //magic number but the point is that you want to not only stop going down but probably to go back up.  Maybe the number should be to go back over the course of 20? minutes? so like (target - threshold) / desired time to rise.  TODO: With 100, 70 and 30 minutes, that is 1mg/dl/minute, so 1 is a good placeholder.
+        let treatAtAbsorptionTime = (correctionTarget - (observedAbsorptionWithSuspendMetrics.glucoseValueAtAbsorptionTime?.quantity.doubleValue(for: displayUnit) ?? 0)) / CSF 
+        let carbAbsorptionStartDelay = CarbMath.defaultEffectDelay //the delay for the effect of carbEffectStart.  Creates a linear estimate of carb velocity
+        let postLowTimeToTarget = 20.0 // minutes
+        let postLowTargetRiseRate = (correctionTarget - suspendThreshold.doubleValue(for: displayUnit)) / postLowTimeToTarget//mg/dl/minute
+        let neutralizeVelocity =  (-velocityAtThresholdCrossing + postLowTargetRiseRate) * (assumedRescueCarbAbsorptionTimeMinutes - carbAbsorptionStartDelay) / CSF //you want to not only stop going down but to go back up.  Compute desired rate of increase so that you get from susped to target in about 20 minutes. Will usually be about 1.5
         
         //let result = max(0, calculatedCarbs)
-        decisionLogger.info("Helper function calculated rescue carbs. NeutralizeVelocity %.1f g,TreatNadir %.1f g TreatAtAbsorptionTime %.1f g", neutralizeVelocity,treatNadir, treatAtAbsorptionTime)
+        decisionLogger.info("Helper function calculated rescue carbs. NeutralizeVelocity %.1f g,TreatNadir %.1f g TreatAtAbsorptionTime %.1f g, correctionTarget %.0f", neutralizeVelocity,treatNadir, treatAtAbsorptionTime, correctionTarget)
         return (neutralizeVelocity: neutralizeVelocity, treatNadir: treatNadir, treatAtAbsorptionTime: treatAtAbsorptionTime)
     }
 
@@ -2992,14 +2996,14 @@ extension LoopDataManager {
             rescueCarbs.treatAtAbsorptionTime
         ].compactMap { $0 }
 
-        let minRescueCarbs = rescueCarbValues.min() ?? 0
-        let maxRescueCarbs = rescueCarbValues.max() ?? 0
+        let minRescueCarbs = rescueCarbValues.min() ?? 0// TODO: floor at zero
+        let maxRescueCarbs = rescueCarbValues.max() ?? 0// TODO: floor at zero
 
         let rescueCarbMessageStr: String
         if minRescueCarbs.rounded() == maxRescueCarbs.rounded() {
-           rescueCarbMessageStr = String(format: "%.0fg", minRescueCarbs)
+           rescueCarbMessageStr = String(format: "%.0f", minRescueCarbs)
         } else {
-           rescueCarbMessageStr = String(format: "%.0f and %.0fg", minRescueCarbs, maxRescueCarbs)
+           rescueCarbMessageStr = String(format: "%.0f and %.0f", minRescueCarbs, maxRescueCarbs)
         }
 
         // Filtering Preconditions (using P2 for initial time-to-low check)
@@ -3113,7 +3117,7 @@ extension LoopDataManager {
         case .rescueCarbsLikelyNeeded:
             return (
                 title: "Likely crash in \(timeToLow) mins",
-                body: "Consider taking \(rescueCarbMessageStr) carbs. Carbs absorbing at \(ratio)% of expectation. Check and consider editing.",
+                body: "Carbs absorbing at \(ratio)%. Consider taking between \(rescueCarbMessageStr) carbs, and editing.",
                 nsMessage: "Slow Abs (\(ratio)%): LIKELY needed. Low=\(lowBG). Rec \(rescueCarbMessageStr)g."
             )
             
