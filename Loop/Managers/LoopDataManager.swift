@@ -2917,8 +2917,7 @@ extension LoopDataManager {
         do {
             try self.updateObservedAbsorptionPredictions() // This is the refactored version
             predictionLogger.info("**Updated specialized predictions (predictionWithObservedAbsorption, etc.) for warnings.")
-            
-            predictionLogger.info("DEBUG: predictedGlucose count: %d", self.predictedGlucose?.count ?? -1)
+    
             logCombinedAbsorptionAndPredictions()
             
         } catch {
