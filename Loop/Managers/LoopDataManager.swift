@@ -2787,6 +2787,8 @@ extension LoopDataManager {
             
                }
         
+        
+        
         // --- Prediction 1: self.predictionWithObservedAbsorption ---
         // Standard effects  PLUS .observedAbsorptionEffect
         // .all = [.carbs, .insulin, .momentum, .retrospection]
@@ -2825,7 +2827,6 @@ extension LoopDataManager {
     }
     
     //TODO: the observed absorption prediction is a little off sometimes need to debug the generation of the effects
-    //TODO: why are the ICE effects so delayed? they should be at least every 5 minutes
 
     // MARK: - Analysis & Calculation Helpers
 
@@ -3201,8 +3202,8 @@ extension LoopDataManager {
         }.sorted(by: { $0.startDate < $1.startDate })
 
         let recentICE = insulinCounteractionEffects.filter {
-            $0.startDate >= effectsStartForLog && $0.startDate <= logNow
-        }.sorted(by: { $0.startDate < $1.startDate })
+            $0.endDate >= effectsStartForLog && $0.endDate <= logNow
+        }.sorted(by: { $0.endDate < $1.endDate })
 
         predictionLogger.info(" ")
         predictionLogger.info("RETROSPECTIVE ABSORPTION ANALYSIS (Window: %d min ending %{public}@)",
@@ -3249,7 +3250,7 @@ extension LoopDataManager {
             predictionLogger.info("No ICE values in window")
         } else {
             for effect in recentICE {
-                let timeStr = dateFormatter.string(from: effect.startDate)
+                let timeStr = dateFormatter.string(from: effect.endDate)
                 let iceValue = effect.quantity.doubleValue(for: ICEUnit)
                 predictionLogger.info("%{public}@ | %13.3f", timeStr, iceValue)
             }

@@ -85,44 +85,33 @@ class ObservedAbsorptionManager {
         let averageCarbVelocity = carbVelocities.map { $0.velocity }.reduce(0, +) / 3.0
         
         // Step 2: Find matching ICE values
-        let newestCarbTimestamp = carbVelocities.last!.timestamp // Most recent carb velocity timestamp
-        let sortedICE = insulinCounteractionEffects.sorted { $0.startDate < $1.startDate }
-        
-        guard sortedICE.count >= 3 else {
+        // Step 2: Get the 3 most recent ICE values
+        guard insulinCounteractionEffects.count >= 3 else {
             predictionLogger.info("Insufficient ICE data for absorption ratio calculation")
             return 1.0
         }
-        
-        // Find ICE value closest to newest carb velocity timestamp
-        var closestIndex = 0
-        var minTimeDifference = abs(sortedICE[0].startDate.timeIntervalSince(newestCarbTimestamp))
-        
-        for i in 1..<sortedICE.count {
-            let timeDifference = abs(sortedICE[i].startDate.timeIntervalSince(newestCarbTimestamp))
-            if timeDifference < minTimeDifference {
-                minTimeDifference = timeDifference
-                closestIndex = i
-            }
+
+        // Take the last 3 elements directly
+        let lastThreeICE = Array(insulinCounteractionEffects.suffix(3))
+        predictionLogger.info("Last 3 ICE entries:")
+        for (index, ice) in lastThreeICE.enumerated() {
+            predictionLogger.info("ICE[%d]: startDate=%@, endDate=%@, value=%.3f",
+                                 index,
+                                 ice.startDate as CVarArg,
+                                 ice.endDate as CVarArg,
+                                 ice.quantity.doubleValue(for: ICEUnit))
         }
-        
-        // Ensure we can get 3 ICE values ending at closestIndex
-        guard closestIndex >= 2 else {
-            predictionLogger.info("Not enough ICE data before closest match for 3-value average")
-            return 1.0
-        }
-        
-        let iceValues = [
-            sortedICE[closestIndex - 2].quantity.doubleValue(for: ICEUnit),
-            sortedICE[closestIndex - 1].quantity.doubleValue(for: ICEUnit),
-            sortedICE[closestIndex].quantity.doubleValue(for: ICEUnit)
-        ]
+        let iceValues = lastThreeICE.map { $0.quantity.doubleValue(for: ICEUnit) }
+        predictionLogger.info("ICE values array: %@", iceValues)
         let averageICE = iceValues.reduce(0, +) / 3.0
-        
+        predictionLogger.info("Average ICE: %.3f", averageICE)
         // Step 3: Calculate ratio
         guard averageCarbVelocity > 0 else {
             predictionLogger.info("Average carb velocity is zero or negative")
             return 1.0
         }
+        
+        
         
         let absorptionRatio = max(averageICE / averageCarbVelocity, 0.0)
         
