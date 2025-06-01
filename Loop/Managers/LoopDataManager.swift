@@ -2786,7 +2786,7 @@ extension LoopDataManager {
         catch { predictionLogger.info(" try updateObservedAbsorptionEffect() produced an error ")
             
                }
-        
+     
         
         
         // --- Prediction 1: self.predictionWithObservedAbsorption ---
@@ -3259,6 +3259,7 @@ extension LoopDataManager {
         predictionLogger.info("========================================")
         predictionLogger.info(" ")
     }
+    
    
     private func logPredictionArrays() {
         let dateFormatter = DateFormatter()
@@ -3276,8 +3277,14 @@ extension LoopDataManager {
         let titleSeparatorLine = String(repeating: "=", count: (columnWidth + padding) * columnCount) // Adjust based on total width
         predictionLogger.info("%{public}@", titleSeparatorLine)
         
+        // --- Prediction 0:
+        // Standard effects
+        // .all = [.carbs, .insulin, .momentum, .retrospection]
+        let p0 = (try? self.predictGlucose(using: .all, includingPendingInsulin: true)) ?? []
+        predictionLogger.info("**Generated predictionWithObservedAbsorption")
+        
         // Filter predictions to the time window
-        let p0_filtered = (predictedGlucoseIncludingPendingInsulin ?? []).filter { $0.startDate <= cutoffTime }//TODO: this gets nulled out before logging
+        let p0_filtered = p0.filter { $0.startDate <= cutoffTime }
         let p1_filtered = predictionWithZeroTemp.filter { $0.startDate <= cutoffTime }
         let p2_filtered = predictionWithObservedAbsorption.filter { $0.startDate <= cutoffTime }
         let p3_filtered = predictionWithObservedAbsorptionAndZeroTemp.filter { $0.startDate <= cutoffTime }
