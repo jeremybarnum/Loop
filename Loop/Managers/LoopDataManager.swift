@@ -377,12 +377,7 @@ final class LoopDataManager {
     private var predictionWithObservedAbsorptionAndZeroTemp: [GlucoseValue] = []
     private var predictionWithZeroTemp: [GlucoseValue] = []
     
-    private var observedAbsorptionEffect: [GlucoseEffect] = [] {
-        didSet {
-            predictionWithObservedAbsorption = []
-            predictionWithObservedAbsorptionAndZeroTemp = []
-        }
-    }
+    private var observedAbsorptionEffect: [GlucoseEffect] = []
 
     /// When combining retrospective glucose discrepancies, extend the window slightly as a buffer.
     private let retrospectiveCorrectionGroupingIntervalMultiplier = 1.01
@@ -395,7 +390,8 @@ final class LoopDataManager {
 
     private var retrospectiveGlucoseDiscrepanciesSummed: [GlucoseChange]?
     
-    private var suspendInsulinDeliveryEffect: [GlucoseEffect] = []
+    private var suspendInsulinDeliveryEffect: [GlucoseEffect] = [] 
+
 
     fileprivate var predictedGlucose: [PredictedGlucoseValue]? {
         didSet {
@@ -2738,7 +2734,6 @@ extension LoopDataManager {
     /// - Throws: LoopError.configurationError
     private func updateObservedAbsorptionEffect() throws {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-        //TODO: I don't understand what dispatchPrecondition is doing, it's just copy pasta
         
         //TODO: determine whether I need to bother to validate settings here
         
@@ -2747,11 +2742,22 @@ extension LoopDataManager {
         
         let carbEffectStart = now().addingTimeInterval(-carbStore.maximumAbsorptionTimeInterval)
         
-        guard let recentCarbEntries = recentCarbEntries else {
+        guard let recentCarbEntries = recentCarbEntries,
+              let carbEffect = carbEffect, !carbEffect.isEmpty else {
+            observedAbsorptionEffect = []
+            self.absorptionRatio = 1.0
             return
         }
-        
-        let carbEntriesExcludingVeryRecentAndFuture = recentCarbEntries.filter { $0.startDate <= excludeCarbEntriesAfterThisTime }
+
+        let carbEntriesExcludingVeryRecentAndFuture = recentCarbEntries.filter {
+            $0.startDate <= excludeCarbEntriesAfterThisTime
+        }
+
+        guard !carbEntriesExcludingVeryRecentAndFuture.isEmpty else {
+            observedAbsorptionEffect = []
+            self.absorptionRatio = 1.0
+            return
+        }
 
             
         let carbEffectExcludeRecentAndFutureEntries = try carbStore.glucoseEffects(
@@ -2759,11 +2765,9 @@ extension LoopDataManager {
             startingAt: carbEffectStart,
             endingAt: nil,
             effectVelocities: insulinCounteractionEffects
-        )
+        ) // these are the carb effects to be modified by the ratio
         
-        let absorptionRatio = self.observedAbsorptionManager.computeObservedAbsorptionRatio(insulinCounteractionEffects: insulinCounteractionEffects, expectedCarbEffects: carbEffect ?? [])
-        
-        //TODO: check the handling of the optional carbEffect
+        let absorptionRatio = self.observedAbsorptionManager.computeObservedAbsorptionRatio(insulinCounteractionEffects: insulinCounteractionEffects, expectedCarbEffects: carbEffect)//this carb effect is what's already in the prediction
         
         observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffectExcludeRecentAndFutureEntries )
         
@@ -2875,7 +2879,7 @@ extension LoopDataManager {
     ) -> (neutralizeVelocity: Double?, treatNadir: Double?, treatAtAbsorptionTime: Double?) {
         guard let minGlucoseObservedSuspendQty = observedAbsorptionWithSuspendMetrics.minimumGlucoseValue?.quantity,
               minGlucoseObservedSuspendQty < suspendThreshold,
-              let timeToMinObservedSuspend = observedAbsorptionWithSuspendMetrics.timeToMinimumGlucose, let velocityAtThresholdCrossing = observedAbsorptionWithSuspendMetrics.velocityAtThresholdCrossing //TODO: check the let and guard let
+              let timeToMinObservedSuspend = observedAbsorptionWithSuspendMetrics.timeToMinimumGlucose, let velocityAtThresholdCrossing = observedAbsorptionWithSuspendMetrics.velocityAtThresholdCrossing
         else {
             decisionLogger.info("Preconditions for rescue carb calculation not met (P3 does not go low or min BG/time missing).")
             return (neutralizeVelocity: nil, treatNadir: nil, treatAtAbsorptionTime: nil)
@@ -2996,8 +3000,8 @@ extension LoopDataManager {
             rescueCarbs.treatAtAbsorptionTime
         ].compactMap { $0 }
 
-        let minRescueCarbs = rescueCarbValues.min() ?? 0// TODO: floor at zero
-        let maxRescueCarbs = rescueCarbValues.max() ?? 0// TODO: floor at zero
+        let minRescueCarbs = max(rescueCarbValues.min() ?? 0 , 0)
+        let maxRescueCarbs = max(rescueCarbValues.max() ?? 0 , 0)
 
         let rescueCarbMessageStr: String
         if minRescueCarbs.rounded() == maxRescueCarbs.rounded() {
