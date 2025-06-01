@@ -1724,7 +1724,11 @@ extension LoopDataManager {
                 // Prepare notification content
                 let alertTime = entry.startDate
                 let carbAmountString = String(format: "%.0f", entry.quantity.doubleValue(for: .gram()))
-                let absorptionTimeString = String(format: "%.1f", entry.absorptionTime! / 3600)
+                let absorptionTimeString = if let absorptionTime = entry.absorptionTime {
+                    String(format: "%.1f", absorptionTime / 3600)
+                } else {
+                    "no absorption time"
+                }
                 
                 // Schedule the notification
                 self.logger.default("[PREBOLUS] Scheduling reminder for entry at %{public}@", String(describing: alertTime))
