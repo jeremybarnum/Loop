@@ -370,8 +370,6 @@ final class LoopDataManager {
             predictedGlucose = nil
         }
     }
-    
-    //TODO: figure out whether these should be optional, and whether any didSets should zero them out
         
     private var predictionWithObservedAbsorption: [GlucoseValue] = []
     private var predictionWithObservedAbsorptionAndZeroTemp: [GlucoseValue] = []
@@ -390,7 +388,7 @@ final class LoopDataManager {
 
     private var retrospectiveGlucoseDiscrepanciesSummed: [GlucoseChange]?
     
-    private var suspendInsulinDeliveryEffect: [GlucoseEffect] = [] 
+    private var suspendInsulinDeliveryEffect: [GlucoseEffect] = []
 
 
     fileprivate var predictedGlucose: [PredictedGlucoseValue]? {
@@ -2735,9 +2733,6 @@ extension LoopDataManager {
     private func updateObservedAbsorptionEffect() throws {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
         
-        //TODO: determine whether I need to bother to validate settings here
-        
-        
         let excludeCarbEntriesAfterThisTime = now().addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)  // 15 minutes ago
         
         let carbEffectStart = now().addingTimeInterval(-carbStore.maximumAbsorptionTimeInterval)
@@ -2777,16 +2772,8 @@ extension LoopDataManager {
     private func updateObservedAbsorptionPredictions() throws {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
         
-        // This function uses self.predictGlucose(...), which will internally use:
-        // - self.glucoseStore.latestGlucose
-        // - Current LDM effect properties (self.insulinEffectIncludingPendingInsulin,
-        //   self.carbEffect, self.glucoseMomentumEffect, self.retrospectiveGlucoseEffect,
-        //   self.suspendInsulinDeliveryEffect) based on the 'inputs' flags.
-        // - Crucially, it will also use self.observedAbsorptionEffect if the flag is set.
-        // Ensure self.observedAbsorptionEffect is up-to-date *before* this function is called.
         
-        let usePendingInsulin = true // Consistent with your original intent
-        
+        let usePendingInsulin = true
         
         do {
                    try updateObservedAbsorptionEffect()
