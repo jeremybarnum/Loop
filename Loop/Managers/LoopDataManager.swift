@@ -2901,10 +2901,11 @@ extension LoopDataManager {
         let thresholdValue = suspendThreshold.doubleValue(for: displayUnit)
         let treatNadir = (thresholdValue - minGlucoseObservedSuspendValue) / CSF / absorptionFraction
         let treatAtAbsorptionTime = (correctionTarget - (observedAbsorptionWithSuspendMetrics.glucoseValueAtAbsorptionTime?.quantity.doubleValue(for: displayUnit) ?? 0)) / CSF 
-        let carbAbsorptionStartDelay = CarbMath.defaultEffectDelay //the delay for the effect of carbEffectStart.  Creates a linear estimate of carb velocity
+        let carbAbsorptionStartDelay = CarbMath.defaultEffectDelay / 60 //the delay for the effect of carbEffectStart.  Creates a linear estimate of carb velocity
         let postLowTimeToTarget = 20.0 // minutes
         let postLowTargetRiseRate = (correctionTarget - suspendThreshold.doubleValue(for: displayUnit)) / postLowTimeToTarget//mg/dl/minute
         let neutralizeVelocity =  (-velocityAtThresholdCrossing + postLowTargetRiseRate) * (assumedRescueCarbAbsorptionTimeMinutes - carbAbsorptionStartDelay) / CSF //you want to not only stop going down but to go back up.  Compute desired rate of increase so that you get from susped to target in about 20 minutes. Will usually be about 1.5
+        decisionLogger.info("post low target rise rate is %.1f, assumedRescueCarbAbsorptionTimeMinutes is %.1f, carbAbsorptionStartDelay is %.1f",postLowTargetRiseRate,assumedRescueCarbAbsorptionTimeMinutes,carbAbsorptionStartDelay)
         
         //let result = max(0, calculatedCarbs)
         decisionLogger.info("Helper function calculated rescue carbs. NeutralizeVelocity %.1f g,TreatNadir %.1f g TreatAtAbsorptionTime %.1f g, correctionTarget %.0f", neutralizeVelocity,treatNadir, treatAtAbsorptionTime, correctionTarget)
