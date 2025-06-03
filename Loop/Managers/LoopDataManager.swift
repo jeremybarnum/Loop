@@ -3109,14 +3109,14 @@ extension LoopDataManager {
             fatalError("Should not call this for .none")
         case .carbsDefinitelyNeeded:
             return (
-                title: "Definite crash in \(timeToLow) mins",
+                title: "Very likely low in \(timeToLow) mins",
                 body: "Take between \(rescueCarbMessageStr) carbs. Low will happen even if any old carbs fully absorb.",
                 nsMessage: "Slow Abs (\(ratio)%): DEFINITELY needed. Low=\(lowBG). Rec \(rescueCarbMessageStr)g."
             )
             
         case .rescueCarbsLikelyNeeded:
             return (
-                title: "Likely crash in \(timeToLow) mins",
+                title: "Likely low in \(timeToLow) mins",
                 body: "Carbs absorbing at \(ratio)%. Consider taking between \(rescueCarbMessageStr) carbs, and editing.",
                 nsMessage: "Slow Abs (\(ratio)%): LIKELY needed. Low=\(lowBG). Rec \(rescueCarbMessageStr)g."
             )
