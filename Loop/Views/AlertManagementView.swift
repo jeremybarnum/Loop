@@ -367,15 +367,16 @@ struct AlertManagementView: View {
                // Test prebolus reminder notification
                let notification = UNMutableNotificationContent()
                notification.title = "Reminder to eat"
-               notification.body = String(format: NSLocalizedString("You declared %@ carbs with a %@hr absorption time.", comment: ""), "25", "2.0")
+               notification.body =  "Test Notification"
                notification.sound = .default
                notification.interruptionLevel = .timeSensitive
-               notification.categoryIdentifier = LoopNotificationCategory.prebolusReminder.rawValue
+               notification.categoryIdentifier = LoopNotificationCategory.lowBGWarning.rawValue //todo: check this is the right category for a test 
+               let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 5.0, repeats: false)
                
                let request = UNNotificationRequest(
-                   identifier: "test-prebolus-reminder",
+                   identifier: "test-notification",
                    content: notification,
-                   trigger: nil  // Immediate notification
+                   trigger: trigger  // 5 second delay
                )
                
                UNUserNotificationCenter.current().add(request)
