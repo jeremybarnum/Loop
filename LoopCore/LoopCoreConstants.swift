@@ -22,9 +22,5 @@ public enum LoopCoreConstants {
     /// Somewhat arbitrary, but typical maximum visible in bolus glucose preview
     public static let dosingDecisionHistoricalGlucoseInterval = TimeInterval(hours: 2)
     
-    // Alert/Warning Settings Defaults
-    public static let defaultWarningSnooze = 10.0
-    public static let defaultDontWarnIfSooner = 10.0
-    public static let defaultDontWarnIfLater = 45.0
-    public static let defaultDelayAfterCarbEntry = 30.0
+
 }
