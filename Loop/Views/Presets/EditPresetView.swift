@@ -305,7 +305,7 @@ struct EditPresetView: View {
                 case .editInsulinNeeds:
                     ExistingPresetInsulinNeedsEdit(
                         insulinScaleFactor: $preset.insulinNeedsScaleFactor,
-                        presetUsesScheduledRange: preset.correctionRange == nil,
+                        presetUsesScheduledRange: preset.correctionRange == nil
                     )
                 case .editCorrectionRange:
                     ExistingPresetRangeEdit(
