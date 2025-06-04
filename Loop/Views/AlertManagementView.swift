@@ -414,7 +414,10 @@ extension UserDefaults {
     
     var warningSnooze: Int {
         get { object(forKey: Key.warningSnooze.rawValue) as? Int ?? 10 }
-        set { set(newValue, forKey: Key.warningSnooze.rawValue) }
+
+        set {
+            print("**Setting warningSnooze to \(newValue)")
+            set(newValue, forKey: Key.warningSnooze.rawValue) }
     }
     
     var dontWarnIfLater: Int {

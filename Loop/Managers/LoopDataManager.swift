@@ -2966,7 +2966,7 @@ extension LoopDataManager {
             decisionLogger.info("Core prediction arrays for warnings are empty. Skipping check.")
             return (.none, nil)
         }
-        
+        //Mark -- functionality to supply different aggressiveness day and night
         let daytimeWarningOffset = HKQuantity(unit: displayUnit, doubleValue: 5.0)
         let nightWarningOffset = HKQuantity(unit: displayUnit, doubleValue: 10.0)
         
@@ -2988,6 +2988,17 @@ extension LoopDataManager {
             
         let warningLevelValue = suspendThresholdQuantity.doubleValue(for: displayUnit) - warningOffset.doubleValue(for: displayUnit)
         let warningLevel = HKQuantity(unit: displayUnit, doubleValue: warningLevelValue)
+        
+        // Add this logging
+        let timeFormatter = DateFormatter()
+        timeFormatter.timeStyle = .medium
+        decisionLogger.info("Night time check: Current=%{public}@, NightStart=%{public}@, NightEnd=%{public}@, IsNight=%{public}d",
+                           timeFormatter.string(from: now),
+                           timeFormatter.string(from: nightStart),
+                           timeFormatter.string(from: nightEnd),
+                           isNightTime ? 1 : 0)
+                           
+        decisionLogger.info("Warning level calc: SuspendThreshold=%.1f, WarningOffset=%.1f, WarningLevel=%.1f", suspendThresholdQuantity.doubleValue(for: displayUnit), warningOffset.doubleValue(for: displayUnit), warningLevelValue)
         
         let p1_Metrics = analyzePrediction(
             prediction: predictionWithZeroTemp,
@@ -3033,11 +3044,19 @@ extension LoopDataManager {
             decisionLogger.info("Observed Absorption prediction (P2) does not cross threshold. No warning needed.")
             return (.none, nil)
         }
-            let warningSnooze = Double(UserDefaults.standard.integer(forKey: "com.loopkit.Loop.warningSnooze")) * 60
-            let dontWarnIfSooner = Double(UserDefaults.standard.integer(forKey: "com.loopkit.Loop.dontWarnIfSooner")) * 60
-            let dontWarnIfLater = Double(UserDefaults.standard.integer(forKey: "com.loopkit.Loop.dontWarnIfLater")) * 60
-            let delayAfterCarbEntry = Double(UserDefaults.standard.integer(forKey: "com.loopkit.Loop.delayAfterCarbEntry")) * 60
-
+            let warningSnooze = Double(UserDefaults.standard.warningSnooze) * 60
+            let dontWarnIfSooner = Double(UserDefaults.standard.dontWarnIfSooner) * 60
+            let dontWarnIfLater = Double(UserDefaults.standard.dontWarnIfLater) * 60
+            let delayAfterCarbEntry = Double(UserDefaults.standard.delayAfterCarbEntry) * 60
+        
+        decisionLogger.info("Raw UserDefaults values: warningSnooze=%d, dontWarnIfSooner=%d, dontWarnIfLater=%d, delayAfterCarbEntry=%d",
+                           UserDefaults.standard.warningSnooze,
+                           UserDefaults.standard.dontWarnIfSooner,
+                           UserDefaults.standard.dontWarnIfLater,
+                           UserDefaults.standard.delayAfterCarbEntry)
+        
+        decisionLogger.info("Notification Interval: %.0f FarEnough:%.0f NotTooFar:%.0f, CarbAge:%.0f", warningSnooze/60, dontWarnIfSooner/60,dontWarnIfLater/60, delayAfterCarbEntry/60 )
+            
             var notificationIntervalExceeded = false
 
             if let lastTime = lastNotificationTime {
@@ -3053,8 +3072,6 @@ extension LoopDataManager {
                 enoughTimeElapsed = currentDate.timeIntervalSince(mostRecentCarbTime) > delayAfterCarbEntry
             } else { enoughTimeElapsed = true }
             
-            
-            decisionLogger.info("Notification Interval: %.2f FarEnough:%.2f, NotTooFar:%.2f, CarbAge:%.2f, Warning Level:%.2f, Warning Offset:%.2f", warningSnooze/60, dontWarnIfSooner/60, dontWarnIfLater/60, delayAfterCarbEntry/60, warningLevel, warningOffset)
             
         decisionLogger.info("Precondition state (Interval:%{public}d, FarEnough:%{public}d, NotTooFar:%{public}d, CarbAge:%{public}d).",
                           notificationIntervalExceeded, farEnough, notTooFar, enoughTimeElapsed)
