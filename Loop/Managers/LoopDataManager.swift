@@ -2966,20 +2966,42 @@ extension LoopDataManager {
             decisionLogger.info("Core prediction arrays for warnings are empty. Skipping check.")
             return (.none, nil)
         }
+        
+        let daytimeWarningOffset = HKQuantity(unit: displayUnit, doubleValue: 5.0)
+        let nightWarningOffset = HKQuantity(unit: displayUnit, doubleValue: 10.0)
+        
+        let calendar = Calendar.current
+        let now = Date()
+        let nightStart = calendar.date(bySettingHour: 22, minute: 30, second: 0, of: now)!
+        let nightEnd = calendar.date(bySettingHour: 6, minute: 30, second: 0, of: now)!
 
+        let isNightTime: Bool
+        if nightStart <= nightEnd {
+           // Night period doesn't cross midnight
+           isNightTime = now >= nightStart && now <= nightEnd
+        } else {
+           // Night period crosses midnight
+           isNightTime = now >= nightStart || now <= nightEnd
+        }
+
+        let warningOffset = isNightTime ? nightWarningOffset : daytimeWarningOffset
+            
+        let warningLevelValue = suspendThresholdQuantity.doubleValue(for: displayUnit) - warningOffset.doubleValue(for: displayUnit)
+        let warningLevel = HKQuantity(unit: displayUnit, doubleValue: warningLevelValue)
+        
         let p1_Metrics = analyzePrediction(
             prediction: predictionWithZeroTemp,
-            threshold: suspendThresholdQuantity,
+            threshold: warningLevel,
             now: currentDate
         )
         let p2_Metrics = analyzePrediction(
             prediction: predictionWithObservedAbsorption,
-            threshold: suspendThresholdQuantity,
+            threshold: warningLevel,
             now: currentDate
         )
         let p3_Metrics = analyzePrediction(
             prediction: predictionWithObservedAbsorptionAndZeroTemp,
-            threshold: suspendThresholdQuantity,
+            threshold: warningLevel,
             now: currentDate
         )
 
@@ -3062,8 +3084,8 @@ extension LoopDataManager {
         let p2Crossed = p2_Metrics.didCrossThreshold
         let p3Crossed = p3_Metrics.didCrossThreshold
         
-        decisionLogger.info("Crossed P1: %d, Crossed P2: %d, Crossed P3: %d",
-                           p1Crossed ? 1 : 0, p2Crossed ? 1 : 0, p3Crossed ? 1 : 0)
+        decisionLogger.info("Crossed P1: %d, Crossed P2: %d, Crossed P3: %d, WarningLevel: %.1f",
+                           p1Crossed ? 1 : 0, p2Crossed ? 1 : 0, p3Crossed ? 1 : 0, warningLevel)
 
         switch (p1Crossed, p2Crossed, p3Crossed) {
         case (true, true, true), (true, true, false): //lots of extra insulin; second case is extra insulin which is offset by underdeclared carbs which are then edited and then the benefit of lower temping.  Too obscure, better to just privilege the first True and send aggressive warning.
