@@ -28,19 +28,19 @@ struct AlertManagementView: View {
    private var isPreBolusReminderEnabled: Bool = false
    
    @AppStorage("com.loopkit.Loop.warningSnooze")
-   private var warningSnooze: Int = 10
+    private var warningSnooze: Int = 10
    
    @AppStorage("com.loopkit.Loop.dontWarnIfLater")
-   private var dontWarnIfLater: Int = 45
+    private var dontWarnIfLater: Int = 45
    
    @AppStorage("com.loopkit.Loop.dontWarnIfSooner")
-   private var dontWarnIfSooner: Int = 10
+    private var dontWarnIfSooner: Int = 10
    
    @AppStorage("com.loopkit.Loop.delayAfterCarbEntry")
-   private var delayAfterCarbEntry: Int = 30
+    private var delayAfterCarbEntry: Int  = 30
    
    @AppStorage("com.loopkit.Loop.prebolusDelayCriterion")
-   private var prebolusDelayCriterion: Int = 5
+    private var prebolusDelayCriterion: Int  = 5
    
    @AppStorage("com.loopkit.Loop.missedMealNotificationsEnabled")
    private var missedMealNotificationsEnabled: Bool = false

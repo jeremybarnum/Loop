@@ -3033,29 +3033,29 @@ extension LoopDataManager {
             decisionLogger.info("Observed Absorption prediction (P2) does not cross threshold. No warning needed.")
             return (.none, nil)
         }
-        let warningSnooze = UserDefaults.standard.double(forKey: "com.loopkit.Loop.warningSnooze") * 60
-        let dontWarnIfSooner = UserDefaults.standard.double(forKey: "com.loopkit.Loop.dontWarnIfSooner") * 60
-        let dontWarnIfLater = UserDefaults.standard.double(forKey: "com.loopkit.Loop.dontWarnIfLater") * 60
-        let delayAfterCarbEntry = UserDefaults.standard.double(forKey: "com.loopkit.Loop.delayAfterCarbEntry") * 60
+            let warningSnooze = Double(UserDefaults.standard.integer(forKey: "com.loopkit.Loop.warningSnooze")) * 60
+            let dontWarnIfSooner = Double(UserDefaults.standard.integer(forKey: "com.loopkit.Loop.dontWarnIfSooner")) * 60
+            let dontWarnIfLater = Double(UserDefaults.standard.integer(forKey: "com.loopkit.Loop.dontWarnIfLater")) * 60
+            let delayAfterCarbEntry = Double(UserDefaults.standard.integer(forKey: "com.loopkit.Loop.delayAfterCarbEntry")) * 60
 
-        var notificationIntervalExceeded = false
+            var notificationIntervalExceeded = false
 
-        if let lastTime = lastNotificationTime {
-            notificationIntervalExceeded = currentDate.timeIntervalSince(lastTime) > warningSnooze
-        } else { notificationIntervalExceeded = true }
+            if let lastTime = lastNotificationTime {
+                notificationIntervalExceeded = currentDate.timeIntervalSince(lastTime) > warningSnooze
+            } else { notificationIntervalExceeded = true }
 
-        let farEnough = timeToObservedLow > dontWarnIfSooner
-        let notTooFar = timeToObservedLow < dontWarnIfLater
+            let farEnough = timeToObservedLow > dontWarnIfSooner
+            let notTooFar = timeToObservedLow < dontWarnIfLater
 
-        var enoughTimeElapsed = false
-   
-        if let mostRecentCarbTime = recentCarbEntries?.last?.startDate {
-            enoughTimeElapsed = currentDate.timeIntervalSince(mostRecentCarbTime) > delayAfterCarbEntry
-        } else { enoughTimeElapsed = true }
-        
-        
-        decisionLogger.info("Notification Interval %.0f FarEnough:%.0f, NotTooFar:%.0f, CarbAge:%.0f", warningSnooze/60, dontWarnIfSooner/60, dontWarnIfLater/60, delayAfterCarbEntry/60)
-        
+            var enoughTimeElapsed = false
+       
+            if let mostRecentCarbTime = recentCarbEntries?.last?.startDate {
+                enoughTimeElapsed = currentDate.timeIntervalSince(mostRecentCarbTime) > delayAfterCarbEntry
+            } else { enoughTimeElapsed = true }
+            
+            
+            decisionLogger.info("Notification Interval: %.2f FarEnough:%.2f, NotTooFar:%.2f, CarbAge:%.2f, Warning Level:%.2f, Warning Offset:%.2f", warningSnooze/60, dontWarnIfSooner/60, dontWarnIfLater/60, delayAfterCarbEntry/60, warningLevel, warningOffset)
+            
         decisionLogger.info("Precondition state (Interval:%{public}d, FarEnough:%{public}d, NotTooFar:%{public}d, CarbAge:%{public}d).",
                           notificationIntervalExceeded, farEnough, notTooFar, enoughTimeElapsed)
         
