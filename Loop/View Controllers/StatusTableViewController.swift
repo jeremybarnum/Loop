@@ -1163,6 +1163,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
                     let imageView = UIImageView(image: UIImage(named: "drop.circle"))
                     imageView.tintColor = .glucoseTintColor
                     cell.accessoryView = imageView
+                    cell.titleLabel.accessibilityIdentifier = "text_NoRecentGlucose"
                     return cell
                 }
             }
