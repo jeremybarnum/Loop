@@ -119,6 +119,7 @@ struct AlertManagementView: View {
             }
             preBolusRemindersSection
             lowBGAlertSection
+            testNotificationSection
         }
         .navigationTitle(NSLocalizedString("Alert Management", comment: "Title of alert management screen"))
         .onDisappear {
@@ -339,15 +340,6 @@ struct AlertManagementView: View {
                         .frame(width: 120, height: 40)
                     }
                     
-                    Button("Test Prebolus Notification") {
-                            NotificationManager.schedulePreBolusReminder(
-                                for: Date().addingTimeInterval(0),
-                                carbAmount: "15",
-                                carbAbsorptionTime: "3.0",
-                                identifier: "test-prebolus-\(Date().timeIntervalSince1970)"
-                            )
-                        }
-                    
                     HStack {
                         Text("Don't warn if farther than")
                         Spacer()
@@ -383,6 +375,35 @@ struct AlertManagementView: View {
                         .pickerStyle(WheelPickerStyle())
                         .frame(width: 120, height: 40)
                     }
+                }
+            }
+        }
+    }
+    private var testNotificationSection: some View {
+        Section(footer: DescriptiveText(label: NSLocalizedString("Test notifications to verify they appear in both foreground and background.", comment: "Description of test notifications."))) {
+            Button(action: {
+                // Test prebolus reminder notification
+                let notification = UNMutableNotificationContent()
+                notification.title = "Reminder to eat"
+                notification.body =  "Test Notification"
+                notification.sound = .default
+                notification.interruptionLevel = .timeSensitive
+                notification.categoryIdentifier = LoopNotificationCategory.lowBGWarning.rawValue //todo: check this is the right category for a test
+                let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 5.0, repeats: false)
+                
+                let request = UNNotificationRequest(
+                    identifier: "test-notification",
+                    content: notification,
+                    trigger: trigger  // 5 second delay
+                )
+                
+                UNUserNotificationCenter.current().add(request)
+            }) {
+                HStack {
+                    Text(NSLocalizedString("Send Test Notification", comment: "Button to test notifications"))
+                    Spacer()
+                    Image(systemName: "bell.badge.fill")
+                        .foregroundColor(.accentColor)
                 }
             }
         }
