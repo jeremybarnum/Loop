@@ -1708,42 +1708,43 @@ extension LoopDataManager {
         if UserDefaults.standard.bool(forKey: "com.loopkit.Loop.prebolusRemindersEnabled") {
             self.logger.default("[PREBOLUS] Prebolus reminders are enabled")
             // Always start from a clean slate so edits or deletions do not leave stale notifications queued
-            NotificationManager.cancelNotificationsForCategory(.prebolusReminder)
-            for entry in entries {
-                let now = Date()
-                let prebolusDelayCriterion: TimeInterval = Double(UserDefaults.standard.integer(forKey: "com.loopkit.Loop.prebolusDelayCriterion")) * 60 // Convert minutes to seconds
-                
-                // Only schedule notifications for future carb entries that meet the threshold
-                guard entry.startDate > entry.userCreatedDate?.addingTimeInterval(prebolusDelayCriterion) ?? now else {
-                    continue }
-                
-                guard entry.startDate > now else {continue}
-                
-                // Ensure the syncIdentifier is valid
-                guard let syncIdentifier = entry.syncIdentifier, !syncIdentifier.isEmpty else {
-                    logger.error("**Invalid or missing syncIdentifier for entry: %@", String(describing: entry))
-                    continue
+            NotificationManager.cancelNotificationsForCategory(.prebolusReminder){
+                for entry in entries {
+                    let now = Date()
+                    let prebolusDelayCriterion: TimeInterval = Double(UserDefaults.standard.integer(forKey: "com.loopkit.Loop.prebolusDelayCriterion")) * 60 // Convert minutes to seconds
+                    
+                    // Only schedule notifications for future carb entries that meet the threshold
+                    guard entry.startDate > entry.userCreatedDate?.addingTimeInterval(prebolusDelayCriterion) ?? now else {
+                        continue }
+                    
+                    guard entry.startDate > now else {continue}
+                    
+                    // Ensure the syncIdentifier is valid
+                    guard let syncIdentifier = entry.syncIdentifier, !syncIdentifier.isEmpty else {
+                        self.logger.error("**Invalid or missing syncIdentifier for entry: %@", String(describing: entry))
+                        continue
+                    }
+                    
+                    // Prepare notification content
+                    let alertTime = entry.startDate
+                    let carbAmountString = String(format: "%.0f", entry.quantity.doubleValue(for: .gram()))
+                    let absorptionTimeString = if let absorptionTime = entry.absorptionTime {
+                        String(format: "%.1f", absorptionTime / 3600)
+                    } else {
+                        "no absorption time"
+                    }
+                    
+                    // Schedule the notification
+                    self.logger.default("[PREBOLUS] Scheduling reminder for entry at %{public}@", String(describing: alertTime))
+                    NotificationManager.schedulePreBolusReminder(
+                        for: alertTime,
+                        carbAmount: carbAmountString,
+                        carbAbsorptionTime: absorptionTimeString,
+                        identifier: syncIdentifier
+                    )
+                    
+                    self.logger.default("**Scheduled notification for carb entry: %@ at %@", syncIdentifier, alertTime as CVarArg)
                 }
-                
-                // Prepare notification content
-                let alertTime = entry.startDate
-                let carbAmountString = String(format: "%.0f", entry.quantity.doubleValue(for: .gram()))
-                let absorptionTimeString = if let absorptionTime = entry.absorptionTime {
-                    String(format: "%.1f", absorptionTime / 3600)
-                } else {
-                    "no absorption time"
-                }
-                
-                // Schedule the notification
-                self.logger.default("[PREBOLUS] Scheduling reminder for entry at %{public}@", String(describing: alertTime))
-                NotificationManager.schedulePreBolusReminder(
-                    for: alertTime,
-                    carbAmount: carbAmountString,
-                    carbAbsorptionTime: absorptionTimeString,
-                    identifier: syncIdentifier
-                )
-                
-                logger.default("**Scheduled notification for carb entry: %@ at %@", syncIdentifier, alertTime as CVarArg)
             }
         }
     }
@@ -3136,10 +3137,11 @@ extension LoopDataManager {
     private func createWarningMessages(for outcome: PotentialWarningType, context: PredictionWarningContext) -> (title: String, body: String, nsMessage: String) {
         // Calculate everything once
         let timeToLow = Int(round((context.observedAbsorptionPredictionMetrics.timeToCrossThreshold ?? 0) / 60))
-        let lowBG = Int(round(context.observedAbsorptionWithSuspendPredictionMetrics.minimumGlucoseDouble(for: context.displayUnit) ?? 0))
-        let rescueCarbMessageStr = context.rescueCarbMessageStr ?? "rescue carbs"
-        
+        let minBG = Int(round(context.observedAbsorptionWithSuspendPredictionMetrics.minimumGlucoseDouble(for: context.displayUnit) ?? 0))
 
+        let timeToMinBG = Int(round((context.observedAbsorptionPredictionMetrics.timeToMinimumGlucose ?? 0) / 60))
+        
+        let rescueCarbMessageStr = context.rescueCarbMessageStr ?? "rescue carbs"
         
         let ratio = Int(round(context.absorptionRatio * 100))
         
@@ -3150,27 +3152,27 @@ extension LoopDataManager {
             return (
                 title: "Very likely low in \(timeToLow) mins",
                 body: "Take between \(rescueCarbMessageStr) carbs. Low will happen even if any old carbs fully absorb.",
-                nsMessage: "Slow Abs (\(ratio)%): DEFINITELY needed. Low=\(lowBG). Rec \(rescueCarbMessageStr)g."
+                nsMessage: "Conf 1. Time to low: \(timeToLow). Min BG: \(minBG). Time to min: \(timeToMinBG). Ratio:(\(ratio)%. Rec \(rescueCarbMessageStr)g."
             )
             
         case .rescueCarbsLikelyNeeded:
             return (
                 title: "Likely low in \(timeToLow) mins",
                 body: "Carbs absorbing at \(ratio)%. Consider taking between \(rescueCarbMessageStr) carbs, and editing.",
-                nsMessage: "Slow Abs (\(ratio)%): LIKELY needed. Low=\(lowBG). Rec \(rescueCarbMessageStr)g."
+                nsMessage: "Conf 2. Time to low: \(timeToLow). Min BG: \(minBG). Time to min: \(timeToMinBG). Ratio:(\(ratio)%. Rec \(rescueCarbMessageStr)g."
             )
             
         case .mayAvoidRescueCarbsWithEditing:
             return (
                 title: "Probable low in \(timeToLow) mins",
                 body: "Check and consider editing. Low temping may avoid need for rescue carbs. Carbs absorbing at \(ratio)% of expectation",
-                nsMessage: "Slow Abs (\(ratio)%): PROBABLY needed. Low=\(lowBG). Rec \(rescueCarbMessageStr)g."
+                nsMessage: "Conf 3. Time to low: \(timeToLow). Min BG: \(minBG). Time to min: \(timeToMinBG). Ratio:(\(ratio)%. Rec \(rescueCarbMessageStr)g."
             )
         case .considerEditingCarbsUpToAvoidUnnecessarySuspend:
             return (
                 title: "Consider editing up carbs.",
                 body: "Weird situation.  Loop thinks you'll go low and is low temping but you probably won't, based on carb absorption.",
-                nsMessage: "Slow Abs (\(ratio)%): DEFINITELY needed. Low=\(lowBG). Rec \(rescueCarbMessageStr)g."
+                nsMessage: "High absorption. Ratio:(\(ratio)%."
             )
         }
     }

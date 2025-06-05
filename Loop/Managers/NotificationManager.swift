@@ -341,13 +341,14 @@ extension NotificationManager {
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
     }
     
-    static func cancelNotificationsForCategory(_ category: LoopNotificationCategory) {
+    static func cancelNotificationsForCategory(_ category: LoopNotificationCategory, completion: @escaping () -> Void) {
         UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
             let identifiersToRemove = requests.filter { $0.content.categoryIdentifier == category.rawValue }.map { $0.identifier }
             if category == .prebolusReminder {
                 print("[PREBOLUS] Cancelling \(identifiersToRemove.count) pending reminders")
             }
             UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiersToRemove)
+            completion() // Call completion after cancellation is done
         }
     }
 }

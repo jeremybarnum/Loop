@@ -339,6 +339,15 @@ struct AlertManagementView: View {
                         .frame(width: 120, height: 40)
                     }
                     
+                    Button("Test Prebolus Notification") {
+                            NotificationManager.schedulePreBolusReminder(
+                                for: Date().addingTimeInterval(0),
+                                carbAmount: "15",
+                                carbAbsorptionTime: "3.0",
+                                identifier: "test-prebolus-\(Date().timeIntervalSince1970)"
+                            )
+                        }
+                    
                     HStack {
                         Text("Don't warn if farther than")
                         Spacer()
