@@ -328,11 +328,13 @@ extension NotificationManager {
             content: notification,
             trigger: trigger
         )
-
+        
         UNUserNotificationCenter.current().add(request) { error in
-            if let error = error {
-                print("Failed to schedule carb alert: \(error.localizedDescription)")
-            }
+           if let error = error {
+               print("[PREBOLUS] Failed to schedule carb alert: \(error.localizedDescription)")
+           } else {
+               print("[PREBOLUS] Successfully scheduled prebolus reminder for \(identifier)")
+           }
         }
     }
     static func cancelNotification(for identifiers: [String]) {

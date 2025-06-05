@@ -1711,7 +1711,7 @@ extension LoopDataManager {
             NotificationManager.cancelNotificationsForCategory(.prebolusReminder)
             for entry in entries {
                 let now = Date()
-                let prebolusDelayCriterion: TimeInterval = Double(UserDefaults.standard.double(forKey: "com.loopkit.Loop.prebolusDelayCriterion")) * 60 // Convert minutes to seconds
+                let prebolusDelayCriterion: TimeInterval = Double(UserDefaults.standard.integer(forKey: "com.loopkit.Loop.prebolusDelayCriterion")) * 60 // Convert minutes to seconds
                 
                 // Only schedule notifications for future carb entries that meet the threshold
                 guard entry.startDate > entry.userCreatedDate?.addingTimeInterval(prebolusDelayCriterion) ?? now else {

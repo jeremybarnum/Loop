@@ -54,10 +54,10 @@ struct AlertManagementView: View {
         )
     }
     
-    private var preBolusReminderEnabled: Binding<Bool> {
+    private var preBolusRemindersEnabled: Binding<Bool> {
         Binding(
-            get: { UserDefaults.standard.preBolusReminderEnabled },
-            set: { UserDefaults.standard.preBolusReminderEnabled = $0 }
+            get: { UserDefaults.standard.preBolusRemindersEnabled },
+            set: { UserDefaults.standard.preBolusRemindersEnabled = $0 }
         )
     }
     
@@ -117,7 +117,7 @@ struct AlertManagementView: View {
             if FeatureFlags.missedMealNotifications {
                 missedMealAlertSection
             }
-            preBolusReminderSection
+            preBolusRemindersSection
             lowBGAlertSection
         }
         .navigationTitle(NSLocalizedString("Alert Management", comment: "Title of alert management screen"))
@@ -301,11 +301,11 @@ struct AlertManagementView: View {
         }
     }
     
-    private var preBolusReminderSection: some View {
+    private var preBolusRemindersSection: some View {
         Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop will remind you to eat when you prebolus.", comment: "Description of prebolus notifications."))) {
-            Toggle(NSLocalizedString("Pre-bolus Reminders", comment: "Title for pre-bolus reminders toggle"), isOn: preBolusReminderEnabled)
+            Toggle(NSLocalizedString("Pre-bolus Reminders", comment: "Title for pre-bolus reminders toggle"), isOn: preBolusRemindersEnabled)
             
-            if UserDefaults.standard.preBolusReminderEnabled {
+            if UserDefaults.standard.preBolusRemindersEnabled {
                 HStack {
                     Text(NSLocalizedString("Prebolus Definition", comment: "Label for prebolus delay criterion"))
                     Spacer()
@@ -383,7 +383,7 @@ struct AlertManagementView: View {
 extension UserDefaults {
     private enum Key: String {
         case missedMealNotificationsEnabled = "com.loopkit.Loop.MissedMealNotificationsEnabled"
-        case preBolusReminderEnabled = "com.loopkit.Loop.preBolusReminderEnabled"
+        case preBolusRemindersEnabled = "com.loopkit.Loop.preBolusRemindersEnabled"
         case prebolusDelayCriterion = "com.loopkit.Loop.prebolusDelayCriterion"
         case lowBGNotificationsEnabled = "com.loopkit.Loop.lowBGNotificationsEnabled"
         case warningSnooze = "com.loopkit.Loop.warningSnooze"
@@ -397,9 +397,9 @@ extension UserDefaults {
         set { set(newValue, forKey: Key.missedMealNotificationsEnabled.rawValue) }
     }
     
-    var preBolusReminderEnabled: Bool {
-        get { object(forKey: Key.preBolusReminderEnabled.rawValue) as? Bool ?? false }
-        set { set(newValue, forKey: Key.preBolusReminderEnabled.rawValue) }
+    var preBolusRemindersEnabled: Bool {
+        get { object(forKey: Key.preBolusRemindersEnabled.rawValue) as? Bool ?? false }
+        set { set(newValue, forKey: Key.preBolusRemindersEnabled.rawValue) }
     }
     
     var prebolusDelayCriterion: Int {
