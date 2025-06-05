@@ -337,7 +337,7 @@ struct AlertManagementView: View {
                             }
                         }
                         .pickerStyle(WheelPickerStyle())
-                        .frame(width: 120, height: 40)
+                        .frame(width: 100, height: 40)
                     }
                     
                     HStack {
@@ -349,7 +349,7 @@ struct AlertManagementView: View {
                             }
                         }
                         .pickerStyle(WheelPickerStyle())
-                        .frame(width: 120, height: 40)
+                        .frame(width: 100, height: 40)
                     }
                     
                     HStack {
@@ -361,7 +361,7 @@ struct AlertManagementView: View {
                             }
                         }
                         .pickerStyle(WheelPickerStyle())
-                        .frame(width: 120, height: 40)
+                        .frame(width: 100, height: 40)
                     }
                     
                     HStack {
@@ -373,7 +373,7 @@ struct AlertManagementView: View {
                             }
                         }
                         .pickerStyle(WheelPickerStyle())
-                        .frame(width: 120, height: 40)
+                        .frame(width: 100, height: 40)
                     }
                 }
             }
@@ -443,7 +443,7 @@ extension UserDefaults {
     }
     
     var warningSnooze: Int {
-        get { object(forKey: Key.warningSnooze.rawValue) as? Int ?? 10 }
+        get { object(forKey: Key.warningSnooze.rawValue) as? Int ?? 9 }
 
         set {
             print("**Setting warningSnooze to \(newValue)")
@@ -456,7 +456,7 @@ extension UserDefaults {
     }
     
     var dontWarnIfSooner: Int {
-        get { object(forKey: Key.dontWarnIfSooner.rawValue) as? Int ?? 10 }
+        get { object(forKey: Key.dontWarnIfSooner.rawValue) as? Int ?? 5 }
         set { set(newValue, forKey: Key.dontWarnIfSooner.rawValue) }
     }
     
