@@ -2967,39 +2967,11 @@ extension LoopDataManager {
             decisionLogger.info("Core prediction arrays for warnings are empty. Skipping check.")
             return (.none, nil)
         }
-        //Mark -- functionality to supply different aggressiveness day and night
-        let daytimeWarningOffset = HKQuantity(unit: displayUnit, doubleValue: 5.0)
-        let nightWarningOffset = HKQuantity(unit: displayUnit, doubleValue: 10.0)
-        
-        let calendar = Calendar.current
-        let now = Date()
-        let nightStart = calendar.date(bySettingHour: 22, minute: 30, second: 0, of: now)!
-        let nightEnd = calendar.date(bySettingHour: 6, minute: 30, second: 0, of: now)!
-
-        let isNightTime: Bool
-        if nightStart <= nightEnd {
-           // Night period doesn't cross midnight
-           isNightTime = now >= nightStart && now <= nightEnd
-        } else {
-           // Night period crosses midnight
-           isNightTime = now >= nightStart || now <= nightEnd
-        }
-
-        let warningOffset = isNightTime ? nightWarningOffset : daytimeWarningOffset
-            
-        let warningLevelValue = suspendThresholdQuantity.doubleValue(for: displayUnit) - warningOffset.doubleValue(for: displayUnit)
+        let warningThresholdSchedule = UserDefaults.standard.warningThresholdSchedule
+        let warningLevelValue = warningThresholdSchedule.warningLevel(at: currentDate)
         let warningLevel = HKQuantity(unit: displayUnit, doubleValue: warningLevelValue)
-        
-        // Add this logging
-        let timeFormatter = DateFormatter()
-        timeFormatter.timeStyle = .medium
-        decisionLogger.info("Night time check: Current=%{public}@, NightStart=%{public}@, NightEnd=%{public}@, IsNight=%{public}d",
-                           timeFormatter.string(from: now),
-                           timeFormatter.string(from: nightStart),
-                           timeFormatter.string(from: nightEnd),
-                           isNightTime ? 1 : 0)
                            
-        decisionLogger.info("Warning level calc: SuspendThreshold=%.1f, WarningOffset=%.1f, WarningLevel=%.1f", suspendThresholdQuantity.doubleValue(for: displayUnit), warningOffset.doubleValue(for: displayUnit), warningLevelValue)
+        decisionLogger.info("Warning level calc: SuspendThreshold=%.1f, WarningLevel=%.1f", suspendThresholdQuantity.doubleValue(for: displayUnit), warningLevelValue)
         
         let p1_Metrics = analyzePrediction(
             prediction: predictionWithZeroTemp,

@@ -316,6 +316,8 @@
 		89FE21AD24AC57E30033F501 /* Collection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89FE21AC24AC57E30033F501 /* Collection.swift */; };
 		991346FF2AE6D1350067EE27 /* ObservedAbsorptionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991346FE2AE6D1350067EE27 /* ObservedAbsorptionManager.swift */; };
 		991347012AE6D1490067EE27 /* ObservedAbsorptionSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991347002AE6D1490067EE27 /* ObservedAbsorptionSettings.swift */; };
+		9943B96E2DF22BFD009A1224 /* LowGlucoseWarningThresholdSchedule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9943B96D2DF22BFD009A1224 /* LowGlucoseWarningThresholdSchedule.swift */; };
+		9943B9702DF22EA0009A1224 /* LowGlucoseWarningThresholdEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9943B96F2DF22EA0009A1224 /* LowGlucoseWarningThresholdEditor.swift */; };
 		A90EF53C25DEF06200F32D61 /* PluginManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16DA84122E8E112008624C2 /* PluginManager.swift */; };
 		A90EF54425DEF0A000F32D61 /* OSLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4374B5EE209D84BE00D17AA8 /* OSLog.swift */; };
 		A91D2A3F26CF0FF80023B075 /* IconTitleSubtitleTableViewCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = A91D2A3E26CF0FF80023B075 /* IconTitleSubtitleTableViewCell.swift */; };
@@ -1250,6 +1252,8 @@
 		89FE21AC24AC57E30033F501 /* Collection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Collection.swift; sourceTree = "<group>"; };
 		991346FE2AE6D1350067EE27 /* ObservedAbsorptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservedAbsorptionManager.swift; sourceTree = "<group>"; };
 		991347002AE6D1490067EE27 /* ObservedAbsorptionSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservedAbsorptionSettings.swift; sourceTree = "<group>"; };
+		9943B96D2DF22BFD009A1224 /* LowGlucoseWarningThresholdSchedule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LowGlucoseWarningThresholdSchedule.swift; sourceTree = "<group>"; };
+		9943B96F2DF22EA0009A1224 /* LowGlucoseWarningThresholdEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LowGlucoseWarningThresholdEditor.swift; sourceTree = "<group>"; };
 		A900531A28D60862000BC15B /* Loop.shortcut */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop.shortcut; sourceTree = "<group>"; };
 		A900531B28D608CA000BC15B /* Cancel Override.shortcut */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Cancel Override.shortcut"; sourceTree = "<group>"; };
 		A900531C28D6090D000BC15B /* Loop Remote Overrides.shortcut */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop Remote Overrides.shortcut"; sourceTree = "<group>"; };
@@ -1849,6 +1853,7 @@
 		1DA6499D2441266400F61E75 /* Alerts */ = {
 			isa = PBXGroup;
 			children = (
+				9943B96D2DF22BFD009A1224 /* LowGlucoseWarningThresholdSchedule.swift */,
 				1DB1065024467E18005542BD /* AlertManager.swift */,
 				1D05219C2469F1F5000EBBDE /* AlertStore.swift */,
 				1D080CBB2473214A00356610 /* AlertStore.xcdatamodeld */,
@@ -2248,6 +2253,7 @@
 		43F5C2CF1B92A2ED003EB13D /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				9943B96F2DF22EA0009A1224 /* LowGlucoseWarningThresholdEditor.swift */,
 				1452F4AA2A851EDF00F8B9E4 /* AddEditFavoriteFoodView.swift */,
 				B4001CED28CBBC82002FB414 /* AlertManagementView.swift */,
 				897A5A9524C2175B00C4E71D /* BolusEntryView.swift */,
@@ -3692,6 +3698,7 @@
 				43A51E1F1EB6D62A000736CC /* CarbAbsorptionViewController.swift in Sources */,
 				43776F901B8022E90074EA36 /* AppDelegate.swift in Sources */,
 				4372E48B213CB5F00068E043 /* Double.swift in Sources */,
+				9943B9702DF22EA0009A1224 /* LowGlucoseWarningThresholdEditor.swift in Sources */,
 				430B29932041F5B300BA9F93 /* UserDefaults+Loop.swift in Sources */,
 				43CE7CDE1CA8B63E003CC1B0 /* Data.swift in Sources */,
 				E9BB27AB23B85C3500FB4987 /* SleepStore.swift in Sources */,
@@ -3819,6 +3826,7 @@
 				43785E932120A01B0057DED1 /* NewCarbEntryIntent+Loop.swift in Sources */,
 				439A7944211FE22F0041B75F /* NSUserActivity.swift in Sources */,
 				4328E0331CFC091100E199AA /* WatchContext+LoopKit.swift in Sources */,
+				9943B96E2DF22BFD009A1224 /* LowGlucoseWarningThresholdSchedule.swift in Sources */,
 				4F526D611DF8D9A900A04910 /* NetBasal.swift in Sources */,
 				C1DE5D23251BFC4D00439E49 /* SimpleBolusView.swift in Sources */,
 				89ADE13B226BFA0F0067222B /* TestingScenariosManager.swift in Sources */,

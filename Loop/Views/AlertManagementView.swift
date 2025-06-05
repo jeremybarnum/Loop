@@ -329,6 +329,15 @@ struct AlertManagementView: View {
             
             if isLowBGNotificationsEnabled {
                 VStack(spacing: 16) {
+                    NavigationLink(destination: LowGlucoseWarningThresholdEditor()) {
+                            HStack {
+                                Text("Warning Threshold Schedule")
+                                Spacer()
+                                Text("Customize").foregroundColor(.secondary)
+                                Image(systemName: "chevron.right").foregroundColor(.gray).font(.footnote)
+                            }
+                        }
+                    
                     HStack {
                         Text("Warning snooze time")
                         Spacer()
