@@ -19,6 +19,10 @@ struct AlertManagementView: View {
 
     @State private var showMuteAlertOptions: Bool = false
     @State private var showHowMuteAlertWork: Bool = false
+    
+    // Local state variables for immediate UI updates
+    @State private var isPreBolusRemindersEnabled: Bool = UserDefaults.standard.preBolusRemindersEnabled
+    @State private var isLowBGNotificationsEnabled: Bool = UserDefaults.standard.lowBGNotificationsEnabled
 
     private var formatter: DateComponentsFormatter = {
         let formatter = DateComponentsFormatter()
@@ -54,24 +58,10 @@ struct AlertManagementView: View {
         )
     }
     
-    private var preBolusRemindersEnabled: Binding<Bool> {
-        Binding(
-            get: { UserDefaults.standard.preBolusRemindersEnabled },
-            set: { UserDefaults.standard.preBolusRemindersEnabled = $0 }
-        )
-    }
-    
     private var prebolusDelayCriterion: Binding<Int> {
         Binding(
             get: { UserDefaults.standard.prebolusDelayCriterion },
             set: { UserDefaults.standard.prebolusDelayCriterion = $0 }
-        )
-    }
-    
-    private var lowBGNotificationsEnabled: Binding<Bool> {
-        Binding(
-            get: { UserDefaults.standard.lowBGNotificationsEnabled },
-            set: { UserDefaults.standard.lowBGNotificationsEnabled = $0 }
         )
     }
     
@@ -120,6 +110,11 @@ struct AlertManagementView: View {
             preBolusRemindersSection
             lowBGAlertSection
             testNotificationSection
+        }
+        .onAppear {
+            // Sync local state on appear
+            isPreBolusRemindersEnabled = UserDefaults.standard.preBolusRemindersEnabled
+            isLowBGNotificationsEnabled = UserDefaults.standard.lowBGNotificationsEnabled
         }
         .navigationTitle(NSLocalizedString("Alert Management", comment: "Title of alert management screen"))
         .onDisappear {
@@ -304,9 +299,12 @@ struct AlertManagementView: View {
     
     private var preBolusRemindersSection: some View {
         Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop will remind you to eat when you prebolus.", comment: "Description of prebolus notifications."))) {
-            Toggle(NSLocalizedString("Pre-bolus Reminders", comment: "Title for pre-bolus reminders toggle"), isOn: preBolusRemindersEnabled)
+            Toggle(NSLocalizedString("Pre-bolus Reminders", comment: "Title for pre-bolus reminders toggle"), isOn: $isPreBolusRemindersEnabled)
+                .onChange(of: isPreBolusRemindersEnabled) { newValue in
+                    UserDefaults.standard.preBolusRemindersEnabled = newValue
+                }
             
-            if UserDefaults.standard.preBolusRemindersEnabled {
+            if isPreBolusRemindersEnabled {
                 HStack {
                     Text(NSLocalizedString("Prebolus Definition", comment: "Label for prebolus delay criterion"))
                     Spacer()
@@ -324,9 +322,12 @@ struct AlertManagementView: View {
     
     private var lowBGAlertSection: some View {
         Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop can notify you when it predicts a low glucose event.", comment: "Description of low BG notifications."))) {
-            Toggle(NSLocalizedString("Predicted Low Warnings", comment: "Title for low BG warning enablement"), isOn: lowBGNotificationsEnabled)
+            Toggle(NSLocalizedString("Predicted Low Warnings", comment: "Title for low BG warning enablement"), isOn: $isLowBGNotificationsEnabled)
+                .onChange(of: isLowBGNotificationsEnabled) { newValue in
+                    UserDefaults.standard.lowBGNotificationsEnabled = newValue
+                }
             
-            if UserDefaults.standard.lowBGNotificationsEnabled {
+            if isLowBGNotificationsEnabled {
                 VStack(spacing: 16) {
                     HStack {
                         Text("Warning snooze time")
@@ -379,6 +380,7 @@ struct AlertManagementView: View {
             }
         }
     }
+    
     private var testNotificationSection: some View {
         Section(footer: DescriptiveText(label: NSLocalizedString("Test notifications to verify they appear in both foreground and background.", comment: "Description of test notifications."))) {
             Button(action: {
@@ -444,10 +446,10 @@ extension UserDefaults {
     
     var warningSnooze: Int {
         get { object(forKey: Key.warningSnooze.rawValue) as? Int ?? 9 }
-
         set {
             print("**Setting warningSnooze to \(newValue)")
-            set(newValue, forKey: Key.warningSnooze.rawValue) }
+            set(newValue, forKey: Key.warningSnooze.rawValue)
+        }
     }
     
     var dontWarnIfLater: Int {
