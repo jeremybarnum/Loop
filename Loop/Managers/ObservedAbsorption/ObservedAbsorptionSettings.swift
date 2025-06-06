@@ -11,8 +11,6 @@ import LoopKit
 
 public struct ObservedAbsorptionSettings {
     
-    //TODO: decide whether to specify a level to treat to.
-    
     //we need to make an assumption about how fast burning the carbs are when estimating the needed rescue carbs
     public static let assumedRescueCarbAbsorptionTimeMinutes = 45.0
     
@@ -23,4 +21,5 @@ public struct ObservedAbsorptionSettings {
     public static let recentAndFutureCarbExclusionWindow = TimeInterval(minutes: 15)
 
 }
+
 
