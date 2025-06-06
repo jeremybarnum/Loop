@@ -43,7 +43,7 @@ protocol DeliveryDelegate: AnyObject {
     var pumpInsulinType: InsulinType? { get }
     var basalDeliveryState: PumpManagerStatus.BasalDeliveryState? { get }
     var isPumpConfigured: Bool { get }
-
+    
     func enact(bolus: Double?, tempBasal: TempBasalRecommendation?, decisionId: UUID?) async throws
     func enactBolus(units: Double, decisionId: UUID?, activationType: BolusActivationType) async throws
     func roundBasalRate(unitsPerHour: Double) -> Double
