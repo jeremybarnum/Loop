@@ -627,6 +627,7 @@ class LoopAppManager: NSObject {
             .environmentObject(deviceDataManager.displayGlucosePreference)
             .environment(\.appName, Bundle.main.bundleDisplayName)
             .environment(\.isInvestigationalDevice, FeatureFlags.isInvestigationalDevice)
+            .environment(\.guidanceColors, .default)
             .environment(\.loopStatusColorPalette, .loopStatus)
             .environment(\.settingsManager, settingsManager)
             .environment(\.temporaryPresetsManager, temporaryPresetsManager)
