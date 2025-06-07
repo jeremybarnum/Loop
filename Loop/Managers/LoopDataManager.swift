@@ -2832,8 +2832,6 @@ extension LoopDataManager {
         predictionLogger.info("**Generated predictionWithZeroTemp using inputs")
        
     }
-    
-    //TODO: the observed absorption prediction is a little off sometimes need to debug the generation of the effects
 
     // MARK: - Analysis & Calculation Helpers
 
@@ -2921,6 +2919,14 @@ extension LoopDataManager {
     private func processObservedAbsorptionAndIssueWarnings() {
         // This function assumes it's already being called on self.dataAccessQueue
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+        
+        guard UserDefaults.standard.lowBGNotificationsEnabled else {
+                decisionLogger.info("Low BG notifications disabled - skipping warning analysis")
+                return
+            }
+
+            decisionLogger.info("Low BG notifications enabled - proceeding with warning analysis")
+
 
         do {
             try self.updateObservedAbsorptionPredictions() // This is the refactored version
@@ -2946,7 +2952,7 @@ extension LoopDataManager {
     private func determinePotentialWarningType() -> (outcome: PotentialWarningType, context: PredictionWarningContext?) {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
 
-        guard UserDefaults.standard.lowBGNotificationsEnabled else { return (.none, nil) }
+       // guard UserDefaults.standard.lowBGNotificationsEnabled else { return (.none, nil) }
         
               let currentDate = now()
         guard let suspendThresholdQuantity = settings.suspendThreshold?.quantity,
