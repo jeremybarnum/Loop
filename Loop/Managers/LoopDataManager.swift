@@ -1712,7 +1712,8 @@ extension LoopDataManager {
             NotificationManager.cancelNotificationsForCategory(.prebolusReminder){
                 for entry in entries {
                     let now = Date()
-                    let prebolusDelayCriterion: TimeInterval = Double(UserDefaults.standard.integer(forKey: "com.loopkit.Loop.prebolusDelayCriterion")) * 60 // Convert minutes to seconds
+                    let prebolusDelayCriterion: TimeInterval = Double(UserDefaults.standard.prebolusDelayCriterion) * 60 // Convert minutes to seconds
+                    self.preBolusLogger.info("[PREBOLUS] Delay Criterion is: %.1f minutes", prebolusDelayCriterion / 60)
                     
                     // Only schedule notifications for future carb entries that meet the threshold
                     guard entry.startDate > entry.userCreatedDate?.addingTimeInterval(prebolusDelayCriterion) ?? now else {
@@ -2945,7 +2946,8 @@ extension LoopDataManager {
     private func determinePotentialWarningType() -> (outcome: PotentialWarningType, context: PredictionWarningContext?) {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
 
-        guard UserDefaults.standard.bool(forKey: "com.loopkit.Loop.lowBGNotificationsEnabled") else { return (.none, nil) }
+        guard UserDefaults.standard.lowBGNotificationsEnabled else { return (.none, nil) }
+        
               let currentDate = now()
         guard let suspendThresholdQuantity = settings.suspendThreshold?.quantity,
               let displayUnit = settings.glucoseUnit,
