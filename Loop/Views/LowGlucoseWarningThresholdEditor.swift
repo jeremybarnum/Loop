@@ -17,11 +17,14 @@ struct LowGlucoseWarningThresholdEditor: View {
     private let suspendThreshold = 80
     
     init() {
-        _schedule = State(initialValue: UserDefaults.standard.warningThresholdSchedule)
+        _schedule = State(initialValue: LowGlucoseWarningThresholdSchedule(items: []))
     }
     
     var body: some View {
         content
+            .onAppear {
+                schedule = UserDefaults.standard.warningThresholdSchedule
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                  //   cancelButton
@@ -54,15 +57,7 @@ struct LowGlucoseWarningThresholdEditor: View {
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                
-               /* HStack {
-                    Spacer()
-                    Button(action: {}) {
-                        Image(systemName: "info.circle")
-                            .font(.title2)
-                            .foregroundColor(.blue)
-                    }
-                }*/
+        
             }
             .padding()
             .background(Color(.secondarySystemGroupedBackground))
@@ -119,7 +114,8 @@ struct LowGlucoseWarningThresholdEditor: View {
             // Save button
             Button("Save") {
                 saveSchedule()
-                presentationMode.wrappedValue.dismiss()
+                editingItemIndex = nil
+                //presentationMode.wrappedValue.dismiss()
             }
             .frame(maxWidth: .infinity)
             .frame(height: 50)
