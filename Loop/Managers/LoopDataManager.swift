@@ -3083,8 +3083,7 @@ extension LoopDataManager {
 
 
         guard notificationIntervalExceeded, farEnough, notTooFar else {
-            decisionLogger.info("Universal warning preconditions not met (Interval:%{public}d, FarEnough:%{public}d, NotTooFar:%{public}d, CarbAge:%{public}d).",
-                              notificationIntervalExceeded, farEnough, notTooFar, enoughTimeElapsed)
+            decisionLogger.info("Universal warning preconditions not met (Interval:%{public}d, FarEnough:%{public}d, NotTooFar:%{public}d, CarbAge:%{public}d).", notificationIntervalExceeded, farEnough, notTooFar, enoughTimeElapsed)
             return (.none, nil) //**not checking enoughTimeElapsed universally because  whether or not we issue a waring will depending on which type of low we have
         }
         
@@ -3105,8 +3104,7 @@ extension LoopDataManager {
         let p2Crossed = p2_Metrics.didCrossThreshold
         let p3Crossed = p3_Metrics.didCrossThreshold
         
-        decisionLogger.info("Crossed P1: %d, Crossed P2: %d, Crossed P3: %d, WarningLevel: %.1f",
-                           p1Crossed ? 1 : 0, p2Crossed ? 1 : 0, p3Crossed ? 1 : 0, warningLevel)
+        decisionLogger.info("Crossed P1: %d, Crossed P2: %d, Crossed P3: %d, WarningLevel: %.1f", p1Crossed ? 1 : 0, p2Crossed ? 1 : 0, p3Crossed ? 1 : 0, warningLevel)
 
         switch (p1Crossed, p2Crossed, p3Crossed) {
         case (true, true, true), (true, true, false): //lots of extra insulin; second case is extra insulin which is offset by underdeclared carbs which are then edited and then the benefit of lower temping.  Too obscure, better to just privilege the first True and send aggressive warning.
