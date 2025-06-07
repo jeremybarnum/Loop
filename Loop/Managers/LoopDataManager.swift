@@ -1712,7 +1712,8 @@ extension LoopDataManager {
             NotificationManager.cancelNotificationsForCategory(.prebolusReminder){
                 for entry in entries {
                     let now = Date()
-                    let prebolusDelayCriterion: TimeInterval = Double(UserDefaults.standard.integer(forKey: "com.loopkit.Loop.prebolusDelayCriterion")) * 60 // Convert minutes to seconds
+                    let prebolusDelayCriterion: TimeInterval = Double(UserDefaults.standard.prebolusDelayCriterion) * 60 // Convert minutes to seconds
+                    self.preBolusLogger.info("[PREBOLUS] Delay Criterion is: %.1f minutes", prebolusDelayCriterion / 60)
                     
                     // Only schedule notifications for future carb entries that meet the threshold
                     guard entry.startDate > entry.userCreatedDate?.addingTimeInterval(prebolusDelayCriterion) ?? now else {
@@ -2831,8 +2832,6 @@ extension LoopDataManager {
         predictionLogger.info("**Generated predictionWithZeroTemp using inputs")
        
     }
-    
-    //TODO: the observed absorption prediction is a little off sometimes need to debug the generation of the effects
 
     // MARK: - Analysis & Calculation Helpers
 
@@ -2920,6 +2919,14 @@ extension LoopDataManager {
     private func processObservedAbsorptionAndIssueWarnings() {
         // This function assumes it's already being called on self.dataAccessQueue
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+        
+        guard UserDefaults.standard.lowBGNotificationsEnabled else {
+                decisionLogger.info("Low BG notifications disabled - skipping warning analysis")
+                return
+            }
+
+            decisionLogger.info("Low BG notifications enabled - proceeding with warning analysis")
+
 
         do {
             try self.updateObservedAbsorptionPredictions() // This is the refactored version
@@ -2945,7 +2952,8 @@ extension LoopDataManager {
     private func determinePotentialWarningType() -> (outcome: PotentialWarningType, context: PredictionWarningContext?) {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
 
-        guard UserDefaults.standard.bool(forKey: "com.loopkit.Loop.lowBGNotificationsEnabled") else { return (.none, nil) }
+       // guard UserDefaults.standard.lowBGNotificationsEnabled else { return (.none, nil) }
+        
               let currentDate = now()
         guard let suspendThresholdQuantity = settings.suspendThreshold?.quantity,
               let displayUnit = settings.glucoseUnit,
@@ -3053,8 +3061,7 @@ extension LoopDataManager {
 
 
         guard notificationIntervalExceeded, farEnough, notTooFar else {
-            decisionLogger.info("Universal warning preconditions not met (Interval:%{public}d, FarEnough:%{public}d, NotTooFar:%{public}d, CarbAge:%{public}d).",
-                              notificationIntervalExceeded, farEnough, notTooFar, enoughTimeElapsed)
+            decisionLogger.info("Universal warning preconditions not met (Interval:%{public}d, FarEnough:%{public}d, NotTooFar:%{public}d, CarbAge:%{public}d).", notificationIntervalExceeded, farEnough, notTooFar, enoughTimeElapsed)
             return (.none, nil) //**not checking enoughTimeElapsed universally because  whether or not we issue a waring will depending on which type of low we have
         }
         
@@ -3075,8 +3082,7 @@ extension LoopDataManager {
         let p2Crossed = p2_Metrics.didCrossThreshold
         let p3Crossed = p3_Metrics.didCrossThreshold
         
-        decisionLogger.info("Crossed P1: %d, Crossed P2: %d, Crossed P3: %d, WarningLevel: %.1f",
-                           p1Crossed ? 1 : 0, p2Crossed ? 1 : 0, p3Crossed ? 1 : 0, warningLevel)
+        decisionLogger.info("Crossed P1: %d, Crossed P2: %d, Crossed P3: %d, WarningLevel: %.1f", p1Crossed ? 1 : 0, p2Crossed ? 1 : 0, p3Crossed ? 1 : 0, warningLevel)
 
         switch (p1Crossed, p2Crossed, p3Crossed) {
         case (true, true, true), (true, true, false): //lots of extra insulin; second case is extra insulin which is offset by underdeclared carbs which are then edited and then the benefit of lower temping.  Too obscure, better to just privilege the first True and send aggressive warning.
