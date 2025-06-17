@@ -430,7 +430,7 @@ extension UserDefaults {
     }
     
     var preBolusRemindersEnabled: Bool {
-        get { object(forKey: Key.preBolusRemindersEnabled.rawValue) as? Bool ?? false }
+        get { object(forKey: Key.preBolusRemindersEnabled.rawValue) as? Bool ?? true }
         set { set(newValue, forKey: Key.preBolusRemindersEnabled.rawValue) }
     }
     
@@ -440,7 +440,7 @@ extension UserDefaults {
     }
     
     var lowBGNotificationsEnabled: Bool {
-        get { object(forKey: Key.lowBGNotificationsEnabled.rawValue) as? Bool ?? false }
+        get { object(forKey: Key.lowBGNotificationsEnabled.rawValue) as? Bool ?? true }
         set { set(newValue, forKey: Key.lowBGNotificationsEnabled.rawValue) }
     }
     
