@@ -117,7 +117,7 @@ class LoopAppManager: NSObject {
     private let log = DiagnosticLog(category: "LoopAppManager")
     private let widgetLog = DiagnosticLog(category: "LoopWidgets")
 
-    private let automaticDosingStatus = AutomaticDosingStatus(automaticDosingEnabled: false, isAutomaticDosingAllowed: false)
+    private var automaticDosingStatus: AutomaticDosingStatus!
 
     lazy private var cancellables = Set<AnyCancellable>()
 
@@ -308,6 +308,9 @@ class LoopAppManager: NSObject {
         }
 
         let carbModel: CarbAbsorptionModel = FeatureFlags.nonlinearCarbModelEnabled ? .piecewiseLinear : .linear
+        
+        self.automaticDosingStatus = UserDefaults.standard.automaticDosingStatus ?? AutomaticDosingStatus(automaticDosingEnabled: UserDefaults.standard.automationHistory.last?.enabled ?? false, isAutomaticDosingAllowed: false)
+
         crashRecoveryManager = CrashRecoveryManager(alertIssuer: alertManager)
 
         loopDataManager = LoopDataManager(
@@ -326,7 +329,6 @@ class LoopAppManager: NSObject {
         )
 
         cacheStore.delegate = loopDataManager
-
 
         Task { @MainActor in
             alertManager.addAlertResponder(managerIdentifier: crashRecoveryManager.managerIdentifier, alertResponder: crashRecoveryManager)

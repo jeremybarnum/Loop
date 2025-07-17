@@ -1179,13 +1179,14 @@ final class StatusTableViewController: LoopChartsTableViewController {
     private func iobFooterViewContent() -> some View {
         let formatter = QuantityFormatter(for: .internationalUnit)
         
-        if let lastManualDose = lastDoseEntry, let formattedBolusValue = formatter.string(from: LoopQuantity(unit: .internationalUnit, doubleValue: lastManualDose.deliveredUnits ?? lastManualDose.value)) {
+        if let lastManualDose = lastDoseEntry, let formattedBolusValue = formatter.string(from: LoopQuantity(unit: .internationalUnit, doubleValue: lastManualDose.deliveredUnits ?? lastManualDose.value)), lastManualDose.endDate <= Date() {
+            
             let hoursDifference = Date().timeIntervalSince(lastManualDose.endDate) / 3600
             
             let lastBolusLabel = Text("Last Bolus: ")
             let lastBolusValue = Text("\(formattedBolusValue) ").fontWeight(.semibold)
             let icon = Text(Image(systemName: "hourglass.bottomhalf.filled")).foregroundStyle(.secondary)
-            let exactTime = Text("at \(lastManualDose.endDate.formatted(date: .omitted, time: .shortened))").foregroundStyle(.secondary)
+            let exactTime = Text("at \(lastManualDose.startDate.formatted(date: .omitted, time: .shortened))").foregroundStyle(.secondary)
             let roundedTime = Text(" \(Int(hoursDifference.rounded())) hours ago").foregroundStyle(.secondary)
             
             Group {
@@ -1362,7 +1363,63 @@ final class StatusTableViewController: LoopChartsTableViewController {
                     performSegue(withIdentifier: PredictionTableViewController.className, sender: indexPath)
                 }
             case .iob:
-                performSegue(withIdentifier: InsulinDeliveryTableViewController.className, sender: indexPath)
+                let showLegacy = false
+                
+                if !showLegacy {
+                    let hostingController = UIHostingController(
+                        rootView: InsulinDeliveryLog(
+                            viewModel: InsulinDeliveryLogViewModel(
+                                loopDataManager: loopManager,
+                                pumpManager: deviceManager.pumpManager
+                            ),
+                            onTapGesture: { [weak navigationController] doseEntry in
+                                Task {
+                                    var dosingDecision: StoredDosingDecision?
+                                    if let decisionId = doseEntry.decisionId {
+                                        dosingDecision = try await self.loopManager.dosingDecisionStore.findDosingDecisionsById(decisionId)
+                                    }
+                                    
+                                    let viewController = CommandResponseViewController(command: { (completionHandler) -> String in
+                                        var description = [String]()
+                                        
+                                        let timeFormatter: DateFormatter = {
+                                            let formatter = DateFormatter()
+                                            
+                                            formatter.dateStyle = .none
+                                            formatter.timeStyle = .short
+                                            
+                                            return formatter
+                                        }()
+                                        
+                                        description.append(timeFormatter.string(from: doseEntry.startDate))
+                                        
+                                        description.append(String(describing: doseEntry))
+                                        
+                                        if let dosingDecision {
+                                            description.append(String(describing: dosingDecision))
+                                        }
+                                        
+                                        return description.joined(separator: "\n\n")
+                                    })
+                                    
+                                    navigationController?.pushViewController(viewController, animated: true)
+                                }
+                            }
+                        )
+                        .navigationTitle(Text("Insulin"))
+                        .environment(\.colorPalette, .default)
+                        .environment(\.loopStatusColorPalette, .loopStatus)
+                    )
+                    
+                    hostingController.hidesBottomBarWhenPushed = true
+                    
+                    navigationController?.pushViewController(
+                        hostingController,
+                        animated: true
+                    )
+                } else {
+                    performSegue(withIdentifier: InsulinDeliveryTableViewController.className, sender: indexPath)
+                }
             case .cob:
                 performSegue(withIdentifier: CarbAbsorptionViewController.className, sender: indexPath)
             }
