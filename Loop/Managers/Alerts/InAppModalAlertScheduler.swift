@@ -9,6 +9,7 @@
 import UIKit
 import LoopKit
 
+@MainActor
 public class InAppModalAlertScheduler {
 
     private weak var alertPresenter: AlertPresenter?
@@ -47,19 +48,17 @@ public class InAppModalAlertScheduler {
         }
     }
     
-    public func unscheduleAlert(identifier: Alert.Identifier) {
-        DispatchQueue.main.async {
-            self.removePendingAlert(identifier: identifier)
-            self.removePresentedAlert(identifier: identifier)
-        }
+    public func unscheduleAlert(identifier: Alert.Identifier) async {
+        removePendingAlert(identifier: identifier)
+        await removePresentedAlert(identifier: identifier)
     }
 
-    func removePresentedAlert(identifier: Alert.Identifier, completion: (() -> Void)? = nil) {
+    func removePresentedAlert(identifier: Alert.Identifier) async {
         guard let alertPresented = alertsPresented[identifier] else {
-            completion?()
             return
         }
-        alertPresenter?.dismissAlert(alertPresented.0, animated: true, completion: completion)
+
+        await alertPresenter?.dismissAlert(alertPresented.0, animated: true)
         clearPresentedAlert(identifier: identifier)
     }
 
@@ -95,22 +94,27 @@ extension InAppModalAlertScheduler {
         guard let content = alert.foregroundContent else {
             return
         }
-        DispatchQueue.main.async {
+        Task { @MainActor in
             if self.isAlertPresented(identifier: alert.identifier) {
                 return
             }
             let alertController = self.constructAlert(title: content.title,
                                                       message: content.body,
-                                                      action: content.acknowledgeActionButtonLabel,
-                                                      isCritical: alert.interruptionLevel == .critical) { [weak self] in
+                                                      actions: content.actions,
+                                                      isCritical: alert.interruptionLevel == .critical)
+            { [weak self] (action) in
                 // the completion is called after the alert is acknowledged
                 self?.clearPresentedAlert(identifier: alert.identifier)
-                self?.alertManagerResponder?.acknowledgeAlert(identifier: alert.identifier)
+                Task {
+                    if action.identifier == "acknowledge" {
+                        try await self?.alertManagerResponder?.acknowledgeAlert(identifier: alert.identifier)
+                    } else {
+                        try await self?.alertManagerResponder?.userDidSelectAction(alertIdentifier: alert.identifier, actionIdentifier: action.identifier)
+                    }
+                }
             }
-            self.alertPresenter?.present(alertController, animated: true) { [weak self] in
-                // the completion is called after the alert is presented
-                self?.addPresentedAlert(alert: alert, controller: alertController)
-            }
+            await self.alertPresenter?.present(alertController, animated: true)
+            addPresentedAlert(alert: alert, controller: alertController)
         }
     }
     
@@ -144,11 +148,40 @@ extension InAppModalAlertScheduler {
         return alertsPresented.index(forKey: identifier) != nil
     }
 
-    private func constructAlert(title: String, message: String, action: String, isCritical: Bool, acknowledgeCompletion: @escaping () -> Void) -> UIAlertController {
+    private func constructAlert(
+        title: String,
+        message: String,
+        actions: [Alert.UserAlertAction],
+        isCritical: Bool,
+        handleAction: @escaping (Alert.UserAlertAction) -> Void
+    ) -> UIAlertController {
         dispatchPrecondition(condition: .onQueue(.main))
         // For now, this is a simple alert with an "OK" button
         let alertController = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alertController.addAction(newActionFunc(action, .default, { _ in acknowledgeCompletion() }))
+        for action in actions {
+            alertController.addAction(
+                newActionFunc(
+                    action.label,
+                    action.style.uiKitStyle,
+                    { _ in
+                        handleAction(action)
+                    })
+            )
+        }
         return alertController
+    }
+}
+
+
+extension Alert.UserAlertAction.Style {
+    var uiKitStyle: UIAlertAction.Style {
+        switch self {
+        case .default:
+            return .default
+        case .destructive:
+            return .destructive
+        case .cancel:
+            return .cancel
+        }
     }
 }

@@ -121,12 +121,11 @@ final class StatusTableViewController: LoopChartsTableViewController {
                         self?.refreshContext.update(with: .carbs)
                     case .glucose?:
                         self?.refreshContext.formUnion([.glucose, .carbs])
-                    default:
-                        break
+                    case .forecast?:
+                        self?.refreshContext.update(with: .glucose)
                     }
 
                     self?.hudView?.loopCompletionHUD.loopInProgress = false
-                    self?.log.debug("[reloadData] from notification with context %{public}@", String(describing: context))
                     await self?.reloadData(animated: true)
                 }
 
@@ -733,7 +732,6 @@ final class StatusTableViewController: LoopChartsTableViewController {
     private var canceledDose: DoseEntry? = nil
     
     private func determinePresetsRowMode() -> PresetsRowMode {
-        print("temporaryPresetsManager.scheduleOverride = \(String(describing: temporaryPresetsManager.scheduleOverride))")
         if let preset = temporaryPresetsManager.scheduleOverride ?? temporaryPresetsManager.preMealOverride, !preset.hasFinished() {
             return .scheduleOverrideEnabled(preset)
         } else {

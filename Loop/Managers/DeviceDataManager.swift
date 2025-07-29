@@ -548,7 +548,9 @@ final class DeviceDataManager {
     
     func checkDeliveryUncertaintyState() {
         if let pumpManager = pumpManager, pumpManager.status.deliveryIsUncertain {
-            self.deliveryUncertaintyAlertManager?.showAlert()
+            Task {
+                await self.deliveryUncertaintyAlertManager?.showAlert()
+            }
         }
     }
 
@@ -562,14 +564,15 @@ final class DeviceDataManager {
     func authorizeHealthStore(_ completion: @escaping (HKAuthorizationRequestStatus) -> Void) {
         // Authorize all types at once for simplicity
         healthStore.requestAuthorization(toShare: shareTypes, read: readTypes) { (success, error) in
-            if success {
-                // Call the individual authorization methods to trigger query creation
-                self.carbStore.hkSampleStore?.authorizationIsDetermined()
-                self.doseStore.hkSampleStore?.authorizationIsDetermined()
-                self.glucoseStore.hkSampleStore?.authorizationIsDetermined()
+            Task { @MainActor in
+                if success {
+                    // Call the individual authorization methods to trigger query creation
+                    self.carbStore.hkSampleStore?.authorizationIsDetermined()
+                    self.doseStore.hkSampleStore?.authorizationIsDetermined()
+                    self.glucoseStore.hkSampleStore?.authorizationIsDetermined()
+                }
+                self.getHealthStoreAuthorization(completion)
             }
-
-            self.getHealthStoreAuthorization(completion)
         }
     }
 
@@ -811,8 +814,10 @@ extension DeviceDataManager {
 // MARK: - DeviceManagerDelegate
 extension DeviceDataManager: DeviceManagerDelegate {
 
-    func deviceManager(_ manager: DeviceManager, logEventForDeviceIdentifier deviceIdentifier: String?, type: DeviceLogEntryType, message: String, completion: ((Error?) -> Void)?) {
-        deviceLog.log(managerIdentifier: manager.pluginIdentifier, deviceIdentifier: deviceIdentifier, type: type, message: message, completion: completion)
+    nonisolated func deviceManager(_ manager: DeviceManager, logEventForDeviceIdentifier deviceIdentifier: String?, type: DeviceLogEntryType, message: String, completion: ((Error?) -> Void)?) {
+        Task { @MainActor in
+            deviceLog.log(managerIdentifier: manager.pluginIdentifier, deviceIdentifier: deviceIdentifier, type: type, message: message, completion: completion)
+        }
     }
     
     var allowDebugFeatures: Bool {
@@ -824,35 +829,35 @@ extension DeviceDataManager: DeviceManagerDelegate {
 extension DeviceDataManager: AlertIssuer {
     static let managerIdentifier = "DeviceDataManager"
 
-    func issueAlert(_ alert: Alert) {
-        alertManager?.issueAlert(alert)
+    func issueAlert(_ alert: Alert) async {
+        await alertManager?.issueAlert(alert)
     }
 
-    func retractAlert(identifier: Alert.Identifier) {
-        alertManager?.retractAlert(identifier: identifier)
+    func retractAlert(identifier: Alert.Identifier) async {
+        await alertManager?.retractAlert(identifier: identifier)
     }
 }
 
 // MARK: - PersistedAlertStore
 extension DeviceDataManager: PersistedAlertStore {
-    func doesIssuedAlertExist(identifier: Alert.Identifier, completion: @escaping (Swift.Result<Bool, Error>) -> Void) {
+    func doesIssuedAlertExist(identifier: LoopKit.Alert.Identifier) async throws -> Bool {
         precondition(alertManager != nil)
-        alertManager.doesIssuedAlertExist(identifier: identifier, completion: completion)
-    }
-
-    func lookupAllUnretracted(managerIdentifier: String, completion: @escaping (Swift.Result<[PersistedAlert], Error>) -> Void) {
-        precondition(alertManager != nil)
-        alertManager.lookupAllUnretracted(managerIdentifier: managerIdentifier, completion: completion)
+        return try await alertManager.doesIssuedAlertExist(identifier: identifier)
     }
     
-    func lookupAllUnacknowledgedUnretracted(managerIdentifier: String, completion: @escaping (Swift.Result<[PersistedAlert], Error>) -> Void) {
+    func lookupAllUnretracted(managerIdentifier: String) async throws -> [LoopKit.PersistedAlert] {
         precondition(alertManager != nil)
-        alertManager.lookupAllUnacknowledgedUnretracted(managerIdentifier: managerIdentifier, completion: completion)
+        return try await alertManager.lookupAllUnretracted(managerIdentifier: managerIdentifier)
+    }
+    
+    func lookupAllUnacknowledgedUnretracted(managerIdentifier: String) async throws -> [LoopKit.PersistedAlert] {
+        precondition(alertManager != nil)
+        return try await alertManager.lookupAllUnacknowledgedUnretracted(managerIdentifier: managerIdentifier)
     }
 
-    func recordRetractedAlert(_ alert: Alert, at date: Date) {
+    func recordRetractedAlert(_ alert: Alert, at date: Date) async throws {
         precondition(alertManager != nil)
-        alertManager.recordRetractedAlert(alert, at: date)
+        try await alertManager.recordRetractedAlert(alert, at: date)
     }
 }
 
@@ -989,27 +994,26 @@ extension DeviceDataManager: PumpManagerDelegate {
         return !(cgmManager?.providesBLEHeartbeat == true)
     }
 
-    func pumpManager(_ pumpManager: PumpManager, didUpdate status: PumpManagerStatus, oldStatus: PumpManagerStatus) {
-        dispatchPrecondition(condition: .onQueue(.main))
-        log.default("PumpManager:%{public}@ did update status: %{public}@", String(describing: type(of: pumpManager)), String(describing: status))
+    nonisolated func pumpManager(_ pumpManager: PumpManager, didUpdate status: PumpManagerStatus, oldStatus: PumpManagerStatus) {
+        Task { @MainActor in
+            log.default("PumpManager:%{public}@ did update status: %{public}@", String(describing: type(of: pumpManager)), String(describing: status))
 
-        doseStore.device = status.device
-        
-        if let newBatteryValue = status.pumpBatteryChargeRemaining,
-           let oldBatteryValue = oldStatus.pumpBatteryChargeRemaining,
-           newBatteryValue - oldBatteryValue >= LoopConstants.batteryReplacementDetectionThreshold {
-            analyticsServicesManager.pumpBatteryWasReplaced()
-        }
+            doseStore.device = status.device
 
-        updatePumpIsAllowingAutomation(status: status)
+            if let newBatteryValue = status.pumpBatteryChargeRemaining,
+               let oldBatteryValue = oldStatus.pumpBatteryChargeRemaining,
+               newBatteryValue - oldBatteryValue >= LoopConstants.batteryReplacementDetectionThreshold {
+                analyticsServicesManager.pumpBatteryWasReplaced()
+            }
 
-        // Update the pump-schedule based settings
-        settingsManager.setScheduleTimeZone(status.timeZone)
+            updatePumpIsAllowingAutomation(status: status)
 
-        if status.deliveryIsUncertain != oldStatus.deliveryIsUncertain {
-            DispatchQueue.main.async {
+            // Update the pump-schedule based settings
+            settingsManager.setScheduleTimeZone(status.timeZone)
+
+            if status.deliveryIsUncertain != oldStatus.deliveryIsUncertain {
                 if status.deliveryIsUncertain {
-                    self.deliveryUncertaintyAlertManager?.showAlert()
+                    await self.deliveryUncertaintyAlertManager?.showAlert()
                 } else {
                     self.deliveryUncertaintyAlertManager?.clearAlert()
                 }

@@ -136,6 +136,7 @@ struct PresetsView: View {
                                 PresetCard(
                                     preset,
                                     guardrail: settingsManager.guardrailForPreset(preset)
+                                    
                                 )
                                 .cornerRadius(12)
                                 .onTapGesture {
@@ -220,9 +221,15 @@ struct PresetsView: View {
                             scheduledRange: scheduledRange,
                             onSave: { updatedPreset in
                                 settingsManager.savePreset(updatedPreset)
+                                Task {
+                                    await temporaryPresetsManager.scheduleNextPresetReminder()
+                                }
                             },
                             onDelete: { preset in
                                 settingsManager.deletePreset(preset)
+                                Task {
+                                    await temporaryPresetsManager.scheduleNextPresetReminder()
+                                }
                             }
                         )
                     }
@@ -303,7 +310,8 @@ extension PresetCard {
             insulinMultiplier: preset.insulinNeedsScaleFactor,
             correctionRange: preset.correctionRange,
             guardrail: guardrail,
-            expectedEndTime: expectedEndTime
+            expectedEndTime: expectedEndTime,
+            isScheduled: preset.isScheduled
         )
     }
 }

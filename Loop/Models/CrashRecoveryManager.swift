@@ -63,12 +63,14 @@ class CrashRecoveryManager {
                          trigger: .immediate,
                          interruptionLevel: .critical)
 
-        self.alertIssuer.issueAlert(alert)
+        Task {
+            await self.alertIssuer.issueAlert(alert)
+        }
     }
 }
 
 extension CrashRecoveryManager: AlertResponder {
-    func acknowledgeAlert(alertIdentifier: LoopKit.Alert.AlertIdentifier, completion: @escaping (Error?) -> Void) {
+    func acknowledgeAlert(alertIdentifier: LoopKit.Alert.AlertIdentifier) async throws {
         UserDefaults.appGroup?.inFlightAutomaticDose = nil
         doseRecoveredFromCrash = nil
     }

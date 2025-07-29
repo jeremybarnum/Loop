@@ -26,13 +26,14 @@ enum SimulatorError: Error {
 }
 #endif
 
+@MainActor
 public protocol AlertPresenter: AnyObject {
     /// Present the alert view controller, with or without animation.
     /// - Parameters:
     ///   - viewControllerToPresent: The alert view controller to present.
     ///   - animated: Animate the alert view controller presentation or not.
     ///   - completion: Completion to call once view controller is presented.
-    func present(_ viewControllerToPresent: UIViewController, animated flag: Bool, completion: (() -> Void)?)
+    func present(_ viewControllerToPresent: UIViewController, animated flag: Bool) async
 
     /// Retract any alerts with the given identifier.  This includes both pending and delivered alerts.
 
@@ -40,20 +41,14 @@ public protocol AlertPresenter: AnyObject {
     /// - Parameters:
     ///   - animated: Animate the alert view controller dismissal or not.
     ///   - completion: Completion to call once view controller is dismissed.
-    func dismissTopMost(animated: Bool, completion: (() -> Void)?)
+    func dismissTopMost(animated: Bool) async
 
     /// Dismiss an alert, even if it is not the top most alert.
     /// - Parameters:
     ///   - alertToDismiss: The alert to dismiss
     ///   - animated: Animate the alert view controller dismissal or not.
     ///   - completion: Completion to call once view controller is dismissed.
-    func dismissAlert(_ alertToDismiss: UIAlertController, animated: Bool, completion: (() -> Void)?)
-}
-
-public extension AlertPresenter {
-    func present(_ viewController: UIViewController, animated: Bool) { present(viewController, animated: animated, completion: nil) }
-    func dismissTopMost(animated: Bool) { dismissTopMost(animated: animated, completion: nil) }
-    func dismissAlert(_ alertToDismiss: UIAlertController, animated: Bool) { dismissAlert(alertToDismiss, animated: animated, completion: nil) }
+    func dismissAlert(_ alertToDismiss: UIAlertController, animated: Bool) async
 }
 
 protocol WindowProvider: AnyObject {
@@ -127,7 +122,7 @@ class LoopAppManager: NSObject {
 
         self.windowProvider = windowProvider
         self.launchOptions = launchOptions
-        
+
         if FeatureFlags.siriEnabled && INPreferences.siriAuthorizationStatus() == .notDetermined {
             INPreferences.requestSiriAuthorization { _ in }
         }
@@ -153,6 +148,8 @@ class LoopAppManager: NSObject {
 
     func launch() {
         precondition(isLaunchPending)
+
+        UNUserNotificationCenter.current().delegate = self
 
         registerBackgroundTasks()
 
@@ -200,7 +197,6 @@ class LoopAppManager: NSObject {
 
         windowProvider?.window?.tintColor = .loopAccent
         OrientationLock.deviceOrientationController = self
-        UNUserNotificationCenter.current().delegate = self
 
         resetLoopManager = ResetLoopManager(delegate: self)
 
@@ -249,11 +245,13 @@ class LoopAppManager: NSObject {
             observationStart: Date().addingTimeInterval(-CarbMath.maximumAbsorptionTimeInterval)
         )
 
-        temporaryPresetsManager = TemporaryPresetsManager(settingsProvider: settingsManager)
+        temporaryPresetsManager = TemporaryPresetsManager(settingsProvider: settingsManager, alertIssuer: alertManager)
         temporaryPresetsManager.presetHistory.delegate = self
 
         temporaryPresetsManager.addTemporaryPresetObserver(alertManager)
         temporaryPresetsManager.addTemporaryPresetObserver(analyticsServicesManager)
+
+        await temporaryPresetsManager.scheduleNextPresetReminder()
 
         self.carbStore = CarbStore(
             healthKitSampleStore: carbHealthStore,
@@ -330,9 +328,8 @@ class LoopAppManager: NSObject {
 
         cacheStore.delegate = loopDataManager
 
-        Task { @MainActor in
-            alertManager.addAlertResponder(managerIdentifier: crashRecoveryManager.managerIdentifier, alertResponder: crashRecoveryManager)
-        }
+        alertManager.addAlertResponder(managerIdentifier: crashRecoveryManager.managerIdentifier, alertResponder: crashRecoveryManager)
+        alertManager.addAlertResponder(managerIdentifier: temporaryPresetsManager.managerIdentifier, alertResponder: temporaryPresetsManager)
 
         cgmEventStore = CgmEventStore(cacheStore: cacheStore, cacheLength: localCacheDuration)
 
@@ -428,6 +425,7 @@ class LoopAppManager: NSObject {
             glucoseStore: glucoseStore,
             analyticsServicesManager: analyticsServicesManager,
             temporaryPresetsManager: temporaryPresetsManager,
+            alertManager: alertManager,
             healthStore: healthStore
         )
 
@@ -532,9 +530,9 @@ class LoopAppManager: NSObject {
         onboardingManager.launch {
             DispatchQueue.main.async {
                 self.state = self.state.next
-                self.alertManager.playbackAlertsFromPersistence()
                 Task {
                     await self.resumeLaunch()
+                    await self.alertManager.playbackAlertsFromPersistence()
                 }
             }
         }
@@ -656,7 +654,7 @@ class LoopAppManager: NSObject {
 
         self.state = state.next
 
-        alertManager.playbackAlertsFromPersistence()
+        await alertManager.playbackAlertsFromPersistence()
     }
 
     // MARK: - Life Cycle
@@ -667,8 +665,10 @@ class LoopAppManager: NSObject {
         }
         settingsManager?.didBecomeActive()
         deviceDataManager?.didBecomeActive()
-        alertManager?.inferDeliveredLoopNotRunningNotifications()
-        
+        Task {
+            await alertManager?.inferDeliveredLoopNotRunningNotifications()
+        }
+
         widgetLog.default("Refreshing widget. Reason: App didBecomeActive")
         WidgetCenter.shared.reloadAllTimelines()
     }
@@ -803,59 +803,32 @@ class LoopAppManager: NSObject {
 // MARK: - AlertPresenter
 
 extension LoopAppManager: AlertPresenter {
-    func present(_ viewControllerToPresent: UIViewController, animated: Bool, completion: (() -> Void)?) {
-        DispatchQueue.main.async {
-            self.rootViewController?.topmostViewController.present(viewControllerToPresent, animated: animated, completion: completion)
+    func present(_ viewControllerToPresent: UIViewController, animated: Bool) async {
+        await withCheckedContinuation { continuation in
+            self.rootViewController?.topmostViewController.present(viewControllerToPresent, animated: animated) {
+                continuation.resume()
+            }
         }
     }
 
-    func dismissTopMost(animated: Bool, completion: (() -> Void)?) {
-        rootViewController?.topmostViewController.dismiss(animated: animated, completion: completion)
+    func dismissTopMost(animated: Bool) async {
+        await withCheckedContinuation { continuation in
+            rootViewController?.topmostViewController.dismiss(animated: animated) {
+                continuation.resume()
+            }
+        }
     }
 
-    func dismissAlert(_ alertToDismiss: UIAlertController, animated: Bool, completion: (() -> Void)?) {
-        if rootViewController?.topmostViewController == alertToDismiss {
-            dismissTopMost(animated: animated, completion: completion)
-        } else {
-            // check if the alert to dismiss is presenting another alert (and so on)
-            // calling dismiss() on an alert presenting another alert will only dismiss the presented alert
-            // (and any other alerts presented by the presented alert)
+    func dismissAlert(_ alertToDismiss: UIAlertController, animated: Bool) async {
+        await alertToDismiss.dismiss(animated: animated)
+    }
+}
 
-            // get the stack of presented alerts that would be undesirably dismissed
-            var presentedAlerts: [UIAlertController] = []
-            var currentAlert = alertToDismiss
-            while let presentedAlert = currentAlert.presentedViewController as? UIAlertController {
-                presentedAlerts.append(presentedAlert)
-                currentAlert = presentedAlert
-            }
-
-            if presentedAlerts.isEmpty {
-                alertToDismiss.dismiss(animated: animated, completion: completion)
-            } else {
-                // Do not animate any of these view transitions, since the alert to dismiss is not at the top of the stack
-
-                // dismiss all the child presented alerts.
-                // Calling dismiss() on a VC that is presenting an other VC will dismiss the presented VC and all of its child presented VCs
-                alertToDismiss.dismiss(animated: false) {
-                    // dismiss the desired alert
-                    // Calling dismiss() on a VC that is NOT presenting any other VCs will dismiss said VC
-                    alertToDismiss.dismiss(animated: false) {
-                        // present the child alerts that were undesirably dismissed
-                        var orderedPresentationBlock: (() -> Void)? = nil
-                        for alert in presentedAlerts.reversed() {
-                            if alert == presentedAlerts.last {
-                                orderedPresentationBlock = {
-                                    self.present(alert, animated: false, completion: completion)
-                                }
-                            } else {
-                                orderedPresentationBlock = {
-                                    self.present(alert, animated: false, completion: orderedPresentationBlock)
-                                }
-                            }
-                        }
-                        orderedPresentationBlock?()
-                    }
-                }
+extension UIViewController {
+    func dismiss(animated flag: Bool) async {
+        await withCheckedContinuation { continuation in
+            self.dismiss(animated: flag) {
+                continuation.resume()
             }
         }
     }
@@ -900,7 +873,8 @@ extension LoopAppManager: @preconcurrency DeviceOrientationController {
 // MARK: - UNUserNotificationCenterDelegate
 
 extension LoopAppManager: UNUserNotificationCenterDelegate {
-    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         switch notification.request.identifier {
         // TODO: Until these notifications are converted to use the new alert system, they shall still show in the foreground
         case LoopNotificationCategory.bolusFailure.rawValue,
@@ -919,7 +893,9 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
         }
     }
 
-    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        log.default("didReceive UNNotificationResponse: %{public}@", String(describing: response))
         switch response.actionIdentifier {
         case NotificationManager.Action.retryBolus.rawValue:
             if  let units = response.notification.request.content.userInfo[LoopNotificationUserInfoKey.bolusAmount.rawValue] as? Double,
@@ -929,18 +905,17 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
                 startDate.timeIntervalSinceNow >= TimeInterval(minutes: -5)
             {
                 analyticsServicesManager.didRetryBolus()
-                
-                Task { @MainActor in
-                    try? await deviceDataManager?.enactBolus(units: units, decisionId: UUID(uuidString: response.notification.request.content.userInfo[LoopNotificationUserInfoKey.decisionId.rawValue] as? String ?? ""), activationType: activationType)
-                    completionHandler()
-                }
+                try? await deviceDataManager?.enactBolus(units: units, decisionId: UUID(uuidString: response.notification.request.content.userInfo[LoopNotificationUserInfoKey.decisionId.rawValue] as? String ?? ""), activationType: activationType)
             }
         case NotificationManager.Action.acknowledgeAlert.rawValue:
             let userInfo = response.notification.request.content.userInfo
             if let alertIdentifier = userInfo[LoopNotificationUserInfoKey.alertTypeID.rawValue] as? LoopKit.Alert.AlertIdentifier,
-               let managerIdentifier = userInfo[LoopNotificationUserInfoKey.managerIDForAlert.rawValue] as? String {
-                alertManager?.acknowledgeAlert(identifier: Alert.Identifier(managerIdentifier: managerIdentifier, alertIdentifier: alertIdentifier))
+               let managerIdentifier = userInfo[LoopNotificationUserInfoKey.managerIDForAlert.rawValue] as? String
+            {
+                try? await alertManager?.acknowledgeAlert(identifier: Alert.Identifier(managerIdentifier: managerIdentifier, alertIdentifier:
+                                                                                    alertIdentifier))
             }
+
         case UNNotificationDefaultActionIdentifier:
             guard response.notification.request.identifier == LoopNotificationCategory.missedMeal.rawValue else {
                 break
@@ -964,10 +939,14 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
             rootViewController?.restoreUserActivityState(carbActivity)
             
         default:
-            break
+            let userInfo = response.notification.request.content.userInfo
+            if let alertIdentifier = userInfo[LoopNotificationUserInfoKey.alertTypeID.rawValue] as? LoopKit.Alert.AlertIdentifier,
+               let managerIdentifier = userInfo[LoopNotificationUserInfoKey.managerIDForAlert.rawValue] as? String
+            {
+                let identifier = Alert.Identifier(managerIdentifier: managerIdentifier, alertIdentifier: alertIdentifier)
+                try? await alertManager.userDidSelectAction(alertIdentifier: identifier, actionIdentifier: response.actionIdentifier)
+            }
         }
-
-        completionHandler()
     }
 
 }
@@ -976,8 +955,10 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
 // MARK: - UNUserNotificationCenterDelegate
 
 extension LoopAppManager: TemporaryScheduleOverrideHistoryDelegate {
-    func temporaryScheduleOverrideHistoryDidUpdate(_ history: TemporaryScheduleOverrideHistory) {
-        remoteDataServicesManager.triggerUpload(for: .overrides)
+    nonisolated func temporaryScheduleOverrideHistoryDidUpdate(_ history: TemporaryScheduleOverrideHistory) {
+        Task {
+            await remoteDataServicesManager.triggerUpload(for: .overrides)
+        }
     }
 }
 
@@ -987,12 +968,14 @@ extension LoopAppManager: ResetLoopManagerDelegate {
     }
     
     func presentConfirmationAlert(confirmAction: @escaping (PumpManager?, @escaping () -> Void) -> Void, cancelAction: @escaping () -> Void) {
-        alertManager.presentLoopResetConfirmationAlert(
-            confirmAction: { [weak self] completion in
-                confirmAction(self?.deviceDataManager.pumpManager, completion)
-            },
-            cancelAction: cancelAction
-        )
+        Task {
+            await alertManager.presentLoopResetConfirmationAlert(
+                confirmAction: { [weak self] completion in
+                    confirmAction(self?.deviceDataManager.pumpManager, completion)
+                },
+                cancelAction: cancelAction
+            )
+        }
     }
     
     func loopWillReset() {
@@ -1024,7 +1007,9 @@ extension LoopAppManager: ResetLoopManagerDelegate {
     }
     
     func presentCouldNotResetLoopAlert(error: Error) {
-        alertManager.presentCouldNotResetLoopAlert(error: error)
+        Task {
+            await alertManager.presentCouldNotResetLoopAlert(error: error)
+        }
     }
 }
 
@@ -1105,7 +1090,7 @@ extension LoopAppManager: SimulatedData {
             fatalError("\(#function) should be invoked only when simulated core data is enabled")
         }
 
-        guard let settingsStore = settingsManager.settingsStore else {
+        guard settingsManager.settingsStore != nil else {
             fatalError("\(#function) invoke with no settings store")
         }
 

@@ -9,6 +9,7 @@
 import UIKit
 import LoopKit
 @testable import Loop
+import XCTest
 
 class MockBluetoothProvider: BluetoothProvider {
     var bluetoothAuthorization: BluetoothAuthorization = .authorized
@@ -28,12 +29,19 @@ class MockBluetoothProvider: BluetoothProvider {
 
 class MockModalAlertScheduler: InAppModalAlertScheduler {
     var scheduledAlert: Alert?
+    
+    var alertScheduledExpectation: XCTestExpectation?
+    var alertUnscheduledExpectation: XCTestExpectation?
+
     override func scheduleAlert(_ alert: Alert) {
         scheduledAlert = alert
+        alertScheduledExpectation?.fulfill()
     }
     var unscheduledAlertIdentifier: Alert.Identifier?
-    override func unscheduleAlert(identifier: Alert.Identifier) {
+
+    override func unscheduleAlert(identifier: Alert.Identifier) async {
         unscheduledAlertIdentifier = identifier
+        alertUnscheduledExpectation?.fulfill()
     }
 }
 
@@ -52,9 +60,9 @@ class MockUserNotificationAlertScheduler: UserNotificationAlertScheduler {
 }
 
 class MockResponder: AlertResponder {
+
     var acknowledged: [Alert.AlertIdentifier: Bool] = [:]
-    func acknowledgeAlert(alertIdentifier: Alert.AlertIdentifier, completion: @escaping (Error?) -> Void) {
-        completion(nil)
+    func acknowledgeAlert(alertIdentifier: LoopKit.Alert.AlertIdentifier) async throws {
         acknowledged[alertIdentifier] = true
     }
 }
@@ -92,13 +100,22 @@ class MockFileManager: FileManager {
 }
 
 class MockPresenter: AlertPresenter {
-    func present(_ viewControllerToPresent: UIViewController, animated: Bool, completion: (() -> Void)?) { completion?() }
-    func dismissTopMost(animated: Bool, completion: (() -> Void)?) { completion?() }
-    func dismissAlert(_ alertToDismiss: UIAlertController, animated: Bool, completion: (() -> Void)?) { completion?() }
+    var presentedViewController: UIViewController?
+
+    func present(_ viewControllerToPresent: UIViewController, animated flag: Bool) async {
+        presentedViewController = viewControllerToPresent
+    }
+    func dismissTopMost(animated: Bool) async {
+        presentedViewController = nil
+    }
+    func dismissAlert(_ alertToDismiss: UIAlertController, animated: Bool) async {
+        presentedViewController = nil
+    }
 }
 
 class MockAlertManagerResponder: AlertManagerResponder {
-    func acknowledgeAlert(identifier: LoopKit.Alert.Identifier) { }
+    func userDidSelectAction(alertIdentifier: LoopKit.Alert.Identifier, actionIdentifier: String) async throws { }
+    func acknowledgeAlert(identifier: LoopKit.Alert.Identifier) async { }
 }
 
 class MockSoundVendor: AlertSoundVendor {
@@ -115,43 +132,38 @@ class MockSoundVendor: AlertSoundVendor {
 class MockAlertStore: AlertStore {
 
     var issuedAlert: Alert?
-    override public func recordIssued(alert: Alert, at date: Date = Date(), completion: ((Result<Void, Error>) -> Void)? = nil) {
+    override public func recordIssued(alert: Alert, at date: Date = Date()) async {
         issuedAlert = alert
-        completion?(.success)
     }
 
     var retractedAlert: Alert?
     var retractedAlertDate: Date?
-    override public func recordRetractedAlert(_ alert: Alert, at date: Date, completion: ((Result<Void, Error>) -> Void)? = nil) {
+    override public func recordRetractedAlert(_ alert: Alert, at date: Date) async throws {
         retractedAlert = alert
         retractedAlertDate = date
-        completion?(.success)
     }
 
     var acknowledgedAlertIdentifier: Alert.Identifier?
     var acknowledgedAlertDate: Date?
-    override public func recordAcknowledgement(of identifier: Alert.Identifier, at date: Date = Date(),
-                                               completion: ((Result<Void, Error>) -> Void)? = nil) {
+    override public func recordAcknowledgement(of identifier: Alert.Identifier, at date: Date = Date()) async throws {
         acknowledgedAlertIdentifier = identifier
         acknowledgedAlertDate = date
-        completion?(.success)
     }
 
     var retractededAlertIdentifier: Alert.Identifier?
-    override public func recordRetraction(of identifier: Alert.Identifier, at date: Date = Date(),
-                                          completion: ((Result<Void, Error>) -> Void)? = nil) {
+    override public func recordRetraction(of identifier: Alert.Identifier, at date: Date = Date()) async throws {
         retractededAlertIdentifier = identifier
         retractedAlertDate = date
-        completion?(.success)
     }
 
     var storedAlerts = [StoredAlert]()
-    override public func lookupAllUnacknowledgedUnretracted(managerIdentifier: String? = nil, filteredByTriggers triggersStoredType: [AlertTriggerStoredType]? = nil, completion: @escaping (Result<[StoredAlert], Error>) -> Void) {
-        completion(.success(storedAlerts))
+    override public func lookupAllUnacknowledgedUnretracted(managerIdentifier: String? = nil, filteredByTriggers triggersStoredType: [AlertTriggerStoredType]? = nil) async throws -> [StoredAlert]
+    {
+        return storedAlerts
     }
 
-    override public func lookupAllUnretracted(managerIdentifier: String?, completion: @escaping (Result<[StoredAlert], Error>) -> Void) {
-        completion(.success(storedAlerts))
+    override public func lookupAllUnretracted(managerIdentifier: String?) async -> [StoredAlert] {
+        return storedAlerts
     }
 }
 

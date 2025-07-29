@@ -17,6 +17,7 @@ import os.log
 import LoopAlgorithm
 
 
+@MainActor
 protocol DeviceStatusProvider {
     var pumpManagerStatus: PumpManagerStatus? { get }
     var cgmManagerStatus: CGMManagerStatus? { get }
@@ -74,7 +75,6 @@ class SettingsManager {
 
         settingsStore?.delegate = self
 
-        
 
         // Migrate old settings from UserDefaults
         if var legacyLoopSettings = UserDefaults.appGroup?.legacyLoopSettings {

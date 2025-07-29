@@ -169,6 +169,19 @@ enum SelectablePreset: Hashable, Identifiable {
         }
     }
 
+    var isScheduled: Bool {
+        return nextScheduledStartAfter(Date()) != nil
+    }
+
+    func nextScheduledStartAfter(_ date: Date) -> Date? {
+        switch self {
+        case .custom(let preset):
+            return preset.nextScheduledStartAfter(date)
+        case .preMeal, .legacyWorkout:
+            return nil
+        }
+    }
+
     var scheduleStartDate: Date? {
         get {
             switch self {

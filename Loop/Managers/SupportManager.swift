@@ -12,6 +12,7 @@ import LoopKit
 import LoopKitUI
 import SwiftUI
 
+@MainActor
 public protocol DeviceSupportDelegate {
     var availableSupports: [SupportUI] { get }
     var pumpManagerStatus: LoopKit.PumpManagerStatus? { get }
@@ -239,12 +240,12 @@ extension SupportManager: SupportUIDelegate {
         await deviceSupportDelegate.generateDiagnosticReport()
     }
     
-    public func issueAlert(_ alert: LoopKit.Alert) {
-        alertIssuer.issueAlert(alert)
+    public func issueAlert(_ alert: LoopKit.Alert) async {
+        await alertIssuer.issueAlert(alert)
     }
     
-    public func retractAlert(identifier: LoopKit.Alert.Identifier) {
-        alertIssuer.retractAlert(identifier: identifier)
+    public func retractAlert(identifier: LoopKit.Alert.Identifier) async {
+        await alertIssuer.retractAlert(identifier: identifier)
     }
 
 }
@@ -331,6 +332,7 @@ extension SupportUI {
 }
 
 extension Bundle {
+    @MainActor
     fileprivate func loadAndInstantiateSupport() throws -> SupportUI? {
         try loadAndReturnError()
 

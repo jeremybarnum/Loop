@@ -11,6 +11,7 @@ import LoopKit
 import os.log
 import LoopCore
 
+
 protocol PresetActivationObserver: AnyObject {
     func presetActivated(context: TemporaryScheduleOverride.Context, duration: TemporaryScheduleOverride.Duration)
     func presetDeactivated(context: TemporaryScheduleOverride.Context)
@@ -22,21 +23,26 @@ class TemporaryPresetsManager {
 
     @ObservationIgnored private let log = OSLog(category: "TemporaryPresetsManager")
 
+    let managerIdentifier = "TemporaryPresetsManager"
+
     @ObservationIgnored private var settingsProvider: SettingsProvider
 
     var presetHistory: TemporaryScheduleOverrideHistory
+
+    @ObservationIgnored private var alertIssuer: AlertIssuer?
 
     @ObservationIgnored private var presetActivationObservers: [PresetActivationObserver] = []
 
     @ObservationIgnored private var overrideIntentObserver: NSKeyValueObservation? = nil
 
-    init(settingsProvider: SettingsProvider) {
+    init(settingsProvider: SettingsProvider, alertIssuer: AlertIssuer? = nil) {
         self.settingsProvider = settingsProvider
-        
+        self.alertIssuer = alertIssuer
+
         self.presetHistory = TemporaryScheduleOverrideHistoryContainer.shared.fetch()
         TemporaryScheduleOverrideHistory.relevantTimeWindow = Bundle.main.localCacheDuration
 
-        scheduleOverride = presetHistory.activeOverride(at: Date())
+        _scheduleOverride = presetHistory.activeOverride(at: Date())
 
         if scheduleOverride?.context == .preMeal {
             preMealOverride = scheduleOverride
@@ -81,7 +87,6 @@ class TemporaryPresetsManager {
 
     public var scheduleOverride: TemporaryScheduleOverride? {
         didSet {
-            print("didSet scheduleOverride called: \(scheduleOverride)")
             guard oldValue != scheduleOverride else {
                 return
             }
@@ -307,6 +312,15 @@ class TemporaryPresetsManager {
         )
     }
 
+    func startPreset(withIdentifier identifier: String) {
+        guard let preset = selectablePresets.first(where: { $0.id == identifier }) else {
+            log.error("Unable to find preset with identifier ${public}@", identifier)
+            return
+        }
+        startPreset(preset)
+    }
+
+
     func startPreset(_ preset: SelectablePreset) {
         switch preset {
         case .custom(let temporaryScheduleOverridePreset):
@@ -415,11 +429,94 @@ class TemporaryPresetsManager {
         return lastUsed![id]
     }
 
+    func scheduleNextPresetReminder() async {
+
+        let settings = settingsProvider.settings
+
+        let now = Date()
+
+        let preset = settings.overridePresets.reduce(into: nil as TemporaryPreset?) { result, preset in
+            if let nextScheduledTime = preset.nextScheduledStartAfter(now) {
+                if result == nil || nextScheduledTime < (result!.nextScheduledStartAfter(now)!) {
+                    result = preset
+                }
+            }
+        }
+
+        if let preset {
+
+            let nextScheduledPresetReminderIdentifier = Alert.Identifier(managerIdentifier: managerIdentifier, alertIdentifier: preset.id.uuidString)
+            await alertIssuer?.retractAlert(identifier: nextScheduledPresetReminderIdentifier)
+
+
+            let nextScheduledTime = preset.nextScheduledStartAfter(now)!
+
+            let formatter = DateFormatter()
+            formatter.dateStyle = .none
+            formatter.timeStyle = .short
+
+            let title = NSLocalizedString("Start Scheduled Preset?", comment: "Scheduled preset reminder title")
+            let body = String(
+                format: NSLocalizedString("Your %1$@ preset is scheduled for today at %2$@. Would you like to start it now?\n\nThis will end any active preset.", comment: "Scheduled preset reminder alert body. (1: preset name) (2: time)"),
+                preset.name,
+                formatter.string(
+                    from: nextScheduledTime
+                )
+            )
+
+            let actions = [
+                Alert.UserAlertAction(
+                    label: NSLocalizedString("Don't Start", comment: "Label for do not start preset action on scheduled preset reminder alert"),
+                    identifier: "acknowledge",
+                    style: .default
+                ),
+                Alert.UserAlertAction(
+                    label: NSLocalizedString("Yes, Start Now", comment: "Label for do yes, start preset now action on scheduled preset reminder alert"),
+                    identifier: "startPreset",
+                    style: .cancel
+                )
+            ]
+
+            let content = Alert.Content(title: title,
+                                        body: body,
+                                        actions: actions)
+
+            let metadata: Alert.Metadata = ["presetId": Alert.MetadataValue(preset.id.uuidString)]
+
+            let alert = Alert(
+                identifier: nextScheduledPresetReminderIdentifier,
+                foregroundContent: content,
+                backgroundContent: content,
+                trigger: .delayed(interval: nextScheduledTime.timeIntervalSince(now)),
+                interruptionLevel: .timeSensitive,
+                metadata: metadata,
+                categoryIdentifier: LoopNotificationCategory.presetReminder.rawValue
+            )
+
+            await alertIssuer?.issueAlert(alert)
+        }
+    }
+
 }
 
 extension TemporaryPresetsManager {
     static var placeholder: TemporaryPresetsManager {
         .init(settingsProvider: SettingsManager.placeholder)
+    }
+}
+
+extension TemporaryPresetsManager : AlertResponder {
+    func acknowledgeAlert(alertIdentifier: Alert.AlertIdentifier) async throws { }
+
+    func handleAlertAction(actionIdentifier: String, from alert: Alert) async throws {
+        if actionIdentifier == NotificationManager.Action.startPreset.rawValue,
+           let metdata = alert.metadata,
+           let presetIdentifier = metdata["presetId"]?.wrapped as? String?
+        {
+            startPreset(withIdentifier: presetIdentifier!)
+        } else {
+            log.error("Could not identify preset to activate for alert action: actionIdentifier=%{public}@, alert=%{public}@", actionIdentifier, String(describing: alert))
+        }
     }
 }
 
