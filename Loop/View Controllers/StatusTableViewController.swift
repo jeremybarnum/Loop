@@ -304,11 +304,13 @@ final class StatusTableViewController: LoopChartsTableViewController {
         didSet {
             if oldValue != bolusState {
                 switch bolusState {
-                case .inProgress(_):
+                case .inProgress(let dose):
                     guard case .inProgress = oldValue else {
                         guard case .canceling = oldValue else {
                             // Bolus starting
-                            bolusProgressReporter = deviceManager.pumpManager?.createBolusProgressReporter(reportingOn: DispatchQueue.main)
+                            if dose.automatic != true {
+                                bolusProgressReporter = deviceManager.pumpManager?.createBolusProgressReporter(reportingOn: DispatchQueue.main)
+                            }
                             break
                         }
                         break
@@ -1554,7 +1556,8 @@ final class StatusTableViewController: LoopChartsTableViewController {
                 .environment(\.isInvestigationalDevice, FeatureFlags.isInvestigationalDevice)
                 .environment(\.loopStatusColorPalette, .loopStatus)
                 .environment(\.settingsManager, settingsManager)
-                .environment(\.temporaryPresetsManager, temporaryPresetsManager),
+                .environment(\.temporaryPresetsManager, temporaryPresetsManager)
+                .environment(\.dosingStrategySelectionEnabled, FeatureFlags.dosingStrategySelectionEnabled),
 
             isModalInPresentation: false)
         present(hostingController, animated: true)
