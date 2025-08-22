@@ -13,12 +13,12 @@ import LoopKit
 
 struct PresetCard: View {
     
-    @Environment(\.guidanceColors) private var guidanceColors
+    @Environment(\.colorPalette) private var colorPalette
     @Environment(\.temporaryPresetsManager) private var temporaryPresetsManager
     @EnvironmentObject var displayGlucosePreference: DisplayGlucosePreference
     
     let presetId: String
-    let icon: PresetIcon
+    let icon: PresetSymbol?
     let presetName: String
     let duration: PresetDuration
     let insulinMultiplier: Double?
@@ -26,23 +26,23 @@ struct PresetCard: View {
     let guardrail: Guardrail<LoopQuantity>?
     let expectedEndTime: PresetExpectedEndTime?
     let isScheduled: Bool
+    let activityPresetIsModified: Bool?
 
     var presetTitle: some View {
         HStack(spacing: 6) {
-            switch icon {
-            case .emoji(let emoji):
-                Text(emoji)
-            case .image(let name, let iconColor):
-                Image(name)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .foregroundColor(iconColor)
-                    .frame(width: UIFontMetrics.default.scaledValue(for: 20), height: UIFontMetrics.default.scaledValue(for: 20))
+            if let icon, !icon.isEmpty {
+                PresetSymbolView(icon)
             }
 
             Text(presetName)
                 .fontWeight(.semibold)
                 .accessibilityIdentifier("text_Preset\(presetName)")
+            
+            if activityPresetIsModified == false {
+                Text(Image(systemName: "checkmark.seal.fill"))
+                    .font(.subheadline)
+                    .foregroundStyle(Color.accentColor)
+            }
         }
     }
 
@@ -142,7 +142,7 @@ extension PresetExpectedEndTime {
         case .untilCarbsEntered:
             return NSLocalizedString("on until carbs added", comment: "Presets card pre-meal expected end time accessibility label")
         case .indefinite:
-            return NSLocalizedString("on indefinitely", comment: "Presets card indefinite duration accessibility label")
+            return NSLocalizedString("on until turned off", comment: "Presets card indefinite duration accessibility label")
         case .scheduled(let date):
             let formatter = DateComponentsFormatter()
             formatter.allowedUnits = [.hour, .minute]
@@ -179,6 +179,20 @@ extension PresetDuration {
             formatter.allowedUnits = [.hour, .minute]
             formatter.unitsStyle = .spellOut
             return NSLocalizedString("Active for \(formatter.string(from: duration) ?? "")", comment: "Presets card time duration accessibility label")
+        }
+    }
+}
+
+extension Color {
+    init(presetSymbolTint: PresetSymbol.SymbolTint?, palette: LoopUIColorPalette) {
+        guard let presetSymbolTint else {
+            self = .primary
+            return
+        }
+        
+        switch presetSymbolTint {
+        case .preMeal:
+            self = palette.carbTintColor
         }
     }
 }
