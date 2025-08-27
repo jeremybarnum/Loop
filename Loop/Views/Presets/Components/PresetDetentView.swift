@@ -148,6 +148,14 @@ struct PresetDetentView: View {
                     isActive: temporaryPresetsManager.activePreset?.id == preset.id
                 )
                 
+                if case let .activity(activityPreset) = preset, !activityPreset.isModifiedFromDefault {
+                    Text("\(Image(systemName: "checkmark.seal.fill")) Recommended starting values")
+                        .font(.subheadline)
+                        .foregroundStyle(Color.accentColor)
+                        .frame(maxWidth: .infinity)
+                        .padding(.bottom, 4)
+                }
+                
                 actionArea
             }
             .toolbar(.hidden)
