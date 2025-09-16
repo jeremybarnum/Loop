@@ -59,6 +59,19 @@ extension PumpManagerStatus.BasalDeliveryState {
             return nil
         }
     }
+    
+    func currentBasalRate(currentScheduledBasalRate: Double) -> Double? {
+        switch self {
+        case .tempBasal(let dose):
+            return dose.unitsPerHour
+        case .suspended:
+            return 0
+        case .pumpInoperable:
+            return nil
+        default:
+            return currentScheduledBasalRate
+        }
+    }
 }
 
 protocol DosingManagerDelegate {
@@ -1533,6 +1546,19 @@ extension LoopDataManager: DiagnosticReportGenerator {
 }
 
 extension LoopDataManager: LoopControl {
+    
+    func scheduledBasalRate(at date: Date = Date()) -> Double? {
+        settings.basalRateSchedule?.value(at: date)
+    }
+    
+    func currentBasalRate(at date: Date = Date()) -> Double? {
+        guard let scheduledBasalRate = scheduledBasalRate(at: date) else {
+            return nil
+        }
+        
+        return deliveryDelegate?.basalDeliveryState?.currentBasalRate(currentScheduledBasalRate: scheduledBasalRate)
+    }
+    
     var automatedTreatmentState: LoopKit.AutomatedTreatmentState? {
         guard let input = displayState.input else {
             return nil
@@ -1540,19 +1566,8 @@ extension LoopDataManager: LoopControl {
 
         let now = Date()
 
-        let neutralBasal = input.basal.closestPrior(to: now)!.value
-        var scheduledBasalRate: Double
-        if let activeOverride = temporaryPresetsManager.presetHistory.activeOverride(at: now) {
-            scheduledBasalRate = neutralBasal / activeOverride.settings.effectiveInsulinNeedsScaleFactor
-        } else {
-            scheduledBasalRate = neutralBasal
-        }
-
-        var currentBasalRate: Double
-        if let currentTempBasal = deliveryDelegate?.basalDeliveryState?.currentTempBasal {
-            currentBasalRate = currentTempBasal.unitsPerHour
-        } else {
-            currentBasalRate = scheduledBasalRate
+        guard let neutralBasal = input.basal.closestPrior(to: now)?.value, let currentBasalRate = currentBasalRate(at: now) else {
+            return nil
         }
 
         if currentBasalRate > neutralBasal {
@@ -1572,7 +1587,7 @@ extension LoopDataManager: LoopControl {
             if !recentAutomaticBoluses.isEmpty {
                 return .increasedInsulin
             }
-            return scheduledBasalRate != neutralBasal ? .neutralOverride : .neutralNoOverride
+            return scheduledBasalRate(at: now) != neutralBasal ? .neutralOverride : .neutralNoOverride
         }
     }
 }
