@@ -11,15 +11,6 @@ import UserNotifications
 import LoopKit
 import LoopCore
 
-enum NotificationManager {
-
-    enum Action: String {
-        case retryBolus
-        case acknowledgeAlert
-        case startPreset
-    }
-}
-
 @MainActor
 extension NotificationManager {
     private static var notificationCategories: Set<UNNotificationCategory> {
@@ -53,7 +44,7 @@ extension NotificationManager {
 
         let yesStartPresetAction = UNNotificationAction(
             identifier: Action.startPreset.rawValue,
-            title: NSLocalizedString("Yes, Start Now", comment: "The title of the notification action to start a preset"),
+            title: NSLocalizedString("Start Preset", comment: "The title of the notification action to start a preset"),
             options: .foreground
         )
 
@@ -95,13 +86,19 @@ extension NotificationManager {
                 }
             }
         }
+    }
+
+    static func setNotificationCategories() {
+        let center = UNUserNotificationCenter.current()
         center.setNotificationCategories(notificationCategories)
     }
-    
+
+
 
     // MARK: - Notifications
-    
-    static func sendBolusFailureNotification(for error: PumpManagerError, units: Double, at startDate: Date, decisionId: UUID?, activationType: BolusActivationType) {
+
+    @MainActor
+    static func sendBolusFailureNotification(for error: PumpManagerError, units: Double, at startDate: Date, decisionId: UUID?, activationType: BolusActivationType) async throws {
         let notification = UNMutableNotificationContent()
 
         notification.title = NSLocalizedString("Bolus Issue", comment: "The notification title for a bolus issue")
@@ -138,7 +135,7 @@ extension NotificationManager {
             trigger: nil
         )
 
-        UNUserNotificationCenter.current().add(request)
+        try await UNUserNotificationCenter.current().add(request)
     }
     
     static func sendRemoteBolusNotification(amount: Double) {

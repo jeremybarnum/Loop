@@ -14,7 +14,7 @@ import WatchConnectivity
 import LoopKit
 import LoopCore
 
-
+@MainActor
 final class CarbAndBolusFlowViewModel: ObservableObject {
     enum Error: Swift.Error {
         case potentialCarbEntryMessageSendFailure
@@ -31,7 +31,6 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
     let interactionStartDate = Date()
     private var carbEntryUnderConsideration: NewCarbEntry?
     private var contextUpdateObservation: AnyObject?
-    private var hasSentConfirmationMessage = false
     private var contextDate: Date?
 
     // MARK: - Constants
@@ -40,21 +39,12 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
 
     // MARK: - Initialization
     let configuration: CarbAndBolusFlow.Configuration
-    private let dismiss: () -> Void
 
     init(
-        configuration: CarbAndBolusFlow.Configuration,
-        dismiss: @escaping () -> Void
+        configuration: CarbAndBolusFlow.Configuration
     ) {
-        let loopManager = ExtensionDelegate.shared().loopManager
-        switch configuration {
-        case .carbEntry:
-            break
-        case .manualBolus:
-            let activeContext = loopManager.activeContext
-            self.contextDate = activeContext?.creationDate
-            self._recommendedBolusAmount = Published(initialValue: activeContext?.recommendedBolusDose)
-        }
+        let loopManager = LoopDataManager.shared
+        self.configuration = configuration
 
         self._bolusPickerValues = Published(
             initialValue: BolusPickerValues(
@@ -63,40 +53,49 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
             )
         )
 
-        self.configuration = configuration
-        self.dismiss = dismiss
+        switch configuration {
+        case .carbEntry:
+            break
+        case .manualBolus:
+            // If we start out on the manual bolus screen, fetch a fresh recommendation immediately
+            Task { @MainActor in
+                await recommendBolus()
+            }
+        }
 
         contextUpdateObservation = NotificationCenter.default.addObserver(
             forName: LoopDataManager.didUpdateContextNotification,
             object: loopManager,
             queue: nil
         ) { [weak self] _ in
-            guard
-                let self = self,
-                !self.hasSentConfirmationMessage
-            else {
-                return
+            Task { @MainActor in
+                self?.handleContextUpdate(loopManager: loopManager)
             }
-            
-            self.bolusPickerValues = BolusPickerValues(
-                supportedVolumes: loopManager.supportedBolusVolumes ?? Self.defaultSupportedBolusVolumes,
-                maxBolus: loopManager.watchInfo.loopSettings.maximumBolus ?? Self.defaultMaxBolus
-            )
+        }
+    }
 
-            switch self.configuration {
-            case .carbEntry:
-                // If this new context wasn't generated in response to a potential carb entry message,
-                // recompute the recommended bolus for the carb entry under consideration.
-                let wasContextGeneratedFromPotentialCarbEntryMessage = loopManager.activeContext?.potentialCarbEntry != nil
-                if !wasContextGeneratedFromPotentialCarbEntryMessage, let entry = self.carbEntryUnderConsideration {
-                    self.recommendBolus(for: entry)
+    func handleContextUpdate(loopManager: LoopDataManager) {
+
+        self.bolusPickerValues = BolusPickerValues(
+            supportedVolumes: loopManager.supportedBolusVolumes ?? Self.defaultSupportedBolusVolumes,
+            maxBolus: loopManager.watchInfo.loopSettings.maximumBolus ?? Self.defaultMaxBolus
+        )
+
+        switch self.configuration {
+        case .carbEntry:
+            // If this new context wasn't generated in response to a potential carb entry message,
+            // recompute the recommended bolus for the carb entry under consideration.
+            let wasContextGeneratedFromPotentialCarbEntryMessage = loopManager.activeContext?.potentialCarbEntry != nil
+            if !wasContextGeneratedFromPotentialCarbEntryMessage, let entry = self.carbEntryUnderConsideration {
+                Task { @MainActor in
+                    await self.recommendBolus(with: entry)
                 }
-            case .manualBolus:
-                let activeContext = loopManager.activeContext
-                self.contextDate = activeContext?.creationDate
-                if self.recommendedBolusAmount != activeContext?.recommendedBolusDose {
-                    self.recommendedBolusAmount = activeContext?.recommendedBolusDose
-                }
+            }
+        case .manualBolus:
+            let activeContext = loopManager.activeContext
+            self.contextDate = activeContext?.creationDate
+            if self.recommendedBolusAmount != activeContext?.recommendedBolusDose {
+                self.recommendedBolusAmount = activeContext?.recommendedBolusDose
             }
         }
     }
@@ -112,7 +111,7 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
         recommendedBolusAmount = nil
     }
 
-    func recommendBolus(forGrams grams: Int, eatenAt carbEntryDate: Date, absorptionTime carbAbsorptionTime: CarbAbsorptionTime, lastEntryDate: Date) {
+    func recommendBolus(forGrams grams: Int, eatenAt carbEntryDate: Date, absorptionTime carbAbsorptionTime: CarbAbsorptionTime, lastEntryDate: Date) async {
         let entry = NewCarbEntry(
             date: lastEntryDate,
             quantity: LoopQuantity(unit: .gram, doubleValue: Double(grams)),
@@ -126,52 +125,34 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
         }
 
         carbEntryUnderConsideration = entry
-        recommendBolus(for: entry)
+        await recommendBolus(with: entry)
     }
 
-    private func recommendBolus(for entry: NewCarbEntry) {
-        let potentialEntry = PotentialCarbEntryUserInfo(carbEntry: entry)
+    private func recommendBolus(with entry: NewCarbEntry? = nil) async {
         do {
             isComputingRecommendedBolus = true
-            try WCSession.default.sendPotentialCarbEntryMessage(potentialEntry,
-                replyHandler: { [weak self] context in
-                    DispatchQueue.main.async {
-                        let loopManager = ExtensionDelegate.shared().loopManager
-                        loopManager.updateContext(context)
+            let context = try await WCSession.default.fetchBolusRecommendation(entry)
 
-                        guard let self = self else {
-                            return
-                        }
+            // Only update if this recommendation corresponds to the current carb entry under consideration.
+            guard context.potentialCarbEntry == self.carbEntryUnderConsideration else {
+                return
+            }
 
-                        // Only update if this recommendation corresponds to the current carb entry under consideration.
-                        guard context.potentialCarbEntry == self.carbEntryUnderConsideration else {
-                            return
-                        }
+            defer {
+                self.isComputingRecommendedBolus = false
+            }
 
-                        defer {
-                            self.isComputingRecommendedBolus = false
-                        }
+            self.contextDate = context.creationDate
 
-                        self.contextDate = context.creationDate
+            // Don't publish a new value if the recommendation has not changed.
+            guard self.recommendedBolusAmount != context.recommendedBolusDose else {
+                return
+            }
 
-                        // Don't publish a new value if the recommendation has not changed.
-                        guard self.recommendedBolusAmount != context.recommendedBolusDose else {
-                            return
-                        }
-
-                        self.recommendedBolusAmount = context.recommendedBolusDose
-                    }
-                },
-                errorHandler: { error in
-                    DispatchQueue.main.async { [weak self] in
-                        self?.isComputingRecommendedBolus = false
-                        WKInterfaceDevice.current().play(.failure)
-                        ExtensionDelegate.shared().present(error)
-                    }
-                }
-            )
+            self.recommendedBolusAmount = context.recommendedBolusDose
         } catch {
             isComputingRecommendedBolus = false
+            WKInterfaceDevice.current().play(.failure)
             self.error = .potentialCarbEntryMessageSendFailure
         }
     }
@@ -189,49 +170,29 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
         }
     }
 
-    func addCarbsWithoutBolusing() {
+    func addCarbsWithoutBolusing() async throws {
         guard let carbEntry = carbEntryUnderConsideration else {
             assertionFailure("Attempting to add carbs without a carb entry")
             return
         }
 
-        sendSetBolusUserInfo(carbEntry: carbEntry, bolus: 0)
+        try await sendSetBolusUserInfo(carbEntry: carbEntry, bolus: 0)
     }
 
-    func addCarbsAndDeliverBolus(_ bolusAmount: Double) {
-        sendSetBolusUserInfo(carbEntry: carbEntryUnderConsideration, bolus: bolusAmount)
+    func addCarbsAndDeliverBolus(_ bolusAmount: Double) async throws {
+        try await sendSetBolusUserInfo(carbEntry: carbEntryUnderConsideration, bolus: bolusAmount)
     }
 
-    private func sendSetBolusUserInfo(carbEntry: NewCarbEntry?, bolus: Double) {
-        guard !hasSentConfirmationMessage else {
-            return
-        }
-        self.hasSentConfirmationMessage = true
-
+    private func sendSetBolusUserInfo(carbEntry: NewCarbEntry?, bolus: Double) async throws {
         let bolus = SetBolusUserInfo(value: bolus, startDate: Date(), contextDate: self.contextDate, carbEntry: carbEntry, activationType: .activationTypeFor(recommendedAmount: recommendedBolusAmount, bolusAmount: bolus))
-        do {
-            try WCSession.default.sendBolusMessage(bolus) { [weak self] (error) in
-                DispatchQueue.main.async {
-                    if let error = error {
-                        ExtensionDelegate.shared().present(error)
-                        self?.hasSentConfirmationMessage = false
-                    } else {
-                        if bolus.carbEntry != nil {
-                            if bolus.value == 0 {
-                                // Notify for a successful carb entry (sans bolus)
-                                WKInterfaceDevice.current().play(.success)
-                            }
-                        }
-                    }
-                }
+        let updatedContext = try await WCSession.default.sendBolusMessage(bolus)
+        if bolus.carbEntry != nil {
+            if bolus.value == 0 {
+                // Notify for a successful carb entry (sans bolus)
+                WKInterfaceDevice.current().play(.success)
             }
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(1)) {
-                self.dismiss()
-            }
-        } catch {
-            self.error = .bolusMessageSendFailure
         }
+        LoopDataManager.shared.updateContext(updatedContext)
     }
 }
 

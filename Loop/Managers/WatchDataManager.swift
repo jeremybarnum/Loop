@@ -13,6 +13,12 @@ import LoopAlgorithm
 import LoopKit
 import LoopCore
 
+
+enum WatchDataManagerError: Error {
+    case decodingError
+    case expiredBolusRecommendation
+}
+
 @MainActor
 final class WatchDataManager: NSObject {
 
@@ -148,8 +154,7 @@ final class WatchDataManager: NSObject {
     private func sendSettingsIfNeeded() {
         let userInfo = LoopSettingsUserInfo(
             loopSettings: settingsManager.loopSettings,
-            scheduleOverride: temporaryPresetsManager.scheduleOverride,
-            preMealOverride: temporaryPresetsManager.preMealOverride)
+            scheduleOverride: temporaryPresetsManager.scheduleOverride)
 
         guard let session = watchSession, session.isPaired, session.isWatchAppInstalled else {
             return
@@ -215,8 +220,6 @@ final class WatchDataManager: NSObject {
         guard let session = watchSession, session.isPaired, session.isWatchAppInstalled else {
             return
         }
-
-        log.default("*** sendWatchContextIfNeeded")
 
         guard case .activated = session.activationState else {
             session.activate()
@@ -309,6 +312,7 @@ final class WatchDataManager: NSObject {
             dosingDecision.manualBolusRecommendation = ManualBolusRecommendationWithDate(
                 recommendation: recommendedBolus,
                 date: Date())
+            log.debug("*** watch bolus recommended: %{public}@ (with carb entry: %{public}@", String(describing: recommendedBolus.amount), String(describing: potentialCarbEntry))
         }
 
         var historicalGlucose: [HistoricalGlucoseValue]?
@@ -380,13 +384,13 @@ final class WatchDataManager: NSObject {
     private func addCarbEntryAndBolusFromWatchMessage(_ message: [String: Any]) async throws {
         guard let bolus = SetBolusUserInfo(rawValue: message as SetBolusUserInfo.RawValue) else {
             log.error("Could not enact bolus from from unknown message: %{public}@", String(describing: message))
-            return
+            throw WatchDataManagerError.decodingError
         }
 
         // Prevent any delayed messages from enacting.
         guard bolus.startDate.timeIntervalSinceNow > -30 else {
             log.error("Could not enact expired bolus from watch: %{public}@", String(describing: message))
-            return
+            throw WatchDataManagerError.expiredBolusRecommendation
         }
 
         var dosingDecision: BolusDosingDecision
@@ -407,48 +411,57 @@ final class WatchDataManager: NSObject {
         dosingDecision.manualBolusRequested = bolus.value
         await loopDataManager.storeManualBolusDosingDecision(dosingDecision, withDate: bolus.startDate)
 
-        guard bolus.value > 0 else {
-            // Ensure active carbs is updated in the absence of a bolus
-            sendWatchContextIfNeeded()
-            return
-        }
-
-        do {
-            try await deviceManager.enactBolus(units: bolus.value, decisionId: dosingDecision.id, activationType: bolus.activationType)
-            self.analyticsServicesManager?.didBolus(source: "Watch", units: bolus.value)
-        } catch { }
-
-        // When we've started the bolus, send a new context with our new prediction
-        self.sendWatchContextIfNeeded()
+        try await deviceManager.enactBolus(units: bolus.value, decisionId: dosingDecision.id, activationType: bolus.activationType)
+        self.analyticsServicesManager?.didBolus(source: "Watch", units: bolus.value)
     }
 
-    func handleWatchMessage(_ message: [String: Any]) async -> [String: Any] {
+    func handleWatchMessage(_ message: [String: Any]) async throws -> [String: Any] {
         switch message["name"] as? String {
-        case PotentialCarbEntryUserInfo.name?:
-            if let potentialCarbEntry = PotentialCarbEntryUserInfo(rawValue: message)?.carbEntry {
-                let context = await createWatchContext(recommendingBolusFor: potentialCarbEntry)
+        case SettingsRequestUserInfo.name?:
+            let userInfo = LoopSettingsUserInfo(
+                loopSettings: settingsManager.loopSettings,
+                scheduleOverride: temporaryPresetsManager.scheduleOverride)
+            return userInfo.rawValue
+        case GetBolusRecommendationUserInfo.name?:
+            if let request = GetBolusRecommendationUserInfo(rawValue: message) {
+                let context = await createWatchContext(recommendingBolusFor: request.carbEntry)
                 return context.rawValue
             } else {
                 log.error("Could not recommend bolus from from unknown message: %{public}@", String(describing: message))
             }
         case SetBolusUserInfo.name?:
             // Add carbs if applicable; start the bolus and reply when it's successfully requested
-            Task {
-                try await addCarbEntryAndBolusFromWatchMessage(message)
-            }
-        case LoopSettingsUserInfo.name?:
-            if let userInfo = LoopSettingsUserInfo(rawValue: message) {
-                // So far we only support watch changes of temporary schedule overrides
-                temporaryPresetsManager.preMealOverride = userInfo.preMealOverride
-                temporaryPresetsManager.scheduleOverride = userInfo.scheduleOverride
+            try await addCarbEntryAndBolusFromWatchMessage(message)
+            let updatedContext = await createWatchContext()
+            lastComplicationContext = updatedContext // Watch will use this to update context
+            return updatedContext.rawValue
+
+        case SetPresetUserInfo.name?:
+            if let userInfo = SetPresetUserInfo(rawValue: message) {
+                if let presetIdentifier = userInfo.presetIdentifier {
+                    temporaryPresetsManager.startPreset(withIdentifier: presetIdentifier)
+                } else {
+                    temporaryPresetsManager.clearOverride()
+                }
 
                 // Prevent re-sending these updated settings back to the watch
-                lastSentUserInfo?.preMealOverride = userInfo.preMealOverride
-                lastSentUserInfo?.scheduleOverride = userInfo.scheduleOverride
+                lastSentUserInfo?.scheduleOverride = temporaryPresetsManager.scheduleOverride
+
+                if let alertIdentifier = userInfo.alertIdentifier {
+                    let id = Alert.Identifier(managerIdentifier: temporaryPresetsManager.managerIdentifier, alertIdentifier: alertIdentifier)
+                    try? await alertManager.acknowledgeAlert(identifier: id)
+                }
+                return [:]
             }
 
             let context = await createWatchContext()
             return context.rawValue
+        case AcknowledgeAlertUserInfo.name?:
+            if let userInfo = AcknowledgeAlertUserInfo(rawValue: message) {
+                let id = Alert.Identifier(managerIdentifier: userInfo.managerIdentifier, alertIdentifier: userInfo.alertIdentifier)
+                try? await alertManager.acknowledgeAlert(identifier: id)
+            }
+            return [:]
         case CarbBackfillRequestUserInfo.name?:
             if let userInfo = CarbBackfillRequestUserInfo(rawValue: message) {
                 do {
@@ -495,8 +508,11 @@ final class WatchDataManager: NSObject {
 extension WatchDataManager: WCSessionDelegate {
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
         Task { @MainActor in
-            let reply = await handleWatchMessage(message)
-            replyHandler(reply)
+            do {
+                replyHandler(try await handleWatchMessage(message))
+            } catch {
+                replyHandler(["error":String(describing: error)])
+            }
         }
     }
 

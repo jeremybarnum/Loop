@@ -15,6 +15,10 @@ import UserNotifications
 import Combine
 import LoopAlgorithm
 
+public enum DemoError: LocalizedError {
+    case CommsError
+}
+
 @MainActor
 protocol LoopControl {
     var lastLoopCompleted: Date? { get }
@@ -745,7 +749,11 @@ extension DeviceDataManager {
             // Do not generate notification on uncertain delivery error
         } catch {
             if !activationType.isAutomatic, let error = error as? PumpManagerError {
-                NotificationManager.sendBolusFailureNotification(for: error, units: units, at: Date(), decisionId: decisionId, activationType: activationType)
+                do {
+                    try await NotificationManager.sendBolusFailureNotification(for: error, units: units, at: Date(), decisionId: decisionId, activationType: activationType)
+                } catch {
+                    log.error("Error sending bolus failure notification %{public}@", String(describing: error))
+                }
             }
         }
     }

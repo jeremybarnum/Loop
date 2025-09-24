@@ -8,6 +8,7 @@
 
 import LoopCore
 import WatchConnectivity
+import LoopKit
 import os.log
 
 
@@ -26,71 +27,67 @@ enum WCSessionMessageResult<T> {
 private let log = OSLog(category: "WCSession Extension")
 
 extension WCSession {
-    func sendPotentialCarbEntryMessage(_ carbEntry: PotentialCarbEntryUserInfo, replyHandler: @escaping (WatchContext) -> Void, errorHandler: @escaping (Error) -> Void) throws {
-        guard activationState == .activated else {
-            throw MessageError.activation
-        }
 
-        guard isReachable else {
-            log.default("sendPotentialCarbEntryMessage: Phone is unreachable, taking no action")
-            return
-        }
-
-        sendMessage(carbEntry.rawValue,
-            replyHandler: { reply in
-                guard let context = WatchContext(rawValue: reply as WatchContext.RawValue) else {
-                    log.error("sendPotentialCarbEntryMessage: could not decode reply: %{public}@", reply)
-                    errorHandler(MessageError.decoding)
+    func fetchSettings() async throws -> LoopSettingsUserInfo {
+        try await withCheckedThrowingContinuation { continuation in
+            sendMessage(SettingsRequestUserInfo().rawValue) { reply in
+                guard let settings = LoopSettingsUserInfo(rawValue: reply as LoopSettingsUserInfo.RawValue) else {
+                    log.error("fetchSettings: could not decode reply: %{public}@", reply)
+                    continuation.resume(throwing: MessageError.decoding)
                     return
                 }
-
-                replyHandler(context)
-            },
-            errorHandler: { error in
-                log.error("sendPotentialCarbEntryMessage: message send failed with error: %{public}@", String(describing: error))
-                errorHandler(error)
+                continuation.resume(returning: settings)
             }
-        )
+        }
     }
 
-    func sendBolusMessage(_ userInfo: SetBolusUserInfo, completionHandler: @escaping (Error?) -> Void) throws {
+    func fetchBolusRecommendation(_ carbEntry: NewCarbEntry?) async throws -> WatchContext {
+        let request = GetBolusRecommendationUserInfo(carbEntry: carbEntry)
+        let reply = try await sendMessage(request.rawValue)
+        log.debug("Requesting bolus recommendation with carbEntry: %{public}@", String(describing: carbEntry))
+
+        guard let context = WatchContext(rawValue: reply as WatchContext.RawValue) else {
+            log.error("fetchBolusRecommendation: could not decode reply: %{public}@", reply)
+            throw MessageError.decoding
+        }
+        log.debug("fetchBolusRecommendation: recommendedBolusDose: %{public}@", String(describing: context.recommendedBolusDose))
+
+        return context
+    }
+
+    func sendBolusMessage(_ userInfo: SetBolusUserInfo) async throws -> WatchContext {
+        let reply = try await sendMessage(userInfo.rawValue)
+        guard let context = WatchContext(rawValue: reply as WatchContext.RawValue) else {
+            log.error("sendBolusMessage: could not decode reply: %{public}@", reply)
+            throw MessageError.decoding
+        }
+        return context
+    }
+
+    func sendSetPreset(presetIdentifier: String?, alertIdentifier: String?) async throws {
+        let _ = try await sendMessage(SetPresetUserInfo(presetIdentifier: presetIdentifier, alertIdentifier: alertIdentifier).rawValue)
+    }
+
+    func sendAcknowledgeAlert(alertIdentifier: String, managerIdentifier: String) async throws {
+        let _ = try await sendMessage(AcknowledgeAlertUserInfo(alertIdentifier: alertIdentifier, managerIdentifier: managerIdentifier).rawValue)
+    }
+
+    func sendMessage(_ msg: [String : Any]) async throws -> [String : Any] {
         guard activationState == .activated else {
             throw MessageError.activation
         }
-
+        
         guard isReachable else {
             throw MessageError.reachability
         }
 
-        sendMessage(userInfo.rawValue,
-            replyHandler: { reply in
-                completionHandler(nil)
-            },
-            errorHandler: { error in
-                log.info("sendBolusMessage failure: %{public}@", error.localizedDescription)
-                completionHandler(error)
-            }
-        )
-    }
-
-    func sendSettingsUpdateMessage(_ userInfo: LoopSettingsUserInfo, completionHandler: @escaping (Result<WatchContext,Error>) -> Void) throws {
-        guard activationState == .activated else {
-            throw MessageError.activation
+        return try await withCheckedThrowingContinuation { continuation in
+            sendMessage(msg, replyHandler: { result in
+                continuation.resume(returning: result)
+            }, errorHandler: { error in
+                continuation.resume(throwing: error)
+            })
         }
-
-        guard isReachable else {
-            throw MessageError.reachability
-        }
-
-        sendMessage(userInfo.rawValue, replyHandler: { (reply) in
-            if let context = WatchContext(rawValue: reply) {
-                completionHandler(.success(context))
-            } else {
-                completionHandler(.failure(MessageError.decoding))
-            }
-        }, errorHandler: { (error) in
-            completionHandler(.failure(error))
-        })
     }
 
     func sendUserSelectedNotificationActionMessage(alertIdentifier: String, managerIdentifier: String, actionIdentifier: String) async {

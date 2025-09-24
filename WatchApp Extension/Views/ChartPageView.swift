@@ -1,0 +1,182 @@
+//
+//  ChartPageView.swift
+//  Loop
+//
+//  Created by Pete Schwamb on 9/19/25.
+//  Copyright © 2025 LoopKit Authors. All rights reserved.
+//
+
+import SwiftUI
+import LoopKit
+import LoopCore
+import SpriteKit
+
+struct ChartPageView: View {
+    @Environment(\.sizeClass) private var sizeClass
+
+    @Environment(LoopDataManager.self) var loopManager
+
+    @State private var isShowingCarbList: Bool = false
+
+    var presetActive: Bool {
+        return loopManager.watchInfo.scheduleOverride?.isActive() == true
+    }
+
+    private var chartHeight: CGFloat {
+        switch sizeClass {
+        case .size38mm:
+            return 73
+        case .size44mm:
+            return 111
+        case .size45mm:
+            return 115
+        default:
+            return 90
+        }
+    }
+
+    var chartView: some View {
+        SpriteView(scene: loopManager.glucoseChartScene)
+            .frame(height: chartHeight)
+            .ignoresSafeArea()
+            .gesture(
+                // Handle double tap
+                TapGesture(count: 2)
+                    .onEnded {
+                        loopManager.glucoseChartScene.increaseVisibleDuration()
+                    }
+            )
+            .gesture(
+                // Handle single tap
+                TapGesture()
+                    .onEnded {
+                        loopManager.glucoseChartScene.decreaseVisibleDuration()
+                    }
+            )
+    }
+
+    var activeInsulin: String? {
+        guard let activeContext = loopManager.activeContext,
+            let activeInsulin = activeContext.activeInsulin
+        else {
+            return nil
+        }
+
+        let insulinFormatter: QuantityFormatter = {
+            let insulinFormatter = QuantityFormatter(for: .internationalUnit)
+            insulinFormatter.numberFormatter.minimumFractionDigits = 1
+            insulinFormatter.numberFormatter.maximumFractionDigits = 1
+
+            return insulinFormatter
+        }()
+
+        return insulinFormatter.string(from: activeInsulin)
+    }
+
+    var activeCarbohydrates: String? {
+        guard let activeContext = loopManager.activeContext,
+            let activeCarbohydrates = activeContext.activeCarbohydrates
+        else {
+            return nil
+        }
+
+        let carbFormatter = QuantityFormatter(for: .gram)
+        carbFormatter.numberFormatter.maximumFractionDigits = 0
+
+        return carbFormatter.string(from: activeCarbohydrates)
+    }
+
+    var netTempBasalDose: String? {
+        guard let activeContext = loopManager.activeContext,
+            let tempBasal = activeContext.lastNetTempBasalDose
+        else {
+            return nil
+        }
+
+        let basalFormatter = NumberFormatter()
+        basalFormatter.numberStyle = .decimal
+        basalFormatter.minimumFractionDigits = 1
+        basalFormatter.maximumFractionDigits = 3
+        basalFormatter.positivePrefix = basalFormatter.plusSign
+
+        let unit = NSLocalizedString(
+            "U/hr",
+            comment: "The short unit display string for international units of insulin delivery per hour"
+        )
+
+        return basalFormatter.string(from: tempBasal, unit: unit)
+    }
+
+    var reservoirVolume: String? {
+        guard let activeContext = loopManager.activeContext,
+            let reservoirVolume = activeContext.reservoirVolume
+        else {
+            return nil
+        }
+
+        let insulinFormatter: QuantityFormatter = {
+            let insulinFormatter = QuantityFormatter(for: .internationalUnit)
+            insulinFormatter.unitStyle = .long
+            insulinFormatter.numberFormatter.minimumFractionDigits = 0
+            insulinFormatter.numberFormatter.maximumFractionDigits = 0
+
+            return insulinFormatter
+        }()
+
+        return insulinFormatter.string(from: reservoirVolume)
+    }
+
+
+    var body: some View {
+        ScrollView(.vertical) {
+            LoopHeader()
+            chartView
+
+            VStack {
+                LabelValueRow(
+                    label: "Active Insulin",
+                    value: activeInsulin
+                )
+                Divider()
+                LabelValueRow(
+                    label: "Active Carbs",
+                    value: activeCarbohydrates
+                )
+                .onTapGesture {
+                    isShowingCarbList = true
+                }
+                Divider()
+                LabelValueRow(
+                    label: "Net Basal Rate",
+                    value: netTempBasalDose
+                )
+                Divider()
+                LabelValueRow(
+                    label: "Reservoir Volume",
+                    value: reservoirVolume
+                )
+            }
+            .padding(.horizontal)
+        }
+        .font(.system(size: 14, weight: .light))
+        .toolbar(.hidden, for: .navigationBar)
+        .environment(\.glucoseDisplayUnit, loopManager.displayGlucoseUnit)
+        .onAppear() {
+            updateGlucoseChart()
+        }
+        .onChange(of: loopManager.activeContext?.predictedGlucose) { oldValue, newValue in
+            updateGlucoseChart()
+        }
+        .sheet(isPresented: $isShowingCarbList) {
+            CarbList()
+        }
+    }
+
+    private func updateGlucoseChart() {
+        Task { @MainActor in
+            let chartData = await loopManager.generateChartData()
+            loopManager.glucoseChartScene.data = chartData
+            loopManager.glucoseChartScene.setNeedsUpdate()
+        }
+    }
+}
