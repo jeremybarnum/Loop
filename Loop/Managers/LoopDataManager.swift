@@ -703,6 +703,7 @@ final class LoopDataManager: ObservableObject {
 
         let output = LoopAlgorithm.run(input: input)
 
+
         switch output.recommendationResult {
         case .success(let prediction):
             guard var manualBolusRecommendation = prediction.manual else { return nil }
@@ -1286,8 +1287,37 @@ extension LoopDataManager: BolusEntryViewModelDelegate {
         temporaryPresetsManager.effectiveGlucoseTargetRangeSchedule(presumingMealEntry: presumingMealEntry)
     }
 
-    func generatePrediction(input: StoredDataAlgorithmInput) throws -> [PredictedGlucoseValue] {
-        try input.predictGlucose()
+    func generatePrediction(
+        originalCarbEntry: StoredCarbEntry?,
+        potentialCarbEntry: NewCarbEntry?,
+        potentialDose: SimpleInsulinDose?,
+        manualGlucose: NewGlucoseSample?
+    ) async throws -> (historicGlucose: [StoredGlucoseSample], predictedGlucose: [PredictedGlucoseValue]) {
+        let startDate = now()
+
+        var endingPremealOverride = false
+
+        if potentialCarbEntry != nil,
+            let activeOverride = temporaryPresetsManager.activeOverride,
+            activeOverride.context == .preMeal
+        {
+            endingPremealOverride = true
+        }
+
+        var input = try await fetchData(for: startDate, presumePresetEndingNow: endingPremealOverride, ensureDosingCoverageStart: nil)
+
+        let insulinModel = insulinModel(for: deliveryDelegate?.pumpInsulinType)
+
+        // Add potential bolus, carbs, manual glucose
+        input = input
+            .addingDose(dose: potentialDose)
+            .addingGlucoseSample(sample: manualGlucose?.asStoredGlucoseSample)
+            .removingCarbEntry(carbEntry: originalCarbEntry)
+            .addingCarbEntry(carbEntry: potentialCarbEntry?.asStoredCarbEntry)
+
+        let prediction = try input.predictGlucose()
+
+        return (historicGlucose: input.glucoseHistory, predictedGlucose: prediction)
     }
 }
 
