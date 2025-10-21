@@ -51,7 +51,6 @@ struct SettingsView: View {
             }
             
             case favoriteFoods
-            case therapySettings
             case presets
         }
     }
@@ -97,8 +96,8 @@ struct SettingsView: View {
                         servicesSection
                     }
 
-                    ForEach(customSections) { customSectionName in
-                        menuItemsForSection(name: customSectionName)
+                    ForEach(pluginMenuItems) { item in
+                        item.view
                     }
 
                     supportSection
@@ -141,16 +140,8 @@ struct SettingsView: View {
             .sheet(item: $sheet) { sheet in
                 Group {
                     switch sheet {
-                    case .therapySettings:
-                        TherapySettingsView(
-                            mode: .settings,
-                            viewModel: TherapySettingsViewModel(
-                                therapySettings: viewModel.therapySettings(),
-                                delegate: viewModel.therapySettingsViewModelDelegate
-                            )
-                        )
                     case .presets:
-                        presetsView
+                        PresetsView()
                     case .favoriteFoods:
                         FavoriteFoodsView(insightsDelegate: viewModel.favoriteFoodInsightsDelegate)
                     }
@@ -168,10 +159,6 @@ struct SettingsView: View {
         .navigationViewStyle(.stack)
     }
 
-    public var presetsView: some View {
-        PresetsView()
-    }
-
     private func menuItemsForSection(name: String) -> some View {
         Section(header: SectionHeader(label: name)) {
             ForEach(pluginMenuItems.filter {$0.section.customLocalizedTitle == name}) { item in
@@ -180,28 +167,11 @@ struct SettingsView: View {
         }
     }
 
-    private var customSections: [String] {
-        pluginMenuItems.compactMap { item in
-            if case .custom(let name) = item.section {
-                return name
-            } else {
-                return nil
-            }
-        }
-    }
-    
     private var closedLoopToggleState: Binding<Bool> {
         Binding(
             get: { self.viewModel.closedLoopPreference },
             set: { self.viewModel.closedLoopPreference = $0 }
         )
-    }
-}
-
-extension String: Identifiable {
-    public typealias ID = Int
-    public var id: Int {
-        return hash
     }
 }
 
@@ -331,16 +301,28 @@ extension SettingsView {
             }
         }
     }
-        
+
+    private var therapySettingsView: some View {
+        TherapySettingsView(
+            mode: .settings,
+            viewModel: TherapySettingsViewModel(
+                therapySettings: viewModel.therapySettings(),
+                delegate: viewModel.therapySettingsViewModelDelegate
+            )
+        )
+    }
+
     private var therapySection: some View {
         Section {
-            LargeButton(action: { sheet = .therapySettings },
-                        includeArrow: true,
-                        imageView: Image("Therapy Icon"),
-                        label: NSLocalizedString("Therapy Settings", comment: "Title text for button to Therapy Settings"),
-                        descriptiveText: NSLocalizedString("Diabetes Treatment", comment: "Descriptive text for Therapy Settings"))
-            .accessibilityIdentifier("button_TherapySettings")
-            
+            NavigationLink(destination: therapySettingsView) {
+                LargeButton(action: {},
+                            includeArrow: false,
+                            imageView: Image("Therapy Icon"),
+                            label: NSLocalizedString("Therapy Settings", comment: "Title text for button to Therapy Settings"),
+                            descriptiveText: NSLocalizedString("Diabetes Treatment", comment: "Descriptive text for Therapy Settings"))
+                .accessibilityIdentifier("button_TherapySettings")
+            }
+
             ForEach(pluginMenuItems.filter {$0.section == .configuration}) { item in
                 item.view
             }
@@ -350,7 +332,7 @@ extension SettingsView {
             }
         }
     }
-    
+
     private var presetsSection: some View {
         Section {
             LargeButton(
