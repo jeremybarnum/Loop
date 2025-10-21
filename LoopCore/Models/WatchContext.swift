@@ -10,6 +10,15 @@ import Foundation
 import LoopKit
 import LoopAlgorithm
 
+public enum InsulinDeliveryWatchState: Int, Equatable {
+    case neutralNoOverride
+    case neutralOverride
+    case increasedInsulin
+    case decreasedInsulin
+    case minimumDelivery
+    case suspended
+    case noDelivery
+}
 
 public final class WatchContext: RawRepresentable {
     public typealias RawValue = [String: Any]
@@ -38,6 +47,8 @@ public final class WatchContext: RawRepresentable {
     public var lastNetTempBasalDose: Double?
     public var lastNetTempBasalDate: Date?
     public var recommendedBolusDose: Double?
+    public var insulinDeliveryState: InsulinDeliveryWatchState?
+    public var lastManualBolus: LastManualBolus?
 
     public var potentialCarbEntry: NewCarbEntry?
 
@@ -74,6 +85,8 @@ public final class WatchContext: RawRepresentable {
         reservoirPercentage: Double? = nil,
         batteryPercentage: Double? = nil,
         cgmManagerState: CGMManager.RawStateValue? = nil,
+        insulinDeliveryState: InsulinDeliveryWatchState? = nil,
+        lastManualBolus: LastManualBolus? = nil,
         isClosedLoop: Bool? = nil
     ) {
         self.creationDate = creationDate
@@ -98,6 +111,8 @@ public final class WatchContext: RawRepresentable {
         self.reservoirPercentage = reservoirPercentage
         self.batteryPercentage = batteryPercentage
         self.cgmManagerState = cgmManagerState
+        self.insulinDeliveryState = insulinDeliveryState
+        self.lastManualBolus = lastManualBolus
         self.isClosedLoop = isClosedLoop
     }
 
@@ -138,6 +153,15 @@ public final class WatchContext: RawRepresentable {
         loopLastRunDate = rawValue["ld"] as? Date
         lastNetTempBasalDose = rawValue["ba"] as? Double
         lastNetTempBasalDate = rawValue["bad"] as? Date
+
+        if let rawInsulinDeliveryState = rawValue["ids"] as? InsulinDeliveryWatchState.RawValue {
+            insulinDeliveryState = InsulinDeliveryWatchState(rawValue: rawInsulinDeliveryState)
+        }
+
+        if let rawLastManualBolus = rawValue["lmb"] as? LastManualBolus.RawValue {
+            lastManualBolus = LastManualBolus(rawValue: rawLastManualBolus)
+        }
+
         recommendedBolusDose = rawValue["rbo"] as? Double
         if let rawPotentialCarbEntry = rawValue["pce"] as? NewCarbEntry.RawValue {
             potentialCarbEntry = NewCarbEntry(rawValue: rawPotentialCarbEntry)
@@ -184,6 +208,10 @@ public final class WatchContext: RawRepresentable {
         raw["iob"] = iob
         raw["ld"] = loopLastRunDate
         raw["r"] = reservoir
+
+        raw["ids"] = insulinDeliveryState?.rawValue
+        raw["lmb"] = lastManualBolus?.rawValue
+
         raw["rbo"] = recommendedBolusDose
         raw["pce"] = potentialCarbEntry?.rawValue
         raw["rp"] = reservoirPercentage

@@ -9,6 +9,7 @@
 import SwiftUI
 import LoopKit
 import LoopCore
+import LoopAlgorithm
 import SpriteKit
 
 struct ChartPageView: View {
@@ -17,6 +18,8 @@ struct ChartPageView: View {
     @Environment(LoopDataManager.self) var loopManager
 
     @State private var isShowingCarbList: Bool = false
+
+    @ScaledMetric private var iconSize: Double = 26
 
     var presetActive: Bool {
         return loopManager.watchInfo.scheduleOverride?.isActive() == true
@@ -86,6 +89,28 @@ struct ChartPageView: View {
         return carbFormatter.string(from: activeCarbohydrates)
     }
 
+    var lastBolus: Text {
+        guard let lastBolus = loopManager.activeContext?.lastManualBolus else {
+            return Text("-")
+        }
+
+        let bolusFormatter = QuantityFormatter(for: .internationalUnit)
+        bolusFormatter.numberFormatter.minimumFractionDigits = 1
+        bolusFormatter.numberFormatter.maximumFractionDigits = 1
+
+
+        let dateFormatter = DateFormatter()
+        dateFormatter.timeStyle = .short
+        dateFormatter.dateStyle = .none
+
+        let bolusVolume = bolusFormatter.string(from: LoopQuantity(unit: .internationalUnit, doubleValue: lastBolus.amount))!
+        let bolusTime = dateFormatter.string(from: lastBolus.startDate)
+
+        return
+            Text("\(bolusVolume)") +
+            Text(" at \(bolusTime)").font(.caption).foregroundColor(.secondary)
+    }
+
     var netTempBasalDose: String? {
         guard let activeContext = loopManager.activeContext,
             let tempBasal = activeContext.lastNetTempBasalDose
@@ -132,29 +157,32 @@ struct ChartPageView: View {
             LoopHeader()
             chartView
 
-            VStack {
-                LabelValueRow(
-                    label: "Active Insulin",
-                    value: activeInsulin
-                )
+            VStack(spacing: 8) {
+                LabelValueRow("Active Insulin") {
+                    Text(activeInsulin ?? "-")
+                }
                 Divider()
-                LabelValueRow(
-                    label: "Active Carbs",
-                    value: activeCarbohydrates
-                )
+                LabelValueRow("Active Carbs") {
+                    Text(activeCarbohydrates ?? "-")
+                }
                 .onTapGesture {
                     isShowingCarbList = true
                 }
                 Divider()
-                LabelValueRow(
-                    label: "Net Basal Rate",
-                    value: netTempBasalDose
-                )
+                LabelValueRow("Last Bolus") {
+                    lastBolus
+                }
+                if let currentDelivery = loopManager.activeContext?.insulinDeliveryState {
+                    Divider()
+                    LabelValueRow("Current Delivery") {
+                        Text(currentDelivery.iconImage) +
+                        Text(" " + currentDelivery.shortDescription)
+                    }
+                }
                 Divider()
-                LabelValueRow(
-                    label: "Reservoir Volume",
-                    value: reservoirVolume
-                )
+                LabelValueRow("Reservoir Volume") {
+                    Text(reservoirVolume ?? "-")
+                }
             }
             .padding(.horizontal)
         }

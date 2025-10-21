@@ -322,7 +322,7 @@ extension SettingsView {
                             descriptiveText: NSLocalizedString("Diabetes Treatment", comment: "Descriptive text for Therapy Settings"))
                 .accessibilityIdentifier("button_TherapySettings")
             }
-
+            
             ForEach(pluginMenuItems.filter {$0.section == .configuration}) { item in
                 item.view
             }
