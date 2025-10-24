@@ -430,7 +430,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
         
         // This should be kept up to date immediately
         hudView?.loopCompletionHUD.lastLoopCompleted = loopManager.lastLoopCompleted
-        hudView?.loopCompletionHUD.deviceInoperable = deviceManager.cgmManager == nil || deviceManager.pumpManager == nil || basalDeliveryState == .pumpInoperable
+        hudView?.loopCompletionHUD.deviceInoperable = deviceManager.cgmManager == nil || deviceManager.cgmManager?.isInoperable == true || deviceManager.pumpManager == nil || deviceManager.pumpManager?.isInoperable == true || deviceManager.hasBluetoothIssue
         hudView?.loopCompletionHUD.mostRecentGlucoseDataDate = loopManager.mostRecentGlucoseDataDate
         hudView?.loopCompletionHUD.mostRecentPumpDataDate = loopManager.mostRecentPumpDataDate
 
@@ -1661,18 +1661,30 @@ final class StatusTableViewController: LoopChartsTableViewController {
     }
 
     @objc private func showLoopCompletionMessage(_: Any) {
-        guard let loopCompletionMessage = hudView?.loopCompletionHUD.loopCompletionMessage else { return }
-        presentLoopCompletionMessage(title: loopCompletionMessage.title, message: loopCompletionMessage.message)
-    }
+        let viewModel = LoopStatusModalViewModel(
+            lastLoopCompleted: loopManager.lastLoopCompleted,
+            loopIconClosed: automaticDosingEnabled,
+            hasBluetoothIssue: deviceManager.hasBluetoothIssue,
+            isDeliverySuspended: deviceManager.isSuspended,
+            isPumpInSignalLoss: deviceManager.pumpManager?.inSignalLoss == true,
+            isPumpInoperable: deviceManager.pumpManager == nil || deviceManager.pumpManager?.isInoperable == true,
+            isCGMInWarmup: deviceManager.cgmManager?.cgmManagerStatus.inSensorWarmup == true,
+            isCGMInSignalLoss: deviceManager.cgmManager?.inSignalLoss == true,
+            isCGMInoperable: deviceManager.cgmManager == nil || deviceManager.cgmManager?.isInoperable == true)
+        
+        let modalVC = UIHostingController(
+            rootView: LoopStatusModalView(viewModel: viewModel,
+                                          onDismiss: { [weak self] in
+                                             self?.dismiss(animated: false)
+                                         })
+                .environment(\.loopStatusColorPalette, .loopStatus)
+        )
+        modalVC.modalPresentationStyle = .overCurrentContext
+        modalVC.view.backgroundColor = UIColor.black.withAlphaComponent(0.4)
+        modalVC.view.frame = view.bounds
+        modalVC.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
 
-    private func presentLoopCompletionMessage(title: String, message: String) {
-        let action = UIAlertAction(title: NSLocalizedString("Dismiss", comment: "The button label of the action used to dismiss an error alert"),
-                                   style: .default)
-        let alertController = UIAlertController(title: title,
-                                                message: message,
-                                                preferredStyle: .alert)
-        alertController.addAction(action)
-        present(alertController, animated: true)
+        present(modalVC, animated: false)
     }
 
     @objc private func showLastError(_: Any) {
