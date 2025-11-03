@@ -61,6 +61,28 @@ extension TemporaryScheduleOverride {
         case .preset(let preset): return preset.id
         }
     }
+
+    public func createPreset() -> SelectablePreset {
+        let range = settings.targetRange
+
+        switch context {
+        case .preMeal:
+            return .preMeal(range: range!)
+        case .activity(let activity):
+            return .activity(activity)
+        case .custom:
+            let preset = TemporaryPreset(
+                id: syncIdentifier.uuidString,
+                symbol: nil,
+                name: NSLocalizedString("Single Use Preset", comment: "The title shown for a single use preset"),
+                settings: settings,
+                duration: duration
+            )
+            return .custom(preset)
+        case .preset(let preset):
+            return .custom(preset)
+        }
+    }
 }
 
 extension ActivityPreset {
@@ -375,6 +397,11 @@ public enum SelectablePreset: Hashable, Identifiable {
             return .distantPast
         }
     }
+
+    public var veryHighInsulinNeeds: Bool {
+        return TemporaryScheduleOverride.isInMitigationRange(insulinNeedsScaleFactor: insulinNeedsScaleFactor)
+    }
+
 }
 
 extension SelectablePreset {
@@ -397,31 +424,6 @@ extension SelectablePreset {
 
     }
 }
-
-extension TemporaryScheduleOverride {
-    public func createPreset() -> SelectablePreset {
-        let range = settings.targetRange
-
-        switch context {
-        case .preMeal:
-            return .preMeal(range: range!)
-        case .activity(let activity):
-            return .activity(activity)
-        case .custom:
-            let preset = TemporaryPreset(
-                id: syncIdentifier.uuidString,
-                symbol: nil,
-                name: NSLocalizedString("Single Use Preset", comment: "The title shown for a single use preset"),
-                settings: settings,
-                duration: duration
-            )
-            return .custom(preset)
-        case .preset(let preset):
-            return .custom(preset)
-        }
-    }
-}
-
 
 extension PresetExpectedEndTime {
     private static let timeFormatter: DateFormatter = {
