@@ -236,7 +236,7 @@ public enum SelectablePreset: Hashable, Identifiable {
             case .activity(var activity):
                 activity.preset.scheduleStartDate = newValue
                 self = .activity(activity)
-            default:
+            case .preMeal:
                 break
             }
         }
@@ -247,7 +247,9 @@ public enum SelectablePreset: Hashable, Identifiable {
             switch self {
             case .custom(let preset):
                 return preset.repeatOptions ?? .none
-            case .preMeal, .activity:
+            case .activity(let activity):
+                return activity.preset.repeatOptions ?? .none
+            case .preMeal:
                 return .none
             }
         }
@@ -256,7 +258,10 @@ public enum SelectablePreset: Hashable, Identifiable {
             case .custom(var preset):
                 preset.repeatOptions = newValue
                 self = .custom(preset)
-            default:
+            case .activity(var activity):
+                activity.preset.repeatOptions = newValue
+                self = .activity(activity)
+            case .preMeal:
                 break
             }
         }
