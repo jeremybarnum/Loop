@@ -735,9 +735,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
     private func determineStatusRowMode() -> StatusRowMode {
         let statusRowMode: StatusRowMode
 
-        if case .initiating = bolusState {
-            statusRowMode = .enactingBolus
-        } else if case .canceling = bolusState {
+        if case .canceling = bolusState {
             statusRowMode = .cancelingBolus
         } else if let canceledDose {
             statusRowMode = .canceledBolus(dose: canceledDose)
