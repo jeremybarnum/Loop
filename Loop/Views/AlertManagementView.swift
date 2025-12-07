@@ -440,7 +440,7 @@ extension UserDefaults {
     }
     
     var lowBGNotificationsEnabled: Bool {
-        get { object(forKey: Key.lowBGNotificationsEnabled.rawValue) as? Bool ?? true }
+        get { object(forKey: Key.lowBGNotificationsEnabled.rawValue) as? Bool ?? false }
         set { set(newValue, forKey: Key.lowBGNotificationsEnabled.rawValue) }
     }
     
