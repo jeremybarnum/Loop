@@ -1186,7 +1186,25 @@ extension LoopDataManager {
 
             return (dosingDecision, nil)
         }
-        processObservedAbsorptionAndIssueWarnings()
+        
+        // Check for compression low - skip warnings if BG drops too much
+        let bgDropThreshold = 10.0
+        var skipWarnings = false
+
+        if let samples = historicalGlucose, samples.count >= 2 {
+            let lastBG = samples[samples.count - 1].quantity.doubleValue(for: .milligramsPerDeciliter)
+            let secondToLastBG = samples[samples.count - 2].quantity.doubleValue(for: .milligramsPerDeciliter)
+            let bgDrop = secondToLastBG - lastBG
+            
+            if bgDrop >= bgDropThreshold {
+                self.logger.info("Skipping warnings due to compression low: BG drop of %.1f mg/dL", bgDrop)
+                skipWarnings = true
+            }
+        }
+
+        if !skipWarnings {
+            processObservedAbsorptionAndIssueWarnings()
+        }
         
         return updatePredictedGlucoseAndRecommendedDose(with: dosingDecision)
         
