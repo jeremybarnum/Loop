@@ -2965,6 +2965,20 @@ extension LoopDataManager {
 
         guard UserDefaults.standard.bool(forKey: "com.loopkit.Loop.lowBGNotificationsEnabled") else { return (.none, nil) }
               let currentDate = now()
+        let calendar = Calendar.current
+        let now = Date()
+        let nightStart = calendar.date(bySettingHour: 22, minute: 30, second: 0, of: now)!
+        let nightEnd = calendar.date(bySettingHour: 6, minute: 30, second: 0, of: now)!
+
+        let isNightTime: Bool
+        if nightStart <= nightEnd {
+           // Night period doesn't cross midnight
+           isNightTime = now >= nightStart && now <= nightEnd
+        } else {
+           // Night period crosses midnight
+           isNightTime = now >= nightStart || now <= nightEnd
+        }
+        
         guard let suspendThresholdQuantity = settings.suspendThreshold?.quantity,
               let displayUnit = settings.glucoseUnit,
               let ISF = settings.insulinSensitivitySchedule?.value(at: currentDate),
@@ -2987,22 +3001,10 @@ extension LoopDataManager {
             return (.none, nil)
         }
         //Mark -- functionality to supply different aggressiveness day and night
-        let daytimeWarningOffset = HKQuantity(unit: displayUnit, doubleValue: 5.0)
-        let nightWarningOffset = HKQuantity(unit: displayUnit, doubleValue: 10.0)
+        let daytimeWarningOffset = HKQuantity(unit: displayUnit, doubleValue: Double(UserDefaults.standard.dayWarningOffset))
+        let nightWarningOffset = HKQuantity(unit: displayUnit, doubleValue: Double(UserDefaults.standard.nightWarningOffset))
         
-        let calendar = Calendar.current
-        let now = Date()
-        let nightStart = calendar.date(bySettingHour: 22, minute: 30, second: 0, of: now)!
-        let nightEnd = calendar.date(bySettingHour: 6, minute: 30, second: 0, of: now)!
 
-        let isNightTime: Bool
-        if nightStart <= nightEnd {
-           // Night period doesn't cross midnight
-           isNightTime = now >= nightStart && now <= nightEnd
-        } else {
-           // Night period crosses midnight
-           isNightTime = now >= nightStart || now <= nightEnd
-        }
 
         let warningOffset = isNightTime ? nightWarningOffset : daytimeWarningOffset
             
@@ -3010,15 +3012,19 @@ extension LoopDataManager {
         let warningLevel = HKQuantity(unit: displayUnit, doubleValue: warningLevelValue)
         
         // Add this logging
+        let isNightWarningsEnabled = UserDefaults.standard.bool(forKey: "com.loopkit.Loop.nightLowBGNotificationsEnabled")
         let timeFormatter = DateFormatter()
         timeFormatter.timeStyle = .medium
-        decisionLogger.info("Night time check: Current=%{public}@, NightStart=%{public}@, NightEnd=%{public}@, IsNight=%{public}d",
+        decisionLogger.info("Night time check: Current=%{public}@, NightStart=%{public}@, NightEnd=%{public}@, IsNight=%{public}d, Night Warnings Enabled: =%{public}d",
                            timeFormatter.string(from: now),
                            timeFormatter.string(from: nightStart),
                            timeFormatter.string(from: nightEnd),
-                           isNightTime ? 1 : 0)
+                           isNightTime ? 1 : 0,
+                           isNightWarningsEnabled ? 1 : 0)
                            
         decisionLogger.info("Warning level calc: SuspendThreshold=%.1f, WarningOffset=%.1f, WarningLevel=%.1f", suspendThresholdQuantity.doubleValue(for: displayUnit), warningOffset.doubleValue(for: displayUnit), warningLevelValue)
+        
+        guard !isNightTime || isNightWarningsEnabled else { return (.none, nil) }
         
         let p1_Metrics = analyzePrediction(
             prediction: predictionWithZeroTemp,
@@ -3101,7 +3107,7 @@ extension LoopDataManager {
         guard notificationIntervalExceeded, farEnough, notTooFar else {
             decisionLogger.info("Universal warning preconditions not met (Interval:%{public}d, FarEnough:%{public}d, NotTooFar:%{public}d, CarbAge:%{public}d).",
                               notificationIntervalExceeded, farEnough, notTooFar, enoughTimeElapsed)
-            return (.none, nil) //**not checking enoughTimeElapsed universally because  whether or not we issue a waring will depending on which type of low we have
+            return (.none, nil) //**not checking enoughTimeElapsed universally because  whether or not we issue a warning will depending on which type of low we have
         }
         
         

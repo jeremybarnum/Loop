@@ -23,6 +23,7 @@ struct AlertManagementView: View {
     // Local state variables for immediate UI updates
     @State private var isPreBolusRemindersEnabled: Bool = UserDefaults.standard.preBolusRemindersEnabled
     @State private var isLowBGNotificationsEnabled: Bool = UserDefaults.standard.lowBGNotificationsEnabled
+    @State private var isNightLowBGNotificationsEnabled: Bool = UserDefaults.standard.nightLowBGNotificationsEnabled
 
     private var formatter: DateComponentsFormatter = {
         let formatter = DateComponentsFormatter()
@@ -90,6 +91,20 @@ struct AlertManagementView: View {
         Binding(
             get: { UserDefaults.standard.delayAfterCarbEntry },
             set: { UserDefaults.standard.delayAfterCarbEntry = $0 }
+        )
+    }
+    
+    private var nightWarningOffset: Binding<Int> {
+        Binding(
+            get: { UserDefaults.standard.nightWarningOffset },
+            set: { UserDefaults.standard.nightWarningOffset = $0 }
+        )
+    }
+    
+    private var dayWarningOffset: Binding<Int> {
+        Binding(
+            get: { UserDefaults.standard.dayWarningOffset },
+            set: { UserDefaults.standard.dayWarningOffset = $0 }
         )
     }
 
@@ -330,6 +345,37 @@ struct AlertManagementView: View {
             if isLowBGNotificationsEnabled {
                 VStack(spacing: 16) {
                     HStack {
+                        Text("Day low warning offset")
+                        Spacer()
+                        Picker("Daytime low warning offset", selection: dayWarningOffset) {
+                            ForEach(0..<15) {
+                                Text("\($0) mg/dl").tag($0)
+                            }
+                        }
+                        .pickerStyle(WheelPickerStyle())
+                        .frame(width: 115, height: 50)
+                    }
+                    
+                    Toggle(NSLocalizedString("Enable warnings overnight", comment: "Title for enabling low BG warnings overnight"), isOn: $isNightLowBGNotificationsEnabled)
+                        .onChange(of: isNightLowBGNotificationsEnabled) { newValue in
+                            UserDefaults.standard.nightLowBGNotificationsEnabled = newValue
+                        }
+                    
+                    if isNightLowBGNotificationsEnabled {
+                        
+                        HStack {
+                            Text("Night low warning offset")
+                            Spacer()
+                            Picker("Nighttime low warning offset", selection: nightWarningOffset) {
+                                ForEach(0..<15) {
+                                    Text("\($0) mg/dl").tag($0)
+                                }
+                            }
+                            .pickerStyle(WheelPickerStyle())
+                            .frame(width: 115, height: 50)
+                        }
+                    }
+                    HStack {
                         Text("Warning snooze time")
                         Spacer()
                         Picker("Warning snooze time", selection: warningSnooze) {
@@ -376,6 +422,7 @@ struct AlertManagementView: View {
                         .pickerStyle(WheelPickerStyle())
                         .frame(width: 100, height: 40)
                     }
+
                 }
             }
         }
@@ -422,6 +469,9 @@ extension UserDefaults {
         case dontWarnIfLater = "com.loopkit.Loop.dontWarnIfLater"
         case dontWarnIfSooner = "com.loopkit.Loop.dontWarnIfSooner"
         case delayAfterCarbEntry = "com.loopkit.Loop.delayAfterCarbEntry"
+        case nightLowBGNotificationsEnabled = "com.loopkit.Loop.nightLowBGNotificationsEnabled"
+        case nightWarningOffset = "com.loopkit.Loop.nightWarningOffset"
+        case dayWarningOffset = "com.loopkit.Loop.dayWarningOffset"
     }
     
     var missedMealNotificationsEnabled: Bool {
@@ -465,6 +515,20 @@ extension UserDefaults {
     var delayAfterCarbEntry: Int {
         get { object(forKey: Key.delayAfterCarbEntry.rawValue) as? Int ?? 30 }
         set { set(newValue, forKey: Key.delayAfterCarbEntry.rawValue) }
+    }
+    var nightLowBGNotificationsEnabled: Bool {
+        get { object(forKey: Key.nightLowBGNotificationsEnabled.rawValue) as? Bool ?? true }
+        set { set(newValue, forKey: Key.nightLowBGNotificationsEnabled.rawValue) }
+    }
+    
+    var nightWarningOffset: Int {
+        get { object(forKey: Key.nightWarningOffset.rawValue) as? Int ?? 10 }
+        set { set(newValue, forKey: Key.nightWarningOffset.rawValue) }
+    }
+    
+    var dayWarningOffset: Int {
+        get { object(forKey: Key.dayWarningOffset.rawValue) as? Int ?? 5 }
+        set { set(newValue, forKey: Key.dayWarningOffset.rawValue) }
     }
 }
 
