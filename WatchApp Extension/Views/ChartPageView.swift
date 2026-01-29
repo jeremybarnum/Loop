@@ -23,6 +23,8 @@ struct ChartPageView: View {
 
     @ScaledMetric private var iconSize: Double = 26
     
+    private let lastSyncUpdateTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
+    
     var presetActive: Bool {
         return loopManager.watchInfo.scheduleOverride?.isActive() == true
     }
@@ -59,8 +61,6 @@ struct ChartPageView: View {
                     }
             )
     }
-    
-    let lastSyncUpdateTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
     
     var activeInsulin: String? {
         guard let activeContext = loopManager.activeContext,
@@ -157,7 +157,7 @@ struct ChartPageView: View {
 
     var body: some View {
         ScrollView(.vertical) {
-            LoopHeader()
+            LoopHeader(freshness: LoopCompletionFreshness(lastCompletion: loopManager.activeContext?.loopLastRunDate, at: Date()))
             chartView
 
             VStack(spacing: 8) {
