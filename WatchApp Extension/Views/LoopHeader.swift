@@ -13,21 +13,19 @@ import LoopCore
 struct LoopHeader: View {
     @Environment(LoopDataManager.self) var loopManager
 
-    @State var freshness: LoopCompletionFreshness
-    
-    private let lastSyncUpdateTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
+    var freshness: LoopCompletionFreshness {
+        LoopCompletionFreshness(lastCompletion: loopManager.activeContext?.loopLastRunDate, at: Date())
+    }
 
     var body: some View {
         HStack {
             if let activeContext = loopManager.activeContext,
                let unit = activeContext.displayGlucoseUnit
             {
-                LoopCircleView(closedLoop: activeContext.isClosedLoop ?? false, freshness: freshness, deviceIssue: loopManager.activeContext?.deviceIssue ?? true)
-                    .frame(width: 22, height: 22)
-                    .padding(.horizontal)
-                
-                .onReceive(lastSyncUpdateTimer) { _ in
-                    self.freshness = LoopCompletionFreshness(lastCompletion: loopManager.activeContext?.loopLastRunDate, at: Date())
+                TimelineView(.animation) { _ in
+                    LoopCircleView(closedLoop: activeContext.isClosedLoop ?? false, freshness: freshness, deviceIssue: loopManager.activeContext?.deviceIssue ?? true)
+                        .frame(width: 22, height: 22)
+                        .padding(.horizontal)
                 }
                 
                 Text(loopManager.glucoseValue)
