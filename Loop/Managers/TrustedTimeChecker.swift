@@ -9,8 +9,9 @@
 import LoopKit
 import TrueTime
 import UIKit
+import Combine
 
-fileprivate extension UserDefaults {
+extension UserDefaults {
     private enum Key: String {
         case detectedSystemTimeOffset = "com.loopkit.Loop.DetectedSystemTimeOffset"
     }
@@ -25,7 +26,12 @@ fileprivate extension UserDefaults {
     }
 }
 
-class TrustedTimeChecker {
+protocol TrustedTimeChecker {
+    var detectedSystemTimeOffset: TimeInterval { get }
+}
+
+@MainActor
+class LoopTrustedTimeChecker: TrustedTimeChecker {
     private let acceptableTimeDelta = TimeInterval.seconds(120)
 
     // For NTP time checking
@@ -33,9 +39,15 @@ class TrustedTimeChecker {
     private weak var alertManager: AlertManager?
     private lazy var log = DiagnosticLog(category: "TrustedTimeChecker")
 
+    lazy private var cancellables = Set<AnyCancellable>()
+
+    nonisolated
     var detectedSystemTimeOffset: TimeInterval {
-        didSet {
-            UserDefaults.standard.detectedSystemTimeOffset = detectedSystemTimeOffset
+        get {
+            UserDefaults.standard.detectedSystemTimeOffset ?? 0
+        }
+        set {
+            UserDefaults.standard.detectedSystemTimeOffset = newValue
         }
     }
 
@@ -48,11 +60,23 @@ class TrustedTimeChecker {
         #endif
         ntpClient.start()
         self.alertManager = alertManager
-        self.detectedSystemTimeOffset = UserDefaults.standard.detectedSystemTimeOffset ?? 0
-        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification,
-                                               object: nil, queue: nil) { [weak self] _ in self?.checkTrustedTime() }
-        NotificationCenter.default.addObserver(forName: .LoopRunning,
-                                               object: nil, queue: nil) { [weak self] _ in self?.checkTrustedTime() }
+        
+        NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)
+            .sink { [weak self] _ in
+                Task {
+                    self?.checkTrustedTime()
+                }
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .LoopRunning)
+            .sink { [weak self] _ in
+                Task {
+                    self?.checkTrustedTime()
+                }
+            }
+            .store(in: &cancellables)
+
         checkTrustedTime()
     }
     
@@ -87,10 +111,14 @@ class TrustedTimeChecker {
         let alertTitle = String(format: NSLocalizedString("%1$@ Time Settings Need Attention", comment: "Time change alert title"), UIDevice.current.model)
         let alertBody = String(format: NSLocalizedString("Your %1$@’s time has been changed. %2$@ needs accurate time records to make predictions about your glucose and adjust your insulin accordingly.\n\nCheck in your %1$@ Settings (General / Date & Time) and verify that 'Set Automatically' is turned ON. Failure to resolve could lead to serious under-delivery or over-delivery of insulin.", comment: "Time change alert body. (1: app name)"), UIDevice.current.model, Bundle.main.bundleDisplayName)
         let content = Alert.Content(title: alertTitle, body: alertBody, acknowledgeActionButtonLabel: NSLocalizedString("OK", comment: "Alert acknowledgment OK button"))
-        alertManager?.issueAlert(Alert(identifier: alertIdentifier, foregroundContent: content, backgroundContent: content, trigger: .immediate))
+        Task {
+            await alertManager?.issueAlert(Alert(identifier: alertIdentifier, foregroundContent: content, backgroundContent: content, trigger: .immediate))
+        }
     }
 
     private func retractTimeChangedAlert() {
-        alertManager?.retractAlert(identifier: alertIdentifier)
+        Task {
+            await alertManager?.retractAlert(identifier: alertIdentifier)
+        }
     }
 }

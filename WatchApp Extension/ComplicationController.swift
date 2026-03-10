@@ -8,8 +8,9 @@
 
 import ClockKit
 import WatchKit
-import LoopCore
+import LoopKit
 import os.log
+import LoopAlgorithm
 
 final class ComplicationController: NSObject, CLKComplicationDataSource {
     
@@ -17,12 +18,8 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
 
     // MARK: - Timeline Configuration
     
-    func getSupportedTimeTravelDirections(for complication: CLKComplication, withHandler handler: @escaping (CLKComplicationTimeTravelDirections) -> Void) {
-        handler([.backward])
-    }
-    
     func getTimelineStartDate(for complication: CLKComplication, withHandler handler: @escaping (Date?) -> Void) {
-        if let date = ExtensionDelegate.shared().loopManager.activeContext?.glucoseDate {
+        if let date = LoopDataManager.shared.activeContext?.glucoseDate {
             handler(date)
         } else {
             handler(nil)
@@ -30,13 +27,28 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
     }
     
     func getTimelineEndDate(for complication: CLKComplication, withHandler handler: @escaping (Date?) -> Void) {
-        if let date = ExtensionDelegate.shared().loopManager.activeContext?.glucoseDate {
+        if let date = LoopDataManager.shared.activeContext?.glucoseDate {
             handler(date)
         } else {
             handler(nil)
         }
     }
-    
+
+    func complicationDescriptors() async -> [CLKComplicationDescriptor] {
+        return [
+            CLKComplicationDescriptor(
+                identifier: "glucosegraph",
+                displayName: "Glucose Graph",
+                supportedFamilies: [.graphicRectangular, .graphicExtraLarge,]
+            ),
+            CLKComplicationDescriptor(
+                identifier: "glucosegraph",
+                displayName: "Loop Status",
+                supportedFamilies: [.circularSmall, .extraLarge, .graphicBezel, .graphicCircular, .graphicCorner, .modularLarge, .modularSmall, .utilitarianLarge, .utilitarianSmall, .utilitarianSmallFlat]
+            )
+        ]
+    }
+
     func getPrivacyBehavior(for complication: CLKComplication, withHandler handler: @escaping (CLKComplicationPrivacyBehavior) -> Void) {
         handler(.hideOnLockScreen)
     }
@@ -55,7 +67,8 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
             return
         }
 
-        ExtensionDelegate.shared().loopManager.generateChartData { chartData in
+        Task { @MainActor in
+            let chartData = await LoopDataManager.shared.generateChartData()
             self.chartManager.data = chartData
             completion()
         }
@@ -84,11 +97,11 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
             
             self.log.default("Updating current complication timeline entry")
             
-            if let context = ExtensionDelegate.shared().loopManager.activeContext,
+            if let context = LoopDataManager.shared.activeContext,
                 let template = CLKComplicationTemplate.templateForFamily(complication.family,
                                                                          from: context,
                                                                          at: timelineDate,
-                                                                         recencyInterval: LoopCoreConstants.inputDataRecencyInterval,
+                                                                         recencyInterval: LoopAlgorithm.inputDataRecencyInterval,
                                                                          chartGenerator: self.makeChart)
             {
                 switch complication.family {
@@ -110,7 +123,7 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
         updateChartManagerIfNeeded {
             let entries: [CLKComplicationTimelineEntry]?
             
-            guard let context = ExtensionDelegate.shared().loopManager.activeContext,
+            guard let context = LoopDataManager.shared.activeContext,
                 let glucoseDate = context.glucoseDate else
             {
                 handler(nil)
@@ -119,7 +132,7 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
             
             var futureChangeDates: [Date] = [
                 // Stale glucose date: just a second after glucose expires
-                glucoseDate + LoopCoreConstants.inputDataRecencyInterval + 1,
+                glucoseDate + LoopAlgorithm.inputDataRecencyInterval + 1,
             ]
             
             if let loopLastRunDate = context.loopLastRunDate {
@@ -135,7 +148,7 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
                 if let template = CLKComplicationTemplate.templateForFamily(complication.family,
                                                                             from: context,
                                                                             at: futureChangeDate,
-                                                                            recencyInterval: LoopCoreConstants.inputDataRecencyInterval,
+                                                                            recencyInterval: LoopAlgorithm.inputDataRecencyInterval,
                                                                             chartGenerator: self.makeChart)
                 {
                     template.tintColor = UIColor.tintColor

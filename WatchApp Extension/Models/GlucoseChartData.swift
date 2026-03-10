@@ -7,16 +7,14 @@
 //
 
 import Foundation
-import HealthKit
 import LoopKit
+import LoopAlgorithm
 
 
 struct GlucoseChartData {
-    var unit: HKUnit?
+    var unit: LoopUnit?
 
     var correctionRange: GlucoseRangeSchedule?
-
-    var preMealOverride: TemporaryScheduleOverride?
 
     var scheduleOverride: TemporaryScheduleOverride?
 
@@ -26,7 +24,7 @@ struct GlucoseChartData {
         }
     }
 
-    private(set) var historicalGlucoseRange: ClosedRange<HKQuantity>?
+    private(set) var historicalGlucoseRange: ClosedRange<LoopQuantity>?
 
     var predictedGlucose: [SampleValue]? {
         didSet {
@@ -34,12 +32,11 @@ struct GlucoseChartData {
         }
     }
 
-    private(set) var predictedGlucoseRange: ClosedRange<HKQuantity>?
+    private(set) var predictedGlucoseRange: ClosedRange<LoopQuantity>?
 
-    init(unit: HKUnit?, correctionRange: GlucoseRangeSchedule?, preMealOverride: TemporaryScheduleOverride?, scheduleOverride: TemporaryScheduleOverride?, historicalGlucose: [SampleValue]?, predictedGlucose: [SampleValue]?) {
+    init(unit: LoopUnit?, correctionRange: GlucoseRangeSchedule?, scheduleOverride: TemporaryScheduleOverride?, historicalGlucose: [SampleValue]?, predictedGlucose: [SampleValue]?) {
         self.unit = unit
         self.correctionRange = correctionRange
-        self.preMealOverride = preMealOverride
         self.scheduleOverride = scheduleOverride
         self.historicalGlucose = historicalGlucose
         self.historicalGlucoseRange = historicalGlucose?.quantityRange
@@ -47,7 +44,7 @@ struct GlucoseChartData {
         self.predictedGlucoseRange = predictedGlucose?.quantityRange
     }
 
-    func chartableGlucoseRange(from interval: DateInterval) -> ClosedRange<HKQuantity> {
+    func chartableGlucoseRange(from interval: DateInterval) -> ClosedRange<LoopQuantity> {
         let unit = self.unit ?? .milligramsPerDeciliter
 
         // Defaults
@@ -57,11 +54,6 @@ struct GlucoseChartData {
         for correction in correctionRange?.quantityBetween(start: interval.start, end: interval.end) ?? [] {
             min = Swift.min(min, correction.value.lowerBound.doubleValue(for: unit))
             max = Swift.max(max, correction.value.upperBound.doubleValue(for: unit))
-        }
-
-        if let override = activePreMealOverride?.settings.targetRange {
-            min = Swift.min(min, override.lowerBound.doubleValue(for: unit))
-            max = Swift.max(max, override.upperBound.doubleValue(for: unit))
         }
 
         if let override = activeScheduleOverride?.settings.targetRange {
@@ -84,8 +76,8 @@ struct GlucoseChartData {
         min = Swift.max(0, min.floored(to: unit.axisIncrement))
         max = max.ceiled(to: unit.axisIncrement)
 
-        let lowerBound = HKQuantity(unit: unit, doubleValue: min)
-        let upperBound = HKQuantity(unit: unit, doubleValue: max)
+        let lowerBound = LoopQuantity(unit: unit, doubleValue: min)
+        let upperBound = LoopQuantity(unit: unit, doubleValue: max)
 
         return lowerBound...upperBound
     }
@@ -96,16 +88,9 @@ struct GlucoseChartData {
         }
         return override
     }
-
-    var activePreMealOverride: TemporaryScheduleOverride? {
-        guard let override = preMealOverride, override.isActive() else {
-            return nil
-        }
-        return override
-    }
 }
 
-private extension HKUnit {
+private extension LoopUnit {
     var axisIncrement: Double {
         return chartableIncrement * 25
     }

@@ -7,7 +7,7 @@
 //
 
 import Combine
-import HealthKit
+import LoopAlgorithm
 import SwiftUI
 import LoopKit
 import LoopKitUI
@@ -23,6 +23,7 @@ struct BolusEntryView: View {
     @ObservedObject var viewModel: BolusEntryViewModel
 
     @State private var enteredBolusString = ""
+
     @State private var isInteractingWithChart = false
     @State private var editedBolusAmount = false
 
@@ -33,30 +34,35 @@ struct BolusEntryView: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            VStack(spacing: 0) {
-                List {
-                    self.chartSection
-                    self.summarySection
-                }
-                .insetGroupedListStyle()
-                
+        VStack(spacing: 0) {
+            List {
+                self.chartSection
+                self.summarySection
             }
-            .navigationBarTitle(self.title)
-            .supportedInterfaceOrientations(.portrait)
-            .alert(item: self.$viewModel.activeAlert, content: self.alert(for:))
-            .onReceive(self.viewModel.$recommendedBolus) { recommendation in
-                // If the recommendation changes, and the user has not edited the bolus amount, update the bolus amount
-                let amount = recommendation?.doubleValue(for: .internationalUnit()) ?? 0
-                if !editedBolusAmount {
-                    var newEnteredBolusString: String
-                    if amount == 0 {
-                        newEnteredBolusString = ""
-                    } else {
-                        newEnteredBolusString = viewModel.formatBolusAmount(amount)
-                    }
-                    enteredBolusStringBinding.wrappedValue = newEnteredBolusString
+            .padding(.top, -28)
+            .insetGroupedListStyle()
+            if !bolusFieldFocused {
+                actionArea
+            }
+
+        }
+        .navigationBarTitle(self.title)
+        .supportedInterfaceOrientations(.portrait)
+        .alert(item: self.$viewModel.activeAlert, content: self.alert(for:))
+        .onReceive(self.viewModel.$recommendedBolus) { recommendation in
+            // If the recommendation changes, and the user has not edited the bolus amount, update the bolus amount
+            let amount = recommendation?.doubleValue(for: .internationalUnit) ?? 0
+            if !editedBolusAmount {
+                var newEnteredBolusString: String
+                if amount == 0 {
+                    newEnteredBolusString = ""
+                } else {
+                    newEnteredBolusString = viewModel.formatBolusAmount(amount)
                 }
+                enteredBolusStringBinding.wrappedValue = newEnteredBolusString
+            } else {
+                // If the recommendation changes, and the user has edited the bolus amount, set the bolus amount to 0
+                enteredBolusStringBinding.wrappedValue = "0"
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if bolusFieldFocused {
@@ -67,6 +73,10 @@ struct BolusEntryView: View {
                 }
             }
         }
+        .edgesIgnoringSafeArea(self.bolusFieldFocused ? [] : .bottom)
+        .task {
+            await self.viewModel.generateRecommendationAndStartObserving()
+        }
     }
     
     private var title: Text {
@@ -75,12 +85,12 @@ struct BolusEntryView: View {
         }
         return Text("Meal Bolus", comment: "Title for bolus entry screen when also entering carbs")
     }
-
+    
     private var chartSection: some View {
         Section {
             VStack(spacing: 8) {
                 HStack(spacing: 0) {
-                    activeCarbsLabel
+                    activeCarbsLabel.accessibilityIdentifier("text_ActiveCarbs")
                     Spacer(minLength: 8)
                     activeInsulinLabel
                 }
@@ -122,6 +132,14 @@ struct BolusEntryView: View {
             }
             .padding(.top, 12)
             .padding(.bottom, 8)
+        } header: {
+            if let scheduleOverride = viewModel.scheduleOverride ?? viewModel.preMealOverride {
+                ActivePresetBanner(override: scheduleOverride)
+                    .listRowInsets(EdgeInsets(top: 30, leading: 0, bottom: 12, trailing: 0))
+                    .padding(.horizontal, -20)
+                    .padding(.bottom, 8)
+                    .textCase(nil)
+            }
         }
     }
 
@@ -130,7 +148,7 @@ struct BolusEntryView: View {
         LabeledQuantity(
             label: Text("Active Carbs", comment: "Title describing quantity of still-absorbing carbohydrates"),
             quantity: viewModel.activeCarbs,
-            unit: .gram()
+            unit: .gram
         )
     }
     
@@ -139,7 +157,7 @@ struct BolusEntryView: View {
         LabeledQuantity(
             label: Text("Active Insulin", comment: "Title describing quantity of still-absorbing insulin"),
             quantity: viewModel.activeInsulin,
-            unit: .internationalUnit(),
+            unit: .internationalUnit,
             maxFractionDigits: 2
         )
     }
@@ -158,6 +176,8 @@ struct BolusEntryView: View {
         )
     }
 
+    @State private var expandedPresetSummary: Bool = false
+    
     private var summarySection: some View {
         Section {
             VStack(spacing: 16) {
@@ -165,6 +185,31 @@ struct BolusEntryView: View {
                     .bold()
                     .frame(maxWidth: .infinity, alignment: .leading)
 
+                if (viewModel.scheduleOverride ?? viewModel.preMealOverride) != nil, let presetEffectedRecommendation = viewModel.presetEffectedRecommendation, presetEffectedRecommendation.showPredictionDifference {
+                    HStack(alignment: .top, spacing: 12) {
+                        Text(Image(systemName: "info.circle"))
+                            .foregroundStyle(Color.accentColor)
+                        
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Recommended bolus adjusted due to preset")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            
+                            if expandedPresetSummary, let differenceString = presetEffectedRecommendation.differenceString, let originalAmountString = presetEffectedRecommendation.originalAmountString {
+                                Text("This reflects a \(differenceString) \(presetEffectedRecommendation.direction) from the original \(originalAmountString) due to preset adjustments.")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .font(.subheadline)
+                        
+                        Text(Image(systemName: "chevron.up"))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(expandedPresetSummary ? 180 : 0))
+                    }
+                    .onTapGesture {
+                        expandedPresetSummary.toggle()
+                    }
+                }
+                
                 if viewModel.isManualGlucoseEntryEnabled {
                     ManualGlucoseEntryRow(quantity: $viewModel.manualGlucoseQuantity)
                 } else if viewModel.potentialCarbEntry != nil {
@@ -222,6 +267,7 @@ struct BolusEntryView: View {
                 Text(viewModel.recommendedBolusString)
                     .font(.title)
                     .foregroundColor(Color(.label))
+                    .accessibilityIdentifier("staticText_RecommendedBolus")
                 bolusUnitsLabel
             }
         }
@@ -248,12 +294,12 @@ struct BolusEntryView: View {
                     .multilineTextAlignment(.trailing)
                     .foregroundColor(.loopAccent)
                     .focused($bolusFieldFocused)
-                    .onChange(of: bolusFieldFocused) { focused in
+                    .onChange(of: bolusFieldFocused) { oldValue, focused in
                         if focused {
                             didBeginEditing()
                         }
                     }
-                    .onChange(of: enteredBolusString) { newValue in
+                    .onChange(of: enteredBolusString) { oldValue, newValue in
                         if newValue.count > 5 {
                             enteredBolusString = String(newValue.prefix(5))
                             viewModel.updateEnteredBolus(enteredBolusString)
@@ -267,12 +313,12 @@ struct BolusEntryView: View {
                     }
                 bolusUnitsLabel
             }
+            .accessibilityIdentifier("textField_Bolus")
         }
-        .accessibilityElement(children: .combine)
     }
 
     private var bolusUnitsLabel: some View {
-        Text(QuantityFormatter(for: .internationalUnit()).localizedUnitStringWithPlurality())
+        Text(QuantityFormatter(for: .internationalUnit).localizedUnitStringWithPlurality())
             .foregroundColor(Color(.secondaryLabel))
     }
 
@@ -298,7 +344,6 @@ struct BolusEntryView: View {
                 enterManualGlucoseButton
                     .transition(AnyTransition.opacity.combined(with: .move(edge: .bottom)))
             }
-
             actionButton
         }
         .padding(.bottom) // FIXME: unnecessary on iPhone 8 size devices
@@ -348,6 +393,7 @@ struct BolusEntryView: View {
         )
         .buttonStyle(ActionButtonStyle(viewModel.primaryButton == .manualGlucoseEntry ? .primary : .secondary))
         .padding([.top, .horizontal])
+        .accessibilityIdentifier("button_EnterFingerstickGlucose")
     }
 
     private var actionButton: some View {
@@ -379,6 +425,7 @@ struct BolusEntryView: View {
         .buttonStyle(ActionButtonStyle(viewModel.primaryButton == .actionButton ? .primary : .secondary))
         .disabled(viewModel.enacting)
         .padding()
+        .accessibilityIdentifier("button_bolusAction")
     }
 
     private func alert(for alert: BolusEntryViewModel.Alert) -> SwiftUI.Alert {
@@ -428,11 +475,6 @@ struct BolusEntryView: View {
                 title: Text("Unable to Save Manual Glucose Entry", comment: "Alert title for a manual glucose entry persistence error"),
                 message: Text("An error occurred while trying to save your manual glucose entry.", comment: "Alert message for a manual glucose entry persistence error")
             )
-        case .glucoseNoLongerStale:
-            return SwiftUI.Alert(
-                title: Text("Glucose Data Now Available", comment: "Alert title when glucose data returns while on bolus screen"),
-                message: Text("An updated bolus recommendation is available.", comment: "Alert message when glucose data returns while on bolus screen")
-            )
         case .forecastInfo:
             return SwiftUI.Alert(
                 title: Text("Forecasted Glucose", comment: "Title for forecast explanation modal on bolus view"),
@@ -444,8 +486,8 @@ struct BolusEntryView: View {
 
 struct LabeledQuantity: View {
     var label: Text
-    var quantity: HKQuantity?
-    var unit: HKUnit
+    var quantity: LoopQuantity?
+    var unit: LoopUnit
     var maxFractionDigits: Int?
 
     var body: some View {
@@ -478,17 +520,5 @@ struct LabeledQuantity: View {
         }
 
         return Text(string)
-    }
-}
-
-struct LabelBackground: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(Color(.systemGray6))
-            )
     }
 }

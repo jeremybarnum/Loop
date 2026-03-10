@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import HealthKit
 import LoopKit
 import LoopCore
 
@@ -47,7 +46,6 @@ final class DataManager {
             healthStore: healthStore,
             cacheStore: cacheStore,
             observationEnabled: false,
-            insulinModelProvider: PresetInsulinModelProvider(defaultRapidActingModel: defaultRapidActingModel),
             longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration,
             basalProfile: basalRateSchedule,
             insulinSensitivitySchedule: insulinSensitivitySchedule,

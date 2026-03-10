@@ -7,6 +7,7 @@
 //
 
 import LoopKit
+import LoopAlgorithm
 
 struct BolusDosingDecision {
     enum Reason: String {
@@ -15,6 +16,7 @@ struct BolusDosingDecision {
         case watchBolus
     }
 
+    var id: UUID
     var reason: Reason
     var scheduleOverride: TemporaryScheduleOverride?
     var historicalGlucose: [HistoricalGlucoseValue]?
@@ -29,6 +31,7 @@ struct BolusDosingDecision {
     var manualBolusRequested: Double?
     
     init(for reason: Reason) {
+        self.id = UUID()
         self.reason = reason
     }
 }

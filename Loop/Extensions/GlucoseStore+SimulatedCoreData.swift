@@ -7,7 +7,7 @@
 //
 
 import Foundation
-import HealthKit
+import LoopAlgorithm
 import LoopKit
 
 // MARK: - Simulated Core Data
@@ -21,7 +21,7 @@ extension GlucoseStore {
     private var simulatedValueIncrement: Double { 2.0 * .pi / 72.0 }    // 6 hour period
     private var simulatedLimit: Int { 10000 }
 
-    func generateSimulatedHistoricalGlucoseObjects(completion: @escaping (Error?) -> Void) {
+    func generateSimulatedHistoricalGlucoseObjects() async throws {
         var startDate = Calendar.current.startOfDay(for: earliestCacheDate)
         let endDate = Calendar.current.startOfDay(for: historicalEndDate)
         var value = 0.0
@@ -52,15 +52,12 @@ extension GlucoseStore {
                 }
             }()
             simulated.append(NewGlucoseSample.simulated(date: startDate,
-                                                        quantity: HKQuantity(unit: .milligramsPerDeciliter, doubleValue: new),
+                                                        quantity: LoopQuantity(unit: .milligramsPerDeciliter, doubleValue: new),
                                                         trend: trend,
-                                                        trendRate: HKQuantity(unit: .milligramsPerDeciliterPerMinute, doubleValue: trendRateValue)))
+                                                        trendRate: LoopQuantity(unit: .milligramsPerDeciliterPerMinute, doubleValue: trendRateValue)))
 
             if simulated.count >= simulatedLimit {
-                if let error = addSimulatedHistoricalGlucoseObjects(samples: simulated) {
-                    completion(error)
-                    return
-                }
+                try await addNewGlucoseSamples(samples: simulated)
                 simulated = []
             }
 
@@ -68,27 +65,16 @@ extension GlucoseStore {
             startDate = startDate.addingTimeInterval(simulatedStartDateInterval)
         }
 
-        completion(addSimulatedHistoricalGlucoseObjects(samples: simulated))
+        try await addNewGlucoseSamples(samples: simulated)
     }
 
-    private func addSimulatedHistoricalGlucoseObjects(samples: [NewGlucoseSample]) -> Error? {
-        var addError: Error?
-        let semaphore = DispatchSemaphore(value: 0)
-        addNewGlucoseSamples(samples: samples) { error in
-            addError = error
-            semaphore.signal()
-        }
-        semaphore.wait()
-        return addError
-    }
-
-    func purgeHistoricalGlucoseObjects(completion: @escaping (Error?) -> Void) {
-        purgeCachedGlucoseObjects(before: historicalEndDate, completion: completion)
+    func purgeHistoricalGlucoseObjects() async throws {
+        try await purgeCachedGlucoseObjects(before: historicalEndDate)
     }
 }
 
 fileprivate extension NewGlucoseSample {
-    static func simulated(date: Date, quantity: HKQuantity, trend: GlucoseTrend?, trendRate: HKQuantity?) -> NewGlucoseSample {
+    static func simulated(date: Date, quantity: LoopQuantity, trend: GlucoseTrend?, trendRate: LoopQuantity?) -> NewGlucoseSample {
         return NewGlucoseSample(date: date,
                                 quantity: quantity,
                                 condition: nil,

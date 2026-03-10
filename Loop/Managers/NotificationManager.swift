@@ -11,14 +11,7 @@ import UserNotifications
 import LoopKit
 import LoopCore
 
-enum NotificationManager {
-
-    enum Action: String {
-        case retryBolus
-        case acknowledgeAlert
-    }
-}
-
+@MainActor
 extension NotificationManager {
     private static var notificationCategories: Set<UNNotificationCategory> {
         var categories = [UNNotificationCategory]()
@@ -39,7 +32,7 @@ extension NotificationManager {
         let acknowledgeAlertAction = UNNotificationAction(
             identifier: Action.acknowledgeAlert.rawValue,
             title: NSLocalizedString("OK", comment: "The title of the notification action to acknowledge a device alert"),
-            options: .foreground
+            options: []
         )
         
         categories.append(UNNotificationCategory(
@@ -48,6 +41,26 @@ extension NotificationManager {
             intentIdentifiers: [],
             options: .customDismissAction
         ))
+
+        let yesStartPresetAction = UNNotificationAction(
+            identifier: Action.startPreset.rawValue,
+            title: NSLocalizedString("Start Preset", comment: "The title of the notification action to start a preset"),
+            options: .foreground
+        )
+
+        let doNotStartPresetAction = UNNotificationAction(
+            identifier: Action.acknowledgeAlert.rawValue,
+            title: NSLocalizedString("Don't Start", comment: "The title of the notification action to not start a preset"),
+            options: []
+        )
+
+        categories.append(UNNotificationCategory(
+            identifier: LoopNotificationCategory.presetReminder.rawValue,
+            actions: [yesStartPresetAction, doNotStartPresetAction],
+            intentIdentifiers: [],
+            options: .customDismissAction
+        ))
+
 
         return Set(categories)
     }
@@ -73,13 +86,19 @@ extension NotificationManager {
                 }
             }
         }
+    }
+
+    static func setNotificationCategories() {
+        let center = UNUserNotificationCenter.current()
         center.setNotificationCategories(notificationCategories)
     }
-    
+
+
 
     // MARK: - Notifications
-    
-    static func sendBolusFailureNotification(for error: PumpManagerError, units: Double, at startDate: Date, activationType: BolusActivationType) {
+
+    @MainActor
+    static func sendBolusFailureNotification(for error: PumpManagerError, units: Double, at startDate: Date, decisionId: UUID?, activationType: BolusActivationType) async throws {
         let notification = UNMutableNotificationContent()
 
         notification.title = NSLocalizedString("Bolus Issue", comment: "The notification title for a bolus issue")
@@ -104,6 +123,10 @@ extension NotificationManager {
             LoopNotificationUserInfoKey.bolusStartDate.rawValue: startDate,
             LoopNotificationUserInfoKey.bolusActivationType.rawValue: activationType.rawValue
         ]
+        
+        if let decisionId {
+            notification.userInfo[LoopNotificationUserInfoKey.decisionId.rawValue] = decisionId.uuidString
+        }
 
         let request = UNNotificationRequest(
             // Only support 1 bolus notification at once
@@ -112,13 +135,12 @@ extension NotificationManager {
             trigger: nil
         )
 
-        UNUserNotificationCenter.current().add(request)
+        try await UNUserNotificationCenter.current().add(request)
     }
     
-    @MainActor
     static func sendRemoteBolusNotification(amount: Double) {
         let notification = UNMutableNotificationContent()
-        let quantityFormatter = QuantityFormatter(for: .internationalUnit())
+        let quantityFormatter = QuantityFormatter(for: .internationalUnit)
         guard let amountDescription = quantityFormatter.numberFormatter.string(from: amount) else {
             return
         }
@@ -138,10 +160,9 @@ extension NotificationManager {
         UNUserNotificationCenter.current().add(request)
     }
     
-    @MainActor
     static func sendRemoteBolusFailureNotification(for error: Error, amountInUnits: Double) {
         let notification = UNMutableNotificationContent()
-        let quantityFormatter = QuantityFormatter(for: .internationalUnit())
+        let quantityFormatter = QuantityFormatter(for: .internationalUnit)
         guard let amountDescription = quantityFormatter.numberFormatter.string(from: amountInUnits) else {
             return
         }
@@ -159,7 +180,6 @@ extension NotificationManager {
         UNUserNotificationCenter.current().add(request)
     }
     
-    @MainActor
     static func sendRemoteCarbEntryNotification(amountInGrams: Double) {
         let notification = UNMutableNotificationContent()
 
@@ -180,7 +200,6 @@ extension NotificationManager {
         UNUserNotificationCenter.current().add(request)
     }
     
-    @MainActor
     static func sendRemoteCarbEntryFailureNotification(for error: Error, amountInGrams: Double) {
         let notification = UNMutableNotificationContent()
         

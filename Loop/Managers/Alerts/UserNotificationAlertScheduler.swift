@@ -8,6 +8,7 @@
 
 import LoopKit
 import UIKit
+import AudioToolbox
 
 public protocol UserNotificationCenter {
     func add(_ request: UNNotificationRequest, withCompletionHandler: ((Error?) -> Void)?)
@@ -33,7 +34,11 @@ public class UserNotificationAlertScheduler {
 
     func scheduleAlert(_ alert: Alert, timestamp: Date, muted: Bool = false) {
         DispatchQueue.main.async {
-            let request = UNNotificationRequest(from: alert, timestamp: timestamp, muted: muted)
+            let content = alert.getUserNotificationContent(timestamp: timestamp, muted: muted)
+            let request = UNNotificationRequest(identifier: alert.identifier.value,
+                      content: content,
+                      trigger: UNTimeIntervalNotificationTrigger(from: alert.trigger))
+
             self.userNotificationCenter.add(request) { error in
                 if let error = error {
                     self.log.error("Something went wrong posting the user notification: %@", error.localizedDescription)
@@ -49,10 +54,8 @@ public class UserNotificationAlertScheduler {
             self.userNotificationCenter.removeDeliveredNotifications(withIdentifiers: [identifier.value])
         }
     }
-}
 
-extension UserNotificationAlertScheduler: AlertManagerResponder {
-    func acknowledgeAlert(identifier: Alert.Identifier) {
+    func alertWasAcknowledged(identifier: Alert.Identifier) {
         DispatchQueue.main.async {
             self.log.debug("Removing notification %@ from delivered notifications", identifier.value)
             self.userNotificationCenter.removeDeliveredNotifications(withIdentifiers: [identifier.value])
@@ -69,13 +72,20 @@ fileprivate extension Alert {
         if #available(iOS 15.0, *) {
             userNotificationContent.interruptionLevel = interruptionLevel.userNotificationInterruptLevel
         }
-        // TODO: Once we have a final design and approval for custom UserNotification buttons, we'll need to set categoryIdentifier
-//        userNotificationContent.categoryIdentifier = LoopNotificationCategory.alert.rawValue
+        userNotificationContent.categoryIdentifier = categoryIdentifier ?? ""
         userNotificationContent.threadIdentifier = identifier.value // Used to match categoryIdentifier, but I /think/ we want multiple threads for multiple alert types, no?
         userNotificationContent.userInfo = [
             LoopNotificationUserInfoKey.managerIDForAlert.rawValue: identifier.managerIdentifier,
             LoopNotificationUserInfoKey.alertTypeID.rawValue: identifier.alertIdentifier,
         ]
+
+        if let metadata {
+            for (key, value) in metadata {
+                guard let value = value.wrapped as? String else { continue }
+                userNotificationContent.userInfo[key] = value
+            }
+        }
+    
         return userNotificationContent
     }
     
@@ -84,8 +94,12 @@ fileprivate extension Alert {
         
         switch sound {
         case .vibrate:
+            guard interruptionLevel == .critical else {
+                AudioServicesPlayAlertSound(kSystemSoundID_Vibrate)
+                return nil
+            }
             // setting the audio volume of critical alert to 0 only vibrates
-            return interruptionLevel == .critical ? .defaultCriticalSound(withAudioVolume: 0) : nil
+            return .defaultCriticalSound(withAudioVolume: 0)
         default:
             if let actualFileName = AlertManager.soundURL(for: self)?.lastPathComponent {
                 let unname = UNNotificationSoundName(rawValue: actualFileName)
@@ -108,15 +122,6 @@ fileprivate extension Alert.InterruptionLevel {
         case .active:
             return .active
         }
-    }
-}
-
-fileprivate extension UNNotificationRequest {
-    convenience init(from alert: Alert, timestamp: Date, muted: Bool) {
-        let content = alert.getUserNotificationContent(timestamp: timestamp, muted: muted)
-        self.init(identifier: alert.identifier.value,
-                  content: content,
-                  trigger: UNTimeIntervalNotificationTrigger(from: alert.trigger))
     }
 }
 

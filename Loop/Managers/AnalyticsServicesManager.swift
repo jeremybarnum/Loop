@@ -9,7 +9,7 @@
 import Foundation
 import LoopKit
 import LoopCore
-import HealthKit
+import LoopAlgorithm
 
 final class AnalyticsServicesManager {
 
@@ -143,10 +143,6 @@ final class AnalyticsServicesManager {
             logEvent("Therapy schedule time zone change")
         }
 
-        if newValue.scheduleOverride != oldValue.scheduleOverride {
-            logEvent("Temporary schedule override change")
-        }
-
         if newValue.glucoseTargetRangeSchedule != oldValue.glucoseTargetRangeSchedule {
             logEvent("Glucose target range change")
         }
@@ -170,8 +166,8 @@ final class AnalyticsServicesManager {
         logEvent("CGM Added", withProperties: ["identifier" : identifier])
     }
 
-    func didAddCarbs(source: String, amount: Double, inSession: Bool = false) {
-        logEvent("Carb entry created", withProperties: ["source" : source, "amount": "\(amount)"], outOfSession: inSession)
+    func didAddCarbs(source: String, amount: Double, isFavoriteFood: Bool = false, inSession: Bool = false) {
+        logEvent("Carb entry created", withProperties: ["source" : source, "amount": "\(amount)", "isFavoriteFood": isFavoriteFood], outOfSession: inSession)
     }
 
     func didRetryBolus() {
@@ -206,7 +202,7 @@ final class AnalyticsServicesManager {
         logEvent("Alert Issued", withProperties: ["identifier": identifier, "interruptionLevel": interruptionLevel.rawValue])
     }
 
-    func didEnactOverride(name: String, symbol: String, duration: TemporaryScheduleOverride.Duration, insulinSensitivityMultiplier: Double = 1.0, targetRange: ClosedRange<HKQuantity>? = nil)
+    func didEnactOverride(name: String, symbol: String, duration: TemporaryScheduleOverride.Duration, insulinSensitivityMultiplier: Double = 1.0, targetRange: ClosedRange<LoopQuantity>? = nil)
     {
         let combinedName = "\(symbol) - \(name)"
 
@@ -217,10 +213,10 @@ final class AnalyticsServicesManager {
             "nameWithEmoji": combinedName
         ]
 
-        if let targetUpperBound = targetRange?.upperBound.doubleValue(for: HKUnit.milligramsPerDeciliter) {
+        if let targetUpperBound = targetRange?.upperBound.doubleValue(for: LoopUnit.milligramsPerDeciliter) {
             properties["targetUpperBound"] = targetUpperBound
         }
-        if let targetLowerBound = targetRange?.lowerBound.doubleValue(for: HKUnit.milligramsPerDeciliter) {
+        if let targetLowerBound = targetRange?.lowerBound.doubleValue(for: LoopUnit.milligramsPerDeciliter) {
             properties["targetLowerBound"] = targetLowerBound
         }
 
@@ -238,25 +234,30 @@ final class AnalyticsServicesManager {
 extension AnalyticsServicesManager: PresetActivationObserver {
     func presetActivated(context: TemporaryScheduleOverride.Context, duration: TemporaryScheduleOverride.Duration) {
         switch context {
-        case .legacyWorkout:
-            didEnactOverride(name: "workout", symbol: "", duration: duration)
         case .preMeal:
             didEnactOverride(name: "preMeal", symbol: "", duration: duration)
         case .custom:
             didEnactOverride(name: "custom", symbol: "", duration: duration)
         case .preset(let preset):
-            didEnactOverride(name: preset.name, symbol: preset.symbol, duration: duration, insulinSensitivityMultiplier: preset.settings.effectiveInsulinNeedsScaleFactor, targetRange: preset.settings.targetRange)
+            didEnactOverride(
+                name: preset.name,
+                symbol: preset.symbol?.textualRepresentation ?? "",
+                duration: duration,
+                insulinSensitivityMultiplier: preset.settings.effectiveInsulinNeedsScaleFactor,
+                targetRange: preset.settings.targetRange
+            )
+        case .activity(let activity):
+            didEnactOverride(
+                name: activity.activityType.name,
+                symbol: activity.preset.symbol?.textualRepresentation ?? "",
+                duration: activity.preset.duration,
+                insulinSensitivityMultiplier: activity.preset.settings.effectiveInsulinNeedsScaleFactor,
+                targetRange: activity.preset.settings.targetRange
+            )
         }
     }
 
-    func presetDeactivated(context: TemporaryScheduleOverride.Context) {
-        switch context {
-        case .legacyWorkout:
-            break
-        default:
-            break
-        }
-    }
+    func presetDeactivated(context: TemporaryScheduleOverride.Context) {}
 }
 
 extension AutomaticDosingStrategy {

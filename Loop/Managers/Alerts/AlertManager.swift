@@ -12,7 +12,9 @@ import Combine
 
 protocol AlertManagerResponder: AnyObject {
     /// Method for our Handlers to call to kick off alert response.  Differs from AlertResponder because here we need the whole `Identifier`.
-    func acknowledgeAlert(identifier: Alert.Identifier)
+    @MainActor
+    func acknowledgeAlert(identifier: Alert.Identifier) async throws
+    func userDidSelectAction(alertIdentifier: Alert.Identifier, actionIdentifier: String) async throws
 }
 
 public enum AlertUserNotificationUserInfoKey: String {
@@ -24,7 +26,9 @@ public enum AlertUserNotificationUserInfoKey: String {
 /// - managing the different responders that might acknowledge the alert
 /// - serializing alerts to storage
 /// - etc.
+@MainActor
 public final class AlertManager {
+    nonisolated
     private static let soundsDirectoryURL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).last!.appendingPathComponent("Sounds")
 
     private let log = DiagnosticLog(category: "AlertManager")
@@ -36,6 +40,7 @@ public final class AlertManager {
 
     // Defer issuance of new alerts until playback is done
     private var deferredAlerts: [Alert] = []
+    private var deferredRetractions: [Alert.Identifier] = []
     private var playbackFinished: Bool
 
     private let fileManager: FileManager
@@ -58,14 +63,14 @@ public final class AlertManager {
     var getCurrentDate = { return Date() }
     
     init(alertPresenter: AlertPresenter,
-                modalAlertScheduler: InAppModalAlertScheduler? = nil,
-                userNotificationAlertScheduler: UserNotificationAlertScheduler,
-                fileManager: FileManager = FileManager.default,
-                alertStore: AlertStore? = nil,
-                expireAfter: TimeInterval = 24 /* hours */ * 60 /* minutes */ * 60 /* seconds */,
-                bluetoothProvider: BluetoothProvider,
-                analyticsServicesManager: AnalyticsServicesManager,
-                preventIssuanceBeforePlayback: Bool = true
+         modalAlertScheduler: InAppModalAlertScheduler? = nil,
+         userNotificationAlertScheduler: UserNotificationAlertScheduler,
+         fileManager: FileManager = FileManager.default,
+         alertStore: AlertStore? = nil,
+         expireAfter: TimeInterval = 24 /* hours */ * 60 /* minutes */ * 60 /* seconds */,
+         bluetoothProvider: BluetoothProvider,
+         analyticsServicesManager: AnalyticsServicesManager,
+         preventIssuanceBeforePlayback: Bool = true
     ) {
         self.fileManager = fileManager
         self.analyticsServicesManager = analyticsServicesManager
@@ -88,10 +93,12 @@ public final class AlertManager {
 
         bluetoothProvider.addBluetoothObserver(self, queue: .main)
 
-        NotificationCenter.default.publisher(for: .LoopCompleted)
+        NotificationCenter.default.publisher(for: .LoopCycleCompleted)
             .sink { [weak self] publisher in
                 if let loopDataManager = publisher.object as? LoopDataManager {
-                    self?.loopDidComplete(loopDataManager.lastLoopCompleted)
+                    Task { @MainActor in
+                        await self?.loopDidComplete(loopDataManager.lastLoopCompleted)
+                    }
                 }
             }
             .store(in: &cancellables)
@@ -130,12 +137,16 @@ public final class AlertManager {
         let content = Alert.Content(title: title,
                                       body: body,
                                       acknowledgeActionButtonLabel: NSLocalizedString("Dismiss", comment: "Default alert dismissal"))
-        issueAlert(Alert(identifier: bluetoothPoweredOffIdentifier, foregroundContent: content, backgroundContent: content, trigger: .immediate))
+        Task {
+            await issueAlert(Alert(identifier: bluetoothPoweredOffIdentifier, foregroundContent: content, backgroundContent: content, trigger: .immediate))
+        }
     }
 
     private func onBluetoothPoweredOn() {
         log.default("Bluetooth powered on")
-        retractAlert(identifier: bluetoothPoweredOffIdentifier)
+        Task {
+            await retractAlert(identifier: bluetoothPoweredOffIdentifier)
+        }
     }
 
     private func onBluetoothPoweredOff() {
@@ -149,31 +160,35 @@ public final class AlertManager {
         let fgcontent = Alert.Content(title: title,
                                       body: fgBody,
                                       acknowledgeActionButtonLabel: NSLocalizedString("Dismiss", comment: "Default alert dismissal"))
-        issueAlert(Alert(identifier: bluetoothPoweredOffIdentifier,
-                         foregroundContent: fgcontent,
-                         backgroundContent: bgcontent,
-                         trigger: .immediate,
-                         interruptionLevel: .critical))
+        Task {
+            await issueAlert(Alert(identifier: bluetoothPoweredOffIdentifier,
+                             foregroundContent: fgcontent,
+                             backgroundContent: bgcontent,
+                             trigger: .immediate,
+                             interruptionLevel: .critical))
+        }
     }
 
     // MARK: - Loop Not Running alerts
 
-    func loopDidComplete(_ lastLoopDate: Date? = nil) {
+    func loopDidComplete(_ lastLoopDate: Date? = nil) async {
         // use now if there is no lastLoopDate
-        rescheduleLoopNotRunningNotifications(lastLoopDate ?? Date())
+        await rescheduleLoopNotRunningNotifications(lastLoopDate ?? Date())
     }
 
     private func rescheduleLoopNotRunningNotifications() {
-        guard let lastLoopDate = getLastLoopDate() else { return }
-        rescheduleLoopNotRunningNotifications(lastLoopDate)
+        Task {
+            guard let lastLoopDate = getLastLoopDate() else { return }
+            await rescheduleLoopNotRunningNotifications(lastLoopDate)
+        }
     }
 
-    func rescheduleLoopNotRunningNotifications(_ lastLoopDate: Date) {
-        clearLoopNotRunningNotifications()
-        scheduleLoopNotRunningNotifications(lastLoopDate)
+    func rescheduleLoopNotRunningNotifications(_ lastLoopDate: Date) async {
+        await clearLoopNotRunningNotifications()
+        await scheduleLoopNotRunningNotifications(lastLoopDate)
     }
 
-    func scheduleLoopNotRunningNotifications(_ lastLoopDate: Date) {
+    func scheduleLoopNotRunningNotifications(_ lastLoopDate: Date) async {
         // Give a little extra time for a loop-in-progress to complete
         let gracePeriod = TimeInterval(minutes: 0.5)
 
@@ -230,12 +245,16 @@ public final class AlertManager {
                     isCritical: isCritical)
                 scheduledNotifications.append(scheduledNotification)
             }
-            UNUserNotificationCenter.current().add(request)
+            do {
+                try await UNUserNotificationCenter.current().add(request)
+            } catch {
+                self.log.error("Error scheduling loop not running notification %{public}@", String(describing: error))
+            }
         }
         UserDefaults.appGroup?.loopNotRunningNotifications = scheduledNotifications
     }
 
-    func inferDeliveredLoopNotRunningNotifications() {
+    func inferDeliveredLoopNotRunningNotifications() async {
         // Infer that any past alerts have been delivered at this point
         let now = getCurrentDate()
         var stillPendingNotifications = [StoredLoopNotRunningNotification]()
@@ -245,7 +264,7 @@ public final class AlertManager {
                 let content = Alert.Content(title: notification.title, body: notification.body, acknowledgeActionButtonLabel: "ios-notification-default")
                 let interruptionLevel: Alert.InterruptionLevel = notification.isCritical ? .critical : .timeSensitive
                 let alert = Alert(identifier: alertIdentifier, foregroundContent: nil, backgroundContent: content, trigger: .immediate, interruptionLevel: interruptionLevel)
-                recordIssued(alert: alert, at: notification.alertAt)
+                await recordIssued(alert: alert, at: notification.alertAt)
             } else {
                 stillPendingNotifications.append(notification)
             }
@@ -253,48 +272,22 @@ public final class AlertManager {
         UserDefaults.appGroup?.loopNotRunningNotifications = stillPendingNotifications
     }
 
-    func clearLoopNotRunningNotifications() {
-        inferDeliveredLoopNotRunningNotifications()
+    func clearLoopNotRunningNotifications() async {
+        await inferDeliveredLoopNotRunningNotifications()
 
         // Clear out any existing not-running notifications
-        UNUserNotificationCenter.current().getDeliveredNotifications { (notifications) in
-            let loopNotRunningIdentifiers = notifications.filter({
-                $0.request.content.categoryIdentifier == LoopNotificationCategory.loopNotRunning.rawValue
-            }).map({
-                $0.request.identifier
-            })
+        let notifications = await UNUserNotificationCenter.current().deliveredNotifications()
+        let loopNotRunningIdentifiers = notifications.filter({
+            $0.request.content.categoryIdentifier == LoopNotificationCategory.loopNotRunning.rawValue
+        }).map({
+            $0.request.identifier
+        })
 
-            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: loopNotRunningIdentifiers)
-        }
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: loopNotRunningIdentifiers)
     }
 
     private func getLastLoopDate() -> Date? {
         ExtensionDataManager.lastLoopCompleted
-    }
-
-    // MARK: - Workout reminder
-    private func scheduleWorkoutOverrideReminder() {
-        issueAlert(workoutOverrideReminderAlert)
-    }
-
-    private func retractWorkoutOverrideReminder() {
-        retractAlert(identifier: AlertManager.workoutOverrideReminderAlertIdentifier)
-    }
-
-    static var workoutOverrideReminderAlertIdentifier: Alert.Identifier {
-        return Alert.Identifier(managerIdentifier: managerIdentifier, alertIdentifier: "WorkoutOverrideReminder")
-    }
-
-    private var workoutOverrideReminderAlert: Alert {
-        let title = NSLocalizedString("Workout Temp Adjust Still On", comment: "Workout override still on reminder alert title")
-        let body = NSLocalizedString("Workout Temp Adjust has been turned on for more than 24 hours. Make sure you still want it enabled, or turn it off in the app.", comment: "Workout override still on reminder alert body.")
-        let content = Alert.Content(title: title,
-                                    body: body,
-                                    acknowledgeActionButtonLabel: NSLocalizedString("Dismiss", comment: "Default alert dismissal"))
-        return Alert(identifier: AlertManager.workoutOverrideReminderAlertIdentifier,
-                     foregroundContent: content,
-                     backgroundContent: content,
-                     trigger: .delayed(interval: .hours(24)))
     }
 
     // MARK: - Rescheduling Muted Alerts
@@ -303,52 +296,74 @@ public final class AlertManager {
         UserDefaults.standard.alertMuterConfiguration = newValue
         rescheduleLoopNotRunningNotifications()
 
-        lookupAllPendingDelayedOrRepeatingAlerts() { [weak self] result in
-            switch result {
-            case .success(let persistedAlerts):
+        Task {
+            do {
+                let persistedAlerts = try await lookupAllPendingDelayedOrRepeatingAlerts()
                 for persistedAlert in persistedAlerts {
-                    self?.rescheduleAlertWithSchedulers(persistedAlert.alert, issuedDate: persistedAlert.issuedDate)
+                    await self.rescheduleAlertWithSchedulers(persistedAlert.alert, issuedDate: persistedAlert.issuedDate)
                 }
-            case .failure(let error):
-                self?.log.error("error looking up all delayed or repeating alerts: %{public}@", String(describing: error))
+            } catch {
+                self.log.error("error looking up all delayed or repeating alerts: %{public}@", String(describing: error))
             }
         }
     }
+
 }
 
 // MARK: AlertManagerResponder implementation
 
 extension AlertManager: AlertManagerResponder {
-    func acknowledgeAlert(identifier: Alert.Identifier) {
-        if let responder = responders[identifier.managerIdentifier]?.value {
-            responder.acknowledgeAlert(alertIdentifier: identifier.alertIdentifier) { (error) in
-                if let error = error {
-                    self.presentAcknowledgementFailedAlert(error: error)
+    func userDidSelectAction(alertIdentifier: Alert.Identifier, actionIdentifier: String) async throws {
+        if let responder = responders[alertIdentifier.managerIdentifier]?.value {
+            do {
+                let storedAlert = try await alertStore.lookupAllMatching(identifier: alertIdentifier, limit: 1).first
+
+                if let storedAlert,
+                   let alert = try? Alert(from: storedAlert, adjustedForStorageTime: false)
+                {
+                    try await responder.handleAlertAction(actionIdentifier: actionIdentifier, from: alert)
+                } else {
+                    log.error("Unable to get preset name from stored alert: %{public}@", String(describing: storedAlert))
                 }
+            } catch {
+                log.error("Unable to fetch alert for preset action: %{public}@, ${public}@", String(describing: alertIdentifier), String(describing: error))
             }
         }
-        userNotificationAlertScheduler.acknowledgeAlert(identifier: identifier)
-        alertStore.recordAcknowledgement(of: identifier)
+
+        try await acknowledgeAlert(identifier: alertIdentifier);
     }
     
-    func presentAcknowledgementFailedAlert(error: Error) {
-        DispatchQueue.main.async {
-            let message: String
-            if let localizedError = error as? LocalizedError {
-                message = [localizedError.localizedDescription, localizedError.recoverySuggestion].compactMap({$0}).joined(separator: "\n\n")
-            } else {
-                message = String(format: NSLocalizedString("%1$@ is unable to clear the alert from your device", comment: "Message for alert shown when alert acknowledgement fails for a device, and the device does not provide a LocalizedError. (1: app name)"), Bundle.main.bundleDisplayName)
+    func acknowledgeAlert(identifier: Alert.Identifier) async throws {
+        self.log.default("acknowledgeAlert called for identifier %{public}@", String(describing: identifier))
+        if let responder = responders[identifier.managerIdentifier]?.value {
+            do {
+                try await responder.acknowledgeAlert(alertIdentifier: identifier.alertIdentifier)
+            } catch {
+                await self.presentAcknowledgementFailedAlert(error: error)
             }
-            self.log.info("Alert acknowledgement failed: %{public}@", message)
-
-            let alert = UIAlertController(
-                title: NSLocalizedString("Unable To Clear Alert", comment: "Title for alert shown when alert acknowledgement fails"),
-                message: message,
-                preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: NSLocalizedString("OK", comment: "Default action for alert when alert acknowledgment fails"), style: .default))
-            
-            self.alertPresenter.present(alert, animated: true)
         }
+        userNotificationAlertScheduler.alertWasAcknowledged(identifier: identifier)
+        await modalAlertScheduler.removePresentedAlert(identifier: identifier)
+        try await alertStore.recordAcknowledgement(of: identifier)
+    }
+
+
+    func presentAcknowledgementFailedAlert(error: Error) async {
+        let message: String
+        if let localizedError = error as? LocalizedError {
+            message = [localizedError.localizedDescription, localizedError.recoverySuggestion].compactMap({$0}).joined(separator: "\n\n")
+        } else {
+            message = String(format: NSLocalizedString("%1$@ is unable to clear the alert from your device", comment: "Message for alert shown when alert acknowledgement fails for a device, and the device does not provide a LocalizedError. (1: app name)"), Bundle.main.bundleDisplayName)
+        }
+        self.log.info("Alert acknowledgement failed: %{public}@", message)
+
+        let alert = UIAlertController(
+            title: NSLocalizedString("Unable To Clear Alert", comment: "Title for alert shown when alert acknowledgement fails"),
+            message: message,
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: NSLocalizedString("OK", comment: "Default action for alert when alert acknowledgment fails"), style: .default))
+
+        await self.alertPresenter.present(alert, animated: true)
     }
 }
 
@@ -356,30 +371,36 @@ extension AlertManager: AlertManagerResponder {
 
 extension AlertManager: AlertIssuer {
 
-    public func issueAlert(_ alert: Alert) {
+    public func issueAlert(_ alert: Alert) async {
         guard playbackFinished else {
             deferredAlerts.append(alert)
             return
         }
         analyticsServicesManager.didIssueAlert(identifier: alert.identifier.value, interruptionLevel: alert.interruptionLevel)
         scheduleAlertWithSchedulers(alert)
-        alertStore.recordIssued(alert: alert)
+        await alertStore.recordIssued(alert: alert)
     }
 
-    public func retractAlert(identifier: Alert.Identifier) {
-        unscheduleAlertWithSchedulers(identifier: identifier)
-        alertStore.recordRetraction(of: identifier)
+    public func retractAlert(identifier: Alert.Identifier) async {
+        log.default("retractAlert: %{public}@", String(describing: identifier))
+        guard playbackFinished else {
+            deferredRetractions.append(identifier)
+            return
+        }
+        await unscheduleAlertWithSchedulers(identifier: identifier)
+        do {
+            try await alertStore.recordRetraction(of: identifier)
+        } catch {
+            log.error("Unable to recordRetraction of %@: %@", String(describing: identifier), String(describing: error))
+        }
     }
 
     private func replayAlert(_ alert: Alert) {
-        guard alert.identifier != AlertPermissionsChecker.unsafeNotificationPermissionsAlertIdentifier else {
-            // this alert does not replay through the alert system, since it provides a button to navigate to settings
-            presentUnsafeNotificationPermissionsInAppAlert()
-            return
-        }
 
-        // Only alerts with foreground content are replayed
-        if alert.foregroundContent != nil {
+        if let unsafeNotificationPermissionsAlert = AlertPermissionsChecker.UnsafeNotificationPermissionAlert.allCases.first(where: { $0.alertIdentifier == alert.identifier }) {
+            presentUnsafeNotificationPermissionsInAppAlert(unsafeNotificationPermissionsAlert)
+        } else if alert.foregroundContent != nil {
+            log.default("Scheduling modal alert during replay: %{public}@", String(describing: alert))
             modalAlertScheduler.scheduleAlert(alert)
         }
     }
@@ -389,13 +410,13 @@ extension AlertManager: AlertIssuer {
         userNotificationAlertScheduler.scheduleAlert(alert, muted: alertMuter.shouldMuteAlert(alert, issuedDate: issuedDate))
     }
 
-    private func unscheduleAlertWithSchedulers(identifier: Alert.Identifier) {
-        modalAlertScheduler.unscheduleAlert(identifier: identifier)
+    private func unscheduleAlertWithSchedulers(identifier: Alert.Identifier) async {
+        await modalAlertScheduler.unscheduleAlert(identifier: identifier)
         userNotificationAlertScheduler.unscheduleAlert(identifier: identifier)
     }
 
-    private func rescheduleAlertWithSchedulers(_ alert: Alert, issuedDate: Date) {
-        unscheduleAlertWithSchedulers(identifier: alert.identifier)
+    private func rescheduleAlertWithSchedulers(_ alert: Alert, issuedDate: Date) async {
+        await unscheduleAlertWithSchedulers(identifier: alert.identifier)
         scheduleAlertWithSchedulers(alert, issuedDate: issuedDate)
     }
 }
@@ -404,10 +425,12 @@ extension AlertManager: AlertIssuer {
 
 extension AlertManager {
 
+    nonisolated
     public static func soundURL(for alert: Alert) -> URL? {
         return soundURL(managerIdentifier: alert.identifier.managerIdentifier, sound: alert.sound)
     }
 
+    nonisolated
     private static func soundURL(managerIdentifier: String, sound: Alert.Sound?) -> URL? {
         guard let soundFileName = sound?.filename else { return nil }
 
@@ -439,192 +462,148 @@ extension AlertManager {
 
 extension AlertManager {
 
-    func playbackAlertsFromPersistence() {
-        playbackAlertsFromAlertStore()
+    func playbackAlertsFromPersistence() async {
+        guard !playbackFinished else { return }
+        await playbackAlertsFromAlertStore()
     }
 
-    private func playbackAlertsFromAlertStore() {
-        let updateGroup = DispatchGroup()
-        updateGroup.enter()
-        alertStore.lookupAllUnacknowledgedUnretracted {
-            switch $0 {
-            case .failure(let error):
-                self.log.error("Could not fetch unacknowledged alerts: %@", error.localizedDescription)
-            case .success(let alerts):
-                alerts.forEach { alert in
-                    do {
-                        if let alert = try Alert(from: alert, adjustedForStorageTime: true) {
-                            self.replayAlert(alert)
-                        }
-                    } catch {
-                        self.log.error("Error decoding alert from persistent storage: %@", error.localizedDescription)
+    private func playbackAlertsFromAlertStore() async {
+        do {
+            let alerts = try await alertStore.lookupAllUnacknowledgedUnretracted()
+            alerts.forEach { alert in
+                do {
+                    if let alert = try Alert(from: alert, adjustedForStorageTime: true) {
+                        self.replayAlert(alert)
                     }
+                } catch {
+                    self.log.error("Error decoding alert from persistent storage: %@", error.localizedDescription)
                 }
             }
-            updateGroup.leave()
+        } catch {
+            self.log.error("Could not fetch unacknowledged alerts: %@", error.localizedDescription)
         }
-        updateGroup.enter()
-        alertStore.lookupAllAcknowledgedUnretractedRepeatingAlerts {
-            switch $0 {
-            case .failure(let error):
-                self.log.error("Could not fetch acknowledged unretracted repeating alerts: %@", error.localizedDescription)
-            case .success(let alerts):
-                alerts.forEach { alert in
-                    do {
-                        if let alert = try Alert(from: alert, adjustedForStorageTime: true) {
-                            self.replayAlert(alert)
-                        }
-                    } catch {
-                        self.log.error("Error decoding alert from persistent storage: %@", error.localizedDescription)
+        do {
+            let alerts = try await alertStore.lookupAllAcknowledgedUnretractedRepeatingAlerts()
+            alerts.forEach { alert in
+                do {
+                    if let alert = try Alert(from: alert, adjustedForStorageTime: true) {
+                        self.replayAlert(alert)
                     }
+                } catch {
+                    self.log.error("Error decoding alert from persistent storage: %@", error.localizedDescription)
                 }
             }
-            updateGroup.leave()
+        } catch {
+            self.log.error("Could not fetch acknowledged unretracted repeating alerts: %@", error.localizedDescription)
         }
-        updateGroup.notify(queue: .main) {
-            self.playbackFinished = true
+        self.playbackFinished = true
+        Task { @MainActor in
             for alert in self.deferredAlerts {
-                self.issueAlert(alert)
+                await self.issueAlert(alert)
+            }
+            for identifier in self.deferredRetractions {
+                await self.retractAlert(identifier: identifier)
             }
         }
     }
-
 }
 
 // MARK: Alert storage access
 extension AlertManager {
 
-    func getStoredEntries(startDate: Date, completion: @escaping (_ report: String) -> Void) {
-        alertStore.executeQuery(since: startDate, limit: 100) { result in
-            switch result {
-            case .failure(let error):
-                completion("Error: \(error)")
-            case .success(_, let objects):
-                let encoder = JSONEncoder()
-                let report = "## Alerts\n" + objects.map { object in
-                    return """
-                    **\(object.title ?? "??")**
+    func generateDiagnosticReport() async -> String {
+        let startDate = Date() - .days(3.5) // Report the last 3 and half days of alerts
+        let header = "## Alerts\n"
+        do {
+            let (_, objects) = try await alertStore.executeQuery(since: startDate, limit: 100, ascending: false)
+            let encoder = JSONEncoder()
+            let report = header + objects.map { object in
+                return """
+                **\(object.title ?? "??")**
 
-                    * identifier: \(object.identifier.value)
-                    * issued: \(object.issuedDate)
-                    * acknowledged: \(object.acknowledgedDate?.description ?? "n/a")
-                    * retracted: \(object.retractedDate?.description ?? "n/a")
-                    * trigger: \(object.trigger)
-                    * interruptionLevel: \(object.interruptionLevel)
-                    * foregroundContent: \((try? encoder.encodeToStringIfPresent(object.foregroundContent)) ?? "n/a")
-                    * backgroundContent: \((try? encoder.encodeToStringIfPresent(object.backgroundContent)) ?? "n/a")
-                    * sound: \((try? encoder.encodeToStringIfPresent(object.sound)) ?? "n/a")
-                    * metadata: \((try? encoder.encodeToStringIfPresent(object.metadata)) ?? "n/a")
+                * identifier: \(object.identifier.value)
+                * issued: \(object.issuedDate)
+                * acknowledged: \(object.acknowledgedDate?.description ?? "n/a")
+                * retracted: \(object.retractedDate?.description ?? "n/a")
+                * trigger: \(object.trigger)
+                * interruptionLevel: \(object.interruptionLevel)
+                * foregroundContent: \((try? encoder.encodeToStringIfPresent(object.foregroundContent)) ?? "n/a")
+                * backgroundContent: \((try? encoder.encodeToStringIfPresent(object.backgroundContent)) ?? "n/a")
+                * sound: \((try? encoder.encodeToStringIfPresent(object.sound)) ?? "n/a")
+                * metadata: \((try? encoder.encodeToStringIfPresent(object.metadata)) ?? "n/a")
 
-                    """
-                }.joined(separator: "\n")
-                completion(report)
-            }
+                """
+            }.joined(separator: "\n")
+            return report
+        } catch {
+            return header
         }
     }
 }
 
 // MARK: PersistedAlertStore
 extension AlertManager: PersistedAlertStore {
-    public func doesIssuedAlertExist(identifier: Alert.Identifier, completion: @escaping (Result<Bool, Error>) -> Void) {
-        alertStore.lookupAllMatching(identifier: identifier) { result in
-            switch result {
-            case .success(let storedAlerts):
-                completion(.success(!storedAlerts.isEmpty))
-            case .failure(let error):
-                completion(.failure(error))
+    public func doesIssuedAlertExist(identifier: LoopKit.Alert.Identifier) async throws -> Bool {
+        let storedAlerts = try await alertStore.lookupAllMatching(identifier: identifier)
+        return !storedAlerts.isEmpty
+    }
+    
+    public func lookupAllUnretracted(managerIdentifier: String) async throws -> [LoopKit.PersistedAlert] {
+        let alerts = try await alertStore.lookupAllUnretracted(managerIdentifier: managerIdentifier)
+        return try alerts.compactMap {
+            if let alert = try Alert(from: $0, adjustedForStorageTime: false) {
+                return PersistedAlert(
+                    alert: alert,
+                    issuedDate: $0.issuedDate,
+                    retractedDate: $0.retractedDate,
+                    acknowledgedDate: $0.acknowledgedDate
+                )
+            } else {
+                return nil
             }
         }
     }
-
-    public func lookupAllUnretracted(managerIdentifier: String, completion: @escaping (Result<[PersistedAlert], Error>) -> Void) {
-        alertStore.lookupAllUnretracted(managerIdentifier: managerIdentifier) {
-            switch $0 {
-            case .success(let alerts):
-                do {
-                    let result = try alerts.compactMap {
-                        if let alert = try Alert(from: $0, adjustedForStorageTime: false) {
-                            return PersistedAlert(
-                                alert: alert,
-                                issuedDate: $0.issuedDate,
-                                retractedDate: $0.retractedDate,
-                                acknowledgedDate: $0.acknowledgedDate
-                            )
-                        } else {
-                            return nil
-                        }
-                    }
-                    completion(.success(result))
-                } catch {
-                    completion(.failure(error))
-                }
-            case .failure(let error):
-                completion(.failure(error))
+    
+    public func lookupAllUnacknowledgedUnretracted(managerIdentifier: String) async throws -> [LoopKit.PersistedAlert] {
+        let alerts = try await alertStore.lookupAllUnacknowledgedUnretracted(managerIdentifier: managerIdentifier)
+        let result = try alerts.compactMap {
+            if let alert = try Alert(from: $0, adjustedForStorageTime: false) {
+                return PersistedAlert(
+                    alert: alert,
+                    issuedDate: $0.issuedDate,
+                    retractedDate: $0.retractedDate,
+                    acknowledgedDate: $0.acknowledgedDate
+                )
+            } else {
+                return nil
             }
         }
+        return result
     }
 
-    public func lookupAllUnacknowledgedUnretracted(managerIdentifier: String, completion: @escaping (Result<[PersistedAlert], Error>) -> Void) {
-        alertStore.lookupAllUnacknowledgedUnretracted(managerIdentifier: managerIdentifier) {
-            switch $0 {
-            case .success(let alerts):
-                do {
-                    let result = try alerts.compactMap {
-                        if let alert = try Alert(from: $0, adjustedForStorageTime: false) {
-                            return PersistedAlert(
-                                alert: alert,
-                                issuedDate: $0.issuedDate,
-                                retractedDate: $0.retractedDate,
-                                acknowledgedDate: $0.acknowledgedDate
-                            )
-                        } else {
-                            return nil
-                        }
-                    }
-                    completion(.success(result))
-                } catch {
-                    completion(.failure(error))
-                }
-            case .failure(let error):
-                completion(.failure(error))
-            }
-        }
-    }
-
-    private func lookupAllPendingDelayedOrRepeatingAlerts(completion: @escaping (Result<[PersistedAlert], Error>) -> Void) {
+    private func lookupAllPendingDelayedOrRepeatingAlerts() async throws -> [PersistedAlert] {
         // the interval provided is not used in the search. Just the trigger stored type value
-        alertStore.lookupAllUnacknowledgedUnretracted(filteredByTriggers: [Alert.Trigger.delayed(interval: 0).storedType, Alert.Trigger.repeating(repeatInterval: 0).storedType]) {
-            switch $0 {
-            case .success(let alerts):
-                do {
-                    let result = try alerts.compactMap {
-                        if let alert = try Alert(from: $0, adjustedForStorageTime: false) {
-                            return PersistedAlert(
-                                alert: alert,
-                                issuedDate: $0.issuedDate,
-                                retractedDate: $0.retractedDate,
-                                acknowledgedDate: $0.acknowledgedDate
-                            )
-                        } else {
-                            return nil
-                        }
-                    }
-                    completion(.success(result))
-                } catch {
-                    completion(.failure(error))
-                }
-            case .failure(let error):
-                completion(.failure(error))
+        let alerts = try await alertStore.lookupAllUnacknowledgedUnretracted(filteredByTriggers: [Alert.Trigger.delayed(interval: 0).storedType, Alert.Trigger.repeating(repeatInterval: 0).storedType])
+        return try alerts.compactMap {
+            if let alert = try Alert(from: $0, adjustedForStorageTime: false) {
+                return PersistedAlert(
+                    alert: alert,
+                    issuedDate: $0.issuedDate,
+                    retractedDate: $0.retractedDate,
+                    acknowledgedDate: $0.acknowledgedDate
+                )
+            } else {
+                return nil
             }
         }
     }
 
-    public func recordRetractedAlert(_ alert: Alert, at date: Date) {
-        alertStore.recordRetractedAlert(alert, at: date)
+    public func recordRetractedAlert(_ alert: Alert, at date: Date) async throws {
+        try await alertStore.recordRetractedAlert(alert, at: date)
     }
 
-    private func recordIssued(alert: Alert, at date: Date = Date(), completion: ((Result<Void, Error>) -> Void)? = nil) {
-        alertStore.recordIssued(alert: alert, at: date, completion: completion)
+    private func recordIssued(alert: Alert, at date: Date = Date()) async {
+        await alertStore.recordIssued(alert: alert, at: date)
     }
 }
 
@@ -690,55 +669,58 @@ extension AlertManager: BluetoothObserver {
     }
 }
 
-
-// MARK: - PresetActivationObserver
-extension AlertManager: PresetActivationObserver {
-    func presetActivated(context: TemporaryScheduleOverride.Context, duration: TemporaryScheduleOverride.Duration) {
-        switch context {
-        case .legacyWorkout:
-            if duration == .indefinite {
-                scheduleWorkoutOverrideReminder()
-            }
-        default:
-            break
-        }
-    }
-
-    func presetDeactivated(context: TemporaryScheduleOverride.Context) {
-        switch context {
-        case .legacyWorkout:
-            retractWorkoutOverrideReminder()
-        default:
-            break
-        }
-    }
-}
-
 // MARK: - Issue/Retract Alert Permissions Warning
 extension AlertManager: AlertPermissionsCheckerDelegate {
-    func notificationsPermissions(requiresRiskMitigation: Bool, scheduledDeliveryEnabled: Bool) {
-        if !issueOrRetract(alert: AlertPermissionsChecker.unsafeNotificationPermissionsAlert,
-                           condition: requiresRiskMitigation,
-                           alreadyIssued: UserDefaults.standard.hasIssuedNotificationPermissionsAlert,
-                           setAlreadyIssued: { UserDefaults.standard.hasIssuedNotificationPermissionsAlert = $0 },
-                           issueHandler: { alert in
-            // in-app modal is presented with a button to navigate to settings
-            self.presentUnsafeNotificationPermissionsInAppAlert()
-            self.userNotificationAlertScheduler.scheduleAlert(alert, muted: self.alertMuter.shouldMuteAlert(alert))
-            self.recordIssued(alert: alert)
-        },
-                           retractionHandler: { alert in
-            // need to dismiss the in-app alert outside of the alert system
-            self.recordRetractedAlert(alert, at: Date())
-            self.dismissUnsafeNotificationPermissionsInAppAlert()
-        }) {
-            _ = issueOrRetract(alert: AlertPermissionsChecker.scheduledDeliveryEnabledAlert,
-                               condition: scheduledDeliveryEnabled,
-                               alreadyIssued: UserDefaults.standard.hasIssuedScheduledDeliveryEnabledAlert,
-                               setAlreadyIssued: { UserDefaults.standard.hasIssuedScheduledDeliveryEnabledAlert = $0 },
-                               issueHandler: { alert in self.issueAlert(alert) },
-                               retractionHandler: { alert in self.retractAlert(identifier: alert.identifier) })
+    func notificationsPermissions(requiresRiskMitigation: Bool, scheduledDeliveryEnabled: Bool, permissions: NotificationCenterSettingsFlags) {
+        guard let unsafeNotificationAlert = AlertPermissionsChecker.UnsafeNotificationPermissionAlert(permissions: permissions) else {
+            _ = issueOrRetract(
+                alert: AlertPermissionsChecker.scheduledDeliveryEnabledAlert,
+                condition: scheduledDeliveryEnabled,
+                alreadyIssued: UserDefaults.standard.hasIssuedScheduledDeliveryEnabledAlert,
+                setAlreadyIssued: {
+                    UserDefaults.standard.hasIssuedScheduledDeliveryEnabledAlert = $0
+                },
+                issueHandler: { alert in
+                    Task {
+                        await self.issueAlert(alert)
+                    }
+                },
+                retractionHandler: { alert in
+                    Task {
+                        await self.retractAlert(identifier: alert.identifier)
+                    }
+                }
+            )
+            
+            return
         }
+        
+        _ = issueOrRetract(
+            alert: unsafeNotificationAlert.alert,
+            condition: requiresRiskMitigation,
+            alreadyIssued: UserDefaults.standard.hasIssuedNotificationPermissionsAlert,
+            setAlreadyIssued: {
+                UserDefaults.standard.hasIssuedNotificationPermissionsAlert = $0
+            },
+            issueHandler: { alert in
+                // in-app modal is presented with a button to navigate to settings
+                self.presentUnsafeNotificationPermissionsInAppAlert(unsafeNotificationAlert)
+                self.userNotificationAlertScheduler.scheduleAlert(
+                    alert,
+                    muted: self.alertMuter.shouldMuteAlert(alert)
+                )
+                Task {
+                    await self.recordIssued(alert: alert)
+                }
+            },
+            retractionHandler: { alert in
+                // need to dismiss the in-app alert outside of the alert system
+                Task {
+                    try await self.recordRetractedAlert(alert, at: Date())
+                    await self.dismissUnsafeNotificationPermissionsInAppAlert()
+                }
+            }
+        )
     }
 
     private func issueOrRetract(alert: LoopKit.Alert,
@@ -763,28 +745,30 @@ extension AlertManager: AlertPermissionsCheckerDelegate {
         }
     }
 
-    private func presentUnsafeNotificationPermissionsInAppAlert() {
-        DispatchQueue.main.async {
-            let alertController = AlertPermissionsChecker.constructUnsafeNotificationPermissionsInAppAlert() { [weak self] in
-                self?.acknowledgeAlert(identifier: AlertPermissionsChecker.unsafeNotificationPermissionsAlertIdentifier)
+    private func presentUnsafeNotificationPermissionsInAppAlert(_ alert: AlertPermissionsChecker.UnsafeNotificationPermissionAlert) {
+        Task { @MainActor in
+            let alertController = AlertPermissionsChecker.constructUnsafeNotificationPermissionsInAppAlert(alert: alert) { [weak self] alert in
+                UserDefaults.standard.hasIssuedNotificationPermissionsAlert = false
+                Task {
+                    try await self?.acknowledgeAlert(identifier: alert.alertIdentifier)
+                }
             }
-            self.alertPresenter.present(alertController, animated: true) { [weak self] in
-                // the completion is called after the alert is presented
-                self?.unsafeNotificationPermissionsAlertController = alertController
-            }
+
+            await self.alertPresenter.present(alertController, animated: true)
+            // this is called after the alert is presented
+            unsafeNotificationPermissionsAlertController = alertController
         }
     }
 
-    private func dismissUnsafeNotificationPermissionsInAppAlert() {
+    private func dismissUnsafeNotificationPermissionsInAppAlert() async {
         guard let alertController = unsafeNotificationPermissionsAlertController else { return }
-        alertPresenter.dismissAlert(alertController, animated: true) { [weak self] in
-            self?.unsafeNotificationPermissionsAlertController = nil
-        }
+        await alertPresenter.dismissAlert(alertController, animated: true)
+        unsafeNotificationPermissionsAlertController = nil
     }
 }
 
 extension AlertManager {
-    func presentLoopResetConfirmationAlert(confirmAction: @escaping (@escaping () -> Void) -> Void, cancelAction: @escaping () -> Void) {
+    func presentLoopResetConfirmationAlert(confirmAction: @escaping (@escaping () -> Void) -> Void, cancelAction: @escaping () -> Void) async {
         let alert = UIAlertController(title: "Loop Reset Requested", message: "We've detected a Loop reset may be needed. Tapping confirm will reset Loop and quit the app.", preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Confirm", style: .default, handler: { _ in
             confirmAction() {
@@ -795,16 +779,16 @@ extension AlertManager {
             cancelAction()
         }))
         
-        alertPresenter.present(alert, animated: true)
+        await alertPresenter.present(alert, animated: true)
     }
     
-    func presentCouldNotResetLoopAlert(error: Error) {
+    func presentCouldNotResetLoopAlert(error: Error) async {
         let titleString = String(format: NSLocalizedString("Could Not Restart %1$@", comment: "Format string for title of reset loop alert. (1: App name)"), Bundle.main.bundleDisplayName)
         let message = String(format: NSLocalizedString("While trying to restart %1$@ an error occured.\n\n%2$@", comment: "Format string for message of reset loop alert. (1: App name) (2: error description)"), Bundle.main.bundleDisplayName, error.localizedDescription)
         let alert = UIAlertController(title: titleString, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: NSLocalizedString("Cancel", comment: "Cancel button for reset loop alert"), style: .cancel))
         
-        alertPresenter.present(alert, animated: true)
+        await alertPresenter.present(alert, animated: true)
     }
 }
 

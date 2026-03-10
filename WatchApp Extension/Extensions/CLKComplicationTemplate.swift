@@ -7,10 +7,10 @@
 //
 
 import ClockKit
-import HealthKit
 import LoopKit
 import Foundation
 import LoopCore
+import LoopAlgorithm
 
 extension CLKComplicationTemplate {
 
@@ -25,25 +25,29 @@ extension CLKComplicationTemplate {
             return nil
         }
         
-        return templateForFamily(family,
+        return templateForFamily(
+            family,
             glucose: glucose,
             unit: unit,
             glucoseDate: context.glucoseDate,
             trend: context.glucoseTrend,
+            glucoseCondition: context.glucoseCondition,
             eventualGlucose: context.eventualGlucose,
             at: date,
             loopLastRunDate: context.loopLastRunDate,
             recencyInterval: recencyInterval,
-            chartGenerator: makeChart)
+            chartGenerator: makeChart
+        )
     }
 
     static func templateForFamily(
         _ family: CLKComplicationFamily,
-        glucose: HKQuantity,
-        unit: HKUnit,
+        glucose: LoopQuantity,
+        unit: LoopUnit,
         glucoseDate: Date?,
         trend: GlucoseTrend?,
-        eventualGlucose: HKQuantity?,
+        glucoseCondition: GlucoseCondition?,
+        eventualGlucose: LoopQuantity?,
         at date: Date,
         loopLastRunDate: Date?,
         recencyInterval: TimeInterval,
@@ -65,7 +69,15 @@ extension CLKComplicationTemplate {
             glucoseString = NSLocalizedString("---", comment: "No glucose value representation (3 dashes for mg/dL; no spaces as this will get truncated in the watch complication)")
             trendString = ""
         } else {
-            guard let formattedGlucose = formatter.string(from: glucose.doubleValue(for: unit)) else {
+            var formattedGlucose: String?
+
+            if let glucoseCondition {
+                formattedGlucose = glucoseCondition.localizedDescription
+            } else {
+                formattedGlucose = formatter.string(from: glucose.doubleValue(for: unit))
+            }
+
+            guard let formattedGlucose else {
                 return nil
             }
             glucoseString = formattedGlucose
@@ -128,6 +140,7 @@ extension CLKComplicationTemplate {
                 eventualGlucoseText = eventualGlucoseString
             }
 
+            // 106↗108 8:47 PM
             let format = NSLocalizedString("UtilitarianLargeFlat", tableName: "ckcomplication", comment: "Utilitarian large flat format string (1: Glucose & Trend symbol) (2: Eventual Glucose) (3: Time)")
 
             return CLKComplicationTemplateUtilitarianLargeFlat(
@@ -161,6 +174,7 @@ extension CLKComplicationTemplate {
                                                              unit: unit,
                                                              glucoseDate: glucoseDate,
                                                              trend: trend,
+                                                             glucoseCondition: glucoseCondition,
                                                              eventualGlucose: eventualGlucose,
                                                              at: date,
                                                              loopLastRunDate: loopLastRunDate,
@@ -177,7 +191,7 @@ extension CLKComplicationTemplate {
         case .graphicRectangular:
             if #available(watchOSApplicationExtension 5.0, *) {
                 return CLKComplicationTemplateGraphicRectangularLargeImage(
-                    textProvider: CLKTextProvider(byJoining: [glucoseAndTrendText, timeText], separator: " "),
+                    textProvider: CLKTextProvider(format: "%@ %@", glucoseAndTrendText, timeText),
                     imageProvider: CLKFullColorImageProvider(fullColorImage: makeChart() ?? UIImage())
                 )
             } else {

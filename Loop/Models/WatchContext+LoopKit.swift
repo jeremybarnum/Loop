@@ -7,14 +7,16 @@
 //
 
 import Foundation
-import HealthKit
 import LoopKit
+import LoopAlgorithm
+import LoopCore
 
 extension WatchContext {
-    convenience init(glucose: GlucoseSampleValue?, glucoseUnit: HKUnit?) {
+    convenience init(glucose: GlucoseSampleValue?, glucoseUnit: LoopUnit?) {
         self.init()
 
         self.glucose = glucose?.quantity
+        self.glucoseCondition = glucose?.condition
         self.glucoseDate = glucose?.startDate
         self.glucoseIsDisplayOnly = glucose?.isDisplayOnly
         self.glucoseWasUserEntered = glucose?.wasUserEntered

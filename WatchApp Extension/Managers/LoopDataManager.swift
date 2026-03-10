@@ -1,5 +1,5 @@
 //
-//  LoopDataManager.swift
+//  LoopDosingManager.swift
 //  WatchApp Extension
 //
 //  Created by Bharat Mediratta on 6/21/18.
@@ -12,24 +12,61 @@ import LoopKit
 import LoopCore
 import WatchConnectivity
 import os.log
+import LoopAlgorithm
+import UserNotifications
+import WatchKit
 
-
+@MainActor
+@Observable
 class LoopDataManager {
+    static let shared = LoopDataManager()
+
     let carbStore: CarbStore
 
-    let glucoseStore: GlucoseStore
+    var glucoseStore: GlucoseStore?
 
+    @ObservationIgnored
     @PersistedProperty(key: "Settings")
-    private var rawSettings: LoopSettings.RawValue?
+    private var rawWatchInfo: LoopSettingsUserInfo.RawValue?
+
+    @ObservationIgnored
+    @PersistedProperty(key: "WatchContext")
+    private var rawWatchContext: WatchContext.RawValue?
 
     // Main queue only
-    var settings: LoopSettings {
+    var watchInfo: LoopSettingsUserInfo {
         didSet {
             needsDidUpdateContextNotification = true
             sendDidUpdateContextNotificationIfNecessary()
-            rawSettings = settings.rawValue
+            rawWatchInfo = watchInfo.rawValue
         }
     }
+
+    var pendingPresetReminder: PendingPresetReminder?
+
+    var pendingPreset: SelectablePreset? {
+        if let presetIdentifier = pendingPresetReminder?.presetIdentifier {
+            return selectablePresets.first(where: { $0.id == presetIdentifier })!
+        } else {
+            return nil
+        }
+    }
+
+    var activePreset: SelectablePreset? {
+        guard let presetId = watchInfo.scheduleOverride?.presetId else {
+            return nil
+        }
+        return selectablePresets.first(where: { $0.id == presetId })
+    }
+
+    var glucoseChartScene: GlucoseChartScene = {
+        let s = GlucoseChartScene()
+        s.size = WKInterfaceDevice.current().screenBounds.size
+        return s
+    }()
+
+    // When set, user will be navigated to carbs/bolus flow
+    var bolusViewModel: CarbAndBolusFlowViewModel?
 
     // Main queue only
     var supportedBolusVolumes = UserDefaults.standard.supportedBolusVolumes {
@@ -40,11 +77,12 @@ class LoopDataManager {
         }
     }
 
-    private let log = OSLog(category: "LoopDataManager")
+    private let log = OSLog(category: "LoopDosingManager")
 
     // Main queue only
     private(set) var activeContext: WatchContext? {
         didSet {
+            rawWatchContext = activeContext?.rawValue
             needsDidUpdateContextNotification = true
             sendDidUpdateContextNotificationIfNecessary()
         }
@@ -66,20 +104,27 @@ class LoopDataManager {
         carbStore = CarbStore(
             cacheStore: cacheStore,
             cacheLength: .hours(24),    // Require 24 hours to store recent carbs "since midnight" for CarbEntryListController
-            defaultAbsorptionTimes: LoopCoreConstants.defaultCarbAbsorptionTimes,
-            syncVersion: 0,
-            provenanceIdentifier: HKSource.default().bundleIdentifier
-        )
-        glucoseStore = GlucoseStore(
-            cacheStore: cacheStore,
-            cacheLength: .hours(4),
-            provenanceIdentifier: HKSource.default().bundleIdentifier
+            syncVersion: 0
         )
 
-        settings = LoopSettings()
+        self.watchInfo = LoopSettingsUserInfo(
+            loopSettings: LoopSettings(),
+            scheduleOverride: nil
+        )
+        
+        Task {
+            glucoseStore = await GlucoseStore(
+                cacheStore: cacheStore,
+                cacheLength: .hours(4)
+            )
+        }
 
-        if let rawSettings = rawSettings, let storedSettings = LoopSettings(rawValue: rawSettings) {
-            self.settings = storedSettings
+        if let rawWatchInfo, let watchInfo = LoopSettingsUserInfo(rawValue: rawWatchInfo) {
+            self.watchInfo = watchInfo
+        }
+
+        if let rawWatchContext, let watchContext = WatchContext(rawValue: rawWatchContext) {
+            self.activeContext = watchContext
         }
     }
 }
@@ -94,7 +139,9 @@ extension LoopDataManager {
 
         if activeContext == nil || context.shouldReplace(activeContext!) {
             if let newGlucoseSample = context.newGlucoseSample {
-                self.glucoseStore.addGlucoseSamples([newGlucoseSample]) { (_) in }
+                Task {
+                    try? await self.glucoseStore?.addGlucoseSamples([newGlucoseSample])
+                }
             }
             activeContext = context
         }
@@ -109,10 +156,18 @@ extension LoopDataManager {
         }
     }
 
+    func sendUserSelectedNotificationActionMessage(alertIdentifier: String, managerIdentifier: String, actionIdentifier: String) async {
+        await WCSession.default.sendUserSelectedNotificationActionMessage(
+            alertIdentifier: alertIdentifier,
+            managerIdentifier: managerIdentifier,
+            actionIdentifier: actionIdentifier
+        )
+    }
+
     func requestCarbBackfill() {
         dispatchPrecondition(condition: .onQueue(.main))
 
-        let start = min(Calendar.current.startOfDay(for: Date()), Date(timeIntervalSinceNow: -carbStore.maximumAbsorptionTimeInterval))
+        let start = min(Calendar.current.startOfDay(for: Date()), Date(timeIntervalSinceNow: -CarbMath.maximumAbsorptionTimeInterval))
         let userInfo = CarbBackfillRequestUserInfo(startDate: start)
         WCSession.default.sendCarbBackfillRequestMessage(userInfo) { (result) in
             switch result {
@@ -151,8 +206,10 @@ extension LoopDataManager {
         WCSession.default.sendGlucoseBackfillRequestMessage(userInfo) { (result) in
             switch result {
             case .success(let context):
-                self.glucoseStore.setSyncGlucoseSamples(context.samples) { (error) in
-                    if let error = error {
+                Task {
+                    do {
+                        try await self.glucoseStore?.setSyncGlucoseSamples(context.samples)
+                    } catch {
                         self.log.error("Failure setting sync glucose samples: %{public}@", String(describing: error))
                     }
                 }
@@ -168,6 +225,12 @@ extension LoopDataManager {
         return true
     }
 
+    func requestSettingsUpdate() async {
+        if let settings = try? await WCSession.default.fetchSettings() {
+            self.watchInfo = settings
+        }
+    }
+
     func requestContextUpdate(completion: @escaping () -> Void = { }) {
         try? WCSession.default.sendContextRequestMessage(WatchContextRequestUserInfo(), completionHandler: { (result) in
             DispatchQueue.main.async {
@@ -181,39 +244,108 @@ extension LoopDataManager {
             }
         })
     }
+
+    func clearOverride() async throws {
+        var watchInfoUpdate = self.watchInfo
+        watchInfoUpdate.scheduleOverride = nil
+        try await WCSession.default.sendSetPreset(presetIdentifier: nil, alertIdentifier: nil)
+        watchInfo = watchInfoUpdate
+    }
+
+    func activateOverride(_ override: TemporaryScheduleOverride, alertIdentifierToAcknowledge: String? = nil) async throws {
+        var watchInfoUpdate = self.watchInfo
+        watchInfoUpdate.scheduleOverride = override
+        try await WCSession.default.sendSetPreset(presetIdentifier: override.presetId, alertIdentifier: alertIdentifierToAcknowledge)
+        watchInfo = watchInfoUpdate
+    }
+
+    func acknowledgeAlert(alertIdentifier: String, managerIdentifier: String) async throws {
+        self.log.default("Acknowledging alert %{public}@ : %{public}@", alertIdentifier, managerIdentifier)
+        try await WCSession.default.sendAcknowledgeAlert(alertIdentifier: alertIdentifier, managerIdentifier: managerIdentifier)
+    }
+
+    var selectablePresets: [SelectablePreset] {
+        var presets: [SelectablePreset] = []
+
+        let settings = watchInfo.loopSettings
+
+        if let preMealTargetRange = settings.preMealTargetRange {
+            presets.append(.preMeal(range: preMealTargetRange))
+        }
+
+        presets.append(contentsOf: settings.overridePresets.map { override in
+            if override.id.hasPrefix("activity-"), let activityPreset = ActivityPreset(preset: override) {
+                return .activity(activityPreset)
+            } else {
+                return .custom(override)
+            }
+        })
+
+        ActivityPreset.ActivityType.allCases.forEach { activityType in
+            if !settings.overridePresets.contains(where: { $0.id == activityType.id }) {
+                presets.append(
+                    .activity(
+                        ActivityPreset(
+                            activityType: activityType,
+                            preset: activityType.completeDefaultPreset
+                        )
+                    )
+                )
+            }
+        }
+
+        return presets
+    }
+
+    var glucoseValue: String {
+        guard let activeContext = activeContext,
+              let glucose = activeContext.glucose,
+              let unit = activeContext.displayGlucoseUnit else
+        {
+            return "- - -"
+        }
+
+        let formatter = NumberFormatter.glucoseFormatter(for: unit)
+
+        var glucoseValue: String
+
+        if let glucoseCondition = activeContext.glucoseCondition {
+            glucoseValue = glucoseCondition.localizedDescription
+        } else {
+            glucoseValue = formatter.string(from: glucose.doubleValue(for: unit)) ?? "???"
+        }
+
+        let trend = activeContext.glucoseTrend?.symbol ?? ""
+        return glucoseValue + trend
+    }
 }
 
 extension LoopDataManager {
-    var displayGlucoseUnit: HKUnit {
+    var displayGlucoseUnit: LoopUnit {
         activeContext?.displayGlucoseUnit ?? .milligramsPerDeciliter
     }
 }
 
 extension LoopDataManager {
-    func generateChartData(completion: @escaping (GlucoseChartData?) -> Void) {
+
+    func generateChartData() async -> GlucoseChartData? {
         guard let activeContext = activeContext else {
-            completion(nil)
-            return
+            return nil
         }
 
-        glucoseStore.getGlucoseSamples(start: .earliestGlucoseCutoff) { result in
-            var historicalGlucose: [StoredGlucoseSample]?
-            switch result {
-            case .failure(let error):
-                self.log.error("Failure getting glucose samples: %{public}@", String(describing: error))
-                historicalGlucose = nil
-            case .success(let samples):
-                historicalGlucose = samples
-            }
-            let chartData = GlucoseChartData(
-                unit: activeContext.displayGlucoseUnit,
-                correctionRange: self.settings.glucoseTargetRangeSchedule,
-                preMealOverride: self.settings.preMealOverride,
-                scheduleOverride: self.settings.scheduleOverride,
-                historicalGlucose: historicalGlucose,
-                predictedGlucose: (activeContext.isClosedLoop ?? false) ? activeContext.predictedGlucose?.values : nil
-            )
-            completion(chartData)
+        var historicalGlucose: [StoredGlucoseSample]?
+        do {
+            historicalGlucose = try await glucoseStore?.getGlucoseSamples(start: .earliestGlucoseCutoff)
+        } catch {
+            self.log.error("Failure getting glucose samples: %{public}@", String(describing: error))
         }
+        let chartData = GlucoseChartData(
+            unit: activeContext.displayGlucoseUnit,
+            correctionRange: self.watchInfo.loopSettings.glucoseTargetRangeSchedule,
+            scheduleOverride: self.watchInfo.scheduleOverride,
+            historicalGlucose: historicalGlucose,
+            predictedGlucose: (activeContext.isClosedLoop ?? false) ? activeContext.predictedGlucose?.values : nil
+        )
+        return chartData
     }
 }

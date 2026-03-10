@@ -6,10 +6,11 @@
 //  Copyright © 2023 LoopKit Authors. All rights reserved.
 //
 
-import HealthKit
 import LoopCore
 import LoopKit
 import WidgetKit
+import LoopAlgorithm
+
 
 struct StatusWidgetTimelimeEntry: TimelineEntry {
     var date: Date
@@ -17,12 +18,14 @@ struct StatusWidgetTimelimeEntry: TimelineEntry {
     let contextUpdatedAt: Date
     
     let lastLoopCompleted: Date?
+    let mostRecentGlucoseDataDate: Date?
+    let mostRecentPumpDataDate: Date?
     let closeLoop: Bool
     
     let currentGlucose: GlucoseValue?
     let glucoseFetchedAt: Date?
-    let delta: HKQuantity?
-    let unit: HKUnit?
+    let delta: LoopQuantity?
+    let unit: LoopUnit?
     let sensor: GlucoseDisplayableContext?
 
     let pumpHighlight: DeviceStatusHighlightContext?
@@ -53,6 +56,6 @@ struct StatusWidgetTimelimeEntry: TimelineEntry {
         }
         let glucoseAge = date - glucoseDate
 
-        return glucoseAge >= LoopCoreConstants.inputDataRecencyInterval
+        return glucoseAge >= LoopAlgorithm.inputDataRecencyInterval
     }
 }

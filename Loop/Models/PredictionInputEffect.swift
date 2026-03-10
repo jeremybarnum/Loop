@@ -7,8 +7,8 @@
 //
 
 import Foundation
-import HealthKit
-
+import LoopKit
+import LoopAlgorithm
 
 struct PredictionInputEffect: OptionSet {
     let rawValue: Int
@@ -38,7 +38,7 @@ struct PredictionInputEffect: OptionSet {
         }
     }
 
-    func localizedDescription(forGlucoseUnit unit: HKUnit) -> String? {
+    func localizedDescription(forGlucoseUnit unit: LoopUnit) -> String? {
         switch self {
         case [.carbs]:
             return String(format: NSLocalizedString("Carbs Absorbed (g) ÷ Carb Ratio (g/U) × Insulin Sensitivity (%1$@/U)", comment: "Description of the prediction input effect for carbohydrates. (1: The glucose unit string)"), unit.localizedShortUnitString)
@@ -53,5 +53,24 @@ struct PredictionInputEffect: OptionSet {
         default:
             return nil
         }
+    }
+}
+
+extension PredictionInputEffect {
+    var algorithmEffectOptions: AlgorithmEffectsOptions {
+        var rval = [AlgorithmEffectsOptions]()
+        if self.contains(.carbs) {
+            rval.append(.carbs)
+        }
+        if self.contains(.insulin) {
+            rval.append(.insulin)
+        }
+        if self.contains(.momentum) {
+            rval.append(.momentum)
+        }
+        if self.contains(.retrospection) {
+            rval.append(.retrospection)
+        }
+        return AlgorithmEffectsOptions(rval)
     }
 }

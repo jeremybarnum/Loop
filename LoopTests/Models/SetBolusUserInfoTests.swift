@@ -7,8 +7,9 @@
 //
 
 import XCTest
-import HealthKit
+import LoopAlgorithm
 import LoopKit
+import LoopCore
 @testable import Loop
 
 class SetBolusUserInfoTests: XCTestCase {
@@ -16,7 +17,7 @@ class SetBolusUserInfoTests: XCTestCase {
     private var startDate = dateFormatter.date(from: "2020-05-14T22:45:00Z")!
     private var contextDate = dateFormatter.date(from: "2020-05-14T22:38:14Z")!
     private var carbEntry = NewCarbEntry(date: dateFormatter.date(from: "2020-05-14T22:39:34Z")!,
-                                         quantity: HKQuantity(unit: .gram(), doubleValue: 17),
+                                         quantity: LoopQuantity(unit: .gram, doubleValue: 17),
                                          startDate: dateFormatter.date(from: "2020-05-14T22:00:00Z")!,
                                          foodType: "Pizza",
                                          absorptionTime: .hours(5))
@@ -99,7 +100,7 @@ class SetBolusUserInfoTests: XCTestCase {
         XCTAssertEqual(rawValue["at"] as? BolusActivationType.RawValue, activationType.rawValue)
         let carbEntryRawValue = rawValue["ce"] as? NewCarbEntry.RawValue
         XCTAssertEqual(carbEntryRawValue?["date"] as? Date, carbEntry.date)
-        XCTAssertEqual(carbEntryRawValue?["grams"] as? Double, carbEntry.quantity.doubleValue(for: .gram()))
+        XCTAssertEqual(carbEntryRawValue?["grams"] as? Double, carbEntry.quantity.doubleValue(for: .gram))
         XCTAssertEqual(carbEntryRawValue?["startDate"] as? Date, carbEntry.startDate)
         XCTAssertEqual(carbEntryRawValue?["foodType"] as? String, carbEntry.foodType)
         XCTAssertEqual(carbEntryRawValue?["absorptionTime"] as? TimeInterval, carbEntry.absorptionTime)

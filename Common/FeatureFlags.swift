@@ -11,42 +11,40 @@ import Foundation
 let FeatureFlags = FeatureFlagConfiguration()
 
 struct FeatureFlagConfiguration: Decodable {
-    let automaticBolusEnabled: Bool
+    let dosingStrategySelectionEnabled: Bool
     let cgmManagerCategorizeManualGlucoseRangeEnabled: Bool
     let criticalAlertsEnabled: Bool
     let entryDeletionEnabled: Bool
     let fiaspInsulinModelEnabled: Bool
     let lyumjevInsulinModelEnabled: Bool
     let afrezzaInsulinModelEnabled: Bool
+    let apidraInsulinModelEnabled: Bool
     let includeServicesInSettingsEnabled: Bool
     let manualDoseEntryEnabled: Bool
     let insulinDeliveryReservoirViewEnabled: Bool
     let mockTherapySettingsEnabled: Bool
-    let nonlinearCarbModelEnabled: Bool
     let observeHealthKitCarbSamplesFromOtherApps: Bool
     let observeHealthKitDoseSamplesFromOtherApps: Bool
     let observeHealthKitGlucoseSamplesFromOtherApps: Bool
     let remoteCommandsEnabled: Bool
     let predictedGlucoseChartClampEnabled: Bool
     let scenariosEnabled: Bool
-    let sensitivityOverridesEnabled: Bool
     let showEventualBloodGlucoseOnWatchEnabled: Bool
     let simulatedCoreDataEnabled: Bool
     let siriEnabled: Bool
     let simpleBolusCalculatorEnabled: Bool
     let usePositiveMomentumAndRCForManualBoluses: Bool
-    let adultChildInsulinModelSelectionEnabled: Bool
     let profileExpirationSettingsViewEnabled: Bool
     let missedMealNotifications: Bool
     let allowAlgorithmExperiments: Bool
-
+    let isInvestigationalDevice: Bool
 
     fileprivate init() {
         // Swift compiler config is inverse, since the default state is enabled.
-        #if AUTOMATIC_BOLUS_DISABLED
-        self.automaticBolusEnabled = false
+        #if DOSING_STRATEGY_SELECTION_DISABLED
+        self.dosingStrategySelectionEnabled = false
         #else
-        self.automaticBolusEnabled = true
+        self.dosingStrategySelectionEnabled = true
         #endif
 
         #if CGM_MANAGER_CATEGORIZE_GLUCOSE_RANGE_ENABLED
@@ -67,19 +65,19 @@ struct FeatureFlagConfiguration: Decodable {
         #else
         self.entryDeletionEnabled = true
         #endif
-
-        // Swift compiler config is inverse, since the default state is enabled.
-        #if FEATURE_OVERRIDES_DISABLED
-        self.sensitivityOverridesEnabled = false
-        #else
-        self.sensitivityOverridesEnabled = true
-        #endif
         
         // Swift compiler config is inverse, since the default state is enabled.
         #if FIASP_INSULIN_MODEL_DISABLED
         self.fiaspInsulinModelEnabled = false
         #else
         self.fiaspInsulinModelEnabled = true
+        #endif
+
+        // Swift compiler config is inverse, since the default state is enabled.
+        #if APIDRA_INSULIN_MODEL_DISABLED
+        self.apidraInsulinModelEnabled = false
+        #else
+        self.apidraInsulinModelEnabled = true
         #endif
 
         // Swift compiler config is inverse, since the default state is enabled.
@@ -121,13 +119,6 @@ struct FeatureFlagConfiguration: Decodable {
         self.mockTherapySettingsEnabled = true
         #else
         self.mockTherapySettingsEnabled = false
-        #endif
-        
-        // Swift compiler config is inverse, since the default state is enabled.
-        #if NONLINEAR_CARB_MODEL_DISABLED
-        self.nonlinearCarbModelEnabled = false
-        #else
-        self.nonlinearCarbModelEnabled = true
         #endif
         
         #if OBSERVE_HEALTH_KIT_CARB_SAMPLES_FROM_OTHER_APPS_ENABLED
@@ -207,12 +198,6 @@ struct FeatureFlagConfiguration: Decodable {
         self.usePositiveMomentumAndRCForManualBoluses = true
         #endif
 
-        #if ADULT_CHILD_INSULIN_MODEL_SELECTION_ENABLED
-        self.adultChildInsulinModelSelectionEnabled = true
-        #else
-        self.adultChildInsulinModelSelectionEnabled = false
-        #endif
-
         // ProfileExpirationSettingsView is inverse, since the default state is enabled.
         #if PROFILE_EXPIRATION_SETTINGS_VIEW_DISABLED
         self.profileExpirationSettingsViewEnabled = false
@@ -232,6 +217,12 @@ struct FeatureFlagConfiguration: Decodable {
         #else
         self.allowAlgorithmExperiments = false
         #endif
+        
+        #if INVESTIGATIONAL_DEVICE
+        self.isInvestigationalDevice = true
+        #else
+        self.isInvestigationalDevice = false
+        #endif
     }
 }
 
@@ -245,29 +236,28 @@ extension FeatureFlagConfiguration : CustomDebugStringConvertible {
             "* fiaspInsulinModelEnabled: \(fiaspInsulinModelEnabled)",
             "* lyumjevInsulinModelEnabled: \(lyumjevInsulinModelEnabled)",
             "* afrezzaInsulinModelEnabled: \(afrezzaInsulinModelEnabled)",
+            "* apidraInsulinModelEnabled: \(apidraInsulinModelEnabled)",
             "* includeServicesInSettingsEnabled: \(includeServicesInSettingsEnabled)",
             "* mockTherapySettingsEnabled: \(mockTherapySettingsEnabled)",
-            "* nonlinearCarbModelEnabled: \(nonlinearCarbModelEnabled)",
             "* observeHealthKitCarbSamplesFromOtherApps: \(observeHealthKitCarbSamplesFromOtherApps)",
             "* observeHealthKitDoseSamplesFromOtherApps: \(observeHealthKitDoseSamplesFromOtherApps)",
             "* observeHealthKitGlucoseSamplesFromOtherApps: \(observeHealthKitGlucoseSamplesFromOtherApps)",
             "* predictedGlucoseChartClampEnabled: \(predictedGlucoseChartClampEnabled)",
             "* remoteCommandsEnabled: \(remoteCommandsEnabled)",
             "* scenariosEnabled: \(scenariosEnabled)",
-            "* sensitivityOverridesEnabled: \(sensitivityOverridesEnabled)",
             "* showEventualBloodGlucoseOnWatchEnabled: \(showEventualBloodGlucoseOnWatchEnabled)",
             "* simulatedCoreDataEnabled: \(simulatedCoreDataEnabled)",
             "* siriEnabled: \(siriEnabled)",
-            "* automaticBolusEnabled: \(automaticBolusEnabled)",
+            "* dosingStrategySelectionEnabled: \(dosingStrategySelectionEnabled)",
             "* manualDoseEntryEnabled: \(manualDoseEntryEnabled)",
             "* allowDebugFeatures: \(allowDebugFeatures)",
             "* simpleBolusCalculatorEnabled: \(simpleBolusCalculatorEnabled)",
             "* usePositiveMomentumAndRCForManualBoluses: \(usePositiveMomentumAndRCForManualBoluses)",
-            "* adultChildInsulinModelSelectionEnabled: \(adultChildInsulinModelSelectionEnabled)",
             "* profileExpirationSettingsViewEnabled: \(profileExpirationSettingsViewEnabled)",
             "* missedMealNotifications: \(missedMealNotifications)",
             "* allowAlgorithmExperiments: \(allowAlgorithmExperiments)",
-            "* allowExperimentalFeatures: \(allowExperimentalFeatures)"
+            "* allowExperimentalFeatures: \(allowExperimentalFeatures)",
+            "* isInvestigationalDevice: \(isInvestigationalDevice)"
         ].joined(separator: "\n")
     }
 }

@@ -6,110 +6,109 @@
 //  Copyright © 2016 Nathan Racklyeft. All rights reserved.
 //
 
+import LoopKit
+import LoopKitUI
+import SwiftUI
 import UIKit
 
-final class LoopStateView: UIView {
-    var firstDataUpdate = true
+class WrappedLoopStateViewModel: ObservableObject {
+    @Published var loopStatusColors: StateColorPalette
+    @Published var closedLoop: Bool
+    @Published var freshness: LoopCompletionFreshness
+    @Published var deviceIssue: Bool
     
-    override func tintColorDidChange() {
-        super.tintColorDidChange()
-
-        updateTintColor()
+    init(
+        loopStatusColors: StateColorPalette = StateColorPalette(unknown: .black, normal: .black, warning: .black, error: .black),
+        closedLoop: Bool = true,
+        freshness: LoopCompletionFreshness = .stale,
+        deviceIssue: Bool = false
+    ) {
+        self.loopStatusColors = loopStatusColors
+        self.closedLoop = closedLoop
+        self.freshness = freshness
+        self.deviceIssue = deviceIssue
     }
+}
 
-    private func updateTintColor() {
-        shapeLayer.strokeColor = tintColor.cgColor
+struct WrappedLoopCircleView: View {
+    
+    @StateObject var viewModel: WrappedLoopStateViewModel
+    
+    var body: some View {
+        LoopCircleView(animationAllowed: true, closedLoop: viewModel.closedLoop, freshness: viewModel.freshness, deviceIssue: viewModel.deviceIssue)
+            .environment(\.loopStatusColorPalette, viewModel.loopStatusColors)
     }
+}
 
-    var open = false {
-        didSet {
-            if open != oldValue {
-                shapeLayer.path = drawPath()
-            }
-        }
+class LoopCircleHostingController: UIHostingController<WrappedLoopCircleView> {
+    init(viewModel: WrappedLoopStateViewModel) {
+        super.init(
+            rootView: WrappedLoopCircleView(
+                viewModel: viewModel
+            )
+        )
     }
-
-    override class var layerClass : AnyClass {
-        return CAShapeLayer.self
+    
+    required init?(coder aDecoder: NSCoder) {
+        fatalError()
     }
+}
 
-    private var shapeLayer: CAShapeLayer {
-        return layer as! CAShapeLayer
-    }
 
+final class LoopStateView: UIView {
+    
     override init(frame: CGRect) {
         super.init(frame: frame)
-
-        shapeLayer.lineWidth = 8
-        shapeLayer.fillColor = UIColor.clear.cgColor
-        updateTintColor()
-
-        shapeLayer.path = drawPath()
+        
+        setupViews()
     }
-
-    required init?(coder aDecoder: NSCoder) {
-        super.init(coder: aDecoder)
-
-        shapeLayer.lineWidth = 8
-        shapeLayer.fillColor = UIColor.clear.cgColor
-        updateTintColor()
-
-        shapeLayer.path = drawPath()
+    
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        
+        setupViews()
     }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-
-        shapeLayer.path = drawPath()
-    }
-
-    private func drawPath(lineWidth: CGFloat? = nil) -> CGPath {
-        let center = CGPoint(x: bounds.midX, y: bounds.midY)
-        let lineWidth = lineWidth ?? shapeLayer.lineWidth
-        let radius = min(bounds.width / 2, bounds.height / 2) - lineWidth / 2
-
-        let startAngle = open ? -CGFloat.pi / 4 : 0
-        let endAngle = open ? 5 * CGFloat.pi / 4 : 2 * CGFloat.pi
-
-        let path = UIBezierPath(
-            arcCenter: center,
-            radius: radius,
-            startAngle: startAngle,
-            endAngle: endAngle,
-            clockwise: true
-        )
-
-        return path.cgPath
-    }
-
-    private static let AnimationKey = "com.loudnate.Naterade.breatheAnimation"
-
-    var animated: Bool = false {
+    
+    var loopStatusColors: StateColorPalette = StateColorPalette(unknown: .black, normal: .black, warning: .black, error: .black) {
         didSet {
-            if animated != oldValue {
-                if animated {
-                    let path = CABasicAnimation(keyPath: "path")
-                    path.fromValue = shapeLayer.path ?? drawPath()
-                    path.toValue = drawPath(lineWidth: 16)
-
-                    let width = CABasicAnimation(keyPath: "lineWidth")
-                    width.fromValue = shapeLayer.lineWidth
-                    width.toValue = 10
-
-                    let group = CAAnimationGroup()
-                    group.animations = [path, width]
-                    group.duration = firstDataUpdate ? 0 : 1
-                    group.repeatCount = HUGE
-                    group.autoreverses = true
-                    group.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-
-                    shapeLayer.add(group, forKey: type(of: self).AnimationKey)
-                } else {
-                    shapeLayer.removeAnimation(forKey: type(of: self).AnimationKey)
-                }
-            }
-            firstDataUpdate = false
+            viewModel.loopStatusColors = loopStatusColors
         }
+    }
+
+    var freshness: LoopCompletionFreshness = .stale {
+        didSet {
+            viewModel.freshness = freshness
+        }
+    }
+    
+    var open = false {
+        didSet {
+            viewModel.closedLoop = !open
+        }
+    }
+    
+    var deviceIssue: Bool = false {
+        didSet {
+            viewModel.deviceIssue = deviceIssue
+        }
+    }
+    
+    private let viewModel = WrappedLoopStateViewModel()
+    
+    private func setupViews() {
+        let hostingController = LoopCircleHostingController(viewModel: viewModel)
+        
+        hostingController.view.backgroundColor = .clear
+        hostingController.view.translatesAutoresizingMaskIntoConstraints = false
+        
+        addSubview(hostingController.view)
+        
+        NSLayoutConstraint.activate([
+            hostingController.view.leadingAnchor.constraint(equalTo: leadingAnchor),
+            hostingController.view.trailingAnchor.constraint(equalTo: trailingAnchor),
+            hostingController.view.topAnchor.constraint(equalTo: topAnchor),
+            hostingController.view.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
     }
 }
 

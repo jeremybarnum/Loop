@@ -8,12 +8,17 @@
 
 import UIKit
 import Intents
+import BackgroundTasks
 import Combine
+import LoopTestingKit
 import LoopKit
 import LoopKitUI
 import MockKit
 import HealthKit
 import WidgetKit
+import LoopCore
+import LoopAlgorithm
+import SwiftUI
 
 #if targetEnvironment(simulator)
 enum SimulatorError: Error {
@@ -21,13 +26,14 @@ enum SimulatorError: Error {
 }
 #endif
 
+@MainActor
 public protocol AlertPresenter: AnyObject {
     /// Present the alert view controller, with or without animation.
     /// - Parameters:
     ///   - viewControllerToPresent: The alert view controller to present.
     ///   - animated: Animate the alert view controller presentation or not.
     ///   - completion: Completion to call once view controller is presented.
-    func present(_ viewControllerToPresent: UIViewController, animated flag: Bool, completion: (() -> Void)?)
+    func present(_ viewControllerToPresent: UIViewController, animated flag: Bool) async
 
     /// Retract any alerts with the given identifier.  This includes both pending and delivered alerts.
 
@@ -35,26 +41,21 @@ public protocol AlertPresenter: AnyObject {
     /// - Parameters:
     ///   - animated: Animate the alert view controller dismissal or not.
     ///   - completion: Completion to call once view controller is dismissed.
-    func dismissTopMost(animated: Bool, completion: (() -> Void)?)
+    func dismissTopMost(animated: Bool) async
 
     /// Dismiss an alert, even if it is not the top most alert.
     /// - Parameters:
     ///   - alertToDismiss: The alert to dismiss
     ///   - animated: Animate the alert view controller dismissal or not.
     ///   - completion: Completion to call once view controller is dismissed.
-    func dismissAlert(_ alertToDismiss: UIAlertController, animated: Bool, completion: (() -> Void)?)
-}
-
-public extension AlertPresenter {
-    func present(_ viewController: UIViewController, animated: Bool) { present(viewController, animated: animated, completion: nil) }
-    func dismissTopMost(animated: Bool) { dismissTopMost(animated: animated, completion: nil) }
-    func dismissAlert(_ alertToDismiss: UIAlertController, animated: Bool) { dismissAlert(alertToDismiss, animated: animated, completion: nil) }
+    func dismissAlert(_ alertToDismiss: UIAlertController, animated: Bool) async
 }
 
 protocol WindowProvider: AnyObject {
     var window: UIWindow? { get }
 }
 
+@MainActor
 class LoopAppManager: NSObject {
     private enum State: Int {
         case initialize
@@ -74,6 +75,11 @@ class LoopAppManager: NSObject {
     private var bluetoothStateManager: BluetoothStateManager!
     private var alertManager: AlertManager!
     private var trustedTimeChecker: TrustedTimeChecker!
+    private var healthStore: HKHealthStore!
+    private var carbStore: CarbStore!
+    private var doseStore: DoseStore!
+    private var glucoseStore: GlucoseStore!
+    private var dosingDecisionStore: DosingDecisionStore!
     private var deviceDataManager: DeviceDataManager!
     private var onboardingManager: OnboardingManager!
     private var alertPermissionsChecker: AlertPermissionsChecker!
@@ -83,16 +89,28 @@ class LoopAppManager: NSObject {
     private var analyticsServicesManager = AnalyticsServicesManager()
     private(set) var testingScenariosManager: TestingScenariosManager?
     private var resetLoopManager: ResetLoopManager!
-    private var deeplinkManager: DeeplinkManager!
+    private var temporaryPresetsManager: TemporaryPresetsManager!
+    private var loopDataManager: LoopDataManager!
+    private var mealDetectionManager: MealDetectionManager!
+    private var statusExtensionManager: ExtensionDataManager!
+    private var watchManager: WatchDataManager!
+    private var crashRecoveryManager: CrashRecoveryManager!
+    private var cgmEventStore: CgmEventStore!
+    private var servicesManager: ServicesManager!
+    private var remoteDataServicesManager: RemoteDataServicesManager!
+    private var statefulPluginManager: StatefulPluginManager!
+    private var criticalEventLogExportManager: CriticalEventLogExportManager!
+    private var deviceLog: PersistentDeviceLog!
 
-    private var overrideHistory = UserDefaults.appGroup?.overrideHistory ?? TemporaryScheduleOverrideHistory.init()
+    // HealthStorePreferredGlucoseUnitDidChange will be notified once the user completes the health access form. Set to .milligramsPerDeciliter until then
+    public private(set) var displayGlucosePreference = DisplayGlucosePreference(displayGlucoseUnit: .milligramsPerDeciliter)
+
+    private var displayGlucoseUnitObservers = WeakSet<DisplayGlucoseUnitObserver>()
 
     private var state: State = .initialize
 
     private let log = DiagnosticLog(category: "LoopAppManager")
     private let widgetLog = DiagnosticLog(category: "LoopWidgets")
-
-    private let automaticDosingStatus = AutomaticDosingStatus(automaticDosingEnabled: false, isAutomaticDosingAllowed: false)
 
     lazy private var cancellables = Set<AnyCancellable>()
 
@@ -102,50 +120,61 @@ class LoopAppManager: NSObject {
 
         self.windowProvider = windowProvider
         self.launchOptions = launchOptions
-        
+
         if FeatureFlags.siriEnabled && INPreferences.siriAuthorizationStatus() == .notDetermined {
             INPreferences.requestSiriAuthorization { _ in }
         }
 
-        registerBackgroundTasks()
-
-        if FeatureFlags.remoteCommandsEnabled {
-            DispatchQueue.main.async {
-#if targetEnvironment(simulator)
-                self.remoteNotificationRegistrationDidFinish(.failure(SimulatorError.remoteNotificationsNotAvailable))
-#else
-                UIApplication.shared.registerForRemoteNotifications()
-#endif
-            }
-        }
         self.state = state.next
     }
 
+    func registerBackgroundTasks() {
+        let taskIdentifier = CriticalEventLogExportManager.historicalExportBackgroundTaskIdentifier
+        let registered = BGTaskScheduler.shared.register(forTaskWithIdentifier: taskIdentifier, using: nil) { task in
+            guard let criticalEventLogExportManager = self.criticalEventLogExportManager else {
+                self.log.error("Critical event log export launch handler called before initialization complete!")
+                return
+            }
+            criticalEventLogExportManager.handleCriticalEventLogHistoricalExportBackgroundTask(task as! BGProcessingTask)
+        }
+        if registered {
+            log.debug("Critical event log export background task registered")
+        } else {
+            log.error("Critical event log export background task not registered")
+        }
+    }
+
     func launch() {
-        dispatchPrecondition(condition: .onQueue(.main))
         precondition(isLaunchPending)
 
-        resumeLaunch()
+        UNUserNotificationCenter.current().delegate = self
+
+        registerBackgroundTasks()
+
+        Task {
+            await resumeLaunch()
+        }
     }
 
     var isLaunchPending: Bool { state == .checkProtectedDataAvailable }
 
     var isLaunchComplete: Bool { state == .launchComplete }
 
-    private func resumeLaunch() {
+    private func resumeLaunch() async {
         if state == .checkProtectedDataAvailable {
             checkProtectedDataAvailable()
         }
         if state == .launchManagers {
-            launchManagers()
+            await launchManagers()
         }
         if state == .launchOnboarding {
             launchOnboarding()
         }
         if state == .launchHomeScreen {
-            launchHomeScreen()
+            NotificationManager.setNotificationCategories()
+            await launchHomeScreen()
         }
-        
+
         askUserToConfirmLoopReset()
     }
 
@@ -161,13 +190,12 @@ class LoopAppManager: NSObject {
         self.state = state.next
     }
 
-    private func launchManagers() {
+    private func launchManagers() async {
         dispatchPrecondition(condition: .onQueue(.main))
         precondition(state == .launchManagers)
 
         windowProvider?.window?.tintColor = .loopAccent
         OrientationLock.deviceOrientationController = self
-        UNUserNotificationCenter.current().delegate = self
 
         resetLoopManager = ResetLoopManager(delegate: self)
 
@@ -187,53 +215,247 @@ class LoopAppManager: NSObject {
         alertPermissionsChecker = AlertPermissionsChecker()
         alertPermissionsChecker.delegate = alertManager
         
-        trustedTimeChecker = TrustedTimeChecker(alertManager: alertManager)
+        trustedTimeChecker = LoopTrustedTimeChecker(alertManager: alertManager)
 
-        settingsManager = SettingsManager(cacheStore: cacheStore,
-                                               expireAfter: localCacheDuration,
-                                               alertMuter: alertManager.alertMuter)
+        settingsManager = SettingsManager(
+            cacheStore: cacheStore,
+            expireAfter: localCacheDuration,
+            alertMuter: alertManager.alertMuter,
+            analyticsServicesManager: analyticsServicesManager
+        )
+
+        // Once settings manager is initialized, we can register for remote notifications
+        if FeatureFlags.remoteCommandsEnabled {
+            DispatchQueue.main.async {
+#if targetEnvironment(simulator)
+                self.remoteNotificationRegistrationDidFinish(.failure(SimulatorError.remoteNotificationsNotAvailable))
+#else
+                UIApplication.shared.registerForRemoteNotifications()
+#endif
+            }
+        }
+
+        healthStore = HKHealthStore()
+
+        let carbHealthStore = HealthKitSampleStore(
+            healthStore: healthStore,
+            observeHealthKitSamplesFromOtherApps: FeatureFlags.observeHealthKitCarbSamplesFromOtherApps, // At some point we should let the user decide which apps they would like to import from.
+            type: HealthKitSampleStore.carbType,
+            observationStart: Date().addingTimeInterval(-CarbMath.maximumAbsorptionTimeInterval)
+        )
+
+        temporaryPresetsManager = TemporaryPresetsManager(settingsProvider: settingsManager, alertIssuer: alertManager)
+        temporaryPresetsManager.presetHistory.delegate = self
+
+        temporaryPresetsManager.addTemporaryPresetObserver(analyticsServicesManager)
+
+        await temporaryPresetsManager.scheduleNextPresetReminder()
+
+        self.carbStore = CarbStore(
+            healthKitSampleStore: carbHealthStore,
+            cacheStore: cacheStore,
+            cacheLength: localCacheDuration
+        )
+
+        let insulinHealthStore = HealthKitSampleStore(
+            healthStore: healthStore,
+            observeHealthKitSamplesFromOtherApps: FeatureFlags.observeHealthKitDoseSamplesFromOtherApps,
+            type: HealthKitSampleStore.insulinQuantityType,
+            observationStart: Date().addingTimeInterval(-CarbMath.maximumAbsorptionTimeInterval)
+        )
+
+        self.doseStore = await DoseStore(
+            healthKitSampleStore: insulinHealthStore,
+            cacheStore: cacheStore,
+            cacheLength: localCacheDuration,
+            longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration,
+            lastPumpEventsReconciliation: nil // PumpManager is nil at this point. Will update this via addPumpEvents below
+        )
+
+        let glucoseHealthStore = HealthKitSampleStore(
+            healthStore: healthStore,
+            observeHealthKitSamplesFromOtherApps:  FeatureFlags.observeHealthKitGlucoseSamplesFromOtherApps,
+            type: HealthKitSampleStore.glucoseType,
+            observationStart: Date().addingTimeInterval(-.hours(24))
+        )
+
+        self.glucoseStore = await GlucoseStore(
+            healthKitSampleStore: glucoseHealthStore,
+            cacheStore: cacheStore,
+            cacheLength: localCacheDuration,
+            provenanceIdentifier: HKSource.default().bundleIdentifier
+        )
+
+        dosingDecisionStore = DosingDecisionStore(store: cacheStore, expireAfter: localCacheDuration)
+
+
+        NotificationCenter.default.addObserver(forName: .HealthStorePreferredGlucoseUnitDidChange, object: healthStore, queue: nil) { [weak self] _ in
+            guard let self else {
+                return
+            }
+
+            Task { @MainActor in
+                if let hkUnit = await self.healthStore.cachedPreferredUnits(for: .bloodGlucose) {
+                    let unit = LoopUnit(from: hkUnit)
+                    self.displayGlucosePreference.unitDidChange(to: unit)
+                    self.notifyObserversOfDisplayGlucoseUnitChange(to: unit)
+                }
+            }
+        }
+
+        crashRecoveryManager = CrashRecoveryManager(alertIssuer: alertManager)
+
+        loopDataManager = LoopDataManager(
+            lastLoopCompleted: ExtensionDataManager.context?.lastLoopCompleted,
+            temporaryPresetsManager: temporaryPresetsManager,
+            settingsProvider: settingsManager,
+            doseStore: doseStore,
+            glucoseStore: glucoseStore,
+            carbStore: carbStore,
+            crashRecoveryManager: crashRecoveryManager,
+            dosingDecisionStore: dosingDecisionStore,
+            trustedTimeOffset: { self.trustedTimeChecker.detectedSystemTimeOffset },
+            analyticsServicesManager: analyticsServicesManager,
+            carbAbsorptionModel: .piecewiseLinear,
+            dosingStrategySelectionEnabled: FeatureFlags.dosingStrategySelectionEnabled
+        )
+
+        cacheStore.delegate = loopDataManager
+
+        alertManager.addAlertResponder(managerIdentifier: crashRecoveryManager.managerIdentifier, alertResponder: crashRecoveryManager)
+        alertManager.addAlertResponder(managerIdentifier: temporaryPresetsManager.managerIdentifier, alertResponder: temporaryPresetsManager)
+
+        cgmEventStore = CgmEventStore(cacheStore: cacheStore, cacheLength: localCacheDuration)
+
+        let fileManager = FileManager.default
+        let documentsDirectory = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let deviceLogDirectory = documentsDirectory.appendingPathComponent("DeviceLog")
+        if !fileManager.fileExists(atPath: deviceLogDirectory.path) {
+            do {
+                try fileManager.createDirectory(at: deviceLogDirectory, withIntermediateDirectories: false)
+            } catch let error {
+                preconditionFailure("Could not create DeviceLog directory: \(error)")
+            }
+        }
+        deviceLog = PersistentDeviceLog(storageFile: deviceLogDirectory.appendingPathComponent("Storage.sqlite"), maxEntryAge: localCacheDuration)
+
+
+        remoteDataServicesManager = RemoteDataServicesManager(
+            alertStore: alertManager.alertStore,
+            carbStore: carbStore,
+            doseStore: doseStore,
+            dosingDecisionStore: dosingDecisionStore,
+            glucoseStore: glucoseStore,
+            cgmEventStore: cgmEventStore,
+            settingsProvider: settingsManager,
+            overrideHistory: temporaryPresetsManager.presetHistory,
+            insulinDeliveryStore: doseStore.insulinDeliveryStore,
+            deviceLog: deviceLog,
+            automationHistoryProvider: loopDataManager
+        )
+
+        settingsManager.remoteDataServicesManager = remoteDataServicesManager
+
+        remoteDataServicesManager.triggerAllUploads()
+
+        servicesManager = ServicesManager(
+            pluginManager: pluginManager,
+            alertManager: alertManager,
+            analyticsServicesManager: analyticsServicesManager,
+            loggingServicesManager: loggingServicesManager,
+            remoteDataServicesManager: remoteDataServicesManager,
+            settingsManager: settingsManager,
+            servicesManagerDelegate: loopDataManager,
+            servicesManagerDosingDelegate: self
+        )
+
+        statefulPluginManager = StatefulPluginManager(pluginManager: pluginManager, servicesManager: servicesManager)
 
         deviceDataManager = DeviceDataManager(pluginManager: pluginManager,
+                                              deviceLog: deviceLog,
                                               alertManager: alertManager,
                                               settingsManager: settingsManager,
-                                              loggingServicesManager: loggingServicesManager,
+                                              healthStore: healthStore,
+                                              carbStore: carbStore,
+                                              doseStore: doseStore,
+                                              glucoseStore: glucoseStore,
+                                              cgmEventStore: cgmEventStore,
+                                              uploadEventListener: remoteDataServicesManager,
+                                              crashRecoveryManager: crashRecoveryManager,
+                                              loopControl: loopDataManager,
                                               analyticsServicesManager: analyticsServicesManager,
+                                              activeServicesProvider: servicesManager,
+                                              activeStatefulPluginsProvider: statefulPluginManager,
                                               bluetoothProvider: bluetoothStateManager,
                                               alertPresenter: self,
-                                              automaticDosingStatus: automaticDosingStatus,
                                               cacheStore: cacheStore,
                                               localCacheDuration: localCacheDuration,
-                                              overrideHistory: overrideHistory,
-                                              trustedTimeChecker: trustedTimeChecker
+                                              displayGlucosePreference: displayGlucosePreference,
+                                              displayGlucoseUnitBroadcaster: self
         )
+
+        dosingDecisionStore.delegate = deviceDataManager
+        remoteDataServicesManager.delegate = deviceDataManager
+
+        let criticalEventLogs: [CriticalEventLog] = [settingsManager.settingsStore!, glucoseStore, carbStore, dosingDecisionStore, doseStore, deviceDataManager.deviceLog, alertManager.alertStore]
+        criticalEventLogExportManager = CriticalEventLogExportManager(logs: criticalEventLogs,
+                                                                      directory: FileManager.default.exportsDirectoryURL,
+                                                                      historicalDuration: localCacheDuration)
+
+        statusExtensionManager = ExtensionDataManager(
+            deviceDataManager: deviceDataManager,
+            loopDataManager: loopDataManager,
+            settingsManager: settingsManager,
+            temporaryPresetsManager: temporaryPresetsManager
+        )
+
+        watchManager = WatchDataManager(
+            deviceManager: deviceDataManager,
+            settingsManager: settingsManager,
+            loopDataManager: loopDataManager,
+            carbStore: carbStore,
+            glucoseStore: glucoseStore,
+            analyticsServicesManager: analyticsServicesManager,
+            temporaryPresetsManager: temporaryPresetsManager,
+            alertManager: alertManager,
+            healthStore: healthStore
+        )
+
+        self.mealDetectionManager = MealDetectionManager(
+            algorithmStateProvider: loopDataManager,
+            settingsProvider: temporaryPresetsManager,
+            bolusStateProvider: deviceDataManager
+        )
+
+        loopDataManager.deliveryDelegate = deviceDataManager
+
+        deviceDataManager.instantiateDeviceManagers()
+
         settingsManager.deviceStatusProvider = deviceDataManager
-        settingsManager.displayGlucosePreference = deviceDataManager.displayGlucosePreference
-
-
-        overrideHistory.delegate = self
+        settingsManager.displayGlucosePreference = displayGlucosePreference
 
         SharedLogging.instance = loggingServicesManager
 
-        scheduleBackgroundTasks()
+        criticalEventLogExportManager.scheduleCriticalEventLogHistoricalExportBackgroundTask()
+
 
         supportManager = SupportManager(pluginManager: pluginManager,
                                         deviceSupportDelegate: deviceDataManager,
-                                        servicesManager: deviceDataManager.servicesManager,
+                                        servicesManager: servicesManager,
                                         alertIssuer: alertManager)
         
         setWhitelistedDevices()
 
         onboardingManager = OnboardingManager(pluginManager: pluginManager,
                                               bluetoothProvider: bluetoothStateManager,
-                                              deviceDataManager: deviceDataManager,
-                                              statefulPluginManager: deviceDataManager.statefulPluginManager,
-                                              servicesManager: deviceDataManager.servicesManager,
-                                              loopDataManager: deviceDataManager.loopManager,
+                                              deviceDataManager: deviceDataManager, 
+                                              settingsManager: settingsManager,
+                                              statefulPluginManager: statefulPluginManager,
+                                              servicesManager: servicesManager,
+                                              loopDataManager: loopDataManager,
                                               supportManager: supportManager,
                                               windowProvider: windowProvider,
                                               userDefaults: UserDefaults.appGroup!)
-
-        deeplinkManager = DeeplinkManager(rootViewController: rootViewController)
 
         for support in supportManager.availableSupports {
             if let analyticsService = support as? AnalyticsService {
@@ -252,23 +474,39 @@ class LoopAppManager: NSObject {
         }
 
         analyticsServicesManager.identify("Dosing Strategy", value: settingsManager.loopSettings.automaticDosingStrategy.analyticsValue)
-        let serviceNames = deviceDataManager.servicesManager.activeServices.map { $0.pluginIdentifier }
+        let serviceNames = servicesManager.activeServices.map { $0.pluginIdentifier }
         analyticsServicesManager.identify("Services", array: serviceNames)
 
         if FeatureFlags.scenariosEnabled {
-            testingScenariosManager = LocalTestingScenariosManager(deviceManager: deviceDataManager, supportManager: supportManager)
+            testingScenariosManager = TestingScenariosManager(
+                deviceManager: deviceDataManager,
+                supportManager: supportManager,
+                pluginManager: pluginManager,
+                carbStore: carbStore,
+                settingsManager: settingsManager
+            )
         }
 
         analyticsServicesManager.application(didFinishLaunchingWithOptions: launchOptions)
 
-
-        automaticDosingStatus.$isAutomaticDosingAllowed
-            .combineLatest(deviceDataManager.loopManager.$dosingEnabled)
-            .map { $0 && $1 }
-            .assign(to: \.automaticDosingStatus.automaticDosingEnabled, on: self)
-            .store(in: &cancellables)
-
         state = state.next
+
+        await loopDataManager.updateDisplayState()
+
+        NotificationCenter.default.publisher(for: .LoopCycleCompleted)
+            .sink { [weak self] _ in
+                Task {
+                    await self?.loopCycleDidComplete()
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func loopCycleDidComplete() async {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            self.widgetLog.default("Refreshing widget. Reason: Loop completed")
+            WidgetCenter.shared.reloadAllTimelines()
+        }
     }
 
     private func launchOnboarding() {
@@ -278,35 +516,121 @@ class LoopAppManager: NSObject {
         onboardingManager.launch {
             DispatchQueue.main.async {
                 self.state = self.state.next
-                self.resumeLaunch()
+                Task {
+                    await self.resumeLaunch()
+                    await self.alertManager.playbackAlertsFromPersistence()
+                }
             }
         }
     }
+    
+    private lazy var settingsViewModel: SettingsViewModel = {
+        let deletePumpDataFunc: () -> PumpManagerViewModel.DeleteTestingDataFunc? = { [weak self] in
+            (self?.deviceDataManager.pumpManager is TestingPumpManager) ? {
+                Task { [weak self] in try? await self?.deviceDataManager.deleteTestingPumpData()
+                }} : nil
+        }
+        let deleteCGMDataFunc: () -> CGMManagerViewModel.DeleteTestingDataFunc? = { [weak self] in
+            (self?.deviceDataManager.cgmManager is TestingCGMManager) ? {
+                Task { [weak self] in try? await self?.deviceDataManager.deleteTestingCGMData()
+                }} : nil
+        }
+        let pumpViewModel = PumpManagerViewModel(
+            image: { [weak self] in (self?.deviceDataManager.pumpManager as? PumpManagerUI)?.smallImage },
+            name: { [weak self] in self?.deviceDataManager.pumpManager?.localizedTitle ?? "" },
+            isSetUp: { [weak self] in self?.deviceDataManager.pumpManager?.isOnboarded == true },
+            availableDevices: deviceDataManager.availablePumpManagers,
+            deleteTestingDataFunc: deletePumpDataFunc
+        )
 
-    private func launchHomeScreen() {
+        let cgmViewModel = CGMManagerViewModel(
+            image: {[weak self] in (self?.deviceDataManager.cgmManager as? DeviceManagerUI)?.smallImage },
+            name: {[weak self] in self?.deviceDataManager.cgmManager?.localizedTitle ?? "" },
+            isSetUp: {[weak self] in self?.deviceDataManager.cgmManager?.isOnboarded == true },
+            availableDevices: deviceDataManager.availableCGMManagers,
+            deleteTestingDataFunc: deleteCGMDataFunc
+        )
+        let servicesViewModel = ServicesViewModel(showServices: FeatureFlags.includeServicesInSettingsEnabled,
+                                                  availableServices: { [weak self] in self?.servicesManager.availableServices ?? [] },
+                                                  activeServices: { [weak self] in self?.servicesManager.activeServices ?? [] })
+        let versionUpdateViewModel = VersionUpdateViewModel(supportManager: supportManager, guidanceColors: .default)
+        
+        let viewModel = SettingsViewModel(alertPermissionsChecker: alertPermissionsChecker,
+                                          alertMuter: alertManager.alertMuter,
+                                          versionUpdateViewModel: versionUpdateViewModel,
+                                          pumpManagerSettingsViewModel: pumpViewModel,
+                                          cgmManagerSettingsViewModel: cgmViewModel,
+                                          servicesViewModel: servicesViewModel,
+                                          criticalEventLogExportViewModel: CriticalEventLogExportViewModel(exporterFactory: criticalEventLogExportManager),
+                                          therapySettings: { [weak self] in self?.settingsManager.therapySettings ?? TherapySettings() },
+                                          initialDosingEnabled: self.settingsManager.settings.dosingEnabled,
+                                          automaticDosingStrategy: self.settingsManager.settings.automaticDosingStrategy,
+                                          lastLoopCompletion: loopDataManager.$lastLoopCompleted,
+                                          mostRecentGlucoseDataDate: loopDataManager.$publishedMostRecentGlucoseDataDate,
+                                          mostRecentPumpDataDate: loopDataManager.$publishedMostRecentPumpDataDate,
+                                          availableSupports: supportManager.availableSupports,
+                                          isOnboardingComplete: onboardingManager.isComplete,
+                                          therapySettingsViewModelDelegate: deviceDataManager,
+                                          presetHistory: temporaryPresetsManager.presetHistory,
+                                          deliveryDelegate: deviceDataManager,
+                                          deviceManager: deviceDataManager
+        )
+        
+        viewModel.favoriteFoodInsightsDelegate = loopDataManager
+        
+        return viewModel
+    }()
+
+    private func launchHomeScreen() async {
         dispatchPrecondition(condition: .onQueue(.main))
         precondition(state == .launchHomeScreen)
+        
+        let viewModel = StatusTableViewModel(
+            alertPermissionsChecker: alertPermissionsChecker,
+            alertMuter: alertManager.alertMuter,
+            deviceDataManager: deviceDataManager,
+            onboardingManager: onboardingManager,
+            supportManager: supportManager,
+            testingScenariosManager: testingScenariosManager,
+            settingsManager: settingsManager,
+            temporaryPresetsManager: temporaryPresetsManager,
+            loopDataManager: loopDataManager,
+            diagnosticReportGenerator: self,
+            simulatedData: self,
+            analyticsServicesManager: analyticsServicesManager,
+            servicesManager: servicesManager,
+            carbStore: carbStore,
+            doseStore: doseStore,
+            criticalEventLogExportManager: criticalEventLogExportManager,
+            bluetoothStateManager: bluetoothStateManager,
+            settingsViewModel: settingsViewModel
+        )
 
-        let storyboard = UIStoryboard(name: "Main", bundle: Bundle(for: Self.self))
-        let statusTableViewController = storyboard.instantiateViewController(withIdentifier: "MainStatusViewController") as! StatusTableViewController
-        statusTableViewController.alertPermissionsChecker = alertPermissionsChecker
-        statusTableViewController.alertMuter = alertManager.alertMuter
-        statusTableViewController.automaticDosingStatus = automaticDosingStatus
-        statusTableViewController.deviceManager = deviceDataManager
-        statusTableViewController.onboardingManager = onboardingManager
-        statusTableViewController.supportManager = supportManager
-        statusTableViewController.testingScenariosManager = testingScenariosManager
-        bluetoothStateManager.addBluetoothObserver(statusTableViewController)
+        let statusTableView = StatusTableView(viewModel: viewModel)
 
+        self.statusTableViewController = statusTableView.viewController
+        
         var rootNavigationController = rootViewController as? RootNavigationController
         if rootNavigationController == nil {
             rootNavigationController = RootNavigationController()
             rootViewController = rootNavigationController
         }
 
-        rootNavigationController?.setViewControllers([statusTableViewController], animated: true)
+        rootNavigationController?.setViewControllers([
+            UIHostingController(
+                rootView: statusTableView
+                    .environmentObject(deviceDataManager.displayGlucosePreference)
+                    .environment(\.appName, Bundle.main.bundleDisplayName)
+                    .environment(\.isInvestigationalDevice, FeatureFlags.isInvestigationalDevice)
+                    .environment(\.guidanceColors, .default)
+                    .environment(\.loopStatusColorPalette, .loopStatus)
+                    .environment(\.settingsManager, settingsManager)
+                    .environment(\.temporaryPresetsManager, temporaryPresetsManager)
+                    .edgesIgnoringSafeArea(.top)
+            )
+        ], animated: true)
 
-        deviceDataManager.refreshDeviceData()
+        await deviceDataManager.refreshDeviceData()
 
         handleRemoteNotificationFromLaunchOptions()
 
@@ -314,7 +638,7 @@ class LoopAppManager: NSObject {
 
         self.state = state.next
 
-        alertManager.playbackAlertsFromPersistence()
+        await alertManager.playbackAlertsFromPersistence()
     }
 
     // MARK: - Life Cycle
@@ -325,15 +649,17 @@ class LoopAppManager: NSObject {
         }
         settingsManager?.didBecomeActive()
         deviceDataManager?.didBecomeActive()
-        alertManager.inferDeliveredLoopNotRunningNotifications()
-        
+        Task {
+            await alertManager?.inferDeliveredLoopNotRunningNotifications()
+        }
+
         widgetLog.default("Refreshing widget. Reason: App didBecomeActive")
         WidgetCenter.shared.reloadAllTimelines()
     }
 
     // MARK: - Remote Notification
     
-    func remoteNotificationRegistrationDidFinish(_ result: Result<Data,Error>) {
+    func remoteNotificationRegistrationDidFinish(_ result: Swift.Result<Data,Error>) {
         if case .success(let token) = result {
             log.default("DeviceToken: %{public}@", token.hexadecimalString)
         }
@@ -349,14 +675,36 @@ class LoopAppManager: NSObject {
         guard let notification = notification else {
             return false
         }
-        deviceDataManager?.servicesManager.handleRemoteNotification(notification)
+        servicesManager.handleRemoteNotification(notification)
         return true
     }
     
     // MARK: - Deeplinking
     
     func handle(_ url: URL) -> Bool {
-        deeplinkManager.handle(url)
+        guard let deeplink = Deeplink(url: url) else {
+            return false
+        }
+        
+        switch deeplink {
+        case let .carbEntry(carbEntryLink):
+            if let carbEntryLink {
+                switch carbEntryLink {
+                case let .carbEntryDetected(value):
+                    statusTableViewController?.presentCarbEntryScreen(nil, value: value)
+                }
+            } else {
+                statusTableViewController?.presentCarbEntryScreen(nil)
+            }
+        case .preMeal:
+            statusTableViewController?.presentPresets()
+        case .bolus:
+            statusTableViewController?.presentBolusScreen()
+        case .customPresets:
+            statusTableViewController?.presentPresets()
+        }
+        
+        return true
     }
 
     // MARK: - Continuity
@@ -393,20 +741,6 @@ class LoopAppManager: NSObject {
                 // Fallback on earlier versions
             }
         }
-    }
-
-    // MARK: - Background Tasks
-
-    private func registerBackgroundTasks() {
-        if DeviceDataManager.registerCriticalEventLogHistoricalExportBackgroundTask({ self.deviceDataManager?.handleCriticalEventLogHistoricalExportBackgroundTask($0) }) {
-            log.debug("Critical event log export background task registered")
-        } else {
-            log.error("Critical event log export background task not registered")
-        }
-    }
-
-    private func scheduleBackgroundTasks() {
-        deviceDataManager?.scheduleCriticalEventLogHistoricalExportBackgroundTask()
     }
 
     // MARK: - Private
@@ -446,72 +780,74 @@ class LoopAppManager: NSObject {
         get { windowProvider?.window?.rootViewController }
         set { windowProvider?.window?.rootViewController = newValue }
     }
+    
+    private var statusTableViewController: StatusTableViewController?
 }
 
 // MARK: - AlertPresenter
 
 extension LoopAppManager: AlertPresenter {
-    func present(_ viewControllerToPresent: UIViewController, animated: Bool, completion: (() -> Void)?) {
-        DispatchQueue.main.async {
-            self.rootViewController?.topmostViewController.present(viewControllerToPresent, animated: animated, completion: completion)
+    func present(_ viewControllerToPresent: UIViewController, animated: Bool) async {
+        await withCheckedContinuation { continuation in
+            self.rootViewController?.topmostViewController.present(viewControllerToPresent, animated: animated) {
+                continuation.resume()
+            }
         }
     }
 
-    func dismissTopMost(animated: Bool, completion: (() -> Void)?) {
-        rootViewController?.topmostViewController.dismiss(animated: animated, completion: completion)
+    func dismissTopMost(animated: Bool) async {
+        await withCheckedContinuation { continuation in
+            rootViewController?.topmostViewController.dismiss(animated: animated) {
+                continuation.resume()
+            }
+        }
     }
 
-    func dismissAlert(_ alertToDismiss: UIAlertController, animated: Bool, completion: (() -> Void)?) {
-        if rootViewController?.topmostViewController == alertToDismiss {
-            dismissTopMost(animated: animated, completion: completion)
-        } else {
-            // check if the alert to dismiss is presenting another alert (and so on)
-            // calling dismiss() on an alert presenting another alert will only dismiss the presented alert
-            // (and any other alerts presented by the presented alert)
+    func dismissAlert(_ alertToDismiss: UIAlertController, animated: Bool) async {
+        await alertToDismiss.dismiss(animated: animated)
+    }
+}
 
-            // get the stack of presented alerts that would be undesirably dismissed
-            var presentedAlerts: [UIAlertController] = []
-            var currentAlert = alertToDismiss
-            while let presentedAlert = currentAlert.presentedViewController as? UIAlertController {
-                presentedAlerts.append(presentedAlert)
-                currentAlert = presentedAlert
+extension UIViewController {
+    func dismiss(animated flag: Bool) async {
+        await withCheckedContinuation { continuation in
+            self.dismiss(animated: flag) {
+                continuation.resume()
             }
+        }
+    }
+}
 
-            if presentedAlerts.isEmpty {
-                alertToDismiss.dismiss(animated: animated, completion: completion)
-            } else {
-                // Do not animate any of these view transitions, since the alert to dismiss is not at the top of the stack
+@MainActor
+protocol DisplayGlucoseUnitBroadcaster: AnyObject {
+    func addDisplayGlucoseUnitObserver(_ observer: DisplayGlucoseUnitObserver)
+    func removeDisplayGlucoseUnitObserver(_ observer: DisplayGlucoseUnitObserver)
+    func notifyObserversOfDisplayGlucoseUnitChange(to displayGlucoseUnit: LoopUnit)
+}
 
-                // dismiss all the child presented alerts.
-                // Calling dismiss() on a VC that is presenting an other VC will dismiss the presented VC and all of its child presented VCs
-                alertToDismiss.dismiss(animated: false) {
-                    // dismiss the desired alert
-                    // Calling dismiss() on a VC that is NOT presenting any other VCs will dismiss said VC
-                    alertToDismiss.dismiss(animated: false) {
-                        // present the child alerts that were undesirably dismissed
-                        var orderedPresentationBlock: (() -> Void)? = nil
-                        for alert in presentedAlerts.reversed() {
-                            if alert == presentedAlerts.last {
-                                orderedPresentationBlock = {
-                                    self.present(alert, animated: false, completion: completion)
-                                }
-                            } else {
-                                orderedPresentationBlock = {
-                                    self.present(alert, animated: false, completion: orderedPresentationBlock)
-                                }
-                            }
-                        }
-                        orderedPresentationBlock?()
-                    }
-                }
-            }
+extension LoopAppManager: DisplayGlucoseUnitBroadcaster {
+    func addDisplayGlucoseUnitObserver(_ observer: DisplayGlucoseUnitObserver) {
+        displayGlucoseUnitObservers.insert(observer)
+        Task { @MainActor in
+            observer.unitDidChange(to: self.displayGlucosePreference.unit)
+        }
+    }
+
+    func removeDisplayGlucoseUnitObserver(_ observer: DisplayGlucoseUnitObserver) {
+        displayGlucoseUnitObservers.remove(observer)
+        displayGlucoseUnitObservers.cleanupDeallocatedElements()
+    }
+
+    func notifyObserversOfDisplayGlucoseUnitChange(to displayGlucoseUnit: LoopUnit) {
+        self.displayGlucoseUnitObservers.forEach {
+            $0.unitDidChange(to: displayGlucoseUnit)
         }
     }
 }
 
 // MARK: - DeviceOrientationController
 
-extension LoopAppManager: DeviceOrientationController {
+extension LoopAppManager: @preconcurrency DeviceOrientationController {
     func setDefaultSupportedInferfaceOrientations() {
         supportedInterfaceOrientations = Self.defaultSupportedInterfaceOrientations
     }
@@ -520,7 +856,8 @@ extension LoopAppManager: DeviceOrientationController {
 // MARK: - UNUserNotificationCenterDelegate
 
 extension LoopAppManager: UNUserNotificationCenterDelegate {
-    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         switch notification.request.identifier {
         // TODO: Until these notifications are converted to use the new alert system, they shall still show in the foreground
         case LoopNotificationCategory.bolusFailure.rawValue,
@@ -539,7 +876,9 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
         }
     }
 
-    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        log.default("didReceive UNNotificationResponse: %{public}@", String(describing: response))
         switch response.actionIdentifier {
         case NotificationManager.Action.retryBolus.rawValue:
             if  let units = response.notification.request.content.userInfo[LoopNotificationUserInfoKey.bolusAmount.rawValue] as? Double,
@@ -548,21 +887,18 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
                 let activationType = BolusActivationType(rawValue: activationTypeRawValue),
                 startDate.timeIntervalSinceNow >= TimeInterval(minutes: -5)
             {
-                deviceDataManager?.analyticsServicesManager.didRetryBolus()
-                
-                deviceDataManager?.enactBolus(units: units, activationType: activationType) { (_) in
-                    DispatchQueue.main.async {
-                        completionHandler()
-                    }
-                }
-                return
+                analyticsServicesManager.didRetryBolus()
+                try? await deviceDataManager?.enactBolus(units: units, decisionId: UUID(uuidString: response.notification.request.content.userInfo[LoopNotificationUserInfoKey.decisionId.rawValue] as? String ?? ""), activationType: activationType)
             }
         case NotificationManager.Action.acknowledgeAlert.rawValue:
             let userInfo = response.notification.request.content.userInfo
-            if let alertIdentifier = userInfo[LoopNotificationUserInfoKey.alertTypeID.rawValue] as? Alert.AlertIdentifier,
-               let managerIdentifier = userInfo[LoopNotificationUserInfoKey.managerIDForAlert.rawValue] as? String {
-                alertManager?.acknowledgeAlert(identifier: Alert.Identifier(managerIdentifier: managerIdentifier, alertIdentifier: alertIdentifier))
+            if let alertIdentifier = userInfo[LoopNotificationUserInfoKey.alertTypeID.rawValue] as? LoopKit.Alert.AlertIdentifier,
+               let managerIdentifier = userInfo[LoopNotificationUserInfoKey.managerIDForAlert.rawValue] as? String
+            {
+                try? await alertManager?.acknowledgeAlert(identifier: Alert.Identifier(managerIdentifier: managerIdentifier, alertIdentifier:
+                                                                                    alertIdentifier))
             }
+
         case UNNotificationDefaultActionIdentifier:
             guard response.notification.request.identifier == LoopNotificationCategory.missedMeal.rawValue else {
                 break
@@ -575,7 +911,7 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
                 let mealTime = userInfo[LoopNotificationUserInfoKey.missedMealTime.rawValue] as? Date,
                 let carbAmount = userInfo[LoopNotificationUserInfoKey.missedMealCarbAmount.rawValue] as? Double
             {
-                let missedEntry = NewCarbEntry(quantity: HKQuantity(unit: .gram(),
+                let missedEntry = NewCarbEntry(quantity: LoopQuantity(unit: .gram,
                                                                          doubleValue: carbAmount),
                                                     startDate: mealTime,
                                                     foodType: nil,
@@ -586,10 +922,14 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
             rootViewController?.restoreUserActivityState(carbActivity)
             
         default:
-            break
+            let userInfo = response.notification.request.content.userInfo
+            if let alertIdentifier = userInfo[LoopNotificationUserInfoKey.alertTypeID.rawValue] as? LoopKit.Alert.AlertIdentifier,
+               let managerIdentifier = userInfo[LoopNotificationUserInfoKey.managerIDForAlert.rawValue] as? String
+            {
+                let identifier = Alert.Identifier(managerIdentifier: managerIdentifier, alertIdentifier: alertIdentifier)
+                try? await alertManager.userDidSelectAction(alertIdentifier: identifier, actionIdentifier: response.actionIdentifier)
+            }
         }
-
-        completionHandler()
     }
 
 }
@@ -598,10 +938,10 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
 // MARK: - UNUserNotificationCenterDelegate
 
 extension LoopAppManager: TemporaryScheduleOverrideHistoryDelegate {
-    func temporaryScheduleOverrideHistoryDidUpdate(_ history: TemporaryScheduleOverrideHistory) {
-        UserDefaults.appGroup?.overrideHistory = history
-
-        deviceDataManager.remoteDataServicesManager.triggerUpload(for: .overrides)
+    nonisolated func temporaryScheduleOverrideHistoryDidUpdate(_ history: TemporaryScheduleOverrideHistory) {
+        Task {
+            await remoteDataServicesManager.triggerUpload(for: .overrides)
+        }
     }
 }
 
@@ -611,12 +951,14 @@ extension LoopAppManager: ResetLoopManagerDelegate {
     }
     
     func presentConfirmationAlert(confirmAction: @escaping (PumpManager?, @escaping () -> Void) -> Void, cancelAction: @escaping () -> Void) {
-        alertManager.presentLoopResetConfirmationAlert(
-            confirmAction: { [weak self] completion in
-                confirmAction(self?.deviceDataManager.pumpManager, completion)
-            },
-            cancelAction: cancelAction
-        )
+        Task {
+            await alertManager.presentLoopResetConfirmationAlert(
+                confirmAction: { [weak self] completion in
+                    confirmAction(self?.deviceDataManager.pumpManager, completion)
+                },
+                cancelAction: cancelAction
+            )
+        }
     }
     
     func loopWillReset() {
@@ -632,14 +974,160 @@ extension LoopAppManager: ResetLoopManagerDelegate {
     }
     
     func resetTestingData(completion: @escaping () -> Void) {
-        deviceDataManager.deleteTestingCGMData { [weak deviceDataManager] _ in
-            deviceDataManager?.deleteTestingPumpData { _ in
+        Task { [weak self] in
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    try? await self?.deviceDataManager.deleteTestingCGMData()
+                }
+                group.addTask {
+                    try? await self?.deviceDataManager?.deleteTestingPumpData()
+                }
+                
+                await group.waitForAll()
                 completion()
             }
         }
     }
     
     func presentCouldNotResetLoopAlert(error: Error) {
-        alertManager.presentCouldNotResetLoopAlert(error: error)
+        Task {
+            await alertManager.presentCouldNotResetLoopAlert(error: error)
+        }
     }
 }
+
+// MARK: - ServicesManagerDosingDelegate
+
+extension LoopAppManager: ServicesManagerDosingDelegate {
+    func deliverBolus(amountInUnits: Double, decisionId: UUID?) async throws {
+        try await deviceDataManager.enactBolus(units: amountInUnits, decisionId: decisionId, activationType: .manualNoRecommendation)
+    }
+}
+
+protocol DiagnosticReportGenerator: AnyObject {
+    func generateDiagnosticReport() async -> String
+}
+
+
+extension LoopAppManager: DiagnosticReportGenerator {
+    /// Generates a diagnostic report about the current state
+    ///
+    /// This operation is performed asynchronously and the completion will be executed on an arbitrary background queue.
+    ///
+    /// - parameter completion: A closure called once the report has been generated. The closure takes a single argument of the report string.
+    func generateDiagnosticReport() async -> String {
+
+        let entries: [String] = [
+            "## Build Details",
+            "* appNameAndVersion: \(Bundle.main.localizedNameAndVersion)",
+            "* profileExpiration: \(BuildDetails.default.profileExpirationString)",
+            "* gitRevision: \(BuildDetails.default.gitRevision ?? "N/A")",
+            "* gitBranch: \(BuildDetails.default.gitBranch ?? "N/A")",
+            "* workspaceGitRevision: \(BuildDetails.default.workspaceGitRevision ?? "N/A")",
+            "* workspaceGitBranch: \(BuildDetails.default.workspaceGitBranch ?? "N/A")",
+            "* sourceRoot: \(BuildDetails.default.sourceRoot ?? "N/A")",
+            "* buildDateString: \(BuildDetails.default.buildDateString ?? "N/A")",
+            "* xcodeVersion: \(BuildDetails.default.xcodeVersion ?? "N/A")",
+            "",
+            "## FeatureFlags",
+            "\(FeatureFlags)",
+            "",
+            await alertManager.generateDiagnosticReport(),
+            await deviceDataManager.generateDiagnosticReport(),
+            "",
+            String(reflecting: self.watchManager),
+            "",
+            String(reflecting: self.statusExtensionManager),
+            "",
+            await loopDataManager.generateDiagnosticReport(),
+            "",
+            await self.glucoseStore.generateDiagnosticReport(),
+            "",
+            await self.carbStore.generateDiagnosticReport(),
+            "",
+            await self.doseStore.generateDiagnosticReport(),
+            "",
+            await self.mealDetectionManager.generateDiagnosticReport(),
+            "",
+            await UNUserNotificationCenter.current().generateDiagnosticReport(),
+            "",
+            UIDevice.current.generateDiagnosticReport(),
+            ""
+        ]
+        return entries.joined(separator: "\n")
+    }
+}
+
+
+// MARK: SimulatedData
+
+@MainActor
+protocol SimulatedData {
+    func generateSimulatedHistoricalCoreData(completion: @escaping (Error?) -> Void)
+    func purgeHistoricalCoreData(completion: @escaping (Error?) -> Void)
+}
+
+extension LoopAppManager: SimulatedData {
+    func generateSimulatedHistoricalCoreData(completion: @escaping (Error?) -> Void) {
+        guard FeatureFlags.simulatedCoreDataEnabled else {
+            fatalError("\(#function) should be invoked only when simulated core data is enabled")
+        }
+
+        guard settingsManager.settingsStore != nil else {
+            fatalError("\(#function) invoke with no settings store")
+        }
+
+        Task { @MainActor in
+            do {
+                try await settingsManager.settingsStore?.generateSimulatedHistoricalSettingsObjects()
+                try await self.doseStore.generateSimulatedHistoricalPumpEvents()
+                try await self.glucoseStore.generateSimulatedHistoricalGlucoseObjects()
+                try await self.carbStore.generateSimulatedHistoricalCarbObjects()
+                try await self.dosingDecisionStore.generateSimulatedHistoricalDosingDecisionObjects()
+                try await self.deviceDataManager.deviceLog.generateSimulatedHistoricalDeviceLogEntries()
+                try await self.alertManager.alertStore.generateSimulatedHistoricalStoredAlerts()
+            } catch {
+                completion(error)
+                return
+            }
+
+        }
+    }
+
+    func purgeHistoricalCoreData(completion: @escaping (Error?) -> Void) {
+        guard FeatureFlags.simulatedCoreDataEnabled else {
+            fatalError("\(#function) should be invoked only when simulated core data is enabled")
+        }
+
+        alertManager.alertStore.purgeHistoricalStoredAlerts() { error in
+            guard error == nil else {
+                completion(error)
+                return
+            }
+            self.deviceDataManager.deviceLog.purgeHistoricalDeviceLogEntries() { error in
+                guard error == nil else {
+                    completion(error)
+                    return
+                }
+                Task { @MainActor in
+                    do {
+                        try await self.doseStore.purgeHistoricalPumpEvents()
+                        try await self.glucoseStore.purgeHistoricalGlucoseObjects()
+                        try await self.dosingDecisionStore.purgeHistoricalDosingDecisionObjects()
+                    } catch {
+                        completion(error)
+                        return
+                    }
+                    self.carbStore.purgeHistoricalCarbObjects() { error in
+                        guard error == nil else {
+                            completion(error)
+                            return
+                        }
+                        self.settingsManager.purgeHistoricalSettingsObjects(completion: completion)
+                    }
+                }
+            }
+        }
+    }
+}
+

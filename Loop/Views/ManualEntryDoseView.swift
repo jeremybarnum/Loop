@@ -7,7 +7,7 @@
 //
 
 import Combine
-import HealthKit
+import LoopAlgorithm
 import SwiftUI
 import LoopKit
 import LoopKitUI
@@ -21,7 +21,6 @@ struct ManualEntryDoseView: View {
 
     @State private var enteredBolusString = ""
     @State private var isInteractingWithChart = false
-
     @FocusState private var bolusFieldFocused: Bool
 
     @Environment(\.dismissAction) var dismiss
@@ -38,6 +37,7 @@ struct ManualEntryDoseView: View {
                     self.summarySection
                 }
                 .insetGroupedListStyle()
+                
             }
             .navigationBarTitle(self.title)
             .supportedInterfaceOrientations(.portrait)
@@ -91,7 +91,7 @@ struct ManualEntryDoseView: View {
         LabeledQuantity(
             label: Text("Active Carbs", comment: "Title describing quantity of still-absorbing carbohydrates"),
             quantity: viewModel.activeCarbs,
-            unit: .gram()
+            unit: .gram
         )
     }
     
@@ -100,7 +100,7 @@ struct ManualEntryDoseView: View {
         LabeledQuantity(
             label: Text("Active Insulin", comment: "Title describing quantity of still-absorbing insulin"),
             quantity: viewModel.activeInsulin,
-            unit: .internationalUnit(),
+            unit: .internationalUnit,
             maxFractionDigits: 2
         )
     }
@@ -145,7 +145,7 @@ struct ManualEntryDoseView: View {
     }
 
     private static let doseAmountFormatter: NumberFormatter = {
-        let quantityFormatter = QuantityFormatter(for: .internationalUnit())
+        let quantityFormatter = QuantityFormatter(for: .internationalUnit)
         return quantityFormatter.numberFormatter
     }()
     
@@ -178,32 +178,33 @@ struct ManualEntryDoseView: View {
             Spacer()
             HStack(alignment: .firstTextBaseline) {
                 TextField(Self.doseAmountFormatter.string(from: 0.0)!, text: typedBolusEntry)
-                .keyboardType(.decimalPad)
-                .textInputAutocapitalization(.never)
-                .disableAutocorrection(true)
-                .font(.title)
-                .multilineTextAlignment(.trailing)
-                .foregroundColor(.loopAccent)
-                .focused($bolusFieldFocused)
-                .onChange(of: enteredBolusString) { newValue in
-                    if newValue.count > 5 {
-                        enteredBolusString = String(newValue.prefix(5))
+                    .keyboardType(.decimalPad)
+                    .textInputAutocapitalization(.never)
+                    .disableAutocorrection(true)
+                    .font(.title)
+                    .multilineTextAlignment(.trailing)
+                    .foregroundColor(.loopAccent)
+                    .focused($bolusFieldFocused)
+                    .onChange(of: enteredBolusString) { oldValue, newValue in
+                        if newValue.count > 5 {
+                            enteredBolusString = String(newValue.prefix(5))
+                        }
                     }
-                }
-                .toolbar {
-                    ToolbarItemGroup(placement: .keyboard) {
-                        Spacer()
-                        Button("Done") { bolusFieldFocused = false }
+                    .toolbar {
+                        ToolbarItemGroup(placement: .keyboard) {
+                            Spacer()
+                            Button("Done") { bolusFieldFocused = false }
+                        }
                     }
-                }
                 bolusUnitsLabel
             }
         }
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("textField_Bolus")
     }
 
     private var bolusUnitsLabel: some View {
-        Text(QuantityFormatter(for: .internationalUnit()).localizedUnitStringWithPlurality())
+        Text(QuantityFormatter(for: .internationalUnit).localizedUnitStringWithPlurality())
             .foregroundColor(Color(.secondaryLabel))
     }
 
@@ -211,7 +212,7 @@ struct ManualEntryDoseView: View {
         Binding(
             get: { self.enteredBolusString },
             set: { newValue in
-                self.viewModel.enteredBolus = HKQuantity(unit: .internationalUnit(), doubleValue: Self.doseAmountFormatter.number(from: newValue)?.doubleValue ?? 0)
+                self.viewModel.enteredBolus = LoopQuantity(unit: .internationalUnit, doubleValue: Self.doseAmountFormatter.number(from: newValue)?.doubleValue ?? 0)
                 self.enteredBolusString = newValue
             }
         )
@@ -236,7 +237,13 @@ struct ManualEntryDoseView: View {
     private var actionButton: some View {
         Button<Text>(
             action: {
-                self.viewModel.saveManualDose(onSuccess: self.dismiss)
+                Task {
+                    do {
+                        try await self.viewModel.saveManualDose()
+                        self.dismiss()
+                    } catch {
+                    }
+                }
             },
             label: {
                 return Text("Log Dose", comment: "Button text to log a dose")

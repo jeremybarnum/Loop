@@ -7,6 +7,7 @@
 //
 
 import UIKit
+import LoopKit
 import LoopKitUI
 
 public final class BasalRateHUDView: BaseHUDView {
@@ -15,7 +16,7 @@ public final class BasalRateHUDView: BaseHUDView {
         return 3
     }
 
-    @IBOutlet private weak var basalStateView: BasalStateView!
+    @IBOutlet private weak var treatmentArrowStateView: TreatmentArrowStateView!
 
     @IBOutlet private weak var basalRateLabel: UILabel! {
         didSet {
@@ -28,23 +29,13 @@ public final class BasalRateHUDView: BaseHUDView {
 
     public override func tintColorDidChange() {
         super.tintColorDidChange()
+        treatmentArrowStateView.tintColor = tintColor
     }
 
     private lazy var basalRateFormatString = LocalizedString("%@ U", comment: "The format string describing the basal rate.")
 
-    public func setNetBasalRate(_ rate: Double, percent: Double, at date: Date) {
-        let time = timeFormatter.string(from: date)
-        caption?.text = time
-
-        if let rateString = decimalFormatter.string(from: rate) {
-            basalRateLabel?.text = String(format: basalRateFormatString, rateString)
-            accessibilityValue = String(format: LocalizedString("%1$@ units per hour at %2$@", comment: "Accessibility format string describing the basal rate. (1: localized basal rate value)(2: last updated time)"), rateString, time)
-        } else {
-            basalRateLabel?.text = nil
-            accessibilityValue = nil
-        }
-
-        basalStateView.netBasalPercent = percent
+    public func setAutomatedTreatmentState(_ automatedTreatmentState: AutomatedTreatmentState) {
+        treatmentArrowStateView.automatedTreatmentState = automatedTreatmentState
     }
 
     private lazy var decimalFormatter: NumberFormatter = {

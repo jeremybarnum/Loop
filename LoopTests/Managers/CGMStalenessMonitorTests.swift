@@ -9,7 +9,7 @@
 import XCTest
 import Foundation
 import LoopKit
-import HealthKit
+import LoopAlgorithm
 @testable import Loop
 
 class CGMStalenessMonitorTests: XCTestCase {
@@ -18,11 +18,11 @@ class CGMStalenessMonitorTests: XCTestCase {
     private var fetchExpectation: XCTestExpectation?
     
     private var storedGlucoseSample: StoredGlucoseSample {
-        return StoredGlucoseSample(uuid: UUID(), provenanceIdentifier: UUID().uuidString, syncIdentifier: "syncIdentifier", syncVersion: 1, startDate: Date().addingTimeInterval(-.minutes(5)), quantity: HKQuantity(unit: .milligramsPerDeciliter, doubleValue: 120), condition: nil, trend: .flat, trendRate: HKQuantity(unit: .milligramsPerDeciliterPerMinute, doubleValue: 0.0), isDisplayOnly: false, wasUserEntered: false, device: nil, healthKitEligibleDate: nil)
+        return StoredGlucoseSample(uuid: UUID(), provenanceIdentifier: UUID().uuidString, syncIdentifier: "syncIdentifier", syncVersion: 1, startDate: Date().addingTimeInterval(-.minutes(5)), quantity: LoopQuantity(unit: .milligramsPerDeciliter, doubleValue: 120), condition: nil, trend: .flat, trendRate: LoopQuantity(unit: .milligramsPerDeciliterPerMinute, doubleValue: 0.0), isDisplayOnly: false, wasUserEntered: false, device: nil, healthKitEligibleDate: nil)
     }
     
     private var newGlucoseSample: NewGlucoseSample {
-        return NewGlucoseSample(date: Date().addingTimeInterval(-.minutes(1)), quantity: HKQuantity(unit: .milligramsPerDeciliter, doubleValue: 120), condition: nil, trend: .flat, trendRate: HKQuantity(unit: .milligramsPerDeciliterPerMinute, doubleValue: 0.0), isDisplayOnly: false, wasUserEntered: false, syncIdentifier: "syncIdentifier")
+        return NewGlucoseSample(date: Date().addingTimeInterval(-.minutes(1)), quantity: LoopQuantity(unit: .milligramsPerDeciliter, doubleValue: 120), condition: nil, trend: .flat, trendRate: LoopQuantity(unit: .milligramsPerDeciliterPerMinute, doubleValue: 0.0), isDisplayOnly: false, wasUserEntered: false, syncIdentifier: "syncIdentifier")
     }
 
     func testInitialValue() {
@@ -30,7 +30,7 @@ class CGMStalenessMonitorTests: XCTestCase {
         XCTAssert(monitor.cgmDataIsStale)
     }
     
-    func testStalenessWithRecentCMGSample() {
+    func testStalenessWithRecentCMGSample() async throws {
         let monitor = CGMStalenessMonitor()
         fetchExpectation = expectation(description: "Fetch latest cgm glucose")
         latestCGMGlucose = storedGlucoseSample
@@ -46,13 +46,16 @@ class CGMStalenessMonitorTests: XCTestCase {
         }
         
         monitor.delegate = self
-        waitForExpectations(timeout: 2)
-        
+
+        await monitor.checkCGMStaleness()
+
+        await fulfillment(of: [fetchExpectation!, exp], timeout: 2)
+
         XCTAssertNotNil(cancelable)
         XCTAssertEqual(receivedValues, [true, false])
     }
     
-    func testStalenessWithNoRecentCGMData() {
+    func testStalenessWithNoRecentCGMData() async throws {
         let monitor = CGMStalenessMonitor()
         fetchExpectation = expectation(description: "Fetch latest cgm glucose")
         latestCGMGlucose = nil
@@ -68,13 +71,16 @@ class CGMStalenessMonitorTests: XCTestCase {
         }
         
         monitor.delegate = self
-        waitForExpectations(timeout: 2)
-        
+
+        await monitor.checkCGMStaleness()
+
+        await fulfillment(of: [fetchExpectation!, exp], timeout: 2)
+
         XCTAssertNotNil(cancelable)
         XCTAssertEqual(receivedValues, [true, true])
     }
     
-    func testStalenessNewReadingsArriving() {
+    func testStalenessNewReadingsArriving() async throws {
         let monitor = CGMStalenessMonitor()
         fetchExpectation = expectation(description: "Fetch latest cgm glucose")
         latestCGMGlucose = nil
@@ -90,19 +96,21 @@ class CGMStalenessMonitorTests: XCTestCase {
         }
         
         monitor.delegate = self
-        
+
+        await monitor.checkCGMStaleness()
+
         monitor.cgmGlucoseSamplesAvailable([newGlucoseSample])
-        
-        waitForExpectations(timeout: 2)
-        
+
+        await fulfillment(of: [fetchExpectation!, exp], timeout: 2)
+
         XCTAssertNotNil(cancelable)
-        XCTAssertEqual(receivedValues, [true, false])
+        XCTAssertEqual(receivedValues, [true, true, false])
     }
 }
 
 extension CGMStalenessMonitorTests: CGMStalenessMonitorDelegate {
-    func getLatestCGMGlucose(since: Date, completion: @escaping (Result<StoredGlucoseSample?, Error>) -> Void) {
-        completion(.success(latestCGMGlucose))
+    public func getLatestCGMGlucose(since: Date) async throws -> StoredGlucoseSample? {
         fetchExpectation?.fulfill()
+        return latestCGMGlucose
     }
 }

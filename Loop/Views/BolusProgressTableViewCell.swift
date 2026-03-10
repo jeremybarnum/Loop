@@ -9,11 +9,22 @@
 import Foundation
 import LoopKit
 import LoopUI
-import HealthKit
+import LoopAlgorithm
 import MKRingProgressView
 
 
 public class BolusProgressTableViewCell: UITableViewCell {
+    
+    public enum Configuration {
+        case starting
+        case bolusing(delivered: Double?, ofTotalVolume: Double)
+        case canceling
+        case canceled(delivered: Double, ofTotalVolume: Double)
+    }
+    
+    @IBOutlet weak var activityIndicator: UIActivityIndicatorView!
+    @IBOutlet weak var paddedView: UIView!
+    @IBOutlet weak var progressIndicator: RingProgressView!
     @IBOutlet weak var progressLabel: UILabel!
     
     @IBOutlet weak var tapToStopLabel: UILabel! {
@@ -28,28 +39,14 @@ public class BolusProgressTableViewCell: UITableViewCell {
         }
     }
 
-    @IBOutlet weak var progressIndicator: RingProgressView!
-
-    public var totalUnits: Double? {
+    public var configuration: Configuration? {
         didSet {
             updateProgress()
         }
     }
-
-    public var deliveredUnits: Double? {
-        didSet {
-            updateProgress()
-        }
-    }
-
-    private lazy var gradient = CAGradientLayer()
-
-    private var doseTotalUnits: Double?
-
-    private var disableUpdates: Bool = false
 
     lazy var insulinFormatter: QuantityFormatter = {
-        let formatter = QuantityFormatter(for: .internationalUnit())
+        let formatter = QuantityFormatter(for: .internationalUnit)
         formatter.numberFormatter.minimumFractionDigits = 2
         return formatter
     }()
@@ -57,15 +54,12 @@ public class BolusProgressTableViewCell: UITableViewCell {
     override public func awakeFromNib() {
         super.awakeFromNib()
 
-        gradient.frame = bounds
-        backgroundView?.layer.insertSublayer(gradient, at: 0)
+        paddedView.layer.masksToBounds = true
+        paddedView.layer.cornerRadius = 10
+        paddedView.layer.borderWidth = 1
+        paddedView.layer.borderColor = UIColor.systemGray5.cgColor
+        
         updateColors()
-    }
-
-    override public func layoutSubviews() {
-        super.layoutSubviews()
-
-        gradient.frame = bounds
     }
 
     public override func tintColorDidChange() {
@@ -83,40 +77,75 @@ public class BolusProgressTableViewCell: UITableViewCell {
         progressIndicator.startColor = tintColor
         progressIndicator.endColor = tintColor
         stopSquare.backgroundColor = tintColor
-        gradient.colors = [
-            UIColor.cellBackgroundColor.withAlphaComponent(0).cgColor,
-            UIColor.cellBackgroundColor.cgColor
-        ]
     }
 
     private func updateProgress() {
-        guard !disableUpdates, let totalUnits = totalUnits else {
+        guard let configuration else {
+            progressIndicator.isHidden = true
+            activityIndicator.isHidden = true
+            tapToStopLabel.isHidden = true
             return
         }
-
-        let totalUnitsQuantity = HKQuantity(unit: .internationalUnit(), doubleValue: totalUnits)
-        let totalUnitsString = insulinFormatter.string(from: totalUnitsQuantity) ?? ""
-
-        if let deliveredUnits = deliveredUnits {
-            let deliveredUnitsQuantity = HKQuantity(unit: .internationalUnit(), doubleValue: deliveredUnits)
-            let deliveredUnitsString = insulinFormatter.string(from: deliveredUnitsQuantity, includeUnit: false) ?? ""
-
-            progressLabel.text = String(format: NSLocalizedString("Bolused %1$@ of %2$@", comment: "The format string for bolus progress. (1: delivered volume)(2: total volume)"), deliveredUnitsString, totalUnitsString)
-
-            let progress = deliveredUnits / totalUnits
-            UIView.animate(withDuration: 0.3) {
-                self.progressIndicator.progress = progress
+        
+        switch configuration {
+        case .starting:
+            progressIndicator.isHidden = true
+            activityIndicator.isHidden = false
+            tapToStopLabel.isHidden = true
+            
+            progressLabel.text = NSLocalizedString("Starting Bolus", comment: "The title of the cell indicating a bolus is being sent")
+            progressLabel.accessibilityIdentifier = "text_BolusStarting"
+        case let .bolusing(delivered, totalVolume):
+            progressIndicator.isHidden = false
+            activityIndicator.isHidden = true
+            tapToStopLabel.isHidden = false
+            tapToStopLabel.accessibilityIdentifier = "text_TapToStop"
+            
+            let totalUnitsQuantity = LoopQuantity(unit: .internationalUnit, doubleValue: totalVolume)
+            let totalUnitsString = insulinFormatter.string(from: totalUnitsQuantity) ?? ""
+            
+            if let delivered {
+                let deliveredUnitsQuantity = LoopQuantity(unit: .internationalUnit, doubleValue: delivered)
+                let deliveredUnitsString = insulinFormatter.string(from: deliveredUnitsQuantity, includeUnit: false) ?? ""
+                
+                progressLabel.text = String(format: NSLocalizedString("Bolused %1$@ of %2$@", comment: "The format string for bolus progress. (1: delivered volume)(2: total volume)"), deliveredUnitsString, totalUnitsString)
+                progressLabel.accessibilityIdentifier = "text_BolusingProgress"
+                
+                let progress = delivered / totalVolume
+                
+                UIView.animate(withDuration: 0.3) {
+                    self.progressIndicator.progress = progress
+                }
+            } else {
+                progressLabel.text = String(format: NSLocalizedString("Bolusing %1$@", comment: "The format string for bolus in progress showing total volume. (1: total volume)"), totalUnitsString)
+                progressLabel.accessibilityIdentifier = "text_BolusingProgress"
             }
-        } else {
-            progressLabel.text = String(format: NSLocalizedString("Bolusing %1$@", comment: "The format string for bolus in progress showing total volume. (1: total volume)"), totalUnitsString)
+        case .canceling:
+            progressIndicator.isHidden = true
+            activityIndicator.isHidden = false
+            tapToStopLabel.isHidden = true
+            
+            progressLabel.text = NSLocalizedString("Canceling Bolus", comment: "The title of the cell indicating a bolus is being canceled")
+            progressLabel.accessibilityIdentifier = "text_BolusCanceling"
+        case let .canceled(delivered, totalVolume):
+            progressIndicator.isHidden = true
+            activityIndicator.isHidden = true
+            tapToStopLabel.isHidden = true
+            
+            let totalUnitsQuantity = LoopQuantity(unit: .internationalUnit, doubleValue: totalVolume)
+            let totalUnitsString = insulinFormatter.string(from: totalUnitsQuantity) ?? ""
+            
+            let deliveredUnitsQuantity = LoopQuantity(unit: .internationalUnit, doubleValue: delivered)
+            let deliveredUnitsString = insulinFormatter.string(from: deliveredUnitsQuantity, includeUnit: false) ?? ""
+            
+            progressLabel.text = String(format: NSLocalizedString("Bolus Canceled: Delivered %1$@ of %2$@", comment: "The title of the cell indicating a bolus has been canceled. (1: delivered volume)(2: total volume)"), deliveredUnitsString, totalUnitsString)
+            progressLabel.accessibilityIdentifier = "text_BolusCanceled"
         }
     }
 
     override public func prepareForReuse() {
         super.prepareForReuse()
-        disableUpdates = true
-        deliveredUnits = 0
-        disableUpdates = false
+        configuration = nil
         progressIndicator.progress = 0
         CATransaction.flush()
         progressLabel.text = ""

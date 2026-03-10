@@ -8,8 +8,7 @@
 
 import Foundation
 import LoopKit
-import HealthKit
-
+import LoopAlgorithm
 
 extension UserDefaults {
 
@@ -24,6 +23,7 @@ extension UserDefaults {
         case LastMissedMealNotification = "com.loopkit.Loop.lastMissedMealNotification"
         case userRequestedLoopReset = "com.loopkit.Loop.userRequestedLoopReset"
         case liveActivity = "com.loopkit.Loop.liveActivity"
+        case defaultEnvironment = "org.tidepool.TidepoolKit.DefaultEnvironment"
     }
 
     public static let appGroup = UserDefaults(suiteName: Bundle.main.appGroupSuiteName)
@@ -78,18 +78,6 @@ extension UserDefaults {
         }
     }
 
-    public var overrideHistory: TemporaryScheduleOverrideHistory? {
-        get {
-            if let rawValue = object(forKey: Key.overrideHistory.rawValue) as? TemporaryScheduleOverrideHistory.RawValue {
-                return TemporaryScheduleOverrideHistory(rawValue: rawValue)
-            } else {
-                return nil
-            }
-        }
-        set {
-            set(newValue?.rawValue, forKey: Key.overrideHistory.rawValue)
-        }
-    }
     
     public var lastBedtimeQuery: Date? {
         get {
@@ -187,6 +175,13 @@ extension UserDefaults {
             } catch {
                 assertionFailure("Unable to encode MissedMealNotification")
             }
+        
+    public var defaultEnvironment: Data? {
+        get {
+            data(forKey: Key.defaultEnvironment.rawValue)
+        }
+        set {
+            setValue(newValue, forKey: Key.defaultEnvironment.rawValue)
         }
     }
 

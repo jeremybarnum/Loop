@@ -9,6 +9,7 @@
 import Foundation
 import HealthKit
 import LoopKit
+import LoopAlgorithm
 
 // MARK: - Simulated Core Data
 
@@ -18,7 +19,7 @@ extension SettingsStore {
     private var simulatedPerDay: Int { 2 }
     private var simulatedLimit: Int { 10000 }
 
-    func generateSimulatedHistoricalSettingsObjects(completion: @escaping (Error?) -> Void) {
+    func generateSimulatedHistoricalSettingsObjects() async throws {
         var startDate = Calendar.current.startOfDay(for: expireDate)
         let endDate = Calendar.current.startOfDay(for: historicalEndDate)
         var simulated = [StoredSettings]()
@@ -29,28 +30,14 @@ extension SettingsStore {
             }
 
             if simulated.count >= simulatedLimit {
-                if let error = addSimulatedHistoricalSettingsObjects(settings: simulated) {
-                    completion(error)
-                    return
-                }
+                try await addStoredSettings(settings: simulated)
                 simulated = []
             }
 
             startDate = Calendar.current.date(byAdding: .day, value: 1, to: startDate)!
         }
 
-        completion(addSimulatedHistoricalSettingsObjects(settings: simulated))
-    }
-
-    private func addSimulatedHistoricalSettingsObjects(settings: [StoredSettings]) -> Error? {
-        var addError: Error?
-        let semaphore = DispatchSemaphore(value: 0)
-        addStoredSettings(settings: settings) { error in
-            addError = error
-            semaphore.signal()
-        }
-        semaphore.wait()
-        return addError
+        try await addStoredSettings(settings: simulated)
     }
 
     func purgeHistoricalSettingsObjects(completion: @escaping (Error?) -> Void) {
@@ -75,14 +62,6 @@ fileprivate extension StoredSettings {
                                                                override: GlucoseRangeSchedule.Override(value: DoubleRange(minValue: 80.0, maxValue: 90.0),
                                                                                                        start: date.addingTimeInterval(-.minutes(30)),
                                                                                                        end: date.addingTimeInterval(.minutes(30))))
-        let preMealOverride = TemporaryScheduleOverride(context: .preMeal,
-                                                        settings: TemporaryScheduleOverrideSettings(unit: .milligramsPerDeciliter,
-                                                                                                    targetRange: DoubleRange(minValue: 80.0, maxValue: 90.0),
-                                                                                                    insulinNeedsScaleFactor: 0.5),
-                                                        startDate: date.addingTimeInterval(-.minutes(30)),
-                                                        duration: .finite(.minutes(60)),
-                                                        enactTrigger: .local,
-                                                        syncIdentifier: UUID())
         let basalRateSchedule = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: .hours(0), value: 1.0),
                                                                RepeatingScheduleValue(startTime: .hours(8), value: 1.125),
                                                                RepeatingScheduleValue(startTime: .hours(10), value: 1.25),
@@ -102,7 +81,7 @@ fileprivate extension StoredSettings {
                                                                                  RepeatingScheduleValue(startTime: .hours(18), value: 45.0),
                                                                                  RepeatingScheduleValue(startTime: .hours(21), value: 50.0)],
                                                                     timeZone: scheduleTimeZone)
-        let carbRatioSchedule = CarbRatioSchedule(unit: .gram(),
+        let carbRatioSchedule = CarbRatioSchedule(unit: .gram,
                                                   dailyItems: [RepeatingScheduleValue(startTime: .hours(0), value: 10.0),
                                                                RepeatingScheduleValue(startTime: .hours(8), value: 12.0),
                                                                RepeatingScheduleValue(startTime: .hours(10), value: 9.0),
@@ -153,10 +132,7 @@ fileprivate extension StoredSettings {
                               dosingEnabled: true,
                               glucoseTargetRangeSchedule: glucoseTargetRangeSchedule,
                               preMealTargetRange: DoubleRange(minValue: 80.0, maxValue: 90.0).quantityRange(for: .milligramsPerDeciliter),
-                              workoutTargetRange: DoubleRange(minValue: 150.0, maxValue: 160.0).quantityRange(for: .milligramsPerDeciliter),
-                              overridePresets: nil,
-                              scheduleOverride: nil,
-                              preMealOverride: preMealOverride,
+                              overridePresets: [],
                               maximumBasalRatePerHour: 3.5,
                               maximumBolus: 10.0,
                               suspendThreshold: GlucoseThreshold(unit: .milligramsPerDeciliter, value: 75.0),

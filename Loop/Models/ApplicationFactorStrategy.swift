@@ -7,14 +7,13 @@
 //
 
 import Foundation
-import HealthKit
+import LoopAlgorithm
 import LoopKit
 import LoopCore
 
 protocol ApplicationFactorStrategy {
     func calculateDosingFactor(
-        for glucose: HKQuantity,
-        correctionRangeSchedule: GlucoseRangeSchedule,
-        settings: LoopSettings
+        for glucose: LoopQuantity,
+        correctionRange: ClosedRange<LoopQuantity>
     ) -> Double
 }

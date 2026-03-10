@@ -9,14 +9,14 @@
 import SwiftUI
 import LoopKit
 import LoopKitUI
-import HealthKit
 import LoopCore
+import LoopAlgorithm
 
 struct SimpleBolusView: View {
     @EnvironmentObject private var displayGlucosePreference: DisplayGlucosePreference
     @Environment(\.dismissAction) var dismiss
     
-    @State private var shouldBolusEntryBecomeFirstResponder = false
+    @State private var shouldGlucoseEntryBecomeFirstResponder = false
     @State private var isKeyboardVisible = false
     @State private var isClosedLoopOffInformationalModalVisible = false
 
@@ -26,6 +26,16 @@ struct SimpleBolusView: View {
         Binding(
             get: { return viewModel.manualGlucoseString },
             set: { newValue in viewModel.manualGlucoseString = newValue }
+        )
+    }
+    
+    private var enteredBolusString: Binding<String> {
+        Binding(
+            get: { return viewModel.enteredBolusString },
+            set: { newValue in
+                viewModel.enteredBolusString = newValue
+                viewModel.didEditBolusAmount = true
+            }
         )
     }
 
@@ -42,46 +52,33 @@ struct SimpleBolusView: View {
     }
         
     var body: some View {
-        GeometryReader { geometry in
-            VStack(spacing: 0) {
-                List() {
-                    self.infoSection
-                    self.summarySection
-                }
-                // As of iOS 13, we can't programmatically scroll to the Bolus entry text field.  This ugly hack scoots the
-                // list up instead, so the summarySection is visible and the keyboard shows when you tap "Enter Bolus".
-                // Unfortunately, after entry, the field scoots back down and remains hidden.  So this is not a great solution.
-                // TODO: Fix this in Xcode 12 when we're building for iOS 14.
-                .padding(.top, self.shouldAutoScroll(basedOn: geometry) ? -200 : 0)
-                .insetGroupedListStyle()
-                .navigationBarTitle(Text(self.title), displayMode: .inline)
-                
-                self.actionArea
-                    .frame(height: self.isKeyboardVisible ? 0 : nil)
-                    .opacity(self.isKeyboardVisible ? 0 : 1)
+        VStack(spacing: 0) {
+            List() {
+                self.infoSection
+                self.summarySection
             }
-            .onKeyboardStateChange { state in
-                self.isKeyboardVisible = state.height > 0
-                
-                if state.height == 0 {
-                    // Ensure tapping 'Enter Bolus' can make the text field the first responder again
-                    self.shouldBolusEntryBecomeFirstResponder = false
-                }
-            }
-            .keyboardAware()
-            .edgesIgnoringSafeArea(self.isKeyboardVisible ? [] : .bottom)
-            .alert(item: self.$viewModel.activeAlert, content: self.alert(for:))
+            .insetGroupedListStyle()
+            .navigationBarTitle(Text(self.title), displayMode: .inline)
+            
+            self.actionArea
+                .frame(height: self.isKeyboardVisible ? 0 : nil)
+                .opacity(self.isKeyboardVisible ? 0 : 1)
         }
+        .onKeyboardStateChange { state in
+            self.isKeyboardVisible = state.height > 0
+            
+            if state.height == 0 {
+                // Ensure tapping 'Enter Bolus' can make the text field the first responder again
+                self.shouldGlucoseEntryBecomeFirstResponder = false
+            }
+        }
+        .keyboardAware()
+        .edgesIgnoringSafeArea(self.isKeyboardVisible ? [] : .bottom)
+        .alert(item: self.$viewModel.activeAlert, content: self.alert(for:))
     }
     
-    private func formatGlucose(_ quantity: HKQuantity) -> String {
+    private func formatGlucose(_ quantity: LoopQuantity) -> String {
         return displayGlucosePreference.format(quantity)
-    }
-    
-    private func shouldAutoScroll(basedOn geometry: GeometryProxy) -> Bool {
-        // Taking a guess of 640 to cover iPhone SE, iPod Touch, and other smaller devices.
-        // Devices such as the iPhone 11 Pro Max do not need to auto-scroll.
-        shouldBolusEntryBecomeFirstResponder && geometry.size.height < 640
     }
     
     private var infoSection: some View {
@@ -109,10 +106,10 @@ struct SimpleBolusView: View {
     
     private var summarySection: some View {
         Section {
+            glucoseEntryRow
             if viewModel.displayMealEntry {
                 carbEntryRow
             }
-            glucoseEntryRow
             recommendedBolusRow
             bolusEntryRow
         }
@@ -136,6 +133,7 @@ struct SimpleBolusView: View {
             .padding([.top, .bottom], 5)
             .fixedSize()
             .modifier(LabelBackground())
+            .accessibilityIdentifier("textField_Carbohydrates")
         }
     }
 
@@ -150,9 +148,14 @@ struct SimpleBolusView: View {
                     font: .heavy(.title1),
                     textAlignment: .right,
                     keyboardType: .decimalPad,
+                    shouldBecomeFirstResponder: shouldGlucoseEntryBecomeFirstResponder,
                     maxLength: 4,
                     doneButtonColor: .loopAccent
                 )
+                .onAppear {
+                    shouldGlucoseEntryBecomeFirstResponder = true
+                }
+                .accessibilityIdentifier("textField_CurrentGlucose")
 
                 glucoseUnitsLabel
             }
@@ -171,6 +174,7 @@ struct SimpleBolusView: View {
                         .font(.title)
                         .foregroundColor(Color(.label))
                         .padding([.top, .bottom], 4)
+                        .accessibilityIdentifier("staticText_RecommendedBolus")
                     bolusUnitsLabel
                 }
             }
@@ -201,13 +205,12 @@ struct SimpleBolusView: View {
             Spacer()
             HStack(alignment: .firstTextBaseline) {
                 DismissibleKeyboardTextField(
-                    text: $viewModel.enteredBolusString,
-                    placeholder: "",
+                    text: enteredBolusString,
+                    placeholder: "0",
                     font: .preferredFont(forTextStyle: .title1),
                     textColor: .loopAccent,
                     textAlignment: .right,
                     keyboardType: .decimalPad,
-                    shouldBecomeFirstResponder: shouldBolusEntryBecomeFirstResponder,
                     maxLength: 5,
                     doneButtonColor: .loopAccent
                 )
@@ -216,11 +219,13 @@ struct SimpleBolusView: View {
             }
             .fixedSize()
             .modifier(LabelBackground())
+            .accessibilityIdentifier("textField_Bolus")
         }
     }
 
     private var carbUnitsLabel: some View {
-        Text(QuantityFormatter(for: .gram()).localizedUnitStringWithPlurality())
+        Text(QuantityFormatter(for: .gram).localizedUnitStringWithPlurality())
+            .foregroundColor(Color(.secondaryLabel))
     }
     
     private var glucoseUnitsLabel: some View {
@@ -230,7 +235,7 @@ struct SimpleBolusView: View {
     }
 
     private var bolusUnitsLabel: Text {
-        Text(QuantityFormatter(for: .internationalUnit()).localizedUnitStringWithPlurality())
+        Text(QuantityFormatter(for: .internationalUnit).localizedUnitStringWithPlurality())
             .foregroundColor(Color(.secondaryLabel))
     }
 
@@ -250,14 +255,13 @@ struct SimpleBolusView: View {
         Button<Text>(
             action: {
                 if self.viewModel.actionButtonAction == .enterBolus {
-                    self.shouldBolusEntryBecomeFirstResponder = true
+                    self.shouldGlucoseEntryBecomeFirstResponder = true
                 } else {
-                    self.viewModel.saveAndDeliver { (success) in
-                        if success {
+                    Task {
+                        if await viewModel.saveAndDeliver() {
                             self.dismiss()
                         }
                     }
-    
                 }
             },
             label: {
@@ -276,6 +280,7 @@ struct SimpleBolusView: View {
         .disabled(viewModel.actionButtonDisabled)
         .buttonStyle(ActionButtonStyle(.primary))
         .padding()
+        .accessibilityIdentifier("button_bolusAction")
     }
     
     private func alert(for alert: SimpleBolusViewModel.Alert) -> SwiftUI.Alert {
@@ -306,7 +311,7 @@ struct SimpleBolusView: View {
             } else {
                 title = Text("No Bolus Recommended", comment: "Title for bolus screen warning when glucose is below suspend threshold, and a bolus is not recommended")
             }
-            let suspendThresholdString = formatGlucose(viewModel.suspendThreshold)
+            let suspendThresholdString = formatGlucose(viewModel.suspendThreshold!)
             return WarningView(
                 title: title,
                 caption: Text(String(format: NSLocalizedString("Your glucose is below your glucose safety limit, %1$@.", comment: "Format string for bolus screen warning when no bolus is recommended due input value below glucose safety limit. (1: suspendThreshold)"), suspendThresholdString))
@@ -343,7 +348,7 @@ struct SimpleBolusView: View {
                 title: Text("Recommended Bolus Exceeds Maximum Bolus", comment: "Title for bolus screen warning when recommended bolus exceeds max bolus"),
                 caption: Text(String(format: NSLocalizedString("Your recommended bolus exceeds your maximum bolus amount of %1$@.", comment: "Warning for simple bolus when recommended bolus exceeds max bolus. (1: maximum bolus)"), viewModel.maximumBolusAmountString )))
         case .carbohydrateEntryTooLarge:
-            let maximumCarbohydrateString = QuantityFormatter(for: .gram()).string(from: LoopConstants.maxCarbEntryQuantity)!
+            let maximumCarbohydrateString = QuantityFormatter(for: .gram).string(from: LoopConstants.maxCarbEntryQuantity)!
             return WarningView(
                 title: Text("Carbohydrate Entry Too Large", comment: "Title for bolus screen warning when carbohydrate entry is too large"),
                 caption: Text(String(format: NSLocalizedString("The maximum amount allowed is %1$@.", comment: "Warning for simple bolus when carbohydrate entry is too large. (1: maximum carbohydrate entry)"), maximumCarbohydrateString)))
@@ -362,13 +367,12 @@ struct SimpleBolusView: View {
 
 struct SimpleBolusCalculatorView_Previews: PreviewProvider {
     class MockSimpleBolusViewDelegate: SimpleBolusViewModelDelegate {
-        func addGlucose(_ samples: [NewGlucoseSample], completion: @escaping (Swift.Result<[StoredGlucoseSample], Error>) -> Void) {
-            completion(.success([]))
+        func saveGlucose(sample: NewGlucoseSample) async throws -> StoredGlucoseSample {
+            return StoredGlucoseSample(startDate: sample.date, quantity: sample.quantity)
         }
         
-        func addCarbEntry(_ carbEntry: NewCarbEntry, replacing replacingEntry: StoredCarbEntry?, completion: @escaping (Result<StoredCarbEntry>) -> Void) {
-            
-            let storedCarbEntry = StoredCarbEntry(
+        func addCarbEntry(_ carbEntry: LoopKit.NewCarbEntry, replacing replacingEntry: StoredCarbEntry?) async throws -> StoredCarbEntry {
+            StoredCarbEntry(
                 startDate: carbEntry.startDate,
                 quantity: carbEntry.quantity,
                 uuid: UUID(),
@@ -380,19 +384,22 @@ struct SimpleBolusCalculatorView_Previews: PreviewProvider {
                 createdByCurrentApp: true,
                 userCreatedDate: Date(),
                 userUpdatedDate: nil)
-            completion(.success(storedCarbEntry))
         }
         
-        func enactBolus(units: Double, activationType: BolusActivationType) {
+        func insulinOnBoard(at date: Date) async -> InsulinValue? {
+            return nil
+        }
+
+        func enactBolus(units: Double, decisionId: UUID?, activationType: BolusActivationType) {
         }
         
         func insulinOnBoard(at date: Date, completion: @escaping (DoseStoreResult<InsulinValue>) -> Void) {
             completion(.success(InsulinValue(startDate: date, value: 2.0)))
         }
         
-        func computeSimpleBolusRecommendation(at date: Date, mealCarbs: HKQuantity?, manualGlucose: HKQuantity?) -> BolusDosingDecision? {
+        func computeSimpleBolusRecommendation(at date: Date, mealCarbs: LoopQuantity?, manualGlucose: LoopQuantity?) -> BolusDosingDecision? {
             var decision = BolusDosingDecision(for: .simpleBolus)
-            decision.manualBolusRecommendation = ManualBolusRecommendationWithDate(recommendation: ManualBolusRecommendation(amount: 3, pendingInsulin: 0),
+            decision.manualBolusRecommendation = ManualBolusRecommendationWithDate(recommendation: ManualBolusRecommendation(amount: 3),
                                                                                    date: Date())
             return decision
         }
@@ -404,20 +411,24 @@ struct SimpleBolusCalculatorView_Previews: PreviewProvider {
             return DisplayGlucosePreference(displayGlucoseUnit: .milligramsPerDeciliter)
         }
         
-        var maximumBolus: Double {
+        var maximumBolus: Double? {
             return 6
         }
         
-        var suspendThreshold: HKQuantity {
-            return HKQuantity(unit: .milligramsPerDeciliter, doubleValue: 75)
+        var suspendThreshold: LoopQuantity? {
+            return LoopQuantity(unit: .milligramsPerDeciliter, doubleValue: 75)
         }
     }
 
-    static var viewModel: SimpleBolusViewModel = SimpleBolusViewModel(delegate: MockSimpleBolusViewDelegate(), displayMealEntry: true)
-    
+    static var previewViewModel: SimpleBolusViewModel = SimpleBolusViewModel(
+        delegate: MockSimpleBolusViewDelegate(),
+        displayMealEntry: true,
+        displayGlucosePreference: DisplayGlucosePreference(displayGlucoseUnit: .milligramsPerDeciliter)
+    )
+
     static var previews: some View {
         NavigationView {
-            SimpleBolusView(viewModel: viewModel)
+            SimpleBolusView(viewModel: previewViewModel)
         }
         .previewDevice("iPod touch (7th generation)")
         .environmentObject(DisplayGlucosePreference(displayGlucoseUnit: .milligramsPerDeciliter))

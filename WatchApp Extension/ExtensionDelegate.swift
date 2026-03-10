@@ -9,15 +9,16 @@
 import WatchConnectivity
 import WatchKit
 import HealthKit
+import LoopAlgorithm
 import Intents
 import os
 import os.log
 import UserNotifications
 import LoopKit
+import LoopCore
+import ClockKit
 
-
-final class ExtensionDelegate: NSObject, WKExtensionDelegate {
-    private(set) lazy var loopManager = LoopDataManager()
+class ExtensionDelegate: NSObject, WKApplicationDelegate {
 
     private let log = OSLog(category: "ExtensionDelegate")
 
@@ -25,8 +26,10 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
     private var notifications: [NSObjectProtocol] = []
 
     static func shared() -> ExtensionDelegate {
-        return WKExtension.shared().extensionDelegate
+        return WKApplication.shared().extensionDelegate
     }
+
+    let loopManager = LoopDataManager.shared
 
     override init() {
         super.init()
@@ -39,6 +42,9 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         // and that KVO is the "recommended" way to deal with it.
         observers.append(session.observe(\WCSession.activationState) { [weak self] (session, change) in
             self?.log.default("WCSession.applicationState did change to %d", session.activationState.rawValue)
+
+            self?.log.default("WCSession.applicationState did change rootInterfaceController = %{public}@", String(describing: WKApplication.shared().rootInterfaceController))
+            self?.log.default("WCSession.applicationState did change visibleInterfaceController = %{public}@", String(describing: WKApplication.shared().visibleInterfaceController))
 
             DispatchQueue.main.async {
                 self?.completePendingConnectivityTasksIfNeeded()
@@ -79,14 +85,9 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         if WCSession.default.activationState != .activated {
             WCSession.default.activate()
         }
-
-        NotificationCenter.default.post(name: type(of: self).didBecomeActiveNotification, object: self)
     }
 
     func applicationWillResignActive() {
-        UserDefaults.standard.startOnChartPage = (WKExtension.shared().visibleInterfaceController as? ChartHUDController) != nil
-
-        NotificationCenter.default.post(name: type(of: self).willResignActiveNotification, object: self)
     }
 
     // Presumably the main thread?
@@ -144,15 +145,11 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
     }
 
     func handle(_ userActivity: NSUserActivity) {
-        if #available(watchOSApplicationExtension 5.0, *) {
-            switch userActivity.activityType {
-            case NSUserActivity.newCarbEntryActivityType, NSUserActivity.didAddCarbEntryOnWatchActivityType:
-                if let statusController = WKExtension.shared().visibleInterfaceController as? HUDInterfaceController {
-                    statusController.addCarbs()
-                }
-            default:
-                break
-            }
+        switch userActivity.activityType {
+        case NSUserActivity.newCarbEntryActivityType, NSUserActivity.didAddCarbEntryOnWatchActivityType:
+            loopManager.bolusViewModel = CarbAndBolusFlowViewModel(configuration: .carbEntry(nil))
+        default:
+            break
         }
     }
 
@@ -165,11 +162,18 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         if context.displayGlucoseUnit == nil {
             let type = HKQuantityType.quantityType(forIdentifier: .bloodGlucose)!
             loopManager.healthStore.preferredUnits(for: [type]) { (units, error) in
-                context.displayGlucoseUnit = units[type]
-
-                DispatchQueue.main.async {
-                    self.loopManager.updateContext(context)
+                defer {
+                    DispatchQueue.main.async {
+                        self.loopManager.updateContext(context)
+                    }
                 }
+                
+                guard let unit = units[type] else {
+                    context.displayGlucoseUnit = nil
+                    return
+                }
+                
+                context.displayGlucoseUnit = LoopUnit(from: unit)
             }
         } else {
             DispatchQueue.main.async {
@@ -181,8 +185,8 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
     private func loopManagerDidUpdateContext() {
         dispatchPrecondition(condition: .onQueue(.main))
 
-        if WKExtension.shared().applicationState != .active {
-            WKExtension.shared().scheduleSnapshotRefresh(withPreferredDate: Date(), userInfo: nil) { (error) in
+        if WKApplication.shared().applicationState != .active {
+            WKApplication.shared().scheduleSnapshotRefresh(withPreferredDate: Date(), userInfo: nil) { (error) in
                 if let error = error {
                     self.log.error("scheduleSnapshotRefresh error: %{public}@", String(describing: error))
                 }
@@ -201,8 +205,16 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
 
 extension ExtensionDelegate: WCSessionDelegate {
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
+        log.default("activationDidCompleteWith %{public}@", String(describing: activationState))
+
+        log.default("activationDidCompleteWith rootInterfaceController = %{public}@", String(describing: WKApplication.shared().rootInterfaceController))
+        log.default("activationDidCompleteWith visibleInterfaceController = %{public}@", String(describing: WKApplication.shared().visibleInterfaceController))
+
         if activationState == .activated {
             updateContext(session.receivedApplicationContext)
+            Task {
+                await loopManager.requestSettingsUpdate()
+            }
         }
     }
 
@@ -219,9 +231,9 @@ extension ExtensionDelegate: WCSessionDelegate {
 
         switch name {
         case LoopSettingsUserInfo.name:
-            if let settings = LoopSettingsUserInfo(rawValue: userInfo)?.settings {
+            if let loopSettings = LoopSettingsUserInfo(rawValue: userInfo) {
                 DispatchQueue.main.async {
-                    self.loopManager.settings = settings
+                    self.loopManager.watchInfo = loopSettings
                 }
             } else {
                 log.error("Could not decode LoopSettingsUserInfo: %{public}@", userInfo)
@@ -244,15 +256,15 @@ extension ExtensionDelegate: WCSessionDelegate {
     }
 }
 
-
 extension ExtensionDelegate: UNUserNotificationCenterDelegate {
-    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+
+        log.default("UNNotificationResponse rootInterfaceController = %{public}@", String(describing: WKApplication.shared().rootInterfaceController))
+        log.default("UNNotificationResponse visibleInterfaceController = %{public}@", String(describing: WKApplication.shared().visibleInterfaceController))
+
         switch response.actionIdentifier {
         case UNNotificationDefaultActionIdentifier:
-            guard
-                response.notification.request.identifier == LoopNotificationCategory.missedMeal.rawValue,
-                let statusController = WKExtension.shared().visibleInterfaceController as? HUDInterfaceController
-            else {
+            guard response.notification.request.identifier == LoopNotificationCategory.missedMeal.rawValue else {
                 break
             }
 
@@ -262,21 +274,55 @@ extension ExtensionDelegate: UNUserNotificationCenterDelegate {
                 let mealTime = userInfo[LoopNotificationUserInfoKey.missedMealTime.rawValue] as? Date,
                 let carbAmount = userInfo[LoopNotificationUserInfoKey.missedMealCarbAmount.rawValue] as? Double
             {
-                let missedEntry = NewCarbEntry(quantity: HKQuantity(unit: .gram(),
+                let missedEntry = NewCarbEntry(quantity: LoopQuantity(unit: .gram,
                                                                          doubleValue: carbAmount),
                                                     startDate: mealTime,
                                                     foodType: nil,
                                                     absorptionTime: nil)
-                statusController.addCarbs(initialEntry: missedEntry)
+                loopManager.bolusViewModel = CarbAndBolusFlowViewModel(configuration: .carbEntry(missedEntry))
             // Otherwise, just provide the ability to add carbs
             } else {
-                statusController.addCarbs()
+                loopManager.bolusViewModel = CarbAndBolusFlowViewModel(configuration: .carbEntry(nil))
             }
+        case NotificationManager.Action.startPreset.rawValue:
+            // Response contains the preset id and alert id
+            let userInfo = response.notification.request.content.userInfo
+            guard let presetIdentifier = userInfo[LoopNotificationUserInfoKey.presetId.rawValue] as? String,
+                  let alertIdentifier = userInfo[LoopNotificationUserInfoKey.alertTypeID.rawValue] as? LoopKit.Alert.AlertIdentifier,
+                  let managerIdentifier = userInfo[LoopNotificationUserInfoKey.managerIDForAlert.rawValue] as? String
+            else {
+                log.default("Unable to find keys in userInfo: %{public}@", String(describing: userInfo))
+                return
+            }
+            log.default("Setting up PendingPresetReminder(presetIdentifier: %{public}@, alertIdentifier: %{public}@), managerIdentifier: %{public}@", presetIdentifier, alertIdentifier, managerIdentifier)
+
+            loopManager.pendingPresetReminder = PendingPresetReminder(
+                presetIdentifier: presetIdentifier,
+                alertIdentifier: alertIdentifier,
+                managerIdentifier: managerIdentifier
+            )
+
+            guard let visibleVC = WKApplication.shared().visibleInterfaceController else {
+                log.error("no visible interface controller for presenting preset reminder!")
+                return
+            }
+
+            guard let preset = loopManager.selectablePresets.first(where: { $0.id == presetIdentifier }) else {
+                log.error("Unable to find preset %{public}@", presetIdentifier)
+                return
+            }
+
+            visibleVC.presentController(withName: "PresetConfirmHostingController", context: preset)
+
         default:
+            let userInfo = response.notification.request.content.userInfo
+            if let alertIdentifier = userInfo[LoopNotificationUserInfoKey.alertTypeID.rawValue] as? LoopKit.Alert.AlertIdentifier,
+               let managerIdentifier = userInfo[LoopNotificationUserInfoKey.managerIDForAlert.rawValue] as? String
+            {
+                await loopManager.sendUserSelectedNotificationActionMessage(alertIdentifier: alertIdentifier, managerIdentifier: managerIdentifier, actionIdentifier: response.actionIdentifier)
+            }
             break
         }
-
-        completionHandler()
     }
     
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
@@ -286,22 +332,18 @@ extension ExtensionDelegate: UNUserNotificationCenterDelegate {
 
 
 extension ExtensionDelegate {
-    static let didBecomeActiveNotification = Notification.Name("com.loopkit.Loop.LoopWatch.didBecomeActive")
-
-    static let willResignActiveNotification = Notification.Name("com.loopkit.Loop.LoopWatch.willResignActive")
-
     /// Global shortcut to present an alert for a specific error out-of-context with a specific interface controller.
     ///
     /// - parameter error: The error whose contents to display
     func present(_ error: Error) {
         dispatchPrecondition(condition: .onQueue(.main))
 
-        WKExtension.shared().rootInterfaceController?.presentAlert(withTitle: error.localizedDescription, message: (error as NSError).localizedRecoverySuggestion ?? (error as NSError).localizedFailureReason, preferredStyle: .alert, actions: [WKAlertAction.dismissAction()])
+        WKApplication.shared().rootInterfaceController?.presentAlert(withTitle: error.localizedDescription, message: (error as NSError).localizedRecoverySuggestion ?? (error as NSError).localizedFailureReason, preferredStyle: .alert, actions: [WKAlertAction.dismissAction()])
     }
 }
 
 
-fileprivate extension WKExtension {
+fileprivate extension WKApplication {
     var extensionDelegate: ExtensionDelegate! {
         return delegate as? ExtensionDelegate
     }

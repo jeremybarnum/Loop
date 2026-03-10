@@ -7,8 +7,8 @@
 //
 
 import SwiftUI
-import HealthKit
 import LoopKit
+import WatchKit
 
 
 struct CarbAndBolusFlow: View {
@@ -32,6 +32,8 @@ struct CarbAndBolusFlow: View {
     @State private var flowState: FlowState
     @ObservedObject private var viewModel: CarbAndBolusFlowViewModel
     @Environment(\.sizeClass) private var sizeClass
+    @Environment(\.dismiss) private var dismiss
+
 
     // MARK: - State: Carb Entry
     // Date the user last changed the carb entry with the UI
@@ -62,7 +64,7 @@ struct CarbAndBolusFlow: View {
             if let entry = entry {
                 _carbEntryDate = State(initialValue: entry.startDate)
                 
-                let initialCarbAmount = entry.quantity.doubleValue(for: .gram())
+                let initialCarbAmount = entry.quantity.doubleValue(for: .gram)
                 _carbAmount = State(initialValue: Int(initialCarbAmount))                
             }
         case .manualBolus:
@@ -90,6 +92,16 @@ struct CarbAndBolusFlow: View {
         // Handle error states.
         .onReceive(viewModel.$error) { self.activeAlert = $0.map(AlertState.communicationError) }
         .alert(item: $activeAlert, content: alert(for:))
+
+        // Handoff
+        .onAppear {
+            let activity = NSUserActivity.forDidAddCarbEntryOnWatch()
+            activity.becomeCurrent()
+        }
+
+        .onReceive(NotificationCenter.default.publisher(for: WKExtension.applicationWillResignActiveNotification)) { _ in
+            dismiss()
+        }
     }
 }
 
@@ -149,10 +161,12 @@ extension CarbAndBolusFlow {
     }
 
     private func transitionToBolusEntry() {
-        viewModel.recommendBolus(forGrams: carbAmount, eatenAt: carbEntryDate, absorptionTime: carbAbsorptionTime, lastEntryDate: carbLastEntryDate)
         withAnimation {
             flowState = .bolusEntry
             inputMode = .carbs
+        }
+        Task { @MainActor in
+            await viewModel.recommendBolus(forGrams: carbAmount, eatenAt: carbEntryDate, absorptionTime: carbAbsorptionTime, lastEntryDate: carbLastEntryDate)
         }
     }
 
@@ -173,7 +187,7 @@ extension CarbAndBolusFlow {
             } else {
                 return 19
             }
-        case .size44mm, .size45mm:
+        case .size44mm, .size45mm, .size46mm, .size49mm:
             return 5
         }
     }
@@ -219,7 +233,14 @@ extension CarbAndBolusFlow {
                     self.flowState = .bolusConfirmation
                 }
             } else if case .carbEntry = self.configuration {
-                self.viewModel.addCarbsWithoutBolusing()
+                Task {
+                    do {
+                        try await self.viewModel.addCarbsWithoutBolusing()
+                        dismiss()
+                    } catch {
+                        viewModel.error = .bolusMessageSendFailure
+                    }
+                }
             }
         }
         .offset(y: actionButtonOffsetY)
@@ -243,14 +264,21 @@ extension CarbAndBolusFlow {
             return 0
         case .size40mm, .size41mm:
             return 20
-        case .size44mm, .size45mm:
+        case .size44mm, .size45mm, .size46mm, .size49mm:
             return 27
         }
     }
 
     private var bolusConfirmationView: some View {
         BolusConfirmationView(progress: $bolusConfirmationProgress, onConfirmation: {
-            self.viewModel.addCarbsAndDeliverBolus(self.bolusAmount)
+            Task {
+                do {
+                    try await self.viewModel.addCarbsAndDeliverBolus(self.bolusAmount)
+                    dismiss()
+                } catch {
+                    viewModel.error = .bolusMessageSendFailure
+                }
+            }
         })
         .padding(.bottom, bolusConfirmationPadding)
         .transition(.fadeIn(after: 0.35))
@@ -310,6 +338,10 @@ extension CarbAndBolusFlow {
 extension CarbAndBolusFlow {
     private func handleNewBolusRecommendation(_ recommendedBolus: Double?) {
         guard flowState != .carbEntry else {
+            return
+        }
+
+        if !receivedInitialBolusRecommendation && recommendedBolus == nil {
             return
         }
 

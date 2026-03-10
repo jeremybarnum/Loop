@@ -7,11 +7,11 @@
 //
 
 import Combine
+import LoopAlgorithm
 import LoopCore
 import LoopKit
 import LoopKitUI
 import SwiftUI
-import HealthKit
 
 public class DeviceViewModel<T>: ObservableObject {
     public typealias DeleteTestingDataFunc = () -> Void
@@ -20,8 +20,8 @@ public class DeviceViewModel<T>: ObservableObject {
     let image: () -> UIImage?
     let name: () -> String
     let deleteTestingDataFunc: () -> DeleteTestingDataFunc?
-    let didTap: () -> Void
-    let didTapAdd: (_ device: T) -> Void
+    var didTap: () -> Void
+    var didTapAdd: (_ device: T) -> Void
     var isTestingDevice: Bool {
         return deleteTestingDataFunc() != nil
     }
@@ -54,9 +54,11 @@ public protocol SettingsViewModelDelegate: AnyObject {
     func dosingStrategyChanged(_: AutomaticDosingStrategy)
     func didTapIssueReport()
     var closedLoopDescriptiveText: String? { get }
+    var automaticDosingEnabled: Bool { get set }
 }
 
-public class SettingsViewModel: ObservableObject {
+@Observable
+class SettingsViewModel {
     
     let alertPermissionsChecker: AlertPermissionsChecker
 
@@ -64,7 +66,9 @@ public class SettingsViewModel: ObservableObject {
 
     let versionUpdateViewModel: VersionUpdateViewModel
     
-    private weak var delegate: SettingsViewModelDelegate?
+    weak var delegate: SettingsViewModelDelegate?
+    
+    weak var deliveryDelegate: DeliveryDelegate?
 
     func didTapIssueReport() {
         delegate?.didTapIssueReport()
@@ -76,18 +80,28 @@ public class SettingsViewModel: ObservableObject {
     let servicesViewModel: ServicesViewModel
     let criticalEventLogExportViewModel: CriticalEventLogExportViewModel
     let therapySettings: () -> TherapySettings
-    let sensitivityOverridesEnabled: Bool
-    let isOnboardingComplete: Bool
+    var isOnboardingComplete: Bool
     let therapySettingsViewModelDelegate: TherapySettingsViewModelDelegate?
+    let presetHistory: TemporaryScheduleOverrideHistory
 
-    @Published var isClosedLoopAllowed: Bool
-
+    private(set) var automaticDosingEnabled: Bool {
+        get {
+            delegate?.automaticDosingEnabled ?? closedLoopPreference
+        }
+        set {
+            delegate?.automaticDosingEnabled = newValue
+        }
+    }
+    
+    private(set) var lastLoopCompletion: Date?
+    private(set) var mostRecentGlucoseDataDate: Date?
+    private(set) var mostRecentPumpDataDate: Date?
+    
     var closedLoopDescriptiveText: String? {
-        return delegate?.closedLoopDescriptiveText
+        delegate?.closedLoopDescriptiveText
     }
 
-
-    @Published var automaticDosingStrategy: AutomaticDosingStrategy {
+    var automaticDosingStrategy: AutomaticDosingStrategy {
         didSet {
             delegate?.dosingStrategyChanged(automaticDosingStrategy)
         }
@@ -98,13 +112,41 @@ public class SettingsViewModel: ObservableObject {
            delegate?.dosingEnabledChanged(closedLoopPreference)
        }
     }
+    
+    private var deviceManager: DeviceDataManager?
+    
+    @MainActor
+    var deviceIssue: Bool {
+        deviceManager?.cgmManager == nil || deviceManager?.cgmManager?.isInoperable == true || deviceManager?.cgmManager?.inSignalLoss == true || deviceManager?.pumpManager == nil || deviceManager?.pumpManager?.isInoperable == true || deviceManager?.pumpManager?.inSignalLoss == true || deviceManager?.hasBluetoothIssue != false
+    }
 
+    var preMealGuardrail: Guardrail<LoopQuantity>?
+
+    @ObservationIgnored weak var favoriteFoodInsightsDelegate: FavoriteFoodInsightsViewModelDelegate?
+
+    @MainActor
     var showDeleteTestData: Bool {
         availableSupports.contains(where: { $0.showsDeleteTestDataUI })
     }
     
-    lazy private var cancellables = Set<AnyCancellable>()
+    var loopStatusCircleFreshness: LoopCompletionFreshness {
+        var age: TimeInterval
+        
+        if automaticDosingEnabled {
+            let lastLoopCompletion = lastLoopCompletion ?? Date().addingTimeInterval(.minutes(16))
+            age = abs(min(0, lastLoopCompletion.timeIntervalSinceNow))
+        } else {
+            let mostRecentGlucoseDataDate = mostRecentGlucoseDataDate ?? Date().addingTimeInterval(.minutes(16))
+            let mostRecentPumpDataDate = mostRecentPumpDataDate ?? Date().addingTimeInterval(.minutes(16))
+            age = max(abs(min(0, mostRecentPumpDataDate.timeIntervalSinceNow)), abs(min(0, mostRecentGlucoseDataDate.timeIntervalSinceNow)))
+        }
+        
+        return LoopCompletionFreshness(age: age)
+    }
+    
+    @ObservationIgnored lazy private var cancellables = Set<AnyCancellable>()
 
+    @MainActor
     public init(alertPermissionsChecker: AlertPermissionsChecker,
                 alertMuter: AlertMuter,
                 versionUpdateViewModel: VersionUpdateViewModel,
@@ -113,14 +155,17 @@ public class SettingsViewModel: ObservableObject {
                 servicesViewModel: ServicesViewModel,
                 criticalEventLogExportViewModel: CriticalEventLogExportViewModel,
                 therapySettings: @escaping () -> TherapySettings,
-                sensitivityOverridesEnabled: Bool,
                 initialDosingEnabled: Bool,
-                isClosedLoopAllowed: Published<Bool>.Publisher,
                 automaticDosingStrategy: AutomaticDosingStrategy,
+                lastLoopCompletion: Published<Date?>.Publisher,
+                mostRecentGlucoseDataDate: Published<Date?>.Publisher,
+                mostRecentPumpDataDate: Published<Date?>.Publisher,
                 availableSupports: [SupportUI],
                 isOnboardingComplete: Bool,
                 therapySettingsViewModelDelegate: TherapySettingsViewModelDelegate?,
-                delegate: SettingsViewModelDelegate?
+                presetHistory: TemporaryScheduleOverrideHistory,
+                deliveryDelegate: DeliveryDelegate?,
+                deviceManager: DeviceDataManager?,
     ) {
         self.alertPermissionsChecker = alertPermissionsChecker
         self.alertMuter = alertMuter
@@ -130,61 +175,87 @@ public class SettingsViewModel: ObservableObject {
         self.servicesViewModel = servicesViewModel
         self.criticalEventLogExportViewModel = criticalEventLogExportViewModel
         self.therapySettings = therapySettings
-        self.sensitivityOverridesEnabled = sensitivityOverridesEnabled
         self.closedLoopPreference = initialDosingEnabled
-        self.isClosedLoopAllowed = false
         self.automaticDosingStrategy = automaticDosingStrategy
+        self.lastLoopCompletion = nil
+        self.mostRecentGlucoseDataDate = nil
+        self.mostRecentPumpDataDate = nil
         self.availableSupports = availableSupports
         self.isOnboardingComplete = isOnboardingComplete
         self.therapySettingsViewModelDelegate = therapySettingsViewModelDelegate
-        self.delegate = delegate
+        self.presetHistory = presetHistory
+        self.deliveryDelegate = deliveryDelegate
+        self.deviceManager = deviceManager
 
         // This strangeness ensures the composed ViewModels' (ObservableObjects') changes get reported to this ViewModel (ObservableObject)
-        alertPermissionsChecker.objectWillChange.sink { [weak self] in
-            self?.objectWillChange.send()
-        }
-        .store(in: &cancellables)
-        alertMuter.objectWillChange.sink { [weak self] in
-            self?.objectWillChange.send()
-        }
-        .store(in: &cancellables)
-        pumpManagerSettingsViewModel.objectWillChange.sink { [weak self] in
-            self?.objectWillChange.send()
-        }
-        .store(in: &cancellables)
-        cgmManagerSettingsViewModel.objectWillChange.sink { [weak self] in
-            self?.objectWillChange.send()
-        }
-        .store(in: &cancellables)
-        
-        isClosedLoopAllowed
-            .assign(to: \.isClosedLoopAllowed, on: self)
+        lastLoopCompletion
+            .assign(to: \.lastLoopCompletion, on: self)
+            .store(in: &cancellables)
+        mostRecentGlucoseDataDate
+            .assign(to: \.mostRecentGlucoseDataDate, on: self)
+            .store(in: &cancellables)
+        mostRecentPumpDataDate
+            .assign(to: \.mostRecentPumpDataDate, on: self)
             .store(in: &cancellables)
     }
 }
 
 // For previews only
+@MainActor
 extension SettingsViewModel {
-    fileprivate class FakeClosedLoopAllowedPublisher {
-        @Published var mockIsClosedLoopAllowed: Bool = false
+    fileprivate class FakeLastLoopCompletionPublisher {
+        @Published var mockLastLoopCompletion: Date? = nil
+    }
+    
+    fileprivate class FakeSettingsProvider: SettingsProvider {
+        let settings = StoredSettings()
+        var dosingEnabled: Bool { settings.dosingEnabled }
+        
+        func getBasalHistory(startDate: Date, endDate: Date) async throws -> [AbsoluteScheduleValue<Double>] {
+            []
+        }
+        
+        func getCarbRatioHistory(startDate: Date, endDate: Date) async throws -> [AbsoluteScheduleValue<Double>] {
+            []
+        }
+        
+        func getInsulinSensitivityHistory(startDate: Date, endDate: Date) async throws -> [AbsoluteScheduleValue<LoopQuantity>] {
+            []
+        }
+        
+        func getTargetRangeHistory(startDate: Date, endDate: Date) async throws -> [AbsoluteScheduleValue<ClosedRange<LoopQuantity>>] {
+            []
+        }
+        
+        func getDosingLimits(at date: Date) async throws -> DosingLimits {
+            DosingLimits()
+        }
+        
+        func executeSettingsQuery(fromQueryAnchor queryAnchor: SettingsStore.QueryAnchor?, limit: Int, completion: @escaping (SettingsStore.SettingsQueryResult) -> Void) {}
+        
+        
     }
 
     static var preview: SettingsViewModel {
         return SettingsViewModel(alertPermissionsChecker: AlertPermissionsChecker(),
                                  alertMuter: AlertMuter(),
-                                 versionUpdateViewModel: VersionUpdateViewModel(supportManager: nil, guidanceColors: GuidanceColors()),
+                                 versionUpdateViewModel: VersionUpdateViewModel(supportManager: nil, guidanceColors: .default),
                                  pumpManagerSettingsViewModel: DeviceViewModel<PumpManagerDescriptor>(),
                                  cgmManagerSettingsViewModel: DeviceViewModel<CGMManagerDescriptor>(),
                                  servicesViewModel: ServicesViewModel.preview,
                                  criticalEventLogExportViewModel: CriticalEventLogExportViewModel(exporterFactory: MockCriticalEventLogExporterFactory()),
                                  therapySettings: { TherapySettings() },
-                                 sensitivityOverridesEnabled: false,
                                  initialDosingEnabled: true,
-                                 isClosedLoopAllowed: FakeClosedLoopAllowedPublisher().$mockIsClosedLoopAllowed,
                                  automaticDosingStrategy: .automaticBolus,
+                                 lastLoopCompletion: FakeLastLoopCompletionPublisher().$mockLastLoopCompletion,
+                                 mostRecentGlucoseDataDate: FakeLastLoopCompletionPublisher().$mockLastLoopCompletion,
+                                 mostRecentPumpDataDate: FakeLastLoopCompletionPublisher().$mockLastLoopCompletion,
                                  availableSupports: [],
                                  isOnboardingComplete: false,
                                  therapySettingsViewModelDelegate: nil,
-                                 delegate: nil)
+                                 presetHistory: TemporaryScheduleOverrideHistory(),
+                                 deliveryDelegate: nil,
+                                 deviceManager: nil
+        )
     }
 }

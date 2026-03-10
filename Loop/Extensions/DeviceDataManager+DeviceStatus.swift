@@ -11,6 +11,10 @@ import LoopKitUI
 import LoopCore
 
 extension DeviceDataManager {
+    var hasBluetoothIssue: Bool {
+        bluetoothProvider.bluetoothState == .poweredOff || bluetoothProvider.bluetoothState == .unauthorized || bluetoothProvider.bluetoothState == .unsupported
+    }
+    
     var cgmStatusHighlight: DeviceStatusHighlight? {
         let bluetoothState = bluetoothProvider.bluetoothState
         if bluetoothState == .unsupported || bluetoothState == .unauthorized {
@@ -41,16 +45,16 @@ extension DeviceDataManager {
         } else if pumpManager == nil {
             return DeviceDataManager.addPumpStatusHighlight
         } else {
-            return pumpManager?.pumpStatusHighlight
+            return (pumpManager as? PumpManagerUI)?.pumpStatusHighlight
         }
     }
 
     var pumpStatusBadge: DeviceStatusBadge? {
-        return pumpManager?.pumpStatusBadge
+        return (pumpManager as? PumpManagerUI)?.pumpStatusBadge
     }
 
     var pumpLifecycleProgress: DeviceLifecycleProgress? {
-        return pumpManager?.pumpLifecycleProgress
+        return (pumpManager as? PumpManagerUI)?.pumpLifecycleProgress
     }
     
     static var resumeOnboardingStatusHighlight: ResumeOnboardingStatusHighlight {
@@ -104,18 +108,12 @@ extension DeviceDataManager {
             let action = pumpManagerHUDProvider.didTapOnHUDView(view, allowDebugFeatures: FeatureFlags.allowDebugFeatures)
         {
             return action
-        } else if let pumpManager = pumpManager {
+        } else if let pumpManager = pumpManager as? PumpManagerUI {
             return .presentViewController(pumpManager.settingsViewController(bluetoothProvider: bluetoothProvider, colorPalette: .default, allowDebugFeatures: FeatureFlags.allowDebugFeatures, allowedInsulinTypes: allowedInsulinTypes))
         } else {
             return .setupNewPump
         }
-    }
-    
-    var isGlucoseValueStale: Bool {
-        guard let latestGlucoseDataDate = glucoseStore.latestGlucose?.startDate else { return true }
-
-        return Date().timeIntervalSince(latestGlucoseDataDate) > LoopCoreConstants.inputDataRecencyInterval
-    }
+    }    
 }
 
 // MARK: - BluetoothState

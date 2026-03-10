@@ -7,7 +7,7 @@
 //
 
 import UIKit
-import HealthKit
+import LoopAlgorithm
 import LoopKit
 import LoopKitUI
 
@@ -21,6 +21,15 @@ public final class CGMStatusHUDView: DeviceStatusHUDView, NibLoadable {
     
     override public var orderPriority: HUDViewOrderPriority {
         return 1
+    }
+    
+    public var isGlucoseValueStale: Bool {
+        get {
+            viewModel.isGlucoseValueStale
+        }
+        set {
+            viewModel.isGlucoseValueStale = newValue
+        }
     }
     
     public var isVisible: Bool {
@@ -47,9 +56,7 @@ public final class CGMStatusHUDView: DeviceStatusHUDView, NibLoadable {
     override func setup() {
         super.setup()
         statusHighlightView.setIconPosition(.right)
-        viewModel = CGMStatusHUDViewModel(staleGlucoseValueHandler: { [weak self] in
-            self?.updateDisplay()
-        })
+        viewModel = CGMStatusHUDViewModel()
     }
     
     override public func tintColorDidChange() {
@@ -109,19 +116,19 @@ public final class CGMStatusHUDView: DeviceStatusHUDView, NibLoadable {
         
     public func setGlucoseQuantity(_ glucoseQuantity: Double,
                                    at glucoseStartDate: Date,
-                                   unit: HKUnit,
-                                   staleGlucoseAge: TimeInterval,
+                                   unit: LoopUnit,
                                    glucoseDisplay: GlucoseDisplayable?,
                                    wasUserEntered: Bool,
-                                   isDisplayOnly: Bool)
+                                   isDisplayOnly: Bool,
+                                   isGlucoseValueStale: Bool)
     {
         viewModel.setGlucoseQuantity(glucoseQuantity,
                                      at: glucoseStartDate,
                                      unit: unit,
-                                     staleGlucoseAge: staleGlucoseAge,
                                      glucoseDisplay: glucoseDisplay,
                                      wasUserEntered: wasUserEntered,
-                                     isDisplayOnly: isDisplayOnly)
+                                     isDisplayOnly: isDisplayOnly,
+                                     isGlucoseValueStale: isGlucoseValueStale)
         
         updateDisplay()
     }
@@ -133,6 +140,12 @@ public final class CGMStatusHUDView: DeviceStatusHUDView, NibLoadable {
         presentStatusHighlight(viewModel.statusHighlight)
         
         accessibilityValue = viewModel.accessibilityString
+        accessibilityIdentifier =
+        if viewModel.glucoseValueString == "LOW" || viewModel.glucoseValueString == "HIGH" {
+            "glucoseHUDView_\(viewModel.glucoseValueString)"
+        } else {
+            "glucoseHUDView"
+        }
     }
     
     func updateTrendIcon() {
