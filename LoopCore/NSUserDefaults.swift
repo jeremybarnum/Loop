@@ -175,7 +175,9 @@ extension UserDefaults {
             } catch {
                 assertionFailure("Unable to encode MissedMealNotification")
             }
-        
+        }
+    }
+
     public var defaultEnvironment: Data? {
         get {
             data(forKey: Key.defaultEnvironment.rawValue)

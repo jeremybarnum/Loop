@@ -229,6 +229,7 @@
 		4FF4D1001E18374700846527 /* WatchContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FF4D0FF1E18374700846527 /* WatchContext.swift */; };
 		4FF4D1011E18375000846527 /* WatchContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FF4D0FF1E18374700846527 /* WatchContext.swift */; };
 		7D23667D21250C7E0028B67D /* LocalizedString.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D23667C21250C7E0028B67D /* LocalizedString.swift */; };
+		7D23667D21250C7E0028B67D /* LocalizedString.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D23667C21250C7E0028B67D /* LocalizedString.swift */; };
 		7E69CFFC2A16A77E00203CBD /* ResetLoopManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E69CFFB2A16A77E00203CBD /* ResetLoopManager.swift */; };
 		84213C752D932F0F00642E78 /* InsulinDeliveryLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84213C742D932F0F00642E78 /* InsulinDeliveryLog.swift */; };
 		84213C892D94941000642E78 /* InsulinDeliveryLogEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84213C882D94941000642E78 /* InsulinDeliveryLogEvent.swift */; };
@@ -430,6 +431,7 @@
 		C10C57FA2E708B2D00A4825C /* PresetWatchCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10C57F92E708B1D00A4825C /* PresetWatchCard.swift */; };
 		C10C57FC2E70B8B900A4825C /* EnvironmentValues+GlucoseDisplayUnit.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10C57FB2E70B87500A4825C /* EnvironmentValues+GlucoseDisplayUnit.swift */; };
 		C10C57FE2E71E87D00A4825C /* ActiveOverrideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10C57FD2E71E87400A4825C /* ActiveOverrideView.swift */; };
+		C110888D2A3913C600BA4898 /* BuildDetails.swift in Sources */ = {isa = PBXBuildFile; fileRef = C110888C2A3913C600BA4898 /* BuildDetails.swift */; };
 		C11445B22DA98A3400034864 /* CorrectionRangeInformationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11445B12DA98A2D00034864 /* CorrectionRangeInformationView.swift */; };
 		C11B9D5B286778A800500CF8 /* SwiftCharts in Frameworks */ = {isa = PBXBuildFile; productRef = C11B9D5A286778A800500CF8 /* SwiftCharts */; };
 		C11B9D5E286778D000500CF8 /* LoopKitUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C11B9D5D286778D000500CF8 /* LoopKitUI.framework */; };
@@ -538,6 +540,7 @@
 		C1ED6C6C2E7C6EC1002F91C2 /* NotificationActionSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1ABA1602E281D330049DF41 /* NotificationActionSelection.swift */; };
 		C1ED6C6D2E7C6EC1002F91C2 /* NotificationActionSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1ABA1602E281D330049DF41 /* NotificationActionSelection.swift */; };
 		C1ED6C6E2E7C6EDE002F91C2 /* IntentExtensionInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9B08020253BBDE900BAD8F8 /* IntentExtensionInfo.swift */; };
+		E9B08021253BBDE900BAD8F8 /* IntentExtensionInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9B08020253BBDE900BAD8F8 /* IntentExtensionInfo.swift */; };
 		C1ED6C6F2E7C6EDE002F91C2 /* IntentExtensionInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9B08020253BBDE900BAD8F8 /* IntentExtensionInfo.swift */; };
 		C1ED6C702E7C6F07002F91C2 /* SetBolusUserInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 435400331C9F878D00D5819C /* SetBolusUserInfo.swift */; };
 		C1ED6C712E7C6F07002F91C2 /* SetBolusUserInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 435400331C9F878D00D5819C /* SetBolusUserInfo.swift */; };
@@ -984,6 +987,7 @@
 		4FF4D0FF1E18374700846527 /* WatchContext.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WatchContext.swift; sourceTree = "<group>"; };
 		4FFEDFBE20E5CF22000BFC58 /* ChartHUDController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ChartHUDController.swift; sourceTree = "<group>"; };
 		7D23667C21250C7E0028B67D /* LocalizedString.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = LocalizedString.swift; path = LoopUI/Common/LocalizedString.swift; sourceTree = SOURCE_ROOT; };
+		7D23667C21250C7E0028B67D /* LocalizedString.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = LocalizedString.swift; path = LoopUI/Common/LocalizedString.swift; sourceTree = SOURCE_ROOT; };
 		7E69CFFB2A16A77E00203CBD /* ResetLoopManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResetLoopManager.swift; sourceTree = "<group>"; };
 		840A2F0D2C0F978E003D5E90 /* LoopKitUI.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = LoopKitUI.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		84213C742D932F0F00642E78 /* InsulinDeliveryLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InsulinDeliveryLog.swift; sourceTree = "<group>"; };
@@ -1221,6 +1225,9 @@
 		C152B9F42C9C7D4A00ACBC06 /* AutomationHistoryEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationHistoryEntry.swift; sourceTree = "<group>"; };
 		C152B9F62C9C7EF100ACBC06 /* AutomationHistoryEntryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationHistoryEntryTests.swift; sourceTree = "<group>"; };
 		C1550B0B2E6F249A009369DC /* LoopCircleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopCircleView.swift; sourceTree = "<group>"; };
+		C159C8192867857000A86EC0 /* LoopKitUI.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = LoopKitUI.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		C159C8212867859800A86EC0 /* MockKitUI.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = MockKitUI.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		C159C82E286787EF00A86EC0 /* LoopKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = LoopKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		C165756E2534C468004AE16E /* SimpleBolusViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleBolusViewModelTests.swift; sourceTree = "<group>"; };
 		C16575702538A36B004AE16E /* CGMStalenessMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CGMStalenessMonitor.swift; sourceTree = "<group>"; };
 		C16575722538AFF6004AE16E /* CGMStalenessMonitorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CGMStalenessMonitorTests.swift; sourceTree = "<group>"; };
@@ -1233,7 +1240,6 @@
 		C16FC0AF2A99392F0025E239 /* live_capture_input.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = live_capture_input.json; sourceTree = "<group>"; };
 		C1742331259BEADC00399C9D /* ManualEntryDoseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualEntryDoseView.swift; sourceTree = "<group>"; };
 		C174233B259BEB0F00399C9D /* ManualEntryDoseViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualEntryDoseViewModel.swift; sourceTree = "<group>"; };
-
 		C1750AEB255B013300B8011C /* Minizip.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = Minizip.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1777A6525A125F100595963 /* ManualEntryDoseViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualEntryDoseViewModelTests.swift; sourceTree = "<group>"; };
 		C17824991E1999FA00D9D25C /* CaseCountable.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = CaseCountable.swift; sourceTree = "<group>"; };
@@ -1257,7 +1263,6 @@
 		C19008FD25225D3900721625 /* SimpleBolusCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleBolusCalculator.swift; sourceTree = "<group>"; };
 		C19008FF252271BB00721625 /* SimpleBolusCalculatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleBolusCalculatorTests.swift; sourceTree = "<group>"; };
 		C191D2A025B3ACAA00C26C0B /* DosingStrategySelectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DosingStrategySelectionView.swift; sourceTree = "<group>"; };
-
 		C19C8BB928651DFB0056D5E4 /* TrueTime.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = TrueTime.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		C19C8BC228651EAE0056D5E4 /* LoopTestingKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = LoopTestingKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		C19C8BC728651F0A0056D5E4 /* MockKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = MockKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -1290,6 +1295,7 @@
 		C1E2774722433D7A00354103 /* MKRingProgressView.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = MKRingProgressView.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1E3862428247B7100F561A4 /* StoredLoopNotRunningNotification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoredLoopNotRunningNotification.swift; sourceTree = "<group>"; };
 		C1E9CB5A295101570022387B /* install-scenarios.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "install-scenarios.sh"; sourceTree = "<group>"; };
+		C1E9CB5A295101570022387B /* install-scenarios.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "install-scenarios.sh"; sourceTree = "<group>"; };
 		C1ED6C602E79BB9C002F91C2 /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
 		C1ED6C7C2E7C8113002F91C2 /* SetPresetUserInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetPresetUserInfo.swift; sourceTree = "<group>"; };
 		C1ED6C7F2E7C9C7A002F91C2 /* PendingPresetReminder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingPresetReminder.swift; sourceTree = "<group>"; };
@@ -1304,7 +1310,12 @@
 		C1F8B1DB223862D500DD66CF /* BolusProgressTableViewCell.xib */ = {isa = PBXFileReference; lastKnownFileType = file.xib; path = BolusProgressTableViewCell.xib; sourceTree = "<group>"; };
 		C1FB428B217806A300FAB378 /* StateColorPalette.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = StateColorPalette.swift; sourceTree = "<group>"; };
 		C1FB428E217921D600FAB378 /* PumpManagerUI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PumpManagerUI.swift; sourceTree = "<group>"; };
+		C1F7822527CC056900C0919A /* SettingsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsManager.swift; sourceTree = "<group>"; };
+		C1F8B1D122375E4200DD66CF /* BolusProgressTableViewCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BolusProgressTableViewCell.swift; sourceTree = "<group>"; };
+		C1F8B1DB223862D500DD66CF /* BolusProgressTableViewCell.xib */ = {isa = PBXFileReference; lastKnownFileType = file.xib; path = BolusProgressTableViewCell.xib; sourceTree = "<group>"; };
 		C1FAD5182E7E0C3100F7FAD9 /* ChartPageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartPageView.swift; sourceTree = "<group>"; };
+		C1FB428B217806A300FAB378 /* StateColorPalette.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = StateColorPalette.swift; sourceTree = "<group>"; };
+		C1FB428E217921D600FAB378 /* PumpManagerUI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PumpManagerUI.swift; sourceTree = "<group>"; };
 		DD3DBD282A33AFE9000F8B5B /* IntegralRetrospectiveCorrectionSelectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegralRetrospectiveCorrectionSelectionView.swift; sourceTree = "<group>"; };
 		DDC389F52A2B61750066E2E8 /* ApplicationFactorStrategy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationFactorStrategy.swift; sourceTree = "<group>"; };
 		DDC389F72A2B620B0066E2E8 /* GlucoseBasedApplicationFactorStrategy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlucoseBasedApplicationFactorStrategy.swift; sourceTree = "<group>"; };
@@ -2002,13 +2013,7 @@
 				89ADE13A226BFA0F0067222B /* TestingScenariosManager.swift */,
 				1D82E69F25377C6B009131FB /* TrustedTimeChecker.swift */,
 				4328E0341CFC0AE100E199AA /* WatchDataManager.swift */,
-				1DA6499D2441266400F61E75 /* Alerts */,
-				E95D37FF24EADE68005E2F50 /* Store Protocols */,
-				E9B355232935906B0076AB04 /* Missed Meal Detection */,
 				3ED319902EB65A2D00820BCF /* Live Activity */,
-				C1F2075B26D6F9B0007AB7EB /* AppExpirationAlerter.swift */,
-				A96DAC2B2838F31200D94E38 /* SharedLogging.swift */,
-				7E69CFFB2A16A77E00203CBD /* ResetLoopManager.swift */,
 				84AA81E42A4A3981000B658B /* DeeplinkManager.swift */,
 				C1B80D622AF97D7200AB7705 /* LoopDataManager+CarbAbsorption.swift */,
 			);
@@ -3037,6 +3042,7 @@
 				B66D1F352E6A5D6600471149 /* Localizable.xcstrings in Resources */,
 				B405E35924D2A75B00DD058D /* DerivedAssets.xcassets in Resources */,
 				C1275E1F2E822CEE0013B99D /* DerivedAssets.xcassets in Resources */,
+				A966152A23EA5A37005D8B29 /* DefaultAssets.xcassets in Resources */,
 				849466D02EF1EAD300A90718 /* LocalizablePlural.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -3795,6 +3801,7 @@
 				E9B07FEE253BBC7100BAD8F8 /* OverrideIntentHandler.swift in Sources */,
 				E942DE9F253BE6A900AC532D /* NSTimeInterval.swift in Sources */,
 				E9B08016253BBD7300BAD8F8 /* UserDefaults+LoopIntents.swift in Sources */,
+				E9B08021253BBDE900BAD8F8 /* IntentExtensionInfo.swift in Sources */,
 				1D3F0F7726D59DCE004A5960 /* Debug.swift in Sources */,
 				E942DF34253BF87F00AC532D /* Intents.intentdefinition in Sources */,
 				E9B07F7F253BBA6500BAD8F8 /* IntentHandler.swift in Sources */,
@@ -3874,6 +3881,32 @@
 			isa = PBXVariantGroup;
 			children = (
 				43785E9A2120E7060057DED1 /* Base */,
+				43785E9F2122774A0057DED1 /* es */,
+				43785EA12122774B0057DED1 /* ru */,
+				43C98058212A799E003B5D17 /* en */,
+				C12CB9AC23106A3C00F84978 /* it */,
+				C12CB9AE23106A5C00F84978 /* fr */,
+				C12CB9B023106A5F00F84978 /* de */,
+				C12CB9B223106A6000F84978 /* zh-Hans */,
+				C12CB9B423106A6100F84978 /* nl */,
+				C12CB9B623106A6200F84978 /* nb */,
+				C12CB9B823106A6300F84978 /* pl */,
+				7D9BEF132335EC4B005DCFD6 /* ja */,
+				7D9BEF292335EC58005DCFD6 /* pt-BR */,
+				7D9BEF3F2335EC62005DCFD6 /* vi */,
+				7D9BEF552335EC6E005DCFD6 /* da */,
+				7D9BEF6B2335EC7D005DCFD6 /* sv */,
+				7D9BEF812335EC8B005DCFD6 /* fi */,
+				7D9BF13A23370E8B005DCFD6 /* ro */,
+				F5D9C01727DABBE0002E48F6 /* tr */,
+				F5E0BDD327E1D71C0033557E /* he */,
+				C1C3127F297E4C0400296DA4 /* ar */,
+				C1C247882995823200371B88 /* sk */,
+				C1C5357529C6346A00E32DF9 /* cs */,
+				3D03C6DA2AACE6AC00FDE5D2 /* hi */,
+				B6F22EF52E95A03600CCA05F /* ce */,
+				B6F22EF72E95A03800CCA05F /* hu */,
+				B6F22EF92E95A03C00CCA05F /* uk */,
 			);
 			name = Intents.intentdefinition;
 			sourceTree = "<group>";
@@ -3891,6 +3924,26 @@
 			isa = PBXVariantGroup;
 			children = (
 				43D9FFA921EA9A0C00AF44BF /* Base */,
+				7D9BEF002335D67D005DCFD6 /* en */,
+				7D9BEF022335D687005DCFD6 /* zh-Hans */,
+				7D9BEF042335D68A005DCFD6 /* nl */,
+				7D9BEF062335D68C005DCFD6 /* fr */,
+				7D9BEF082335D68D005DCFD6 /* de */,
+				7D9BEF0A2335D68F005DCFD6 /* it */,
+				7D9BEF0C2335D690005DCFD6 /* nb */,
+				7D9BEF0E2335D691005DCFD6 /* pl */,
+				7D9BEF102335D693005DCFD6 /* ru */,
+				7D9BEF122335D694005DCFD6 /* es */,
+				7D9BEF182335EC4C005DCFD6 /* ja */,
+				7D9BEF2E2335EC59005DCFD6 /* pt-BR */,
+				7D9BEF442335EC62005DCFD6 /* vi */,
+				7D9BEF5A2335EC6E005DCFD6 /* da */,
+				7D9BEF702335EC7D005DCFD6 /* sv */,
+				7D9BEF862335EC8B005DCFD6 /* fi */,
+				7D9BF13E23370E8C005DCFD6 /* ro */,
+				F5D9C01C27DABBE1002E48F6 /* tr */,
+				F5E0BDD827E1D71E0033557E /* he */,
+				C1C3127A297E4BFE00296DA4 /* ar */,
 			);
 			name = Main.storyboard;
 			sourceTree = "<group>";
@@ -3902,207 +3955,30 @@
 				B66D1F282E6A5D6500471149 /* mul */,
 			);
 			name = MainInterface.storyboard;
-		4B60626A287E286000BF8BBB /* Localizable.strings */ = {
-				4B60626B287E286000BF8BBB /* de */,
-				C1004DF92981F5B700B8CF94 /* da */,
-				C1004E012981F67A00B8CF94 /* sv */,
-				C1004E092981F6A100B8CF94 /* ro */,
-				C1004E112981F6E200B8CF94 /* nl */,
-				C1004E192981F6F500B8CF94 /* nb */,
-				C1004E212981F72D00B8CF94 /* fr */,
-				C1004E282981F74300B8CF94 /* fi */,
-				C1BCB5B3298309C4001C50FF /* it */,
-				C19A2247298951AC000E4E71 /* en */,
-				C1EB0D1E299581D900628475 /* es */,
-				C1F48FFA2995821600C8BD69 /* pl */,
-				C1B267992995824000BCB7C1 /* tr */,
-				C122DEFA29BBFAAE00321F8D /* ru */,
-				C15A582129C7866600D3A5A1 /* ar */,
-				C1FF3D4B29C786A900BDC1EC /* he */,
-				C1B0CFD629C786BF0045B04D /* ja */,
-				C1E693CC29C786E200410918 /* pt-BR */,
-				C1FDCBFD29C786F90056E652 /* sk */,
-				C192C60029C78711001EFEA6 /* vi */,
-			name = Localizable.strings;
-			sourceTree = "<group>";
-		};
-		4B67E2C6289B4EDB002D92AF /* InfoPlist.strings */ = {
-				4B67E2C7289B4EDB002D92AF /* de */,
-				C1004DFB2981F5B700B8CF94 /* da */,
-				C1004E032981F67A00B8CF94 /* sv */,
-				C1004E0B2981F6A100B8CF94 /* ro */,
-				C1004E132981F6E200B8CF94 /* nl */,
-				C1004E1B2981F6F500B8CF94 /* nb */,
-				C1004E232981F72D00B8CF94 /* fr */,
-				C1004E2A2981F74300B8CF94 /* fi */,
-				C1004E2E2981F75B00B8CF94 /* es */,
-				C1BCB5B8298309C4001C50FF /* it */,
-				C1F48FFF2995821600C8BD69 /* pl */,
-				C1B2679D2995824000BCB7C1 /* tr */,
-				C122DEFF29BBFAAE00321F8D /* ru */,
-				C15A582329C7866600D3A5A1 /* ar */,
-				C1FF3D4D29C786A900BDC1EC /* he */,
-				C1B0CFD929C786BF0045B04D /* ja */,
-				C1E693CF29C786E200410918 /* pt-BR */,
-				C1FDCC0129C786F90056E652 /* sk */,
-				C192C60329C78711001EFEA6 /* vi */,
-			name = InfoPlist.strings;
-			sourceTree = "<group>";
-		};
-		63F5E17A297DDF3900A62D4B /* ckcomplication.strings */ = {
-				63F5E17B297DDF3900A62D4B /* Base */,
-				C1C3127E297E4C0100296DA4 /* ar */,
-				C116134D2983096D00777E7C /* nb */,
-				C1BCB5B7298309C4001C50FF /* it */,
-				C11A2BCF29830A3100AC5135 /* fr */,
-				C18886E829830A5E004C982D /* nl */,
-				C155A8F52986396E009BD257 /* de */,
-				C18B7260299581C600F138D3 /* da */,
-				C1EB0D22299581D900628475 /* es */,
-				C1F48FFE2995821600C8BD69 /* pl */,
-				C1B2679C2995824000BCB7C1 /* tr */,
-				C1AD630029BBFAA80002685D /* ro */,
-				C122DEFE29BBFAAE00321F8D /* ru */,
-				C1275E202E8235E90013B99D /* en */,
-			name = ckcomplication.strings;
-			sourceTree = "<group>";
-		};
-		7D7076471FE06EE0004AC8EA /* InfoPlist.strings */ = {
-				7D23667A21250C480028B67D /* Base */,
-				F5D9C02327DABBE3002E48F6 /* tr */,
-				F5E0BDDF27E1D7210033557E /* he */,
-				C1C31281297E4C0400296DA4 /* ar */,
-				C1004DFA2981F5B700B8CF94 /* da */,
-				C1004E022981F67A00B8CF94 /* sv */,
-				C1004E0A2981F6A100B8CF94 /* ro */,
-				C1004E122981F6E200B8CF94 /* nl */,
-				C1004E1A2981F6F500B8CF94 /* nb */,
-				C1004E222981F72D00B8CF94 /* fr */,
-				C1004E292981F74300B8CF94 /* fi */,
-				C1004E342981F77B00B8CF94 /* de */,
-				C1BCB5B4298309C4001C50FF /* it */,
-				C1EB0D1F299581D900628475 /* es */,
-				C1F48FFB2995821600C8BD69 /* pl */,
-				C122DEFB29BBFAAE00321F8D /* ru */,
-				C1B0CFD729C786BF0045B04D /* ja */,
-				C1E693CD29C786E200410918 /* pt-BR */,
-				C192C60129C78711001EFEA6 /* vi */,
-			name = InfoPlist.strings;
-			sourceTree = "<group>";
-		};
-		7D70764C1FE06EE1004AC8EA /* Localizable.strings */ = {
-				7D70764B1FE06EE1004AC8EA /* es */,
-				7D68AAB31FE2E8D500522C49 /* ru */,
-				7D23667921250C440028B67D /* Base */,
-				7D23668C21250D190028B67D /* fr */,
-				7D23669C21250D230028B67D /* de */,
-				7D2366AC21250D2D0028B67D /* zh-Hans */,
-				7D2366BD21250D360028B67D /* it */,
-				7D2366CC21250D400028B67D /* nl */,
-				7D2366DC21250D4B0028B67D /* nb */,
-				7D199D9A212A067600241026 /* pl */,
-				7D9BEEDB2335A587005DCFD6 /* en */,
-				7D9BEF1F2335EC4D005DCFD6 /* ja */,
-				7D9BEF352335EC59005DCFD6 /* pt-BR */,
-				7D9BEF4B2335EC63005DCFD6 /* vi */,
-				7D9BEF612335EC6F005DCFD6 /* da */,
-				7D9BEF772335EC7E005DCFD6 /* sv */,
-				7D9BEF8D2335EC8C005DCFD6 /* fi */,
-				7D9BF14323370E8C005DCFD6 /* ro */,
-				F5D9C02227DABBE3002E48F6 /* tr */,
-				F5E0BDDE27E1D7210033557E /* he */,
-				C1C31280297E4C0400296DA4 /* ar */,
-				C121D8D029C7866D00DA0520 /* cs */,
-				C1FAB5C029C786B000D25073 /* hi */,
-				C1FDCBFE29C786F90056E652 /* sk */,
-			name = Localizable.strings;
-			sourceTree = "<group>";
-		};
-		7D7076511FE06EE1004AC8EA /* InfoPlist.strings */ = {
-				7D68AAB41FE2E8D600522C49 /* ru */,
-				7D23667621250BF70028B67D /* Base */,
-				7D23668921250D180028B67D /* fr */,
-				7D23669921250D230028B67D /* de */,
-				7D2366A921250D2C0028B67D /* zh-Hans */,
-				7D2366BA21250D360028B67D /* it */,
-				7D2366C921250D400028B67D /* nl */,
-				7D2366D921250D4A0028B67D /* nb */,
-				7D199D97212A067600241026 /* pl */,
-				7D9BEED52335A3CB005DCFD6 /* en */,
-				7D9BEF1C2335EC4C005DCFD6 /* ja */,
-				7D9BEF322335EC59005DCFD6 /* pt-BR */,
-				7D9BEF5E2335EC6F005DCFD6 /* da */,
-				7D9BEF8A2335EC8C005DCFD6 /* fi */,
-				7D9BEF98233600D6005DCFD6 /* es */,
-				7D9BEF99233600D8005DCFD6 /* sv */,
-				7D9BEF9A233600D9005DCFD6 /* vi */,
-				7D9BF14123370E8C005DCFD6 /* ro */,
-				F5D9C02027DABBE2002E48F6 /* tr */,
-				F5E0BDDC27E1D7200033557E /* he */,
-				C174571429830930009EFCF2 /* ar */,
-				C1C247902995823200371B88 /* sk */,
-			name = InfoPlist.strings;
-			sourceTree = "<group>";
-		};
-		7D7076601FE06EE3004AC8EA /* Localizable.strings */ = {
-				7D70765F1FE06EE3004AC8EA /* es */,
-				7D68AAB71FE2E8D600522C49 /* ru */,
-				7D23667F21250CB80028B67D /* Base */,
-				7D23668F21250D190028B67D /* fr */,
-				7D23669F21250D240028B67D /* de */,
-				7D2366AF21250D2D0028B67D /* zh-Hans */,
-				7D2366BF21250D370028B67D /* it */,
-				7D2366CF21250D400028B67D /* nl */,
-				7D2366DF21250D4B0028B67D /* nb */,
-				7D199D9D212A067700241026 /* pl */,
-				7D9BEEDE2335A5F7005DCFD6 /* en */,
-				7D9BEF222335EC4D005DCFD6 /* ja */,
-				7D9BEF382335EC5A005DCFD6 /* pt-BR */,
-				7D9BEF4E2335EC63005DCFD6 /* vi */,
-				7D9BEF642335EC6F005DCFD6 /* da */,
-				7D9BEF7A2335EC7E005DCFD6 /* sv */,
-				7D9BEF902335EC8C005DCFD6 /* fi */,
-				7D9BF14423370E8D005DCFD6 /* ro */,
-				F5D9C02527DABBE4002E48F6 /* tr */,
-				F5E0BDE127E1D7230033557E /* he */,
-				C174571529830930009EFCF2 /* ar */,
-				C121D8D129C7866D00DA0520 /* cs */,
-				C1FAB5C129C786B000D25073 /* hi */,
-				C1FDCC0029C786F90056E652 /* sk */,
-			name = Localizable.strings;
-			sourceTree = "<group>";
-		};
-		7D7076651FE06EE4004AC8EA /* Localizable.strings */ = {
-				7D7076641FE06EE4004AC8EA /* es */,
-				7D68AAB81FE2E8D700522C49 /* ru */,
-				7D23667521250BE30028B67D /* Base */,
-				7D23668821250D180028B67D /* fr */,
-				7D23669821250D230028B67D /* de */,
-				7D2366A821250D2C0028B67D /* zh-Hans */,
-				7D2366B921250D360028B67D /* it */,
-				7D2366C821250D400028B67D /* nl */,
-				7D2366D821250D4A0028B67D /* nb */,
-				7D199D96212A067600241026 /* pl */,
-				7D9BEF1B2335EC4C005DCFD6 /* ja */,
-				7D9BEF312335EC59005DCFD6 /* pt-BR */,
-				7D9BEF472335EC62005DCFD6 /* vi */,
-				7D9BEF5D2335EC6F005DCFD6 /* da */,
-				7D9BEF732335EC7D005DCFD6 /* sv */,
-				7D9BEF892335EC8C005DCFD6 /* fi */,
-				7D9BEF972335F667005DCFD6 /* en */,
-				7D9BF14023370E8C005DCFD6 /* ro */,
-				F5D9C01F27DABBE2002E48F6 /* tr */,
-				F5E0BDDB27E1D7200033557E /* he */,
-				C1C31282297E4F6E00296DA4 /* ar */,
-				C1C247912995823200371B88 /* sk */,
-				C12BCCF929BBFA480066A158 /* cs */,
-				C1FAB5BE29C786B000D25073 /* hi */,
-			name = Localizable.strings;
 			sourceTree = "<group>";
 		};
 		7D9BEEE72335A6B3005DCFD6 /* Localizable.strings */ = {
 			isa = PBXVariantGroup;
 			children = (
+				7D9BEEE62335A6B3005DCFD6 /* en */,
+				7D9BEEE82335A6B9005DCFD6 /* zh-Hans */,
+				7D9BEEE92335A6BB005DCFD6 /* nl */,
+				7D9BEEEA2335A6BC005DCFD6 /* fr */,
+				7D9BEEEB2335A6BD005DCFD6 /* de */,
+				7D9BEEEC2335A6BE005DCFD6 /* it */,
+				7D9BEEED2335A6BF005DCFD6 /* nb */,
+				7D9BEEEE2335A6BF005DCFD6 /* pl */,
+				7D9BEEEF2335A6C0005DCFD6 /* ru */,
+				7D9BEEF02335A6C1005DCFD6 /* es */,
+				7D9BEF282335EC4E005DCFD6 /* ja */,
+				7D9BEF3E2335EC5A005DCFD6 /* pt-BR */,
+				7D9BEF542335EC64005DCFD6 /* vi */,
+				7D9BEF6A2335EC70005DCFD6 /* da */,
+				7D9BEF802335EC7E005DCFD6 /* sv */,
+				7D9BEF962335EC8D005DCFD6 /* fi */,
+				7D9BF14623370E8D005DCFD6 /* ro */,
+				F5D9C02727DABBE4002E48F6 /* tr */,
+				F5E0BDE327E1D7230033557E /* he */,
 			);
 			name = Localizable.strings;
 			sourceTree = "<group>";
@@ -4110,6 +3986,27 @@
 		7D9BEEF52335CF8D005DCFD6 /* Localizable.strings */ = {
 			isa = PBXVariantGroup;
 			children = (
+				7D9BEEF42335CF8D005DCFD6 /* en */,
+				7D9BEEF62335CF90005DCFD6 /* zh-Hans */,
+				7D9BEEF72335CF91005DCFD6 /* nl */,
+				7D9BEEF82335CF93005DCFD6 /* fr */,
+				7D9BEEF92335CF93005DCFD6 /* de */,
+				7D9BEEFA2335CF94005DCFD6 /* it */,
+				7D9BEEFB2335CF95005DCFD6 /* nb */,
+				7D9BEEFC2335CF96005DCFD6 /* pl */,
+				7D9BEEFD2335CF97005DCFD6 /* ru */,
+				7D9BEEFE2335CF97005DCFD6 /* es */,
+				7D9BEF1A2335EC4C005DCFD6 /* ja */,
+				7D9BEF302335EC59005DCFD6 /* pt-BR */,
+				7D9BEF462335EC62005DCFD6 /* vi */,
+				7D9BEF5C2335EC6F005DCFD6 /* da */,
+				7D9BEF722335EC7D005DCFD6 /* sv */,
+				7D9BEF882335EC8C005DCFD6 /* fi */,
+				7D9BF13F23370E8C005DCFD6 /* ro */,
+				F5D9C01E27DABBE2002E48F6 /* tr */,
+				F5E0BDDA27E1D71F0033557E /* he */,
+				C1C3127C297E4BFE00296DA4 /* ar */,
+				C1C247892995823200371B88 /* sk */,
 			);
 			name = Localizable.strings;
 			sourceTree = "<group>";
@@ -4117,6 +4014,20 @@
 		80F864E42433BF5D0026EC26 /* InfoPlist.strings */ = {
 			isa = PBXVariantGroup;
 			children = (
+				80F864E52433BF5D0026EC26 /* fi */,
+				C1004DEF2981F5B700B8CF94 /* da */,
+				C1004DFD2981F67A00B8CF94 /* sv */,
+				C1004E052981F6A100B8CF94 /* ro */,
+				C1004E0D2981F6E200B8CF94 /* nl */,
+				C1004E152981F6F500B8CF94 /* nb */,
+				C1004E1D2981F72D00B8CF94 /* fr */,
+				C1004E2C2981F75B00B8CF94 /* es */,
+				C1004E302981F77B00B8CF94 /* de */,
+				C1BCB5AF298309C4001C50FF /* it */,
+				C19E387B298638CE00851444 /* tr */,
+				C1F48FF62995821600C8BD69 /* pl */,
+				C14952142995822A0095AA84 /* ru */,
+				C1C2478B2995823200371B88 /* sk */,
 			);
 			name = InfoPlist.strings;
 			sourceTree = "<group>";
@@ -4819,12 +4730,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "$(MAIN_APP_BUNDLE_IDENTIFIER).LoopUI";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SUPPORTS_MACCATALYST = NO;
-				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
-				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_INSTALL_OBJC_HEADER = NO;
-				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -4847,12 +4753,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "$(MAIN_APP_BUNDLE_IDENTIFIER).LoopUI";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SUPPORTS_MACCATALYST = NO;
-				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
-				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_INSTALL_OBJC_HEADER = NO;
-				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -5116,7 +5017,12 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.loopkit.LoopCore;
 				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
 				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_INSTALL_OBJC_HEADER = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Testflight;
 		};
@@ -5167,7 +5073,12 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "$(MAIN_APP_BUNDLE_IDENTIFIER).LoopUI";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_INSTALL_OBJC_HEADER = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Testflight;
 		};

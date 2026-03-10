@@ -8,7 +8,6 @@
 
 import LoopKitUI
 import LoopKit
-import LoopCore
 import Foundation
 import HealthKit
 import ActivityKit
@@ -25,7 +24,9 @@ class LiveActivityManager : LiveActivityManagerProxy {
     
     private let glucoseStore: GlucoseStoreProtocol
     private let doseStore: DoseStoreProtocol
-    private var loopSettings: LoopSettings
+    private var scheduleOverride: TemporaryScheduleOverride?
+    private var preMealOverride: TemporaryScheduleOverride?
+    private var glucoseTargetRangeSchedule: GlucoseRangeSchedule?
     
     private var startDate: Date = Date.now
     private var settings: LiveActivitySettings = UserDefaults.standard.liveActivity ?? LiveActivitySettings()
@@ -50,7 +51,7 @@ class LiveActivityManager : LiveActivityManagerProxy {
         return dateFormatter
     }()
     
-    init?(glucoseStore: GlucoseStoreProtocol, doseStore: DoseStoreProtocol, loopSettings: LoopSettings) {
+    init?(glucoseStore: GlucoseStoreProtocol, doseStore: DoseStoreProtocol) {
         guard self.activityInfo.areActivitiesEnabled else {
             print("ERROR: Live Activities are not enabled...")
             return nil
@@ -58,7 +59,6 @@ class LiveActivityManager : LiveActivityManagerProxy {
         
         self.glucoseStore = glucoseStore
         self.doseStore = doseStore
-        self.loopSettings = loopSettings
         
         // Ensure settings exist
         if UserDefaults.standard.liveActivity == nil {
@@ -80,8 +80,14 @@ class LiveActivityManager : LiveActivityManagerProxy {
         }
     }
     
-    public func update(loopSettings: LoopSettings) {
-        self.loopSettings = loopSettings
+    public func update(
+        scheduleOverride: TemporaryScheduleOverride?,
+        preMealOverride: TemporaryScheduleOverride?,
+        glucoseTargetRangeSchedule: GlucoseRangeSchedule?
+    ) {
+        self.scheduleOverride = scheduleOverride
+        self.preMealOverride = preMealOverride
+        self.glucoseTargetRangeSchedule = glucoseTargetRangeSchedule
         update()
     }
     
@@ -142,7 +148,7 @@ class LiveActivityManager : LiveActivityManagerProxy {
             }
             
             var presetContext: Preset? = nil
-            if let override = self.loopSettings.preMealOverride ?? self.loopSettings.scheduleOverride, let start = glucoseSamples.first?.startDate {
+            if let override = self.preMealOverride ?? self.scheduleOverride, let start = glucoseSamples.first?.startDate {
                 presetContext = Preset(
                     title: override.getTitle(),
                     startDate: max(override.startDate, start),
@@ -153,7 +159,7 @@ class LiveActivityManager : LiveActivityManagerProxy {
             }
             
             var glucoseRanges: [GlucoseRangeValue] = []
-            if let glucoseRangeSchedule = self.loopSettings.glucoseTargetRangeSchedule, let start = glucoseSamples.first?.startDate {
+            if let glucoseRangeSchedule = self.glucoseTargetRangeSchedule, let start = glucoseSamples.first?.startDate {
                 glucoseRanges = getGlucoseRanges(
                     glucoseRangeSchedule: glucoseRangeSchedule,
                     presetContext: presetContext,

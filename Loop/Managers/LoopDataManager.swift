@@ -202,8 +202,7 @@ final class LoopDataManager: ObservableObject {
         if #available(iOS 16.2, *) {
             self.liveActivityManager = LiveActivityManager(
                 glucoseStore: self.glucoseStore,
-                doseStore: self.doseStore,
-                loopSettings: self.settings
+                doseStore: self.doseStore
             )
         }
 
@@ -218,22 +217,10 @@ final class LoopDataManager: ObservableObject {
             }
             
             self?.logger.default("Override Intent: setting override named '%s'", String(describing: name))
-            self?.mutateSettings { settings in
-                if let oldPreset = settings.scheduleOverride {
-                    if let observers = self?.presetActivationObservers {
-                        for observer in observers {
-                            observer.presetDeactivated(context: oldPreset.context)
-                        }
-                    }
-                }
-                
-                settings.scheduleOverride = preset.createOverride(enactTrigger: .remote("Siri"))
-                if let observers = self?.presetActivationObservers {
-                    for observer in observers {
-                        observer.presetActivated(context: .preset(preset), duration: preset.duration)
-                    }
-                }
-                self?.liveActivityManager?.update(loopSettings: settings)
+            // TemporaryPresetsManager handles presetActivated/Deactivated observers automatically
+            self?.temporaryPresetsManager.scheduleOverride = preset.createOverride(enactTrigger: .remote("Siri"))
+            Task { @MainActor in
+                await self?.updateDisplayState()
             }
             // Remove the override from UserDefaults so we don't set it multiple times
             appGroup.intentExtensionOverrideToSet = nil
@@ -257,17 +244,8 @@ final class LoopDataManager: ObservableObject {
                 object: self.carbStore,
                 queue: nil
             ) { (note) -> Void in
-                self.dataAccessQueue.async {
-                    self.logger.default("Received notification of carb entries changing")
-                    self.liveActivityManager?.update(loopSettings: self.settings)
-
-                    self.carbEffect = nil
-                    self.carbsOnBoard = nil
-                    self.recentCarbEntries = nil
-                    self.remoteRecommendationNeedsUpdating = true
                 Task { @MainActor in
                     await self.updateDisplayState()
-
                     self.notify(forChange: .carbs)
                 }
             },
@@ -276,16 +254,9 @@ final class LoopDataManager: ObservableObject {
                 object: self.glucoseStore,
                 queue: nil
             ) { (note) in
-                self.dataAccessQueue.async {
-                    self.logger.default("Received notification of glucose samples changing")
-                    self.liveActivityManager?.update(loopSettings: self.settings)
-                    
-                    self.glucoseMomentumEffect = nil
-                    self.remoteRecommendationNeedsUpdating = true
                 Task { @MainActor in
                     self.restartGlucoseValueStalenessTimer()
                     await self.updateDisplayState()
-
                     self.notify(forChange: .glucose)
                 }
             },
@@ -294,15 +265,8 @@ final class LoopDataManager: ObservableObject {
                 object: self.doseStore,
                 queue: OperationQueue.main
             ) { (note) in
-                self.dataAccessQueue.async {
-                    self.logger.default("Received notification of dosing changing")
-                    self.liveActivityManager?.update(loopSettings: self.settings)
-
-                    self.clearCachedInsulinEffects()
-                    self.remoteRecommendationNeedsUpdating = true
                 Task { @MainActor in
                     await self.updateDisplayState()
-
                     self.notify(forChange: .insulin)
                 }
             },
@@ -335,64 +299,10 @@ final class LoopDataManager: ObservableObject {
                     now.timeIntervalSince(entry.startDate) < .hours(36)
                 })
 
-    private var lockedSettings: Locked<LoopSettings>
-
-    var settings: LoopSettings {
-        lockedSettings.value
-    }
-
-    func mutateSettings(_ changes: (_ settings: inout LoopSettings) -> Void) {
-        var oldValue: LoopSettings!
-        let newValue = lockedSettings.mutate { settings in
-            oldValue = settings
-            changes(&settings)
-        }
-
-        guard oldValue != newValue else {
-            return
-        }
-
-        var invalidateCachedEffects = false
-
-        dosingEnabled = newValue.dosingEnabled
-
-        if newValue.preMealOverride != oldValue.preMealOverride {
-            // The prediction isn't actually invalid, but a target range change requires recomputing recommended doses
-            predictedGlucose = nil
-            
-            self.liveActivityManager?.update(loopSettings: newValue)
-        }
-
-        if newValue.scheduleOverride != oldValue.scheduleOverride {
-            overrideHistory.recordOverride(settings.scheduleOverride)
-
-            if let oldPreset = oldValue.scheduleOverride {
-                for observer in self.presetActivationObservers {
-                    observer.presetDeactivated(context: oldPreset.context)
-                }
-                self.liveActivityManager?.update(loopSettings: newValue)
-            }
-            if let newPreset = newValue.scheduleOverride {
-                for observer in self.presetActivationObservers {
-                    observer.presetActivated(context: newPreset.context, duration: newPreset.duration)
-                Task {
-                    await self.updateDisplayState()
-
-                }
-                
-                self.liveActivityManager?.update(loopSettings: newValue)
-            }
-            
-            if !enabled {
-                temporaryPresetsManager.endPreMealOverride()
-                Task {
-                    try? await self?.cancelActiveTempBasal(for: .automaticDosingDisabled)
-                }
-            }
-        }
-    }
-
     // MARK: - Calculation state
+    // Note: settings are now accessed via settingsProvider.settings (StoredSettings)
+    // and overrides via temporaryPresetsManager. DIY's lockedSettings/mutateSettings
+    // were removed as part of the Swift Concurrency migration.
 
     fileprivate let dataAccessQueue: DispatchQueue = DispatchQueue(label: "com.loudnate.Naterade.LoopDataManager.dataAccessQueue", qos: .utility)
 
@@ -651,6 +561,14 @@ final class LoopDataManager: ObservableObject {
         displayState = newState
         publishedMostRecentGlucoseDataDate = glucoseStore.latestGlucose?.startDate
         publishedMostRecentPumpDataDate = mostRecentPumpDataDate
+
+        // DIY: Update Live Activity with current override and target range state
+        liveActivityManager?.update(
+            scheduleOverride: temporaryPresetsManager.scheduleOverride,
+            preMealOverride: temporaryPresetsManager.preMealOverride,
+            glucoseTargetRangeSchedule: settingsProvider.settings.glucoseTargetRangeSchedule
+        )
+
         await updateRemoteRecommendation()
     }
 
@@ -1036,349 +954,6 @@ extension LoopDataManager {
         dosingDecisionStore.storeDosingDecision(dosingDecision) {}
     }
 
-    // Actions
-
-    /// Runs the "loop"
-    ///
-    /// Executes an analysis of the current data, and recommends an adjustment to the current
-    /// temporary basal rate.
-    ///
-    func loop() {
-
-        if let lastLoopCompleted, Date().timeIntervalSince(lastLoopCompleted) < .minutes(2) {
-            print("Looping too fast!")
-        }
-
-        let available = loopLock.withLockIfAvailable {
-            loopInternal()
-            return true
-        }
-        if available == nil {
-            print("Loop attempted while already looping!")
-        }
-    }
-
-    func loopInternal() {
-        
-        dataAccessQueue.async {
-
-            // If time was changed to future time, and a loop completed, then time was fixed, lastLoopCompleted will prevent looping
-            // until the future loop time passes. Fix that here.
-            if let lastLoopCompleted = self.lastLoopCompleted, Date() < lastLoopCompleted, self.trustedTimeOffset() == 0 {
-                self.logger.error("Detected future lastLoopCompleted. Restoring.")
-                self.lastLoopCompleted = Date()
-            }
-
-            // Partial application factor assumes 5 minute intervals. If our looping intervals are shorter, then this will be adjusted
-            self.timeBasedDoseApplicationFactor = 1.0
-            if let lastLoopCompleted = self.lastLoopCompleted {
-                let timeSinceLastLoop = max(0, Date().timeIntervalSince(lastLoopCompleted))
-                self.timeBasedDoseApplicationFactor = min(1, timeSinceLastLoop/TimeInterval.minutes(5))
-                self.logger.default("Looping with timeBasedDoseApplicationFactor = %{public}@", String(describing: self.timeBasedDoseApplicationFactor))
-            }
-
-            self.logger.default("Loop running")
-            NotificationCenter.default.post(name: .LoopRunning, object: self)
-
-            self.lastLoopError = nil
-            let startDate = self.now()
-
-            var (dosingDecision, error) = self.update(for: .loop)
-
-            if error == nil, self.automaticDosingStatus.automaticDosingEnabled == true {
-                error = self.enactRecommendedAutomaticDose()
-            } else {
-                self.logger.default("Not adjusting dosing during open loop.")
-            }
-
-            self.finishLoop(startDate: startDate, dosingDecision: dosingDecision, error: error)
-        }
-    }
-
-    private func finishLoop(startDate: Date, dosingDecision: StoredDosingDecision, error: LoopError? = nil) {
-        let date = now()
-        let duration = date.timeIntervalSince(startDate)
-
-        if let error = error {
-            loopDidError(date: date, error: error, dosingDecision: dosingDecision, duration: duration)
-        } else {
-            loopDidComplete(date: date, dosingDecision: dosingDecision, duration: duration)
-        }
-
-        logger.default("Loop ended")
-        notify(forChange: .loopFinished)
-
-        if FeatureFlags.missedMealNotifications {
-            let samplesStart = now().addingTimeInterval(-MissedMealSettings.maxRecency)
-            carbStore.getGlucoseEffects(start: samplesStart, end: now(), effectVelocities: insulinCounteractionEffects) {[weak self] result in
-                guard
-                    let self = self,
-                    case .success((_, let carbEffects)) = result
-                else {
-                    if case .failure(let error) = result {
-                        self?.logger.error("Failed to fetch glucose effects to check for missed meal: %{public}@", String(describing: error))
-                    }
-                    return
-                }
-
-                glucoseStore.getGlucoseSamples(start: samplesStart, end: now()) {[weak self] result in
-                    guard
-                        let self = self,
-                        case .success(let glucoseSamples) = result
-                    else {
-                        if case .failure(let error) = result {
-                            self?.logger.error("Failed to fetch glucose samples to check for missed meal: %{public}@", String(describing: error))
-                        }
-                        return
-                    }
-
-                    self.mealDetectionManager.generateMissedMealNotificationIfNeeded(
-                        glucoseSamples: glucoseSamples,
-                        insulinCounteractionEffects: self.insulinCounteractionEffects,
-                        carbEffects: carbEffects,
-                        pendingAutobolusUnits: self.recommendedAutomaticDose?.recommendation.bolusUnits,
-                        bolusDurationEstimator: { [unowned self] bolusAmount in
-                            return self.delegate?.loopDataManager(self, estimateBolusDuration: bolusAmount)
-                        }
-                    )
-                }                
-            }
-        }
-
-        // 5 second delay to allow stores to cache data before it is read by widget
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-            self.widgetLog.default("Refreshing widget. Reason: Loop completed")
-            WidgetCenter.shared.reloadAllTimelines()
-        }
-
-        updateRemoteRecommendation()
-    }
-
-    fileprivate enum UpdateReason: String {
-        case loop
-        case getLoopState
-        case updateRemoteRecommendation
-    }
-
-    fileprivate func update(for reason: UpdateReason) -> (StoredDosingDecision, LoopError?) {
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-
-        var dosingDecision = StoredDosingDecision(reason: reason.rawValue)
-        let latestSettings = latestStoredSettingsProvider.latestSettings
-        dosingDecision.settings = StoredDosingDecision.Settings(latestSettings)
-        dosingDecision.scheduleOverride = latestSettings.scheduleOverride
-        dosingDecision.controllerStatus = UIDevice.current.controllerStatus
-        dosingDecision.pumpManagerStatus = delegate?.pumpManagerStatus
-        if let pumpStatusHighlight = delegate?.pumpStatusHighlight {
-            dosingDecision.pumpStatusHighlight = StoredDosingDecision.StoredDeviceHighlight(
-                localizedMessage: pumpStatusHighlight.localizedMessage,
-                imageName: pumpStatusHighlight.imageName,
-                state: pumpStatusHighlight.state)
-        }
-        dosingDecision.cgmManagerStatus = delegate?.cgmManagerStatus
-        dosingDecision.lastReservoirValue = StoredDosingDecision.LastReservoirValue(doseStore.lastReservoirValue)
-
-        let warnings = Locked<[LoopWarning]>([])
-
-        let updateGroup = DispatchGroup()
-
-        let historicalGlucoseStartDate = Date(timeInterval: -LoopCoreConstants.dosingDecisionHistoricalGlucoseInterval, since: now())
-        let inputDataRecencyStartDate = Date(timeInterval: -LoopCoreConstants.inputDataRecencyInterval, since: now())
-
-        // Fetch glucose effects as far back as we want to make retroactive analysis and historical glucose for dosing decision
-        var historicalGlucose: [HistoricalGlucoseValue]?
-        var latestGlucoseDate: Date?
-        updateGroup.enter()
-        glucoseStore.getGlucoseSamples(start: min(historicalGlucoseStartDate, inputDataRecencyStartDate), end: nil) { (result) in
-            switch result {
-            case .failure(let error):
-                self.logger.error("Failure getting glucose samples: %{public}@", String(describing: error))
-                latestGlucoseDate = nil
-                warnings.append(.fetchDataWarning(.glucoseSamples(error: error)))
-            case .success(let samples):
-                historicalGlucose = samples.filter { $0.startDate >= historicalGlucoseStartDate }.map { HistoricalGlucoseValue(startDate: $0.startDate, quantity: $0.quantity) }
-                latestGlucoseDate = samples.last?.startDate
-            }
-            updateGroup.leave()
-        }
-        _ = updateGroup.wait(timeout: .distantFuture)
-
-        guard let lastGlucoseDate = latestGlucoseDate else {
-            dosingDecision.appendWarnings(warnings.value)
-            dosingDecision.appendError(.missingDataError(.glucose))
-            return (dosingDecision, .missingDataError(.glucose))
-        }
-
-        let retrospectiveStart = lastGlucoseDate.addingTimeInterval(-type(of: retrospectiveCorrection).retrospectionInterval)
-
-        let earliestEffectDate = Date(timeInterval: .hours(-24), since: now())
-        let nextCounteractionEffectDate = insulinCounteractionEffects.last?.endDate ?? earliestEffectDate
-        let insulinEffectStartDate = nextCounteractionEffectDate.addingTimeInterval(.minutes(-5))
-
-        if glucoseMomentumEffect == nil {
-            updateGroup.enter()
-            glucoseStore.getRecentMomentumEffect(for: now()) { (result) -> Void in
-                switch result {
-                case .failure(let error):
-                    self.logger.error("Failure getting recent momentum effect: %{public}@", String(describing: error))
-                    self.glucoseMomentumEffect = nil
-                    warnings.append(.fetchDataWarning(.glucoseMomentumEffect(error: error)))
-                case .success(let effects):
-                    self.glucoseMomentumEffect = effects
-                }
-                updateGroup.leave()
-            }
-        }
-
-        if insulinEffect == nil || insulinEffect?.first?.startDate ?? .distantFuture > insulinEffectStartDate {
-            self.logger.debug("Recomputing insulin effects")
-            updateGroup.enter()
-            doseStore.getGlucoseEffects(start: insulinEffectStartDate, end: nil, basalDosingEnd: now()) { (result) -> Void in
-                switch result {
-                case .failure(let error):
-                    self.logger.error("Could not fetch insulin effects: %{public}@", error.localizedDescription)
-                    self.insulinEffect = nil
-                    warnings.append(.fetchDataWarning(.insulinEffect(error: error)))
-                case .success(let effects):
-                    self.insulinEffect = effects
-                }
-
-                updateGroup.leave()
-            }
-        }
-
-        if insulinEffectIncludingPendingInsulin == nil {
-            updateGroup.enter()
-            doseStore.getGlucoseEffects(start: insulinEffectStartDate, end: nil, basalDosingEnd: nil) { (result) -> Void in
-                switch result {
-                case .failure(let error):
-                    self.logger.error("Could not fetch insulin effects including pending insulin: %{public}@", error.localizedDescription)
-                    self.insulinEffectIncludingPendingInsulin = nil
-                    warnings.append(.fetchDataWarning(.insulinEffectIncludingPendingInsulin(error: error)))
-                case .success(let effects):
-                    self.insulinEffectIncludingPendingInsulin = effects
-                }
-
-                updateGroup.leave()
-            }
-        }
-
-        _ = updateGroup.wait(timeout: .distantFuture)
-
-        if nextCounteractionEffectDate < lastGlucoseDate, let insulinEffect = insulinEffect {
-            updateGroup.enter()
-            self.logger.debug("Fetching counteraction effects after %{public}@", String(describing: nextCounteractionEffectDate))
-            glucoseStore.getCounteractionEffects(start: nextCounteractionEffectDate, end: nil, to: insulinEffect) { (result) in
-                switch result {
-                case .failure(let error):
-                    self.logger.error("Failure getting counteraction effects: %{public}@", String(describing: error))
-                    warnings.append(.fetchDataWarning(.insulinCounteractionEffect(error: error)))
-                case .success(let velocities):
-                    self.insulinCounteractionEffects.append(contentsOf: velocities)
-                }
-                self.insulinCounteractionEffects = self.insulinCounteractionEffects.filterDateRange(earliestEffectDate, nil)
-
-                updateGroup.leave()
-            }
-
-            _ = updateGroup.wait(timeout: .distantFuture)
-        }
-
-        if carbEffect == nil {
-            updateGroup.enter()
-            carbStore.getGlucoseEffects(
-                start: retrospectiveStart, end: nil,
-                effectVelocities: insulinCounteractionEffects
-            ) { (result) -> Void in
-                switch result {
-                case .failure(let error):
-                    self.logger.error("%{public}@", String(describing: error))
-                    self.carbEffect = nil
-                    self.recentCarbEntries = nil
-                    warnings.append(.fetchDataWarning(.carbEffect(error: error)))
-                case .success(let (entries, effects)):
-                    self.carbEffect = effects
-                    self.recentCarbEntries = entries
-                }
-
-                updateGroup.leave()
-            }
-        }
-
-        if carbsOnBoard == nil {
-            updateGroup.enter()
-            carbStore.carbsOnBoard(at: now(), effectVelocities: insulinCounteractionEffects) { (result) in
-                switch result {
-                case .failure(let error):
-                    switch error {
-                    case .noData:
-                        // when there is no data, carbs on board is set to 0
-                        self.carbsOnBoard = CarbValue(startDate: Date(), value: 0)
-                    default:
-                        self.carbsOnBoard = nil
-                        warnings.append(.fetchDataWarning(.carbsOnBoard(error: error)))
-                    }
-                case .success(let value):
-                    self.carbsOnBoard = value
-                }
-                updateGroup.leave()
-            }
-        }
-        updateGroup.enter()
-        doseStore.insulinOnBoard(at: now()) { result in
-            switch result {
-            case .failure(let error):
-                warnings.append(.fetchDataWarning(.insulinOnBoard(error: error)))
-            case .success(let insulinValue):
-                self.insulinOnBoard = insulinValue
-            }
-            updateGroup.leave()
-        }
-
-        _ = updateGroup.wait(timeout: .distantFuture)
-
-        if retrospectiveGlucoseDiscrepancies == nil {
-            do {
-                try updateRetrospectiveGlucoseEffect()
-            } catch let error {
-                logger.error("%{public}@", String(describing: error))
-                warnings.append(.fetchDataWarning(.retrospectiveGlucoseEffect(error: error)))
-            }
-        }
-        
-        do {
-            try updateSuspendInsulinDeliveryEffect()
-        } catch let error {
-            logger.error("%{public}@", String(describing: error))
-        }
-
-        dosingDecision.appendWarnings(warnings.value)
-
-        dosingDecision.date = now()
-        dosingDecision.historicalGlucose = historicalGlucose
-        dosingDecision.carbsOnBoard = carbsOnBoard
-        dosingDecision.insulinOnBoard = self.insulinOnBoard
-        dosingDecision.glucoseTargetRangeSchedule = settings.effectiveGlucoseTargetRangeSchedule()
-
-        // These will be updated by updatePredictedGlucoseAndRecommendedDose, if possible
-        dosingDecision.predictedGlucose = predictedGlucoseIncludingPendingInsulin
-        dosingDecision.automaticDoseRecommendation = recommendedAutomaticDose?.recommendation
-
-        // If the glucose prediction hasn't changed, then nothing has changed, so just use pre-existing recommendations
-        guard predictedGlucose == nil else {
-
-            // If we still have a bolus in progress, then warn (unlikely, but possible if device comms fail)
-            if lastRequestedBolus != nil, dosingDecision.automaticDoseRecommendation == nil, dosingDecision.manualBolusRecommendation == nil {
-                dosingDecision.appendWarning(.bolusInProgress)
-            }
-
-            return (dosingDecision, nil)
-        }
-
-        return updatePredictedGlucoseAndRecommendedDose(with: dosingDecision)
-        await dosingDecisionStore.storeDosingDecision(dosingDecision)
-
-    }
 
     private func notify(forChange context: LoopUpdateContext) {
         NotificationCenter.default.post(name: .LoopDataUpdated,
