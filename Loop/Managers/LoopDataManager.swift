@@ -137,6 +137,7 @@ final class LoopDataManager: ObservableObject {
 
     // References to registered notification center observers
     private var notificationObservers: [Any] = []
+    private var overrideIntentObserver: NSKeyValueObservation? = nil
 
     var activeInsulin: InsulinValue? {
         displayState.activeInsulin
@@ -966,7 +967,7 @@ extension LoopDataManager {
                                                   predictedGlucose: bolusDosingDecision.predictedGlucose,
                                                   manualBolusRecommendation: bolusDosingDecision.manualBolusRecommendation,
                                                   manualBolusRequested: bolusDosingDecision.manualBolusRequested)
-        dosingDecisionStore.storeDosingDecision(dosingDecision) {}
+        Task { await dosingDecisionStore.storeDosingDecision(dosingDecision) }
     }
 
 
