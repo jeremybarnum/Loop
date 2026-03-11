@@ -1341,63 +1341,6 @@ extension DeviceDataManager: DeliveryDelegate {
         return pumpManager != nil
     }
 
-            self.alertManager.getStoredEntries(startDate: Date() - .hours(logDurationHours)) { (alertReport) in
-                self.deviceLog.getLogEntries(startDate: Date() - .hours(logDurationHours)) { (result) in
-                    let deviceLogReport: String
-                    switch result {
-                    case .failure(let error):
-                        deviceLogReport = "Error fetching entries: \(error)"
-                    case .success(let entries):
-                        deviceLogReport = entries.map { "* \($0.timestamp) \($0.managerIdentifier) \($0.deviceIdentifier ?? "") \($0.type) \($0.message)" }.joined(separator: "\n")
-                    }
-
-                    let submodulesInfo = BuildDetails.default.submodules
-                        .sorted(by: { $0.key < $1.key })
-                        .map { key, value in
-                            "*   \(key): \(value.branch), \(value.commitSHA)"
-                        }
-                        .joined(separator: "\n")
-
-                    let report = [
-                        "## Build Details",
-                        "* appNameAndVersion: \(Bundle.main.localizedNameAndVersion)",
-                        "* profileExpiration: \(BuildDetails.default.profileExpirationString)",
-                        "* sourceRoot: \(BuildDetails.default.sourceRoot ?? "N/A")",
-                        "* buildDateString: \(BuildDetails.default.buildDateString ?? "N/A")",
-                        "* xcodeVersion: \(BuildDetails.default.xcodeVersion ?? "N/A")",
-                        "* Workspace branch: \(BuildDetails.default.workspaceGitBranch ?? "N/A")",
-                        "* Workspace SHA: \(BuildDetails.default.workspaceGitRevision ?? "N/A")",
-                        "* Submodule name: branch, SHA",
-                        "\(submodulesInfo)",
-                        "",
-                        "## FeatureFlags",
-                        "\(FeatureFlags)",
-                        "",
-                        alertReport,
-                        "",
-                        "## DeviceDataManager",
-                        "* launchDate: \(self.launchDate)",
-                        "* lastError: \(String(describing: self.lastError))",
-                        "",
-                        "cacheStore: \(String(reflecting: self.cacheStore))",
-                        "",
-                        self.cgmManager != nil ? String(reflecting: self.cgmManager!) : "cgmManager: nil",
-                        "",
-                        self.pumpManager != nil ? String(reflecting: self.pumpManager!) : "pumpManager: nil",
-                        "",
-                        "## Device Communication Log",
-                        deviceLogReport,
-                        "",
-                        String(reflecting: self.watchManager!),
-                        "",
-                        String(reflecting: self.statusExtensionManager!),
-                        "",
-                        loopReport,
-                        ].joined(separator: "\n")
-
-                    completion(report)
-                }
-            }
     func roundBasalRate(unitsPerHour: Double) -> Double {
         guard let pumpManager = pumpManager else {
             return unitsPerHour

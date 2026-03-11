@@ -299,6 +299,20 @@ final class LoopDataManager: ObservableObject {
                     now.timeIntervalSince(entry.startDate) < .hours(36)
                 })
 
+                Task {
+                    await self.updateDisplayState()
+                }
+            }
+
+            if !enabled {
+                temporaryPresetsManager.endPreMealOverride()
+                Task {
+                    try? await self?.cancelActiveTempBasal(for: .automaticDosingDisabled)
+                }
+            }
+        }
+    }
+
     // MARK: - Calculation state
     // Note: settings are now accessed via settingsProvider.settings (StoredSettings)
     // and overrides via temporaryPresetsManager. DIY's lockedSettings/mutateSettings
