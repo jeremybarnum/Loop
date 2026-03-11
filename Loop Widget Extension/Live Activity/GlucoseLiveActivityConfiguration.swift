@@ -205,12 +205,12 @@ struct GlucoseLiveActivityConfiguration: Widget {
     ) -> some View {
         let glucoseFormatter = NumberFormatter.glucoseFormatter(
             for: context.state.isMmol
-                ? HKUnit.millimolesPerLiter
-                : HKUnit.milligramsPerDeciliter
+                ? LoopUnit.millimolesPerLiter
+                : LoopUnit.milligramsPerDeciliter
         )
         let unit = context.state.isMmol
-            ? HKUnit.millimolesPerLiter.localizedShortUnitString
-            : HKUnit.milligramsPerDeciliter.localizedShortUnitString
+            ? LoopUnit.millimolesPerLiter.localizedShortUnitString
+            : LoopUnit.milligramsPerDeciliter.localizedShortUnitString
         
         let glucoseColor = !context.attributes.useLimits ? .primary : getGlucoseColor(context: context)
         let currentBG = (glucoseFormatter.string(from: context.state.currentGlucose) ?? "??") + getArrowImage(context.state.trendType)
@@ -263,7 +263,7 @@ struct GlucoseLiveActivityConfiguration: Widget {
     ) -> DynamicIsland {
         let glucoseFormatter = NumberFormatter.glucoseFormatter(
             for: context.state.isMmol
-                ? HKUnit.millimolesPerLiter : HKUnit.milligramsPerDeciliter
+                ? LoopUnit.millimolesPerLiter : LoopUnit.milligramsPerDeciliter
         )
 
         return DynamicIsland {
@@ -287,8 +287,8 @@ struct GlucoseLiveActivityConfiguration: Widget {
                         .font(.headline)
                     Text(
                         context.state.isMmol
-                            ? HKUnit.millimolesPerLiter.localizedShortUnitString
-                            : HKUnit.milligramsPerDeciliter
+                            ? LoopUnit.millimolesPerLiter.localizedShortUnitString
+                            : LoopUnit.milligramsPerDeciliter
                                 .localizedShortUnitString
                     )
                     .foregroundStyle(Color(white: 0.7))
