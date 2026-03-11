@@ -14,6 +14,7 @@ protocol LiveActivityManagerProxy {
     func update(
         scheduleOverride: TemporaryScheduleOverride?,
         preMealOverride: TemporaryScheduleOverride?,
-        glucoseTargetRangeSchedule: GlucoseRangeSchedule?
+        glucoseTargetRangeSchedule: GlucoseRangeSchedule?,
+        activeInsulin: InsulinValue?
     )
 }

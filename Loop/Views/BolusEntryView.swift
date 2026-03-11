@@ -64,13 +64,13 @@ struct BolusEntryView: View {
                 // If the recommendation changes, and the user has edited the bolus amount, set the bolus amount to 0
                 enteredBolusStringBinding.wrappedValue = "0"
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if bolusFieldFocused {
-                    // Reserve space so the toolbar doesn’t overlap the field
-                    Color.clear.frame(height: accessoryClearance)
-                } else {
-                    actionArea
-                }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if bolusFieldFocused {
+                // Reserve space so the toolbar doesn't overlap the field
+                Color.clear.frame(height: accessoryClearance)
+            } else {
+                actionArea
             }
         }
         .edgesIgnoringSafeArea(self.bolusFieldFocused ? [] : .bottom)
@@ -78,14 +78,14 @@ struct BolusEntryView: View {
             await self.viewModel.generateRecommendationAndStartObserving()
         }
     }
-    
+
     private var title: Text {
         if viewModel.potentialCarbEntry == nil {
             return Text("Bolus", comment: "Title for bolus entry screen")
         }
         return Text("Meal Bolus", comment: "Title for bolus entry screen when also entering carbs")
     }
-    
+
     private var chartSection: some View {
         Section {
             VStack(spacing: 8) {
@@ -151,7 +151,7 @@ struct BolusEntryView: View {
             unit: .gram
         )
     }
-    
+
     @ViewBuilder
     private var activeInsulinLabel: some View {
         LabeledQuantity(
@@ -177,7 +177,7 @@ struct BolusEntryView: View {
     }
 
     @State private var expandedPresetSummary: Bool = false
-    
+
     private var summarySection: some View {
         Section {
             VStack(spacing: 16) {
@@ -189,18 +189,18 @@ struct BolusEntryView: View {
                     HStack(alignment: .top, spacing: 12) {
                         Text(Image(systemName: "info.circle"))
                             .foregroundStyle(Color.accentColor)
-                        
+
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Recommended bolus adjusted due to preset")
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                            
+
                             if expandedPresetSummary, let differenceString = presetEffectedRecommendation.differenceString, let originalAmountString = presetEffectedRecommendation.originalAmountString {
                                 Text("This reflects a \(differenceString) \(presetEffectedRecommendation.direction) from the original \(originalAmountString) due to preset adjustments.")
                                     .foregroundStyle(.secondary)
                             }
                         }
                         .font(.subheadline)
-                        
+
                         Text(Image(systemName: "chevron.up"))
                             .foregroundStyle(.secondary)
                             .rotationEffect(.degrees(expandedPresetSummary ? 180 : 0))
@@ -209,7 +209,7 @@ struct BolusEntryView: View {
                         expandedPresetSummary.toggle()
                     }
                 }
-                
+
                 if viewModel.isManualGlucoseEntryEnabled {
                     ManualGlucoseEntryRow(quantity: $viewModel.manualGlucoseQuantity)
                 } else if viewModel.potentialCarbEntry != nil {
@@ -219,7 +219,7 @@ struct BolusEntryView: View {
                 }
             }
             .padding(.top, 8)
-            
+
             if viewModel.isManualGlucoseEntryEnabled && viewModel.potentialCarbEntry != nil {
                 potentialCarbEntryRow
             }
@@ -231,7 +231,7 @@ struct BolusEntryView: View {
             bolusEntryRow
         }
     }
-    
+
     private var titleText: Text {
         return Text("Bolus Summary", comment: "Title for card displaying carb entry and bolus recommendation")
     }
@@ -381,7 +381,7 @@ struct BolusEntryView: View {
             )
         }
     }
-            
+
     private var enterManualGlucoseButton: some View {
         Button(
             action: {
@@ -505,9 +505,9 @@ struct LabeledQuantity: View {
 
     var valueText: Text {
         guard let quantity = quantity else {
-            return Text(verbatim: "– –")
+            return Text(verbatim: "- -")
         }
-        
+
         let formatter = QuantityFormatter(for: unit)
 
         if let maxFractionDigits = maxFractionDigits {

@@ -28,6 +28,7 @@ class LiveActivityManager : LiveActivityManagerProxy {
     private var scheduleOverride: TemporaryScheduleOverride?
     private var preMealOverride: TemporaryScheduleOverride?
     private var glucoseTargetRangeSchedule: GlucoseRangeSchedule?
+    private var activeInsulin: InsulinValue?
     
     private var startDate: Date = Date.now
     private var settings: LiveActivitySettings = UserDefaults.standard.liveActivity ?? LiveActivitySettings()
@@ -84,11 +85,13 @@ class LiveActivityManager : LiveActivityManagerProxy {
     public func update(
         scheduleOverride: TemporaryScheduleOverride?,
         preMealOverride: TemporaryScheduleOverride?,
-        glucoseTargetRangeSchedule: GlucoseRangeSchedule?
+        glucoseTargetRangeSchedule: GlucoseRangeSchedule?,
+        activeInsulin: InsulinValue?
     ) {
         self.scheduleOverride = scheduleOverride
         self.preMealOverride = preMealOverride
         self.glucoseTargetRangeSchedule = glucoseTargetRangeSchedule
+        self.activeInsulin = activeInsulin
         update()
     }
     
@@ -104,7 +107,7 @@ class LiveActivityManager : LiveActivityManagerProxy {
                 return
             }
             
-            let isMmol = unit == HKUnit.millimolesPerLiter
+            let isMmol = unit == LoopUnit.millimolesPerLiter
             await self.endUnknownActivities()
 
             let statusContext = UserDefaults.appGroup?.statusExtensionContext
@@ -173,7 +176,7 @@ class LiveActivityManager : LiveActivityManagerProxy {
             let yAxisPoints = glucoseSamples.map{ item in item.quantity.doubleValue(for: unit) } + predicatedGlucose
             let chartYAxis = ChartAxisGenerator.getYAxis(
                 points: yAxisPoints,
-                isMmol: unit == HKUnit.millimolesPerLiter
+                isMmol: unit == LoopUnit.millimolesPerLiter
             )
 
             let state = GlucoseActivityAttributes.ContentState(
@@ -308,27 +311,11 @@ class LiveActivityManager : LiveActivityManagerProxy {
     }
     
     private func getInsulinOnBoard() -> String {
-        let updateGroup = DispatchGroup()
-        var iob = "??"
-        
-        updateGroup.enter()
-        self.doseStore.insulinOnBoard(at: Date.now) { result in
-            switch (result) {
-            case .failure:
-                break
-            case .success(let iobValue):
-                iob = self.iobFormatter.string(from: iobValue.value) ?? "??"
-                break
-            }
-            
-            updateGroup.leave()
-        }
-        
-        _ = updateGroup.wait(timeout: .distantFuture)
-        return iob
+        guard let iob = activeInsulin?.value else { return "??" }
+        return iobFormatter.string(from: iob) ?? "??"
     }
     
-    private func getGlucoseSample(unit: HKUnit) -> [StoredGlucoseSample] {
+    private func getGlucoseSample(unit: LoopUnit) -> [StoredGlucoseSample] {
         let updateGroup = DispatchGroup()
         var samples: [StoredGlucoseSample] = []
         
@@ -356,7 +343,7 @@ class LiveActivityManager : LiveActivityManagerProxy {
         return samples
     }
     
-    private func getGlucoseRanges(glucoseRangeSchedule: GlucoseRangeSchedule, presetContext: Preset?, start: Date, end: Date, unit: HKUnit) -> [GlucoseRangeValue] {
+    private func getGlucoseRanges(glucoseRangeSchedule: GlucoseRangeSchedule, presetContext: Preset?, start: Date, end: Date, unit: LoopUnit) -> [GlucoseRangeValue] {
         var glucoseRanges: [GlucoseRangeValue] = []
         for item in glucoseRangeSchedule.quantityBetween(start: start, end: end) {
             let minValue = item.value.lowerBound.doubleValue(for: unit)
@@ -515,8 +502,6 @@ extension TemporaryScheduleOverride {
             return NSLocalizedString("Custom preset", comment: "The title of the cell indicating a generic custom preset is enabled")
         case .preMeal:
             return NSLocalizedString(" Pre-meal Preset", comment: "Status row title for premeal override enabled (leading space is to separate from symbol)")
-        case .legacyWorkout:
-            return ""
         }
     }
 }

@@ -580,7 +580,8 @@ final class LoopDataManager: ObservableObject {
         liveActivityManager?.update(
             scheduleOverride: temporaryPresetsManager.scheduleOverride,
             preMealOverride: temporaryPresetsManager.preMealOverride,
-            glucoseTargetRangeSchedule: settingsProvider.settings.glucoseTargetRangeSchedule
+            glucoseTargetRangeSchedule: settingsProvider.settings.glucoseTargetRangeSchedule,
+            activeInsulin: displayState.activeInsulin
         )
 
         await updateRemoteRecommendation()
