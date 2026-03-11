@@ -8,6 +8,7 @@
 
 import Foundation
 import HealthKit
+import LoopAlgorithm
 import SwiftCharts
 import UIKit
 
@@ -22,7 +23,7 @@ struct ChartAxisGenerator {
     
     // This logic is copied/ported from generateYAxisValuesUsingLinearSegmentStep
     static func getYAxis(points: [Double], isMmol: Bool) -> [Double] {
-        let unit: HKUnit = isMmol ? .millimolesPerLiter : .milligramsPerDeciliter
+        let unit: LoopUnit = isMmol ? .millimolesPerLiter : .milligramsPerDeciliter
 
         let glucoseDisplayRange = [
             range.lowerBound.doubleValue(for: unit),
