@@ -9,6 +9,7 @@
 import LoopKitUI
 import LoopKit
 import LoopCore
+import LoopAlgorithm
 import Foundation
 import HealthKit
 import ActivityKit
@@ -319,23 +320,15 @@ class LiveActivityManager : LiveActivityManagerProxy {
         let updateGroup = DispatchGroup()
         var samples: [StoredGlucoseSample] = []
         
-        updateGroup.enter()
-        
         // When in spacious mode, we want to show the predictive line
         // In compact mode, we only want to show the history
         let timeInterval: TimeInterval = self.settings.addPredictiveLine ? .hours(-2) : .hours(-6)
-        self.glucoseStore.getGlucoseSamples(
-            start: Date.now.addingTimeInterval(timeInterval),
-            end: Date.now
-        ) { result in
-            switch (result) {
-            case .failure:
-                break
-            case .success(let data):
-                samples = data
-                break
-            }
-            
+        updateGroup.enter()
+        Task {
+            samples = (try? await self.glucoseStore.getGlucoseSamples(
+                start: Date.now.addingTimeInterval(timeInterval),
+                end: Date.now
+            )) ?? []
             updateGroup.leave()
         }
         
@@ -502,6 +495,8 @@ extension TemporaryScheduleOverride {
             return NSLocalizedString("Custom preset", comment: "The title of the cell indicating a generic custom preset is enabled")
         case .preMeal:
             return NSLocalizedString(" Pre-meal Preset", comment: "Status row title for premeal override enabled (leading space is to separate from symbol)")
+        @unknown default:
+            return ""
         }
     }
 }

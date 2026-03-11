@@ -7,6 +7,7 @@
 //
 
 import LoopKit
+import LoopAlgorithm
 
 protocol LiveActivityManagerProxy {
     /// Update the live activity with current override and glucose target information.
