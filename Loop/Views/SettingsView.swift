@@ -138,9 +138,6 @@ struct SettingsView: View {
                 }
             }
             .sheet(item: $sheet) { sheet in
-                switch sheet {
-                case .favoriteFoods:
-                    FavoriteFoodsView()
                 Group {
                     switch sheet {
                     case .presets:
@@ -326,15 +323,6 @@ extension SettingsView {
         .environment(\.insulinTintColor, self.insulinTintColor)
     }
 
-    private var configurationSection: some View {
-        Section(header: SectionHeader(label: NSLocalizedString("Configuration", comment: "The title of the Configuration section in settings"))) {
-            NavigationLink(destination: therapySettingsView) {
-                LargeButton(action: { },
-                delegate: viewModel.therapySettingsViewModelDelegate
-            )
-        )
-    }
-
     private var therapySection: some View {
         Section {
             NavigationLink(destination: therapySettingsView) {
@@ -343,14 +331,13 @@ extension SettingsView {
                             imageView: Image("Therapy Icon"),
                             label: NSLocalizedString("Therapy Settings", comment: "Title text for button to Therapy Settings"),
                             descriptiveText: NSLocalizedString("Diabetes Treatment", comment: "Descriptive text for Therapy Settings"))
-            }
                 .accessibilityIdentifier("button_TherapySettings")
             }
-            
+
             ForEach(pluginMenuItems.filter {$0.section == .configuration}) { item in
                 item.view
             }
-            
+
             if FeatureFlags.allowAlgorithmExperiments {
                 algorithmExperimentsSection
             }
@@ -614,7 +601,9 @@ extension SettingsView {
     private func serviceImage(uiImage: UIImage?) -> some View {
         deviceImage(uiImage: uiImage)
     }
-}
+}  // end extension SettingsView
+
+// MARK: - LargeButton
 
 fileprivate struct LargeButton<Content: View, SecondaryContent: View>: View {
     
