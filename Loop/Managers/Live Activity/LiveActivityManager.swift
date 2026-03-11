@@ -8,6 +8,7 @@
 
 import LoopKitUI
 import LoopKit
+import LoopCore
 import Foundation
 import HealthKit
 import ActivityKit
