@@ -308,8 +308,6 @@ extension SettingsView {
             mode: .settings,
             viewModel: TherapySettingsViewModel(
                 therapySettings: viewModel.therapySettings(),
-                sensitivityOverridesEnabled: FeatureFlags.sensitivityOverridesEnabled,
-                adultChildInsulinModelSelectionEnabled: FeatureFlags.adultChildInsulinModelSelectionEnabled,
                 delegate: viewModel.therapySettingsViewModelDelegate
             )
         )
