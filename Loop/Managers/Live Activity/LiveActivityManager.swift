@@ -103,10 +103,11 @@ class LiveActivityManager : LiveActivityManagerProxy {
                 await endActivity()
             }
             
-            guard let unit = await self.healthStore.cachedPreferredUnits(for: .bloodGlucose) else {
+            guard let hkUnit = await self.healthStore.cachedPreferredUnits(for: .bloodGlucose) else {
                 print("ERROR: No unit found...")
                 return
             }
+            let unit = LoopUnit(from: hkUnit)
             
             let isMmol = unit == LoopUnit.millimolesPerLiter
             await self.endUnknownActivities()

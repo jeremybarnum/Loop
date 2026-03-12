@@ -40,7 +40,7 @@ struct ChartAxisGenerator {
             return []
         }
         
-        let maxSegmentCount: Double = glucoseValueBelowSoftBoundsMinimum(first, unit) ? 5 : 4
+        let maxSegmentCount: Double = glucoseValueBelowSoftBoundsMinimum(first, unit.hkUnit) ? 5 : 4
         
         guard lastPar >=~ first else {fatalError("Invalid range generating axis values")}
         let multiple: Double = !isMmol ? (yAxisStepSizeMGDLOverride ?? 25) : 1
