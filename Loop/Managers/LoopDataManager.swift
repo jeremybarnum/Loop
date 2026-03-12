@@ -199,6 +199,13 @@ final class LoopDataManager: ObservableObject {
         self.crashRecoveryManager = crashRecoveryManager
         self.dosingDecisionStore = dosingDecisionStore
         self.trustedTimeOffset = trustedTimeOffset
+        self.analyticsServicesManager = analyticsServicesManager
+        self.carbAbsorptionModel = carbAbsorptionModel
+        self.usePositiveMomentumAndRCForManualBoluses = usePositiveMomentumAndRCForManualBoluses
+        self.automationHistory = UserDefaults.standard.automationHistory
+        self.publishedMostRecentGlucoseDataDate = glucoseStore.latestGlucose?.startDate
+        self.dosingStrategySelectionEnabled = dosingStrategySelectionEnabled
+        self.publishedMostRecentPumpDataDate = mostRecentPumpDataDate
         
         if #available(iOS 16.2, *) {
             self.liveActivityManager = LiveActivityManager(
@@ -226,13 +233,6 @@ final class LoopDataManager: ObservableObject {
             // Remove the override from UserDefaults so we don't set it multiple times
             appGroup.intentExtensionOverrideToSet = nil
         })
-        self.analyticsServicesManager = analyticsServicesManager
-        self.carbAbsorptionModel = carbAbsorptionModel
-        self.usePositiveMomentumAndRCForManualBoluses = usePositiveMomentumAndRCForManualBoluses
-        self.automationHistory = UserDefaults.standard.automationHistory
-        self.publishedMostRecentGlucoseDataDate = glucoseStore.latestGlucose?.startDate
-        self.dosingStrategySelectionEnabled = dosingStrategySelectionEnabled
-        self.publishedMostRecentPumpDataDate = mostRecentPumpDataDate
 
 
         // Required for device settings in stored dosing decisions
