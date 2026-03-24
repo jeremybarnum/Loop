@@ -169,7 +169,7 @@ struct PresetPerformanceHistoryView: View {
     
     private func detailsSection(performanceData: PresetsPerformanceHistoryViewModel.PerformanceData, showNoData: Bool) -> some View {
         GroupBox {
-            if showNoData {
+            if showNoData || performanceData.allGlucoseValues.isEmpty {
                 Image("performance-history-empty")
                     .resizable()
                     .scaledToFit()
@@ -180,12 +180,14 @@ struct PresetPerformanceHistoryView: View {
                 VStack(spacing: 4) {
                     Text("No performance history available yet")
                         .multilineTextAlignment(.center)
-                    
-                    Text("You can see this summary 6 hours after the preset ends.")
-                        .multilineTextAlignment(.center)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity)
+                    
+                    if showNoData {
+                        Text("You can see this summary 6 hours after the preset ends.")
+                            .multilineTextAlignment(.center)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             } else {
                 VStack(alignment: .leading, spacing: 24) {
@@ -205,8 +207,10 @@ struct PresetPerformanceHistoryView: View {
                                 }
                             }
                                 
-                            LabeledContent("Average Glucose") {
-                                Group { Text(displayGlucosePreference.format(performanceData.averageGlucose, includeUnit: false)).fontWeight(.semibold).foregroundStyle(.primary) + Text(" ") + Text(displayGlucosePreference.unit.localizedShortUnitString).foregroundStyle(.secondary) }.contentTransition(.numericText())
+                            if let averageGlucose = performanceData.averageGlucose {
+                                LabeledContent("Average Glucose") {
+                                    Group { Text(displayGlucosePreference.format(averageGlucose, includeUnit: false)).fontWeight(.semibold).foregroundStyle(.primary) + Text(" ") + Text(displayGlucosePreference.unit.localizedShortUnitString).foregroundStyle(.secondary) }.contentTransition(.numericText())
+                                }
                             }
                         }
                     }
