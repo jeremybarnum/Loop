@@ -504,947 +504,6 @@
         }
       }
     },
-    "." : {
-      "comment" : "Full stop character",
-      "localizations" : {
-        "da" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "."
-          }
-        },
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "-"
-          }
-        },
-        "he" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "."
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "."
-          }
-        },
-        "nb" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "."
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "."
-          }
-        },
-        "pl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "."
-          }
-        },
-        "ro" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "."
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "."
-          }
-        }
-      }
-    },
-    "%@ %@" : {
-      "comment" : "The format for an active custom preset. (1: preset symbol)(2: preset name)",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "da" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "he" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "nb" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "pl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "ro" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@%2$@"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "sk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "sv" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@"
-          }
-        }
-      }
-    },
-    "%@ absorbed" : {
-      "comment" : "Formats absorbed carb value",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ استغرق"
-          }
-        },
-        "da" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ optaget"
-          }
-        },
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ resorbiert"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ absorbido"
-          }
-        },
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ imeytynyt"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ absorbé(s)"
-          }
-        },
-        "he" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ נספג"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ assorbiti"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ 吸収済"
-          }
-        },
-        "nb" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ absorbert"
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ geabsorbeerd"
-          }
-        },
-        "pl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ zaabsorbowane"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ absorvida"
-          }
-        },
-        "ro" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ absorbiți"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ усвоено"
-          }
-        },
-        "sk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ absorbované"
-          }
-        },
-        "sv" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ absorberat"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Emilen %@"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ được hấp thụ"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ 已吸收"
-          }
-        }
-      }
-    },
-    "%@ remaining" : {
-      "comment" : "Estimated remaining duration with more than a minute",
-      "localizations" : {
-        "da" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ tilbage"
-          }
-        },
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ verbleiben"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ restante"
-          }
-        },
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ jäljellä"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ restant"
-          }
-        },
-        "he" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ נותרו"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ rimanenti"
-          }
-        },
-        "nb" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ gjenstår"
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ resterend"
-          }
-        },
-        "pl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pozostało %@"
-          }
-        },
-        "ro" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ rămase"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Осталось %@"
-          }
-        },
-        "sv" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ återstår"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ kaldı"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "剩余 %@"
-          }
-        }
-      }
-    },
-    "%@ U Total" : {
-      "comment" : "The subtitle format describing total insulin. (1: localized insulin total)",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ وحدة بشكل كامل"
-          }
-        },
-        "da" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ E Total"
-          }
-        },
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ IE gesamt"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ U Totales"
-          }
-        },
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ U yhteensä"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ U total"
-          }
-        },
-        "he" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ U סה״כ"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ U Totali"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "計 %@ 単位"
-          }
-        },
-        "nb" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ E Totalt"
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ E Totaal"
-          }
-        },
-        "pl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ J łącznie"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ U Total"
-          }
-        },
-        "ro" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ U total"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ всего ед"
-          }
-        },
-        "sk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ j Celkom"
-          }
-        },
-        "sv" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ E totalt"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Toplam %@ Ü"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ U Tổng cộng"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ 单位 总量"
-          }
-        }
-      }
-    },
-    "%@." : {
-      "comment" : "Appends a full-stop to a statement",
-      "extractionState" : "manual",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@."
-          }
-        },
-        "da" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@."
-          }
-        },
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@."
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@."
-          }
-        },
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@."
-          }
-        },
-        "he" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@."
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@."
-          }
-        },
-        "nb" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ ."
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@."
-          }
-        },
-        "pl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@."
-          }
-        },
-        "ro" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@."
-          }
-        },
-        "sk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ ."
-          }
-        },
-        "sv" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@."
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@."
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@."
-          }
-        }
-      }
-    },
-    "%@%@ was unable to cancel your current temporary basal rate, which is higher than the new Max Basal limit you have set. This may result in higher insulin delivery than desired.\n\nConsider suspending insulin delivery manually and then immediately resuming to enact basal delivery with the new limit in place." : {
-      "comment" : "Alert text for failing to cancel temp basal (1: reason description, 2: app name)",
-      "localizations" : {
-        "da" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@%2$@ kunne ikke annullere din nuværende midlertidige basalrate, som er højere end den nye Max basalgrænse, du har indstillet. Dette kan resultere i en højere insulintilførsel end ønsket.\n\nOvervej at suspendere insulintilførslen manuelt og derefter straks genoptage den for at iværksætte basaltilførslen med den nye grænse på plads."
-          }
-        },
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@%2$@ konnte Deine aktuelle temporäre Basalrate nicht abbrechen, da diese höher ist als die neue maximale Basalrate, die Du festgelegt hast. Dies kann zu einer höheren Insulinabgabe, als erwünscht führen.\n\nErwäge, die Insulinabgabe manuell zu unterbrechen und dann sofort wieder aufzunehmen, um die Basalabgabe mit dem neuen Grenzwert zu initiieren."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@ no pudo cancelar su basal temporal actual, que es más alta que el nuevo límite basal máximo que ha establecido. Esto puede resultar en una administración de insulina superior a la deseada. \n\n Considere suspender la administración de insulina manualmente y luego reanudarla de inmediato para activar la administración basal con el nuevo límite establecido."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@ n'a pas pu annuler votre débit basal temporaire actuel, qui est supérieur à la nouvelle limite basale max que vous avez définie. Cela peut entraîner une administration d'insuline plus élevée que souhaitée. \n\nEnvisagez de suspendre l'administration d'insuline manuellement, puis de reprendre immédiatement l'administration basale avec la nouvelle limite en place."
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@%2$@ non sono stati in grado di cancellare la tua attuale basale temporanea, che è più elevata di quella impostata come nuovo limite massimo di basale. Questo potrebbe comportare una maggiore infusione d'insulina di quanto desiderato. \n\nConsidera di sospendere manualmente l'erogazione d'insulina e quindi di riattivarla immediatamente per attivare l'erogazione d'insulina basale con il corretto limite impostato."
-          }
-        },
-        "nb" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@ kunne ikke avbryte den nåværende midlertidige basaldosen, som er høyere enn den nye maksimale basalgrensen du har angitt. Dette kan føre til høyere insulintilførsel enn ønsket. \n\n Vurder å avbryte insulintilførselen manuelt og deretter umiddelbart gjenoppta for å innføre basaltilførsel med den nye grensen på plass."
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@ kon je huidige tijdelijke basaalsnelheid niet annuleren, die hoger is dan de nieuwe Maximale Basaallimiet die je hebt ingesteld. Dit kan leiden tot een hogere insulinetoediening dan gewenst. \n\nOverweeg om de insulinetoediening handmatig te onderbreken en dan direct het hervatten van de basaaltoediening uit te laten voeren met de nieuwe geldende limiet."
-          }
-        },
-        "pl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@ nie mógł anulować bieżącej tymczasowej dawki podstawowej, która jest wyższa niż nowy ustawiony limit maksymalnej dawki podstawowej. Może to skutkować wyższym niż pożądane podawaniem insuliny. \n\n Rozważ ręczne wstrzymanie podawania insuliny, a następnie natychmiastowe wznowienie podawania dawki podstawowej z obowiązującym nowym limitem."
-          }
-        },
-        "ro" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@ nu a putut anula rata bazală temporară actuală, care este mai mare decât noua limită bazală maximă pe care ați setat-o. Acest lucru poate duce la o administrare de insulină mai mare decât se dorește. \n\nLuați în considerare suspendarea manuală a administrării insulinei și apoi reluarea imediată pentru a pune în aplicare administrarea bazală cu noua limită în vigoare."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@%2$@ не смог отменить вашу текущую   ВБС, которая превышает установленный вами новый предел максимальной ВБС. Это может привести к   большему количеству подаваемого инсулина, чем хотелось бы.\n\nРассмотрите возможность приостановить введение инсулина вручную, а затем немедленно возобновить введение базального инсулина с новым установленным лимитом."
-          }
-        },
-        "sk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@%2$@ nedokázal zrušiť vašu aktuálnu dočasnú bazálnu dávku, ktorá je vyššia ako nový maximálny bazálny limit, ktorý ste nastavili. To môže viesť k vyššiemu dodávaniu inzulínu, ako je požadované.\n\nZvážte ručné pozastavenie podávania inzulínu a následné okamžité obnovenie, aby ste uplatnili novým bazálny limit."
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ %2$@ , ayarladığınız yeni Maks Bazal limitinden daha yüksek olan mevcut geçici bazal oranınızı iptal edemedi. Bu, istenenden daha yüksek insülin iletimi ile sonuçlanabilir. \n\n İnsülin iletimini manuel olarak askıya almayı ve ardından yeni limit geçerliyken bazal iletimi etkinleştirmek için hemen devam etmeyi düşünün."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@%@ 无法取消当前的临时基础率，该基础率高于您新设定的最大基础率上限。这可能导致胰岛素输注量高于预期。\n\n建议您手动暂停胰岛素输注，然后立即恢复，以便根据新的上限重新执行基础输注。"
-          }
-        }
-      }
-    },
-    "%1@%2@" : {
-      "comment" : "Adds a full-stop to a statement (1: statement, 2: full stop character)",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$1@%2$2@"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$1@%2$2@"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$1@%2$2@"
-          }
-        },
-        "he" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$1@%2$2@"
-          }
-        },
-        "nb" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$1@%2$2@"
-          }
-        },
-        "ro" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$1@%2$2@"
-          }
-        }
-      }
-    },
-    "%1$@ – %2$@ %3$@" : {
-      "comment" : "Format string for glucose target range. (1: Min target)(2: Max target)(3: glucose unit)",
-      "extractionState" : "manual",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        },
-        "da" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        },
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        },
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        },
-        "he" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        },
-        "nb" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ - %2$@ %3$@"
-          }
-        },
-        "pl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        },
-        "ro" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        },
-        "sk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        },
-        "sv" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ – %2$@ %3$@"
-          }
-        }
-      }
-    },
     "%1$@ %2$@" : {
       "comment" : "Format string combining carb entry quantity and absorption time emoji",
       "localizations" : {
@@ -2937,6 +1996,138 @@
         }
       }
     },
+    "%1$@ – %2$@ %3$@" : {
+      "comment" : "Format string for glucose target range. (1: Min target)(2: Max target)(3: glucose unit)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ - %2$@ %3$@"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ – %2$@ %3$@"
+          }
+        }
+      }
+    },
     "%1$@: %2$@" : {
       "comment" : "Formats (1: carb value) and (2: food type)",
       "localizations" : {
@@ -3145,60 +2336,819 @@
         }
       }
     },
-    "⚠️" : {
+    "%1@%2@" : {
+      "comment" : "Adds a full-stop to a statement (1: statement, 2: full stop character)",
       "localizations" : {
-        "da" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "⚠️"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "⚠️"
+            "value" : "%1$1@%2$2@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$1@%2$2@"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "⚠️"
+            "value" : "%1$1@%2$2@"
           }
         },
-        "it" : {
+        "he" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "⚠️"
+            "value" : "%1$1@%2$2@"
           }
         },
         "nb" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "⚠️"
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "⚠️"
-          }
-        },
-        "pl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "⚠️"
+            "value" : "%1$1@%2$2@"
           }
         },
         "ro" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "⚠️"
+            "value" : "%1$1@%2$2@"
+          }
+        }
+      }
+    },
+    "%@ %@" : {
+      "comment" : "The format for an active custom preset. (1: preset symbol)(2: preset name)",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@%2$@"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "⚠️"
+            "value" : "%1$@ %2$@"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@"
+          }
+        }
+      }
+    },
+    "%@ absorbed" : {
+      "comment" : "Formats absorbed carb value",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ استغرق"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ optaget"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ resorbiert"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ absorbido"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ imeytynyt"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ absorbé(s)"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ נספג"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ assorbiti"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 吸収済"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ absorbert"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ geabsorbeerd"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ zaabsorbowane"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ absorvida"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ absorbiți"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ усвоено"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ absorbované"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ absorberat"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Emilen %@"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ được hấp thụ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已吸收"
+          }
+        }
+      }
+    },
+    "%@ remaining" : {
+      "comment" : "Estimated remaining duration with more than a minute",
+      "localizations" : {
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ tilbage"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ verbleiben"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ restante"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ jäljellä"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ restant"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ נותרו"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ rimanenti"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ gjenstår"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ resterend"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pozostało %@"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ rămase"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Осталось %@"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ återstår"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ kaldı"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剩余 %@"
+          }
+        }
+      }
+    },
+    "%@ U Total" : {
+      "comment" : "The subtitle format describing total insulin. (1: localized insulin total)",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ وحدة بشكل كامل"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ E Total"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ IE gesamt"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ U Totales"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ U yhteensä"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ U total"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ U סה״כ"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ U Totali"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "計 %@ 単位"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ E Totalt"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ E Totaal"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ J łącznie"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ U Total"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ U total"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ всего ед"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ j Celkom"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ E totalt"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toplam %@ Ü"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ U Tổng cộng"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 单位 总量"
+          }
+        }
+      }
+    },
+    "%@%@ was unable to cancel your current temporary basal rate, which is higher than the new Max Basal limit you have set. This may result in higher insulin delivery than desired.\n\nConsider suspending insulin delivery manually and then immediately resuming to enact basal delivery with the new limit in place." : {
+      "comment" : "Alert text for failing to cancel temp basal (1: reason description, 2: app name)",
+      "localizations" : {
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@%2$@ kunne ikke annullere din nuværende midlertidige basalrate, som er højere end den nye Max basalgrænse, du har indstillet. Dette kan resultere i en højere insulintilførsel end ønsket.\n\nOvervej at suspendere insulintilførslen manuelt og derefter straks genoptage den for at iværksætte basaltilførslen med den nye grænse på plads."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@%2$@ konnte Deine aktuelle temporäre Basalrate nicht abbrechen, da diese höher ist als die neue maximale Basalrate, die Du festgelegt hast. Dies kann zu einer höheren Insulinabgabe, als erwünscht führen.\n\nErwäge, die Insulinabgabe manuell zu unterbrechen und dann sofort wieder aufzunehmen, um die Basalabgabe mit dem neuen Grenzwert zu initiieren."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ no pudo cancelar su basal temporal actual, que es más alta que el nuevo límite basal máximo que ha establecido. Esto puede resultar en una administración de insulina superior a la deseada. \n\n Considere suspender la administración de insulina manualmente y luego reanudarla de inmediato para activar la administración basal con el nuevo límite establecido."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ n'a pas pu annuler votre débit basal temporaire actuel, qui est supérieur à la nouvelle limite basale max que vous avez définie. Cela peut entraîner une administration d'insuline plus élevée que souhaitée. \n\nEnvisagez de suspendre l'administration d'insuline manuellement, puis de reprendre immédiatement l'administration basale avec la nouvelle limite en place."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@%2$@ non sono stati in grado di cancellare la tua attuale basale temporanea, che è più elevata di quella impostata come nuovo limite massimo di basale. Questo potrebbe comportare una maggiore infusione d'insulina di quanto desiderato. \n\nConsidera di sospendere manualmente l'erogazione d'insulina e quindi di riattivarla immediatamente per attivare l'erogazione d'insulina basale con il corretto limite impostato."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ kunne ikke avbryte den nåværende midlertidige basaldosen, som er høyere enn den nye maksimale basalgrensen du har angitt. Dette kan føre til høyere insulintilførsel enn ønsket. \n\n Vurder å avbryte insulintilførselen manuelt og deretter umiddelbart gjenoppta for å innføre basaltilførsel med den nye grensen på plass."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ kon je huidige tijdelijke basaalsnelheid niet annuleren, die hoger is dan de nieuwe Maximale Basaallimiet die je hebt ingesteld. Dit kan leiden tot een hogere insulinetoediening dan gewenst. \n\nOverweeg om de insulinetoediening handmatig te onderbreken en dan direct het hervatten van de basaaltoediening uit te laten voeren met de nieuwe geldende limiet."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ nie mógł anulować bieżącej tymczasowej dawki podstawowej, która jest wyższa niż nowy ustawiony limit maksymalnej dawki podstawowej. Może to skutkować wyższym niż pożądane podawaniem insuliny. \n\n Rozważ ręczne wstrzymanie podawania insuliny, a następnie natychmiastowe wznowienie podawania dawki podstawowej z obowiązującym nowym limitem."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ nu a putut anula rata bazală temporară actuală, care este mai mare decât noua limită bazală maximă pe care ați setat-o. Acest lucru poate duce la o administrare de insulină mai mare decât se dorește. \n\nLuați în considerare suspendarea manuală a administrării insulinei și apoi reluarea imediată pentru a pune în aplicare administrarea bazală cu noua limită în vigoare."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@%2$@ не смог отменить вашу текущую   ВБС, которая превышает установленный вами новый предел максимальной ВБС. Это может привести к   большему количеству подаваемого инсулина, чем хотелось бы.\n\nРассмотрите возможность приостановить введение инсулина вручную, а затем немедленно возобновить введение базального инсулина с новым установленным лимитом."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@%2$@ nedokázal zrušiť vašu aktuálnu dočasnú bazálnu dávku, ktorá je vyššia ako nový maximálny bazálny limit, ktorý ste nastavili. To môže viesť k vyššiemu dodávaniu inzulínu, ako je požadované.\n\nZvážte ručné pozastavenie podávania inzulínu a následné okamžité obnovenie, aby ste uplatnili novým bazálny limit."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ , ayarladığınız yeni Maks Bazal limitinden daha yüksek olan mevcut geçici bazal oranınızı iptal edemedi. Bu, istenenden daha yüksek insülin iletimi ile sonuçlanabilir. \n\n İnsülin iletimini manuel olarak askıya almayı ve ardından yeni limit geçerliyken bazal iletimi etkinleştirmek için hemen devam etmeyi düşünün."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@%@ 无法取消当前的临时基础率，该基础率高于您新设定的最大基础率上限。这可能导致胰岛素输注量高于预期。\n\n建议您手动暂停胰岛素输注，然后立即恢复，以便根据新的上限重新执行基础输注。"
+          }
+        }
+      }
+    },
+    "%@." : {
+      "comment" : "Appends a full-stop to a statement",
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ ."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ ."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@."
+          }
+        }
+      }
+    },
+    "%lld mg/dl" : {
+      "comment" : "A picker option in the \"Day low warning offset\" section of the alert management view, showing a different glucose value.",
+      "isCommentAutoGenerated" : true
+    },
+    "%lld min" : {
+      "comment" : "A picker option in the prebolus definition section, showing a number of minutes. The number is dynamically generated based on the index of the option.",
+      "isCommentAutoGenerated" : true
+    },
+    "." : {
+      "comment" : "Full stop character",
+      "localizations" : {
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "-"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "."
           }
         }
       }
@@ -3542,6 +3492,89 @@
         }
       }
     },
+    "A manual glucose entry must be between %1$@ and %2$@." : {
+      "comment" : "Warning for simple bolus when glucose entry is out of range. (1: upper bound) (2: lower bound)",
+      "localizations" : {
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En manuel glukoseindtastning skal være mellem %1$@ og %2$@"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der manuelle Blutzucker muss zwischen %1$@ und %2$@ liegen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Una entrada de glucosa manual debe estar entre %1$@ y %2$@ ."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Une saisie manuelle de la glycémie doit être comprise entre %1$@ et %2$@."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "הזנת גלוקוז ידנית חייבת להיות בין %1$@ ל- %2$@."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un inserimento manuale della glicemia deve essere compreso tra %1$@ e %2$@."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En manuell BS-registrering må være mellom %1$@ og %2$@ ."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Een handmatige glucose-invoer moet tussen %1$@ en %2$@ liggen."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ręczny wpis poziomu glukozy musi mieścić się w przedziale od %1$@ do %2$@ ."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O intrare manuală de glicemie trebuie să fie între %1$@ și %2$@ ."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ручной ввод глюкозы должен находиться между %1$@ и %2$@"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manuel KŞ girişi %1$@ ile %2$@ arasında olmalıdır."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入 %1$@ 到 %2$@ 之间的血糖值"
+          }
+        }
+      }
+    },
     "A manual glucose entry must be between %@ and %@" : {
       "comment" : "Alert message for a manual glucose entry out of range error",
       "localizations" : {
@@ -3627,89 +3660,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "请输入 %@ 到 %@ 之间的血糖值"
-          }
-        }
-      }
-    },
-    "A manual glucose entry must be between %1$@ and %2$@." : {
-      "comment" : "Warning for simple bolus when glucose entry is out of range. (1: upper bound) (2: lower bound)",
-      "localizations" : {
-        "da" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "En manuel glukoseindtastning skal være mellem %1$@ og %2$@"
-          }
-        },
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Der manuelle Blutzucker muss zwischen %1$@ und %2$@ liegen."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Una entrada de glucosa manual debe estar entre %1$@ y %2$@ ."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Une saisie manuelle de la glycémie doit être comprise entre %1$@ et %2$@."
-          }
-        },
-        "he" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "הזנת גלוקוז ידנית חייבת להיות בין %1$@ ל- %2$@."
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Un inserimento manuale della glicemia deve essere compreso tra %1$@ e %2$@."
-          }
-        },
-        "nb" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "En manuell BS-registrering må være mellom %1$@ og %2$@ ."
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Een handmatige glucose-invoer moet tussen %1$@ en %2$@ liggen."
-          }
-        },
-        "pl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ręczny wpis poziomu glukozy musi mieścić się w przedziale od %1$@ do %2$@ ."
-          }
-        },
-        "ro" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "O intrare manuală de glicemie trebuie să fie între %1$@ și %2$@ ."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ручной ввод глюкозы должен находиться между %1$@ и %2$@"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Manuel KŞ girişi %1$@ ile %2$@ arasında olmalıdır."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "请输入 %1$@ 到 %2$@ 之间的血糖值"
           }
         }
       }
@@ -14405,35 +14355,6 @@
         }
       }
     },
-    "Custom preset" : {
-      "comment" : "The title of the cell indicating a generic custom preset is enabled",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Benutzerdefinierte Voreinstellung"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Préréglage personnalisé"
-          }
-        },
-        "ro" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Presetare personalizată"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "自定义预设"
-          }
-        }
-      }
-    },
     "Custom Preset" : {
       "comment" : "The title of the cell indicating a generic custom preset is enabled",
       "localizations" : {
@@ -14513,6 +14434,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Özel Ön Ayar"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自定义预设"
+          }
+        }
+      }
+    },
+    "Custom preset" : {
+      "comment" : "The title of the cell indicating a generic custom preset is enabled",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Benutzerdefinierte Voreinstellung"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Préréglage personnalisé"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Presetare personalizată"
           }
         },
         "zh-Hans" : {
@@ -14648,6 +14598,14 @@
         }
       }
     },
+    "Day low warning offset" : {
+      "comment" : "A label displayed above a stepper that lets the user set the warning offset for low glucose events during the day.",
+      "isCommentAutoGenerated" : true
+    },
+    "Daytime low warning offset" : {
+      "comment" : "A label describing the option to set a custom offset for the low glucose warning that triggers during the day.",
+      "isCommentAutoGenerated" : true
+    },
     "dB" : {
       "comment" : "The short unit display string for decibles",
       "localizations" : {
@@ -14767,6 +14725,14 @@
         }
       }
     },
+    "Delay after carb entry" : {
+      "comment" : "A label displayed above a stepper that allows the user to set the delay after a carbohydrate entry.",
+      "isCommentAutoGenerated" : true
+    },
+    "Delay Criterion" : {
+      "comment" : "A label describing the picker that lets the user select how long after a meal they should be reminded to eat.",
+      "isCommentAutoGenerated" : true
+    },
     "Delete" : {
       "localizations" : {
         "ar" : {
@@ -14881,64 +14847,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "删除"
-          }
-        }
-      }
-    },
-    "Delete “%@”?" : {
-      "localizations" : {
-        "da" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Slet \"%@\"?"
-          }
-        },
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "„ %@ “ löschen?"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Supprimer \"%@\"?"
-          }
-        },
-        "he" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "למחוק את \" %@ \"?"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Eliminare \"%@\" ?"
-          }
-        },
-        "nb" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Slette \"%@\"?"
-          }
-        },
-        "pl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Usunąć „ %@ ”?"
-          }
-        },
-        "ro" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ștergeți „%@”?"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "删除”%@”？"
           }
         }
       }
@@ -15761,6 +15669,64 @@
         }
       }
     },
+    "Delete “%@”?" : {
+      "localizations" : {
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Slet \"%@\"?"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "„ %@ “ löschen?"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supprimer \"%@\"?"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "למחוק את \" %@ \"?"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eliminare \"%@\" ?"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Slette \"%@\"?"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usunąć „ %@ ”?"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ștergeți „%@”?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除”%@”？"
+          }
+        }
+      }
+    },
     "Deliver" : {
       "comment" : "Button text to deliver a bolus",
       "localizations" : {
@@ -16497,6 +16463,18 @@
         }
       }
     },
+    "Don't warn if closer than" : {
+      "comment" : "A label for the \"Don't warn if closer than\" setting in the Alert Management view.",
+      "isCommentAutoGenerated" : true
+    },
+    "Don't warn if farther than" : {
+      "comment" : "A description of the \"Don't warn if farther than\" and \"Don't warn if closer than\" settings.",
+      "isCommentAutoGenerated" : true
+    },
+    "Don't warn if sooner than" : {
+      "comment" : "A label for the \"Don't warn if sooner than\" setting in the Alert Management view.",
+      "isCommentAutoGenerated" : true
+    },
     "Done" : {
       "localizations" : {
         "cs" : {
@@ -17034,6 +17012,9 @@
           }
         }
       }
+    },
+    "Enable warnings overnight" : {
+      "comment" : "Title for enabling low BG warnings overnight"
     },
     "Enabled" : {
       "comment" : "Title for enable live activity toggle",
@@ -18789,47 +18770,6 @@
         }
       }
     },
-    "Favorite Foods" : {
-      "comment" : "Title for Favorite Foods view",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Lieblingsessen"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Aliments favoris"
-          }
-        },
-        "he" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "מאכלים אהובים"
-          }
-        },
-        "nb" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Favorittmat"
-          }
-        },
-        "ro" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mâncăruri preferate"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "食物库"
-          }
-        }
-      }
-    },
     "FAVORITE FOODS" : {
       "comment" : "The section title for Carb entry screen where Favorite Foods can be selected",
       "localizations" : {
@@ -18885,6 +18825,47 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "MÂNCĂRURI PREFERATE"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "食物库"
+          }
+        }
+      }
+    },
+    "Favorite Foods" : {
+      "comment" : "Title for Favorite Foods view",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lieblingsessen"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aliments favoris"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "מאכלים אהובים"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Favorittmat"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mâncăruri preferate"
           }
         },
         "zh-Hans" : {
@@ -20399,6 +20380,9 @@
           }
         }
       }
+    },
+    "Glucose effect of assuming slow absorption continues" : {
+      "comment" : "Description of the prediction input effect for slow absorbing carbs"
     },
     "Glucose effect of suspending insulin delivery" : {
       "comment" : "Description of the prediction input effect for suspension of insulin delivery",
@@ -27166,6 +27150,10 @@
         }
       }
     },
+    "Night low warning offset" : {
+      "comment" : "A label for the nighttime low glucose warning offset setting.",
+      "isCommentAutoGenerated" : true
+    },
     "Nightscout" : {
       "comment" : "The title of the Nightscout service",
       "extractionState" : "manual",
@@ -27297,6 +27285,10 @@
           }
         }
       }
+    },
+    "Nighttime low warning offset" : {
+      "comment" : "A picker for selecting the warning offset for low glucose events that occur at night.",
+      "isCommentAutoGenerated" : true
     },
     "No alerts or alarms will sound while muted. Select how long you would you like to mute for." : {
       "comment" : "Message for mute alert duration selection action sheet",
@@ -29386,6 +29378,9 @@
         }
       }
     },
+    "Pre-bolus Reminders" : {
+      "comment" : "Title for pre-bolus reminders toggle"
+    },
     "Pre-Meal Targets" : {
       "comment" : "The label of the pre-meal mode toggle button",
       "localizations" : {
@@ -29504,6 +29499,9 @@
           }
         }
       }
+    },
+    "Prebolus Definition" : {
+      "comment" : "Label for prebolus delay criterion"
     },
     "Predicted glucose at %1$@ is %2$@." : {
       "comment" : "Message when offering bolus recommendation even though bg is below range and minBG is in future. (1: glucose time)(2: glucose number)",
@@ -29939,6 +29937,9 @@
           }
         }
       }
+    },
+    "Predicted Low Warnings" : {
+      "comment" : "Title for low BG warning enablement"
     },
     "Predicted: %1$@\nActual: %2$@ (%3$@)" : {
       "comment" : "Format string describing retrospective glucose prediction comparison. (1: Predicted glucose)(2: Actual glucose)(3: difference)",
@@ -30581,6 +30582,9 @@
           }
         }
       }
+    },
+    "Profiles" : {
+      "comment" : "Title text for button to Profiles"
     },
     "Pump" : {
       "comment" : "The title of the pump section in settings",
@@ -33720,6 +33724,9 @@
         }
       }
     },
+    "Send Test Notification" : {
+      "comment" : "Button to test notifications"
+    },
     "Sensor Failed" : {
       "localizations" : {
         "da" : {
@@ -34641,6 +34648,9 @@
         }
       }
     },
+    "Slow Absorption" : {
+      "comment" : "Title of the prediction input effect for slow absorbing carbs"
+    },
     "Software Update" : {
       "comment" : "Software update button link text",
       "localizations" : {
@@ -35309,6 +35319,9 @@
           }
         }
       }
+    },
+    "Switch between profiles for different scenarios" : {
+      "comment" : "Descriptive text for Profiles"
     },
     "Switch to main" : {
       "comment" : "Button on the development build warning that opens documentation about switching branches",
@@ -36032,6 +36045,9 @@
           }
         }
       }
+    },
+    "Test notifications to verify they appear in both foreground and background." : {
+      "comment" : "Description of test notifications."
     },
     "TestFlight" : {
       "comment" : "Settings app TestFlight section",
@@ -38872,6 +38888,65 @@
         }
       }
     },
+    "Until %1$@" : {
+      "comment" : "indication of when alerts will be unmuted (1: time when alerts unmute)",
+      "localizations" : {
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Indtil %1$@"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bis %1$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jusqu'à %1$@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fino a %1$@"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inntil %1$@"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Do %1$@"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Până la %1$@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "До %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直到 %1$@"
+          }
+        }
+      }
+    },
     "until %@" : {
       "comment" : "The format for the description of a custom preset end date",
       "localizations" : {
@@ -38987,65 +39062,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "直到 %@"
-          }
-        }
-      }
-    },
-    "Until %1$@" : {
-      "comment" : "indication of when alerts will be unmuted (1: time when alerts unmute)",
-      "localizations" : {
-        "da" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Indtil %1$@"
-          }
-        },
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bis %1$@"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Jusqu'à %1$@"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fino a %1$@"
-          }
-        },
-        "nb" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Inntil %1$@"
-          }
-        },
-        "pl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Do %1$@"
-          }
-        },
-        "ro" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Până la %1$@"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "До %1$@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "直到 %1$@"
           }
         }
       }
@@ -39834,6 +39850,10 @@
         }
       }
     },
+    "Warning snooze time" : {
+      "comment" : "A label displayed above a picker that lets the user set the snooze time for low glucose warnings.",
+      "isCommentAutoGenerated" : true
+    },
     "Warning! Safety notifications are turned OFF" : {
       "comment" : "Alert Permissions Need Attention alert title",
       "localizations" : {
@@ -40260,6 +40280,12 @@
           }
         }
       }
+    },
+    "When enabled, Loop can notify you when it predicts a low glucose event." : {
+      "comment" : "Description of low BG notifications."
+    },
+    "When enabled, Loop will remind you to eat when you prebolus." : {
+      "comment" : "Description of prebolus notifications."
     },
     "When out of Closed Loop mode, the app uses a simplified bolus calculator like a typical pump." : {
       "localizations" : {
@@ -40895,6 +40921,18 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "是"
+          }
+        }
+      }
+    },
+    "You declared %@ carbs with a %@hr absorption time." : {
+      "comment" : "The body text of a notification that reminds a user to eat based on a pre-bolus carb declaration. The first argument is the amount of carbs declared. The second argument is the absorption time of the carbs.",
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "You declared %1$@ carbs with a %2$@hr absorption time."
           }
         }
       }
@@ -41826,6 +41864,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "推荐的大剂量超过了你设定的最大剂量限制：%1$@。"
+          }
+        }
+      }
+    },
+    "⚠️" : {
+      "localizations" : {
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "⚠️"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "⚠️"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "⚠️"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "⚠️"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "⚠️"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "⚠️"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "⚠️"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "⚠️"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "⚠️"
           }
         }
       }

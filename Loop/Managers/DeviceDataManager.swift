@@ -1710,6 +1710,10 @@ extension DeviceDataManager: TherapySettingsViewModelDelegate {
         }
     }
     
+    func updateCurrentProfileName() {
+        loopManager.updateCurrentProfileName()
+    }
+    
     func saveCompletion(therapySettings: TherapySettings) {
 
         loopManager.mutateSettings { settings in
