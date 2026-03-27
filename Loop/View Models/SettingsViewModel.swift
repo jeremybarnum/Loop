@@ -199,6 +199,18 @@ class SettingsViewModel {
             .assign(to: \.mostRecentPumpDataDate, on: self)
             .store(in: &cancellables)
     }
+
+    @MainActor func deleteAllTestingData() {
+        Task {
+            try? await deviceManager?.deleteTestingPumpData()
+
+            try? await deviceManager?.deleteTestingCGMData()
+
+            try? await deviceManager?.deleteTestingCarbData()
+
+            try? await deviceManager?.deleteTestingAlertData()
+        }
+    }
 }
 
 // For previews only
