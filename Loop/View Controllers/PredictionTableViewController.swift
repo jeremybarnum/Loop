@@ -30,7 +30,7 @@ class PredictionTableViewController: LoopChartsTableViewController, Identifiable
         tableView.cellLayoutMarginsFollowReadableWidth = true
 
         glucoseChart.glucoseDisplayRange = LoopConstants.glucoseChartDefaultDisplayRangeWide
-
+        
         let notificationCenter = NotificationCenter.default
 
         notificationObservers += [
@@ -134,6 +134,7 @@ class PredictionTableViewController: LoopChartsTableViewController, Identifiable
             totalRetrospectiveCorrection = state.totalRetrospectiveCorrection
             self.glucoseChart.setPredictedGlucoseValues(state.predictedGlucoseIncludingPendingInsulin ?? [])
 
+
             do {
                 let glucose = try state.predictGlucose(using: self.selectedInputs, includingPendingInsulin: true)
                 self.glucoseChart.setAlternatePredictedGlucoseValues(glucose)
@@ -197,7 +198,7 @@ class PredictionTableViewController: LoopChartsTableViewController, Identifiable
 
     private var eventualGlucoseDescription: String?
 
-    private var availableInputs: [PredictionInputEffect] = [.carbs, .insulin, .momentum, .retrospection, .suspend]
+    private var availableInputs: [PredictionInputEffect] = [.suspend, .observedAbsorptionEffect, .carbs, .momentum, .retrospection, .insulin ]
 
     private var selectedInputs = PredictionInputEffect.all
 

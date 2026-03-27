@@ -548,6 +548,11 @@ extension LoopAppManager: DeviceOrientationController {
 
 extension LoopAppManager: UNUserNotificationCenterDelegate {
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        // Always display notifications as banners in the foreground
+        completionHandler([.badge, .sound, .list, .banner])
+        
+        /*
+        // Previous per-identifier logic retained for reference
         switch notification.request.identifier {
         // TODO: Until these notifications are converted to use the new alert system, they shall still show in the foreground
         case LoopNotificationCategory.bolusFailure.rawValue,
@@ -558,7 +563,9 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
              LoopNotificationCategory.remoteBolusFailure.rawValue,
              LoopNotificationCategory.remoteCarbs.rawValue,
              LoopNotificationCategory.remoteCarbsFailure.rawValue,
-             LoopNotificationCategory.missedMeal.rawValue:
+             LoopNotificationCategory.missedMeal.rawValue,
+             LoopNotificationCategory.prebolusReminder.rawValue,
+             LoopNotificationCategory.lowBGWarning.rawValue:
             completionHandler([.badge, .sound, .list, .banner])
         // R37: the dead-watch reclaim alerts. The user is very likely staring AT the phone
         // when these fire (they just force-reclaimed on it), which is exactly when a plain
@@ -569,6 +576,7 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
             // For all others, banners are not to be displayed while in the foreground
             completionHandler([.badge, .sound, .list])
         }
+        */
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {

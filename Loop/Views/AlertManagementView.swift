@@ -21,6 +21,11 @@ struct AlertManagementView: View {
 
     @State private var showMuteAlertOptions: Bool = false
     @State private var showHowMuteAlertWork: Bool = false
+    
+    // Local state variables for immediate UI updates
+    @State private var isPreBolusRemindersEnabled: Bool = UserDefaults.standard.preBolusRemindersEnabled
+    @State private var isLowBGNotificationsEnabled: Bool = UserDefaults.standard.lowBGNotificationsEnabled
+    @State private var isNightLowBGNotificationsEnabled: Bool = UserDefaults.standard.nightLowBGNotificationsEnabled
 
     private var formatter: DateComponentsFormatter = {
         let formatter = DateComponentsFormatter()
@@ -48,12 +53,60 @@ struct AlertManagementView: View {
         AlertMuter.allowedDurations.compactMap { formatter.string(from: $0) }
     }
     
+    // Binding wrappers for UserDefaults
     private var missedMealNotificationsEnabled: Binding<Bool> {
         Binding(
             get: { UserDefaults.standard.missedMealNotificationsEnabled },
-            set: { enabled in
-                UserDefaults.standard.missedMealNotificationsEnabled = enabled
-            }
+            set: { UserDefaults.standard.missedMealNotificationsEnabled = $0 }
+        )
+    }
+    
+    private var prebolusDelayCriterion: Binding<Int> {
+        Binding(
+            get: { UserDefaults.standard.prebolusDelayCriterion },
+            set: { UserDefaults.standard.prebolusDelayCriterion = $0 }
+        )
+    }
+    
+    private var warningSnooze: Binding<Int> {
+        Binding(
+            get: { UserDefaults.standard.warningSnooze },
+            set: { UserDefaults.standard.warningSnooze = $0 }
+        )
+    }
+    
+    private var dontWarnIfLater: Binding<Int> {
+        Binding(
+            get: { UserDefaults.standard.dontWarnIfLater },
+            set: { UserDefaults.standard.dontWarnIfLater = $0 }
+        )
+    }
+    
+    private var dontWarnIfSooner: Binding<Int> {
+        Binding(
+            get: { UserDefaults.standard.dontWarnIfSooner },
+            set: { UserDefaults.standard.dontWarnIfSooner = $0 }
+        )
+    }
+    
+    private var delayAfterCarbEntry: Binding<Int> {
+        Binding(
+            get: { UserDefaults.standard.delayAfterCarbEntry },
+            set: { UserDefaults.standard.delayAfterCarbEntry = $0 }
+        )
+    }
+    
+    private var nightWarningOffset: Binding<Int> {
+        Binding(
+            get: { UserDefaults.standard.nightWarningOffset },
+            set: { UserDefaults.standard.nightWarningOffset = $0 }
+        )
+    }
+    
+    private var dayWarningOffset: Binding<Int> {
+        Binding(
+            get: { UserDefaults.standard.dayWarningOffset },
+            set: { UserDefaults.standard.dayWarningOffset = $0 }
         )
     }
 
@@ -71,8 +124,24 @@ struct AlertManagementView: View {
             if FeatureFlags.missedMealNotifications {
                 missedMealAlertSection
             }
+            preBolusRemindersSection
+            lowBGAlertSection
+            testNotificationSection
+        }
+        .onAppear {
+            // Sync local state on appear
+            isPreBolusRemindersEnabled = UserDefaults.standard.preBolusRemindersEnabled
+            isLowBGNotificationsEnabled = UserDefaults.standard.lowBGNotificationsEnabled
         }
         .navigationTitle(NSLocalizedString("Alert Management", comment: "Title of alert management screen"))
+        .onDisappear {
+            // Trigger recalculation when user exits the view
+            NotificationCenter.default.post(
+                name: .LoopDataUpdated,
+                object: nil,
+                userInfo: [LoopDataManager.LoopUpdateContextKey: LoopDataManager.LoopUpdateContext.preferences.rawValue]
+            )
+        }
     }
     
     private var footerView: some View {
@@ -249,20 +318,224 @@ struct AlertManagementView: View {
             Toggle(NSLocalizedString("Missed Meal Notifications", comment: "Title for missed meal notifications toggle"), isOn: missedMealNotificationsEnabled)
         }
     }
+    
+    private var preBolusRemindersSection: some View {
+        Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop will remind you to eat when you prebolus.", comment: "Description of prebolus notifications."))) {
+            Toggle(NSLocalizedString("Pre-bolus Reminders", comment: "Title for pre-bolus reminders toggle"), isOn: $isPreBolusRemindersEnabled)
+                .onChange(of: isPreBolusRemindersEnabled) { newValue in
+                    UserDefaults.standard.preBolusRemindersEnabled = newValue
+                }
+            
+            if isPreBolusRemindersEnabled {
+                HStack {
+                    Text(NSLocalizedString("Prebolus Definition", comment: "Label for prebolus delay criterion"))
+                    Spacer()
+                    Picker("Delay Criterion", selection: prebolusDelayCriterion) {
+                        ForEach(1..<39) {
+                            Text("\($0) min").tag($0)
+                        }
+                    }
+                    .pickerStyle(WheelPickerStyle())
+                    .frame(height: 40)
+                }
+            }
+        }
+    }
+    
+    private var lowBGAlertSection: some View {
+        Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop can notify you when it predicts a low glucose event.", comment: "Description of low BG notifications."))) {
+            Toggle(NSLocalizedString("Predicted Low Warnings", comment: "Title for low BG warning enablement"), isOn: $isLowBGNotificationsEnabled)
+                .onChange(of: isLowBGNotificationsEnabled) { newValue in
+                    UserDefaults.standard.lowBGNotificationsEnabled = newValue
+                }
+            
+            if isLowBGNotificationsEnabled {
+                VStack(spacing: 16) {
+                    HStack {
+                        Text("Day low warning offset")
+                        Spacer()
+                        Picker("Daytime low warning offset", selection: dayWarningOffset) {
+                            ForEach(0..<15) {
+                                Text("\($0) mg/dl").tag($0)
+                            }
+                        }
+                        .pickerStyle(WheelPickerStyle())
+                        .frame(width: 115, height: 50)
+                    }
+                    
+                    Toggle(NSLocalizedString("Enable warnings overnight", comment: "Title for enabling low BG warnings overnight"), isOn: $isNightLowBGNotificationsEnabled)
+                        .onChange(of: isNightLowBGNotificationsEnabled) { newValue in
+                            UserDefaults.standard.nightLowBGNotificationsEnabled = newValue
+                        }
+                    
+                    if isNightLowBGNotificationsEnabled {
+                        
+                        HStack {
+                            Text("Night low warning offset")
+                            Spacer()
+                            Picker("Nighttime low warning offset", selection: nightWarningOffset) {
+                                ForEach(0..<15) {
+                                    Text("\($0) mg/dl").tag($0)
+                                }
+                            }
+                            .pickerStyle(WheelPickerStyle())
+                            .frame(width: 115, height: 50)
+                        }
+                    }
+                    HStack {
+                        Text("Warning snooze time")
+                        Spacer()
+                        Picker("Warning snooze time", selection: warningSnooze) {
+                            ForEach(1..<30) {
+                                Text("\($0) min").tag($0)
+                            }
+                        }
+                        .pickerStyle(WheelPickerStyle())
+                        .frame(width: 100, height: 40)
+                    }
+                    
+                    HStack {
+                        Text("Don't warn if farther than")
+                        Spacer()
+                        Picker("Don't warn if farther than", selection: dontWarnIfLater) {
+                            ForEach(20..<120) {
+                                Text("\($0) min").tag($0)
+                            }
+                        }
+                        .pickerStyle(WheelPickerStyle())
+                        .frame(width: 100, height: 40)
+                    }
+                    
+                    HStack {
+                        Text("Don't warn if closer than")
+                        Spacer()
+                        Picker("Don't warn if sooner than", selection: dontWarnIfSooner) {
+                            ForEach(1..<15) {
+                                Text("\($0) min").tag($0)
+                            }
+                        }
+                        .pickerStyle(WheelPickerStyle())
+                        .frame(width: 100, height: 40)
+                    }
+                    
+                    HStack {
+                        Text("Delay after carb entry")
+                        Spacer()
+                        Picker("Delay after carb entry", selection: delayAfterCarbEntry) {
+                            ForEach(10..<31) {
+                                Text("\($0) min").tag($0)
+                            }
+                        }
+                        .pickerStyle(WheelPickerStyle())
+                        .frame(width: 100, height: 40)
+                    }
+
+                }
+            }
+        }
+    }
+    
+    private var testNotificationSection: some View {
+        Section(footer: DescriptiveText(label: NSLocalizedString("Test notifications to verify they appear in both foreground and background.", comment: "Description of test notifications."))) {
+            Button(action: {
+                // Test prebolus reminder notification
+                let notification = UNMutableNotificationContent()
+                notification.title = "Reminder to eat"
+                notification.body =  "Test Notification"
+                notification.sound = .default
+                notification.interruptionLevel = .timeSensitive
+                notification.categoryIdentifier = LoopNotificationCategory.lowBGWarning.rawValue //todo: check this is the right category for a test
+                let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 5.0, repeats: false)
+                
+                let request = UNNotificationRequest(
+                    identifier: "test-notification",
+                    content: notification,
+                    trigger: trigger  // 5 second delay
+                )
+                
+                UNUserNotificationCenter.current().add(request)
+            }) {
+                HStack {
+                    Text(NSLocalizedString("Send Test Notification", comment: "Button to test notifications"))
+                    Spacer()
+                    Image(systemName: "bell.badge.fill")
+                        .foregroundColor(.accentColor)
+                }
+            }
+        }
+    }
 }
 
 extension UserDefaults {
     private enum Key: String {
         case missedMealNotificationsEnabled = "com.loopkit.Loop.MissedMealNotificationsEnabled"
+        case preBolusRemindersEnabled = "com.loopkit.Loop.preBolusRemindersEnabled"
+        case prebolusDelayCriterion = "com.loopkit.Loop.prebolusDelayCriterion"
+        case lowBGNotificationsEnabled = "com.loopkit.Loop.lowBGNotificationsEnabled"
+        case warningSnooze = "com.loopkit.Loop.warningSnooze"
+        case dontWarnIfLater = "com.loopkit.Loop.dontWarnIfLater"
+        case dontWarnIfSooner = "com.loopkit.Loop.dontWarnIfSooner"
+        case delayAfterCarbEntry = "com.loopkit.Loop.delayAfterCarbEntry"
+        case nightLowBGNotificationsEnabled = "com.loopkit.Loop.nightLowBGNotificationsEnabled"
+        case nightWarningOffset = "com.loopkit.Loop.nightWarningOffset"
+        case dayWarningOffset = "com.loopkit.Loop.dayWarningOffset"
     }
     
     var missedMealNotificationsEnabled: Bool {
-        get {
-            return object(forKey: Key.missedMealNotificationsEnabled.rawValue) as? Bool ?? false
-        }
+        get { object(forKey: Key.missedMealNotificationsEnabled.rawValue) as? Bool ?? false }
+        set { set(newValue, forKey: Key.missedMealNotificationsEnabled.rawValue) }
+    }
+    
+    var preBolusRemindersEnabled: Bool {
+        get { object(forKey: Key.preBolusRemindersEnabled.rawValue) as? Bool ?? true }
+        set { set(newValue, forKey: Key.preBolusRemindersEnabled.rawValue) }
+    }
+    
+    var prebolusDelayCriterion: Int {
+        get { object(forKey: Key.prebolusDelayCriterion.rawValue) as? Int ?? 5 }
+        set { set(newValue, forKey: Key.prebolusDelayCriterion.rawValue) }
+    }
+    
+    var lowBGNotificationsEnabled: Bool {
+        get { object(forKey: Key.lowBGNotificationsEnabled.rawValue) as? Bool ?? false }
+        set { set(newValue, forKey: Key.lowBGNotificationsEnabled.rawValue) }
+    }
+    
+    var warningSnooze: Int {
+        get { object(forKey: Key.warningSnooze.rawValue) as? Int ?? 9 }
         set {
-            set(newValue, forKey: Key.missedMealNotificationsEnabled.rawValue)
+            print("**Setting warningSnooze to \(newValue)")
+            set(newValue, forKey: Key.warningSnooze.rawValue)
         }
+    }
+    
+    var dontWarnIfLater: Int {
+        get { object(forKey: Key.dontWarnIfLater.rawValue) as? Int ?? 45 }
+        set { set(newValue, forKey: Key.dontWarnIfLater.rawValue) }
+    }
+    
+    var dontWarnIfSooner: Int {
+        get { object(forKey: Key.dontWarnIfSooner.rawValue) as? Int ?? 5 }
+        set { set(newValue, forKey: Key.dontWarnIfSooner.rawValue) }
+    }
+    
+    var delayAfterCarbEntry: Int {
+        get { object(forKey: Key.delayAfterCarbEntry.rawValue) as? Int ?? 30 }
+        set { set(newValue, forKey: Key.delayAfterCarbEntry.rawValue) }
+    }
+    var nightLowBGNotificationsEnabled: Bool {
+        get { object(forKey: Key.nightLowBGNotificationsEnabled.rawValue) as? Bool ?? true }
+        set { set(newValue, forKey: Key.nightLowBGNotificationsEnabled.rawValue) }
+    }
+    
+    var nightWarningOffset: Int {
+        get { object(forKey: Key.nightWarningOffset.rawValue) as? Int ?? 10 }
+        set { set(newValue, forKey: Key.nightWarningOffset.rawValue) }
+    }
+    
+    var dayWarningOffset: Int {
+        get { object(forKey: Key.dayWarningOffset.rawValue) as? Int ?? 5 }
+        set { set(newValue, forKey: Key.dayWarningOffset.rawValue) }
     }
 }
 

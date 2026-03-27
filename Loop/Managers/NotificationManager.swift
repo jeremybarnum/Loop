@@ -67,6 +67,22 @@ extension NotificationManager {
             options: []
         ))
 
+        // Add prebolus reminder category
+        categories.append(UNNotificationCategory(
+            identifier: LoopNotificationCategory.prebolusReminder.rawValue,
+            actions: [acknowledgeAlertAction],
+            intentIdentifiers: [],
+            options: .customDismissAction
+        ))
+
+        // Add slow absorption warning category
+        categories.append(UNNotificationCategory(
+            identifier: LoopNotificationCategory.lowBGWarning.rawValue,
+            actions: [acknowledgeAlertAction],
+            intentIdentifiers: [],
+            options: .customDismissAction
+        ))
+
         return Set(categories)
     }
 
@@ -238,7 +254,34 @@ extension NotificationManager {
 
         UNUserNotificationCenter.current().add(request)
     }
-    
+
+        static func sendGenericPredictedLowWarning(title: String, body: String) {
+            let notification = UNMutableNotificationContent()
+
+            notification.title = title
+            notification.body = body
+            notification.sound = .default // Or your preferred sound for these warnings
+            
+            // Consistent with your other low BG warnings
+            notification.interruptionLevel = .timeSensitive
+            notification.categoryIdentifier = LoopNotificationCategory.lowBGWarning.rawValue
+
+            // Use the category raw value as the identifier to ensure this notification
+            // replaces any previous one from this same category/system.
+            let request = UNNotificationRequest(
+                identifier: LoopNotificationCategory.lowBGWarning.rawValue,
+                content: notification,
+                trigger: nil // Deliver immediately
+            )
+
+            UNUserNotificationCenter.current().add(request) { error in
+                if let error = error {
+                    // Consider adding logging here if you have a logger available in NotificationManager
+                    print("Error scheduling generic predicted low warning: \(error.localizedDescription)")
+                }
+            }
+        }
+
     static func sendMissedMealNotification(mealStart: Date, amountInGrams: Double, delay: TimeInterval? = nil) {
         let notification = UNMutableNotificationContent()
         /// Notifications should expire after the missed meal is no longer relevant
@@ -303,5 +346,47 @@ extension NotificationManager {
     
     private static func remoteCarbEntryNotificationBody(amountInGrams: Double) -> String {
         return String(format: NSLocalizedString("Remote Carbs Entry: %d grams", comment: "The carb amount message for a remote carbs entry notification. (1: Carb amount in grams)"), Int(amountInGrams))
+    }
+}
+
+extension NotificationManager {
+    static func schedulePreBolusReminder(for alertTime: Date, carbAmount: String, carbAbsorptionTime: String, identifier: String) {
+        let notification = UNMutableNotificationContent()
+        notification.title = "Reminder to eat"
+        notification.body = String(format: NSLocalizedString("You declared %@ carbs with a %@hr absorption time.", comment: ""), carbAmount, carbAbsorptionTime)
+        notification.sound = .default
+        notification.interruptionLevel = .timeSensitive
+        notification.categoryIdentifier = LoopNotificationCategory.prebolusReminder.rawValue
+
+        let triggerDate = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: alertTime)
+        let trigger = UNCalendarNotificationTrigger(dateMatching: triggerDate, repeats: false)
+        
+        let request = UNNotificationRequest(
+            identifier: identifier,
+            content: notification,
+            trigger: trigger
+        )
+        
+        UNUserNotificationCenter.current().add(request) { error in
+           if let error = error {
+               print("[PREBOLUS] Failed to schedule carb alert: \(error.localizedDescription)")
+           } else {
+               print("[PREBOLUS] Successfully scheduled prebolus reminder for \(identifier)")
+           }
+        }
+    }
+    static func cancelNotification(for identifiers: [String]) {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
+    }
+    
+    static func cancelNotificationsForCategory(_ category: LoopNotificationCategory, completion: @escaping () -> Void) {
+        UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
+            let identifiersToRemove = requests.filter { $0.content.categoryIdentifier == category.rawValue }.map { $0.identifier }
+            if category == .prebolusReminder {
+                print("[PREBOLUS] Cancelling \(identifiersToRemove.count) pending reminders")
+            }
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiersToRemove)
+            completion() // Call completion after cancellation is done
+        }
     }
 }
