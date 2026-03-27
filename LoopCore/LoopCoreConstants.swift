@@ -21,4 +21,6 @@ public enum LoopCoreConstants {
     /// How much historical glucose to include in a dosing decision
     /// Somewhat arbitrary, but typical maximum visible in bolus glucose preview
     public static let dosingDecisionHistoricalGlucoseInterval = TimeInterval(hours: 2)
+    
+
 }

@@ -34,6 +34,10 @@ final class LoopDataManager {
     private let carbStore: CarbStoreProtocol
     
     private let mealDetectionManager: MealDetectionManager
+    
+    private let observedAbsorptionManager: ObservedAbsorptionManager
+    
+    private var absorptionRatio = 1.0
 
     private let doseStore: DoseStoreProtocol
 
@@ -47,6 +51,11 @@ final class LoopDataManager {
 
     private let logger = DiagnosticLog(category: "LoopDataManager")
     private let widgetLog = DiagnosticLog(category: "LoopWidgets")
+    
+    // Add this property near your other logger declarations
+    private let predictionLogger = DiagnosticLog(category: "PredictionAnalysis")
+    private let decisionLogger = DiagnosticLog(category: "DecisionAnalysis")
+    private let preBolusLogger = DiagnosticLog(category: "PreBolus")
 
     private let analyticsServicesManager: AnalyticsServicesManager
 
@@ -70,6 +79,7 @@ final class LoopDataManager {
     private var insulinOnBoard: InsulinValue?
     
     private var liveActivityManager: LiveActivityManagerProxy?
+    var lastNotificationTime: Date? = nil //this is for slow carb absorption.  seems wrong to have it here, but what can you do
 
     deinit {
         for observer in notificationObservers {
@@ -120,6 +130,8 @@ final class LoopDataManager {
             insulinSensitivityScheduleApplyingOverrideHistory: carbStore.insulinSensitivityScheduleApplyingOverrideHistory,
             maximumBolus: settings.maximumBolus
         )
+        
+        self.observedAbsorptionManager = ObservedAbsorptionManager()
         
         self.lockedPumpInsulinType = Locked(pumpInsulinType)
 
@@ -188,6 +200,7 @@ final class LoopDataManager {
                     self.notify(forChange: .carbs)
                 }
             },
+            
             NotificationCenter.default.addObserver(
                 forName: GlucoseStore.glucoseSamplesDidChange,
                 object: self.glucoseStore,
@@ -244,6 +257,10 @@ final class LoopDataManager {
         lockedSettings.value
     }
 
+    func updateCurrentProfileName () {
+        notify(forChange: .preferences)
+    }
+    
     func mutateSettings(_ changes: (_ settings: inout LoopSettings) -> Void) {
         var oldValue: LoopSettings!
         let newValue = lockedSettings.mutate { settings in
@@ -377,6 +394,12 @@ final class LoopDataManager {
             predictedGlucose = nil
         }
     }
+        
+    private var predictionWithObservedAbsorption: [GlucoseValue] = []
+    private var predictionWithObservedAbsorptionAndZeroTemp: [GlucoseValue] = []
+    private var predictionWithZeroTemp: [GlucoseValue] = []
+    
+    private var observedAbsorptionEffect: [GlucoseEffect] = []
 
     /// When combining retrospective glucose discrepancies, extend the window slightly as a buffer.
     private let retrospectiveCorrectionGroupingIntervalMultiplier = 1.01
@@ -390,6 +413,7 @@ final class LoopDataManager {
     private var retrospectiveGlucoseDiscrepanciesSummed: [GlucoseChange]?
     
     private var suspendInsulinDeliveryEffect: [GlucoseEffect] = []
+
 
     fileprivate var predictedGlucose: [PredictedGlucoseValue]? {
         didSet {
@@ -945,14 +969,16 @@ extension LoopDataManager {
             }
         }
 
-        // 5 second delay to allow stores to cache data before it is read by widget
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-            self.widgetLog.default("Refreshing widget. Reason: Loop completed")
-            WidgetCenter.shared.reloadAllTimelines()
-        }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                    self.widgetLog.default("Refreshing widget. Reason: Loop completed")
+                    WidgetCenter.shared.reloadAllTimelines()
+                }
+        
 
+                
         updateRemoteRecommendation()
-    }
+
+            }
 
     fileprivate enum UpdateReason: String {
         case loop
@@ -1097,8 +1123,13 @@ extension LoopDataManager {
                     self.recentCarbEntries = nil
                     warnings.append(.fetchDataWarning(.carbEffect(error: error)))
                 case .success(let (entries, effects)):
+                    self.preBolusLogger.info("[PREBOLUS] Got glucose effects with %{public}d entries", entries.count)
                     self.carbEffect = effects
                     self.recentCarbEntries = entries
+                    
+                    // Reschedule pre-bolus reminders to reflect current carb entries
+                    self.schedulePreBolusRemindersForAllFutureCarbEntries(entries)
+
                 }
 
                 updateGroup.leave()
@@ -1174,8 +1205,30 @@ extension LoopDataManager {
 
             return (dosingDecision, nil)
         }
+        
+        // Check for compression low - skip warnings if BG drops too much
+        let bgDropThreshold = 10.0
+        var skipWarnings = false
 
+        if let samples = historicalGlucose, samples.count >= 2 {
+            let lastBG = samples[samples.count - 1].quantity.doubleValue(for: .milligramsPerDeciliter)
+            let secondToLastBG = samples[samples.count - 2].quantity.doubleValue(for: .milligramsPerDeciliter)
+            let bgDrop = secondToLastBG - lastBG
+            
+            if bgDrop >= bgDropThreshold {
+                self.logger.info("Skipping warnings due to compression low: BG drop of %.1f mg/dL", bgDrop)
+                skipWarnings = true
+            }
+        }
+
+        if !skipWarnings {
+            processObservedAbsorptionAndIssueWarnings()
+        }
+        
         return updatePredictedGlucoseAndRecommendedDose(with: dosingDecision)
+        
+       
+      
     }
 
     private func notify(forChange context: LoopUpdateContext) {
@@ -1354,6 +1407,11 @@ extension LoopDataManager {
         if inputs.contains(.suspend) {
             effects.append(suspendInsulinDeliveryEffect)
         }
+        
+        // Append effect of projecting observed carb absorption forward when selected by the user on the Predicted Glucose screen (for information purposes only)
+        if inputs.contains(.observedAbsorptionEffect) {
+            effects.append(observedAbsorptionEffect)
+        }
 
         var prediction = LoopMath.predictGlucose(startingAt: glucose, momentum: momentum, effects: effects)
 
@@ -1497,8 +1555,7 @@ extension LoopDataManager {
     ///     - LoopError.invalidFutureGlucose
     ///     - LoopError.pumpDataTooOld
     ///     - LoopError.configurationError
-    fileprivate func recommendBolusValidatingDataRecency<Sample: GlucoseValue>(forPrediction predictedGlucose: [Sample],
-                                                                               consideringPotentialCarbEntry potentialCarbEntry: NewCarbEntry?) throws -> ManualBolusRecommendation? {
+    fileprivate func recommendBolusValidatingDataRecency<Sample: GlucoseValue>(forPrediction predictedGlucose: [Sample], consideringPotentialCarbEntry potentialCarbEntry: NewCarbEntry?) throws -> ManualBolusRecommendation? {
         guard let glucose = glucoseStore.latestGlucose else {
             throw LoopError.missingDataError(.glucose)
         }
@@ -1683,6 +1740,52 @@ extension LoopDataManager {
         // Calculate predicted glucose effect of suspending insulin delivery
         suspendInsulinDeliveryEffect = suspendDoses.glucoseEffects(insulinModelProvider: doseStore.insulinModelProvider, longestEffectDuration: doseStore.longestEffectDuration, insulinSensitivity: insulinSensitivity).filterDateRange(startSuspend, endSuspend)
     }
+    
+    private func schedulePreBolusRemindersForAllFutureCarbEntries(_ entries: [StoredCarbEntry]) {
+        self.preBolusLogger.info("[PREBOLUS] Checking %{public}d entries for prebolus reminders", entries.count)
+        if UserDefaults.standard.preBolusRemindersEnabled {
+            self.preBolusLogger.info("[PREBOLUS] Prebolus reminders are enabled")
+            // Always start from a clean slate so edits or deletions do not leave stale notifications queued
+            NotificationManager.cancelNotificationsForCategory(.prebolusReminder){
+                for entry in entries {
+                    let now = Date()
+                    let prebolusDelayCriterion: TimeInterval = Double(UserDefaults.standard.integer(forKey: "com.loopkit.Loop.prebolusDelayCriterion")) * 60 // Convert minutes to seconds
+                    
+                    // Only schedule notifications for future carb entries that meet the threshold
+                    guard entry.startDate > entry.userCreatedDate?.addingTimeInterval(prebolusDelayCriterion) ?? now else {
+                        continue }
+                    
+                    guard entry.startDate > now else {continue}
+                    
+                    // Ensure the syncIdentifier is valid
+                    guard let syncIdentifier = entry.syncIdentifier, !syncIdentifier.isEmpty else {
+                        self.preBolusLogger.info("**Invalid or missing syncIdentifier for entry: %@", String(describing: entry))
+                        continue
+                    }
+                    
+                    // Prepare notification content
+                    let alertTime = entry.startDate
+                    let carbAmountString = String(format: "%.0f", entry.quantity.doubleValue(for: .gram()))
+                    let absorptionTimeString = if let absorptionTime = entry.absorptionTime {
+                        String(format: "%.1f", absorptionTime / 3600)
+                    } else {
+                        "no absorption time"
+                    }
+                    
+                    // Schedule the notification
+                    self.preBolusLogger.info("[PREBOLUS] Scheduling reminder for entry at %{public}@", String(describing: alertTime))
+                    NotificationManager.schedulePreBolusReminder(
+                        for: alertTime,
+                        carbAmount: carbAmountString,
+                        carbAbsorptionTime: absorptionTimeString,
+                        identifier: syncIdentifier
+                    )
+                    
+                    self.preBolusLogger.info("**Scheduled notification for carb entry: %@ at %@", syncIdentifier, alertTime as CVarArg)
+                }
+            }
+        }
+    }
 
     /// Runs the glucose prediction on the latest effect data.
     ///
@@ -1786,7 +1889,7 @@ extension LoopDataManager {
             self.predictedGlucoseIncludingPendingInsulin = predictedGlucoseIncludingPendingInsulin
 
             dosingDecision.predictedGlucose = predictedGlucose
-
+          
             guard lastRequestedBolus == nil
             else {
                 // Don't recommend changes if a bolus was just requested.
@@ -1886,6 +1989,8 @@ extension LoopDataManager {
                 dosingDecision.appendError(loopError)
             }
         }
+        
+        
 
         return (dosingDecision, loopError)
     }
@@ -2258,6 +2363,18 @@ extension LoopDataManager {
                     entries.append("* \(entry.startDate), \(entry.endDate), \(entry.quantity.doubleValue(for: .milligramsPerDeciliter))\n")
                 }),
                 "]",
+                
+                "suspendInsulinDeliveryEffect: [",
+                         "* GlucoseEffect(start, mg/dL)",
+                         (manager.suspendInsulinDeliveryEffect ).reduce(into: "", { (entries, entry) in
+                         entries.append("* \(entry.startDate), \(entry.quantity.doubleValue(for: .milligramsPerDeciliter))\n")
+                         }),
+                         "]",
+                         
+                "observedAbsorptionEffect: [",
+                "* GlucoseEffect(start, mg/dL)", (manager.observedAbsorptionEffect ).reduce(into: "", { (entries, entry) in entries.append("* \(entry.startDate), \(entry.quantity.doubleValue(for: .milligramsPerDeciliter))\n")
+                         }),
+                         "]",
 
                 "glucoseMomentumEffect: \(manager.glucoseMomentumEffect ?? [])",
                 "retrospectiveGlucoseEffect: \(manager.retrospectiveGlucoseEffect)",
@@ -2300,12 +2417,12 @@ extension LoopDataManager {
                                     entries.append("")
 
                                     completion(entries.joined(separator: "\n"))
-                                }
-                            }
-                        }
-                    }
                 }
             }
+        }
+    }
+                }
+}
         }
     }
 }
@@ -2613,4 +2730,692 @@ extension LoopDataManager: ServicesManagerDelegate {
         }
     }
     
+}
+
+// MARK: - Predicted Low Warning Logic
+
+extension LoopDataManager {
+    
+    // MARK: - Supporting Types
+
+    /// Structure to hold the results of analyzing a single prediction curve
+    
+    private struct PredictionMetrics {
+        let minimumGlucoseValue: (any GlucoseValue)?
+        let glucoseValueAtAbsorptionTime: (any GlucoseValue)?
+        let timeToMinimumGlucose: TimeInterval?
+        let timeToCrossThreshold: TimeInterval?
+        let velocityAtThresholdCrossing: Double? // mg/dL/min, nil if no crossing
+        
+        func minimumGlucoseDouble(for unit: HKUnit) -> Double? {
+            return minimumGlucoseValue?.quantity.doubleValue(for: unit)
+        }
+        var didCrossThreshold: Bool { return timeToCrossThreshold != nil }
+    }
+
+    /// Structure to hold all relevant calculated info for context passed to warning handlers
+    private struct PredictionWarningContext {
+        let standardWithSuspendPredictionMetrics: PredictionMetrics // P1: Standard + Suspend
+        let observedAbsorptionPredictionMetrics: PredictionMetrics    // P2: Observed Absorption (No Suspend assumption)
+        let observedAbsorptionWithSuspendPredictionMetrics: PredictionMetrics // P3: Observed Absorption + Suspend
+        let calculatedRescueCarbs: (neutralizeVelocity: Double?, treatNadir: Double?, treatAtAbsorptionTime: Double?) // Based on observedAbsorptionWithSuspendPredictionMetrics
+        let rescueCarbMessageStr: String?
+        let absorptionRatio: Double
+        let displayUnit: HKUnit
+        // let currentCOB: Double? // Can be added if needed for message wording
+    }
+
+    enum PotentialWarningType {
+        case none
+        case carbsDefinitelyNeeded
+        case rescueCarbsLikelyNeeded
+        case mayAvoidRescueCarbsWithEditing
+        case considerEditingCarbsUpToAvoidUnnecessarySuspend
+    }
+    
+    
+    /// Generates a glucose prediction effect of applying observed carb absorptionRatio to currentCarbEffects
+    ///
+    /// - Throws: LoopError.configurationError
+    private func updateObservedAbsorptionEffect() throws {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+        
+        let excludeCarbEntriesAfterThisTime = now().addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)  // 15 minutes ago
+        
+        let carbEffectStart = now().addingTimeInterval(-carbStore.maximumAbsorptionTimeInterval)
+        
+        guard let recentCarbEntries = recentCarbEntries,
+              let carbEffect = carbEffect, !carbEffect.isEmpty else {
+            observedAbsorptionEffect = []
+            self.absorptionRatio = 1.0
+            return
+        }
+
+        let carbEntriesExcludingVeryRecentAndFuture = recentCarbEntries.filter {
+            $0.startDate <= excludeCarbEntriesAfterThisTime
+        }
+
+        guard !carbEntriesExcludingVeryRecentAndFuture.isEmpty else {
+            observedAbsorptionEffect = []
+            self.absorptionRatio = 1.0
+            return
+        }
+
+            
+        let carbEffectExcludeRecentAndFutureEntries = try carbStore.glucoseEffects(
+            of: carbEntriesExcludingVeryRecentAndFuture,
+            startingAt: carbEffectStart,
+            endingAt: nil,
+            effectVelocities: insulinCounteractionEffects
+        ) // these are the carb effects to be modified by the ratio
+        
+        let absorptionRatio = self.observedAbsorptionManager.computeObservedAbsorptionRatio(insulinCounteractionEffects: insulinCounteractionEffects, expectedCarbEffects: carbEffect)//this carb effect is what's already in the prediction
+        
+        observedAbsorptionEffect = self.observedAbsorptionManager.generateObservedAbsorptionEffects(absorptionRatio: absorptionRatio, carbEffects: carbEffectExcludeRecentAndFutureEntries )
+        
+        self.absorptionRatio = absorptionRatio // updating class variable with latest value for logging and warning text purposes. the class variable is never an input to a calculation
+    }
+    
+    private func updateObservedAbsorptionPredictions() throws {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+        
+        
+        let usePendingInsulin = true
+        
+        do {
+                   try updateObservedAbsorptionEffect()
+               }
+        
+        catch { predictionLogger.info(" try updateObservedAbsorptionEffect() produced an error ")
+            
+               }
+     
+        
+        
+        // --- Prediction 1: self.predictionWithObservedAbsorption ---
+        // Standard effects  PLUS .observedAbsorptionEffect
+        // .all = [.carbs, .insulin, .momentum, .retrospection]
+        var inputs1: PredictionInputEffect = .all
+        inputs1.insert(.observedAbsorptionEffect)
+        // Resulting inputs1: [.insulin, .momentum, .retrospection, .observedAbsorptionEffect]
+        self.predictionWithObservedAbsorption = try self.predictGlucose(
+            using: inputs1,
+            includingPendingInsulin: usePendingInsulin
+        )
+        predictionLogger.info("**Generated predictionWithObservedAbsorption")
+        
+        // --- Prediction 2: self.predictionWithObservedAbsorptionAndZeroTemp ---
+        // Effects from Prediction 1 PLUS .suspend
+        var inputs2 = inputs1 // Start with effects from prediction 1
+        inputs2.insert(.suspend)
+        // Resulting inputs2: [.insulin, .momentum, .retrospection, .observedAbsorptionEffect, .suspend]
+        self.predictionWithObservedAbsorptionAndZeroTemp = try self.predictGlucose(
+            using: inputs2,
+            includingPendingInsulin: usePendingInsulin
+        )
+        predictionLogger.info("**Generated predictionWithObservedAbsorptionAndZeroTemp")
+        
+        
+        // --- Prediction 4: self.predictionWithZeroTemp (Standard Zero Temp) ---
+        //note it's 4 because no IRC used to be 3 and we got rid of it
+        // Effects: All standard effects PLUS .suspend
+        let inputs4: PredictionInputEffect = [.all, .suspend]
+        // Resulting inputs4: [.carbs, .insulin, .momentum, .retrospection, .suspend]
+        self.predictionWithZeroTemp = try self.predictGlucose(
+            using: inputs4,
+            includingPendingInsulin: usePendingInsulin
+        )
+        predictionLogger.info("**Generated predictionWithZeroTemp using inputs")
+       
+    }
+    
+    //TODO: the observed absorption prediction is a little off sometimes need to debug the generation of the effects
+
+    // MARK: - Analysis & Calculation Helpers
+
+    /// Helper function to analyze a prediction array against a threshold quantity.
+    private func analyzePrediction(prediction: [any GlucoseValue], threshold: HKQuantity, now: Date) -> PredictionMetrics {
+        let firstLowElement = prediction.first { $0.quantity < threshold }
+        let timeToCrossThreshold = firstLowElement?.startDate.timeIntervalSince(now)
+        let rescueCarbsAbsorptionTime = ObservedAbsorptionSettings.assumedRescueCarbAbsorptionTimeMinutes
+        let glucoseValueAtAbsorptionTime = prediction.first { $0.startDate >= now.addingTimeInterval(TimeInterval(rescueCarbsAbsorptionTime * 60)) }
+        
+        // Calculate velocity at crossing
+        var velocityAtCrossing: Double? = nil
+        if let crossingIndex = prediction.firstIndex(where: { $0.quantity < threshold }),
+           crossingIndex + 1 < prediction.count {
+            let beforeCrossing = prediction[crossingIndex]
+            let afterCrossing = prediction[crossingIndex + 1]
+            let bgDiff = afterCrossing.quantity.doubleValue(for: .milligramsPerDeciliter) - beforeCrossing.quantity.doubleValue(for: .milligramsPerDeciliter)
+            velocityAtCrossing = bgDiff / 5.0
+        }
+        // velocityAtCrossing stays nil if bounds check fails, which is fine
+        let minimumGlucoseValue = prediction.min(by: { $0.quantity < $1.quantity })
+        let timeToMinimumGlucose = minimumGlucoseValue?.startDate.timeIntervalSince(now)
+        
+        predictionLogger.info("Ran analysePrediction helper function")
+
+        return PredictionMetrics(
+            minimumGlucoseValue: minimumGlucoseValue,
+            glucoseValueAtAbsorptionTime: glucoseValueAtAbsorptionTime,
+            timeToMinimumGlucose: timeToMinimumGlucose,
+            timeToCrossThreshold: timeToCrossThreshold,
+            velocityAtThresholdCrossing: velocityAtCrossing,
+            
+        )
+    }
+
+    // Helper function to calculate rescue carbs.
+    private func calculateRescueCarbs(
+        from observedAbsorptionWithSuspendMetrics: PredictionMetrics, // Use P3 metrics
+        suspendThreshold: HKQuantity,
+        displayUnit: HKUnit,
+        CSF: Double
+    ) -> (neutralizeVelocity: Double?, treatNadir: Double?, treatAtAbsorptionTime: Double?) {
+        guard let minGlucoseObservedSuspendQty = observedAbsorptionWithSuspendMetrics.minimumGlucoseValue?.quantity,
+              minGlucoseObservedSuspendQty < suspendThreshold,
+              let timeToMinObservedSuspend = observedAbsorptionWithSuspendMetrics.timeToMinimumGlucose, let velocityAtThresholdCrossing = observedAbsorptionWithSuspendMetrics.velocityAtThresholdCrossing
+        else {
+            decisionLogger.info("Preconditions for rescue carb calculation not met (P3 does not go low or min BG/time missing).")
+            return (neutralizeVelocity: nil, treatNadir: nil, treatAtAbsorptionTime: nil)
+        }
+
+        let minGlucoseObservedSuspendValue = minGlucoseObservedSuspendQty.doubleValue(for: displayUnit)
+        let assumedRescueCarbAbsorptionTimeMinutes = ObservedAbsorptionSettings.assumedRescueCarbAbsorptionTimeMinutes
+        let flooredTimeForRescueCarbs = ObservedAbsorptionSettings.flooredTimeForRescueCarbs
+        let flooredTimeToLowestBG = max(flooredTimeForRescueCarbs, timeToMinObservedSuspend / 60.0)
+
+        guard assumedRescueCarbAbsorptionTimeMinutes > 0 else {
+            decisionLogger.info("Assumed rescue carb absorption time is zero or negative.")
+            return (neutralizeVelocity: nil, treatNadir: nil, treatAtAbsorptionTime: nil)
+            }
+        let absorptionFraction = min(1.0, flooredTimeToLowestBG / assumedRescueCarbAbsorptionTimeMinutes)
+        guard absorptionFraction > 0 else {
+            decisionLogger.info("Rescue carb absorption fraction is zero or negative.")
+            return (neutralizeVelocity: nil, treatNadir: nil, treatAtAbsorptionTime: nil)
+        }
+        
+        let correctionTarget = settings.glucoseTargetRangeSchedule?.quantityRange(at: Date(timeIntervalSinceNow: 30 * 60)).lowerBound.doubleValue(for: displayUnit) ?? 100.0
+            
+        let thresholdValue = suspendThreshold.doubleValue(for: displayUnit)
+        let treatNadir = (thresholdValue - minGlucoseObservedSuspendValue) / CSF / absorptionFraction
+        let treatAtAbsorptionTime = (correctionTarget - (observedAbsorptionWithSuspendMetrics.glucoseValueAtAbsorptionTime?.quantity.doubleValue(for: displayUnit) ?? 0)) / CSF 
+        let carbAbsorptionStartDelay = CarbMath.defaultEffectDelay / 60 //the delay for the effect of carbEffectStart.  Creates a linear estimate of carb velocity
+        let postLowTimeToTarget = 20.0 // minutes
+        let postLowTargetRiseRate = (correctionTarget - suspendThreshold.doubleValue(for: displayUnit)) / postLowTimeToTarget//mg/dl/minute
+        let neutralizeVelocity =  (-velocityAtThresholdCrossing + postLowTargetRiseRate) * (assumedRescueCarbAbsorptionTimeMinutes - carbAbsorptionStartDelay) / CSF //you want to not only stop going down but to go back up.  Compute desired rate of increase so that you get from susped to target in about 20 minutes. Will usually be about 1.5
+        decisionLogger.info("post low target rise rate is %.1f, assumedRescueCarbAbsorptionTimeMinutes is %.1f, carbAbsorptionStartDelay is %.1f",postLowTargetRiseRate,assumedRescueCarbAbsorptionTimeMinutes,carbAbsorptionStartDelay)
+        
+        //let result = max(0, calculatedCarbs)
+        decisionLogger.info("Helper function calculated rescue carbs. NeutralizeVelocity %.1f g,TreatNadir %.1f g TreatAtAbsorptionTime %.1f g, correctionTarget %.0f", neutralizeVelocity,treatNadir, treatAtAbsorptionTime, correctionTarget)
+        return (neutralizeVelocity: neutralizeVelocity, treatNadir: treatNadir, treatAtAbsorptionTime: treatAtAbsorptionTime)
+    }
+
+    
+    // MARK: - Observed Absorption Warning Pipeline
+
+    private func processObservedAbsorptionAndIssueWarnings() {
+        // This function assumes it's already being called on self.dataAccessQueue
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+
+        do {
+            try self.updateObservedAbsorptionPredictions() // This is the refactored version
+            predictionLogger.info("**Updated specialized predictions (predictionWithObservedAbsorption, etc.) for warnings.")
+    
+            logCombinedAbsorptionAndPredictions()
+            
+        } catch {
+            predictionLogger.info("**Error updating observed absorption predictions: %{public}@", String(describing: error))
+             return // If predictions fail
+        }
+    
+        // 4. Determine and handle the warning outcome
+        //    These functions will now be called on dataAccessQueue.
+        let (warningOutcome, context) = self.determinePotentialWarningType()
+        if let context = context {
+            self.handleWarningOutcome(warningOutcome, context: context)
+        }
+    }
+
+    // MARK: - Warning Determination Logic
+
+    private func determinePotentialWarningType() -> (outcome: PotentialWarningType, context: PredictionWarningContext?) {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+
+        guard UserDefaults.standard.bool(forKey: "com.loopkit.Loop.lowBGNotificationsEnabled") else { return (.none, nil) }
+              let currentDate = now()
+        let calendar = Calendar.current
+        let now = Date()
+        let nightStart = calendar.date(bySettingHour: 22, minute: 30, second: 0, of: now)!
+        let nightEnd = calendar.date(bySettingHour: 6, minute: 30, second: 0, of: now)!
+
+        let isNightTime: Bool
+        if nightStart <= nightEnd {
+           // Night period doesn't cross midnight
+           isNightTime = now >= nightStart && now <= nightEnd
+        } else {
+           // Night period crosses midnight
+           isNightTime = now >= nightStart || now <= nightEnd
+        }
+        
+        guard !isNightTime || UserDefaults.standard.bool(forKey: "com.loopkit.Loop.nightwarningEnabled") else { return (.none, nil) }
+        
+        guard let suspendThresholdQuantity = settings.suspendThreshold?.quantity,
+              let displayUnit = settings.glucoseUnit,
+              let ISF = settings.insulinSensitivitySchedule?.value(at: currentDate),
+              let CR = settings.carbRatioSchedule?.value(at: currentDate)
+        else {
+            decisionLogger.info("Missing critical settings for warning check.")
+            return (.none, nil)
+        }
+        let CSF = ISF / CR
+        guard CSF > 0 else {
+            decisionLogger.info("CSF is zero or negative.")
+            return (.none, nil)
+        }
+
+        guard !predictionWithZeroTemp.isEmpty, // P1
+              !predictionWithObservedAbsorption.isEmpty, // P2
+              !predictionWithObservedAbsorptionAndZeroTemp.isEmpty // P3
+        else {
+            decisionLogger.info("Core prediction arrays for warnings are empty. Skipping check.")
+            return (.none, nil)
+        }
+        //Mark -- functionality to supply different aggressiveness day and night
+        let daytimeWarningOffset = HKQuantity(unit: displayUnit, doubleValue: Double(UserDefaults.standard.dayWarningOffset))
+        let nightWarningOffset = HKQuantity(unit: displayUnit, doubleValue: Double(UserDefaults.standard.nightWarningOffset))
+        
+
+
+        let warningOffset = isNightTime ? nightWarningOffset : daytimeWarningOffset
+            
+        let warningLevelValue = suspendThresholdQuantity.doubleValue(for: displayUnit) - warningOffset.doubleValue(for: displayUnit)
+        let warningLevel = HKQuantity(unit: displayUnit, doubleValue: warningLevelValue)
+        
+        // Add this logging
+        let timeFormatter = DateFormatter()
+        timeFormatter.timeStyle = .medium
+        decisionLogger.info("Night time check: Current=%{public}@, NightStart=%{public}@, NightEnd=%{public}@, IsNight=%{public}d",
+                           timeFormatter.string(from: now),
+                           timeFormatter.string(from: nightStart),
+                           timeFormatter.string(from: nightEnd),
+                           isNightTime ? 1 : 0)
+                           
+        decisionLogger.info("Warning level calc: SuspendThreshold=%.1f, WarningOffset=%.1f, WarningLevel=%.1f", suspendThresholdQuantity.doubleValue(for: displayUnit), warningOffset.doubleValue(for: displayUnit), warningLevelValue)
+        
+        let p1_Metrics = analyzePrediction(
+            prediction: predictionWithZeroTemp,
+            threshold: warningLevel,
+            now: currentDate
+        )
+        let p2_Metrics = analyzePrediction(
+            prediction: predictionWithObservedAbsorption,
+            threshold: warningLevel,
+            now: currentDate
+        )
+        let p3_Metrics = analyzePrediction(
+            prediction: predictionWithObservedAbsorptionAndZeroTemp,
+            threshold: warningLevel,
+            now: currentDate
+        )
+
+        let rescueCarbs = calculateRescueCarbs(
+            from: p3_Metrics, // Based on Observed + Suspend.  THis could be debated  but the impact on the recommended carb about is tiny
+            suspendThreshold: suspendThresholdQuantity,
+            displayUnit: displayUnit,
+            CSF: CSF
+        )
+        
+        let rescueCarbValues = [
+            rescueCarbs.neutralizeVelocity,
+            rescueCarbs.treatNadir,
+            rescueCarbs.treatAtAbsorptionTime
+        ].compactMap { $0 }
+
+        let minRescueCarbs = max(rescueCarbValues.min() ?? 0 , 0)
+        let maxRescueCarbs = max(rescueCarbValues.max() ?? 0 , 0)
+
+        let rescueCarbMessageStr: String
+        if minRescueCarbs.rounded() == maxRescueCarbs.rounded() {
+           rescueCarbMessageStr = String(format: "%.0f", minRescueCarbs)
+        } else {
+           rescueCarbMessageStr = String(format: "%.0f and %.0f", minRescueCarbs, maxRescueCarbs)
+        }
+
+        // Filtering Preconditions (using P2 for initial time-to-low check)
+        guard let timeToObservedLow = p2_Metrics.timeToCrossThreshold else {
+            decisionLogger.info("Observed Absorption prediction (P2) does not cross threshold. No warning needed.")
+            return (.none, nil)
+        }
+            let warningSnooze = Double(UserDefaults.standard.warningSnooze) * 60
+            let dontWarnIfSooner = Double(UserDefaults.standard.dontWarnIfSooner) * 60
+            let dontWarnIfLater = Double(UserDefaults.standard.dontWarnIfLater) * 60
+            let delayAfterCarbEntry = Double(UserDefaults.standard.delayAfterCarbEntry) * 60
+        
+        decisionLogger.info("Raw UserDefaults values: warningSnooze=%d, dontWarnIfSooner=%d, dontWarnIfLater=%d, delayAfterCarbEntry=%d",
+                           UserDefaults.standard.warningSnooze,
+                           UserDefaults.standard.dontWarnIfSooner,
+                           UserDefaults.standard.dontWarnIfLater,
+                           UserDefaults.standard.delayAfterCarbEntry)
+        
+        decisionLogger.info("Notification Interval: %.0f FarEnough:%.0f NotTooFar:%.0f, CarbAge:%.0f", warningSnooze/60, dontWarnIfSooner/60,dontWarnIfLater/60, delayAfterCarbEntry/60 )
+            
+            var notificationIntervalExceeded = false
+
+            if let lastTime = lastNotificationTime {
+                notificationIntervalExceeded = currentDate.timeIntervalSince(lastTime) > warningSnooze
+            } else { notificationIntervalExceeded = true }
+
+            let farEnough = timeToObservedLow > dontWarnIfSooner
+            let notTooFar = timeToObservedLow < dontWarnIfLater
+
+            var enoughTimeElapsed = false
+       
+            if let mostRecentCarbTime = recentCarbEntries?.last?.startDate {
+                enoughTimeElapsed = currentDate.timeIntervalSince(mostRecentCarbTime) > delayAfterCarbEntry
+            } else { enoughTimeElapsed = true }
+            
+            
+        decisionLogger.info("Precondition state (Interval:%{public}d, FarEnough:%{public}d, NotTooFar:%{public}d, CarbAge:%{public}d).",
+                          notificationIntervalExceeded, farEnough, notTooFar, enoughTimeElapsed)
+        
+
+
+        guard notificationIntervalExceeded, farEnough, notTooFar else {
+            decisionLogger.info("Universal warning preconditions not met (Interval:%{public}d, FarEnough:%{public}d, NotTooFar:%{public}d, CarbAge:%{public}d).",
+                              notificationIntervalExceeded, farEnough, notTooFar, enoughTimeElapsed)
+            return (.none, nil) //**not checking enoughTimeElapsed universally because  whether or not we issue a waring will depending on which type of low we have
+        }
+        
+        
+        // Create the full context
+        let context = PredictionWarningContext(
+            standardWithSuspendPredictionMetrics: p1_Metrics,
+            observedAbsorptionPredictionMetrics: p2_Metrics,
+            observedAbsorptionWithSuspendPredictionMetrics: p3_Metrics,
+            calculatedRescueCarbs: rescueCarbs,
+            rescueCarbMessageStr: rescueCarbMessageStr,
+            absorptionRatio: absorptionRatio,
+            displayUnit: displayUnit
+        )
+
+        // Decision logic based on the 8 scenarios
+        let p1Crossed = p1_Metrics.didCrossThreshold
+        let p2Crossed = p2_Metrics.didCrossThreshold
+        let p3Crossed = p3_Metrics.didCrossThreshold
+        
+        decisionLogger.info("Crossed P1: %d, Crossed P2: %d, Crossed P3: %d, WarningLevel: %.1f",
+                           p1Crossed ? 1 : 0, p2Crossed ? 1 : 0, p3Crossed ? 1 : 0, warningLevel)
+
+        switch (p1Crossed, p2Crossed, p3Crossed) {
+        case (true, true, true), (true, true, false): //lots of extra insulin; second case is extra insulin which is offset by underdeclared carbs which are then edited and then the benefit of lower temping.  Too obscure, better to just privilege the first True and send aggressive warning.
+            return (.carbsDefinitelyNeeded, context) // always warn here even if the carbs aren't old enough
+            
+        default:
+            // For all other warning types, check if enough time has elapsed since carb entry
+            guard enoughTimeElapsed else {
+                decisionLogger.info("Carbs too recent to warn CarbAge:%{public}d).", enoughTimeElapsed)
+                return (.none, nil)
+            }
+            
+            switch (p1Crossed, p2Crossed, p3Crossed) {
+            case (false, true, true): // observed absorption sends you low and low temping can't help
+                return (.rescueCarbsLikelyNeeded, context)
+            case (false, true, false): // observed absorption sends you low and low temping might help
+                return (.mayAvoidRescueCarbsWithEditing, context)
+            case (true, false, false), (true, false, true): // underdeclaring carbs means that carbs will absorb as more than loop expects and so loop's low temping may not be needed.  It's not really a low BG situation.  TFT is an essentially impossible corner case.
+                return (.considerEditingCarbsUpToAvoidUnnecessarySuspend, context)
+            case (false, false, true): // essentialy impossible corner case
+                decisionLogger.info("Unexpected prediction pattern (F,F,T) - only P3 crossed. No warning issued.")
+                return (.none, nil)
+            case (false, false, false):
+                return (.none, nil)
+            default:
+                return (.none, nil)
+            }
+        }
+    }
+    
+    private func createWarningMessages(for outcome: PotentialWarningType, context: PredictionWarningContext) -> (title: String, body: String, nsMessage: String) {
+        // Calculate everything once
+        let timeToLow = Int(round((context.observedAbsorptionPredictionMetrics.timeToCrossThreshold ?? 0) / 60))
+        let minBG = Int(round(context.observedAbsorptionWithSuspendPredictionMetrics.minimumGlucoseDouble(for: context.displayUnit) ?? 0))
+
+        let timeToMinBG = Int(round((context.observedAbsorptionPredictionMetrics.timeToMinimumGlucose ?? 0) / 60))
+        
+        let rescueCarbMessageStr = context.rescueCarbMessageStr ?? "rescue carbs"
+        
+        let ratio = Int(round(context.absorptionRatio * 100))
+        
+        switch outcome {
+        case .none:
+            fatalError("Should not call this for .none")
+        case .carbsDefinitelyNeeded:
+            return (
+                title: "Very likely low in \(timeToLow) mins",
+                body: "Take between \(rescueCarbMessageStr) carbs. Low will happen even if any old carbs fully absorb.",
+                nsMessage: "Conf 1. Time to low: \(timeToLow). Min BG: \(minBG). Time to min: \(timeToMinBG). Ratio:(\(ratio)%. Rec \(rescueCarbMessageStr)g."
+            )
+            
+        case .rescueCarbsLikelyNeeded:
+            return (
+                title: "Likely low in \(timeToLow) mins",
+                body: "Carbs absorbing at \(ratio)%. Consider taking between \(rescueCarbMessageStr) carbs, and editing.",
+                nsMessage: "Conf 2. Time to low: \(timeToLow). Min BG: \(minBG). Time to min: \(timeToMinBG). Ratio:(\(ratio)%. Rec \(rescueCarbMessageStr)g."
+            )
+            
+        case .mayAvoidRescueCarbsWithEditing:
+            return (
+                title: "Probable low in \(timeToLow) mins",
+                body: "Check and consider editing. Low temping may avoid need for rescue carbs. Carbs absorbing at \(ratio)% of expectation",
+                nsMessage: "Conf 3. Time to low: \(timeToLow). Min BG: \(minBG). Time to min: \(timeToMinBG). Ratio:(\(ratio)%. Rec \(rescueCarbMessageStr)g."
+            )
+        case .considerEditingCarbsUpToAvoidUnnecessarySuspend:
+            return (
+                title: "Consider editing up carbs.",
+                body: "Weird situation.  Loop thinks you'll go low and is low temping but you probably won't, based on carb absorption.",
+                nsMessage: "High absorption. Ratio:(\(ratio)%."
+            )
+        }
+    }
+    
+    // Inside LoopDataManager extension
+
+    // MARK: - Action Handling
+    private func handleWarningOutcome(_ outcome: PotentialWarningType, context: PredictionWarningContext) {
+        // Handle .none case early
+        guard outcome != .none else {
+            decisionLogger.info("Handling outcome: No warning needed.")
+            return
+        }
+
+        
+        let messages = createWarningMessages(for: outcome, context: context)
+        
+        NotificationManager.sendGenericPredictedLowWarning(title: messages.title, body: messages.body)
+        postWarningNotificationToNightscout(payload: messages.nsMessage, time: Date())
+        lastNotificationTime = Date()
+        decisionLogger.info("Updated lastNotificationTime")
+    }
+
+    private func postWarningNotificationToNightscout(payload: String, time: Date) {
+        let notificationName = Notification.Name.lowBGWarning // Ensure this matches NightscoutService observer
+        let userInfo: [String: Any] = [
+            "warningMessage": payload,
+            "warningTimestamp": time
+        ]
+        NotificationCenter.default.post(
+            name: notificationName,
+            object: self,
+            userInfo: userInfo
+        )
+        decisionLogger.info("**Posted '%{public}@' notification with payload: %{public}@", notificationName.rawValue, payload)
+    }
+}
+
+// MARK: - Retrospective Absorption Logging Details
+
+extension LoopDataManager {
+    
+    private func logCombinedAbsorptionAndPredictions() {
+        // Call the moved absorption analysis logging
+        logAbsorptionRatioCalculation(
+            expectedCarbEffects: self.carbEffect ?? [],
+            insulinCounteractionEffects: self.insulinCounteractionEffects,
+            absorptionRatio: self.absorptionRatio
+        )
+        
+        // Immediately follow with prediction arrays
+        logPredictionArrays()
+    }
+    private func logAbsorptionRatioCalculation(
+        expectedCarbEffects: [GlucoseEffect],
+        insulinCounteractionEffects: [GlucoseEffectVelocity],
+        absorptionRatio: Double
+    ) {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "HH:mm:ss"
+        let logNow = now()
+        
+        let carbUnit = HKUnit.milligramsPerDeciliter
+        let ICEUnit = HKUnit.milligramsPerDeciliterPerMinute
+
+        // Get recent data for both arrays separately
+        let analysisWindow = TimeInterval(hours: 1)
+        let effectsStartForLog = logNow.addingTimeInterval(-analysisWindow)
+        
+        let recentCarbEffects = expectedCarbEffects.filter {
+            $0.startDate >= effectsStartForLog && $0.startDate <= logNow
+        }.sorted(by: { $0.startDate < $1.startDate })
+
+        let recentICE = insulinCounteractionEffects.filter {
+            $0.endDate >= effectsStartForLog && $0.endDate <= logNow
+        }.sorted(by: { $0.endDate < $1.endDate })
+
+        predictionLogger.info(" ")
+        predictionLogger.info("RETROSPECTIVE ABSORPTION ANALYSIS (Window: %d min ending %{public}@)",
+                    Int(analysisWindow/60), dateFormatter.string(from: logNow))
+        predictionLogger.info("========================================")
+        predictionLogger.info("Calculated Absorption Ratio: %.2f", absorptionRatio)
+        predictionLogger.info(" ")
+        
+        // Log carb effects and deltas
+        predictionLogger.info("CARB EFFECTS mg/dl/min (Recent %d min):", Int(analysisWindow/60))
+        predictionLogger.info("Time     | Cumulative | Delta")
+        predictionLogger.info("---------|------------|------")
+        
+        if recentCarbEffects.isEmpty {
+            predictionLogger.info("No carb effects in window")
+        } else {
+            var lastValue: Double? = nil
+            for effect in recentCarbEffects {
+                let timeStr = dateFormatter.string(from: effect.startDate)
+                let cumValue = effect.quantity.doubleValue(for: carbUnit)
+                
+                let deltaStr: String
+                if let last = lastValue {
+                    let delta = (cumValue - last) / 5.0 // Convert to mg/dL/min
+                    deltaStr = String(format: "%+.3f", delta)
+                } else {
+                    deltaStr = "---"
+                }
+                
+                predictionLogger.info("%{public}@ | %10.1f | %{public}@",
+                            timeStr, cumValue, deltaStr)
+                lastValue = cumValue
+            }
+        }
+        
+        predictionLogger.info(" ")
+        
+        // Log ICE values
+        predictionLogger.info("ICE VALUES (Recent %d min):", Int(analysisWindow/60))
+        predictionLogger.info("Time     | ICE (mg/dL/min)")
+        predictionLogger.info("---------|---------------")
+        
+        if recentICE.isEmpty {
+            predictionLogger.info("No ICE values in window")
+        } else {
+            for effect in recentICE {
+                let timeStr = dateFormatter.string(from: effect.endDate)
+                let iceValue = effect.quantity.doubleValue(for: ICEUnit)
+                predictionLogger.info("%{public}@ | %13.3f", timeStr, iceValue)
+            }
+        }
+        
+        predictionLogger.info("========================================")
+        predictionLogger.info(" ")
+    }
+    
+   
+    private func logPredictionArrays() {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "HH:mm:ss"
+        let glucoseUnit = HKUnit.milligramsPerDeciliter
+        
+        let logNow = self.now()
+        let futureWindow: TimeInterval = .hours(2) // Configurable
+        let cutoffTime = logNow.addingTimeInterval(futureWindow)
+        let columnWidth = 8
+        let columnCount = 5
+        let padding = 2
+        
+        predictionLogger.info("PREDICTION ARRAYS (Next %.0f hours from %{public}@)", futureWindow/3600, dateFormatter.string(from: logNow))
+        let titleSeparatorLine = String(repeating: "=", count: (columnWidth + padding) * columnCount) // Adjust based on total width
+        predictionLogger.info("%{public}@", titleSeparatorLine)
+        
+        // --- Prediction 0:
+        // Standard effects
+        // .all = [.carbs, .insulin, .momentum, .retrospection]
+        let p0 = (try? self.predictGlucose(using: .all, includingPendingInsulin: true)) ?? []
+        predictionLogger.info("**Generated predictionWithObservedAbsorption")
+        
+        // Filter predictions to the time window
+        let p0_filtered = p0.filter { $0.startDate <= cutoffTime }
+        let p1_filtered = predictionWithZeroTemp.filter { $0.startDate <= cutoffTime }
+        let p2_filtered = predictionWithObservedAbsorption.filter { $0.startDate <= cutoffTime }
+        let p3_filtered = predictionWithObservedAbsorptionAndZeroTemp.filter { $0.startDate <= cutoffTime }
+        
+        // Create table header with tighter column widths
+        let hTime = "Time".padding(toLength: columnWidth, withPad: " ", startingAt: 0)
+        let hP0 = "Standard".padding(toLength: columnWidth, withPad: " ", startingAt: 0)
+        let hP1 = "Std+Sus".padding(toLength: columnWidth, withPad: " ", startingAt: 0)
+        let hP2 = "ObsAbs".padding(toLength: columnWidth, withPad: " ", startingAt: 0)
+        let hP3 = "Obs+Sus".padding(toLength: columnWidth, withPad: " ", startingAt: 0)
+        
+        predictionLogger.info("%{public}@ | %{public}@ | %{public}@ | %{public}@ | %{public}@", hTime, hP0, hP1, hP2, hP3)
+        let separatorLine = String(repeating: "-", count: (columnWidth + padding) * columnCount) // Adjust based on total width
+        predictionLogger.info("%{public}@", separatorLine)
+        
+        // Get all unique timestamps from all four predictions
+        var allTimestamps = Set<Date>()
+        p0_filtered.forEach { allTimestamps.insert($0.startDate) }
+        p1_filtered.forEach { allTimestamps.insert($0.startDate) }
+        p2_filtered.forEach { allTimestamps.insert($0.startDate) }
+        p3_filtered.forEach { allTimestamps.insert($0.startDate) }
+        
+        let sortedTimestamps = allTimestamps.sorted()
+        
+        if sortedTimestamps.isEmpty {
+            predictionLogger.info("No prediction data found within the specified window.")
+        } else {
+            for timestamp in sortedTimestamps {
+                let p0Value = p0_filtered.first(where: { $0.startDate == timestamp })
+                let p1Value = p1_filtered.first(where: { $0.startDate == timestamp })
+                let p2Value = p2_filtered.first(where: { $0.startDate == timestamp })
+                let p3Value = p3_filtered.first(where: { $0.startDate == timestamp })
+                
+                let timeStr = dateFormatter.string(from: timestamp)
+                let p0Str = p0Value.map { String(format: "%.0f", $0.quantity.doubleValue(for: glucoseUnit)) } ?? " "
+                let p1Str = p1Value.map { String(format: "%.0f", $0.quantity.doubleValue(for: glucoseUnit)) } ?? " "
+                let p2Str = p2Value.map { String(format: "%.0f", $0.quantity.doubleValue(for: glucoseUnit)) } ?? " "
+                let p3Str = p3Value.map { String(format: "%.0f", $0.quantity.doubleValue(for: glucoseUnit)) } ?? " "
+                
+                let dataRowString = "\(timeStr.padding(toLength: columnWidth, withPad: " ", startingAt: 0)) | \(p0Str.padding(toLength: columnWidth, withPad: " ", startingAt: 0)) | \(p1Str.padding(toLength: columnWidth, withPad: " ", startingAt: 0)) | \(p2Str.padding(toLength: columnWidth, withPad: " ", startingAt: 0)) | \(p3Str.padding(toLength: columnWidth, withPad: " ", startingAt: 0))"
+                predictionLogger.info("%{public}@", dataRowString)
+            }
+        }
+        
+        predictionLogger.info("%{public}@", titleSeparatorLine)
+    }
 }
