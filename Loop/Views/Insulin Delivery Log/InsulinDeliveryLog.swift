@@ -12,15 +12,17 @@ import LoopKitUI
 import SwiftUI
 
 struct InsulinDeliveryLog: View {
-    
+
     @State private var viewModel: InsulinDeliveryLogViewModel
     @State var showingFilterMenu = false
-    
+
     let onTapGesture: (DoseEntry) -> Void
-    
-    init(viewModel: InsulinDeliveryLogViewModel, onTapGesture: @escaping (DoseEntry) -> Void) {
+    let onEnterManualDose: (() -> Void)?
+
+    init(viewModel: InsulinDeliveryLogViewModel, onTapGesture: @escaping (DoseEntry) -> Void, onEnterManualDose: (() -> Void)? = nil) {
         self.viewModel = viewModel
         self.onTapGesture = onTapGesture
+        self.onEnterManualDose = onEnterManualDose
     }
     
     private func totalInsulinDeliveredLabel(from total: LoopQuantity) -> some View {
@@ -151,6 +153,16 @@ struct InsulinDeliveryLog: View {
         }
         .refreshable {
             await viewModel.fetchData()
+        }
+        .toolbar {
+            if FeatureFlags.manualDoseEntryEnabled, let onEnterManualDose {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: onEnterManualDose) {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel(Text("Log Dose", comment: "Accessibility label for the manual dose entry button on the insulin delivery screen"))
+                }
+            }
         }
     }
 }

@@ -24699,7 +24699,7 @@
       }
     },
     "Log Dose" : {
-      "comment" : "Button text to log a dose\nTitle for dose logging screen",
+      "comment" : "Accessibility label for the manual dose entry button on the insulin delivery screen\nButton text to log a dose\nTitle for dose logging screen",
       "localizations" : {
         "da" : {
           "stringUnit" : {

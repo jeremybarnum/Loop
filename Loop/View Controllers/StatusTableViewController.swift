@@ -1351,6 +1351,9 @@ final class StatusTableViewController: LoopChartsTableViewController {
                                     
                                     navigationController?.pushViewController(viewController, animated: true)
                                 }
+                            },
+                            onEnterManualDose: { [weak self] in
+                                self?.presentManualDoseEntry()
                             }
                         )
                         .navigationTitle(Text("Insulin"))
@@ -1371,6 +1374,15 @@ final class StatusTableViewController: LoopChartsTableViewController {
                 performSegue(withIdentifier: CarbAbsorptionViewController.className, sender: indexPath)
             }
         }
+    }
+
+    private func presentManualDoseEntry() {
+        let viewModel = ManualEntryDoseViewModel(delegate: loopManager)
+        let manualEntryDoseView = ManualEntryDoseView(viewModel: viewModel)
+        let hostingController = DismissibleHostingController(rootView: manualEntryDoseView, isModalInPresentation: false)
+        let navigationWrapper = UINavigationController(rootViewController: hostingController)
+        hostingController.navigationItem.leftBarButtonItem = UIBarButtonItem(barButtonSystemItem: .cancel, target: navigationWrapper, action: #selector(dismissWithAnimation))
+        present(navigationWrapper, animated: true)
     }
 
     private func presentUnmuteAlertConfirmation() {
