@@ -41,10 +41,6 @@ struct BolusEntryView: View {
             }
             .padding(.top, -28)
             .insetGroupedListStyle()
-            if !bolusFieldFocused {
-                actionArea
-            }
-
         }
         .navigationBarTitle(self.title)
         .supportedInterfaceOrientations(.portrait)
