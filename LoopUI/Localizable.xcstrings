@@ -3,6 +3,7 @@
   "strings" : {
     "\n%1$@\n\n%2$@ is operating with Closed Loop in the ON position." : {
       "comment" : "Green closed loop ON message (1: last loop string) (2: app name)",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -80,6 +81,7 @@
     },
     "\n%1$@\n\nTap your CGM and insulin pump status icons for more information. %2$@ will continue trying to complete a loop, but check for potential communication issues with your pump and CGM." : {
       "comment" : "Red loop message (1: last loop  string) (2: app name)",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -157,6 +159,7 @@
     },
     "\n%1$@\n\nTap your CGM and insulin pump status icons for more information. %2$@ will continue trying to complete a loop, but watch for potential communication issues with your pump and CGM." : {
       "comment" : "Yellow loop message (1: last loop string) (2: app name)",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -234,6 +237,7 @@
     },
     "\n%1$@ is operating with Closed Loop in the OFF position. Your pump and CGM will continue operating, but the app will not adjust dosing automatically.\n\n%2$@" : {
       "comment" : "Green closed loop OFF message (1: app name)(2: reason for open loop)",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -308,6 +312,12 @@
           }
         }
       }
+    },
+    " %@ ago" : {
+      "comment" : "Format string describing the time interval since the last completion date, last cgm or last pump communication. (1: The localized date components"
+    },
+    " >%@ ago" : {
+      "comment" : "Format string describing the time interval since the last completion date, last cgm or last pump communication. (1: The localized date components"
     },
     "– – –" : {
       "comment" : "No glucose value representation (3 dashes for mg/dL)",
@@ -448,6 +458,7 @@
     },
     "%@ ago" : {
       "comment" : "Format string describing the time interval since the last completion date. (1: The localized date components",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -971,6 +982,7 @@
     },
     "%1$@ units per hour at %2$@" : {
       "comment" : "Accessibility format string describing the basal rate. (1: localized basal rate value)(2: last updated time)",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -1537,6 +1549,7 @@
     },
     "Closed Loop OFF" : {
       "comment" : "Title of green open loop OFF message",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -1626,6 +1639,7 @@
     },
     "Closed Loop ON" : {
       "comment" : "Title of green closed loop ON message",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -1834,6 +1848,7 @@
     },
     "g" : {
       "comment" : "The short unit display string for grams",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -2159,8 +2174,12 @@
         }
       }
     },
+    "Last device communication ran %@ ago" : {
+      "comment" : "Accessbility format label describing the time interval since the last device communication date. (1: The localized date components)"
+    },
     "Loop Failure" : {
       "comment" : "Title of red loop message",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -2399,6 +2418,7 @@
     },
     "Loop Warning" : {
       "comment" : "Title of yellow loop message",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -2595,6 +2615,7 @@
     },
     "mg/dL" : {
       "comment" : "The short unit display string for milligrams of glucose per decilter",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -2720,6 +2741,7 @@
     },
     "mmol/L" : {
       "comment" : "The short unit display string for millimoles of glucose per liter",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -3209,6 +3231,7 @@
     },
     "Tap Settings to toggle Closed Loop ON if you wish for the app to automate your insulin." : {
       "comment" : "Instructions for user to close loop if it is allowed.",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -3286,6 +3309,7 @@
     },
     "U" : {
       "comment" : "The short unit display string for international units of insulin",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -3402,6 +3426,9 @@
           }
         }
       }
+    },
+    "U/hr" : {
+      "comment" : "The format string describing the basal rate unit."
     },
     "Unknown" : {
       "comment" : "Accessibility value for an unknown value",

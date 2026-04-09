@@ -4,6 +4,18 @@
     "" : {
 
     },
+    " " : {
+
+    },
+    "  " : {
+
+    },
+    " -" : {
+
+    },
+    " - " : {
+
+    },
     " (pending: %@)" : {
       "comment" : "The string format appended to active insulin that describes pending insulin. (1: pending insulin)",
       "extractionState" : "manual",
@@ -129,6 +141,36 @@
           }
         }
       }
+    },
+    " **Tip** Use your %@ **Jogging** preset" : {
+
+    },
+    " **Tip** Use your %@ **Walking** preset" : {
+
+    },
+    " / " : {
+
+    },
+    " %@" : {
+
+    },
+    " %@" : {
+
+    },
+    " %@ · " : {
+
+    },
+    " %@ read" : {
+
+    },
+    " %lld hours ago" : {
+
+    },
+    " grams" : {
+
+    },
+    " of " : {
+
     },
     " Pre-meal Preset" : {
       "comment" : "Status row title for premeal override enabled (leading space is to separate from symbol)",
@@ -334,6 +376,7 @@
     },
     " Safety Notifications are OFF" : {
       "comment" : "Warning text for when Notifications or Critical Alerts Permissions is disabled",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -415,8 +458,12 @@
         }
       }
     },
+    " setting. Adjusting it can help reduce the risk of low glucose if you expect unusual fluctuations." : {
+
+    },
     " Workout Preset" : {
       "comment" : "Status row title for workout override enabled (leading space is to separate from symbol)",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -510,6 +557,12 @@
         }
       }
     },
+    "-.--" : {
+
+    },
+    "–" : {
+      "comment" : "String denoting lack of a recommended bolus amount in the simple bolus calculator"
+    },
     "." : {
       "comment" : "Full stop character",
       "localizations" : {
@@ -586,6 +639,24 @@
           }
         }
       }
+    },
+    "**Tip: If glucose rises to >270 mg/dl,** check %@ to see if a bolus is recommended to bring your glucose back into range." : {
+
+    },
+    "**Tip:** Try exercising when your active insulin is close to zero at the start of an activity." : {
+
+    },
+    "**Try:** If you often experience low glucose, consider exercising earlier in the day before eating." : {
+
+    },
+    "**Try:** Reducing your meal bolus if you expect your glucose to drop." : {
+
+    },
+    "%@" : {
+
+    },
+    "%@ " : {
+
     },
     "%@ %@" : {
       "comment" : "The format for an active custom preset. (1: preset symbol)(2: preset name)",
@@ -843,6 +914,15 @@
         }
       }
     },
+    "%@ of insulin" : {
+
+    },
+    "%@ read" : {
+
+    },
+    "%@ Recommended starting values" : {
+
+    },
     "%@ remaining" : {
       "comment" : "Estimated remaining duration with more than a minute",
       "localizations" : {
@@ -940,6 +1020,7 @@
     },
     "%@ U Total" : {
       "comment" : "The subtitle format describing total insulin. (1: localized insulin total)",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -1829,6 +1910,7 @@
     },
     "%1$@ APP SOUNDS" : {
       "comment" : "App sounds title text (1: app name)",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -1861,6 +1943,15 @@
           }
         }
       }
+    },
+    "%1$@ has been active for more than 24 hours. Make sure you still want it enabled, or turn it off in the app." : {
+      "comment" : "Active preset reminder alert background body. (1: preset name)"
+    },
+    "%1$@ has been active for more than 24 hours. Make sure you still want it enabled, or turn it off." : {
+      "comment" : "Active preset reminder alert foreground body. (1: preset name)"
+    },
+    "%1$@ has set your correction range to 110 mg/dL or higher." : {
+      "comment" : "The format string for the high insulin needs preset warning text on the preset detent screen when stopping a preset. (1: app name)"
     },
     "%1$@ is operating with Closed Loop in the OFF position. Your pump and CGM will continue operating, but the app will not adjust dosing automatically." : {
       "comment" : "Alert message for closed loop off informational modal. (1: app name)",
@@ -2110,6 +2201,9 @@
           }
         }
       }
+    },
+    "%1$@ Still Active" : {
+      "comment" : "The format title for the preset still active alert. (1: preset name)"
     },
     "%1$@ Time Settings Need Attention" : {
       "comment" : "Time change alert title",
@@ -2810,6 +2904,9 @@
         }
       }
     },
+    "%1$@ will set your correction range to 110 mg/dL or higher when this preset is enabled." : {
+      "comment" : "The format string for the high insulin needs preset warning text on the preset detent screen when starting a preset. (1: app name)"
+    },
     "%1$@ will stop working in %2$@. You will need to rebuild before that." : {
       "comment" : "Format string for body for notification of upcoming expiration. (1: app name) (2: amount of time until expiration",
       "localizations" : {
@@ -3148,6 +3245,9 @@
         }
       }
     },
+    "•" : {
+
+    },
     "⚠️" : {
       "localizations" : {
         "da" : {
@@ -3205,6 +3305,21 @@
           }
         }
       }
+    },
+    "0" : {
+
+    },
+    "3-6" : {
+
+    },
+    "6-9" : {
+
+    },
+    "9-20" : {
+
+    },
+    "10" : {
+
     },
     "15 min glucose regression coefficient (b₁), continued with decay over 30 min" : {
       "comment" : "Description of the prediction input effect for glucose momentum",
@@ -3331,6 +3446,9 @@
         }
       }
     },
+    "25-33%" : {
+
+    },
     "30 min comparison of glucose prediction vs actual, continued with decay over 60 min" : {
       "comment" : "Description of the prediction input effect for retrospective correction",
       "localizations" : {
@@ -3449,6 +3567,9 @@
           }
         }
       }
+    },
+    "100m sprint" : {
+
     },
     "A few seconds remaining" : {
       "comment" : "Estimated remaining duration with a few seconds",
@@ -4128,6 +4249,21 @@
           }
         }
       }
+    },
+    "A percentage **above 100%** tells the system you need **more** insulin" : {
+
+    },
+    "A percentage **below 100%** tells the system you need **less** insulin" : {
+
+    },
+    "A preset with %@ overall insulin is on. The system is currently delivering less than your preset baseline." : {
+
+    },
+    "A preset with %@ overall insulin is on. The system is currently delivering more than your preset baseline." : {
+
+    },
+    "A preset with %@ overall insulin is on. This is your new preset baseline and it overrides your Scheduled Basal." : {
+
     },
     "A pump must be configured before a bolus can be delivered." : {
       "comment" : "Alert message for a missing pump error",
@@ -5220,6 +5356,9 @@
         }
       }
     },
+    "Add Carbs" : {
+
+    },
     "Add CGM" : {
       "comment" : "Action sheet title selecting CGM\nThe title of the CGM chooser in settings\nTitle text for button to add CGM device\nTitle text for button to set up a CGM",
       "localizations" : {
@@ -5382,6 +5521,7 @@
     },
     "Add Meal" : {
       "comment" : "The label of the carb entry button",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -5749,6 +5889,9 @@
         }
       }
     },
+    "Adjust Preset Duration" : {
+
+    },
     "Adjusted for" : {
       "localizations" : {
         "da" : {
@@ -5830,6 +5973,12 @@
           }
         }
       }
+    },
+    "Aerobic" : {
+
+    },
+    "Afternoon Exercise" : {
+
     },
     "Alert Management" : {
       "comment" : "Alert Permissions button text\nTitle of alert management screen",
@@ -5916,6 +6065,7 @@
     },
     "Alert Permissions" : {
       "comment" : "Alert Permissions button text\nNotification & Critical Alert Permissions screen title",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -6011,6 +6161,7 @@
     },
     "Alert Permissions and Mute Alerts" : {
       "comment" : "Alert Permissions descriptive text",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -6296,6 +6447,7 @@
     },
     "All Alerts Muted" : {
       "comment" : "Warning text for when alerts are muted",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -6355,6 +6507,7 @@
     },
     "All alerts muted until" : {
       "comment" : "Label for when mute alert will end",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -6405,6 +6558,18 @@
           }
         }
       }
+    },
+    "All App Sounds Muted" : {
+      "comment" : "Warning text for when alerts are muted"
+    },
+    "All app sounds, including sounds for all critical alerts such as Urgent Low, Sensor Fail, Pump Expiration, and others will NOT sound." : {
+      "comment" : "Warning label that all alerts will not sound"
+    },
+    "All app sounds, including sounds for all critical alerts, are currently muted.\n\nTap Unmute to resume app sounds for your alerts." : {
+      "comment" : "The alert body for unmute alert confirmation"
+    },
+    "All Events" : {
+
     },
     "All Favorites" : {
       "comment" : "section header for list of existing FavoriteFoods",
@@ -6458,6 +6623,12 @@
           }
         }
       }
+    },
+    "All Out" : {
+
+    },
+    "All Presets" : {
+
     },
     "Amount Consumed" : {
       "comment" : "Label for carb quantity entry row on carb entry screen",
@@ -6646,6 +6817,7 @@
     },
     "An active override is modifying your carb ratio and insulin sensitivity. If you don't want this to affect your bolus calculation and projected glucose, consider turning off the override." : {
       "comment" : "Warning to ensure the carb entry is accurate during an override",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -6966,6 +7138,7 @@
     },
     "An updated bolus recommendation is available." : {
       "comment" : "Alert message when glucose data returns while on bolus screen",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -8166,6 +8339,12 @@
         }
       }
     },
+    "Are you sure you want to turn automation OFF?" : {
+      "comment" : "Closed loop alert title"
+    },
+    "ask yourself, am I more likely to go high or low during this event?" : {
+
+    },
     "at %@" : {
       "comment" : "Format fragment for a specific time",
       "localizations" : {
@@ -8290,6 +8469,12 @@
           }
         }
       }
+    },
+    "at %1$@" : {
+      "comment" : "when adding a timestamp. (1: the formatted timestamp)\nwhen adding the date and time. (1: the formatted date and time)"
+    },
+    "At 100%%, %@ assumes your insulin needs are the same as usual." : {
+
     },
     "Authenticate to Bolus %@ Units" : {
       "comment" : "The message displayed during a device authentication prompt for bolus specification",
@@ -8504,6 +8689,57 @@
           }
         }
       }
+    },
+    "Automated" : {
+
+    },
+    "Automated (↑ Increase)" : {
+
+    },
+    "Automated (↓ Decrease)" : {
+
+    },
+    "Automated (Preset Basal Rate)" : {
+
+    },
+    "Automated (Scheduled)" : {
+
+    },
+    "Automated insulin adjustments by %@ reduce a noticeable rise in glucose" : {
+
+    },
+    "Automation" : {
+
+    },
+    "Automation is off" : {
+      "comment" : "title for when automation is off"
+    },
+    "Automation is on" : {
+      "comment" : "title for when automation is on"
+    },
+    "Automation is unavailable" : {
+      "comment" : "title for when automation is unavailable"
+    },
+    "Automation is unavailable while your CGM sensor is warming up.\n\nIn the meantime, your pump is still able to deliver insulin.\n\nAutomation will resume when CGM readings are received." : {
+      "comment" : "message when automation is on and CGM is in warmup"
+    },
+    "Automation is unavailable while your insulin is suspended.\n\nResume insulin if you wish for the app to automate insulin delivery." : {
+      "comment" : "message when automation is on and insulin delivery is suspended"
+    },
+    "Automation OFF" : {
+
+    },
+    "Automation ON" : {
+
+    },
+    "Automation unavailable" : {
+
+    },
+    "Automation was unsuccessful" : {
+      "comment" : "title for when automation was unsuccessful"
+    },
+    "Basal Rate" : {
+
     },
     "Basal Rate Schedule" : {
       "comment" : "Details for configuration error when basal rate schedule is missing",
@@ -8768,6 +9004,9 @@
         }
       }
     },
+    "Basal: " : {
+
+    },
     "Based on your predicted glucose, no bolus is recommended." : {
       "comment" : "Caption for bolus screen notice when no bolus is recommended for the predicted glucose",
       "localizations" : {
@@ -8850,6 +9089,12 @@
           }
         }
       }
+    },
+    "Because Omar has gone low while working outdoors in the past, he raises his preset correction range to help prevent another low." : {
+
+    },
+    "Before" : {
+
     },
     "Bluetooth\nOff" : {
       "comment" : "Message to the user to that the bluetooth is off",
@@ -9220,7 +9465,7 @@
       }
     },
     "Bolus" : {
-      "comment" : "Label for bolus entry row on bolus screen\nLabel for bolus entry row on simple bolus screen\nThe label of the bolus entry button\nTitle for bolus entry screen",
+      "comment" : "Label for bolus entry row on bolus screen\nLabel for bolus entry row on simple bolus screen\nTitle for bolus entry screen",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -9343,6 +9588,9 @@
           }
         }
       }
+    },
+    "Bolus Canceled: Delivered %1$@ of %2$@" : {
+      "comment" : "The title of the cell indicating a bolus has been canceled. (1: delivered volume)(2: total volume)"
     },
     "Bolus Issue" : {
       "comment" : "The notification title for a bolus issue",
@@ -9694,6 +9942,9 @@
         }
       }
     },
+    "Bolus: " : {
+
+    },
     "Bolused %1$@ of %2$@" : {
       "comment" : "The format string for bolus progress. (1: delivered volume)(2: total volume)",
       "localizations" : {
@@ -10003,6 +10254,15 @@
           }
         }
       }
+    },
+    "Breathing is slightly uncomfortable. Conversation requires maximal effort." : {
+
+    },
+    "Breathing more heavily. Can carry on a conversation, but requires more effort." : {
+
+    },
+    "Can I use Focus modes with %1$@?" : {
+      "comment" : "Focus modes section title (1: app name)"
     },
     "Cancel" : {
       "comment" : "Button label for cancel\nButton text to cancel\nCancel button for reset loop alert\nCancel export button title\nThe title of the cancel action in an action sheet",
@@ -10532,6 +10792,9 @@
           }
         }
       }
+    },
+    "Carb Ratio" : {
+
     },
     "Carb Ratio Schedule" : {
       "comment" : "Details for configuration error when carb ratio schedule is missing",
@@ -11253,6 +11516,9 @@
         }
       }
     },
+    "CAUTION - Investigational device. Limited by Federal (or United States) law to investigational use." : {
+
+    },
     "Change the pump battery immediately" : {
       "comment" : "The notification alert describing a low pump battery",
       "extractionState" : "manual",
@@ -11516,6 +11782,12 @@
           }
         }
       }
+    },
+    "Changing it can lower the chance of your glucose levels going too low if you expect unusual changes." : {
+
+    },
+    "Check for potential communication issues with your CGM.\n\nIn the meantime, your pump is still able to deliver insulin." : {
+      "comment" : "message when automation is off and CGM is in signal loss"
     },
     "Check settings" : {
       "comment" : "Details for configuration error when one or more loop settings are missing",
@@ -11959,6 +12231,9 @@
         }
       }
     },
+    "Check your glucose levels around 20 to 30 min after eating. If you're still low, consider eating the same amount." : {
+
+    },
     "Choose a longer absorption time for larger meals, or those containing fats and proteins. This is only guidance to the algorithm and need not be exact." : {
       "comment" : "Carb entry section footer text explaining absorption time",
       "localizations" : {
@@ -12125,8 +12400,11 @@
         }
       }
     },
+    "Choose the glucose value (or values) you want %@ to target when changing how much basal insulin you get." : {
+
+    },
     "Close" : {
-      "comment" : "Button title to close view\nThe button label of the action used to dismiss the unsafe notification permission alert",
+      "comment" : "Preset training needed alert cancel button\nThe button label of the action used to dismiss the unsafe notification permission alert",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -12213,6 +12491,9 @@
           }
         }
       }
+    },
+    "Close Training" : {
+
     },
     "Closed Loop" : {
       "comment" : "The title text for the looping enabled switch cell",
@@ -12960,6 +13241,15 @@
         }
       }
     },
+    "Combination of high and low intensity" : {
+
+    },
+    "Competition Stress" : {
+
+    },
+    "Complete each section below to learn how presets can be used for a variety of situations." : {
+
+    },
     "Complete Setup" : {
       "comment" : "Title text for button to complete setup",
       "localizations" : {
@@ -13033,6 +13323,7 @@
     },
     "Configuration" : {
       "comment" : "The title of the Configuration section in settings",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -13304,6 +13595,15 @@
         }
       }
     },
+    "Congratulations! You've finished the Presets training." : {
+
+    },
+    "Consider an exercise you do regularly and think about how hard you push yourself." : {
+
+    },
+    "Consider eating around 10 to 20 grams of fast-acting carbs" : {
+
+    },
     "Continue" : {
       "comment" : "Button label for continue\nDefault alert dismissal",
       "localizations" : {
@@ -13435,6 +13735,9 @@
         }
       }
     },
+    "Continue to %@" : {
+
+    },
     "Continuous Glucose Monitor" : {
       "comment" : "Descriptive text for Continuous Glucose Monitor",
       "localizations" : {
@@ -13553,6 +13856,9 @@
           }
         }
       }
+    },
+    "Continuous or exercise without breaks" : {
+
     },
     "Correction Range" : {
       "comment" : "The title of the glucose target range schedule screen\n   The title text for the glucose target range schedule",
@@ -13680,6 +13986,12 @@
         }
       }
     },
+    "Correction range is a " : {
+
+    },
+    "Correction range is a **safety setting**. Changing it can help lower your risk of going low if you expect unusual changes." : {
+
+    },
     "Could Not Restart %1$@" : {
       "comment" : "Format string for title of reset loop alert. (1: App name)",
       "localizations" : {
@@ -13726,6 +14038,9 @@
           }
         }
       }
+    },
+    "Create new presets" : {
+
     },
     "Critical Alerts" : {
       "comment" : "Critical Alerts Status text",
@@ -13815,6 +14130,33 @@
           }
         }
       }
+    },
+    "Critical Alerts and Time Sensitive Notifications are important types of iOS notifications used for events that require immediate attention. Examples include:" : {
+
+    },
+    "Critical Alerts and Time Sensitive Notifications are turned OFF" : {
+      "comment" : "Both Critical Alerts and Time Sensitive Notifications disabled banner title"
+    },
+    "Critical Alerts and Time Sensitive Notifications are turned OFF. Go to the App to fix the issue now." : {
+      "comment" : "Both Critical Alerts and Time Sensitive Notifications disabled notification body"
+    },
+    "Critical Alerts and Time Sensitive Notifications are turned off. You may not get sound, visual or vibration alerts regarding critical safety information.\n\nTo fix the issue, tap ‘Settings’ and make sure Critical Alerts and Time Sensitive Notifications are turned ON." : {
+      "comment" : "Both Critical Alerts and Time Sensitive Notifications disabled alert body"
+    },
+    "Critical Alerts and Time Sensitive Notifications are turned off. You may not get sound, visual or vibration alerts regarding critical safety information.\n\nTo fix the issue, tap ‘Settings’ and make sure Notifications and Critical Alerts are turned ON." : {
+      "comment" : "Both Notifications and Critical Alerts disabled alert body"
+    },
+    "Critical Alerts are turned OFF" : {
+      "comment" : "Critical alerts disabled banner title"
+    },
+    "Critical Alerts are turned OFF. Go to the App to fix the issue now." : {
+      "comment" : "Critical alerts disabled notification body"
+    },
+    "Critical Alerts are turned off. You may not get sound, visual or vibration alerts regarding critical safety information.\n\nTo fix the issue, tap ‘Settings’ and make sure Critical Alerts are turned ON." : {
+      "comment" : "Critical alerts disabled alert body"
+    },
+    "Critical Alerts will still sound, but all others will be silenced." : {
+      "comment" : "Additional description text for temporarily silencing non-critical alerts"
     },
     "Critical Event Log Ready" : {
       "comment" : "Critical event log ready text",
@@ -14064,6 +14406,15 @@
           }
         }
       }
+    },
+    "CrossFit" : {
+
+    },
+    "Current Basal Rate" : {
+
+    },
+    "Current Delivery" : {
+
     },
     "Current Glucose" : {
       "comment" : "Label for glucose entry row on simple bolus screen",
@@ -14436,6 +14787,7 @@
     },
     "Custom Preset" : {
       "comment" : "The title of the cell indicating a generic custom preset is enabled",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -14648,6 +15000,9 @@
         }
       }
     },
+    "Date Created" : {
+      "comment" : "Preset sorting option description for sorting by date created"
+    },
     "dB" : {
       "comment" : "The short unit display string for decibles",
       "localizations" : {
@@ -14766,6 +15121,12 @@
           }
         }
       }
+    },
+    "decrease" : {
+
+    },
+    "Decreased Delivery" : {
+
     },
     "Delete" : {
       "localizations" : {
@@ -15856,6 +16217,9 @@
         }
       }
     },
+    "Delivery Details" : {
+
+    },
     "Delivery Limits" : {
       "comment" : "Title text for delivery limits",
       "extractionState" : "manual",
@@ -15993,6 +16357,15 @@
           }
         }
       }
+    },
+    "Depending on the activity, you may notice a few common patterns when it comes to your insulin needs:" : {
+
+    },
+    "Device Issue" : {
+      "comment" : "title for when automation is off and there is a device issue"
+    },
+    "Devices" : {
+
     },
     "Diabetes Treatment" : {
       "comment" : "Descriptive text for Therapy Settings",
@@ -16154,8 +16527,12 @@
         }
       }
     },
+    "Difficulty maintaining exercise or holding a conversation." : {
+
+    },
     "Disables" : {
       "comment" : "The action hint of the workout mode toggle button when enabled",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -16274,7 +16651,7 @@
       }
     },
     "Dismiss" : {
-      "comment" : "Default alert dismissal\nThe button label of the action used to dismiss an error alert",
+      "comment" : "Default alert dismissal",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -16436,6 +16813,9 @@
           }
         }
       }
+    },
+    "Don't Start" : {
+      "comment" : "Label for do not start preset action on scheduled preset reminder alert\nThe title of the notification action to not start a preset"
     },
     "Done" : {
       "localizations" : {
@@ -16626,6 +17006,9 @@
         }
       }
     },
+    "Dose Type" : {
+
+    },
     "Dosing Strategy" : {
       "comment" : "The title of the Dosing Strategy section in settings",
       "localizations" : {
@@ -16715,6 +17098,9 @@
         }
       }
     },
+    "Duration" : {
+
+    },
     "Duration exceeds: %1$.1f hours" : {
       "comment" : "Override error description: duration exceed max (1: max duration in hours).",
       "localizations" : {
@@ -16785,6 +17171,24 @@
           }
         }
       }
+    },
+    "Duration: %@" : {
+
+    },
+    "During this kind of hard exercise, your body may release hormones that raise glucose. This is more common in the morning before eating." : {
+
+    },
+    "Easy breath. Can carry on a conversation." : {
+
+    },
+    "Edit Food" : {
+
+    },
+    "Edit Preset" : {
+
+    },
+    "Edit presets" : {
+
     },
     "Enable\nBluetooth" : {
       "comment" : "Message to the user to enable bluetooth",
@@ -17006,6 +17410,7 @@
     },
     "Enables" : {
       "comment" : "The action hint of the workout mode toggle button when disabled",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -17122,6 +17527,21 @@
           }
         }
       }
+    },
+    "End" : {
+
+    },
+    "End Preset" : {
+
+    },
+    "End Time" : {
+
+    },
+    "End Training?" : {
+
+    },
+    "Ensure that notifications are allowed and NOT silenced from %1$@." : {
+      "comment" : "Focus modes step 4 (1: appName)"
     },
     "Enter a blood glucose from a meter for a recommended bolus amount." : {
       "comment" : "Caption for bolus screen notice when glucose data is missing or stale",
@@ -17957,6 +18377,9 @@
         }
       }
     },
+    "Event" : {
+
+    },
     "Event History" : {
       "comment" : "Segmented button title for insulin delivery log event history",
       "localizations" : {
@@ -18070,8 +18493,12 @@
         }
       }
     },
+    "Eventually" : {
+
+    },
     "Eventually %@" : {
       "comment" : "The subtitle format describing eventual glucose. (1: localized glucose value description)",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -18188,6 +18615,15 @@
           }
         }
       }
+    },
+    "Example" : {
+
+    },
+    "Example: Allow Notifications from %1$@" : {
+      "comment" : "Focus mode image 1 caption (1: appName)"
+    },
+    "Example: Silence Notifications from other apps" : {
+      "comment" : "Focus mode image 2 caption"
     },
     "Exceeds maximum allowed bolus in settings" : {
       "comment" : "Bolus error description: bolus exceeds maximum bolus in settings.",
@@ -18456,6 +18892,12 @@
         }
       }
     },
+    "Exercise is a common reason to use a preset. Different kinds of exercise and their intensity levels can affect your glucose levels in different ways." : {
+
+    },
+    "Explosive sprints or bursts" : {
+
+    },
     "Export Critical Event Logs" : {
       "comment" : "The title of the export critical event logs in support",
       "localizations" : {
@@ -18723,6 +19165,18 @@
         }
       }
     },
+    "Falling / Falling Quickly" : {
+
+    },
+    "Falling Slowly" : {
+
+    },
+    "FAQ about Alerts" : {
+      "comment" : "View title for how mute alerts work"
+    },
+    "Favorite Food Insights" : {
+
+    },
     "Favorite Foods" : {
       "comment" : "Title for Favorite Foods view",
       "localizations" : {
@@ -18955,6 +19409,12 @@
         }
       }
     },
+    "Filter" : {
+
+    },
+    "Filtered by:" : {
+
+    },
     "Fingerstick Glucose" : {
       "comment" : "Label for manual glucose entry row on bolus screen",
       "localizations" : {
@@ -19044,8 +19504,21 @@
         }
       }
     },
+    "Fix now by turning Critical Alerts and Time Sensitive Notifications ON." : {
+      "comment" : "Both Critical Alerts and Time Sensitive Notifications disabled banner body"
+    },
+    "Fix now by turning Critical Alerts ON." : {
+      "comment" : "Critical alerts disabled banner body"
+    },
+    "Fix now by turning Notifications and Critical Alerts ON." : {
+      "comment" : "Both Critical Alerts and Notifications disabled banner body"
+    },
+    "Fix now by turning Notifications ON." : {
+      "comment" : "Notifications disabled banner body"
+    },
     "Fix now by turning Notifications, Critical Alerts and Time Sensitive Notifications ON." : {
       "comment" : "Secondary text for alerts disabled warning, which appears on the main status screen.",
+      "extractionState" : "stale",
       "localizations" : {
         "cs" : {
           "stringUnit" : {
@@ -19126,6 +19599,9 @@
           }
         }
       }
+    },
+    "Fix now by turning Time Sensitive Notifications ON." : {
+      "comment" : "Time sensitive notifications disabled banner body"
     },
     "Food Type" : {
       "comment" : "Label for food type entry on add favorite food screen",
@@ -19248,6 +19724,7 @@
     },
     "For %1$@" : {
       "comment" : "The format string used to describe a finite workout targets duration",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -19365,8 +19842,15 @@
         }
       }
     },
+    "For activities that raise your risk of going low, you can set a higher temporary correction range." : {
+
+    },
+    "For mixed-intensity activity:" : {
+
+    },
     "For safety purposes, you should allow Critical Alerts, Time Sensitive and Notification Permissions (non-critical alerts) on your device to continue using %1$@ and cannot turn off individual alarms." : {
       "comment" : "Description text for silencing time sensitive and non-critical alerts (1: app name)",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -19417,6 +19901,15 @@
           }
         }
       }
+    },
+    "For some people, routine chores and everyday activities can affect glucose levels similar to exercise." : {
+
+    },
+    "For these activities, consider setting your insulin needs to **less than 100%**." : {
+
+    },
+    "For these activities, consider setting your insulin needs to **more than 100%**." : {
+
     },
     "Forecasted blood glucose may still be higher than target range." : {
       "localizations" : {
@@ -19579,6 +20072,7 @@
     },
     "Frequently asked questions about alerts" : {
       "comment" : "Label for link to see frequently asked questions",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -19630,8 +20124,12 @@
         }
       }
     },
+    "Full out effort. No conversation possible." : {
+
+    },
     "g" : {
       "comment" : "The short unit display string for grams",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -19757,6 +20255,7 @@
     },
     "Get help with Alert Permissions" : {
       "comment" : "Get help with Alert Permissions support button text",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -19831,6 +20330,9 @@
           }
         }
       }
+    },
+    "Get help with iOS Permissions" : {
+      "comment" : "Get help with iOS Permissions support button text"
     },
     "Glucose" : {
       "comment" : "The title of the glucose and prediction graph\nTitle for predicted glucose chart on bolus screen",
@@ -20015,6 +20517,9 @@
           }
         }
       }
+    },
+    "Glucose Change Chart" : {
+
     },
     "Glucose data is %1$@ old" : {
       "comment" : "The error message when glucose data is too old to be used. (1: glucose data age in minutes)",
@@ -20256,6 +20761,7 @@
     },
     "Glucose Data Now Available" : {
       "comment" : "Alert title when glucose data returns while on bolus screen",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -20669,7 +21175,14 @@
         }
       }
     },
+    "Go to Settings > Focus." : {
+      "comment" : "Focus modes step 1"
+    },
+    "grams" : {
+
+    },
     "HARDWARE SOUNDS" : {
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -20720,6 +21233,12 @@
           }
         }
       }
+    },
+    "Her bolus recommendation is higher than usual because her overall insulin is set higher." : {
+
+    },
+    "Her preset is set to **110%%**, which is more than she usually needs. This means %@ will make her basal rates, carb ratio, and insulin sensitivity factor (ISF) stronger. " : {
+
     },
     "High Glucose" : {
       "localizations" : {
@@ -20772,6 +21291,18 @@
           }
         }
       }
+    },
+    "High Intensity (Anaerobic)" : {
+
+    },
+    "High-intensity exercise means pushing yourself to your **maximum effort**. It is so hard that talking is nearly impossible, and you can’t keep it up for very long." : {
+
+    },
+    "Hiking" : {
+
+    },
+    "Historical Data" : {
+
     },
     "How can I silence non-Critical Alerts?" : {
       "localizations" : {
@@ -20826,6 +21357,7 @@
       }
     },
     "How can I silence only Time Sensitive and Non-Critical alerts?" : {
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -20930,6 +21462,12 @@
         }
       }
     },
+    "How does her preset impact her bolus recommendation?" : {
+
+    },
+    "How to configure each setting" : {
+
+    },
     "How to update (LoopDocs)" : {
       "comment" : "The title text for how to update",
       "localizations" : {
@@ -21013,6 +21551,15 @@
         }
       }
     },
+    "How to use Presets for everyday activities" : {
+
+    },
+    "How to use Presets for exercise" : {
+
+    },
+    "How to use Presets when you are sick" : {
+
+    },
     "https://mysite.herokuapp.com" : {
       "comment" : "The placeholder text for the nightscout site URL credential",
       "extractionState" : "manual",
@@ -21025,8 +21572,15 @@
         }
       }
     },
+    "if eating less than 2 hours before exercise" : {
+
+    },
+    "If glucose drops below 126 mg/dL" : {
+
+    },
     "If iOS Focus Mode is ON and Mute Alerts is OFF, Critical Alerts will still be delivered and non-Critical Alerts will be silenced until %1$@ is added to each Focus mode as an Allowed App." : {
       "comment" : "Focus modes descriptive text (1: app name)",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -21077,6 +21631,33 @@
           }
         }
       }
+    },
+    "If you expect your glucose to rise during the activity, you may not need a preset." : {
+
+    },
+    "If you have active insulin in your body when you start exercising, you generally have an increased risk of low glucose." : {
+
+    },
+    "If you haven’t noticed a rise in glucose with high-intensity exercise, it may be due to:" : {
+
+    },
+    "If you often experience low glucose, you may need to reduce how much insulin you deliver for meals eaten 1-2 hours before exercising." : {
+
+    },
+    "If you usually experience lows while exercising, watch your glucose levels closely during exercise and consider eating around 3 to 20g of fast-acting carbs." : {
+
+    },
+    "If your activity has a higher risk of low glucose, start a physical activity preset at least **1 hour before you begin** and keep it on until you finish." : {
+
+    },
+    "If your glucose goes down, you may only need a small decrease in insulin — less than you would for low to moderate-intensity activity." : {
+
+    },
+    "If your glucose goes up, you may only need a small increase in insulin — less than you would for high-intensity activity." : {
+
+    },
+    "If your glucose isn't dropping, eating too many carbs can raise your blood sugar, trigger more insulin, and increase the risk of low blood sugar during or after the activity." : {
+
     },
     "Immediate" : {
       "comment" : "Immediate Delivery status text",
@@ -21207,6 +21788,15 @@
           }
         }
       }
+    },
+    "Includes basal and automated boluses" : {
+
+    },
+    "increase" : {
+
+    },
+    "Increased Delivery" : {
+
     },
     "Indefinitely" : {
       "comment" : "The title of a target alert action specifying an indefinitely long workout targets duration",
@@ -21677,6 +22267,9 @@
         }
       }
     },
+    "Insulin Automation" : {
+      "comment" : "Closed loop settings button descriptive text"
+    },
     "Insulin Delivery" : {
       "comment" : "The title of the insulin delivery graph",
       "localizations" : {
@@ -21802,6 +22395,9 @@
         }
       }
     },
+    "Insulin Delivery Log" : {
+
+    },
     "Insulin effects" : {
       "comment" : "Details for missing data error when insulin effects are missing\nDetails for missing data error when insulin effects including pending insulin are missing",
       "localizations" : {
@@ -21920,6 +22516,9 @@
           }
         }
       }
+    },
+    "Insulin Event" : {
+
     },
     "Insulin Model" : {
       "comment" : "Details for configuration error when insulin model is missing\n   The title text for the insulin model setting row",
@@ -22148,6 +22747,9 @@
         }
       }
     },
+    "Insulin Resumed" : {
+
+    },
     "Insulin Sensitivities" : {
       "comment" : "The title of the insulin sensitivities schedule screen\n   The title text for the insulin sensitivity schedule",
       "extractionState" : "manual",
@@ -22273,6 +22875,9 @@
           }
         }
       }
+    },
+    "Insulin Sensitivity Factor (ISF)" : {
+
     },
     "Insulin Sensitivity Schedule" : {
       "comment" : "Details for configuration error when insulin sensitivity schedule is missing",
@@ -22705,6 +23310,9 @@
           }
         }
       }
+    },
+    "Interval Training " : {
+
     },
     "Invalid absorption time: %1$@ hours" : {
       "comment" : "Carb error description: invalid absorption time. (1: Input duration in hours).",
@@ -23187,7 +23795,11 @@
         }
       }
     },
+    "iOS" : {
+
+    },
     "iOS Critical Alerts and Time Sensitive Alerts are types of Apple notifications. They are used for high-priority events. Some examples include:" : {
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -23239,7 +23851,11 @@
         }
       }
     },
+    "iOS Focus Modes" : {
+      "comment" : "View title for iOS focus modes\niOS focus modes navigation link label"
+    },
     "IOS FOCUS MODES" : {
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -23290,6 +23906,21 @@
           }
         }
       }
+    },
+    "iOS Focus Modes enable you to have more control over when apps can send you notifications. If you decide to use these, ensure that notifications are allowed and NOT silenced from %1$@." : {
+      "comment" : "Description text for focus modes (1: app name)"
+    },
+    "iOS has added features such as ‘Focus Mode’ that enable you to have more control over when apps can send you notifications.\n\nIf you wish to continue receiving important notifications from %1$@ while in a Focus Mode, you must ensure that notifications are allowed and NOT silenced from %1$@ for each Focus Mode." : {
+      "comment" : "Description text for iOS Focus Modes (1: app name) (2: app name)"
+    },
+    "iOS Permissions" : {
+      "comment" : "Notification & Critical Alert Permissions screen title\niOS Permissions button text"
+    },
+    "iOS Permissions and Mute All App Sounds" : {
+      "comment" : "Alert Permissions descriptive text"
+    },
+    "ISF" : {
+
     },
     "Issue Report" : {
       "comment" : "The title text for the issue report menu item\nThe view controller title for the issue report screen",
@@ -23481,6 +24112,12 @@
         }
       }
     },
+    "Jogging" : {
+
+    },
+    "Keep All Notifications ON for %1$@" : {
+      "comment" : "Time sensitive notifications callout title (1: app name)"
+    },
     "Large Meal Entered" : {
       "comment" : "Title of the warning shown when a large meal was entered",
       "localizations" : {
@@ -23563,6 +24200,24 @@
           }
         }
       }
+    },
+    "Larger glucose drop" : {
+
+    },
+    "Last Auto Bolus" : {
+
+    },
+    "Last Bolus: " : {
+
+    },
+    "Last loop completed" : {
+
+    },
+    "Last Used" : {
+      "comment" : "Preset sorting option description for sorting by last used"
+    },
+    "Later that day, Paloma eats a meal with about 30g of carbs." : {
+
     },
     "Launches CGM app" : {
       "comment" : "Glucose HUD accessibility hint",
@@ -23691,7 +24346,7 @@
       }
     },
     "Learn More" : {
-      "comment" : "OK button title for alert shown when delivery status is uncertain",
+      "comment" : "Learn more section header\nOK button title for alert shown when delivery status is uncertain",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -23778,6 +24433,9 @@
           }
         }
       }
+    },
+    "Learn more about Alerts" : {
+      "comment" : "Link to learn more about alerts"
     },
     "Less than a minute remaining" : {
       "comment" : "Estimated remaining duration with less than a minute",
@@ -23867,6 +24525,18 @@
           }
         }
       }
+    },
+    "Let’s walk through a simple example to show how a preset might be used in this situation." : {
+
+    },
+    "Let’s walk through some examples to show how presets might be used in these situations." : {
+
+    },
+    "Light Intensity (Aerobic)" : {
+
+    },
+    "Light-to-moderate intensity exercise can cause a drop in glucose levels. This is because your body uses glucose (or sugar) for energy during physical activity." : {
+
     },
     "Live activity" : {
       "comment" : "Alert Permissions live activity\nLive activity screen title",
@@ -24813,6 +25483,9 @@
         }
       }
     },
+    "Loop is already looping." : {
+      "comment" : "The error message displayed for LoopError.loopInProgress errors."
+    },
     "Loop normally gives 40% of your predicted insulin needs each dosing cycle.\n\nWhen the Glucose Based Partial Application experiment is enabled, Loop will vary the percentage of recommended bolus delivered each cycle with glucose level.\n\nNear correction range, it will use 20% (similar to Temp Basal), and gradually increase to a maximum of 80% at high glucose (200 mg/dL, 11.1 mmol/L).\n\nPlease be aware that during fast rising glucose, such as after an unannounced meal, this feature, combined with velocity and retrospective correction effects, may result in a larger dose than your ISF would call for." : {
       "comment" : "Description of Glucose Based Partial Application toggle.",
       "localizations" : {
@@ -25192,8 +25865,15 @@
         }
       }
     },
+    "Make sure to keep Notifications, Time Sensitive Notifications, and Critical Alerts turned ON in iOS Settings to receive essential safety and maintenance notifications." : {
+      "comment" : "Time sensitive notifications callout message"
+    },
+    "Manage iOS Permissions" : {
+      "comment" : "Manage Permissions in Settings button text"
+    },
     "Manage Permissions in Settings" : {
       "comment" : "Manage Permissions in Settings button text",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -25275,8 +25955,12 @@
         }
       }
     },
+    "Managing Activities of Daily Living" : {
+
+    },
     "Managing Alerts" : {
       "comment" : "View title for how mute alerts work",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -25327,6 +26011,9 @@
           }
         }
       }
+    },
+    "Manual" : {
+
     },
     "Manual Dose: <b>%1$@</b> %2$@" : {
       "comment" : "Description of a bolus dose entry (1: value (? if no value) in bold, 2: unit)",
@@ -25690,6 +26377,15 @@
         }
       }
     },
+    "Maximum Intensity (Anaerobic)" : {
+
+    },
+    "May experience a rise in glucose." : {
+
+    },
+    "May experience drops in glucose." : {
+
+    },
     "Meal Bolus" : {
       "comment" : "Title for bolus entry screen when also entering carbs",
       "localizations" : {
@@ -25785,8 +26481,18 @@
         }
       }
     },
+    "Meal Summary" : {
+
+    },
+    "Meal Timing" : {
+
+    },
+    "Medium Intensity (Aerobic)" : {
+
+    },
     "mg/dL" : {
       "comment" : "The short unit display string for milligrams of glucose per decilter",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -26183,8 +26889,12 @@
         }
       }
     },
+    "Mixed-intensity exercise may cause only small changes in glucose levels. Your glucose may go up or down." : {
+
+    },
     "mmol/L" : {
       "comment" : "The short unit display string for millimoles of glucose per liter",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -26456,6 +27166,9 @@
         }
       }
     },
+    "Monitor your glucose and active insulin at the start of a competition day" : {
+
+    },
     "More Info" : {
       "comment" : "Text for more info action on notification of upcoming TestFlight expiration\nText for more info action on notification of upcoming profile expiration",
       "localizations" : {
@@ -26569,8 +27282,18 @@
         }
       }
     },
+    "Morning Exercise" : {
+
+    },
+    "Morning exercise before eating (like a fasted jog) usually causes a smaller drop in glucose levels and may even promote a rise, compared to afternoon exercise." : {
+
+    },
+    "Mutable" : {
+
+    },
     "Mute All Alerts" : {
       "comment" : "Label for button to mute all alerts",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -26654,6 +27377,7 @@
     },
     "Mute All Alerts Temporarily" : {
       "comment" : "Title for mute alert duration selection action sheet",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -26705,8 +27429,14 @@
         }
       }
     },
+    "Mute All App Sounds" : {
+      "comment" : "Label for button to mute all app sounds"
+    },
+    "Muted until" : {
+      "comment" : "Label for when mute alert will end"
+    },
     "Name" : {
-      "comment" : "Label for name row on add favorite food screen",
+      "comment" : "Label for name row on add favorite food screen\nPreset sorting option description for sorting by name",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -26841,6 +27571,9 @@
           }
         }
       }
+    },
+    "Navigating the Challenges of Mixed Exercise" : {
+
     },
     "Needs Attention" : {
       "comment" : "Sensor state description for the non-valid state",
@@ -27062,6 +27795,12 @@
         }
       }
     },
+    "Next, we’ll look at settings you can change and how they affect Omar’s insulin." : {
+
+    },
+    "Next, we’ll look at settings you can change and how they affect Paloma’s insulin." : {
+
+    },
     "Nightscout" : {
       "comment" : "The title of the Nightscout service",
       "extractionState" : "manual",
@@ -27194,8 +27933,15 @@
         }
       }
     },
+    "No" : {
+
+    },
+    "No Activity" : {
+
+    },
     "No alerts or alarms will sound while muted. Select how long you would you like to mute for." : {
       "comment" : "Message for mute alert duration selection action sheet",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -27336,6 +28082,12 @@
         }
       }
     },
+    "No change in glucose." : {
+
+    },
+    "no change needed" : {
+
+    },
     "No connected devices, or failure during device connection" : {
       "comment" : "The error message displayed for device connection errors.",
       "localizations" : {
@@ -27454,6 +28206,9 @@
           }
         }
       }
+    },
+    "No Delivery" : {
+
     },
     "No Maximum Bolus Configured" : {
       "comment" : "Alert title for a missing maximum bolus setting error",
@@ -27647,6 +28402,7 @@
     },
     "No Recent Glucose" : {
       "comment" : "The title of the cell indicating that there is no recent glucose",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -28144,6 +28900,9 @@
         }
       }
     },
+    "None in last 24 hours" : {
+
+    },
     "Notification Delivery" : {
       "comment" : "Notification Delivery Status text",
       "localizations" : {
@@ -28466,6 +29225,7 @@
     },
     "Notifications give you important %1$@ app information without requiring you to open the app." : {
       "comment" : "Alert Permissions descriptive text (1: app name)",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -28629,6 +29389,9 @@
           }
         }
       }
+    },
+    "Observed changes in glucose, subtracting changes modeled from insulin delivery, can be used to estimate carbohydrate absorption." : {
+      "comment" : "Section explaining carb effects chart"
     },
     "Off" : {
       "comment" : "Notification Setting Status is Off",
@@ -28809,7 +29572,7 @@
       }
     },
     "OK" : {
-      "comment" : "Alert acknowledgment OK button\nCritical Alert permissions disabled alert button\nDefault action for alert when alert acknowledgment fails\nNotifications permissions disabled alert button\nText for ok action on notification of upcoming TestFlight expiration\nText for ok action on notification of upcoming profile expiration\nThe title of the notification action to acknowledge a device alert",
+      "comment" : "Alert acknowledgment OK button\nCritical Alert permissions disabled alert button\nDefault action for alert when alert acknowledgment fails\nLabel for acknowledging the preset has been active for 24 hours\nNotifications permissions disabled alert button\nText for ok action on notification of upcoming TestFlight expiration\nText for ok action on notification of upcoming profile expiration\nThe title of the notification action to acknowledge a device alert",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -28938,6 +29701,25 @@
           }
         }
       }
+    },
+    "Omar asks himself, **do I expect I will need more or less insulin than usual?**" : {
+
+    },
+    "Omar Octopus wants to create a preset for some yard work he’ll be doing around the house." : {
+
+    },
+    "Omar sets his correction range a little higher, to %@-%@ %@. This tells %@ to step in sooner." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Omar sets his correction range a little higher, to %1$@-%2$@ %3$@. This tells %4$@ to step in sooner."
+          }
+        }
+      }
+    },
+    "Omar’s Current Therapy Settings" : {
+
     },
     "On" : {
       "comment" : "Notification Setting Status is On",
@@ -29070,6 +29852,21 @@
         }
       }
     },
+    "On until" : {
+
+    },
+    "on until %@" : {
+      "comment" : "The format for the description of a custom preset end date\nThe format for the description of a finite custom preset end date"
+    },
+    "on until carbs added" : {
+      "comment" : "The format for the description of a premeal preset end date"
+    },
+    "on until turned off" : {
+      "comment" : "The format for the description of an indefinite custom preset end date"
+    },
+    "Once saved, Omar’s new preset will display in his Presets lists." : {
+
+    },
     "Override Presets" : {
       "comment" : "The title text for the override presets",
       "extractionState" : "manual",
@@ -29196,6 +29993,27 @@
         }
       }
     },
+    "Paloma Porpoise sees her glucose is running higher than usual. She creates a preset to help manage her glucose while she is sick." : {
+
+    },
+    "Paloma wants %@ to know she needs more insulin than usual." : {
+
+    },
+    "Paloma’s Adjusted Therapy Settings" : {
+
+    },
+    "Paloma’s Current Therapy Settings" : {
+
+    },
+    "Pay attention to your insulin needs before and after exercising, playing sports, or doing unusually hard physical labor." : {
+
+    },
+    "Physical stress, like illness, can cause glucose to rise." : {
+
+    },
+    "Planning for physical activity can be tough. If you forget to set a preset ahead of time, consider these strategies:" : {
+
+    },
     "Possible Missed Meal" : {
       "comment" : "The notification title for a meal that was possibly not logged in Loop.",
       "localizations" : {
@@ -29273,8 +30091,12 @@
         }
       }
     },
+    "Power lifting" : {
+
+    },
     "Pre-Meal Targets" : {
       "comment" : "The label of the pre-meal mode toggle button",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -30220,6 +31042,36 @@
         }
       }
     },
+    "Preset Delivery" : {
+
+    },
+    "Preset Disabled" : {
+
+    },
+    "Preset Enabled" : {
+
+    },
+    "Preset Summary" : {
+
+    },
+    "Presets" : {
+      "comment" : "Presets screen title\nTitle text for button to Preset Settings"
+    },
+    "Presets can be used for a variety of situations. Explore the uses below to learn tips for these common scenarios." : {
+
+    },
+    "Presets for Daily Activity" : {
+
+    },
+    "Presets for Exercise" : {
+
+    },
+    "Presets for Illness" : {
+
+    },
+    "Presets Performance History" : {
+
+    },
     "Profile Expiration" : {
       "comment" : "Settings App Profile expiration view",
       "localizations" : {
@@ -30999,6 +31851,9 @@
         }
       }
     },
+    "Pump Inoperable. Automatic dosing is disabled." : {
+      "comment" : "The error message displayed for LoopError.pumpInoperable errors."
+    },
     "Pump Manager" : {
       "comment" : "Details for configuration error when pump manager is missing",
       "localizations" : {
@@ -31574,7 +32429,7 @@
       }
     },
     "Pump Suspended. Automatic dosing is disabled." : {
-      "comment" : "The error message displayed for pumpSuspended errors.",
+      "comment" : "The error message displayed for LoopError.pumpSuspended errors.",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -32040,6 +32895,12 @@
         }
       }
     },
+    "Recent Events" : {
+
+    },
+    "Recognizing how hard you feel you're working during exercise can help you understand its impact on your glucose levels." : {
+
+    },
     "Recommendation expired: %1$@ old" : {
       "comment" : "The error message when a recommendation has expired. (1: age of recommendation in minutes)",
       "localizations" : {
@@ -32386,6 +33247,9 @@
         }
       }
     },
+    "Recommended bolus adjusted due to preset" : {
+
+    },
     "Recommended Bolus Exceeds Maximum Bolus" : {
       "comment" : "Title for bolus screen warning when recommended bolus exceeds max bolus",
       "localizations" : {
@@ -32594,6 +33458,12 @@
           }
         }
       }
+    },
+    "Recommended Insulin Reduction" : {
+
+    },
+    "Recommended: " : {
+
     },
     "Remote Bolus Entry: %@ U" : {
       "comment" : "The notification title for a remote bolus. (1: Bolus amount)\nThe notification title for a remote failure. (1: Bolus amount)",
@@ -32932,6 +33802,9 @@
         }
       }
     },
+    "Resume insulin if you wish for the app to restart insulin delivery.\n\nIf you wish for the app to automate your insulin, go to Settings and toggle Closed Loop to on." : {
+      "comment" : "message when automation is off and insulin delivery is suspended"
+    },
     "Retrospective Correction" : {
       "comment" : "Title of the prediction input effect for retrospective correction",
       "localizations" : {
@@ -33181,6 +34054,15 @@
           }
         }
       }
+    },
+    "Review Presets Training" : {
+
+    },
+    "safety" : {
+
+    },
+    "Same Activity, Different Intensity" : {
+
     },
     "Save" : {
       "localizations" : {
@@ -33500,6 +34382,15 @@
         }
       }
     },
+    "Scheduled basal" : {
+
+    },
+    "Scheduled Basal" : {
+
+    },
+    "Scheduled reminder" : {
+
+    },
     "Select Lock Screen Display Options" : {
       "comment" : "A section header for the lock screen display options.",
       "isCommentAutoGenerated" : true,
@@ -33569,6 +34460,9 @@
           }
         }
       }
+    },
+    "Self-Initiated Events" : {
+
     },
     "Sensor Failed" : {
       "localizations" : {
@@ -33741,8 +34635,11 @@
         }
       }
     },
+    "Set the glucose value (or values) you want Tidepool Loop to aim for in adjusting your basal insulin." : {
+
+    },
     "Settings" : {
-      "comment" : "Label of button that navigation user to iOS Settings\nSettings screen title\nThe label of the settings button",
+      "comment" : "Label of button that navigation user to iOS Settings\nSettings screen title\nWord referring to the app's settings screen",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -33942,6 +34839,9 @@
           }
         }
       }
+    },
+    "She can do this by raising her **Overall Insulin** setting. This tells %@ to deliver more than her usual amount, making her insulin settings stronger." : {
+
     },
     "Shows last loop error" : {
       "comment" : "Loop Completion HUD accessibility hint",
@@ -34359,6 +35259,12 @@
         }
       }
     },
+    "Since he doesn’t plan to push himself too hard, he expects his insulin needs to stay the same, so he leaves the setting at 100%." : {
+
+    },
+    "Since Paloma doesn't know when she'll feel better, she sets hers to “Until I Turn Off”." : {
+
+    },
     "Site URL" : {
       "comment" : "The title of the nightscout site URL credential",
       "extractionState" : "manual",
@@ -34491,6 +35397,21 @@
         }
       }
     },
+    "Sitting or laying down, no change in breathing." : {
+
+    },
+    "Skip and complete training up to" : {
+
+    },
+    "Skip to Chapter" : {
+
+    },
+    "Smaller glucose drop" : {
+
+    },
+    "Soccer" : {
+
+    },
     "Software Update" : {
       "comment" : "Software update button link text",
       "localizations" : {
@@ -34567,6 +35488,27 @@
           }
         }
       }
+    },
+    "Sort" : {
+
+    },
+    "Sort By" : {
+
+    },
+    "Stable Glucose" : {
+
+    },
+    "Start Preset" : {
+      "comment" : "The title of the notification action to start a preset"
+    },
+    "Start Required Training" : {
+      "comment" : "CPreset training needed alert start training button"
+    },
+    "Start Scheduled Preset?" : {
+      "comment" : "Scheduled preset reminder title"
+    },
+    "Start Time" : {
+
     },
     "Start time is out of range: %@" : {
       "comment" : "Carb error description: invalid start time is out of range.",
@@ -34883,6 +35825,15 @@
         }
       }
     },
+    "Starting your exercise with high active insulin" : {
+
+    },
+    "Stay hydrated" : {
+
+    },
+    "Stress during a game, match or tournament causes your body to release hormones like adrenaline and cortisol, which may raise your glucose and cause %@ to increase insulin delivery." : {
+
+    },
     "Support" : {
       "comment" : "Section title for Support\nThe title of the support section in settings",
       "localizations" : {
@@ -35150,6 +36101,15 @@
           }
         }
       }
+    },
+    "Swimming" : {
+
+    },
+    "Tap “Apps”." : {
+      "comment" : "Focus modes step 3"
+    },
+    "Tap a provided Focus option — like Do Not Disturb, Personal, or Sleep." : {
+      "comment" : "Focus modes step 2"
     },
     "Tap here to set up a CGM" : {
       "comment" : "Descriptive text for button to add CGM device",
@@ -35438,6 +36398,7 @@
     },
     "Tap to Add" : {
       "comment" : "The subtitle of the cell displaying an action to add a manually measurement glucose value",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -35530,6 +36491,9 @@
           }
         }
       }
+    },
+    "Tap to listen" : {
+
     },
     "Tap to Resume" : {
       "comment" : "The subtitle of the cell displaying an action to resume insulin delivery\nThe subtitle of the cell displaying an action to resume onboarding",
@@ -35747,6 +36711,7 @@
     },
     "Tap to Unmute Alerts" : {
       "comment" : "Label for button to unmute all alerts",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -35798,8 +36763,12 @@
         }
       }
     },
+    "Tap to Unmute All App Sounds" : {
+      "comment" : "Label for button to unmute all app sounds"
+    },
     "Tap Unmute to resume sound for your alerts and alarms." : {
       "comment" : "The alert body for unmute alert confirmation",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -35844,6 +36813,24 @@
           }
         }
       }
+    },
+    "Tap your CGM or insulin pump status icons right away for more information and steps to resolve the issue." : {
+      "comment" : "message when automation is off and there is a bluetooth or pump issue\nmessage when automation is on and there is a bluetooth or pump issue"
+    },
+    "Tap your CGM status icon right away for more information and steps to resolve the issue.\n\nIn the meantime, your pump is still able to deliver insulin." : {
+      "comment" : "message when automation is off and CGM is inoperable\nmessage when automation is on and CGM is inoperable"
+    },
+    "Temp Basal" : {
+
+    },
+    "Temp Basal: " : {
+
+    },
+    "Temporarily silence all sounds from %1$@, including sounds for all critical alerts such as Urgent Low, Sensor Fail, Pump Expiration and others." : {
+
+    },
+    "Temporary Settings Adjustments" : {
+      "comment" : "Descriptive text for Preset Settings"
     },
     "TestFlight" : {
       "comment" : "Settings app TestFlight section",
@@ -36068,6 +37055,12 @@
           }
         }
       }
+    },
+    "That said, insulin needs vary from person to person. Some people find they don’t need to adjust their insulin at all for high-intensity exercise." : {
+
+    },
+    "The \"Overall Insulin\" percentage controls total insulin delivery by adjusting your:" : {
+
     },
     "The bolus amount entered is smaller than the minimum deliverable." : {
       "comment" : "Alert message for a bolus too small validation error",
@@ -36323,6 +37316,9 @@
           }
         }
       }
+    },
+    "The exercise may not be vigorous enough to produce these results" : {
+
     },
     "The legacy model used by Loop, allowing customization of action duration." : {
       "comment" : "Subtitle description of Walsh insulin model setting",
@@ -37027,6 +38023,12 @@
         }
       }
     },
+    "These patterns are based on published exercise consensus guidelines and are meant to be used as a starting point. What works for one person may not work for you." : {
+
+    },
+    "These recommendations should be used as a starting point. Checking your glucose during exercise will help you find the settings that work best for you." : {
+
+    },
     "This option only applies when Loop's Dosing Strategy is set to Automatic Bolus." : {
       "comment" : "String shown when glucose based partial application cannot be enabled because dosing strategy is not set to Automatic Bolus",
       "localizations" : {
@@ -37086,7 +38088,36 @@
         }
       }
     },
+    "This range is usually higher than your correction range when you are not exercising." : {
+
+    },
+    "This reflects a %@ %@ from the original %@ due to preset adjustments." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This reflects a %1$@ %2$@ from the original %3$@ due to preset adjustments."
+          }
+        }
+      }
+    },
+    "This required training will show you how to change your settings with confidence and create custom presets that fit your needs.\n\nThis training covers:" : {
+
+    },
+    "Tidepool Loop will actively adjust your insulin dosing in response to your glucose as often as every 5 minutes." : {
+      "comment" : "message when automation is on and the glucose value is fresh"
+    },
+    "Tidepool Loop will continue trying to restore automation, but check for potential communication issues with your CGM or insulin pump." : {
+      "comment" : "message when automation is on and pump is in signal loss\nmessage when automation is on and the glucose value is not fresh"
+    },
+    "Tidepool Loop will continue trying to restore automation, but check for potential communication issues with your CGM.\n\nIn the meantime, your pump is still able to deliver insulin." : {
+      "comment" : "message when automation is on and CGM is in signal loss"
+    },
+    "Time of Day" : {
+
+    },
     "Time Sensitive Alerts" : {
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -37220,6 +38251,45 @@
           }
         }
       }
+    },
+    "Time Sensitive Notifications are turned OFF" : {
+      "comment" : "Time sensitive notifications disabled banner title"
+    },
+    "Time Sensitive notifications are turned OFF. Go to the App to fix the issue now." : {
+      "comment" : "Time sensitive notifications disabled notification body"
+    },
+    "Time Sensitive Notifications are turned OFF. You may not get sound, visual or vibration alerts regarding critical safety information.\n\nTo fix the issue, tap ‘Settings’ and make sure Notifications are turned ON." : {
+      "comment" : "Notifications disabled alert body"
+    },
+    "Time Sensitive Notifications are turned OFF. You may not get sound, visual or vibration alerts regarding critical safety information.\n\nTo fix the issue, tap ‘Settings’ and make sure Time Sensitive Notifications are turned ON." : {
+      "comment" : "Time sensitive notifications disabled alert body"
+    },
+    "Tip" : {
+
+    },
+    "To be safe, %@ will remind her after 24 hours that the preset is still running." : {
+
+    },
+    "To create a new preset, you must complete the required training." : {
+      "comment" : "Preset training needed alert message"
+    },
+    "To help avoid lows, set a range **higher** than your typical correction range." : {
+
+    },
+    "To help avoid lows, set a range higher than your typical correction range." : {
+
+    },
+    "To help prevent lows, she will increase her correction range." : {
+
+    },
+    "To turn Silent mode on, flip the Ring/Silent switch toward the back of your iPhone." : {
+      "comment" : "Description text for temporarily silencing non-critical alerts"
+    },
+    "Total Insulin Delivery" : {
+
+    },
+    "Training Required for New Presets" : {
+      "comment" : "Preset training needed alert title"
     },
     "Transmitter Low Battery" : {
       "localizations" : {
@@ -37370,6 +38440,7 @@
     },
     "Turn off the volume on your iOS device or add %1$@ as an allowed app to each Focus Mode. Time Sensitive and Critical Alerts will still sound, but non-Critical Alerts will be silenced." : {
       "comment" : "Description text for temporarily silencing non-critical alerts (1: app name)",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -37510,8 +38581,24 @@
         }
       }
     },
+    "Turn On Critical Alerts" : {
+      "comment" : "Critical alerts disabled alert title\nCritical alerts disabled notification title"
+    },
+    "Turn On Critical Alerts and Time Sensitive Notifications" : {
+      "comment" : "Both Critical Alerts and Time Sensitive Notifications disabled alert title\nBoth Critical Alerts and Time Sensitive Notifications disabled notification title"
+    },
+    "Turn on the preset as soon as you remember and keep it on until the activity ends" : {
+
+    },
+    "Turn On Time Sensitive Notifications" : {
+      "comment" : "Time sensitive notifications disabled alert title"
+    },
+    "Turn On Time Sensitive Notifications " : {
+      "comment" : "Time sensitive notifications disabled alert title"
+    },
     "U" : {
       "comment" : "The short unit display string for international units of insulin",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -38075,7 +39162,7 @@
       }
     },
     "Unknown" : {
-      "comment" : "Event title displayed when StoredPumpEvent.title is not set\nThe default description to use when an entry has no dose description\nlabel for when the alert mute end time is unknown\nresult when time cannot be formatted",
+      "comment" : "Event title displayed when StoredPumpEvent.title is not set\nThe default description to use when an entry has no dose description\nresult when time cannot be formatted",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -38200,7 +39287,7 @@
       }
     },
     "Unknown Error: %1$@" : {
-      "comment" : "The error message displayed for unknown errors. (1: unknown error)",
+      "comment" : "The error message displayed for unknown LoopError errors. (1: unknown error)",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -38455,7 +39542,7 @@
       }
     },
     "Unmute" : {
-      "comment" : "The title of the action used to unmute alerts",
+      "comment" : "The title of the action used to unmute app sounds",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -38515,6 +39602,7 @@
     },
     "Unmute Alerts?" : {
       "comment" : "The alert title for unmute alert confirmation",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -38571,6 +39659,12 @@
           }
         }
       }
+    },
+    "Unmute All App Sounds?" : {
+      "comment" : "The alert title for unmute all app sounds confirmation"
+    },
+    "Unsupported" : {
+
     },
     "Unsupported Notification Service: %1$@" : {
       "comment" : "Error message when a service can't be found to handle a push notification. (1: Service Identifier)",
@@ -38633,6 +39727,7 @@
     },
     "until %@" : {
       "comment" : "The format for the description of a custom preset end date",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -38906,6 +40001,7 @@
     },
     "Until I turn off" : {
       "comment" : "The title of a target alert action specifying workout targets duration until it is turned off by the user",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -39178,6 +40274,7 @@
     },
     "Use the Mute Alerts feature. It allows you to temporarily silence all of your alerts and alarms via the %1$@ app, including Critical Alerts and Time Sensitive Alerts." : {
       "comment" : "Description text for temporarily silencing all sounds (1: app name)",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -39228,6 +40325,12 @@
           }
         }
       }
+    },
+    "Use the Mute All App Sounds feature. It allows you to temporarily silence (up to 4 hours) all of the sounds from %1$@, including Critical Alerts and Time Sensitive Notifications." : {
+      "comment" : "Description text for temporarily silencing all sounds (1: app name)"
+    },
+    "Use the slider to rate the effort on a scale of 0–10, with 10 being the hardest you’ve ever worked." : {
+
     },
     "Use Workout Glucose Targets" : {
       "comment" : "The title of the alert controller used to select a duration for workout targets",
@@ -39357,6 +40460,7 @@
     },
     "Use Workout Preset" : {
       "comment" : "The title of the alert controller used to select a duration for workout targets",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -39443,6 +40547,22 @@
           }
         }
       }
+    },
+    "Very Easy" : {
+
+    },
+    "Viewing entry %lld of %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Viewing entry %1$lld of %2$lld"
+          }
+        }
+      }
+    },
+    "Walking" : {
+
     },
     "Walsh" : {
       "comment" : "Title of insulin model setting",
@@ -39572,6 +40692,7 @@
     },
     "Warning! Safety notifications are turned OFF" : {
       "comment" : "Alert Permissions Need Attention alert title",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -39647,7 +40768,11 @@
         }
       }
     },
+    "What are examples of Critical Alerts and Time Sensitive Notifications?" : {
+
+    },
     "What are examples of Critical and Time Sensitive alerts?" : {
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -39920,6 +41045,9 @@
         }
       }
     },
+    "When deciding to adjust your overall insulin, **ask yourself, does my body need more or less than usual?**" : {
+
+    },
     "When enabled, Loop can notify you when it detects a meal that wasn't logged." : {
       "comment" : "Description of missed meal notifications.",
       "localizations" : {
@@ -40085,8 +41213,15 @@
         }
       }
     },
+    "When using a preset for activity, keep in mind four key factors that may impact your  glucose." : {
+
+    },
+    "When using high-insulin presets, **you may not need to start your preset 1 hour before**." : {
+
+    },
     "While mute alerts is on, all alerts from your %1$@ app including Critical and Time Sensitive alerts will temporarily display without sounds and will vibrate only." : {
       "comment" : "App sounds descriptive text (1: app name)",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -40139,6 +41274,7 @@
       }
     },
     "While mute alerts is on, your insulin pump and CGM hardware may still sound." : {
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -40196,6 +41332,9 @@
         }
       }
     },
+    "While sick, Paloma expects to eat less or not absorb everything she eats." : {
+
+    },
     "While trying to restart %1$@ an error occured.\n\n%2$@" : {
       "comment" : "Format string for message of reset loop alert. (1: App name) (2: error description)",
       "localizations" : {
@@ -40249,8 +41388,15 @@
         }
       }
     },
+    "While turned on, Paloma’s preset will display on the home screen and in her Presets list." : {
+
+    },
+    "With Preset On" : {
+
+    },
     "Workout Targets" : {
       "comment" : "The label of the workout mode toggle button",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -40370,6 +41516,7 @@
     },
     "Workout Temp Adjust has been turned on for more than 24 hours. Make sure you still want it enabled, or turn it off in the app." : {
       "comment" : "Workout override still on reminder alert body.",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -40459,6 +41606,7 @@
     },
     "Workout Temp Adjust Still On" : {
       "comment" : "Workout override still on reminder alert title",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -40545,6 +41693,9 @@
           }
         }
       }
+    },
+    "Would you like to start your %1$@ preset?\n\nThis will end any active preset." : {
+      "comment" : "Scheduled preset reminder alert body. (1: preset name)"
     },
     "Yes" : {
       "comment" : "The title of the action used when confirming entered amount of carbohydrates.",
@@ -40635,8 +41786,30 @@
         }
       }
     },
+    "Yes, Start Now" : {
+      "comment" : "Label for do yes, start preset now action on scheduled preset reminder alert"
+    },
+    "Yes, turn OFF" : {
+
+    },
+    "You can choose how long your preset lasts." : {
+
+    },
+    "You can now:" : {
+
+    },
+    "You can use presets for a variety of situations. Explore the uses below to learn tips for these common scenarios." : {
+
+    },
+    "You do not have to set a new correction range for each preset, but before deciding to adjust your correction range, " : {
+
+    },
+    "You don’t need to change the correction range for every preset. But before you decide to change it, ask yourself: *Am I more likely to go high or low during this time?*" : {
+
+    },
     "You may not get sound, visual or vibration alerts regarding critical safety information.\n\nTo fix the issue, tap ‘Settings’ and make sure Notifications, Critical Alerts and Time Sensitive Notifications are turned ON." : {
       "comment" : "Format for Notifications permissions disabled alert body. (1: app name)",
+      "extractionState" : "stale",
       "localizations" : {
         "da" : {
           "stringUnit" : {
@@ -40718,6 +41891,21 @@
         }
       }
     },
+    "You may review the training materials again at any time via the Learning Hub, located at the bottom of the Preset screen." : {
+
+    },
+    "you need **less** insulin than usual" : {
+
+    },
+    "you need **more** insulin than usual" : {
+
+    },
+    "You’ll have to restart this section and some features will be disabled until you complete the training." : {
+
+    },
+    "You’ll need to ensure these settings for each Focus Mode you have enabled or plan to enable." : {
+      "comment" : "iOS focus modes callout title"
+    },
     "Your %1$@’s time has been changed. %2$@ needs accurate time records to make predictions about your glucose and adjust your insulin accordingly.\n\nCheck in your %1$@ Settings (General / Date & Time) and verify that 'Set Automatically' is turned ON. Failure to resolve could lead to serious under-delivery or over-delivery of insulin." : {
       "comment" : "Time change alert body. (1: app name)",
       "localizations" : {
@@ -40794,6 +41982,9 @@
           }
         }
       }
+    },
+    "Your CGM sensor is warming up.\n\nIn the meantime, your pump is still able to deliver insulin.\n\nIf you wish for the app to automate your insulin, go to Settings and toggle Closed Loop to on." : {
+      "comment" : "message when automation is off and CGM is in warmup"
     },
     "Your glucose is below %1$@. Are you sure you want to bolus?" : {
       "comment" : "Format string for simple bolus screen warning when glucose is below glucose warning limit.",
@@ -41234,6 +42425,9 @@
         }
       }
     },
+    "Your glucose is rapidly rising. Check that any carbs you've eaten were logged. If you logged carbs, check that the time you entered lines up with when you started eating." : {
+      "comment" : "Warning to ensure the carb entry is accurate"
+    },
     "Your maximum bolus amount is %1$@." : {
       "comment" : "Warning for simple bolus when max bolus is exceeded. (1: maximum bolus)",
       "localizations" : {
@@ -41316,6 +42510,12 @@
           }
         }
       }
+    },
+    "Your pump and CGM will continue operating but the app will not make automatic adjustments. You will receive your scheduled basal rate(s)." : {
+      "comment" : "Closed loop alert message"
+    },
+    "Your pump and CGM will continue to operate, but the app will not adjust insulin dosing automatically.\n\nIf you wish for the app to automate your insulin, go to Settings and toggle Closed Loop to on." : {
+      "comment" : "message when automation is off, glucose value is fresh and devices are good"
     },
     "Your pump data is stale. %1$@ cannot recommend a bolus amount." : {
       "comment" : "Caption for bolus screen notice when pump data is missing or stale",
