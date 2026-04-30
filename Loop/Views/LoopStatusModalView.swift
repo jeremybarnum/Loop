@@ -34,25 +34,23 @@ struct LoopStatusModalView: View {
     
     var body: some View {
         VStack {
-            TimelineView(.animation) { _ in
-                closeButton
-                    .padding(5)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                
-                LoopCircleView(closedLoop: viewModel.loopIconClosed, freshness: viewModel.freshness, deviceIssue: deviceIssue)
-                    .environment(\.loopStatusColorPalette, loopStatusColors)
-                    .padding(.bottom)
-                
-                if viewModel.loopIconClosed,
-                   let lastLoopCompletedFormattedTime = viewModel.lastLoopCompletedFormattedTime
-                {
-                    lastLoopCompleted(lastLoopCompletedString: lastLoopCompletedFormattedTime)
-                }
-                
-                automationDetails
-                    .padding([.top, .horizontal])
-                    .padding(.bottom, 10)
+            closeButton
+                .padding(5)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+
+            LoopCircleView(closedLoop: viewModel.loopIconClosed, freshness: viewModel.freshness, deviceIssue: deviceIssue)
+                .environment(\.loopStatusColorPalette, loopStatusColors)
+                .padding(.bottom)
+
+            if viewModel.loopIconClosed,
+               let lastLoopCompletedFormattedTime = viewModel.lastLoopCompletedFormattedTime
+            {
+                lastLoopCompleted(lastLoopCompletedString: lastLoopCompletedFormattedTime)
             }
+
+            automationDetails
+                .padding([.top, .horizontal])
+                .padding(.bottom, 10)
         }
         .padding(10)
         .background(Color(UIColor.systemGroupedBackground))
@@ -212,21 +210,14 @@ class LoopStatusModalViewModel {
     }()
     
     var freshness: LoopCompletionFreshness {
-        guard !isPumpInSignalLoss, !isCGMInSignalLoss else {
-            return .stale
-        }
-        
         guard loopIconClosed else {
             return .fresh
         }
-        
+
         return LoopCompletionFreshness(age: ago)
     }
     
-    var ago: TimeInterval? {
-        guard let lastLoopCompleted else { return nil }
-        return abs(min(0, lastLoopCompleted.timeIntervalSinceNow))
-    }
+    var ago: TimeInterval?
     
     var includeDateTimeStamp: Bool { // only include if last loop was before today
         guard let lastLoopCompleted else { return false }
