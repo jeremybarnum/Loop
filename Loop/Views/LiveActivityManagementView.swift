@@ -40,9 +40,13 @@ struct LiveActivityManagementView: View {
                                 .foregroundStyle(viewModel.isEditingMode ? .blue : .primary)
                         },
                         expandedContent: {
-                            ResizeablePicker(selection: self.$viewModel.mode.animation(),
-                                             data: LiveActivityMode.all,
-                                             formatter: { $0.name() })
+                            Picker(selection: $viewModel.mode.animation(), label: EmptyView()) {
+                                ForEach(LiveActivityMode.all, id: \.self) { mode in
+                                    Text(mode.name()).tag(mode)
+                                }
+                            }
+                            .pickerStyle(.wheel)
+                            .labelsHidden()
                         }
                     )
                     .onChange(of: viewModel.mode) { _ in
