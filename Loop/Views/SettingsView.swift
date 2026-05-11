@@ -317,6 +317,19 @@ extension SettingsView {
                 )
                 .accessibilityIdentifier("settingsViewAlertManagement")
             }
+            NavigationLink(destination: LiveActivityManagementView()) {
+                LargeButton(
+                    action: {},
+                    includeArrow: false,
+                    imageView: Image(systemName: "rectangle.on.rectangle")
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 30),
+                    label: NSLocalizedString("Live Activity", comment: "Live Activity settings button text"),
+                    descriptiveText: NSLocalizedString("Lock Screen, Dynamic Island, and CarPlay display", comment: "Live Activity settings descriptive text")
+                )
+                .accessibilityIdentifier("settingsViewLiveActivity")
+            }
         }
     }
 
