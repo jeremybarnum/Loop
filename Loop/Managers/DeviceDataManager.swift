@@ -166,10 +166,11 @@ final class DeviceDataManager {
     var doseEnactor = DoseEnactor()
     
     // MARK: Stores
+    let carbStore: CarbStore
+    let doseStore: DoseStore
+    let glucoseStore: GlucoseStore
+    
     private let healthStore: HKHealthStore
-    private let carbStore: CarbStore
-    private let doseStore: DoseStore
-    private let glucoseStore: GlucoseStore
     private let cacheStore: PersistenceController
     private let cgmEventStore: CgmEventStore
 
@@ -1217,6 +1218,30 @@ extension DeviceDataManager {
         }
 
         try await glucoseStore.purgeAllGlucose(for: testingCGMManager.testingDevice)
+    }
+    
+    func deleteTestingCarbData(before: Date = Date()) async throws {
+        guard let testingCGMManager = cgmManager as? TestingCGMManager,
+              let testingPumpManager = pumpManager as? TestingPumpManager
+        else {
+            return
+        }
+        
+        try await carbStore.deleteAllCarbEntries()
+    }
+    
+    func deleteTestingAlertData() async throws {
+        guard let testingCGMManager = cgmManager as? TestingCGMManager,
+              let testingPumpManager = pumpManager as? TestingPumpManager
+        else {
+            return
+        }
+        
+        await withCheckedContinuation { [weak alertStore = alertManager.alertStore] continuation in
+            alertStore?.purge(before: Date(), completion: { _ in
+                continuation.resume()
+            })
+        }
     }
 }
 

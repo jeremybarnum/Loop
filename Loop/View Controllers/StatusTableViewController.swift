@@ -1544,17 +1544,24 @@ final class StatusTableViewController: LoopChartsTableViewController {
     
     func presentPresets() {
         let hostingController = DismissibleHostingController(
-            rootView: PresetsView(roundBasalRate: deviceManager.roundBasalRate)
-                .onAppear { self.isShowingPresets = true }
-                .onDisappear { self.isShowingPresets = false }
-                .environmentObject(deviceManager.displayGlucosePreference)
-                .environment(\.appName, Bundle.main.bundleDisplayName)
-                .environment(\.isInvestigationalDevice, FeatureFlags.isInvestigationalDevice)
-                .environment(\.colorPalette, .default)
-                .environment(\.loopStatusColorPalette, .loopStatus)
-                .environment(\.temporaryPresetsManager, temporaryPresetsManager)
-                .environment(\.settingsManager, settingsManager),
-            isModalInPresentation: false)
+            rootView: PresetsView(
+                roundBasalRate: deviceManager.roundBasalRate,
+                carbStore: deviceManager.carbStore,
+                doseStore: deviceManager.doseStore,
+                glucoseStore: deviceManager.glucoseStore,
+                trainingContent: supportManager.availableSupports.flatMap({ $0.trainingMedia(for: .presets) }),
+                automationHistory: { [weak self] in self?.loopManager.automationHistory ?? [] }
+            )
+            .onAppear { self.isShowingPresets = true }
+            .onDisappear { self.isShowingPresets = false }
+            .environmentObject(deviceManager.displayGlucosePreference)
+            .environment(\.appName, Bundle.main.bundleDisplayName)
+            .environment(\.isInvestigationalDevice, FeatureFlags.isInvestigationalDevice)
+            .environment(\.colorPalette, .default)
+            .environment(\.loopStatusColorPalette, .loopStatus)
+            .environment(\.temporaryPresetsManager, temporaryPresetsManager)
+            .environment(\.settingsManager, settingsManager),
+        isModalInPresentation: false)
         present(hostingController, animated: true)
     }
     
@@ -1569,6 +1576,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
                 .environment(\.appName, Bundle.main.bundleDisplayName)
                 .environment(\.isInvestigationalDevice, FeatureFlags.isInvestigationalDevice)
                 .environment(\.loopStatusColorPalette, .loopStatus)
+                .environment(\.colorPalette, .default)
                 .environment(\.settingsManager, settingsManager)
                 .environment(\.temporaryPresetsManager, temporaryPresetsManager)
                 .environment(\.dosingStrategySelectionEnabled, FeatureFlags.dosingStrategySelectionEnabled),
@@ -1640,6 +1648,9 @@ final class StatusTableViewController: LoopChartsTableViewController {
             hudView.loopCompletionHUD.lastLoopCompleted = loopManager.lastLoopCompleted
             hudView.loopCompletionHUD.mostRecentGlucoseDataDate = loopManager.mostRecentGlucoseDataDate
             hudView.loopCompletionHUD.mostRecentPumpDataDate = loopManager.mostRecentPumpDataDate
+            hudView.loopCompletionHUD.onAgoUpdate = { [weak self] ago in
+                self?.loopCompletionModalViewModel.ago = ago
+            }
 
             hudView.cgmStatusHUD.stateColors = .cgmStatus
             hudView.cgmStatusHUD.tintColor = .label
@@ -2139,6 +2150,10 @@ extension StatusTableViewController: SettingsViewModelDelegate {
     
     var closedLoopDescriptiveText: String? {
         return deviceManager.closedLoopDisallowedLocalizedDescription
+    }
+    
+    var automationHistory: [AutomationHistoryEntry] {
+        loopManager.automationHistory
     }
 
     func dosingEnabledChanged(_ value: Bool) {

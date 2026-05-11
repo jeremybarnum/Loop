@@ -55,6 +55,7 @@ public protocol SettingsViewModelDelegate: AnyObject {
     func didTapIssueReport()
     var closedLoopDescriptiveText: String? { get }
     var automaticDosingEnabled: Bool { get set }
+    var automationHistory: [AutomationHistoryEntry] { get }
 }
 
 @Observable
@@ -113,7 +114,7 @@ class SettingsViewModel {
        }
     }
     
-    private var deviceManager: DeviceDataManager?
+    private(set) var deviceManager: DeviceDataManager?
     
     @MainActor
     var deviceIssue: Bool {
@@ -130,18 +131,13 @@ class SettingsViewModel {
     }
     
     var loopStatusCircleFreshness: LoopCompletionFreshness {
-        var age: TimeInterval
-        
         if automaticDosingEnabled {
             let lastLoopCompletion = lastLoopCompletion ?? Date().addingTimeInterval(.minutes(16))
-            age = abs(min(0, lastLoopCompletion.timeIntervalSinceNow))
+            let age = abs(min(0, lastLoopCompletion.timeIntervalSinceNow))
+            return LoopCompletionFreshness(age: age)
         } else {
-            let mostRecentGlucoseDataDate = mostRecentGlucoseDataDate ?? Date().addingTimeInterval(.minutes(16))
-            let mostRecentPumpDataDate = mostRecentPumpDataDate ?? Date().addingTimeInterval(.minutes(16))
-            age = max(abs(min(0, mostRecentPumpDataDate.timeIntervalSinceNow)), abs(min(0, mostRecentGlucoseDataDate.timeIntervalSinceNow)))
+            return .fresh
         }
-        
-        return LoopCompletionFreshness(age: age)
     }
     
     @ObservationIgnored lazy private var cancellables = Set<AnyCancellable>()
@@ -197,6 +193,18 @@ class SettingsViewModel {
         mostRecentPumpDataDate
             .assign(to: \.mostRecentPumpDataDate, on: self)
             .store(in: &cancellables)
+    }
+
+    @MainActor func deleteAllTestingData() {
+        Task {
+            try? await deviceManager?.deleteTestingPumpData()
+
+            try? await deviceManager?.deleteTestingCGMData()
+
+            try? await deviceManager?.deleteTestingCarbData()
+
+            try? await deviceManager?.deleteTestingAlertData()
+        }
     }
 }
 

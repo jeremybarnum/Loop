@@ -33,6 +33,7 @@ struct SettingsView: View {
             
             case deleteCGMData
             case deletePumpData
+            case deleteAllTestingData
         }
         
         enum ActionSheet: String, Identifiable {
@@ -96,7 +97,7 @@ struct SettingsView: View {
                         servicesSection
                     }
 
-                    ForEach(pluginMenuItems) { item in
+                    ForEach(pluginMenuItems.filter({ $0.section != .support })) { item in
                         item.view
                     }
 
@@ -135,13 +136,27 @@ struct SettingsView: View {
                     return makeDeleteAlert(for: self.viewModel.cgmManagerSettingsViewModel)
                 case .deletePumpData:
                     return makeDeleteAlert(for: self.viewModel.pumpManagerSettingsViewModel)
+                case .deleteAllTestingData:
+                    return SwiftUI.Alert(title: Text("Delete All Testing Data"),
+                                         message: Text("Are you sure you want to delete all your testing Data?\n(This action is not reversible)"),
+                                         primaryButton: .cancel(),
+                                         secondaryButton: .destructive(Text("Delete"), action: viewModel.deleteAllTestingData))
                 }
             }
             .sheet(item: $sheet) { sheet in
                 Group {
                     switch sheet {
                     case .presets:
-                        PresetsView(roundBasalRate: viewModel.deliveryDelegate?.roundBasalRate)
+                        if let carbStore = viewModel.deviceManager?.carbStore, let doseStore = viewModel.deviceManager?.doseStore, let glucoseStore = viewModel.deviceManager?.glucoseStore {
+                            PresetsView(
+                                roundBasalRate: viewModel.deliveryDelegate?.roundBasalRate,
+                                carbStore: carbStore,
+                                doseStore: doseStore,
+                                glucoseStore: glucoseStore,
+                                trainingContent: viewModel.availableSupports.flatMap({ $0.trainingMedia(for: .presets) }),
+                                automationHistory: { viewModel.delegate?.automationHistory ?? [] }
+                            )
+                        }
                     case .favoriteFoods:
                         FavoriteFoodsView(insightsDelegate: viewModel.favoriteFoodInsightsDelegate)
                     }
@@ -250,9 +265,11 @@ extension SettingsView {
     private var softwareUpdateSection: some View {
         Section(footer: Text(viewModel.versionUpdateViewModel.footer(appName: appName))) {
             NavigationLink(destination: viewModel.versionUpdateViewModel.softwareUpdateView) {
-                Text(NSLocalizedString("Software Update", comment: "Software update button link text"))
-                Spacer()
-                viewModel.versionUpdateViewModel.icon
+                HStack {
+                    Text(NSLocalizedString("Software Update", comment: "Software update button link text"))
+                    Spacer()
+                    viewModel.versionUpdateViewModel.icon
+                }
             }
         }
     }
@@ -483,6 +500,17 @@ extension SettingsView {
                     HStack {
                         Spacer()
                         Text("Delete Testing CGM Data").accentColor(.destructive)
+                        Spacer()
+                    }
+                }
+            }
+            if viewModel.cgmManagerSettingsViewModel.isTestingDevice,
+               viewModel.pumpManagerSettingsViewModel.isTestingDevice
+            {
+                Button(action: { alert = .deleteAllTestingData }) {
+                    HStack {
+                        Spacer()
+                        Text("Delete All Testing Data").accentColor(.destructive)
                         Spacer()
                     }
                 }
