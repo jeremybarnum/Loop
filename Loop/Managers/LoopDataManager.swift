@@ -548,7 +548,7 @@ final class LoopDataManager: ObservableObject {
         self.notify(forChange: .forecast)
     }
 
-    func updateDisplayState() async {
+    func updateDisplayState(forceStoreRemoteRecommendation: Bool = false) async {
 
         var newState = AlgorithmDisplayState()
         do {
@@ -585,7 +585,7 @@ final class LoopDataManager: ObservableObject {
             activeInsulin: displayState.activeInsulin
         )
 
-        await updateRemoteRecommendation()
+        await updateRemoteRecommendation(force: forceStoreRemoteRecommendation)
     }
 
     private nonisolated func runAlgorithm(input: StoredDataAlgorithmInput) async -> AlgorithmOutput<StoredCarbEntry> {
@@ -618,6 +618,10 @@ final class LoopDataManager: ObservableObject {
         }
 
         await dosingDecisionStore.storeDosingDecision(dosingDecision)
+
+        // DIY: refresh post-dose forecast and persist an "updateRemoteRecommendation"
+        // decision so Nightscout sees the post-cancel state.
+        await updateDisplayState(forceStoreRemoteRecommendation: true)
     }
 
     func loop() async {
@@ -747,6 +751,12 @@ final class LoopDataManager: ObservableObject {
             analyticsServicesManager?.loopDidError(error: loopError)
             NotificationCenter.default.post(name: .LoopCycleCompleted, object: self)
         }
+
+        // DIY: refresh post-dose forecast and persist an "updateRemoteRecommendation"
+        // decision (Nightscout's Loop pill + forecast source — paired with the just-stored
+        // "loop" decision by NightscoutService). Runs for both success and error paths.
+        await updateDisplayState(forceStoreRemoteRecommendation: true)
+
         logger.default("Loop ended")
     }
 
@@ -815,13 +825,18 @@ final class LoopDataManager: ObservableObject {
         displayState.output?.dosesRelativeToBasal ?? []
     }
 
-    func updateRemoteRecommendation() async {
+    func updateRemoteRecommendation(force: Bool = false) async {
         if lastManualBolusRecommendation == nil {
             lastManualBolusRecommendation = displayState.output?.recommendation?.manual
         }
 
-        guard lastManualBolusRecommendation != displayState.output?.recommendation?.manual else {
-            // no change
+        let recommendationChanged = lastManualBolusRecommendation != displayState.output?.recommendation?.manual
+
+        // DIY: post-dose "updateRemoteRecommendation" decisions are also Nightscout's
+        // Loop pill + forecast source (NightscoutService pairs them with the cached "loop"
+        // decision). Force-store after every Loop cycle and temp basal cancel so NS stays
+        // current even when the manual bolus recommendation hasn't changed.
+        guard force || recommendationChanged else {
             return
         }
 
