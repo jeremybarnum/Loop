@@ -52,10 +52,33 @@ public struct GlucoseActivityAttributes: ActivityAttributes {
 
 public struct Preset: Codable, Hashable {
     public let title: String
+    /// SF Symbol name to render alongside the title. nil means render the title alone.
+    /// Emoji symbols are folded into `title` directly (they render as plain text); only
+    /// `.systemImage` symbols use this field.
+    public let iconSystemSymbolName: String?
     public let startDate: Date
     public let endDate: Date
     public let minValue: Double
     public let maxValue: Double
+
+    public init(title: String, iconSystemSymbolName: String? = nil, startDate: Date, endDate: Date, minValue: Double, maxValue: Double) {
+        self.title = title
+        self.iconSystemSymbolName = iconSystemSymbolName
+        self.startDate = startDate
+        self.endDate = endDate
+        self.minValue = minValue
+        self.maxValue = maxValue
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.title = try container.decode(String.self, forKey: .title)
+        self.iconSystemSymbolName = try container.decodeIfPresent(String.self, forKey: .iconSystemSymbolName)
+        self.startDate = try container.decode(Date.self, forKey: .startDate)
+        self.endDate = try container.decode(Date.self, forKey: .endDate)
+        self.minValue = try container.decode(Double.self, forKey: .minValue)
+        self.maxValue = try container.decode(Double.self, forKey: .maxValue)
+    }
 }
 
 public struct GlucoseRangeValue: Identifiable, Codable, Hashable {

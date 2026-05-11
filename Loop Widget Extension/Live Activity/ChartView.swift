@@ -171,10 +171,16 @@ struct ChartView: View {
             }
             
             if let preset = self.preset, preset.endDate > Date.now {
-                Text(preset.title)
-                    .font(.footnote)
-                    .padding(.trailing, 5)
-                    .padding(.top, 2)
+                Group {
+                    if let symbolName = preset.iconSystemSymbolName {
+                        Text(Image(systemName: symbolName)) + Text(" ") + Text(preset.title)
+                    } else {
+                        Text(preset.title)
+                    }
+                }
+                .font(.footnote)
+                .padding(.trailing, 5)
+                .padding(.top, 2)
             }
         }
     }

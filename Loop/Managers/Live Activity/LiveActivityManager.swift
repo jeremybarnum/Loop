@@ -162,8 +162,10 @@ class LiveActivityManager : LiveActivityManagerProxy {
                 // presetEnd < presetStart and drawing a RectangleMark with those backwards dates
                 // forces SwiftUI Charts to expand the x-axis far into the past.
                 if presetStart <= presetEnd {
+                    let (title, iconSymbol) = override.liveActivityTitleAndSymbol()
                     presetContext = Preset(
-                        title: override.getTitle(),
+                        title: title,
+                        iconSystemSymbolName: iconSymbol,
                         startDate: presetStart,
                         endDate: presetEnd,
                         minValue: override.settings.targetRange?.lowerBound.doubleValue(for: unit) ?? 0,
@@ -559,16 +561,29 @@ class LiveActivityManager : LiveActivityManagerProxy {
 }
 
 extension TemporaryScheduleOverride {
-    func getTitle() -> String {
-        switch (self.context) {
+    /// Returns the Live Activity preset display: a plain-text title (with emoji folded in)
+    /// and, when the preset uses an SF Symbol, the symbol name to render via Image(systemName:).
+    func liveActivityTitleAndSymbol() -> (title: String, systemSymbolName: String?) {
+        switch context {
         case .preset(let preset):
-            return "\(preset.symbol) \(preset.name)"
+            guard let symbol = preset.symbol else {
+                return (preset.name, nil)
+            }
+            switch symbol.symbolType {
+            case .emoji:
+                return ("\(symbol.value) \(preset.name)", nil)
+            case .systemImage:
+                return (preset.name, symbol.value)
+            case .image:
+                // Asset-image symbols can't be loaded from the widget bundle; render name only.
+                return (preset.name, nil)
+            }
         case .custom:
-            return NSLocalizedString("Custom preset", comment: "The title of the cell indicating a generic custom preset is enabled")
+            return (NSLocalizedString("Custom preset", comment: "The title of the cell indicating a generic custom preset is enabled"), nil)
         case .preMeal:
-            return NSLocalizedString(" Pre-meal Preset", comment: "Status row title for premeal override enabled (leading space is to separate from symbol)")
+            return (NSLocalizedString("Pre-meal Preset", comment: "Status row title for premeal override enabled"), "fork.knife")
         @unknown default:
-            return ""
+            return ("", nil)
         }
     }
 }
