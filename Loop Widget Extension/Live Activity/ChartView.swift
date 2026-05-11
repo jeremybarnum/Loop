@@ -98,8 +98,7 @@ struct ChartView: View {
     }
     
     var body: some View {
-        ZStack(alignment: Alignment(horizontal: .leading, vertical: .top)){
-            Chart {
+        Chart {
                 if let preset = self.preset, (preset.minValue > 0 || preset.maxValue > 0), predicatedData.count > 0, preset.endDate > Date.now.addingTimeInterval(.hours(-6)) {
                     let (presetMin, presetMax) = adjustedRange(min: preset.minValue, max: preset.maxValue)
                     RectangleMark(
@@ -146,9 +145,24 @@ struct ChartView: View {
                 "Low": Self.colorBelowRange,
                 "Default": Color("glucose")
             ])
-            .chartPlotStyle { plotContent in
-                plotContent.background(.cyan.opacity(0.15))
-            }
+        .chartPlotStyle { plotContent in
+            plotContent
+                .background(.cyan.opacity(0.15))
+                .overlay(alignment: .topTrailing) {
+                    if let preset = self.preset, preset.endDate > Date.now {
+                        Group {
+                            if let symbolName = preset.iconSystemSymbolName {
+                                Text(Image(systemName: symbolName)) + Text(" ") + Text(preset.title)
+                            } else {
+                                Text(preset.title)
+                            }
+                        }
+                        .font(.footnote)
+                        .padding(.trailing, 4)
+                        .padding(.top, 2)
+                    }
+                }
+        }
             .chartLegend(.hidden)
             .chartYScale(domain: [yAxisMarks.first ?? 0, yAxisMarks.last ?? 0])
             .chartYAxis {
@@ -161,26 +175,12 @@ struct ChartView: View {
                         .foregroundStyle(Color.primary)
                 }
             }
-            .chartXAxis {
-                AxisMarks(position: .automatic, values: .stride(by: .hour)) { _ in
-                    AxisValueLabel(format: .dateTime.hour(.twoDigits(amPM: .narrow)), anchor: .top)
-                        .foregroundStyle(Color.primary)
-                    AxisGridLine(stroke: .init(lineWidth: 0.1, dash: [2, 3]))
-                        .foregroundStyle(Color.primary)
-                }
-            }
-            
-            if let preset = self.preset, preset.endDate > Date.now {
-                Group {
-                    if let symbolName = preset.iconSystemSymbolName {
-                        Text(Image(systemName: symbolName)) + Text(" ") + Text(preset.title)
-                    } else {
-                        Text(preset.title)
-                    }
-                }
-                .font(.footnote)
-                .padding(.leading, 5)
-                .padding(.top, 2)
+        .chartXAxis {
+            AxisMarks(position: .automatic, values: .stride(by: .hour)) { _ in
+                AxisValueLabel(format: .dateTime.hour(.twoDigits(amPM: .narrow)), anchor: .top)
+                    .foregroundStyle(Color.primary)
+                AxisGridLine(stroke: .init(lineWidth: 0.1, dash: [2, 3]))
+                    .foregroundStyle(Color.primary)
             }
         }
     }
