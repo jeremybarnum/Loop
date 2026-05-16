@@ -86,7 +86,7 @@ extension LoopDataManager {
         )
 
         let carbEffects = carbStatus.dynamicGlucoseEffects(
-            from: end,
+            from: start,
             to: end.addingTimeInterval(InsulinMath.defaultInsulinActivityDuration),
             carbRatios: carbRatioWithOverrides,
             insulinSensitivities: sensitivityWithOverrides,
