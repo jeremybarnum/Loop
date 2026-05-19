@@ -11,16 +11,24 @@ import LoopKit
 import SwiftUI
 
 struct InsulinDeliveryEventDetailsView: View {
-    
+
+    @Environment(\.dismiss) private var dismiss
+
     let basalUnitsFormatter = QuantityFormatter(for: .internationalUnitsPerHour)
     let bolusUnitsFormatter = QuantityFormatter(for: .internationalUnit)
     let durationFormatter = DateComponentsFormatter()
-    
+
     let pumpEventType: InsulinDeliveryLogEvent.EventType.PumpEventType
     let doseEntry: DoseEntry
     let onTapGesture: (DoseEntry) -> Void
+    let onDelete: ((DoseEntry) async -> Void)?
+
+    @State private var showingDeleteConfirmation = false
     
     var doseTypeValue: String {
+        if case .bolus(.external, _, _) = pumpEventType {
+            return NSLocalizedString("External Insulin", comment: "Dose type label for a manually-entered bolus")
+        }
         switch pumpEventType {
         case .basal(let basalEventType, _):
             switch basalEventType {
@@ -144,11 +152,38 @@ struct InsulinDeliveryEventDetailsView: View {
             } header: {
                 Text("Delivery Details")
             }
-            .navigationTitle(Text("Insulin Event"))
             .contentShape(Rectangle())
             .onTapGesture {
                 onTapGesture(doseEntry)
             }
+
+            if doseEntry.manuallyEntered, let onDelete {
+                Section {
+                    Button(role: .destructive) {
+                        showingDeleteConfirmation = true
+                    } label: {
+                        HStack {
+                            Spacer()
+                            Text("Delete External Insulin")
+                            Spacer()
+                        }
+                    }
+                }
+                .confirmationDialog(
+                    Text("Delete this manually-entered insulin entry?"),
+                    isPresented: $showingDeleteConfirmation,
+                    titleVisibility: .visible
+                ) {
+                    Button("Delete", role: .destructive) {
+                        Task {
+                            await onDelete(doseEntry)
+                            dismiss()
+                        }
+                    }
+                    Button("Cancel", role: .cancel) { }
+                }
+            }
         }
+        .navigationTitle(Text("Insulin Event"))
     }
 }

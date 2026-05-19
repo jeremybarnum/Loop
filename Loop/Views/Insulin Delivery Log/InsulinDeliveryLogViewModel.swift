@@ -78,7 +78,8 @@ class InsulinDeliveryLogViewModel {
                             .pumpEvent(.basal(.manualTempBasal, rate: _), _),
                             .pumpEvent(.insulin, _),
                             .pumpEvent(.bolus(.correction, _, _), _),
-                            .pumpEvent(.bolus(.meal, _, _), _):
+                            .pumpEvent(.bolus(.meal, _, _), _),
+                            .pumpEvent(.bolus(.external, _, _), _):
                         return true
                     default:
                         return false
@@ -151,6 +152,17 @@ class InsulinDeliveryLogViewModel {
         
         Task {
             await fetchData()
+        }
+    }
+
+    func deleteDose(_ doseEntry: DoseEntry) async {
+        await withCheckedContinuation { continuation in
+            doseStore.deleteDose(doseEntry) { error in
+                if let error {
+                    self.log.error("Error deleting dose: %{public}@", String(describing: error))
+                }
+                continuation.resume()
+            }
         }
     }
 
@@ -397,7 +409,28 @@ class InsulinDeliveryLogViewModel {
     }
     
     private func handleBolusEvents(dose: DoseEntry, decision: LightDosingDecision?, events: inout [InsulinDeliveryLogEvent]) {
-        if dose.automatic == true {
+        if dose.manuallyEntered {
+            events.append(
+                InsulinDeliveryLogEvent(
+                    id: dose.syncIdentifier ?? UUID().uuidString,
+                    type: .pumpEvent(
+                        .bolus(
+                            .external,
+                            programmedAmount: LoopQuantity(
+                                unit: .internationalUnit,
+                                doubleValue: dose.programmedUnits
+                            ),
+                            deliveryAmount: LoopQuantity(
+                                unit: .internationalUnit,
+                                doubleValue: dose.deliveredUnits ?? dose.programmedUnits
+                            )
+                        ),
+                        dose
+                    ),
+                    date: dose.startDate
+                )
+            )
+        } else if dose.automatic == true {
             events.append(
                 InsulinDeliveryLogEvent(
                     id: dose.syncIdentifier ?? UUID().uuidString,

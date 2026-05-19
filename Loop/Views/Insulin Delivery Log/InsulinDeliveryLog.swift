@@ -110,7 +110,14 @@ struct InsulinDeliveryLog: View {
                     
                     if case let .pumpEvent(pumpEventType, doseEntry) = event.type, let doseEntry {
                         NavigationLink {
-                            InsulinDeliveryEventDetailsView(pumpEventType: pumpEventType, doseEntry: doseEntry, onTapGesture: onTapGesture)
+                            InsulinDeliveryEventDetailsView(
+                                pumpEventType: pumpEventType,
+                                doseEntry: doseEntry,
+                                onTapGesture: onTapGesture,
+                                onDelete: { entry in
+                                    await viewModel.deleteDose(entry)
+                                }
+                            )
                         } label: {
                             EmptyView()
                         }

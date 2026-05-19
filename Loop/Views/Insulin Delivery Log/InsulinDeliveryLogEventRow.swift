@@ -247,9 +247,25 @@ struct InsulinDeliveryLogEventRow: View {
                                 .foregroundStyle(.secondary)
                             }
                         }
-                        
+
                         Spacer()
-                        
+
+                        Text(event.date.formatted(date: .omitted, time: .shortened))
+                            .font(.system(size: dateFontSize))
+                            .foregroundStyle(.secondary)
+                    }
+                case .external:
+                    HStack(spacing: 0) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            bolusTitle(deliveryAmount: deliveryAmount, programmedAmount: programmedAmount)
+
+                            Text("External Insulin")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+
                         Text(event.date.formatted(date: .omitted, time: .shortened))
                             .font(.system(size: dateFontSize))
                             .foregroundStyle(.secondary)
@@ -363,7 +379,7 @@ struct InsulinDeliveryLogEventRow: View {
             EmptyView()
         case .pumpEvent(.bolus(let bolusEventType, _, _), _):
             switch bolusEventType {
-            case .automated, .correction:
+            case .automated, .correction, .external:
                 EmptyView()
             case .meal(_, let carbAmount, let emoji):
                 VStack(alignment: .leading, spacing: 8) {
