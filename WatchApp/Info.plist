@@ -47,7 +47,5 @@
 	<array>
 		<string>GlucoseActivityAttributes</string>
 	</array>
-	<key>WKWatchKitApp</key>
-	<true/>
 </dict>
 </plist>
