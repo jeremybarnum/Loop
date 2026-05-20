@@ -553,6 +553,15 @@ final class DeviceDataManager {
             completion(authorizationRequestStatus)
         }
     }
+
+    /// The sharing (write) authorization status for a HealthKit type.
+    ///
+    /// HealthKit only exposes share/write authorization. Read authorization is
+    /// intentionally hidden by the system for privacy, so there is no equivalent
+    /// accessor for read access.
+    func healthKitSharingStatus(for type: HKObjectType) -> HKAuthorizationStatus {
+        healthStore.authorizationStatus(for: type)
+    }
     
     // Get HealthKit authorization for all of the stores
     func authorizeHealthStore(_ completion: @escaping (HKAuthorizationRequestStatus) -> Void) {

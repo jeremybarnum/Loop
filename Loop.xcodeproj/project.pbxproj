@@ -80,6 +80,7 @@
 		1DB619AC270BAD3D006C9D07 /* VersionUpdateViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DB619AB270BAD3D006C9D07 /* VersionUpdateViewModel.swift */; };
 		1DDE273D24AEA4B000796622 /* SettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DB1CA4E24A56D7600B3B94C /* SettingsViewModel.swift */; };
 		1DDE273E24AEA4B000796622 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DE09BA824A3E23F009EE9F9 /* SettingsView.swift */; };
+		BAF043BF0BC70EC99AE79F71 /* HealthAccessView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4854073AAE5C2CB97167F63 /* HealthAccessView.swift */; };
 		1DDE274024AEA4F200796622 /* NotificationsCriticalAlertPermissionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DA46B5F2492E2E300D71A63 /* NotificationsCriticalAlertPermissionsView.swift */; };
 		1DFE9E172447B6270082C280 /* UserNotificationAlertSchedulerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DFE9E162447B6270082C280 /* UserNotificationAlertSchedulerTests.swift */; };
 		3ED3198A2EB659E600820BCF /* GlucoseLiveActivityConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3ED319882EB659E600820BCF /* GlucoseLiveActivityConfiguration.swift */; };
@@ -827,6 +828,7 @@
 		1DB619AB270BAD3D006C9D07 /* VersionUpdateViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VersionUpdateViewModel.swift; sourceTree = "<group>"; };
 		1DC63E7325351BDF004605DA /* TrueTime.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = TrueTime.framework; path = Carthage/Build/iOS/TrueTime.framework; sourceTree = "<group>"; };
 		1DE09BA824A3E23F009EE9F9 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		E4854073AAE5C2CB97167F63 /* HealthAccessView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthAccessView.swift; sourceTree = "<group>"; };
 		1DFE9E162447B6270082C280 /* UserNotificationAlertSchedulerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserNotificationAlertSchedulerTests.swift; sourceTree = "<group>"; };
 		3ED319862EB659E600820BCF /* BasalViewActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BasalViewActivity.swift; sourceTree = "<group>"; };
 		3ED319872EB659E600820BCF /* ChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartView.swift; sourceTree = "<group>"; };
@@ -2005,6 +2007,7 @@
 				B43B5C532EAFBF110096A6AE /* RecentGlucoseTableViewCell.xib */,
 				C151634D2FA2C9C800FEECE8 /* RequiredVersionUpdateView.swift */,
 				1DE09BA824A3E23F009EE9F9 /* SettingsView.swift */,
+				E4854073AAE5C2CB97167F63 /* HealthAccessView.swift */,
 				DDC389FB2A2BC6670066E2E8 /* SettingsView+algorithmExperimentsSection.swift */,
 				C1DE5D22251BFC4D00439E49 /* SimpleBolusView.swift */,
 				43F64DD81D9C92C900D24DC6 /* TitleSubtitleTableViewCell.swift */,
@@ -3530,6 +3533,7 @@
 				1D12D3B92548EFDD00B53E8B /* main.swift in Sources */,
 				A9DCF32A25B0FABF00C89088 /* LoopUIColorPalette+Default.swift in Sources */,
 				1DDE273E24AEA4B000796622 /* SettingsView.swift in Sources */,
+				BAF043BF0BC70EC99AE79F71 /* HealthAccessView.swift in Sources */,
 				A9B607B0247F000F00792BE4 /* UserNotifications+Loop.swift in Sources */,
 				43F89CA322BDFBBD006BB54E /* UIActivityIndicatorView.swift in Sources */,
 				A999D40624663D18004C89D4 /* PumpManagerError.swift in Sources */,

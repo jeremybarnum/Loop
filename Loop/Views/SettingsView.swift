@@ -6,6 +6,7 @@
 //  Copyright © 2020 LoopKit Authors. All rights reserved.
 //
 
+import HealthKit
 import LoopKit
 import LoopKitUI
 import MockKit
@@ -85,6 +86,7 @@ struct SettingsView: View {
                     }
                     presetsSection
                     deviceSettingsSection
+                    healthAccessSection
                     if FeatureFlags.allowExperimentalFeatures {
                         favoriteFoodsSection
                     }
@@ -329,6 +331,43 @@ extension SettingsView {
                     descriptiveText: NSLocalizedString("Lock Screen, Dynamic Island, and CarPlay display", comment: "Live Activity settings descriptive text")
                 )
                 .accessibilityIdentifier("settingsViewLiveActivity")
+            }
+        }
+    }
+
+    private func healthKitSharingStatus(for type: HKObjectType) -> HKAuthorizationStatus {
+        viewModel.deviceManager?.healthKitSharingStatus(for: type) ?? .notDetermined
+    }
+
+    @ViewBuilder
+    private var healthAccessWarning: some View {
+        let denied = healthKitSharingStatus(for: HealthKitSampleStore.glucoseType) == .sharingDenied
+            || healthKitSharingStatus(for: HealthKitSampleStore.insulinQuantityType) == .sharingDenied
+        if denied {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.critical)
+                .accessibilityIdentifier("settingsViewHealthAccessWarning")
+        }
+    }
+
+    private var healthAccessSection: some View {
+        Section {
+            NavigationLink(destination: HealthAccessView(
+                glucoseSharingStatus: { healthKitSharingStatus(for: HealthKitSampleStore.glucoseType) },
+                insulinSharingStatus: { healthKitSharingStatus(for: HealthKitSampleStore.insulinQuantityType) }
+            )) {
+                LargeButton(
+                    action: {},
+                    includeArrow: false,
+                    imageView: Image(systemName: "heart.fill")
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 30),
+                    secondaryImageView: healthAccessWarning,
+                    label: NSLocalizedString("Apple Health", comment: "Apple Health settings button text"),
+                    descriptiveText: NSLocalizedString("Glucose and Insulin Data Access", comment: "Apple Health settings descriptive text")
+                )
+                .accessibilityIdentifier("settingsViewHealthAccess")
             }
         }
     }
