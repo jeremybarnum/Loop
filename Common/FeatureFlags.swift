@@ -109,10 +109,11 @@ struct FeatureFlagConfiguration: Decodable {
         self.manualDoseEntryEnabled = true
         #endif
 
-        #if DOSE_DELETION_ENABLED
-        self.doseDeletionEnabled = true
-        #else
+        // Swift compiler config is inverse, since the default state is enabled.
+        #if DOSE_DELETION_DISABLED
         self.doseDeletionEnabled = false
+        #else
+        self.doseDeletionEnabled = true
         #endif
 
         // Swift compiler config is inverse, since the default state is enabled.
