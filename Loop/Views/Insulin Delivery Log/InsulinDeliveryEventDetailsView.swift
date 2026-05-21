@@ -100,9 +100,10 @@ struct InsulinDeliveryEventDetailsView: View {
     }
 
     // External (manually-entered) doses can always be deleted; deleting any other
-    // (Loop-recorded) dose is gated behind the doseDeletion feature flag.
+    // (Loop-recorded) dose is gated behind the doseDeletion feature flag. In-progress
+    // (mutable) doses can never be deleted — you can't delete a dose still being delivered.
     private var showDeleteButton: Bool {
-        onDelete != nil && isDeletableDoseType && (isExternalDose || FeatureFlags.doseDeletionEnabled)
+        onDelete != nil && isDeletableDoseType && !doseEntry.isMutable && (isExternalDose || FeatureFlags.doseDeletionEnabled)
     }
 
     /// True while the dose still contributes active insulin (within the ~6h insulin activity window).
