@@ -86,6 +86,48 @@ struct InsulinDeliveryEventDetailsView: View {
         }
     }
     
+    private var isExternalDose: Bool {
+        doseEntry.manuallyEntered
+    }
+
+    private var isDeletableDoseType: Bool {
+        switch pumpEventType {
+        case .bolus, .basal:
+            return true
+        case .insulin:
+            return false
+        }
+    }
+
+    // External (manually-entered) doses can always be deleted; deleting any other
+    // (Loop-recorded) dose is gated behind the doseDeletion feature flag.
+    private var showDeleteButton: Bool {
+        onDelete != nil && isDeletableDoseType && (isExternalDose || FeatureFlags.doseDeletionEnabled)
+    }
+
+    /// True while the dose still contributes active insulin (within the ~6h insulin activity window).
+    private var doseHasActiveInsulin: Bool {
+        doseEntry.endDate > Date().addingTimeInterval(-.hours(6))
+    }
+
+    private var deleteButtonTitle: String {
+        isExternalDose
+            ? NSLocalizedString("Delete External Insulin", comment: "Button to delete a manually-entered insulin dose")
+            : NSLocalizedString("Delete Dose", comment: "Button to delete a dose")
+    }
+
+    private var deleteConfirmationTitle: String {
+        isExternalDose
+            ? NSLocalizedString("Delete this manually-entered insulin entry?", comment: "Confirmation title for deleting a manually-entered insulin dose")
+            : NSLocalizedString("Delete this dose?", comment: "Confirmation title for deleting a dose")
+    }
+
+    /// Extra warning shown when deleting a Loop-recorded dose that still has active insulin.
+    private var deleteConfirmationMessage: String? {
+        guard !isExternalDose, doseHasActiveInsulin else { return nil }
+        return NSLocalizedString("This dose still has active insulin. Deleting it may cause Loop to make up for the reduced active insulin by dosing more.", comment: "Warning when deleting a Loop-recorded dose that still has active insulin")
+    }
+
     var body: some View {
         List {
             Section {
@@ -157,20 +199,20 @@ struct InsulinDeliveryEventDetailsView: View {
                 onTapGesture(doseEntry)
             }
 
-            if doseEntry.manuallyEntered, let onDelete {
+            if showDeleteButton, let onDelete {
                 Section {
                     Button(role: .destructive) {
                         showingDeleteConfirmation = true
                     } label: {
                         HStack {
                             Spacer()
-                            Text("Delete External Insulin")
+                            Text(deleteButtonTitle)
                             Spacer()
                         }
                     }
                 }
                 .confirmationDialog(
-                    Text("Delete this manually-entered insulin entry?"),
+                    Text(deleteConfirmationTitle),
                     isPresented: $showingDeleteConfirmation,
                     titleVisibility: .visible
                 ) {
@@ -181,6 +223,10 @@ struct InsulinDeliveryEventDetailsView: View {
                         }
                     }
                     Button("Cancel", role: .cancel) { }
+                } message: {
+                    if let deleteConfirmationMessage {
+                        Text(deleteConfirmationMessage)
+                    }
                 }
             }
         }

@@ -21,6 +21,7 @@ struct FeatureFlagConfiguration: Decodable {
     let apidraInsulinModelEnabled: Bool
     let includeServicesInSettingsEnabled: Bool
     let manualDoseEntryEnabled: Bool
+    let doseDeletionEnabled: Bool
     let insulinDeliveryReservoirViewEnabled: Bool
     let mockTherapySettingsEnabled: Bool
     let observeHealthKitCarbSamplesFromOtherApps: Bool
@@ -106,6 +107,12 @@ struct FeatureFlagConfiguration: Decodable {
         self.manualDoseEntryEnabled = false
         #else
         self.manualDoseEntryEnabled = true
+        #endif
+
+        #if DOSE_DELETION_ENABLED
+        self.doseDeletionEnabled = true
+        #else
+        self.doseDeletionEnabled = false
         #endif
 
         // Swift compiler config is inverse, since the default state is enabled.
@@ -250,6 +257,7 @@ extension FeatureFlagConfiguration : CustomDebugStringConvertible {
             "* siriEnabled: \(siriEnabled)",
             "* dosingStrategySelectionEnabled: \(dosingStrategySelectionEnabled)",
             "* manualDoseEntryEnabled: \(manualDoseEntryEnabled)",
+            "* doseDeletionEnabled: \(doseDeletionEnabled)",
             "* allowDebugFeatures: \(allowDebugFeatures)",
             "* simpleBolusCalculatorEnabled: \(simpleBolusCalculatorEnabled)",
             "* usePositiveMomentumAndRCForManualBoluses: \(usePositiveMomentumAndRCForManualBoluses)",
