@@ -10,7 +10,7 @@ import LoopKit
 import LoopKitUI
 import SwiftUI
 
-/// Shows the app's Apple Health access for glucose and insulin.
+/// Shows the app's Apple Health access for glucose, insulin, and carbohydrates.
 ///
 /// HealthKit only exposes *sharing* (write) authorization, so this screen can show
 /// write status definitively. Read authorization is intentionally hidden by the system
@@ -25,19 +25,22 @@ struct HealthAccessView: View {
     /// returns from the Settings app having changed a permission).
     let glucoseSharingStatus: () -> HKAuthorizationStatus
     let insulinSharingStatus: () -> HKAuthorizationStatus
+    let carbSharingStatus: () -> HKAuthorizationStatus
 
     @State private var glucoseStatus: HKAuthorizationStatus = .notDetermined
     @State private var insulinStatus: HKAuthorizationStatus = .notDetermined
+    @State private var carbStatus: HKAuthorizationStatus = .notDetermined
 
     var body: some View {
         List {
             Section {
                 statusRow(label: NSLocalizedString("Glucose", comment: "Health access row label for glucose"), status: glucoseStatus)
                 statusRow(label: NSLocalizedString("Insulin", comment: "Health access row label for insulin"), status: insulinStatus)
+                statusRow(label: NSLocalizedString("Carbohydrates", comment: "Health access row label for carbohydrates"), status: carbStatus)
             } header: {
                 Text("Sharing to Apple Health", comment: "Health access section header for write access")
             } footer: {
-                Text(String(format: NSLocalizedString("Whether %1$@ is allowed to save glucose and insulin data to Apple Health.", comment: "Health access write section footer (1: app name)"), appName))
+                Text(String(format: NSLocalizedString("Whether %1$@ is allowed to save glucose, insulin, and carbohydrate data to Apple Health.", comment: "Health access write section footer (1: app name)"), appName))
             }
 
             Section {
@@ -60,6 +63,7 @@ struct HealthAccessView: View {
     private func refresh() {
         glucoseStatus = glucoseSharingStatus()
         insulinStatus = insulinSharingStatus()
+        carbStatus = carbSharingStatus()
     }
 
     private func statusRow(label: String, status: HKAuthorizationStatus) -> some View {

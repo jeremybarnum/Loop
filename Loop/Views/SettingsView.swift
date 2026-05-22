@@ -354,7 +354,8 @@ extension SettingsView {
         Section {
             NavigationLink(destination: HealthAccessView(
                 glucoseSharingStatus: { healthKitSharingStatus(for: HealthKitSampleStore.glucoseType) },
-                insulinSharingStatus: { healthKitSharingStatus(for: HealthKitSampleStore.insulinQuantityType) }
+                insulinSharingStatus: { healthKitSharingStatus(for: HealthKitSampleStore.insulinQuantityType) },
+                carbSharingStatus: { healthKitSharingStatus(for: HealthKitSampleStore.carbType) }
             )) {
                 LargeButton(
                     action: {},
@@ -365,7 +366,7 @@ extension SettingsView {
                         .frame(width: 30),
                     secondaryImageView: healthAccessWarning,
                     label: NSLocalizedString("Apple Health", comment: "Apple Health settings button text"),
-                    descriptiveText: NSLocalizedString("Glucose and Insulin Data Access", comment: "Apple Health settings descriptive text")
+                    descriptiveText: NSLocalizedString("Glucose, Insulin, and Carb Data Access", comment: "Apple Health settings descriptive text")
                 )
                 .accessibilityIdentifier("settingsViewHealthAccess")
             }
