@@ -68,7 +68,7 @@ class SettingsManager {
             storedSettings = latest
         } else {
             log.default("SettingsStore has no settings: initializing empty StoredSettings.")
-            storedSettings = StoredSettings()
+            storedSettings = StoredSettings(automaticDosingStrategy: .automaticBolus)
         }
 
         dosingEnabled = settings.dosingEnabled
