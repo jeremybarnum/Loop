@@ -303,7 +303,7 @@ extension SettingsView {
 
     private var alertManagementSection: some View {
         Section {
-            NavigationLink(destination: AlertManagementView(checker: viewModel.alertPermissionsChecker, alertMuter: viewModel.alertMuter)) {
+            NavigationLink(destination: AlertManagementView(checker: viewModel.alertPermissionsChecker, alertMuter: viewModel.alertMuter, glucoseAlertManager: viewModel.deviceManager?.glucoseAlertManager)) {
                 LargeButton(
                     action: {},
                     includeArrow: false,

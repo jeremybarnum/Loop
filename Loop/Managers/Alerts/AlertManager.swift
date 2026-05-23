@@ -49,6 +49,7 @@ public final class AlertManager {
     private var modalAlertScheduler: InAppModalAlertScheduler!
     private var userNotificationAlertScheduler: UserNotificationAlertScheduler
     private var unsafeNotificationPermissionsAlertController: UIAlertController?
+    private let criticalAlertAudioPlayer = CriticalAlertAudioPlayer()
     var alertMuter: AlertMuter
 
     let alertStore: AlertStore
@@ -340,6 +341,7 @@ extension AlertManager: AlertManagerResponder {
         }
         userNotificationAlertScheduler.alertWasAcknowledged(identifier: identifier)
         await modalAlertScheduler.removePresentedAlert(identifier: identifier)
+        criticalAlertAudioPlayer.stop()
         try await alertStore.recordAcknowledgement(of: identifier)
     }
 
@@ -403,12 +405,45 @@ extension AlertManager: AlertIssuer {
 
     private func scheduleAlertWithSchedulers(_ alert: Alert, issuedDate: Date = Date()) {
         modalAlertScheduler.scheduleAlert(alert)
-        userNotificationAlertScheduler.scheduleAlert(alert, muted: alertMuter.shouldMuteAlert(alert, issuedDate: issuedDate))
+        let muted = alertMuter.shouldMuteAlert(alert, issuedDate: issuedDate)
+        userNotificationAlertScheduler.scheduleAlert(alert, muted: muted)
+        playCriticalAlertAudioFallbackIfNeeded(for: alert, muted: muted, issuedDate: issuedDate)
     }
 
     private func unscheduleAlertWithSchedulers(identifier: Alert.Identifier) async {
         await modalAlertScheduler.unscheduleAlert(identifier: identifier)
         userNotificationAlertScheduler.unscheduleAlert(identifier: identifier)
+        criticalAlertAudioPlayer.stop()
+    }
+
+    /// When the system can't deliver a true Critical Alert (no
+    /// entitlement at build time, or the user disabled the permission),
+    /// fall back to playing the alert sound through AVAudioPlayer so the
+    /// silent switch / Focus / DND don't suppress it. The UNNotification
+    /// is still scheduled in parallel for the visual.
+    private func playCriticalAlertAudioFallbackIfNeeded(for alert: Alert, muted: Bool, issuedDate: Date) {
+        guard alert.interruptionLevel == .critical else { return }
+        guard !muted else { return }
+        // Only relevant when the trigger is immediate. Delayed/repeating
+        // alerts go through the UNNotification system at fire time; the
+        // audio fallback would be too eager to play here.
+        switch alert.trigger {
+        case .immediate: break
+        case .delayed, .repeating: return
+        }
+        // Compile-time gate is enough for the DIY case (no entitlement
+        // in the binary at all). For builds that DO ship with the
+        // entitlement, the system delivers a true Critical Alert and
+        // this fallback never runs — even if the user has disabled the
+        // permission at runtime, the visual notification still surfaces
+        // and audio handling is the user's choice via Settings.
+        guard !FeatureFlags.criticalAlertsEnabled else { return }
+        guard let soundURL = Self.soundURL(for: alert) else {
+            log.default("No sound file available for critical alert %@; audio fallback skipped", String(describing: alert.identifier))
+            return
+        }
+        log.default("Playing audio fallback for critical alert %@ (no entitlement or user-disabled)", String(describing: alert.identifier))
+        criticalAlertAudioPlayer.play(soundURL: soundURL)
     }
 
     private func rescheduleAlertWithSchedulers(_ alert: Alert, issuedDate: Date) async {

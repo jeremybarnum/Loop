@@ -18,6 +18,7 @@ struct AlertManagementView: View {
 
     @ObservedObject private var checker: AlertPermissionsChecker
     @ObservedObject private var alertMuter: AlertMuter
+    private let glucoseAlertManager: GlucoseAlertManager?
 
     enum Sheet: Hashable, Identifiable {
         case durationSelection
@@ -63,9 +64,12 @@ struct AlertManagementView: View {
         )
     }
 
-    public init(checker: AlertPermissionsChecker, alertMuter: AlertMuter = AlertMuter()) {
+    public init(checker: AlertPermissionsChecker,
+                alertMuter: AlertMuter = AlertMuter(),
+                glucoseAlertManager: GlucoseAlertManager? = nil) {
         self.checker = checker
         self.alertMuter = alertMuter
+        self.glucoseAlertManager = glucoseAlertManager
     }
 
     var body: some View {
@@ -74,12 +78,28 @@ struct AlertManagementView: View {
             if FeatureFlags.criticalAlertsEnabled {
                 muteAlertsSection
             }
+            if let glucoseAlertManager {
+                glucoseAlertsSection(manager: glucoseAlertManager)
+            }
             if FeatureFlags.missedMealNotifications {
                 missedMealAlertSection
             }
             supportSection
         }
         .navigationTitle(NSLocalizedString("Alert Management", comment: "Title of alert management screen"))
+    }
+
+    private func glucoseAlertsSection(manager: GlucoseAlertManager) -> some View {
+        Section(header: Text("Glucose").textCase(nil)) {
+            NavigationLink(destination: GlucoseAlertSettingsView(manager: manager)) {
+                HStack {
+                    Image(systemName: "drop.fill")
+                        .foregroundStyle(.tint)
+                    Text("Glucose Alerts")
+                }
+                .accessibilityIdentifier("alertManagementGlucoseAlerts")
+            }
+        }
     }
 
     private var alertPermissionsSection: some View {

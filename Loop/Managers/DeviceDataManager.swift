@@ -63,6 +63,8 @@ final class DeviceDataManager {
     private var alertPresenter: AlertPresenter
     
     private var deliveryUncertaintyAlertManager: DeliveryUncertaintyAlertManager?
+
+    let glucoseAlertManager: GlucoseAlertManager
     
     @Published var cgmHasValidSensorSession: Bool
 
@@ -264,6 +266,7 @@ final class DeviceDataManager {
         self.pluginManager = pluginManager
         self.deviceLog = deviceLog
         self.alertManager = alertManager
+        self.glucoseAlertManager = GlucoseAlertManager(alertIssuer: alertManager)
         self.settingsManager = settingsManager
         self.healthStore = healthStore
         self.carbStore = carbStore
@@ -446,6 +449,10 @@ final class DeviceDataManager {
             }
             if !values.isEmpty {
                 self.cgmStalenessMonitor.cgmGlucoseSamplesAvailable(values)
+                // GlucoseAlertManager owns the decision based on the
+                // active CGM's providesOwnGlucoseAlerts flag and the
+                // user's override; we just hand it the samples.
+                await self.glucoseAlertManager.evaluate(samples: values)
             }
         case .unreliableData:
             await self.receivedUnreliableCGMReading()
@@ -622,11 +629,15 @@ private extension DeviceDataManager {
             alertManager?.addAlertResponder(managerIdentifier: cgmManager.pluginIdentifier,
                                             alertResponder: cgmManager)
             alertManager?.addAlertSoundVendor(managerIdentifier: cgmManager.pluginIdentifier,
-                                              soundVendor: cgmManager)            
+                                              soundVendor: cgmManager)
             cgmHasValidSensorSession = cgmManager.cgmManagerStatus.hasValidSensorSession
 
             analyticsServicesManager.identifyCGMType(cgmManager.pluginIdentifier)
         }
+        // Refresh the GlucoseAlertManager's view of whether the active
+        // CGM does its own alerting. No active CGM ⇒ treat as "no
+        // native alerts" so Loop alerts stay on.
+        glucoseAlertManager.cgmProvidesOwnAlerts = cgmManager?.providesOwnGlucoseAlerts ?? false
 
         if let cgmManagerUI = cgmManager as? CGMManagerUI {
             displayGlucoseUnitBroadcaster?.addDisplayGlucoseUnitObserver(cgmManagerUI)

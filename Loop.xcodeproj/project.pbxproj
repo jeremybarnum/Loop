@@ -76,6 +76,9 @@
 		1DA7A84224476EAD008257F0 /* AlertManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DA7A84124476EAD008257F0 /* AlertManagerTests.swift */; };
 		1DA7A84424477698008257F0 /* InAppModalAlertSchedulerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DA7A84324477698008257F0 /* InAppModalAlertSchedulerTests.swift */; };
 		1DB1065124467E18005542BD /* AlertManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DB1065024467E18005542BD /* AlertManager.swift */; };
+		C9A47B0180AAB1FC572D3EFE /* CriticalAlertAudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9A47B0175B13A9543390BC5 /* CriticalAlertAudioPlayer.swift */; };
+		C9A47B0280AAB1FC572D3EFF /* GlucoseAlertManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9A47B0275B13A9543390BC6 /* GlucoseAlertManager.swift */; };
+		C9A47B0380AAB1FC572D3F00 /* GlucoseAlertSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9A47B0375B13A9543390BC7 /* GlucoseAlertSettingsView.swift */; };
 		1DB1CA4D24A55F0000B3B94C /* Image.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DB1CA4C24A55F0000B3B94C /* Image.swift */; };
 		1DB619AC270BAD3D006C9D07 /* VersionUpdateViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DB619AB270BAD3D006C9D07 /* VersionUpdateViewModel.swift */; };
 		1DDE273D24AEA4B000796622 /* SettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DB1CA4E24A56D7600B3B94C /* SettingsViewModel.swift */; };
@@ -822,6 +825,9 @@
 		1DA7A84124476EAD008257F0 /* AlertManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertManagerTests.swift; sourceTree = "<group>"; };
 		1DA7A84324477698008257F0 /* InAppModalAlertSchedulerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InAppModalAlertSchedulerTests.swift; sourceTree = "<group>"; };
 		1DB1065024467E18005542BD /* AlertManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AlertManager.swift; sourceTree = "<group>"; };
+		C9A47B0175B13A9543390BC5 /* CriticalAlertAudioPlayer.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = CriticalAlertAudioPlayer.swift; sourceTree = "<group>"; };
+		C9A47B0275B13A9543390BC6 /* GlucoseAlertManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = GlucoseAlertManager.swift; sourceTree = "<group>"; };
+		C9A47B0375B13A9543390BC7 /* GlucoseAlertSettingsView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = GlucoseAlertSettingsView.swift; sourceTree = "<group>"; };
 		1DB1CA4C24A55F0000B3B94C /* Image.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Image.swift; sourceTree = "<group>"; };
 		1DB1CA4E24A56D7600B3B94C /* SettingsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViewModel.swift; sourceTree = "<group>"; };
 		1DB619AB270BAD3D006C9D07 /* VersionUpdateViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VersionUpdateViewModel.swift; sourceTree = "<group>"; };
@@ -1527,6 +1533,8 @@
 			isa = PBXGroup;
 			children = (
 				1DB1065024467E18005542BD /* AlertManager.swift */,
+				C9A47B0175B13A9543390BC5 /* CriticalAlertAudioPlayer.swift */,
+				C9A47B0275B13A9543390BC6 /* GlucoseAlertManager.swift */,
 				1D05219C2469F1F5000EBBDE /* AlertStore.swift */,
 				1D080CBB2473214A00356610 /* AlertStore.xcdatamodeld */,
 				1DA649A8244126DA00F61E75 /* InAppModalAlertScheduler.swift */,
@@ -1960,6 +1968,7 @@
 			children = (
 				84213C732D932EF400642E78 /* Insulin Delivery Log */,
 				B4001CED28CBBC82002FB414 /* AlertManagementView.swift */,
+				C9A47B0375B13A9543390BC7 /* GlucoseAlertSettingsView.swift */,
 				897A5A9524C2175B00C4E71D /* BolusEntryView.swift */,
 				C1F8B1D122375E4200DD66CF /* BolusProgressTableViewCell.swift */,
 				C1F8B1DB223862D500DD66CF /* BolusProgressTableViewCell.xib */,
@@ -3433,6 +3442,8 @@
 				C120CECC2D8CD6990050944B /* Publisher.swift in Sources */,
 				84D1F1A92D09800700CB271F /* PresetDetentView.swift in Sources */,
 				1DB1065124467E18005542BD /* AlertManager.swift in Sources */,
+				C9A47B0180AAB1FC572D3EFE /* CriticalAlertAudioPlayer.swift in Sources */,
+				C9A47B0280AAB1FC572D3EFF /* GlucoseAlertManager.swift in Sources */,
 				43C0944A1CACCC73001F6403 /* NotificationManager.swift in Sources */,
 				149A28E42A8A63A700052EDF /* FavoriteFoodDetailView.swift in Sources */,
 				1DDE274024AEA4F200796622 /* NotificationsCriticalAlertPermissionsView.swift in Sources */,
@@ -3444,6 +3455,7 @@
 				3ED319962EB65A5C00820BCF /* LiveActivityManagementViewModel.swift in Sources */,
 				E98A55EF24EDD6E60008715D /* DosingDecisionStoreProtocol.swift in Sources */,
 				B4001CEE28CBBC82002FB414 /* AlertManagementView.swift in Sources */,
+				C9A47B0380AAB1FC572D3F00 /* GlucoseAlertSettingsView.swift in Sources */,
 				E9C00EF524C623EF00628F35 /* LoopSettings+Loop.swift in Sources */,
 				4389916B1E91B689000EEF90 /* ChartSettings+Loop.swift in Sources */,
 				C178249A1E1999FA00D9D25C /* CaseCountable.swift in Sources */,
