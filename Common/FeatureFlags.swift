@@ -39,6 +39,7 @@ struct FeatureFlagConfiguration: Decodable {
     let missedMealNotifications: Bool
     let allowAlgorithmExperiments: Bool
     let isInvestigationalDevice: Bool
+    let devBranchWarningEnabled: Bool
 
     fileprivate init() {
         // Swift compiler config is inverse, since the default state is enabled.
@@ -225,11 +226,18 @@ struct FeatureFlagConfiguration: Decodable {
         #else
         self.allowAlgorithmExperiments = false
         #endif
-        
+
         #if INVESTIGATIONAL_DEVICE
         self.isInvestigationalDevice = true
         #else
         self.isInvestigationalDevice = false
+        #endif
+
+        // Swift compiler config is inverse, since the default state is enabled.
+        #if DEV_BRANCH_WARNING_DISABLED
+        self.devBranchWarningEnabled = false
+        #else
+        self.devBranchWarningEnabled = true
         #endif
     }
 }
@@ -265,6 +273,7 @@ extension FeatureFlagConfiguration : CustomDebugStringConvertible {
             "* profileExpirationSettingsViewEnabled: \(profileExpirationSettingsViewEnabled)",
             "* missedMealNotifications: \(missedMealNotifications)",
             "* allowAlgorithmExperiments: \(allowAlgorithmExperiments)",
+            "* devBranchWarningEnabled: \(devBranchWarningEnabled)",
             "* allowExperimentalFeatures: \(allowExperimentalFeatures)",
             "* isInvestigationalDevice: \(isInvestigationalDevice)"
         ].joined(separator: "\n")

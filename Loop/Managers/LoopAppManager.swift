@@ -646,6 +646,10 @@ class LoopAppManager: NSObject {
         self.state = state.next
 
         await alertManager.playbackAlertsFromPersistence()
+
+        if let rootViewController = rootViewController {
+            DevelopmentBranchAlerter.alertIfNeeded(viewControllerToPresentFrom: rootViewController)
+        }
     }
 
     // MARK: - Life Cycle
