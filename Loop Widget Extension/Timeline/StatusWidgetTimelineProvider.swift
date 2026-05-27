@@ -103,11 +103,17 @@ class StatusWidgetTimelineProvider: TimelineProvider {
 
             var glucose: [StoredGlucoseSample] = []
 
-            do {
-                glucose = try await glucoseStore.getGlucoseSamples(start: startDate)
-                self.log.default("Fetched glucose: last = %{public}@, %{public}@", String(describing: glucose.last?.startDate), String(describing: glucose.last?.quantity))
-            } catch {
-                self.log.error("Failed to fetch glucose after %{public}@", String(describing: startDate))
+            // glucoseStore is async-initialized; guard prevents a force-unwrap crash
+            // when WidgetKit calls update before the init Task completes.
+            if let gs = self.glucoseStore {
+                do {
+                    glucose = try await gs.getGlucoseSamples(start: startDate)
+                    self.log.default("Fetched glucose: last = %{public}@, %{public}@", String(describing: glucose.last?.startDate), String(describing: glucose.last?.quantity))
+                } catch {
+                    self.log.error("Failed to fetch glucose after %{public}@", String(describing: startDate))
+                }
+            } else {
+                self.log.error("glucoseStore not yet initialized; skipping glucose fetch")
             }
 
             let finalGlucose = glucose
