@@ -34,6 +34,20 @@
                ReferencedContainer = "container:Loop.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "NO"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "B2EABFEC645A3969B0B548ED"
+               BuildableName = "LibreLoopPlugin.loopplugin"
+               BlueprintName = "LibreLoopPlugin"
+               ReferencedContainer = "container:../LibreLoop/LibreLoop.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
