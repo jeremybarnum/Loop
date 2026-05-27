@@ -43,5 +43,9 @@
 	<string>$(MAIN_APP_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
+	<key>WKSupportsLiveActivityLaunchAttributeTypes</key>
+	<array>
+		<string>GlucoseActivityAttributes</string>
+	</array>
 </dict>
 </plist>

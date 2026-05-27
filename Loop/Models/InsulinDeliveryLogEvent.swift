@@ -32,6 +32,7 @@ struct InsulinDeliveryLogEvent: Hashable, Identifiable {
                 case automated
                 case meal(recommendedAmount: LoopQuantity, carbAmount: LoopQuantity, emoji: String)
                 case correction(recommendedAmount: LoopQuantity?)
+                case external
             }
             
             case bolus(BolusEventType, programmedAmount: LoopQuantity?, deliveryAmount: LoopQuantity)

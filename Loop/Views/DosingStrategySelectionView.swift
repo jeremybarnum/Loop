@@ -34,19 +34,26 @@ public struct DosingStrategySelectionView: View {
 
     public var options: some View {
         ForEach(AutomaticDosingStrategy.allCases, id: \.self) { strategy in
-            CheckmarkListItem(
-                title: Text(strategy.title),
-                description: Text(strategy.informationalText),
-                isSelected: Binding(
-                    get: { self.automaticDosingStrategy == strategy },
-                    set: { isSelected in
-                        if isSelected {
-                            self.automaticDosingStrategy = strategy
-                            self.internalDosingStrategy = strategy // Hack to force update. :(
+            VStack(alignment: .leading, spacing: 8) {
+                CheckmarkListItem(
+                    title: Text(strategy.title),
+                    description: Text(strategy.informationalText),
+                    isSelected: Binding(
+                        get: { self.automaticDosingStrategy == strategy },
+                        set: { isSelected in
+                            if isSelected {
+                                self.automaticDosingStrategy = strategy
+                                self.internalDosingStrategy = strategy // Hack to force update. :(
+                            }
                         }
-                    }
+                    )
                 )
-            )
+                if strategy == .tempBasalOnly {
+                    Text("Temp Basal dosing is deprecated and may be removed in a future release. Automatic Bolus is recommended.", comment: "Deprecation warning for the temp basal only dosing strategy")
+                        .font(.footnote)
+                        .foregroundColor(.orange)
+                }
+            }
             .padding(.vertical, 4)
         }
     }

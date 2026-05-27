@@ -66,7 +66,8 @@ extension PresetsTraining.Step: PresetsTrainingContent {
                 
                 VStack(alignment: .leading) {
                     Text("The \"Overall Insulin\" percentage controls total insulin delivery by adjusting your:")
-                    
+                        .fixedSize(horizontal: false, vertical: true)
+
                     BulletedListView {
                         Text("Basal Rate")
                         Text("Carb Ratio")
@@ -153,7 +154,8 @@ extension PresetsTraining.Step: PresetsTrainingContent {
                 
             case .overallInsulin:
                 Text("Paloma wants \(appName) to know she needs more insulin than usual.")
-                
+                    .fixedSize(horizontal: false, vertical: true)
+
                 TherapySettingsExampleView(
                     title: NSLocalizedString("Paloma’s Current Therapy Settings", comment: ""),
                     components: [
@@ -164,7 +166,8 @@ extension PresetsTraining.Step: PresetsTrainingContent {
                 )
                 
                 Text("She can do this by raising her **Overall Insulin** setting. This tells \(appName) to deliver more than her usual amount, making her insulin settings stronger.")
-                
+                    .fixedSize(horizontal: false, vertical: true)
+
                 if let image = Image.optional("PresetsTrainingIllnessOverallInsulin") {
                     image
                         .resizable()

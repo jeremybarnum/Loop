@@ -564,10 +564,20 @@ final class LoopDataManager: ObservableObject {
                     $0.startDate >= lastManualBolusVisibilityWindowStartDate && $0.deliveryType == .bolus && $0.automatic == false
                 })
 
-            if let lastStoredManualBolus,
-               self.lastManualBolus == nil || lastStoredManualBolus.startDate >= self.lastManualBolus!.startDate
-            {
-                self.lastManualBolus = LastManualBolus(amount: lastStoredManualBolus.volume, startDate: lastStoredManualBolus.startDate)
+            // Reflect the most recent user-entered bolus still present in the store. This
+            // both updates to a newer bolus and clears/downgrades the value when the shown
+            // bolus is no longer there (e.g. the user deleted it) — the previous logic only
+            // ever moved forward, so a deleted bolus lingered in the "Last Bolus" footer.
+            // A just-enacted bolus that the store may not have persisted yet is preserved.
+            let recentlyEnactedCutoff = now.addingTimeInterval(-.minutes(1))
+            if let lastStoredManualBolus {
+                let shownIsNewerThanStored = (self.lastManualBolus?.startDate).map { $0 > lastStoredManualBolus.startDate } ?? false
+                let shownWasJustEnacted = (self.lastManualBolus?.startDate).map { $0 >= recentlyEnactedCutoff } ?? false
+                if !(shownIsNewerThanStored && shownWasJustEnacted) {
+                    self.lastManualBolus = LastManualBolus(amount: lastStoredManualBolus.volume, startDate: lastStoredManualBolus.startDate)
+                }
+            } else if let lastManualBolus = self.lastManualBolus, lastManualBolus.startDate < recentlyEnactedCutoff {
+                self.lastManualBolus = nil
             }
         } catch {
             let loopError = error as? LoopError ?? .unknownError(error)
