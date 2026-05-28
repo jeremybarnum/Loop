@@ -155,7 +155,8 @@ struct AlertManagementView: View {
                 DurationSheet(
                     allowedDurations: AlertMuter.allowedDurations,
                     duration: $durationSelection,
-                    durationWasSelected: $durationWasSelection
+                    durationWasSelected: $durationWasSelection,
+                    criticalAlertsEnabled: FeatureFlags.criticalAlertsEnabled
                 )
             case .confirmation(let resumeDate):
                 ConfirmationSheet(resumeDate: resumeDate)
