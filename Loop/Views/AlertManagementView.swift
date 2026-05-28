@@ -75,9 +75,7 @@ struct AlertManagementView: View {
     var body: some View {
         List {
             alertPermissionsSection
-            if FeatureFlags.criticalAlertsEnabled {
-                muteAlertsSection
-            }
+            muteAlertsSection
             if let glucoseAlertManager {
                 glucoseAlertsSection(manager: glucoseAlertManager)
             }
@@ -91,7 +89,7 @@ struct AlertManagementView: View {
 
     private func glucoseAlertsSection(manager: GlucoseAlertManager) -> some View {
         Section(header: Text("Glucose").textCase(nil)) {
-            NavigationLink(destination: GlucoseAlertSettingsView(manager: manager)) {
+            NavigationLink(destination: GlucoseAlertSettingsView(manager: manager, permissionsChecker: checker)) {
                 HStack {
                     Image(systemName: "drop.fill")
                         .foregroundStyle(.tint)
