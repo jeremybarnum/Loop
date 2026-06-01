@@ -1498,8 +1498,14 @@ extension LoopDataManager: FavoriteFoodInsightsViewModelDelegate {
         }
         let carbRatioWithOverrides = overrides.applyCarbRatio(over: carbRatio)
 
-        // Overlay basal history on basal doses, splitting doses to get amount delivered relative to basal
-        let annotatedDoses = doses.map({ $0.simpleDose(with: insulinModel(for: $0.insulinType)) }).annotated(with: basalWithOverrides)
+        // Overlay basal history on basal doses, splitting doses to get amount delivered relative to basal.
+        // annotated() can emit segments out of startDate order when input doses overlap (e.g. a bolus
+        // during a temp basal, or overlapping pending/committed doses), so sort for downstream
+        // binary-search filterDateRange.
+        let annotatedDoses = doses
+            .map({ $0.simpleDose(with: insulinModel(for: $0.insulinType)) })
+            .annotated(with: basalWithOverrides)
+            .sorted { $0.startDate < $1.startDate }
 
         let insulinEffects = annotatedDoses.glucoseEffects(
             insulinSensitivityHistory: sensitivityWithOverrides,
