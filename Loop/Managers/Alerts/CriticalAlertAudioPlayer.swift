@@ -41,19 +41,34 @@ final class CriticalAlertAudioPlayer {
     /// True if we're currently looping audio for a critical alert.
     var isPlaying: Bool { player?.isPlaying ?? false }
 
-    /// Start (or restart) looping playback of the sound at `url`. Safe to
-    /// call repeatedly — replaces any current playback.
-    func play(soundURL url: URL) {
+    /// Start (or restart) looping playback of the bundled critical
+    /// alert sound. Safe to call repeatedly — replaces any current
+    /// playback. The sound file lives in Loop's main bundle as
+    /// `critical.caf` so it's always present; we don't go through
+    /// AlertManager's AlertSoundVendor-keyed `Library/Sounds/` lookup,
+    /// which would only work for plugins that register sound vendors.
+    func play() {
         stop()
+
+        guard let url = Bundle.main.url(forResource: "critical", withExtension: "caf") else {
+            os_log("critical.caf not found in main bundle; audio fallback unavailable", log: log, type: .error)
+            return
+        }
 
         do {
             let session = AVAudioSession.sharedInstance()
-            // .playback ignores the silent switch and Focus modes;
-            // .mixWithOthers lets the user's music keep playing;
-            // .duckOthers temporarily lowers other audio so the alarm
-            // is clearly audible on top.
-            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers, .duckOthers])
+            // Plain .playback — primary audio that ignores the silent
+            // switch and Focus modes. Don't use .mixWithOthers /
+            // .duckOthers for an alarm: with .mixWithOthers iOS treats
+            // us as secondary audio and may not actually start
+            // playback when no other audio is active.
+            try session.setCategory(.playback, mode: .default, options: [])
             try session.setActive(true, options: [])
+            os_log("Audio session active. category=%{public}@ otherAudioPlaying=%{public}@ outputVolume=%{public}.2f",
+                   log: log, type: .info,
+                   session.category.rawValue,
+                   session.isOtherAudioPlaying ? "yes" : "no",
+                   session.outputVolume)
 
             let p = try AVAudioPlayer(contentsOf: url)
             p.numberOfLoops = -1
@@ -68,7 +83,8 @@ final class CriticalAlertAudioPlayer {
             stopTimer = Timer.scheduledTimer(withTimeInterval: maxDuration, repeats: false) { [weak self] _ in
                 Task { @MainActor in self?.stop() }
             }
-            os_log("Started critical-alert audio playback (%{public}@)", log: log, type: .info, url.lastPathComponent)
+            os_log("Started critical-alert audio playback (duration=%{public}.2fs playing=%{public}@)",
+                   log: log, type: .info, p.duration, p.isPlaying ? "yes" : "no")
         } catch {
             os_log("Failed to start audio playback: %{public}@", log: log, type: .error, String(describing: error))
         }

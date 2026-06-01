@@ -438,12 +438,8 @@ extension AlertManager: AlertIssuer {
         // permission at runtime, the visual notification still surfaces
         // and audio handling is the user's choice via Settings.
         guard !FeatureFlags.criticalAlertsEnabled else { return }
-        guard let soundURL = Self.soundURL(for: alert) else {
-            log.default("No sound file available for critical alert %@; audio fallback skipped", String(describing: alert.identifier))
-            return
-        }
         log.default("Playing audio fallback for critical alert %@ (no entitlement or user-disabled)", String(describing: alert.identifier))
-        criticalAlertAudioPlayer.play(soundURL: soundURL)
+        criticalAlertAudioPlayer.play()
     }
 
     private func rescheduleAlertWithSchedulers(_ alert: Alert, issuedDate: Date) async {
