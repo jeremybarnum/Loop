@@ -1399,6 +1399,13 @@ extension DeviceDataManager: DeliveryDelegate {
         return pumpManager?.status.basalDeliveryState?.isSuspended ?? false
     }
 
+    var isManualTempBasalRunning: Bool {
+        guard case .tempBasal(let dose) = pumpManager?.status.basalDeliveryState else {
+            return false
+        }
+        return dose.automatic == false && dose.endDate > Date()
+    }
+
     var isPumpInoperable: Bool {
         guard let basalDeliveryState else {
             return true

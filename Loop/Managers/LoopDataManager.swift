@@ -40,6 +40,7 @@ struct AlgorithmDisplayState {
 
 protocol DeliveryDelegate: AnyObject {
     var isSuspended: Bool { get }
+    var isManualTempBasalRunning: Bool { get }
     var pumpInsulinType: InsulinType? { get }
     var basalDeliveryState: PumpManagerStatus.BasalDeliveryState? { get }
     var isPumpConfigured: Bool { get }
@@ -729,6 +730,10 @@ final class LoopDataManager: ObservableObject {
 
                     if deliveryDelegate.isSuspended {
                         throw LoopError.pumpSuspended
+                    }
+
+                    if deliveryDelegate.isManualTempBasalRunning {
+                        throw LoopError.manualTempBasalRunning
                     }
 
                     logger.default("Enacting: %{public}@", String(describing: recommendationToEnact))
