@@ -40749,6 +40749,9 @@
         }
       }
     },
+    "Version" : {
+      "comment" : "Label for the app version row in the Support section"
+    },
     "Very Easy" : {
 
     },
