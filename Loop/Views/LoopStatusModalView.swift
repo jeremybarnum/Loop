@@ -181,6 +181,10 @@ class LoopStatusModalViewModel {
         deviceManager?.isSuspended ?? false
     }
 
+    var isManualTempBasalRunning: Bool {
+        deviceManager?.isManualTempBasalRunning ?? false
+    }
+
     var isCGMInWarmup: Bool {
         deviceManager?.cgmManager?.cgmManagerStatus.inSensorWarmup == true
     }
@@ -241,6 +245,8 @@ class LoopStatusModalViewModel {
                 return (titleDeviceIssue, NSLocalizedString("Tap your CGM or insulin pump status icons right away for more information and steps to resolve the issue.", comment: "message when automation is off and there is a bluetooth or pump issue"))
             } else if isDeliverySuspended {
                 return (titleAutomationOff, NSLocalizedString("Resume insulin if you wish for the app to restart insulin delivery.\n\nIf you wish for the app to automate your insulin, go to Settings and toggle Closed Loop to on.", comment: "message when automation is off and insulin delivery is suspended"))
+            } else if isManualTempBasalRunning {
+                return (titleAutomationOff, NSLocalizedString("Cancel the manual temporary basal if you wish for the app to restart automated dosing.\n\nIf you wish for the app to automate your insulin, go to Settings and toggle Closed Loop to on.", comment: "message when automation is off and a manual temp basal is in progress"))
             } else if isCGMInoperable {
                 return (titleDeviceIssue, NSLocalizedString("Tap your CGM status icon right away for more information and steps to resolve the issue.\n\nIn the meantime, your pump is still able to deliver insulin.", comment: "message when automation is off and CGM is inoperable"))
             } else if isCGMInSignalLoss {
@@ -258,6 +264,8 @@ class LoopStatusModalViewModel {
             return (titleUnsuccessful, NSLocalizedString("Tidepool Loop will continue trying to restore automation, but check for potential communication issues with your CGM or insulin pump.", comment: "message when automation is on and pump is in signal loss"))
         } else if isDeliverySuspended {
             return (titleUnavailable, NSLocalizedString("Automation is unavailable while your insulin is suspended.\n\nResume insulin if you wish for the app to automate insulin delivery.", comment: "message when automation is on and insulin delivery is suspended"))
+        } else if isManualTempBasalRunning {
+            return (titleUnavailable, NSLocalizedString("Automation is unavailable while a manual temporary basal is in progress.\n\nCancel the manual temporary basal if you wish for the app to automate insulin delivery.", comment: "message when automation is on and a manual temp basal is in progress"))
         } else if isCGMInoperable {
             return (titleUnavailable, NSLocalizedString("Tap your CGM status icon right away for more information and steps to resolve the issue.\n\nIn the meantime, your pump is still able to deliver insulin.", comment: "message when automation is on and CGM is inoperable"))
         } else if isCGMInSignalLoss {
