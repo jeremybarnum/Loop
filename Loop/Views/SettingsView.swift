@@ -213,23 +213,18 @@ extension SettingsView {
     
     private var loopSection: some View {
         Section(
-            header: 
-                VStack(alignment: .leading, spacing: 8) {
-                    SectionHeader(label: localizedAppNameAndVersion.description)
-                    
-                    if isInvestigationalDevice {
-                        Group {
-                            Text(Image(systemName: "exclamationmark.triangle.fill"))
-                                .foregroundColor(guidanceColors.warning) +
-                            Text(" ") +
-                            Text("CAUTION - Investigational device. Limited by Federal (or United States) law to investigational use.")
-                        }
-                        .font(.footnote)
-                        .textCase(nil)
-                        .foregroundColor(.primary)
-                        .padding(.bottom, 6)
-                    }
+            header: Group {
+                if isInvestigationalDevice {
+                    Text(Image(systemName: "exclamationmark.triangle.fill"))
+                        .foregroundColor(guidanceColors.warning) +
+                    Text(" ") +
+                    Text("CAUTION - Investigational device. Limited by Federal (or United States) law to investigational use.")
                 }
+            }
+            .font(.footnote)
+            .textCase(nil)
+            .foregroundColor(.primary)
+            .padding(.bottom, 6)
         ) {
             ConfirmationToggle(
                 isOn: closedLoopToggleState,
@@ -592,6 +587,13 @@ extension SettingsView {
 
             NavigationLink(destination: CriticalEventLogExportView(viewModel: viewModel.criticalEventLogExportViewModel)) {
                 Text(NSLocalizedString("Export Critical Event Logs", comment: "The title of the export critical event logs in support"))
+            }
+
+            HStack {
+                Text(NSLocalizedString("Version", comment: "Label for the app version row in the Support section"))
+                Spacer()
+                Text(localizedAppNameAndVersion)
+                    .foregroundColor(.secondary)
             }
         }
     }
