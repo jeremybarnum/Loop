@@ -8787,6 +8787,9 @@
     "Automation is unavailable" : {
       "comment" : "title for when automation is unavailable"
     },
+    "Automation is unavailable while a manual temporary basal is in progress.\n\nCancel the manual temporary basal if you wish for the app to automate insulin delivery." : {
+      "comment" : "message when automation is on and a manual temp basal is in progress"
+    },
     "Automation is unavailable while your CGM sensor is warming up.\n\nIn the meantime, your pump is still able to deliver insulin.\n\nAutomation will resume when CGM readings are received." : {
       "comment" : "message when automation is on and CGM is in warmup"
     },
@@ -10468,6 +10471,9 @@
           }
         }
       }
+    },
+    "Cancel the manual temporary basal if you wish for the app to restart automated dosing.\n\nIf you wish for the app to automate your insulin, go to Settings and toggle Closed Loop to on." : {
+      "comment" : "message when automation is off and a manual temp basal is in progress"
     },
     "Canceling Bolus" : {
       "comment" : "The title of the cell indicating a bolus is being canceled",
@@ -26230,6 +26236,9 @@
           }
         }
       }
+    },
+    "Manual temporary basal in progress. Automatic dosing is disabled." : {
+      "comment" : "The error message displayed for LoopError.manualTempBasalRunning errors."
     },
     "Maximum Basal Rate Per Hour" : {
       "comment" : "Details for configuration error when maximum basal rate per hour is missing",
