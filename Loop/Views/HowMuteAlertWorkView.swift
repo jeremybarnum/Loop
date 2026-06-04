@@ -59,7 +59,62 @@ struct HowMuteAlertWorkView: View {
                         .stroke(Color(.systemFill), lineWidth: 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                
+
+                if !FeatureFlags.criticalAlertsEnabled {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(
+                            String(
+                                format: NSLocalizedString(
+                                    "What if Critical Alerts aren't available in %1$@?",
+                                    comment: "Title text for critical alerts unavailable fallback (1: app name)"
+                                ),
+                                appName
+                            )
+                        )
+                        .bold()
+
+                        Text(
+                            String(
+                                format: NSLocalizedString(
+                                    "Critical Alerts require a special permission from Apple that many do-it-yourself versions of %1$@ don't include. Without it, iOS treats even urgent alarms as ordinary notifications, so the Ring/Silent switch, Do Not Disturb, and Focus modes can silence them.",
+                                    comment: "Description text explaining the critical alerts entitlement may be unavailable (1: app name)"
+                                ),
+                                appName
+                            )
+                        )
+
+                        Text(
+                            String(
+                                format: NSLocalizedString(
+                                    "To help make sure you're still alerted in urgent situations such as Urgent Low, %1$@ plays the alarm sound itself. This sound plays even when the Ring/Silent switch is set to silent or a Focus mode is on, and it repeats for up to 5 minutes or until you acknowledge the alert.",
+                                    comment: "Description text explaining the in-app audio fallback for urgent alerts (1: app name)"
+                                ),
+                                appName
+                            )
+                        )
+                    }
+
+                    Callout(
+                        .warning,
+                        title: Text(
+                            NSLocalizedString(
+                                "Keep your volume up",
+                                comment: "Critical alert audio fallback callout title"
+                            )
+                        ),
+                        message: Text(
+                            String(
+                                format: NSLocalizedString(
+                                    "%1$@ cannot turn your iPhone's volume up for you. Make sure your volume is turned up — especially overnight — or you may not hear urgent alarms. The Mute All App Sounds feature also silences these alarms while it is active.",
+                                    comment: "Critical alert audio fallback callout message (1: app name)"
+                                ),
+                                appName
+                            )
+                        )
+                    )
+                    .padding(.horizontal, -20)
+                }
+
                 VStack(alignment: .leading, spacing: 8) {
                     Text(
                         String(
@@ -94,13 +149,23 @@ struct HowMuteAlertWorkView: View {
                         )
                     )
                     
-                    Text(
-                        NSLocalizedString(
-                            "Critical Alerts will still sound, but all others will be silenced.",
-                            comment: "Additional description text for temporarily silencing non-critical alerts"
+                    if FeatureFlags.criticalAlertsEnabled {
+                        Text(
+                            NSLocalizedString(
+                                "Critical Alerts will still sound, but all others will be silenced.",
+                                comment: "Additional description text for temporarily silencing non-critical alerts"
+                            )
                         )
-                    )
-                    .italic()
+                        .italic()
+                    } else {
+                        Text(
+                            NSLocalizedString(
+                                "Urgent alarms, such as Urgent Low, will still sound, but all others will be silenced.",
+                                comment: "Additional description text for temporarily silencing non-critical alerts when Critical Alerts are unavailable"
+                            )
+                        )
+                        .italic()
+                    }
                 }
                 
                 Callout(
@@ -115,10 +180,15 @@ struct HowMuteAlertWorkView: View {
                         )
                     ),
                     message: Text(
-                        NSLocalizedString(
-                            "Make sure to keep Notifications, Time Sensitive Notifications, and Critical Alerts turned ON in iOS Settings to receive essential safety and maintenance notifications.",
-                            comment: "Time sensitive notifications callout message"
-                        )
+                        FeatureFlags.criticalAlertsEnabled
+                            ? NSLocalizedString(
+                                "Make sure to keep Notifications, Time Sensitive Notifications, and Critical Alerts turned ON in iOS Settings to receive essential safety and maintenance notifications.",
+                                comment: "Time sensitive notifications callout message"
+                            )
+                            : NSLocalizedString(
+                                "Make sure to keep Notifications and Time Sensitive Notifications turned ON in iOS Settings to receive essential safety and maintenance notifications.",
+                                comment: "Time sensitive notifications callout message when Critical Alerts are unavailable"
+                            )
                     )
                 )
                 .padding(.horizontal, -20)
