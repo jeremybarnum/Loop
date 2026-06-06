@@ -15,6 +15,49 @@ import LoopAlgorithm
 import LoopKit
 import os.log
 
+// MARK: - Sound catalog
+
+/// One selectable alarm sound. `filename` is the bundled `.caf` (also the
+/// `Alert.Sound` name stamped onto issued alerts); `displayName` is what the
+/// picker shows.
+struct AlarmSound: Identifiable, Equatable {
+    let filename: String
+    let displayName: String
+    var id: String { filename }
+}
+
+/// The sounds available for glucose alarms. Each file is bundled in
+/// Loop/Resources/Sounds and flattened to the app-bundle root (same as
+/// `critical.caf`), so it's reachable both by `AVAudioPlayer` (in-process
+/// critical fallback) and by the notification path once copied into
+/// `Library/Sounds` via the AlertSoundVendor mechanism.
+enum AlarmSoundCatalog {
+    static let all: [AlarmSound] = [
+        AlarmSound(filename: "urgent_low.caf", displayName: "Urgent Low"),
+        AlarmSound(filename: "critical.caf", displayName: "Sharp Alarm"),
+        AlarmSound(filename: "alarm.caf", displayName: "Alarm"),
+        AlarmSound(filename: "bright_alarm.caf", displayName: "Bright Alarm"),
+        AlarmSound(filename: "honk.caf", displayName: "Honk"),
+        AlarmSound(filename: "chime.caf", displayName: "Chime"),
+        AlarmSound(filename: "clear_chimes.caf", displayName: "Clear Chimes"),
+        AlarmSound(filename: "high_chimes.caf", displayName: "High Chimes"),
+        AlarmSound(filename: "dings.caf", displayName: "Dings"),
+        AlarmSound(filename: "trill.caf", displayName: "Trill"),
+        AlarmSound(filename: "bloom.caf", displayName: "Bloom"),
+        AlarmSound(filename: "bloop.caf", displayName: "Bloop"),
+        AlarmSound(filename: "spring.caf", displayName: "Spring"),
+        AlarmSound(filename: "minimal.caf", displayName: "Minimal"),
+        AlarmSound(filename: "simple.caf", displayName: "Simple"),
+        AlarmSound(filename: "synth.caf", displayName: "Synth"),
+        AlarmSound(filename: "mood_synth.caf", displayName: "Mood Synth"),
+        AlarmSound(filename: "crying.caf", displayName: "Crying"),
+    ]
+
+    static func displayName(for filename: String) -> String {
+        all.first { $0.filename == filename }?.displayName ?? filename
+    }
+}
+
 // MARK: - Configuration
 
 struct GlucoseAlertConfiguration: Equatable, Codable {
@@ -36,6 +79,11 @@ struct GlucoseAlertConfiguration: Equatable, Codable {
     var lowSnoozeEnabled: Bool
     var highSnoozeEnabled: Bool
 
+    /// Delay the first high alert until BG has stayed above the threshold
+    /// continuously for `highDelay`. Re-arms once BG recovers below threshold.
+    var highDelayEnabled: Bool
+    var highDelay: TimeInterval
+
     var predictedLowEnabled: Bool
     var predictedLowThresholdMgDL: Double
     var predictedLowHorizon: TimeInterval
@@ -53,10 +101,49 @@ struct GlucoseAlertConfiguration: Equatable, Codable {
         highEnabled: true,
         lowSnoozeEnabled: false,
         highSnoozeEnabled: false,
+        highDelayEnabled: false,
+        highDelay: 30 * 60,
         predictedLowEnabled: true,
         predictedLowThresholdMgDL: 60,
         predictedLowHorizon: 20 * 60
     )
+}
+
+extension GlucoseAlertConfiguration {
+    private enum CodingKeys: String, CodingKey {
+        case lowThresholdMgDL, urgentLowThresholdMgDL, highThresholdMgDL
+        case recoveryMarginMgDL
+        case lowRepeatInterval, urgentLowRepeatInterval, highRepeatInterval
+        case lowEnabled, urgentLowEnabled, highEnabled
+        case lowSnoozeEnabled, highSnoozeEnabled
+        case highDelayEnabled, highDelay
+        case predictedLowEnabled, predictedLowThresholdMgDL, predictedLowHorizon
+    }
+
+    /// Custom decode so configs persisted before a field was introduced still
+    /// load: a missing key falls back to the default rather than failing the
+    /// whole decode, which would discard the user's saved profiles.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = GlucoseAlertConfiguration.default
+        lowThresholdMgDL = try c.decodeIfPresent(Double.self, forKey: .lowThresholdMgDL) ?? d.lowThresholdMgDL
+        urgentLowThresholdMgDL = try c.decodeIfPresent(Double.self, forKey: .urgentLowThresholdMgDL) ?? d.urgentLowThresholdMgDL
+        highThresholdMgDL = try c.decodeIfPresent(Double.self, forKey: .highThresholdMgDL) ?? d.highThresholdMgDL
+        recoveryMarginMgDL = try c.decodeIfPresent(Double.self, forKey: .recoveryMarginMgDL) ?? d.recoveryMarginMgDL
+        lowRepeatInterval = try c.decodeIfPresent(TimeInterval.self, forKey: .lowRepeatInterval) ?? d.lowRepeatInterval
+        urgentLowRepeatInterval = try c.decodeIfPresent(TimeInterval.self, forKey: .urgentLowRepeatInterval) ?? d.urgentLowRepeatInterval
+        highRepeatInterval = try c.decodeIfPresent(TimeInterval.self, forKey: .highRepeatInterval) ?? d.highRepeatInterval
+        lowEnabled = try c.decodeIfPresent(Bool.self, forKey: .lowEnabled) ?? d.lowEnabled
+        urgentLowEnabled = try c.decodeIfPresent(Bool.self, forKey: .urgentLowEnabled) ?? d.urgentLowEnabled
+        highEnabled = try c.decodeIfPresent(Bool.self, forKey: .highEnabled) ?? d.highEnabled
+        lowSnoozeEnabled = try c.decodeIfPresent(Bool.self, forKey: .lowSnoozeEnabled) ?? d.lowSnoozeEnabled
+        highSnoozeEnabled = try c.decodeIfPresent(Bool.self, forKey: .highSnoozeEnabled) ?? d.highSnoozeEnabled
+        highDelayEnabled = try c.decodeIfPresent(Bool.self, forKey: .highDelayEnabled) ?? d.highDelayEnabled
+        highDelay = try c.decodeIfPresent(TimeInterval.self, forKey: .highDelay) ?? d.highDelay
+        predictedLowEnabled = try c.decodeIfPresent(Bool.self, forKey: .predictedLowEnabled) ?? d.predictedLowEnabled
+        predictedLowThresholdMgDL = try c.decodeIfPresent(Double.self, forKey: .predictedLowThresholdMgDL) ?? d.predictedLowThresholdMgDL
+        predictedLowHorizon = try c.decodeIfPresent(TimeInterval.self, forKey: .predictedLowHorizon) ?? d.predictedLowHorizon
+    }
 }
 
 // MARK: - Schedule settings
@@ -136,6 +223,17 @@ final class GlucoseAlertManager: ObservableObject {
 
     private static let profilesKey = "GlucoseAlertProfiles"
     private static let activeProfileIDKey = "GlucoseAlertActiveProfileID"
+    private static let urgentLowSoundKey = "GlucoseAlertUrgentLowSound"
+    private static let lowSoundKey = "GlucoseAlertLowSound"
+    private static let highSoundKey = "GlucoseAlertHighSound"
+    private static let predictedLowSoundKey = "GlucoseAlertPredictedLowSound"
+
+    // Per-alarm sound defaults. Urgent low keeps the loud critical tone;
+    // the rest get a gentler default the user can change.
+    static let defaultUrgentLowSound = "urgent_low.caf"
+    static let defaultLowSound = "simple.caf"
+    static let defaultHighSound = "chime.caf"
+    static let defaultPredictedLowSound = "mood_synth.caf"
     private static let overrideKey = "GlucoseAlertLoopOverride"
     private static let legacyConfigKey = "GlucoseAlertConfiguration"
     private static let legacyPrimaryKey = "GlucoseAlertPrimaryConfig"
@@ -165,6 +263,34 @@ final class GlucoseAlertManager: ObservableObject {
 
     @Published var loopAlertsOverrideForOwnAlertingCGM: Bool {
         didSet { userDefaults.set(loopAlertsOverrideForOwnAlertingCGM, forKey: Self.overrideKey) }
+    }
+
+    /// Global per-alarm sound selection (filename in AlarmSoundCatalog). These
+    /// are global rather than per-profile: the sound identifies the alarm
+    /// type, not the threshold profile. Stamped onto each issued Alert so both
+    /// the notification path and the in-process critical player use it.
+    @Published var urgentLowSound: String {
+        didSet { userDefaults.set(urgentLowSound, forKey: Self.urgentLowSoundKey) }
+    }
+    @Published var lowSound: String {
+        didSet { userDefaults.set(lowSound, forKey: Self.lowSoundKey) }
+    }
+    @Published var highSound: String {
+        didSet { userDefaults.set(highSound, forKey: Self.highSoundKey) }
+    }
+    @Published var predictedLowSound: String {
+        didSet { userDefaults.set(predictedLowSound, forKey: Self.predictedLowSoundKey) }
+    }
+
+    /// The configured sound filename for a given glucose alarm identifier.
+    func configuredSoundName(for identifier: Alert.AlertIdentifier) -> String {
+        switch identifier {
+        case Self.urgentLowAlertIdentifier:   return urgentLowSound
+        case Self.lowAlertIdentifier:         return lowSound
+        case Self.highAlertIdentifier:        return highSound
+        case Self.predictedLowAlertIdentifier: return predictedLowSound
+        default:                              return Self.defaultUrgentLowSound
+        }
     }
 
     @Published var cgmProvidesOwnAlerts: Bool = false
@@ -207,6 +333,20 @@ final class GlucoseAlertManager: ObservableObject {
         guard profiles.count > 1, profiles[0].id != id else { return }
         if activeProfileID == id { activeProfileID = profiles[0].id }
         profiles.removeAll { $0.id == id }
+    }
+
+    /// Restore all glucose-alert settings to their factory defaults: a single
+    /// Primary profile with default thresholds/schedule, default per-alarm
+    /// sounds, and the Loop-override toggle off.
+    func resetToDefaults() {
+        let primary = GlucoseAlertProfile.makePrimary()
+        profiles = [primary]
+        activeProfileID = primary.id
+        urgentLowSound = Self.defaultUrgentLowSound
+        lowSound = Self.defaultLowSound
+        highSound = Self.defaultHighSound
+        predictedLowSound = Self.defaultPredictedLowSound
+        loopAlertsOverrideForOwnAlertingCGM = false
     }
 
     // MARK: - Scheduling
@@ -299,6 +439,9 @@ final class GlucoseAlertManager: ObservableObject {
     private struct AlertState: Equatable {
         var inBoundary: Bool = false
         var lastFiredAt: Date?
+        /// When BG first crossed into the alert boundary this episode. Used to
+        /// honor a configured first-alert delay. Reset on recovery.
+        var boundaryEnteredAt: Date?
     }
     private var lowState = AlertState()
     private var urgentLowState = AlertState()
@@ -361,6 +504,11 @@ final class GlucoseAlertManager: ObservableObject {
         self.loopAlertsOverrideForOwnAlertingCGM = didMigrate && migratedOverride
             ? migratedOverride
             : userDefaults.bool(forKey: Self.overrideKey)
+
+        self.urgentLowSound = userDefaults.string(forKey: Self.urgentLowSoundKey) ?? Self.defaultUrgentLowSound
+        self.lowSound = userDefaults.string(forKey: Self.lowSoundKey) ?? Self.defaultLowSound
+        self.highSound = userDefaults.string(forKey: Self.highSoundKey) ?? Self.defaultHighSound
+        self.predictedLowSound = userDefaults.string(forKey: Self.predictedLowSoundKey) ?? Self.defaultPredictedLowSound
 
         if didMigrate {
             // Write new format and erase all legacy + WIP keys atomically so
@@ -429,6 +577,7 @@ final class GlucoseAlertManager: ObservableObject {
                 state: &lowState, identifier: Self.lowAlertIdentifier, interruptionLevel: .timeSensitive,
                 title: "Low Glucose",
                 body: "Glucose is below \(Int(threshold)) mg/dL (current: \(Int(mgdl)))",
+                delay: nil,
                 repeatInterval: config.lowSnoozeEnabled ? config.lowRepeatInterval : nil, now: now
             )
             if let alert { await alertIssuer.issueAlert(alert) }
@@ -447,6 +596,7 @@ final class GlucoseAlertManager: ObservableObject {
                 state: &urgentLowState, identifier: Self.urgentLowAlertIdentifier, interruptionLevel: .critical,
                 title: "Urgent Low Glucose",
                 body: "Glucose is below \(Int(threshold)) mg/dL (current: \(Int(mgdl))). Treat now.",
+                delay: nil,
                 repeatInterval: config.urgentLowRepeatInterval, now: now
             )
             if let alert { await alertIssuer.issueAlert(alert) }
@@ -465,6 +615,7 @@ final class GlucoseAlertManager: ObservableObject {
                 state: &highState, identifier: Self.highAlertIdentifier, interruptionLevel: .timeSensitive,
                 title: "High Glucose",
                 body: "Glucose is above \(Int(threshold)) mg/dL (current: \(Int(mgdl)))",
+                delay: config.highDelayEnabled ? config.highDelay : nil,
                 repeatInterval: config.highSnoozeEnabled ? config.highRepeatInterval : nil, now: now
             )
             if let alert { await alertIssuer.issueAlert(alert) }
@@ -513,7 +664,8 @@ final class GlucoseAlertManager: ObservableObject {
                 title: "Predicted Low Glucose",
                 body: "Loop predicts glucose below \(Int(threshold)) mg/dL within \(Int(config.predictedLowHorizon / 60)) min.",
                 acknowledgeActionButtonLabel: "OK"),
-            trigger: .immediate, interruptionLevel: .timeSensitive, sound: .sound(name: "alert.caf")
+            trigger: .immediate, interruptionLevel: .timeSensitive,
+            sound: .sound(name: configuredSoundName(for: Self.predictedLowAlertIdentifier))
         )
         await alertIssuer.issueAlert(alert)
     }
@@ -521,17 +673,26 @@ final class GlucoseAlertManager: ObservableObject {
     private func decideAndUpdate(
         state: inout AlertState, identifier: Alert.AlertIdentifier,
         interruptionLevel: Alert.InterruptionLevel,
-        title: String, body: String, repeatInterval: TimeInterval?, now: Date
+        title: String, body: String, delay: TimeInterval?, repeatInterval: TimeInterval?, now: Date
     ) -> Alert? {
-        let shouldFire: Bool
         if !state.inBoundary {
-            shouldFire = true
+            state.inBoundary = true
+            state.boundaryEnteredAt = now
+        }
+        let shouldFire: Bool
+        if state.lastFiredAt == nil {
+            // First alert of this episode: hold off until BG has stayed in the
+            // boundary for the configured delay.
+            if let delay, let entered = state.boundaryEnteredAt, now.timeIntervalSince(entered) < delay {
+                shouldFire = false
+            } else {
+                shouldFire = true
+            }
         } else if let repeatInterval, let last = state.lastFiredAt, now.timeIntervalSince(last) >= repeatInterval {
             shouldFire = true
         } else {
             shouldFire = false
         }
-        state.inBoundary = true
         guard shouldFire else { return nil }
         state.lastFiredAt = now
         return Alert(
@@ -539,8 +700,24 @@ final class GlucoseAlertManager: ObservableObject {
             foregroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
             backgroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
             trigger: .immediate, interruptionLevel: interruptionLevel,
-            sound: interruptionLevel == .critical ? .sound(name: "critical.caf") : .sound(name: "alert.caf")
+            sound: .sound(name: configuredSoundName(for: identifier))
         )
+    }
+}
+
+// MARK: - AlertSoundVendor
+
+extension GlucoseAlertManager: AlertSoundVendor {
+    // The .caf files are bundled as individual resources, so they're
+    // flattened to the app-bundle root (same as critical.caf). The
+    // AlertManager copies each into Library/Sounds/GlucoseAlertManager-<file>
+    // so the notification path can resolve them by name.
+    nonisolated func getSoundBaseURL() -> URL? {
+        Bundle.main.resourceURL
+    }
+
+    nonisolated func getSounds() -> [Alert.Sound] {
+        AlarmSoundCatalog.all.map { .sound(name: $0.filename) }
     }
 }
 

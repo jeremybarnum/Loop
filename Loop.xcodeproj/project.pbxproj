@@ -80,6 +80,23 @@
 		C9A47B0280AAB1FC572D3EFF /* GlucoseAlertManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9A47B0275B13A9543390BC6 /* GlucoseAlertManager.swift */; };
 		C9A47B0380AAB1FC572D3F00 /* GlucoseAlertSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9A47B0375B13A9543390BC7 /* GlucoseAlertSettingsView.swift */; };
 		C9A47B0480AAB1FC572D3F01 /* critical.caf in Resources */ = {isa = PBXBuildFile; fileRef = C9A47B0475B13A9543390BC8 /* critical.caf */; };
+		DE965737FE2DAE9FE692769E /* alarm.caf in Resources */ = {isa = PBXBuildFile; fileRef = 0FC34B523FE5A50C920506D5 /* alarm.caf */; };
+		A413B305CB4C4009DA09BE57 /* bloom.caf in Resources */ = {isa = PBXBuildFile; fileRef = 8FB2394478FF679F436E8EF1 /* bloom.caf */; };
+		230BE095719B8D8969B32A9C /* bloop.caf in Resources */ = {isa = PBXBuildFile; fileRef = AF16A5EDEB9DF756890E0C09 /* bloop.caf */; };
+		9B8FCBDD6E3A9E603C4AABAD /* bright_alarm.caf in Resources */ = {isa = PBXBuildFile; fileRef = 270F994CD56D566028B3CB25 /* bright_alarm.caf */; };
+		9960C6964DD51D81093FAD5D /* chime.caf in Resources */ = {isa = PBXBuildFile; fileRef = 3F7A1D72697082DC3A14587E /* chime.caf */; };
+		824A01CBE97A4F7A9D32F7D6 /* clear_chimes.caf in Resources */ = {isa = PBXBuildFile; fileRef = 4A645E0E2DDA534A635C9201 /* clear_chimes.caf */; };
+		01414522FC033F2B7A9B223A /* crying.caf in Resources */ = {isa = PBXBuildFile; fileRef = 85203550670F2E9BE92F27D8 /* crying.caf */; };
+		2C694BFD5806E573AFAB5E2E /* dings.caf in Resources */ = {isa = PBXBuildFile; fileRef = 62F7CB5D5DC337E705032AC7 /* dings.caf */; };
+		A4574F416AD62A1FCDE36D7D /* high_chimes.caf in Resources */ = {isa = PBXBuildFile; fileRef = 491F8F0D89972E9D8903CFA7 /* high_chimes.caf */; };
+		FA37F6EC10FF02D4F985D724 /* honk.caf in Resources */ = {isa = PBXBuildFile; fileRef = 6D5FCC7207E50ACC682E9E6E /* honk.caf */; };
+		0A02E77AD7536C322933D49B /* minimal.caf in Resources */ = {isa = PBXBuildFile; fileRef = 74145BE3C46270883D295A1F /* minimal.caf */; };
+		33644743F20B3706E3107FAC /* mood_synth.caf in Resources */ = {isa = PBXBuildFile; fileRef = BEC0BA802BE613F144AC3A70 /* mood_synth.caf */; };
+		A2779286E117BD3627DA0618 /* simple.caf in Resources */ = {isa = PBXBuildFile; fileRef = 5181B60CBF3CB2DA537F0475 /* simple.caf */; };
+		D6E28676C2C7751C77C7F2FB /* spring.caf in Resources */ = {isa = PBXBuildFile; fileRef = 9471E156FC10D6D0FF219C77 /* spring.caf */; };
+		CB1AF8155B1761A30ACA5591 /* synth.caf in Resources */ = {isa = PBXBuildFile; fileRef = 83081FFB0497A4596F597830 /* synth.caf */; };
+		16E5A3BC4D931CE6AED18518 /* trill.caf in Resources */ = {isa = PBXBuildFile; fileRef = 21F13EB666EBFDD03F99CB7E /* trill.caf */; };
+		124B300527D84BE2A1233A91 /* urgent_low.caf in Resources */ = {isa = PBXBuildFile; fileRef = C9EA3F48338B49BD9C6BD0F9 /* urgent_low.caf */; };
 		1DB1CA4D24A55F0000B3B94C /* Image.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DB1CA4C24A55F0000B3B94C /* Image.swift */; };
 		1DB619AC270BAD3D006C9D07 /* VersionUpdateViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DB619AB270BAD3D006C9D07 /* VersionUpdateViewModel.swift */; };
 		1DDE273D24AEA4B000796622 /* SettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DB1CA4E24A56D7600B3B94C /* SettingsViewModel.swift */; };
@@ -820,6 +837,23 @@
 		C9A47B0275B13A9543390BC6 /* GlucoseAlertManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = GlucoseAlertManager.swift; sourceTree = "<group>"; };
 		C9A47B0375B13A9543390BC7 /* GlucoseAlertSettingsView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = GlucoseAlertSettingsView.swift; sourceTree = "<group>"; };
 		C9A47B0475B13A9543390BC8 /* critical.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop/Resources/Sounds/critical.caf"; sourceTree = SOURCE_ROOT; };
+		0FC34B523FE5A50C920506D5 /* alarm.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop/Resources/Sounds/alarm.caf"; sourceTree = SOURCE_ROOT; };
+		8FB2394478FF679F436E8EF1 /* bloom.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop/Resources/Sounds/bloom.caf"; sourceTree = SOURCE_ROOT; };
+		AF16A5EDEB9DF756890E0C09 /* bloop.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop/Resources/Sounds/bloop.caf"; sourceTree = SOURCE_ROOT; };
+		270F994CD56D566028B3CB25 /* bright_alarm.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop/Resources/Sounds/bright_alarm.caf"; sourceTree = SOURCE_ROOT; };
+		3F7A1D72697082DC3A14587E /* chime.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop/Resources/Sounds/chime.caf"; sourceTree = SOURCE_ROOT; };
+		4A645E0E2DDA534A635C9201 /* clear_chimes.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop/Resources/Sounds/clear_chimes.caf"; sourceTree = SOURCE_ROOT; };
+		85203550670F2E9BE92F27D8 /* crying.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop/Resources/Sounds/crying.caf"; sourceTree = SOURCE_ROOT; };
+		62F7CB5D5DC337E705032AC7 /* dings.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop/Resources/Sounds/dings.caf"; sourceTree = SOURCE_ROOT; };
+		491F8F0D89972E9D8903CFA7 /* high_chimes.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop/Resources/Sounds/high_chimes.caf"; sourceTree = SOURCE_ROOT; };
+		6D5FCC7207E50ACC682E9E6E /* honk.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop/Resources/Sounds/honk.caf"; sourceTree = SOURCE_ROOT; };
+		74145BE3C46270883D295A1F /* minimal.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop/Resources/Sounds/minimal.caf"; sourceTree = SOURCE_ROOT; };
+		BEC0BA802BE613F144AC3A70 /* mood_synth.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop/Resources/Sounds/mood_synth.caf"; sourceTree = SOURCE_ROOT; };
+		5181B60CBF3CB2DA537F0475 /* simple.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop/Resources/Sounds/simple.caf"; sourceTree = SOURCE_ROOT; };
+		9471E156FC10D6D0FF219C77 /* spring.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop/Resources/Sounds/spring.caf"; sourceTree = SOURCE_ROOT; };
+		83081FFB0497A4596F597830 /* synth.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop/Resources/Sounds/synth.caf"; sourceTree = SOURCE_ROOT; };
+		21F13EB666EBFDD03F99CB7E /* trill.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop/Resources/Sounds/trill.caf"; sourceTree = SOURCE_ROOT; };
+		C9EA3F48338B49BD9C6BD0F9 /* urgent_low.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop/Resources/Sounds/urgent_low.caf"; sourceTree = SOURCE_ROOT; };
 		1DB1CA4C24A55F0000B3B94C /* Image.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Image.swift; sourceTree = "<group>"; };
 		1DB1CA4E24A56D7600B3B94C /* SettingsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViewModel.swift; sourceTree = "<group>"; };
 		1DB619AB270BAD3D006C9D07 /* VersionUpdateViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VersionUpdateViewModel.swift; sourceTree = "<group>"; };
@@ -3042,6 +3076,23 @@
 				C1EE9E812A38D0FB0064784A /* BuildDetails.plist in Resources */,
 				43FCBBC21E51710B00343C1B /* LaunchScreen.storyboard in Resources */,
 				C9A47B0480AAB1FC572D3F01 /* critical.caf in Resources */,
+				DE965737FE2DAE9FE692769E /* alarm.caf in Resources */,
+				A413B305CB4C4009DA09BE57 /* bloom.caf in Resources */,
+				230BE095719B8D8969B32A9C /* bloop.caf in Resources */,
+				9B8FCBDD6E3A9E603C4AABAD /* bright_alarm.caf in Resources */,
+				9960C6964DD51D81093FAD5D /* chime.caf in Resources */,
+				824A01CBE97A4F7A9D32F7D6 /* clear_chimes.caf in Resources */,
+				01414522FC033F2B7A9B223A /* crying.caf in Resources */,
+				2C694BFD5806E573AFAB5E2E /* dings.caf in Resources */,
+				A4574F416AD62A1FCDE36D7D /* high_chimes.caf in Resources */,
+				FA37F6EC10FF02D4F985D724 /* honk.caf in Resources */,
+				0A02E77AD7536C322933D49B /* minimal.caf in Resources */,
+				33644743F20B3706E3107FAC /* mood_synth.caf in Resources */,
+				A2779286E117BD3627DA0618 /* simple.caf in Resources */,
+				D6E28676C2C7751C77C7F2FB /* spring.caf in Resources */,
+				CB1AF8155B1761A30ACA5591 /* synth.caf in Resources */,
+				16E5A3BC4D931CE6AED18518 /* trill.caf in Resources */,
+				124B300527D84BE2A1233A91 /* urgent_low.caf in Resources */,
 				B405E35A24D2B1A400DD058D /* HUDAssets.xcassets in Resources */,
 				A966152623EA5A26005D8B29 /* DefaultAssets.xcassets in Resources */,
 				A966152723EA5A26005D8B29 /* DerivedAssets.xcassets in Resources */,

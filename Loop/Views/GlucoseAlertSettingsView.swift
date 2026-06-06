@@ -8,6 +8,7 @@
 //
 
 import SwiftUI
+import AVFoundation
 
 // MARK: - Profile list
 
@@ -17,6 +18,7 @@ struct GlucoseAlertSettingsView: View {
 
     @State private var pendingNewProfileID: UUID? = nil
     @State private var navigateToNew = false
+    @State private var showResetConfirm = false
 
     var body: some View {
         List {
@@ -34,6 +36,19 @@ struct GlucoseAlertSettingsView: View {
                         navigateToNew = true
                     }
                 }
+            }
+
+            Section {
+                Button("Reset Alert Settings", role: .destructive) {
+                    showResetConfirm = true
+                }
+            } footer: {
+                Text("Restores all glucose alert thresholds, schedules, and sounds to their defaults, and removes any extra profiles.")
+            }
+        }
+        .confirmationDialog("Reset all glucose alert settings to defaults?", isPresented: $showResetConfirm, titleVisibility: .visible) {
+            Button("Reset Alert Settings", role: .destructive) {
+                manager.resetToDefaults()
             }
         }
         .background(
@@ -376,9 +391,15 @@ struct GlucoseAlertDetailView: View {
     let snooze: SnoozeBinding?
     let horizon: HorizonBinding?
     let infoNotice: String?
+    var delay: DelayBinding? = nil
     var showsTestButton: Bool = false
+    var soundBinding: Binding<String>? = nil
 
     struct SnoozeBinding {
+        let enabled: Binding<Bool>
+        let interval: Binding<TimeInterval>
+    }
+    struct DelayBinding {
         let enabled: Binding<Bool>
         let interval: Binding<TimeInterval>
     }
@@ -403,6 +424,14 @@ struct GlucoseAlertDetailView: View {
                 if let level {
                     Section { LevelPickerRow(label: levelLabel, value: level, range: levelRange) }
                 }
+                if let delay {
+                    Section {
+                        Toggle("Delay 1st Alert", isOn: delay.enabled)
+                        if delay.enabled.wrappedValue { DelayIntervalRow(interval: delay.interval) }
+                    } footer: {
+                        Text("Delay the first alert until your reading stays out of range for this long.")
+                    }
+                }
                 if let snooze {
                     Section {
                         Toggle("Snooze", isOn: snooze.enabled)
@@ -414,6 +443,22 @@ struct GlucoseAlertDetailView: View {
                 if let horizon {
                     Section { HorizonRow(value: horizon.value) } footer: {
                         Text("Fires once when Loop's forecast first dips below the level inside this horizon. Re-arms when the forecast clears.")
+                    }
+                }
+                if let soundBinding {
+                    Section {
+                        NavigationLink {
+                            SoundPickerView(selection: soundBinding)
+                        } label: {
+                            HStack {
+                                Text("Sound")
+                                Spacer()
+                                Text(AlarmSoundCatalog.displayName(for: soundBinding.wrappedValue))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    } footer: {
+                        Text("The sound played when this alarm fires.")
                     }
                 }
             }
@@ -448,7 +493,8 @@ extension GlucoseAlertDetailView {
             levelLabel: "Level", level: detail.cfgBind(\.lowThresholdMgDL), levelRange: 60...90,
             enabled: detail.cfgBind(\.lowEnabled),
             snooze: .init(enabled: detail.cfgBind(\.lowSnoozeEnabled), interval: detail.cfgBind(\.lowRepeatInterval)),
-            horizon: nil, infoNotice: nil
+            horizon: nil, infoNotice: nil,
+            soundBinding: Binding(get: { manager.lowSound }, set: { manager.lowSound = $0 })
         )
     }
 
@@ -460,7 +506,8 @@ extension GlucoseAlertDetailView {
             description: "Alerts you when your sensor reading is at or below this level. Repeats every 5 min while still low.",
             levelLabel: "Level", level: detail.cfgBind(\.urgentLowThresholdMgDL), levelRange: 50...70,
             enabled: detail.cfgBind(\.urgentLowEnabled),
-            snooze: nil, horizon: nil, infoNotice: notice, showsTestButton: true
+            snooze: nil, horizon: nil, infoNotice: notice, showsTestButton: true,
+            soundBinding: Binding(get: { manager.urgentLowSound }, set: { manager.urgentLowSound = $0 })
         )
     }
 
@@ -471,7 +518,9 @@ extension GlucoseAlertDetailView {
             levelLabel: "Level", level: detail.cfgBind(\.highThresholdMgDL), levelRange: 140...300,
             enabled: detail.cfgBind(\.highEnabled),
             snooze: .init(enabled: detail.cfgBind(\.highSnoozeEnabled), interval: detail.cfgBind(\.highRepeatInterval)),
-            horizon: nil, infoNotice: nil
+            horizon: nil, infoNotice: nil,
+            delay: .init(enabled: detail.cfgBind(\.highDelayEnabled), interval: detail.cfgBind(\.highDelay)),
+            soundBinding: Binding(get: { manager.highSound }, set: { manager.highSound = $0 })
         )
     }
 
@@ -481,7 +530,8 @@ extension GlucoseAlertDetailView {
             description: "Alerts you when Loop's dosing forecast predicts you'll drop below the set level within the chosen horizon.",
             levelLabel: "Level", level: detail.cfgBind(\.predictedLowThresholdMgDL), levelRange: 55...80,
             enabled: detail.cfgBind(\.predictedLowEnabled),
-            snooze: nil, horizon: .init(value: detail.cfgBind(\.predictedLowHorizon)), infoNotice: nil
+            snooze: nil, horizon: .init(value: detail.cfgBind(\.predictedLowHorizon)), infoNotice: nil,
+            soundBinding: Binding(get: { manager.predictedLowSound }, set: { manager.predictedLowSound = $0 })
         )
     }
 }
@@ -534,6 +584,22 @@ private struct SnoozeIntervalRow: View {
     }
 }
 
+private struct DelayIntervalRow: View {
+    @Binding var interval: TimeInterval
+    private let options: [TimeInterval] = [15*60, 30*60, 45*60, 60*60, 90*60, 120*60, 180*60]
+    var body: some View {
+        Picker("Delay for", selection: $interval) {
+            ForEach(options, id: \.self) { v in Text(Self.label(v)).tag(v) }
+        }
+    }
+
+    private static func label(_ v: TimeInterval) -> String {
+        let minutes = Int(v / 60)
+        if minutes % 60 == 0 { return "\(minutes / 60) hr" }
+        return "\(minutes) min"
+    }
+}
+
 private struct HorizonRow: View {
     @Binding var value: TimeInterval
     private let options: [TimeInterval] = [10*60, 15*60, 20*60, 25*60, 30*60, 45*60]
@@ -541,5 +607,67 @@ private struct HorizonRow: View {
         Picker("Horizon", selection: $value) {
             ForEach(options, id: \.self) { v in Text("\(Int(v/60)) min").tag(v) }
         }
+    }
+}
+
+// MARK: - Sound picker
+
+private struct SoundPickerView: View {
+    @Binding var selection: String
+    @StateObject private var preview = AlarmSoundPreviewPlayer()
+
+    var body: some View {
+        List {
+            ForEach(AlarmSoundCatalog.all) { sound in
+                Button {
+                    selection = sound.filename
+                    preview.play(soundNamed: sound.filename)
+                } label: {
+                    HStack {
+                        Text(sound.displayName).foregroundStyle(.primary)
+                        Spacer()
+                        if sound.filename == selection {
+                            Image(systemName: "checkmark").foregroundStyle(.tint).fontWeight(.semibold)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Sound")
+        .navigationBarTitleDisplayMode(.inline)
+        .onDisappear { preview.stop() }
+    }
+}
+
+/// Plays a short preview of a bundled `.caf` alarm sound. Uses the
+/// `.playback` category so previews are audible even with the silent
+/// switch on, matching how the alarms themselves behave.
+@MainActor
+private final class AlarmSoundPreviewPlayer: ObservableObject {
+    private var player: AVAudioPlayer?
+
+    func play(soundNamed soundName: String) {
+        stop()
+        let resource = (soundName as NSString).deletingPathExtension
+        let ext = (soundName as NSString).pathExtension.isEmpty ? "caf" : (soundName as NSString).pathExtension
+        guard let url = Bundle.main.url(forResource: resource, withExtension: ext) else { return }
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default, options: [.duckOthers, .mixWithOthers])
+            try session.setActive(true, options: [])
+            let p = try AVAudioPlayer(contentsOf: url)
+            p.volume = 1.0
+            p.prepareToPlay()
+            p.play()
+            player = p
+        } catch {
+            // Preview is best-effort; silently ignore failures.
+        }
+    }
+
+    func stop() {
+        player?.stop()
+        player = nil
+        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 }

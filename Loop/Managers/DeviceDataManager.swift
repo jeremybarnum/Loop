@@ -267,6 +267,8 @@ final class DeviceDataManager {
         self.deviceLog = deviceLog
         self.alertManager = alertManager
         self.glucoseAlertManager = GlucoseAlertManager(alertIssuer: alertManager)
+        alertManager.addAlertSoundVendor(managerIdentifier: GlucoseAlertManager.managerIdentifier,
+                                         soundVendor: self.glucoseAlertManager)
         self.settingsManager = settingsManager
         self.healthStore = healthStore
         self.carbStore = carbStore
