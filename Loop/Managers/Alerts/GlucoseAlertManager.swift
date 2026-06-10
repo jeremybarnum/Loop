@@ -447,6 +447,9 @@ final class GlucoseAlertManager: ObservableObject {
     private var urgentLowState = AlertState()
     private var highState = AlertState()
     private var predictedLowInEpisode = false
+    /// Most recent real CGM reading. Used to suppress a redundant predicted-low
+    /// alert when glucose is already at/below the Low threshold.
+    private var latestReading: (mgdl: Double, date: Date)?
     private var cancellables = Set<AnyCancellable>()
 
     @Published private(set) var pendingTestUrgentLow: Bool = false
@@ -556,6 +559,7 @@ final class GlucoseAlertManager: ObservableObject {
             os_log("Skipping stale sample", log: log, type: .debug)
             return
         }
+        latestReading = (latest.quantity.doubleValue(for: .milligramsPerDeciliter), latest.date)
         let config = activeConfiguration(at: now)
         let mgdl: Double
         if pendingTestUrgentLow {
@@ -637,6 +641,26 @@ final class GlucoseAlertManager: ObservableObject {
         guard effectiveLoopAlertsEnabled else { return }
         let config = activeConfiguration(at: now)
         guard config.predictedLowEnabled else { return }
+
+        func retractIfActive() async {
+            guard predictedLowInEpisode else { return }
+            predictedLowInEpisode = false
+            await alertIssuer.retractAlert(
+                identifier: Alert.Identifier(managerIdentifier: Self.managerIdentifier, alertIdentifier: Self.predictedLowAlertIdentifier)
+            )
+        }
+
+        // A predicted-low warns you're *trending* toward a low. If you're
+        // already at/below your Low threshold, the Low alert already covers it
+        // and a separate "predicted low" is redundant and confusing — suppress
+        // it (requires a fresh reading to confirm you're currently low).
+        if let reading = latestReading,
+           now.timeIntervalSince(reading.date) < 15 * 60,
+           reading.mgdl < config.lowThresholdMgDL {
+            await retractIfActive()
+            return
+        }
+
         let horizonEnd = now.addingTimeInterval(config.predictedLowHorizon)
         let threshold = config.predictedLowThresholdMgDL
         let crossesLow = predicted.contains {
@@ -644,12 +668,7 @@ final class GlucoseAlertManager: ObservableObject {
                 && $0.quantity.doubleValue(for: .milligramsPerDeciliter) < threshold
         }
         if !crossesLow {
-            if predictedLowInEpisode {
-                predictedLowInEpisode = false
-                await alertIssuer.retractAlert(
-                    identifier: Alert.Identifier(managerIdentifier: Self.managerIdentifier, alertIdentifier: Self.predictedLowAlertIdentifier)
-                )
-            }
+            await retractIfActive()
             return
         }
         guard !predictedLowInEpisode else { return }
