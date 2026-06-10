@@ -40,6 +40,7 @@ struct AlgorithmDisplayState {
 
 protocol DeliveryDelegate: AnyObject {
     var isSuspended: Bool { get }
+    var isManualTempBasalRunning: Bool { get }
     var pumpInsulinType: InsulinType? { get }
     var basalDeliveryState: PumpManagerStatus.BasalDeliveryState? { get }
     var isPumpConfigured: Bool { get }
@@ -356,7 +357,8 @@ final class LoopDataManager: ObservableObject {
     func fetchData(
         for baseTime: Date? = nil,
         presumePresetEndingNow: Bool = false,
-        ensureDosingCoverageStart: Date? = nil
+        ensureDosingCoverageStart: Date? = nil,
+        projectOngoingDoses: Bool = false
     ) async throws -> StoredDataAlgorithmInput {
         // Need to fetch doses back as far as t - (DIA + DCA) for Dynamic carbs
         let dosesInputHistory = CarbMath.maximumAbsorptionTimeInterval + InsulinMath.defaultInsulinActivityDuration
@@ -370,9 +372,13 @@ final class LoopDataManager: ObservableObject {
             dosesStart = min(ensureDosingCoverageStart, dosesStart)
         }
 
+        // When projectOngoingDoses is true (display path), pass end:nil so DoseStore
+        // extends a mutable suspend to its insulin-activity-duration fallback. Doses
+        // already in flight (e.g. a manual temp basal) keep their actual endDate
+        // either way; only the suspend extension is gated on this flag.
         let doses = try await doseStore.getNormalizedDoseEntries(
             start: dosesStart,
-            end: baseTime
+            end: projectOngoingDoses ? nil : baseTime
         )
 
         // Doses that were included because they cover dosesStart might have a start time earlier than dosesStart
@@ -382,10 +388,25 @@ final class LoopDataManager: ObservableObject {
         // Doses with a start time before baseTime might still end after baseTime
         let dosesEnd = max(baseTime, doses.map { $0.endDate }.max() ?? baseTime)
 
-        let basal = try await settingsProvider.getBasalHistory(startDate: dosesStart, endDate: dosesEnd)
+        let rawBasal = try await settingsProvider.getBasalHistory(startDate: dosesStart, endDate: dosesEnd)
 
-        guard !basal.isEmpty else {
+        guard !rawBasal.isEmpty else {
             throw LoopError.configurationError(.basalRateSchedule)
+        }
+
+        // Collapse contiguous same-rate basal entries. getBasalHistory projects the
+        // daily BasalRateSchedule onto absolute time and splits at every local
+        // midnight even when the rate doesn't change; InsulinDose.annotated(with:)
+        // then splits the suspend (or any long basal-typed dose) at each of those
+        // boundaries, and the continuous-delivery IOB integrator doesn't join the
+        // resulting sub-doses perfectly across the boundary -- visible as a small
+        // bump in Active Insulin at midnight even with a single-rate schedule.
+        let basal: [AbsoluteScheduleValue<Double>] = rawBasal.reduce(into: []) { acc, entry in
+            if let last = acc.last, last.value == entry.value, last.endDate == entry.startDate {
+                acc[acc.count - 1] = AbsoluteScheduleValue(startDate: last.startDate, endDate: entry.endDate, value: last.value)
+            } else {
+                acc.append(entry)
+            }
         }
 
         let forecastEndTime = baseTime.addingTimeInterval(InsulinMath.defaultInsulinActivityDuration).dateCeiledToTimeInterval(GlucoseMath.defaultDelta)
@@ -554,7 +575,7 @@ final class LoopDataManager: ObservableObject {
         do {
             let lastManualBolusVisibilityWindowStartDate = now.addingTimeInterval(.days(-1))
 
-            var input = try await fetchData(for: now, ensureDosingCoverageStart: lastManualBolusVisibilityWindowStartDate)
+            var input = try await fetchData(for: now, ensureDosingCoverageStart: lastManualBolusVisibilityWindowStartDate, projectOngoingDoses: true)
             input.recommendationType = .manualBolus
             newState.input = input
             newState.output = await runAlgorithm(input: input)
@@ -729,6 +750,10 @@ final class LoopDataManager: ObservableObject {
 
                     if deliveryDelegate.isSuspended {
                         throw LoopError.pumpSuspended
+                    }
+
+                    if deliveryDelegate.isManualTempBasalRunning {
+                        throw LoopError.manualTempBasalRunning
                     }
 
                     logger.default("Enacting: %{public}@", String(describing: recommendationToEnact))

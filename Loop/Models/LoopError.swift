@@ -108,6 +108,9 @@ enum LoopError: Error {
     // Pump Suspended
     case pumpSuspended
 
+    // Pump is delivering a manual temporary basal rate
+    case manualTempBasalRunning
+
     // Pump Manager Error
     case pumpManagerError(PumpManagerError)
 
@@ -143,6 +146,8 @@ extension LoopError {
             return "pumpInoperable"
         case .pumpSuspended:
             return "pumpSuspended"
+        case .manualTempBasalRunning:
+            return "manualTempBasalRunning"
         case .pumpManagerError:
             return "pumpManagerError"
         case .loopInProgress:
@@ -217,6 +222,8 @@ extension LoopError: LocalizedError {
             return NSLocalizedString("Pump Inoperable. Automatic dosing is disabled.", comment: "The error message displayed for LoopError.pumpInoperable errors.")
         case .pumpSuspended:
             return NSLocalizedString("Pump Suspended. Automatic dosing is disabled.", comment: "The error message displayed for LoopError.pumpSuspended errors.")
+        case .manualTempBasalRunning:
+            return NSLocalizedString("Manual temporary basal in progress. Automatic dosing is disabled.", comment: "The error message displayed for LoopError.manualTempBasalRunning errors.")
         case .pumpManagerError(let pumpManagerError):
             return String(format: NSLocalizedString("Pump Manager Error: %1$@", comment: "The error message displayed for pump manager errors. (1: pump manager error)"), pumpManagerError.errorDescription!)
         case .loopInProgress:

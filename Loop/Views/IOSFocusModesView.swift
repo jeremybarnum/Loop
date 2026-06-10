@@ -44,37 +44,34 @@ struct IOSFocusModesView: View {
                     }
                 }
                 
-                // MARK: To be removed before next DIY Sync
-                if appName.contains("Tidepool") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Image("focus-mode-1")
-                        
-                        Text(
-                            String(
-                                format: NSLocalizedString(
-                                    "Example: Allow Notifications from %1$@",
-                                    comment: "Focus mode image 1 caption (1: appName)"
-                                ),
-                                appName
-                            )
-                        )
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    }
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 8) {
+                    Image("focus-mode-1")
                     
-                    VStack(alignment: .leading, spacing: 8) {
-                        Image("focus-mode-2")
-                        
-                        Text(
-                            NSLocalizedString(
-                                "Example: Silence Notifications from other apps",
-                                comment: "Focus mode image 2 caption"
-                            )
+                    Text(
+                        String(
+                            format: NSLocalizedString(
+                                "Example: Allow Notifications from %1$@",
+                                comment: "Focus mode image 1 caption (1: appName)"
+                            ),
+                            appName
                         )
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    }
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    Image("focus-mode-2")
+                    
+                    Text(
+                        NSLocalizedString(
+                            "Example: Silence Notifications from other apps",
+                            comment: "Focus mode image 2 caption"
+                        )
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                 }
                 
                 Callout(

@@ -12,6 +12,7 @@ import SwiftUI
 struct CorrectionRangeInformationView: View {
     @State private var insulinPercentage: Double = 100
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.appName) private var appName
 
     var body: some View {
         VStack(spacing: 0) {
@@ -44,7 +45,7 @@ struct CorrectionRangeInformationView: View {
                     // Description Text
                     (Text("Correction range is a ") + Text("safety").fontWeight(.semibold) + Text(" setting. Adjusting it can help reduce the risk of low glucose if you expect unusual fluctuations."))
                         .padding(.top)
-                    Text("Set the glucose value (or values) you want Tidepool Loop to aim for in adjusting your basal insulin.")
+                    Text(String(format: NSLocalizedString("Set the glucose value (or values) you want %1$@ to aim for in adjusting your basal insulin.", comment: "Correction range description (1: app name)"), appName))
                     Text("You do not have to set a new correction range for each preset, but before deciding to adjust your correction range, ") +
                     Text("ask yourself, am I more likely to go high or low during this event?")
                         .fontWeight(.semibold)
