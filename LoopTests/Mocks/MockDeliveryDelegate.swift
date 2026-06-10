@@ -14,6 +14,8 @@ import LoopAlgorithm
 class MockDeliveryDelegate: DeliveryDelegate {
     var isSuspended: Bool = false
 
+    var isManualTempBasalRunning: Bool = false
+
     var pumpInsulinType: InsulinType?
     
     var basalDeliveryState: PumpManagerStatus.BasalDeliveryState?
