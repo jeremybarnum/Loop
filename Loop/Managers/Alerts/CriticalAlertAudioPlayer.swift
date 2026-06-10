@@ -23,6 +23,7 @@
 import AVFoundation
 import AudioToolbox
 import LoopKit
+import MediaPlayer
 import os.log
 import UIKit
 
@@ -39,10 +40,16 @@ final class CriticalAlertAudioPlayer {
     /// to keep buzzing for the life of the alarm.
     private let vibrationInterval: TimeInterval = 2.0
 
-    /// Below this output volume the audio fallback is likely inaudible
-    /// (e.g. ringer turned all the way down overnight). We can't raise the
-    /// volume ourselves, so we log it loudly and lean on vibration.
-    private let lowVolumeThreshold: Float = 0.30
+    /// System volume we force for the duration of a critical-alert burst.
+    /// Max, because an urgent-low alarm (often at 3am, ringer turned all the
+    /// way down) has to wake the wearer; the pre-alarm level is restored when
+    /// the alarm stops. Only takes effect on builds without the Critical
+    /// Alerts entitlement, which is the only path that reaches this player.
+    private let boostedVolume: Float = 1.0
+
+    /// Best-effort system-volume override (MPVolumeView slider trick). See
+    /// `SystemVolumeBooster`.
+    private let volumeBooster = SystemVolumeBooster()
 
     /// How long the alarm plays before stopping on its own. A short burst
     /// (a few loops of the ~0.84s tone) is attention-grabbing without being
@@ -102,10 +109,10 @@ final class CriticalAlertAudioPlayer {
                    session.category.rawValue,
                    session.isOtherAudioPlaying ? "yes" : "no",
                    volume)
-            if volume < lowVolumeThreshold {
-                os_log("System volume is low (outputVolume=%{public}.2f); critical-alert audio may be inaudible — relying on vibration",
-                       log: log, type: .error, volume)
-            }
+            // Without the Critical Alerts entitlement the system won't raise
+            // an inaudible ringer for us, so force it up for the life of the
+            // alarm (restored on stop). Best-effort — see SystemVolumeBooster.
+            volumeBooster.boost(to: boostedVolume)
 
             let p = try AVAudioPlayer(contentsOf: url)
             p.numberOfLoops = -1
@@ -142,7 +149,83 @@ final class CriticalAlertAudioPlayer {
         stopTimer = nil
         vibrationTimer?.invalidate()
         vibrationTimer = nil
+        volumeBooster.restore()
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
         os_log("Stopped critical-alert audio playback", log: log, type: .info)
+    }
+}
+
+/// Best-effort override of the system output volume.
+///
+/// iOS has no public API to set the hardware volume. `MPVolumeView` hosts a
+/// `UISlider` that, when its value changes, drives the system volume — the
+/// long-standing workaround. We use it ONLY for critical-alert audio on
+/// builds without the Critical Alerts entitlement: without it an urgent-low
+/// alarm can be silent when the ringer is down overnight, which is dangerous.
+///
+/// It's best-effort: the slider only populates once the hosting view is in an
+/// on-screen window, so it may no-op when the app is fully backgrounded. The
+/// alarm's audio and vibration run regardless — this only makes them louder
+/// when it can. The pre-boost level is restored on `restore()`, unless the
+/// user manually changed the volume in the meantime (we don't fight that).
+@MainActor
+private final class SystemVolumeBooster {
+    private let volumeView = MPVolumeView(frame: CGRect(x: -2000, y: -2000, width: 1, height: 1))
+    private var savedVolume: Float?
+    private var targetVolume: Float?
+    /// Bumped on every boost/restore so a deferred slider write that's been
+    /// superseded (e.g. the alarm was retracted within the populate delay)
+    /// bails instead of leaving the volume stuck high.
+    private var generation = 0
+
+    func boost(to target: Float) {
+        guard let window = Self.activeWindow() else { return }
+        attach(to: window)
+        generation &+= 1
+        let gen = generation
+        // The slider subview populates a runloop tick after the view enters
+        // the hierarchy, so defer the read/write briefly.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self, gen == self.generation, let slider = self.slider() else { return }
+            let current = slider.value
+            guard current < target else { return }
+            self.savedVolume = current
+            self.targetVolume = target
+            slider.setValue(target, animated: false)
+        }
+    }
+
+    func restore() {
+        generation &+= 1  // invalidate any pending boost write
+        if let saved = savedVolume,
+           let target = targetVolume,
+           let slider = slider(),
+           abs(slider.value - target) < 0.05 {  // skip if the user moved it
+            slider.setValue(saved, animated: false)
+        }
+        savedVolume = nil
+        targetVolume = nil
+        volumeView.removeFromSuperview()
+    }
+
+    private func attach(to window: UIWindow) {
+        volumeView.alpha = 0.0001
+        volumeView.isUserInteractionEnabled = false
+        if volumeView.superview !== window {
+            volumeView.removeFromSuperview()
+            window.addSubview(volumeView)
+        }
+    }
+
+    private func slider() -> UISlider? {
+        volumeView.subviews.compactMap { $0 as? UISlider }.first
+    }
+
+    private static func activeWindow() -> UIWindow? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let active = scenes.first { $0.activationState == .foregroundActive }
+        return active?.windows.first(where: { $0.isKeyWindow })
+            ?? active?.windows.first
+            ?? scenes.flatMap { $0.windows }.first
     }
 }
