@@ -347,6 +347,9 @@ class LoopDataManagerTests: XCTestCase {
         deliveryDelegate.basalDeliveryState = .tempBasal(dose)
 
         dosingDecisionStore.storeExpectation = expectation(description: #function)
+        // DIY: loop decision + post-dose remote-recommendation decision. Wait for
+        // both so the second (async) store can't leak into a later test.
+        dosingDecisionStore.storeExpectation!.expectedFulfillmentCount = 2
         settingsProvider.dosingEnabled = false
 
         await fulfillment(of: [dosingDecisionStore.storeExpectation!], timeout: 1.0)
@@ -354,7 +357,7 @@ class LoopDataManagerTests: XCTestCase {
         let expectedAutomaticDoseRecommendation = AutomaticDoseRecommendation(basalAdjustment: .cancel, direction: .decrease)
         XCTAssertEqual(deliveryDelegate.lastEnact.bolus, expectedAutomaticDoseRecommendation.bolusUnits)
         XCTAssertEqual(deliveryDelegate.lastEnact.tempBasal, expectedAutomaticDoseRecommendation.basalAdjustment)
-        XCTAssertEqual(dosingDecisionStore.dosingDecisions.count, 1)
+        XCTAssertEqual(dosingDecisionStore.dosingDecisions.count, 2)
         XCTAssertEqual(dosingDecisionStore.dosingDecisions[0].reason, "automaticDosingDisabled")
         XCTAssertEqual(dosingDecisionStore.dosingDecisions[0].automaticDoseRecommendation, expectedAutomaticDoseRecommendation)
     }
