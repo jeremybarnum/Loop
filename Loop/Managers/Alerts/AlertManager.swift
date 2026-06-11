@@ -453,11 +453,14 @@ extension AlertManager: AlertIssuer {
         // that breaks through silent/Focus/DND far more reliably than driving
         // the system volume ourselves. Fall back to the AVAudioPlayer + volume
         // hack when AlarmKit is unavailable (iOS < 26) or unauthorized.
-        if criticalAlertAlarmScheduler.scheduleAlarm(for: alert) {
+        let soundName = alert.sound?.filename ?? "critical.caf"
+        if criticalAlertAlarmScheduler.scheduleAlarm(for: alert, onScheduleFailure: { [weak self] in
+            self?.log.default("AlarmKit scheduling failed for %@; playing audio fallback", String(describing: alert.identifier))
+            self?.criticalAlertAudioPlayer.play(soundNamed: soundName)
+        }) {
             log.default("Scheduled AlarmKit alarm for critical alert %@ (no entitlement or user-disabled)", String(describing: alert.identifier))
             return
         }
-        let soundName = alert.sound?.filename ?? "critical.caf"
         log.default("Playing audio fallback for critical alert %@ with sound %@ (no entitlement or user-disabled)", String(describing: alert.identifier), soundName)
         criticalAlertAudioPlayer.play(soundNamed: soundName)
     }

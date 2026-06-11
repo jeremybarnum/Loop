@@ -59,11 +59,18 @@ final class CriticalAlertAlarmScheduler {
         #endif
     }
 
-    /// Schedule an immediate AlarmKit alarm for the alert. Returns true if an
-    /// alarm was scheduled (so the caller skips the audio fallback), false if
-    /// AlarmKit isn't usable and the caller should fall back.
+    /// How far in the future to schedule the "immediate" alarm. AlarmKit fixed
+    /// alarms ring at a future wall-clock moment; a now/past date schedules
+    /// silently and never fires, so we nudge it a couple seconds ahead.
+    private static let immediateFireDelay: TimeInterval = 2
+
+    /// Schedule an (effectively immediate) AlarmKit alarm for the alert. Returns
+    /// true if AlarmKit will handle it (so the caller skips the audio fallback),
+    /// false if AlarmKit isn't usable and the caller should fall back now.
+    /// `onScheduleFailure` runs if the async schedule throws, so the caller can
+    /// still play the audio fallback rather than leaving the alert silent.
     @discardableResult
-    func scheduleAlarm(for alert: Alert) -> Bool {
+    func scheduleAlarm(for alert: Alert, onScheduleFailure: @escaping () -> Void) -> Bool {
         guard #available(iOS 26, *), isAuthorizedAndAvailable else { return false }
         #if canImport(AlarmKit)
         // Replace any existing alarm for this alert.
@@ -90,7 +97,7 @@ final class CriticalAlertAlarmScheduler {
         // The stop button runs StopCriticalAlertIntent, which acknowledges the
         // corresponding Loop alert (in addition to AlarmKit stopping the alarm).
         let configuration = AlarmManager.AlarmConfiguration<EmptyAlarmMetadata>.alarm(
-            schedule: .fixed(Date()),
+            schedule: .fixed(Date().addingTimeInterval(Self.immediateFireDelay)),
             attributes: attributes,
             stopIntent: StopCriticalAlertIntent(identifier: alert.identifier)
         )
@@ -99,12 +106,14 @@ final class CriticalAlertAlarmScheduler {
         alarmsByAlert[alert.identifier] = id
         let log = self.log
         let identifier = alert.identifier
-        Task {
+        Task { [weak self] in
             do {
                 _ = try await AlarmManager.shared.schedule(id: id, configuration: configuration)
                 os_log("Scheduled AlarmKit alarm %{public}@ for %{public}@", log: log, type: .info, id.uuidString, String(describing: identifier))
             } catch {
-                os_log("Failed to schedule AlarmKit alarm for %{public}@: %{public}@", log: log, type: .error, String(describing: identifier), String(describing: error))
+                os_log("Failed to schedule AlarmKit alarm for %{public}@: %{public}@ — falling back to audio", log: log, type: .error, String(describing: identifier), String(describing: error))
+                self?.alarmsByAlert.removeValue(forKey: identifier)
+                onScheduleFailure()
             }
         }
         return true
