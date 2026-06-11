@@ -20,6 +20,7 @@ import os.log
 
 #if canImport(AlarmKit)
 import AlarmKit
+import AppIntents
 import struct SwiftUI.Color   // Color only; `import SwiftUI` would make `Alert` ambiguous with LoopKit.Alert
 #endif
 
@@ -86,7 +87,13 @@ final class CriticalAlertAlarmScheduler {
         // Fire immediately. No countdownDuration (preAlert nil) → alert-only,
         // so no Widget Extension / Live Activity is required. Default alarm
         // sound (our .caf alarm sounds aren't guaranteed AlarmKit-compatible).
-        let configuration = AlarmManager.AlarmConfiguration<EmptyAlarmMetadata>.alarm(schedule: .fixed(Date()), attributes: attributes)
+        // The stop button runs StopCriticalAlertIntent, which acknowledges the
+        // corresponding Loop alert (in addition to AlarmKit stopping the alarm).
+        let configuration = AlarmManager.AlarmConfiguration<EmptyAlarmMetadata>.alarm(
+            schedule: .fixed(Date()),
+            attributes: attributes,
+            stopIntent: StopCriticalAlertIntent(identifier: alert.identifier)
+        )
 
         let id = UUID()
         alarmsByAlert[alert.identifier] = id
@@ -120,11 +127,70 @@ final class CriticalAlertAlarmScheduler {
     }
 }
 
+/// Hands the AlarmKit Stop button's tap back to the AlertManager so the
+/// corresponding Loop alert is acknowledged (not just silenced). The Stop
+/// button runs `StopCriticalAlertIntent` in the app process; the intent is
+/// reconstructed by the system and has no reference to the live AlertManager,
+/// so it routes through this shared bridge. AlertManager registers the handler;
+/// taps that arrive before it's registered (e.g. the app was relaunched to run
+/// the intent) are queued and flushed once it is.
+@MainActor
+final class CriticalAlertAcknowledgementBridge {
+    static let shared = CriticalAlertAcknowledgementBridge()
+    private init() {}
+
+    private var handler: ((Alert.Identifier) async -> Void)?
+    private var pending: [Alert.Identifier] = []
+
+    func setHandler(_ handler: @escaping (Alert.Identifier) async -> Void) {
+        self.handler = handler
+        guard !pending.isEmpty else { return }
+        let queued = pending
+        pending = []
+        Task { for identifier in queued { await handler(identifier) } }
+    }
+
+    func acknowledge(_ identifier: Alert.Identifier) async {
+        if let handler {
+            await handler(identifier)
+        } else {
+            pending.append(identifier)
+        }
+    }
+}
+
 #if canImport(AlarmKit)
 /// Minimal metadata for Loop critical-alert alarms. We present an alert-only
 /// alarm (no countdown / custom Live Activity), so this carries nothing.
 @available(iOS 26, *)
 struct EmptyAlarmMetadata: AlarmMetadata {
     init() {}
+}
+
+/// Run in the app process when the user taps Stop on an AlarmKit critical
+/// alarm. Acknowledges the Loop alert it was scheduled for, via the shared
+/// bridge. Carries the alert identifier as parameters so the system can
+/// reconstruct it.
+@available(iOS 26, *)
+struct StopCriticalAlertIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "Stop Glucose Alarm"
+    static var isDiscoverable: Bool = false
+
+    @Parameter(title: "Manager Identifier") var managerIdentifier: String
+    @Parameter(title: "Alert Identifier") var alertIdentifier: String
+
+    init() {}
+
+    init(identifier: Alert.Identifier) {
+        self.managerIdentifier = identifier.managerIdentifier
+        self.alertIdentifier = identifier.alertIdentifier
+    }
+
+    func perform() async throws -> some IntentResult {
+        await CriticalAlertAcknowledgementBridge.shared.acknowledge(
+            Alert.Identifier(managerIdentifier: managerIdentifier, alertIdentifier: alertIdentifier)
+        )
+        return .result()
+    }
 }
 #endif

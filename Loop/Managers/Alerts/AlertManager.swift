@@ -95,6 +95,14 @@ public final class AlertManager {
 
         bluetoothProvider.addBluetoothObserver(self, queue: .main)
 
+        // Let the AlarmKit critical-alarm Stop button acknowledge the matching
+        // Loop alert (CriticalAlertAlarmScheduler routes the tap through this).
+        Task { @MainActor in
+            CriticalAlertAcknowledgementBridge.shared.setHandler { [weak self] identifier in
+                try? await self?.acknowledgeAlert(identifier: identifier)
+            }
+        }
+
         NotificationCenter.default.publisher(for: .LoopCycleCompleted)
             .sink { [weak self] publisher in
                 if let loopDataManager = publisher.object as? LoopDataManager {
