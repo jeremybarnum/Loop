@@ -308,7 +308,16 @@ extension OnboardingManager: NotificationAuthorizationProvider {
     }
 
     func authorizeNotification(_ completion: @escaping (NotificationAuthorization) -> Void) {
-        NotificationManager.authorize{ completion(NotificationAuthorization($0)) }
+        NotificationManager.authorize { status in
+            completion(NotificationAuthorization(status))
+            // On iOS 26+ builds without the Critical Alerts entitlement, AlarmKit
+            // is the audible critical-alert channel. Request its authorization
+            // here, after the notification prompt so the two system prompts don't
+            // stack. No-op below iOS 26 or when the entitlement is present.
+            if !FeatureFlags.criticalAlertsEnabled {
+                Task { await CriticalAlertAlarmScheduler.requestAuthorization() }
+            }
+        }
     }
 }
 

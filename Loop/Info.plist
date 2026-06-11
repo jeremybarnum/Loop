@@ -55,6 +55,8 @@
 	<true/>
 	<key>LoopLocalCacheDurationDays</key>
 	<string>$(LOOP_LOCAL_CACHE_DURATION_DAYS)</string>
+	<key>NSAlarmKitUsageDescription</key>
+	<string>The app uses alarms to alert you to urgent glucose conditions even when your phone is silenced or in Focus.</string>
 	<key>NFCReaderUsageDescription</key>
 	<string>The app uses NFC to pair with diabetes devices.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>

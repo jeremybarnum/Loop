@@ -50,6 +50,7 @@ public final class AlertManager {
     private var userNotificationAlertScheduler: UserNotificationAlertScheduler
     private var unsafeNotificationPermissionsAlertController: UIAlertController?
     private let criticalAlertAudioPlayer = CriticalAlertAudioPlayer()
+    private let criticalAlertAlarmScheduler = CriticalAlertAlarmScheduler()
     var alertMuter: AlertMuter
 
     let alertStore: AlertStore
@@ -341,6 +342,7 @@ extension AlertManager: AlertManagerResponder {
         }
         userNotificationAlertScheduler.alertWasAcknowledged(identifier: identifier)
         await modalAlertScheduler.removePresentedAlert(identifier: identifier)
+        criticalAlertAlarmScheduler.cancelAlarm(for: identifier)
         criticalAlertAudioPlayer.stop()
         try await alertStore.recordAcknowledgement(of: identifier)
     }
@@ -413,6 +415,7 @@ extension AlertManager: AlertIssuer {
     private func unscheduleAlertWithSchedulers(identifier: Alert.Identifier) async {
         await modalAlertScheduler.unscheduleAlert(identifier: identifier)
         userNotificationAlertScheduler.unscheduleAlert(identifier: identifier)
+        criticalAlertAlarmScheduler.cancelAlarm(for: identifier)
         criticalAlertAudioPlayer.stop()
     }
 
@@ -438,6 +441,14 @@ extension AlertManager: AlertIssuer {
         // permission at runtime, the visual notification still surfaces
         // and audio handling is the user's choice via Settings.
         guard !FeatureFlags.criticalAlertsEnabled else { return }
+        // Prefer AlarmKit on iOS 26+ (authorized): a system-rendered alarm
+        // that breaks through silent/Focus/DND far more reliably than driving
+        // the system volume ourselves. Fall back to the AVAudioPlayer + volume
+        // hack when AlarmKit is unavailable (iOS < 26) or unauthorized.
+        if criticalAlertAlarmScheduler.scheduleAlarm(for: alert) {
+            log.default("Scheduled AlarmKit alarm for critical alert %@ (no entitlement or user-disabled)", String(describing: alert.identifier))
+            return
+        }
         let soundName = alert.sound?.filename ?? "critical.caf"
         log.default("Playing audio fallback for critical alert %@ with sound %@ (no entitlement or user-disabled)", String(describing: alert.identifier), soundName)
         criticalAlertAudioPlayer.play(soundNamed: soundName)

@@ -650,6 +650,15 @@ class LoopAppManager: NSObject {
         if let rootViewController = rootViewController {
             DevelopmentBranchAlerter.alertIfNeeded(viewControllerToPresentFrom: rootViewController)
         }
+
+        // On iOS 26+ builds without the Critical Alerts entitlement, AlarmKit is
+        // the audible critical-alert channel. Onboarding requests its
+        // authorization, but request it here too for users who onboarded before
+        // this build existed. No-op below iOS 26, once decided, or with the
+        // entitlement present.
+        if !FeatureFlags.criticalAlertsEnabled {
+            Task { await CriticalAlertAlarmScheduler.requestAuthorization() }
+        }
     }
 
     // MARK: - Life Cycle
