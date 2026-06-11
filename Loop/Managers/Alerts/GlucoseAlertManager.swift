@@ -568,15 +568,32 @@ final class GlucoseAlertManager: ObservableObject {
         } else {
             mgdl = latest.quantity.doubleValue(for: .milligramsPerDeciliter)
         }
-        await evaluateLow(mgdl: mgdl, config: config, now: now)
+        // Low and urgent-low are mutually exclusive: a reading below the
+        // urgent-low threshold is also below the low threshold, so issuing both
+        // in the same check is redundant. As a rule, only surface the most
+        // severe applicable alert — when urgent low applies it supersedes low.
+        let urgentLowSupersedes = config.urgentLowEnabled && mgdl < config.urgentLowThresholdMgDL
+        await evaluateLow(mgdl: mgdl, config: config, now: now, supersededByUrgentLow: urgentLowSupersedes)
         await evaluateUrgentLow(mgdl: mgdl, config: config, now: now)
         await evaluateHigh(mgdl: mgdl, config: config, now: now)
     }
 
-    private func evaluateLow(mgdl: Double, config: GlucoseAlertConfiguration, now: Date) async {
+    private func evaluateLow(mgdl: Double, config: GlucoseAlertConfiguration, now: Date, supersededByUrgentLow: Bool) async {
         guard config.lowEnabled else { return }
         let threshold = config.lowThresholdMgDL
         if mgdl < threshold {
+            guard !supersededByUrgentLow else {
+                // The more severe urgent-low alert covers this reading. Don't
+                // also issue a low alert; retract any low alert still showing
+                // from before BG fell into the urgent range so the two never
+                // coexist. Resetting the boundary state lets a fresh low alert
+                // fire if BG later recovers into the low (non-urgent) band while
+                // still below the low threshold.
+                if let id = takeRetractID(state: &lowState, identifier: Self.lowAlertIdentifier) {
+                    await alertIssuer.retractAlert(identifier: id)
+                }
+                return
+            }
             let alert = decideAndUpdate(
                 state: &lowState, identifier: Self.lowAlertIdentifier, interruptionLevel: .timeSensitive,
                 title: "Low Glucose",
