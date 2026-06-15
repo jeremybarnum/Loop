@@ -100,7 +100,11 @@ struct SettingsView: View {
                         servicesSection
                     }
 
-                    ForEach(pluginMenuItems.filter({ $0.section != .support })) { item in
+                    // Catch-all for menu items without a dedicated section (e.g. .custom).
+                    // .configuration items render in the configuration section and
+                    // .support items in the Support section, so exclude both to avoid
+                    // showing them twice.
+                    ForEach(pluginMenuItems.filter({ $0.section != .support && $0.section != .configuration })) { item in
                         item.view
                     }
 
