@@ -24,10 +24,10 @@ struct StatisticsView: View {
 
     var body: some View {
         List {
-            Section {
+            Section(footer: cacheNote) {
                 Picker(NSLocalizedString("Range", comment: "Statistics date-range picker label"),
                        selection: $viewModel.selectedRange) {
-                    ForEach(StatisticsViewModel.DateRange.allCases) { range in
+                    ForEach(viewModel.availableRanges) { range in
                         Text("\(range.days)d").tag(range)
                     }
                 }
@@ -54,35 +54,60 @@ struct StatisticsView: View {
         .task { await viewModel.load() }
     }
 
-    // MARK: - Sections
-
-    private func metricsSection(_ stats: GlucoseStatistics) -> some View {
-        Section {
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
-                metric(NSLocalizedString("GMI", comment: "Glucose Management Indicator metric title"),
-                       stats.gmi.map { String(format: "%.1f%%", $0) })
-                metric(NSLocalizedString("Average", comment: "Average glucose metric title"),
-                       stats.averageGlucose.map {
-                           displayGlucosePreference.format(LoopQuantity(unit: .milligramsPerDeciliter, doubleValue: $0))
-                       })
-                metric(NSLocalizedString("CV", comment: "Coefficient of variation metric title"),
-                       stats.coefficientOfVariation.map { String(format: "%.0f%%", $0) })
-                metric(NSLocalizedString("CGM Active", comment: "Percent of time CGM data present metric title"),
-                       String(format: "%.0f%%", stats.percentActive * 100))
-            }
-            .padding(.vertical, 4)
+    @ViewBuilder
+    private var cacheNote: some View {
+        if viewModel.cacheLimitsHistory {
+            Text(String(format: NSLocalizedString(
+                "This device keeps %d days of glucose. To review up to 90 days, increase the cache duration and rebuild.",
+                comment: "Note shown when the local cache is configured below 90 days"), viewModel.cacheDurationDays))
         }
     }
 
-    private func metric(_ title: String, _ value: String?) -> some View {
-        VStack(spacing: 4) {
-            Text(value ?? "–")
-                .font(.title2.bold().monospacedDigit())
+    // MARK: - Sections
+
+    private func metricsSection(_ stats: GlucoseStatistics) -> some View {
+        let averageGoal = displayGlucosePreference.format(LoopQuantity(unit: .milligramsPerDeciliter, doubleValue: 154))
+        return Section(header: Text(NSLocalizedString("Glucose Metrics", comment: "Glucose metrics section header"))) {
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                metric(NSLocalizedString("GMI", comment: "Glucose Management Indicator metric title"),
+                       value: stats.gmi.map { String(format: "%.1f%%", $0) },
+                       goal: NSLocalizedString("Goal: <7%", comment: "GMI goal"))
+                metric(NSLocalizedString("Average", comment: "Average glucose metric title"),
+                       value: stats.averageGlucose.map {
+                           displayGlucosePreference.format(LoopQuantity(unit: .milligramsPerDeciliter, doubleValue: $0))
+                       },
+                       goal: String(format: NSLocalizedString("Goal: <%@", comment: "Average glucose goal"), averageGoal))
+                metric(NSLocalizedString("Variability", comment: "Coefficient of variation metric title"),
+                       value: stats.coefficientOfVariation.map { String(format: "%.0f%%", $0) },
+                       goal: NSLocalizedString("Goal: ≤36%", comment: "Glucose variability goal"))
+                metric(NSLocalizedString("CGM Active", comment: "Percent of time CGM data present metric title"),
+                       value: String(format: "%.0f%%", stats.percentActive * 100),
+                       goal: NSLocalizedString("Goal: >70%", comment: "CGM active goal"))
+            }
+            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+            .listRowBackground(Color.clear)
+        }
+    }
+
+    private func metric(_ title: String, value: String?, goal: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.caption)
+                .font(.subheadline.weight(.semibold))
+            Text(value ?? "–")
+                .font(.system(.title, design: .rounded).weight(.bold))
+                .monospacedDigit()
+                .minimumScaleFactor(0.6)
+                .lineLimit(1)
+            Text(goal)
+                .font(.caption2)
                 .foregroundColor(.secondary)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
     }
 
     private func timeInRangeSection(_ stats: GlucoseStatistics) -> some View {
@@ -94,7 +119,7 @@ struct StatisticsView: View {
 
     @ViewBuilder
     private func agpSection(_ stats: GlucoseStatistics) -> some View {
-        Section(header: Text(NSLocalizedString("Ambulatory Glucose Profile", comment: "AGP section header")),
+        Section(header: Text(NSLocalizedString("Daily Glucose Pattern", comment: "Daily glucose pattern (AGP) section header")),
                 footer: Text(NSLocalizedString("Median (line) with 25–75% and 5–95% bands, by time of day.", comment: "AGP chart explanation"))) {
             if stats.agpProfile.isEmpty {
                 Text(NSLocalizedString("Not enough data to plot a profile.", comment: "AGP empty state"))
