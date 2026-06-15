@@ -73,3 +73,10 @@ struct TimeInRangeBar: View {
         }
     }
 }
+
+#if DEBUG
+#Preview {
+    TimeInRangeBar(timeInRange: [.veryLow: 0.02, .low: 0.05, .target: 0.74, .high: 0.15, .veryHigh: 0.04])
+        .padding()
+}
+#endif

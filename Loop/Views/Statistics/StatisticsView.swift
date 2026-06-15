@@ -107,3 +107,47 @@ struct StatisticsView: View {
         }
     }
 }
+
+#if DEBUG
+/// Generates a daily glucose pattern with day-to-day spread so the AGP bands and
+/// metrics populate in the canvas. Deterministic (seeded) so previews are stable.
+private final class PreviewGlucoseStore: GlucoseStoreProtocol {
+    private let samples: [StoredGlucoseSample]
+
+    init() {
+        var seed: UInt64 = 0x9E3779B97F4A7C15
+        func unit01() -> Double {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Double(seed >> 11) / Double(UInt64(1) << 53)
+        }
+        let cal = Calendar.current
+        let now = Date()
+        let cadence: TimeInterval = 15 * 60
+        var t = now.addingTimeInterval(-14 * 24 * 60 * 60)
+        var out: [StoredGlucoseSample] = []
+        while t < now {
+            let hour = t.timeIntervalSince(cal.startOfDay(for: t)) / 3600
+            let base = 140.0 + 40 * sin((hour - 4) / 24 * 2 * .pi)
+            let value = max(45, base + (unit01() - 0.5) * 70)
+            out.append(StoredGlucoseSample(startDate: t, quantity: LoopQuantity(unit: .milligramsPerDeciliter, doubleValue: value)))
+            t = t.addingTimeInterval(cadence)
+        }
+        samples = out
+    }
+
+    var latestGlucose: GlucoseSampleValue? { samples.last }
+
+    func getGlucoseSamples(start: Date?, end: Date?) async throws -> [StoredGlucoseSample] {
+        samples.filter { (start == nil || $0.startDate >= start!) && (end == nil || $0.startDate < end!) }
+    }
+
+    func addGlucoseSamples(_ samples: [NewGlucoseSample]) async throws -> [StoredGlucoseSample] { [] }
+}
+
+#Preview {
+    NavigationView {
+        StatisticsView(glucoseStore: PreviewGlucoseStore())
+            .environmentObject(DisplayGlucosePreference(displayGlucoseUnit: .milligramsPerDeciliter))
+    }
+}
+#endif

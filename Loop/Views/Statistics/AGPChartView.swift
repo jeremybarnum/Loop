@@ -95,3 +95,18 @@ struct AGPChartView: View {
         }
     }
 }
+
+#if DEBUG
+#Preview {
+    let bands: [AGPBand] = (0..<24).map { hour in
+        let base = 140.0 + 40 * sin((Double(hour) - 4) / 24 * 2 * .pi)
+        return AGPBand(
+            timeOfDay: (Double(hour) + 0.5) * 3600,
+            p05: base - 45, p25: base - 20, p50: base, p75: base + 22, p95: base + 55
+        )
+    }
+    return AGPChartView(profile: bands, unit: .milligramsPerDeciliter)
+        .frame(height: 260)
+        .padding()
+}
+#endif
