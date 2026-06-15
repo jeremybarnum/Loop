@@ -11,77 +11,100 @@ import LoopKit
 import LoopAlgorithm
 import LoopUI
 
-/// The ambulatory glucose profile: percentile bands (5–95 and 25–75) and the
-/// median, plotted across a single 24-hour day. Glucose values are converted to
-/// the user's display unit for plotting.
+/// The ambulatory glucose profile, styled after the IDC / captūrAGP report:
+/// glucose ranges are colored as horizontal zones (green target, gold high,
+/// orange very-high, red lows), but the color shows only *inside* the 5–95%
+/// percentile band, with the 25–75% inter-quartile band rendered more strongly
+/// and the median as a bold line. Glucose is plotted in the user's display unit.
 struct AGPChartView: View {
     let profile: [AGPBand]
     let unit: LoopUnit
-    /// Target range boundaries in mg/dL (consensus 70–180).
     var targetLowMgDL: Double = 70
     var targetHighMgDL: Double = 180
+
+    private struct Zone: Identifiable {
+        let lo: Double, hi: Double, band: GlucoseBand
+        var id: Double { lo }
+    }
+
+    // Horizontal zones (mg/dL) drawn as the colored background, top clamped to 350+.
+    private var topMgDL: Double { max(350, (profile.map { $0.p95 }.max() ?? 350).rounded(.up)) }
+    private var zones: [Zone] {
+        [Zone(lo: 0, hi: 54, band: .veryLow),
+         Zone(lo: 54, hi: 70, band: .low),
+         Zone(lo: 70, hi: 180, band: .target),
+         Zone(lo: 180, hi: 250, band: .high),
+         Zone(lo: 250, hi: topMgDL, band: .veryHigh)]
+    }
 
     private func display(_ mgdl: Double) -> Double {
         LoopQuantity(unit: .milligramsPerDeciliter, doubleValue: mgdl).doubleValue(for: unit)
     }
-
     private func hours(_ band: AGPBand) -> Double { band.timeOfDay / 3600 }
+
+    // Matches the plot background so masked regions blend seamlessly in light/dark mode.
+    private var maskColor: Color { Color(.secondarySystemGroupedBackground) }
 
     var body: some View {
         Chart {
-            // Target range boundaries.
-            RuleMark(y: .value("Target low", display(targetLowMgDL)))
-                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                .foregroundStyle(Color.glucoseNormal.opacity(0.6))
-            RuleMark(y: .value("Target high", display(targetHighMgDL)))
-                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                .foregroundStyle(Color.glucoseNormal.opacity(0.6))
-
-            ForEach(profile, id: \.timeOfDay) { band in
-                // Outer band: 5th–95th percentile.
-                AreaMark(
-                    x: .value("Time", hours(band)),
-                    yStart: .value("5th", display(band.p05)),
-                    yEnd: .value("95th", display(band.p95))
+            // 1. Colored glucose zones across the full width.
+            ForEach(zones) { zone in
+                RectangleMark(
+                    xStart: .value("Start", 0), xEnd: .value("End", 24),
+                    yStart: .value("Low", display(zone.lo)), yEnd: .value("High", display(zone.hi))
                 )
-                .foregroundStyle(Color.glucose.opacity(0.15))
-                .interpolationMethod(.monotone)
-
-                // Inner band: 25th–75th percentile.
-                AreaMark(
-                    x: .value("Time", hours(band)),
-                    yStart: .value("25th", display(band.p25)),
-                    yEnd: .value("75th", display(band.p75))
-                )
-                .foregroundStyle(Color.glucose.opacity(0.3))
-                .interpolationMethod(.monotone)
+                .foregroundStyle(zone.band.agpColor.opacity(0.9))
             }
 
-            // Median line.
-            ForEach(profile, id: \.timeOfDay) { band in
-                LineMark(
-                    x: .value("Time", hours(band)),
-                    y: .value("Median", display(band.p50))
-                )
-                .foregroundStyle(Color.glucose)
-                .lineStyle(StrokeStyle(lineWidth: 2))
-                .interpolationMethod(.monotone)
+            // 2. Mask the zones outside the 5–95% band (above p95, below p05).
+            ForEach(profile, id: \.timeOfDay) { b in
+                AreaMark(x: .value("Time", hours(b)), yStart: .value("p95", display(b.p95)), yEnd: .value("Top", display(topMgDL)))
+                    .foregroundStyle(maskColor)
+                    .interpolationMethod(.monotone)
+                AreaMark(x: .value("Time", hours(b)), yStart: .value("Bottom", 0), yEnd: .value("p05", display(b.p05)))
+                    .foregroundStyle(maskColor)
+                    .interpolationMethod(.monotone)
+            }
+
+            // 3. Lighten the outer wings so the 25–75% inter-quartile band reads stronger.
+            ForEach(profile, id: \.timeOfDay) { b in
+                AreaMark(x: .value("Time", hours(b)), yStart: .value("p75", display(b.p75)), yEnd: .value("p95", display(b.p95)))
+                    .foregroundStyle(maskColor.opacity(0.5))
+                    .interpolationMethod(.monotone)
+                AreaMark(x: .value("Time", hours(b)), yStart: .value("p05", display(b.p05)), yEnd: .value("p25", display(b.p25)))
+                    .foregroundStyle(maskColor.opacity(0.5))
+                    .interpolationMethod(.monotone)
+            }
+
+            // 4. Target-range boundaries.
+            ForEach([targetLowMgDL, targetHighMgDL], id: \.self) { y in
+                RuleMark(y: .value("Target", display(y)))
+                    .lineStyle(StrokeStyle(lineWidth: 2))
+                    .foregroundStyle(GlucoseBand.target.agpColor)
+            }
+
+            // 5. Median.
+            ForEach(profile, id: \.timeOfDay) { b in
+                LineMark(x: .value("Time", hours(b)), y: .value("Median", display(b.p50)))
+                    .lineStyle(StrokeStyle(lineWidth: 2.5))
+                    .foregroundStyle(Color(red: 0.16, green: 0.40, blue: 0.20))
+                    .interpolationMethod(.monotone)
             }
         }
         .chartXScale(domain: 0...24)
+        .chartYScale(domain: 0...display(topMgDL))
+        .chartPlotStyle { $0.background(maskColor) }
         .chartXAxis {
             AxisMarks(values: [0, 6, 12, 18, 24]) { value in
                 AxisGridLine()
-                AxisTick()
-                AxisValueLabel {
-                    if let hour = value.as(Double.self) {
-                        Text(hourLabel(Int(hour)))
-                    }
-                }
+                AxisValueLabel { if let h = value.as(Double.self) { Text(hourLabel(Int(h))) } }
             }
         }
         .chartYAxis {
-            AxisMarks(position: .leading)
+            AxisMarks(position: .leading, values: [54, 70, 180, 250, topMgDL].map { display($0) }) { value in
+                AxisGridLine()
+                AxisValueLabel()
+            }
         }
         .accessibilityLabel(Text(NSLocalizedString("Ambulatory glucose profile", comment: "Accessibility label for the AGP chart")))
     }
@@ -98,11 +121,14 @@ struct AGPChartView: View {
 
 #if DEBUG
 #Preview {
-    let bands: [AGPBand] = (0..<24).map { hour in
-        let base = 140.0 + 40 * sin((Double(hour) - 4) / 24 * 2 * .pi)
+    let bands: [AGPBand] = (0..<48).map { i in
+        let hour = Double(i) * 0.5
+        let base = 150.0 + 55 * sin((hour - 4) / 24 * 2 * .pi)
+        let spread = 25 + 18 * (1 + sin((hour - 8) / 24 * 2 * .pi))
         return AGPBand(
-            timeOfDay: (Double(hour) + 0.5) * 3600,
-            p05: base - 45, p25: base - 20, p50: base, p75: base + 22, p95: base + 55
+            timeOfDay: (Double(i) + 0.5) * 1800,
+            p05: max(45, base - spread * 1.8), p25: base - spread * 0.7,
+            p50: base, p75: base + spread * 0.8, p95: base + spread * 1.9
         )
     }
     return AGPChartView(profile: bands, unit: .milligramsPerDeciliter)
