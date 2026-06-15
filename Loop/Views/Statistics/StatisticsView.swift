@@ -24,14 +24,28 @@ struct StatisticsView: View {
 
     var body: some View {
         List {
-            Section(footer: cacheNote) {
+            Section {
                 Picker(NSLocalizedString("Range", comment: "Statistics date-range picker label"),
                        selection: $viewModel.selectedRange) {
-                    ForEach(viewModel.availableRanges) { range in
+                    ForEach(StatisticsViewModel.DateRange.allCases) { range in
                         Text("\(range.days)d").tag(range)
                     }
                 }
                 .pickerStyle(.segmented)
+            }
+
+            if !viewModel.dataNotices.isEmpty {
+                Section {
+                    ForEach(viewModel.dataNotices, id: \.self) { line in
+                        Label {
+                            Text(line)
+                        } icon: {
+                            Image(systemName: "info.circle")
+                        }
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                    }
+                }
             }
 
             if let stats = viewModel.statistics, stats.sampleCount > 0 {
@@ -52,15 +66,6 @@ struct StatisticsView: View {
         .navigationTitle(Text(NSLocalizedString("Statistics", comment: "Statistics screen title")))
         .navigationBarTitleDisplayMode(.inline)
         .task { await viewModel.load() }
-    }
-
-    @ViewBuilder
-    private var cacheNote: some View {
-        if viewModel.cacheLimitsHistory {
-            Text(String(format: NSLocalizedString(
-                "This device keeps %d days of glucose. To review up to 90 days, increase the cache duration and rebuild.",
-                comment: "Note shown when the local cache is configured below 90 days"), viewModel.cacheDurationDays))
-        }
     }
 
     // MARK: - Sections

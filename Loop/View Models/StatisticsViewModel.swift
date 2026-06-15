@@ -55,16 +55,21 @@ final class StatisticsViewModel: ObservableObject {
 
     var cacheDurationDays: Int { Int((cacheDuration / 86400).rounded()) }
 
-    /// True when the cache is configured below the longest range, so the longer
-    /// views can never be fully populated regardless of how long Loop has run.
-    var cacheLimitsHistory: Bool {
-        cacheDurationDays < (DateRange.allCases.map(\.days).max() ?? 90)
-    }
-
-    /// Ranges we have enough data to offer (always at least the shortest). A range
-    /// is offered once data reaches within a day of its length.
-    var availableRanges: [DateRange] {
-        DateRange.allCases.filter { $0 == .week || availableDays >= Double($0.days) - 1 }
+    /// Info notices for the selected range: shown when the window is incomplete,
+    /// with an extra line when the local cache is what's limiting the history.
+    /// Empty when there's enough data to fill the selected window.
+    var dataNotices: [String] {
+        guard availableDays + 1 < Double(selectedRange.days) else { return [] }
+        let have = max(0, Int(availableDays.rounded()))
+        var notices = [String(format: NSLocalizedString(
+            "Showing %1$d days of data — not enough for the full %2$d-day period yet.",
+            comment: "Notice when the selected statistics range has incomplete data"), have, selectedRange.days)]
+        if cacheDurationDays < selectedRange.days {
+            notices.append(String(format: NSLocalizedString(
+                "This device keeps %d days of glucose. Increase the cache duration and rebuild to review the full period.",
+                comment: "Notice when the local cache limits the statistics history"), cacheDurationDays))
+        }
+        return notices
     }
 
     func load() async {
@@ -81,11 +86,6 @@ final class StatisticsViewModel: ObservableObject {
             allSamples = []
         }
         availableDays = allSamples.first.map { end.timeIntervalSince($0.startDate) / 86400 } ?? 0
-
-        // Drop to the largest available range if the current selection outruns the data.
-        if !availableRanges.contains(selectedRange) {
-            selectedRange = availableRanges.last ?? .week
-        }
         recompute()
     }
 
