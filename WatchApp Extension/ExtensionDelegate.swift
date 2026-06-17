@@ -85,6 +85,14 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         if WCSession.default.activationState != .activated {
             WCSession.default.activate()
         }
+
+        // Catch up when the app comes to the foreground (e.g. tapping a stale
+        // complication). Otherwise glucose is only fetched during background
+        // refresh tasks, so opening the app could show just the current point
+        // and forecast with no history. Pull the latest context and backfill any
+        // glucose we're missing.
+        loopManager.requestContextUpdate()
+        loopManager.requestGlucoseBackfillIfNecessary()
     }
 
     func applicationWillResignActive() {

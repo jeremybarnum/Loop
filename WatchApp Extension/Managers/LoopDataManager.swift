@@ -188,14 +188,18 @@ extension LoopDataManager {
     func requestGlucoseBackfillIfNecessary() -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
 
+        // Throttle: don't re-request within the stale window of our last attempt.
         guard lastGlucoseBackfill < .staleGlucoseCutoff else {
             log.default("Skipping glucose backfill request because our latest attempt was %{public}@", String(describing: lastGlucoseBackfill))
             return false
         }
 
         // Loop doesn't read data from HealthKit anymore, and its local watch data is truly ephemeral
-        // to power the chart. Fetch enough data to populate the display of the chart.
-        let latestDate = max(lastGlucoseBackfill, .earliestGlucoseCutoff)
+        // to power the chart. Backfill from just after our most recent stored sample so the phone
+        // returns exactly what we're missing (no overlap); if we have nothing recent, fall back to
+        // the earliest cutoff to repopulate the whole chart window.
+        let latestSampleDate = glucoseStore?.latestGlucose?.startDate ?? .distantPast
+        let latestDate = max(latestSampleDate, .earliestGlucoseCutoff)
         guard latestDate < .staleGlucoseCutoff else {
             self.log.default("Skipping glucose backfill request because our latest sample date is %{public}@", String(describing: latestDate))
             return false
