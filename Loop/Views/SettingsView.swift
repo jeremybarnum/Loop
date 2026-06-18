@@ -81,6 +81,7 @@ struct SettingsView: View {
                         dosingStrategySection
                     }
                     alertManagementSection
+                    statisticsSection
                     if viewModel.pumpManagerSettingsViewModel.isSetUp() {
                         therapySection
                     }
@@ -99,7 +100,11 @@ struct SettingsView: View {
                         servicesSection
                     }
 
-                    ForEach(pluginMenuItems.filter({ $0.section != .support })) { item in
+                    // Catch-all for menu items without a dedicated section (e.g. .custom).
+                    // .configuration items render in the configuration section and
+                    // .support items in the Support section, so exclude both to avoid
+                    // showing them twice.
+                    ForEach(pluginMenuItems.filter({ $0.section != .support && $0.section != .configuration })) { item in
                         item.view
                     }
 
@@ -326,6 +331,27 @@ extension SettingsView {
                     descriptiveText: NSLocalizedString("Lock Screen, Dynamic Island, and CarPlay display", comment: "Live Activity settings descriptive text")
                 )
                 .accessibilityIdentifier("settingsViewLiveActivity")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var statisticsSection: some View {
+        if let glucoseStore = viewModel.deviceManager?.glucoseStore {
+            Section {
+                NavigationLink(destination: StatisticsView(glucoseStore: glucoseStore)) {
+                    LargeButton(
+                        action: {},
+                        includeArrow: false,
+                        imageView: Image(systemName: "chart.xyaxis.line")
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 30),
+                        label: NSLocalizedString("Statistics", comment: "Statistics settings button text"),
+                        descriptiveText: NSLocalizedString("Glucose overview and ambulatory glucose profile", comment: "Statistics settings descriptive text")
+                    )
+                    .accessibilityIdentifier("settingsViewStatistics")
+                }
             }
         }
     }
