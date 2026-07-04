@@ -321,6 +321,13 @@
 		89FE21AD24AC57E30033F501 /* Collection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89FE21AC24AC57E30033F501 /* Collection.swift */; };
 		991346FF2AE6D1350067EE27 /* ObservedAbsorptionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991346FE2AE6D1350067EE27 /* ObservedAbsorptionManager.swift */; };
 		991347012AE6D1490067EE27 /* ObservedAbsorptionSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991347002AE6D1490067EE27 /* ObservedAbsorptionSettings.swift */; };
+		992F41852FF9A3200071F0F0 /* PodHandbackUserInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 992F41822FF9A3200071F0F0 /* PodHandbackUserInfo.swift */; };
+		992F41862FF9A3200071F0F0 /* PodLoanGrantUserInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 992F41832FF9A3200071F0F0 /* PodLoanGrantUserInfo.swift */; };
+		992F41872FF9A3200071F0F0 /* PodLoanRequestUserInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 992F41842FF9A3200071F0F0 /* PodLoanRequestUserInfo.swift */; };
+		992F41882FF9A3200071F0F0 /* PodHandbackUserInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 992F41822FF9A3200071F0F0 /* PodHandbackUserInfo.swift */; };
+		992F41892FF9A3200071F0F0 /* PodLoanGrantUserInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 992F41832FF9A3200071F0F0 /* PodLoanGrantUserInfo.swift */; };
+		992F418A2FF9A3200071F0F0 /* PodLoanRequestUserInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 992F41842FF9A3200071F0F0 /* PodLoanRequestUserInfo.swift */; };
+		992F418C2FF9A38B0071F0F0 /* PodLoanUserInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 992F418B2FF9A38B0071F0F0 /* PodLoanUserInfoTests.swift */; };
 		A90EF53C25DEF06200F32D61 /* PluginManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16DA84122E8E112008624C2 /* PluginManager.swift */; };
 		A90EF54425DEF0A000F32D61 /* OSLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4374B5EE209D84BE00D17AA8 /* OSLog.swift */; };
 		A91D2A3F26CF0FF80023B075 /* IconTitleSubtitleTableViewCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = A91D2A3E26CF0FF80023B075 /* IconTitleSubtitleTableViewCell.swift */; };
@@ -1132,6 +1139,10 @@
 		89FE21AC24AC57E30033F501 /* Collection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Collection.swift; sourceTree = "<group>"; };
 		991346FE2AE6D1350067EE27 /* ObservedAbsorptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservedAbsorptionManager.swift; sourceTree = "<group>"; };
 		991347002AE6D1490067EE27 /* ObservedAbsorptionSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservedAbsorptionSettings.swift; sourceTree = "<group>"; };
+		992F41822FF9A3200071F0F0 /* PodHandbackUserInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodHandbackUserInfo.swift; sourceTree = "<group>"; };
+		992F41832FF9A3200071F0F0 /* PodLoanGrantUserInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanGrantUserInfo.swift; sourceTree = "<group>"; };
+		992F41842FF9A3200071F0F0 /* PodLoanRequestUserInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanRequestUserInfo.swift; sourceTree = "<group>"; };
+		992F418B2FF9A38B0071F0F0 /* PodLoanUserInfoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanUserInfoTests.swift; sourceTree = "<group>"; };
 		A900531A28D60862000BC15B /* Loop.shortcut */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop.shortcut; sourceTree = "<group>"; };
 		A900531B28D608CA000BC15B /* Cancel Override.shortcut */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Cancel Override.shortcut"; sourceTree = "<group>"; };
 		A900531C28D6090D000BC15B /* Loop Remote Overrides.shortcut */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop Remote Overrides.shortcut"; sourceTree = "<group>"; };
@@ -2197,6 +2208,9 @@
 				4F7E8AC620E2AC0300AEA65E /* WatchPredictedGlucose.swift */,
 				E9B08020253BBDE900BAD8F8 /* IntentExtensionInfo.swift */,
 				C110888C2A3913C600BA4898 /* BuildDetails.swift */,
+				992F41822FF9A3200071F0F0 /* PodHandbackUserInfo.swift */,
+				992F41832FF9A3200071F0F0 /* PodLoanGrantUserInfo.swift */,
+				992F41842FF9A3200071F0F0 /* PodLoanRequestUserInfo.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -2452,6 +2466,7 @@
 		A9E6DFED246A0460005B1A1C /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				992F418B2FF9A38B0071F0F0 /* PodLoanUserInfoTests.swift */,
 				A9DFAFB224F0415E00950D1E /* CarbBackfillRequestUserInfoTests.swift */,
 				A963B279252CEBAE0062AA12 /* SetBolusUserInfoTests.swift */,
 				A9DFAFB424F048A000950D1E /* WatchHistoricalCarbsTests.swift */,
@@ -2930,7 +2945,6 @@
 					43776F8B1B8022E90074EA36 = {
 						CreatedOnToolsVersion = 7.0;
 						LastSwiftMigration = 1020;
-						ProvisioningStyle = Automatic;
 						SystemCapabilities = {
 							com.apple.ApplicationGroups.iOS = {
 								enabled = 1;
@@ -3404,6 +3418,9 @@
 				3ED319992EB65A6900820BCF /* LiveActivityManagementView.swift in Sources */,
 				3ED3199A2EB65A6900820BCF /* LiveActivityBottomRowManagerView.swift in Sources */,
 				C1F2075C26D6F9B0007AB7EB /* AppExpirationAlerter.swift in Sources */,
+				992F41852FF9A3200071F0F0 /* PodHandbackUserInfo.swift in Sources */,
+				992F41862FF9A3200071F0F0 /* PodLoanGrantUserInfo.swift in Sources */,
+				992F41872FF9A3200071F0F0 /* PodLoanRequestUserInfo.swift in Sources */,
 				B4FEEF7D24B8A71F00A8DF9B /* DeviceDataManager+DeviceStatus.swift in Sources */,
 				142CB7592A60BF2E0075748A /* EditMode.swift in Sources */,
 				E95D380324EADF36005E2F50 /* CarbStoreProtocol.swift in Sources */,
@@ -3646,6 +3663,9 @@
 				4F7E8AC520E2AB9600AEA65E /* Date.swift in Sources */,
 				89F9119424358E4500ECCAF3 /* CarbAbsorptionTime.swift in Sources */,
 				895788B1242E69A2002CB114 /* Color.swift in Sources */,
+				992F41882FF9A3200071F0F0 /* PodHandbackUserInfo.swift in Sources */,
+				992F41892FF9A3200071F0F0 /* PodLoanGrantUserInfo.swift in Sources */,
+				992F418A2FF9A3200071F0F0 /* PodLoanRequestUserInfo.swift in Sources */,
 				89E08FC2242E73DC000D719B /* CarbAmountPositionKey.swift in Sources */,
 				4F11D3C420DD881A006E072C /* WatchHistoricalGlucose.swift in Sources */,
 				E98A55F724EEE1E10008715D /* OnOffSelectionView.swift in Sources */,
@@ -3757,6 +3777,7 @@
 				A9F5F1F5251050EC00E7C8A4 /* ZipArchiveTests.swift in Sources */,
 				E9B3552D293592B40076AB04 /* MealDetectionManagerTests.swift in Sources */,
 				E950CA9129002D9000B5B692 /* LoopDataManagerDosingTests.swift in Sources */,
+				992F418C2FF9A38B0071F0F0 /* PodLoanUserInfoTests.swift in Sources */,
 				B4CAD8792549D2540057946B /* LoopCompletionFreshnessTests.swift in Sources */,
 				1D8D55BC252274650044DBB6 /* BolusEntryViewModelTests.swift in Sources */,
 				A91E4C2124F867A700BE9213 /* StoredAlertTests.swift in Sources */,
@@ -4431,8 +4452,8 @@
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
 				ASSETCATALOG_COMPILER_APPICON_NAME = "$(APPICON_NAME)";
 				CODE_SIGN_ENTITLEMENTS = "$(LOOP_ENTITLEMENTS)";
-				CODE_SIGN_IDENTITY = "$(LOOP_CODE_SIGN_IDENTITY_DEBUG)";
-				CODE_SIGN_STYLE = "$(LOOP_CODE_SIGN_STYLE)";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 687ZSJ6WD3;
 				FRAMEWORK_SEARCH_PATHS = "$(inherited)";
@@ -4446,7 +4467,7 @@
 				"OTHER_SWIFT_FLAGS[sdk=iphonesimulator*]" = "-D IOS_SIMULATOR -D DEBUG";
 				PRODUCT_BUNDLE_IDENTIFIER = "$(MAIN_APP_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				PROVISIONING_PROFILE_SPECIFIER = "$(LOOP_PROVISIONING_PROFILE_SPECIFIER_DEBUG)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
@@ -4461,8 +4482,8 @@
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
 				ASSETCATALOG_COMPILER_APPICON_NAME = "$(APPICON_NAME)";
 				CODE_SIGN_ENTITLEMENTS = "$(LOOP_ENTITLEMENTS)";
-				CODE_SIGN_IDENTITY = "$(LOOP_CODE_SIGN_IDENTITY_RELEASE)";
-				CODE_SIGN_STYLE = "$(LOOP_CODE_SIGN_STYLE)";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = 687ZSJ6WD3;
 				FRAMEWORK_SEARCH_PATHS = "$(inherited)";
 				INFOPLIST_FILE = Loop/Info.plist;
@@ -4473,7 +4494,7 @@
 				OTHER_LDFLAGS = "";
 				PRODUCT_BUNDLE_IDENTIFIER = "$(MAIN_APP_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				PROVISIONING_PROFILE_SPECIFIER = "$(LOOP_PROVISIONING_PROFILE_SPECIFIER_RELEASE)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;

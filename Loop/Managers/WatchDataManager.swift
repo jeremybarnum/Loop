@@ -44,6 +44,19 @@ final class WatchDataManager: NSObject {
     private var lastSentSettings: LoopSettings?
     private var lastSentBolusVolumes: [Double]?
 
+    // MARK: - Pod loan (watch borrows the pod for a workout)
+
+    /// The user's `dosingEnabled` setting captured when the pod was loaned to the
+    /// watch, so it can be restored exactly on hand-back. Non-nil while a loan is
+    /// active.
+    private var dosingEnabledBeforeWatchLoan: Bool?
+
+    /// The most recent hand-back summary from the watch (Phase 1: shown to the
+    /// user). `lastWatchLoanJournalData` keeps the raw journal for Phase 2 IOB
+    /// reconciliation.
+    private(set) var lastWatchLoanSummary: String?
+    private(set) var lastWatchLoanJournalData: Data?
+
     private var contextDosingDecisions: [Date: BolusDosingDecision] {
         get { lockedContextDosingDecisions.value }
         set { lockedContextDosingDecisions.value = newValue }
@@ -484,9 +497,56 @@ extension WatchDataManager: WCSessionDelegate {
                 // Send back the updated prediction and recommended bolus
                 replyHandler(context.rawValue)
             }
+        case PodLoanRequestUserInfo.name?:
+            handlePodLoanRequest(replyHandler: replyHandler)
+        case PodHandbackUserInfo.name?:
+            handlePodHandback(message)
+            replyHandler([:])
         default:
             replyHandler([:])
         }
+    }
+
+    /// The watch is asking to borrow the pod for a workout. Reply with the pod
+    /// identity it needs to take over (read from the pump manager's rawState —
+    /// see PodLoanIdentity), and pause automatic dosing for the loan. If there's
+    /// no active pod, the reply is a denial and nothing is changed.
+    private func handlePodLoanRequest(replyHandler: @escaping ([String: Any]) -> Void) {
+        let grant = PodLoanIdentity.grant(fromPumpManagerRawState: deviceManager.pumpManager?.rawState)
+
+        if grant.granted {
+            // Capture the current dosing state so it can be restored on hand-back,
+            // then pause automatic dosing while the watch holds the pod.
+            dosingEnabledBeforeWatchLoan = deviceManager.loopManager.settings.dosingEnabled
+            deviceManager.loopManager.mutateSettings { $0.dosingEnabled = false }
+            log.default("Pod loan granted to watch; automatic dosing paused")
+        } else {
+            log.default("Pod loan denied: %{public}@", grant.denialReason ?? "unknown")
+        }
+
+        replyHandler(grant.rawValue)
+    }
+
+    /// The watch has handed the pod back. Record what it did (Phase 1: display;
+    /// Phase 2: reconcile), restore automatic dosing to its pre-loan state, and
+    /// re-establish the phone's own pod session so the pump data is current again.
+    private func handlePodHandback(_ message: [String: Any]) {
+        guard let handback = PodHandbackUserInfo(rawValue: message) else {
+            log.error("Could not decode pod hand-back message: %{public}@", String(describing: message))
+            return
+        }
+
+        log.default("Pod handed back from watch: %{public}@", handback.summary)
+        lastWatchLoanSummary = handback.summary
+        lastWatchLoanJournalData = handback.journalData
+
+        if let priorDosing = dosingEnabledBeforeWatchLoan {
+            deviceManager.loopManager.mutateSettings { $0.dosingEnabled = priorDosing }
+            dosingEnabledBeforeWatchLoan = nil
+        }
+
+        // Reconnect to the pod and refresh status now that we own it again.
+        deviceManager.pumpManager?.ensureCurrentPumpData(completion: { _ in })
     }
 
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {

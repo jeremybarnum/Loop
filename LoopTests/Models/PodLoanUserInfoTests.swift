@@ -116,19 +116,28 @@ class PodLoanGrantUserInfoTests: XCTestCase {
 
 class PodHandbackUserInfoTests: XCTestCase {
     private lazy var handedBackAt = Date(timeIntervalSinceReferenceDate: 0)
+    private let summary = "Delivered 1.5 U in 3 boluses"
     private let journalData = Data("{\"any\":\"json\"}".utf8)
     private lazy var rawValue: PodHandbackUserInfo.RawValue = [
         "v": 1,
         "name": "PodHandbackUserInfo",
         "hb": handedBackAt,
+        "sm": summary,
         "jd": journalData,
     ]
 
-    func testRoundTripPreservesJournalData() {
-        let info = PodHandbackUserInfo(handedBackAt: handedBackAt, journalData: journalData)
+    func testRoundTripPreservesSummaryAndJournalData() {
+        let info = PodHandbackUserInfo(handedBackAt: handedBackAt, summary: summary, journalData: journalData)
         let decoded = PodHandbackUserInfo(rawValue: info.rawValue)
         XCTAssertEqual(decoded?.handedBackAt, handedBackAt)
+        XCTAssertEqual(decoded?.summary, summary)
         XCTAssertEqual(decoded?.journalData, journalData)
+    }
+
+    func testMissingSummaryRejected() {
+        var rawValue = self.rawValue
+        rawValue["sm"] = nil
+        XCTAssertNil(PodHandbackUserInfo(rawValue: rawValue))
     }
 
     func testInvalidVersionRejected() {

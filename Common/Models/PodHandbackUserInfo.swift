@@ -20,8 +20,13 @@ import Foundation
 struct PodHandbackUserInfo {
     let version = 1
     let handedBackAt: Date
-    /// PodLoanJournal.encoded() — JSON. Decoded with PodLoanJournal(data:) on
-    /// the phone, which links OmniBLECore.
+    /// Human-readable summary of the loan, already rendered on the watch (which
+    /// links OmniBLECore). The phone displays this directly — so the phone does
+    /// NOT need to link the pod driver just to show what the watch did.
+    let summary: String
+    /// PodLoanJournal.encoded() — JSON. Opaque to the phone in Phase 1; kept for
+    /// Phase 2 IOB reconciliation, when the phone will decode it with
+    /// PodLoanJournal(data:).
     let journalData: Data
 }
 
@@ -35,12 +40,14 @@ extension PodHandbackUserInfo: RawRepresentable {
             rawValue["v"] as? Int == version,
             rawValue["name"] as? String == PodHandbackUserInfo.name,
             let handedBackAt = rawValue["hb"] as? Date,
+            let summary = rawValue["sm"] as? String,
             let journalData = rawValue["jd"] as? Data
             else {
                 return nil
         }
 
         self.handedBackAt = handedBackAt
+        self.summary = summary
         self.journalData = journalData
     }
 
@@ -49,6 +56,7 @@ extension PodHandbackUserInfo: RawRepresentable {
             "v": version,
             "name": PodHandbackUserInfo.name,
             "hb": handedBackAt,
+            "sm": summary,
             "jd": journalData
         ]
     }
