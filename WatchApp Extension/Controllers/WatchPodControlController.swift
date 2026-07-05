@@ -11,6 +11,7 @@
 
 import WatchKit
 import SwiftUI
+import LoopCore
 
 final class WatchPodControlController: WKHostingController<WatchPodControlView>, IdentifiableClass {
     private lazy var coordinator = WatchPodLoanCoordinator()
