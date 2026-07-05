@@ -108,4 +108,9 @@ class HUDInterfaceController: WKInterfaceController {
         presentController(withName: CarbAndBolusFlowController.className, context: CarbAndBolusFlow.Configuration.manualBolus)
     }
 
+    /// Opens the pod-loan screen (borrow the pod from the phone for a workout).
+    @IBAction func openPodControl() {
+        presentController(withName: WatchPodControlController.className, context: nil)
+    }
+
 }
