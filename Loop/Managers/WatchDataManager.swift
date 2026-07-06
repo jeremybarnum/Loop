@@ -515,11 +515,19 @@ extension WatchDataManager: WCSessionDelegate {
         let grant = PodLoanIdentity.grant(fromPumpManagerRawState: deviceManager.pumpManager?.rawState)
 
         if grant.granted {
-            // Capture the current dosing state so it can be restored on hand-back,
-            // then pause automatic dosing while the watch holds the pod.
-            dosingEnabledBeforeWatchLoan = deviceManager.loopManager.settings.dosingEnabled
-            deviceManager.loopManager.mutateSettings { $0.dosingEnabled = false }
-            log.default("Pod loan granted to watch; automatic dosing paused")
+            // Capture the pre-loan dosing state and pause automatic dosing — but
+            // ONLY on the first grant of a loan. A repeat borrow (e.g. the watch
+            // retried after a failed takeover) must NOT re-capture: by then dosing
+            // is already paused, so re-capturing would save "off" and hand-back
+            // would restore to "off", silently leaving the loop open. Guarding on
+            // nil makes the capture idempotent for the life of the loan.
+            if dosingEnabledBeforeWatchLoan == nil {
+                dosingEnabledBeforeWatchLoan = deviceManager.loopManager.settings.dosingEnabled
+                deviceManager.loopManager.mutateSettings { $0.dosingEnabled = false }
+                log.default("Pod loan granted to watch; automatic dosing paused")
+            } else {
+                log.default("Pod loan re-granted to watch (loan already active; dosing state preserved)")
+            }
         } else {
             log.default("Pod loan denied: %{public}@", grant.denialReason ?? "unknown")
         }
