@@ -19,6 +19,12 @@ import LoopKit
 final class ExtensionDelegate: NSObject, WKExtensionDelegate {
     private(set) lazy var loopManager = LoopDataManager()
 
+    /// The pod loan lives here — at app scope — NOT inside the pod-control screen,
+    /// so that dismissing that screen (the X) can't deallocate the loan and its
+    /// live BLE connection to the pod, which would orphan the pod (see B1 in
+    /// docs/LIVE_TEST_FINDINGS.md). The screen is only a view of this state.
+    private(set) lazy var podLoanCoordinator = WatchPodLoanCoordinator()
+
     private let log = OSLog(category: "ExtensionDelegate")
 
     private var observers: [NSKeyValueObservation] = []

@@ -14,9 +14,10 @@ import SwiftUI
 import LoopCore
 
 final class WatchPodControlController: WKHostingController<WatchPodControlView>, IdentifiableClass {
-    private lazy var coordinator = WatchPodLoanCoordinator()
-
+    // The coordinator is owned by ExtensionDelegate (app scope), not this screen.
+    // So closing this screen (the X) is a pure view dismissal — it does NOT tear
+    // down the loan or its BLE connection to the pod. (B1 fix — orphaning.)
     override var body: WatchPodControlView {
-        WatchPodControlView(coordinator: coordinator)
+        WatchPodControlView(coordinator: ExtensionDelegate.shared().podLoanCoordinator)
     }
 }
