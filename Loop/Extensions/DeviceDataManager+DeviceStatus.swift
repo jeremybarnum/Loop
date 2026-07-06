@@ -33,6 +33,12 @@ extension DeviceDataManager {
     }
 
     var pumpStatusHighlight: DeviceStatusHighlight? {
+        // When the pod is loaned to the watch, the phone deliberately isn't in
+        // contact with it — show that, rather than the pump's own status (which
+        // would read as "Signal Loss").
+        if podLoanedToWatch {
+            return PodOnWatchStatusHighlight()
+        }
         let bluetoothState = bluetoothProvider.bluetoothState
         if bluetoothState == .unsupported || bluetoothState == .unauthorized || bluetoothState == .poweredOff {
             return BluetoothState.enableHighlight
@@ -60,6 +66,13 @@ extension DeviceDataManager {
     struct ResumeOnboardingStatusHighlight: DeviceStatusHighlight {
         var localizedMessage: String = NSLocalizedString("Complete Setup", comment: "Title text for button to complete setup")
         var imageName: String = "exclamationmark.circle.fill"
+        var state: DeviceStatusHighlightState = .warning
+    }
+
+    /// Placeholder shown while the pod is loaned to the Apple Watch.
+    struct PodOnWatchStatusHighlight: DeviceStatusHighlight {
+        var localizedMessage: String = NSLocalizedString("On Watch", comment: "Pump status highlight when the pod is loaned to the Apple Watch")
+        var imageName: String = "applewatch"
         var state: DeviceStatusHighlightState = .warning
     }
 

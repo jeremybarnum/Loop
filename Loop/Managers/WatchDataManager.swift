@@ -515,6 +515,9 @@ extension WatchDataManager: WCSessionDelegate {
         let grant = PodLoanIdentity.grant(fromPumpManagerRawState: deviceManager.pumpManager?.rawState)
 
         if grant.granted {
+            // Reflect in the phone UI that the pod is now on the watch (shows an
+            // "On Watch" pump status instead of the pump's own Signal Loss).
+            deviceManager.podLoanedToWatch = true
             // Capture the pre-loan dosing state and pause automatic dosing — but
             // ONLY on the first grant of a loan. A repeat borrow (e.g. the watch
             // retried after a failed takeover) must NOT re-capture: by then dosing
@@ -547,6 +550,7 @@ extension WatchDataManager: WCSessionDelegate {
         log.default("Pod handed back from watch: %{public}@", handback.summary)
         lastWatchLoanSummary = handback.summary
         lastWatchLoanJournalData = handback.journalData
+        deviceManager.podLoanedToWatch = false   // phone is back in control
 
         if let priorDosing = dosingEnabledBeforeWatchLoan {
             deviceManager.loopManager.mutateSettings { $0.dosingEnabled = priorDosing }

@@ -231,6 +231,12 @@ final class DeviceDataManager {
 
     private var watchManager: WatchDataManager!
 
+    /// True while the pod is loaned to the Apple Watch. Set by WatchDataManager on
+    /// grant / hand-back. Drives the pump status HUD to show an "On Watch"
+    /// placeholder instead of the pump's own status (which would otherwise read as
+    /// Signal Loss). See DeviceDataManager+DeviceStatus.pumpStatusHighlight.
+    var podLoanedToWatch = false
+
     // MARK: - Status Extension
 
     private var statusExtensionManager: ExtensionDataManager!
