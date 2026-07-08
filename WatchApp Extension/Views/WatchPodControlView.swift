@@ -23,24 +23,33 @@ enum PodControlEntry {
 struct WatchPodControlView: View {
     @ObservedObject var coordinator: WatchPodLoanCoordinator
     var entry: PodControlEntry = .start
-    @State private var confirmingBolus = false
-    @State private var bolusAmount = WatchPodLoanCoordinator.defaultBolusUnits
-    @State private var confirmingBasal = false
-    @State private var basalAmount = WatchPodLoanCoordinator.defaultBasalRate
+    /// Return to the main HUD (set by the hosting controller). Used by the dose
+    /// screens to dismiss after a delivery, like the regular bolus flow.
+    var dismiss: () -> Void = {}
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 10) {
+        Group {
+            if isDoseScreen {
+                // Dose screens must NOT sit inside a ScrollView: the scroll view captures
+                // the Digital Crown, so the dial/confirm wouldn't respond until tapped.
+                // Outside a scroll (like the regular bolus screen) the crown works
+                // immediately, and the trailing Spacer can pin the action button.
                 content
+            } else {
+                ScrollView {
+                    VStack(spacing: 10) {
+                        content
 
-                if let error = coordinator.lastError {
-                    Text(error)
-                        .font(.footnote)
-                        .foregroundColor(.orange)
-                        .multilineTextAlignment(.center)
+                        if let error = coordinator.lastError {
+                            Text(error)
+                                .font(.footnote)
+                                .foregroundColor(.orange)
+                                .multilineTextAlignment(.center)
+                        }
+                    }
+                    .padding(.horizontal, 4)
                 }
             }
-            .padding(.horizontal, 4)
         }
         .onAppear {
             // Tapping the horse IS the intent to start Show Mode, so begin fetching the
@@ -51,6 +60,12 @@ struct WatchPodControlView: View {
                 coordinator.requestLoan()
             }
         }
+    }
+
+    /// The crown-driven bolus/basal dose screens — rendered outside the ScrollView so the
+    /// Digital Crown reaches them immediately (no tap-to-focus needed).
+    private var isDoseScreen: Bool {
+        coordinator.phase == .active && (entry == .bolus || entry == .basal)
     }
 
     @ViewBuilder
@@ -139,9 +154,9 @@ struct WatchPodControlView: View {
     private var activeContent: some View {
         switch entry {
         case .bolus:
-            VStack(spacing: 10) { statusCard; bolusControl }
+            ShowModeDoseView(kind: .bolus, coordinator: coordinator, onFinish: dismiss)
         case .basal:
-            VStack(spacing: 10) { statusCard; basalControl }
+            ShowModeDoseView(kind: .basal, coordinator: coordinator, onFinish: dismiss)
         case .start, .end:
             endSection
         }
@@ -154,76 +169,6 @@ struct WatchPodControlView: View {
                 Label("End Show Mode", systemImage: "iphone")
             }
             .disabled(coordinator.busy)
-        }
-    }
-
-    // Crown-dialed amount, hard-capped, with a two-tap confirm (no confirmationDialog
-    // on the watchOS 7 floor). A manual capped correction — no BG gate yet.
-    @ViewBuilder
-    private var bolusControl: some View {
-        if confirmingBolus {
-            VStack(spacing: 6) {
-                Button(String(format: "Give %.2f U", bolusAmount)) {
-                    confirmingBolus = false
-                    coordinator.bolus(units: bolusAmount)
-                }
-                Button("Cancel") { confirmingBolus = false }
-            }
-            .disabled(coordinator.busy)
-        } else {
-            VStack(spacing: 4) {
-                Text(String(format: "%.2f U", bolusAmount))
-                    .font(.title3)
-                    .focusable(true)
-                    .digitalCrownRotation($bolusAmount,
-                                          from: 0.0,
-                                          through: WatchPodLoanCoordinator.maxBolusUnits,
-                                          by: 0.05,
-                                          sensitivity: .medium,
-                                          isContinuous: false,
-                                          isHapticFeedbackEnabled: true)
-                Button {
-                    confirmingBolus = true
-                } label: {
-                    Label("Bolus", systemImage: "syringe")
-                }
-                .disabled(coordinator.busy || bolusAmount <= 0)
-            }
-        }
-    }
-
-    // Crown-dialed absolute basal rate, hard-capped, two-tap confirm. 0 U/hr = suspend.
-    // Set-and-forget from the user's view (fixed 3h duration under the hood, auto-reverts).
-    @ViewBuilder
-    private var basalControl: some View {
-        if confirmingBasal {
-            VStack(spacing: 6) {
-                Button(basalAmount <= 0 ? "Suspend basal" : String(format: "Set %.2f U/hr", basalAmount)) {
-                    confirmingBasal = false
-                    coordinator.setBasalRate(basalAmount)
-                }
-                Button("Cancel") { confirmingBasal = false }
-            }
-            .disabled(coordinator.busy)
-        } else {
-            VStack(spacing: 4) {
-                Text(basalAmount <= 0 ? "Basal 0 (suspend)" : String(format: "Basal %.2f U/hr", basalAmount))
-                    .font(.title3)
-                    .focusable(true)
-                    .digitalCrownRotation($basalAmount,
-                                          from: 0.0,
-                                          through: WatchPodLoanCoordinator.maxTempBasalRate,
-                                          by: 0.05,
-                                          sensitivity: .medium,
-                                          isContinuous: false,
-                                          isHapticFeedbackEnabled: true)
-                Button {
-                    confirmingBasal = true
-                } label: {
-                    Label("Set basal", systemImage: "dial.medium")
-                }
-                .disabled(coordinator.busy)
-            }
         }
     }
 
@@ -272,6 +217,155 @@ struct WatchPodControlView: View {
         VStack(spacing: 8) {
             ProgressView()
             Text(label).font(.footnote)
+        }
+    }
+}
+
+// The watch-resident bolus / basal control used in Show Mode, built from the same
+// polished pieces as Loop's regular watch bolus screen — DoseVolumeInput's big rounded
+// number + BolusConfirmationView's "turn Digital Crown to confirm" — but wired straight
+// to the pod (WatchPodLoanCoordinator) instead of the phone. Bolus and basal share this
+// view; they differ only in unit, action verb, and which command delivers. Two steps,
+// mirroring the regular bolus UX: pick the amount (crown), then a turn-crown-to-confirm
+// gesture delivers and returns to the main HUD. Both amounts are hard-capped in the
+// coordinator regardless of the dial.
+//
+// (Lives here rather than its own file so it compiles without a project.pbxproj change;
+// split into ShowModeDoseView.swift via Xcode if desired.)
+struct ShowModeDoseView: View {
+    enum Kind: Equatable {
+        case bolus
+        case basal
+
+        var unit: String { self == .bolus ? "U" : "U/hr" }
+        var max: Double {
+            self == .bolus ? WatchPodLoanCoordinator.maxBolusUnits
+                           : WatchPodLoanCoordinator.maxTempBasalRate
+        }
+        var defaultAmount: Double {
+            self == .bolus ? WatchPodLoanCoordinator.defaultBolusUnits
+                           : WatchPodLoanCoordinator.defaultBasalRate
+        }
+        /// The +/- button increment — coarser than the crown's 0.05, matching the regular
+        /// bolus screen (0.5 U). Basal is dialed in smaller steps, so 0.1 U/hr.
+        var buttonStep: Double { self == .bolus ? 0.5 : 0.1 }
+    }
+
+    let kind: Kind
+    @ObservedObject var coordinator: WatchPodLoanCoordinator
+    /// Called after delivery to return to the main HUD (the confirmation gesture is the
+    /// commit, so we dismiss right after — like the regular bolus flow).
+    let onFinish: () -> Void
+
+    @State private var amount: Double
+    @State private var confirming = false
+    @State private var confirmProgress: Double = 0
+
+    private let step = 0.05
+
+    init(kind: Kind, coordinator: WatchPodLoanCoordinator, onFinish: @escaping () -> Void) {
+        self.kind = kind
+        self.coordinator = coordinator
+        self.onFinish = onFinish
+        _amount = State(initialValue: kind.defaultAmount)
+    }
+
+    var body: some View {
+        if confirming {
+            confirmStep
+        } else {
+            pickStep
+        }
+    }
+
+    // MARK: - Pick the amount
+
+    private var pickStep: some View {
+        VStack(spacing: 2) {
+            DoseVolumeInput(
+                volume: amount,
+                unit: Text(kind.unit),
+                isEditable: true,
+                increment: { amount = min(amount + kind.buttonStep, kind.max) },   // +/- buttons: coarse
+                decrement: { amount = max(amount - kind.buttonStep, 0) },
+                formatVolume: { String(format: "%.2f", $0) }
+            )
+            .focusable(true)
+            .digitalCrownRotation($amount,                                          // crown: fine (0.05)
+                                  from: 0, through: kind.max, by: step,
+                                  sensitivity: .medium, isContinuous: false, isHapticFeedbackEnabled: true)
+
+            Spacer()
+
+            // The orange pill from the regular bolus screen, pinned to the bottom.
+            ActionButton(
+                title: Text(actionTitle),
+                color: actionEnabled ? .insulin : .gray,
+                action: {
+                    confirmProgress = 0
+                    confirming = true
+                }
+            )
+            .disabled(!actionEnabled)
+        }
+    }
+
+    /// Bolus needs a positive amount; basal is always actionable (0 = suspend).
+    private var actionEnabled: Bool { kind == .basal || amount > 0 }
+
+    // MARK: - Turn-crown-to-confirm
+
+    private var confirmStep: some View {
+        VStack(spacing: 6) {
+            Text(confirmSummary)
+                .font(.caption)
+                .multilineTextAlignment(.center)
+            BolusConfirmationView(progress: $confirmProgress, helpText: confirmHelpText) {
+                deliver()
+            }
+            Button("Cancel") { confirming = false }
+        }
+    }
+
+    private func deliver() {
+        let dose = (amount / step).rounded() * step   // snap to pod resolution
+        switch kind {
+        case .bolus: coordinator.bolus(units: dose)
+        case .basal: coordinator.setBasalRate(dose)
+        }
+        onFinish()
+    }
+
+    // MARK: - Labels
+
+    private var isSuspend: Bool { kind == .basal && amount <= 0 }
+
+    private var actionTitle: String {
+        switch kind {
+        case .bolus: return NSLocalizedString("Bolus", comment: "Show Mode bolus action")
+        case .basal: return isSuspend
+            ? NSLocalizedString("Suspend", comment: "Show Mode basal-zero action")
+            : NSLocalizedString("Set basal", comment: "Show Mode basal action")
+        }
+    }
+
+    private var confirmSummary: String {
+        switch kind {
+        case .bolus: return String(format: NSLocalizedString("Bolus %.2f U", comment: "Show Mode bolus confirm summary"), amount)
+        case .basal: return isSuspend
+            ? NSLocalizedString("Suspend basal", comment: "Show Mode suspend confirm summary")
+            : String(format: NSLocalizedString("Basal %.2f U/hr", comment: "Show Mode basal confirm summary"), amount)
+        }
+    }
+
+    private var confirmHelpText: Text? {
+        switch kind {
+        case .bolus:
+            return nil   // BolusConfirmationView's default ("Turn Digital Crown to bolus")
+        case .basal:
+            return Text(isSuspend
+                        ? NSLocalizedString("Turn Digital Crown\nto suspend", comment: "Show Mode suspend confirm help")
+                        : NSLocalizedString("Turn Digital Crown\nto set basal", comment: "Show Mode basal confirm help"))
         }
     }
 }

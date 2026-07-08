@@ -24,7 +24,9 @@ final class WatchPodControlController: WKHostingController<WatchPodControlView>,
     private var entry: PodControlEntry = .start
 
     override var body: WatchPodControlView {
-        WatchPodControlView(coordinator: ExtensionDelegate.shared().podLoanCoordinator, entry: entry)
+        WatchPodControlView(coordinator: ExtensionDelegate.shared().podLoanCoordinator,
+                            entry: entry,
+                            dismiss: { [weak self] in self?.dismiss() })
     }
 
     override func awake(withContext context: Any?) {

@@ -15,6 +15,7 @@ struct BolusConfirmationView: View {
     @Binding private var progressStorage: Double
 
     private let completion: () -> Void
+    private let customHelpText: Text?
     private let resetProgress = PeriodicPublisher(interval: 0.25)
 
     private var progress: Binding<Double> {
@@ -39,9 +40,10 @@ struct BolusConfirmationView: View {
         )
     }
 
-    init(progress: Binding<Double>, onConfirmation completion: @escaping () -> Void) {
+    init(progress: Binding<Double>, helpText: Text? = nil, onConfirmation completion: @escaping () -> Void) {
         self._progressStorage = progress
         self.completion = completion
+        self.customHelpText = helpText
     }
 
     var body: some View {
@@ -66,7 +68,7 @@ struct BolusConfirmationView: View {
     private var isFinished: Bool { abs(progress.wrappedValue) >= 1.0 }
 
     private var helpText: some View {
-        Text("Turn Digital Crown\nto bolus", comment: "Help text for bolus confirmation on Apple Watch")
+        (customHelpText ?? Text("Turn Digital Crown\nto bolus", comment: "Help text for bolus confirmation on Apple Watch"))
             .font(.footnote)
             .multilineTextAlignment(.center)
             .foregroundColor(Color(.lightGray))

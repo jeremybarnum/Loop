@@ -122,11 +122,22 @@ class HUDInterfaceController: WKInterfaceController {
         }
     }
 
-    /// The horse button. Not in Show Mode → the start/untether flow; in Show Mode →
-    /// the End Show Mode screen (tapping the green horse ends it).
+    /// The horse button. Not in Show Mode → the start/untether flow. In Show Mode →
+    /// end Show Mode immediately (hand back to the phone) and return to the main HUD —
+    /// no screen. All dosing now lives on the main HUD, so there's nothing left to show
+    /// on an "end" screen.
+    //
+    // TODO(pod-test, ~Fri): direct hand-back assumes the phone doesn't need Bluetooth
+    // pre-enabled to reclaim the pod, and shows no on-screen feedback if hand-back fails
+    // (phone unreachable — phase reverts to .active, horse goes back to green). Revisit
+    // after real-pod testing: if a confirm or "re-enable Bluetooth" step is needed,
+    // restore the presented end screen (PodControlEntry.end + endSection are retained).
     @IBAction func openPodControl() {
-        let entry: PodControlEntry = isInShowMode ? .end : .start
-        presentController(withName: WatchPodControlController.className, context: entry)
+        if isInShowMode {
+            ExtensionDelegate.shared().podLoanCoordinator.handBack()
+        } else {
+            presentController(withName: WatchPodControlController.className, context: PodControlEntry.start)
+        }
     }
 
 }
