@@ -43,8 +43,11 @@ final class WatchPodLoanCoordinator: ObservableObject {
         return controller.loanJournalSummary
     }
 
-    /// The single fixed bolus size this build offers (safety: no arbitrary dosing).
-    static let fixedBolusUnits: Double = 0.5
+    /// Hard cap on any single correction bolus from the watch (safety bound). The
+    /// dial can't exceed this. (BG-gating is a later phase; this is the current bound.)
+    static let maxBolusUnits: Double = 1.0
+    /// The amount the bolus dial starts at.
+    static let defaultBolusUnits: Double = 0.5
 
     /// True only in the watchOS simulator (which has no Bluetooth, so it can never
     /// reach a pod). When true, the methods below route to the simulator demo path
@@ -201,9 +204,11 @@ final class WatchPodLoanCoordinator: ObservableObject {
         if Self.isSimulatorDemo { demoResume(); return }
         runPodCommand { self.controller.resume(completion: $0) }
     }
-    func bolus() {
-        if Self.isSimulatorDemo { demoBolus(); return }
-        runPodCommand { self.controller.bolus(units: Self.fixedBolusUnits, completion: $0) }
+    func bolus(units: Double) {
+        let capped = min(max(units, 0), Self.maxBolusUnits)
+        guard capped > 0 else { return }
+        if Self.isSimulatorDemo { demoBolus(units: capped); return }
+        runPodCommand { self.controller.bolus(units: capped, completion: $0) }
     }
     func refreshStatus() {
         if Self.isSimulatorDemo { return }
@@ -324,8 +329,8 @@ private extension WatchPodLoanCoordinator {
         }
     }
 
-    func demoBolus() {
-        let delivered = (status?.insulinDelivered ?? 0) + Self.fixedBolusUnits
+    func demoBolus(units: Double) {
+        let delivered = (status?.insulinDelivered ?? 0) + units
         busy = true
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)

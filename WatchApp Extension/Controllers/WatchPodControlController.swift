@@ -12,6 +12,7 @@
 import WatchKit
 import SwiftUI
 import LoopCore
+import Combine
 
 final class WatchPodControlController: WKHostingController<WatchPodControlView>, IdentifiableClass {
     // The coordinator is owned by ExtensionDelegate (app scope), not this screen.
@@ -19,5 +20,30 @@ final class WatchPodControlController: WKHostingController<WatchPodControlView>,
     // down the loan or its BLE connection to the pod. (B1 fix — orphaning.)
     override var body: WatchPodControlView {
         WatchPodControlView(coordinator: ExtensionDelegate.shared().podLoanCoordinator)
+    }
+
+    private var autoReturnCancellable: AnyCancellable?
+
+    override func willActivate() {
+        super.willActivate()
+        // This screen is just the transient "steps." The instant the loan completes a
+        // transition, drop the user back onto the main HUD — no manual X needed:
+        //   • → .active  Untether succeeded → go use Show Mode on the main screen
+        //   • → .done    hand-back finished → back to tethered
+        // dropFirst() skips the phase we opened in, so opening this screen while already
+        // .active (to end Show Mode) doesn't instantly dismiss.
+        autoReturnCancellable = ExtensionDelegate.shared().podLoanCoordinator.$phase
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] phase in
+                if phase == .active || phase == .done {
+                    self?.dismiss()
+                }
+            }
+    }
+
+    override func didDeactivate() {
+        super.didDeactivate()
+        autoReturnCancellable = nil
     }
 }

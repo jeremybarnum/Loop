@@ -12,6 +12,7 @@ import HealthKit
 import LoopKit
 import LoopCore
 import SwiftUI
+import Combine
 
 
 final class ActionHUDController: HUDInterfaceController {
@@ -28,7 +29,12 @@ final class ActionHUDController: HUDInterfaceController {
     @IBOutlet var bolusButtonImage: WKInterfaceImage!
     @IBOutlet var bolusButtonBackground: WKInterfaceGroup!
 
-    private lazy var preMealButtonGroup = ButtonGroup(button: preMealButton, image: preMealButtonImage, background: preMealButtonBackground, onBackgroundColor: .carbsColor, offBackgroundColor: .darkCarbsColor, onIconColor: .darkCarbsColor, offIconColor: .carbsColor)
+    // Show Mode toggle. Three visual states, respecting the HID/Loop convention that
+    // GREY means "unavailable — don't press" (reserved for .disabled):
+    //   • off / available → white icon on dark  (tap to start Show Mode)
+    //   • on  / active    → green fill           (watch holds the pod)
+    //   • .disabled is never used here — the toggle is always pressable.
+    private lazy var preMealButtonGroup = ButtonGroup(button: preMealButton, image: preMealButtonImage, background: preMealButtonBackground, onBackgroundColor: .carbsColor, offBackgroundColor: .darkCarbsColor, onIconColor: .darkCarbsColor, offIconColor: .white)
 
     private lazy var overrideButtonGroup = ButtonGroup(button: overrideButton, image: overrideButtonImage, background: overrideButtonBackground, onBackgroundColor: .overrideColor, offBackgroundColor: .darkOverrideColor, onIconColor: .darkOverrideColor, offIconColor: .overrideColor)
 
@@ -37,6 +43,21 @@ final class ActionHUDController: HUDInterfaceController {
     private lazy var bolusButtonGroup = ButtonGroup(button: bolusButton, image: bolusButtonImage, background: bolusButtonBackground, onBackgroundColor: .insulin, offBackgroundColor: .darkInsulin, onIconColor: .darkInsulin, offIconColor: .insulin)
 
     @IBOutlet var overrideButtonLabel: WKInterfaceLabel?
+
+    private var loanPhaseCancellable: AnyCancellable?
+
+    override func awake(withContext context: Any?) {
+        super.awake(withContext: context)
+        // Keep the horse button + Carbs availability in sync with the pod loan even
+        // while the pod sheet is covering this screen: the phase changes while we're
+        // inactive, and dismissing that sheet doesn't reliably fire willActivate — so
+        // observe the phase directly and re-run update(). dropFirst() skips the current
+        // value (willActivate paints the initial state); we only need later changes.
+        loanPhaseCancellable = ExtensionDelegate.shared().podLoanCoordinator.$phase
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.update() }
+    }
 
     override func willActivate() {
         super.willActivate()
@@ -49,7 +70,7 @@ final class ActionHUDController: HUDInterfaceController {
         // enabled. (Later option: a custom watch+rider glyph to show the watch too.)
         let untetherIconConfig = UIImage.SymbolConfiguration(pointSize: 32, weight: .medium)
         preMealButtonImage.setImage(UIImage(systemName: "figure.equestrian.sports", withConfiguration: untetherIconConfig))
-        preMealButtonGroup.state = .off
+        preMealButtonGroup.state = isInShowMode ? .on : .off
 
         // Update the override button description based on the feature flag; this cannot be done earlier than `-willActivate` (e.g. didSet on the IBOutlet is too soon)
         if FeatureFlags.sensitivityOverridesEnabled {
@@ -82,7 +103,8 @@ final class ActionHUDController: HUDInterfaceController {
 
         let isClosedLoop = loopManager.activeContext?.isClosedLoop ?? false
 
-        preMealButtonGroup.state = .off
+        // Show Mode button (repurposed Pre-Meal): green while the watch holds the pod.
+        preMealButtonGroup.state = isInShowMode ? .on : .off
 
         if !isClosedLoop && FeatureFlags.simpleBolusCalculatorEnabled {
             overrideButtonGroup.state = .disabled
@@ -99,6 +121,12 @@ final class ActionHUDController: HUDInterfaceController {
             }
         }
 
+        // In Show Mode the phone is away, so carb entry (which routes to the phone) is
+        // unavailable — grey it out. Bolus + basal are handled on the watch (next steps).
+        if isInShowMode {
+            carbsButtonGroup.state = .disabled
+        }
+
         glucoseFormatter.updateUnit(to: loopManager.displayGlucoseUnit)
     }
     
@@ -108,6 +136,14 @@ final class ActionHUDController: HUDInterfaceController {
         } else {
             return loopManager.settings.legacyWorkoutTargetRange != nil
         }
+    }
+
+    /// True while the watch actually holds the pod (Show Mode is live). Derived from
+    /// the loan coordinator's real phase — never a separate flag — so the HUD can't
+    /// show green while the watch isn't really in control. In Show Mode the horse
+    /// button is green and Carbs is unavailable (there's no phone to route carbs to).
+    private var isInShowMode: Bool {
+        ExtensionDelegate.shared().podLoanCoordinator.phase == .active
     }
 
     private func updateForPreMeal(enabled: Bool) {

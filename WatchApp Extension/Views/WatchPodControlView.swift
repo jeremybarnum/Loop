@@ -14,6 +14,7 @@ import OmniBLECore
 struct WatchPodControlView: View {
     @ObservedObject var coordinator: WatchPodLoanCoordinator
     @State private var confirmingBolus = false
+    @State private var bolusAmount = WatchPodLoanCoordinator.defaultBolusUnits
 
     var body: some View {
         ScrollView {
@@ -29,6 +30,15 @@ struct WatchPodControlView: View {
             }
             .padding(.horizontal, 4)
         }
+        .onAppear {
+            // Tapping the horse IS the intent to start Show Mode, so begin fetching the
+            // pod credentials from the phone immediately (in the background) and land the
+            // user straight on the "disconnect Bluetooth → Untether" screen — no separate
+            // "Start" tap. Only auto-start from a resting phase (not mid-loan).
+            if coordinator.phase == .idle || coordinator.phase == .done {
+                coordinator.requestLoan()
+            }
+        }
     }
 
     @ViewBuilder
@@ -36,12 +46,10 @@ struct WatchPodControlView: View {
         switch coordinator.phase {
         case .idle:
             idleSection
-        case .requesting:
-            progress("Starting Show Mode…")
+        case .requesting, .armed:
+            untetherSection
         case .denied(let reason):
             deniedSection(reason)
-        case .armed:
-            armedSection
         case .active:
             activeSection
         case .handingBack:
@@ -81,23 +89,32 @@ struct WatchPodControlView: View {
         }
     }
 
-    private var armedSection: some View {
+    // Single Show Mode entry screen (covers both .requesting and .armed). Opened
+    // straight from the horse tap: the "disconnect Bluetooth" instruction shows
+    // immediately while credentials are fetched in the background; the Untether button
+    // is greyed until the keys arrive (.armed), then lights up and runs the takeover.
+    private var untetherSection: some View {
         VStack(spacing: 10) {
-            Text("Ready to start")
+            Text("Show Mode")
                 .font(.headline)
-            if coordinator.busy {
-                // BUG-3: give the takeover visible feedback (it can take a few seconds).
+            Text("Disconnect Bluetooth on your iPhone, then Untether watch.")
+                .font(.footnote)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+
+            if coordinator.busy && coordinator.phase == .armed {
+                // Takeover in progress (Untether tapped) — BUG-3: visible feedback.
                 ProgressView()
-                Text("Untethering…").font(.footnote)
-            } else {
-                Text("Disconnect Bluetooth on your iPhone, then Untether watch.")
-                    .font(.footnote)
+                Text("Untethering…")
+                    .font(.caption2)
                     .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
+            } else {
                 Button(action: coordinator.claim) {
                     Label("Untether watch", systemImage: "checkmark.circle")
                 }
+                .disabled(coordinator.phase != .armed)   // lit only once keys have arrived
                 Button("Cancel", action: coordinator.cancelArmed)
+                    .disabled(coordinator.busy)
             }
         }
     }
@@ -130,27 +147,38 @@ struct WatchPodControlView: View {
         // hand-back summary (doneSection) instead, keeping the active screen clean.
     }
 
-    // Two-tap confirm rather than a one-tap dose (no confirmationDialog on the
-    // watchOS 7 floor).
+    // Crown-dialed amount, hard-capped, with a two-tap confirm (no confirmationDialog
+    // on the watchOS 7 floor). A manual capped correction — no BG gate yet.
     @ViewBuilder
     private var bolusControl: some View {
-        let units = WatchPodLoanCoordinator.fixedBolusUnits
         if confirmingBolus {
-            HStack(spacing: 6) {
-                Button(String(format: "Give %.1f U", units)) {
+            VStack(spacing: 6) {
+                Button(String(format: "Give %.2f U", bolusAmount)) {
                     confirmingBolus = false
-                    coordinator.bolus()
+                    coordinator.bolus(units: bolusAmount)
                 }
                 Button("Cancel") { confirmingBolus = false }
             }
             .disabled(coordinator.busy)
         } else {
-            Button {
-                confirmingBolus = true
-            } label: {
-                Label(String(format: "Bolus %.1f U", units), systemImage: "syringe")
+            VStack(spacing: 4) {
+                Text(String(format: "%.2f U", bolusAmount))
+                    .font(.title3)
+                    .focusable(true)
+                    .digitalCrownRotation($bolusAmount,
+                                          from: 0.0,
+                                          through: WatchPodLoanCoordinator.maxBolusUnits,
+                                          by: 0.05,
+                                          sensitivity: .medium,
+                                          isContinuous: false,
+                                          isHapticFeedbackEnabled: true)
+                Button {
+                    confirmingBolus = true
+                } label: {
+                    Label("Bolus", systemImage: "syringe")
+                }
+                .disabled(coordinator.busy || bolusAmount <= 0)
             }
-            .disabled(coordinator.busy)
         }
     }
 
