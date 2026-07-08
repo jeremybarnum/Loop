@@ -37,7 +37,7 @@ struct WatchPodControlView: View {
         case .idle:
             idleSection
         case .requesting:
-            progress("Borrowing pod…")
+            progress("Starting Show Mode…")
         case .denied(let reason):
             deniedSection(reason)
         case .armed:
@@ -45,7 +45,7 @@ struct WatchPodControlView: View {
         case .active:
             activeSection
         case .handingBack:
-            progress("Handing back…")
+            progress("Ending Show Mode…")
         case .done:
             doneSection
         }
@@ -55,14 +55,14 @@ struct WatchPodControlView: View {
 
     private var idleSection: some View {
         VStack(spacing: 10) {
-            Text("Pod is with iPhone")
+            Text("iPhone in control")
                 .font(.headline)
-            Text("Borrow the pod to suspend insulin or give a correction from your watch while your phone is away.")
+            Text("Start Show Mode to control insulin from your watch while your iPhone is away.")
                 .font(.footnote)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
             Button(action: coordinator.requestLoan) {
-                Label("Borrow pod", systemImage: "arrow.left.arrow.right")
+                Label("Start Show Mode", systemImage: "arrow.left.arrow.right")
             }
             .disabled(coordinator.busy)
         }
@@ -70,7 +70,7 @@ struct WatchPodControlView: View {
 
     private func deniedSection(_ reason: String) -> some View {
         VStack(spacing: 10) {
-            Text("Couldn't borrow the pod")
+            Text("Couldn't start Show Mode")
                 .font(.headline)
             Text(reason)
                 .font(.footnote)
@@ -83,19 +83,19 @@ struct WatchPodControlView: View {
 
     private var armedSection: some View {
         VStack(spacing: 10) {
-            Text("Pod keys ready")
+            Text("Ready to start")
                 .font(.headline)
             if coordinator.busy {
                 // BUG-3: give the takeover visible feedback (it can take a few seconds).
                 ProgressView()
-                Text("Claiming pod…").font(.footnote)
+                Text("Taking control…").font(.footnote)
             } else {
-                Text("The iPhone loaned the pod. Power the iPhone off (or turn its Bluetooth off in Settings), then Claim to take control on your watch.")
+                Text("Power your iPhone off (or turn Bluetooth off in Settings), then tap Take control to run Show Mode from your watch.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
                 Button(action: coordinator.claim) {
-                    Label("Claim pod", systemImage: "checkmark.circle")
+                    Label("Take control", systemImage: "checkmark.circle")
                 }
                 Button("Cancel", action: coordinator.cancelArmed)
             }
@@ -121,7 +121,7 @@ struct WatchPodControlView: View {
             Divider()
 
             Button(action: coordinator.handBack) {
-                Label("Hand back to iPhone", systemImage: "iphone")
+                Label("End Show Mode", systemImage: "iphone")
             }
             .disabled(coordinator.busy)
         }
@@ -168,7 +168,7 @@ struct WatchPodControlView: View {
                     .font(.caption2)
                     .foregroundColor(.secondary)
             } else {
-                Text("Holding pod")
+                Text("In Show Mode")
                     .font(.headline)
             }
         }
@@ -180,7 +180,7 @@ struct WatchPodControlView: View {
             Image(systemName: "checkmark.circle.fill")
                 .foregroundColor(.green)
                 .font(.title2)
-            Text("Handed back to iPhone")
+            Text("Show Mode ended")
                 .font(.headline)
             if let summary = coordinator.liveSummary {
                 Text(summary)
@@ -188,7 +188,7 @@ struct WatchPodControlView: View {
                     .foregroundColor(.secondary)
             }
             // BUG-1: let the user start a new loan without force-quitting.
-            Button("Borrow again", action: coordinator.reset)
+            Button("Start again", action: coordinator.reset)
                 .disabled(coordinator.busy)
                 .padding(.top, 4)
         }

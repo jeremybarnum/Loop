@@ -55,7 +55,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
         guard !busy else { return }
         let session = WCSession.default
         guard session.activationState == .activated, session.isReachable else {
-            lastError = "iPhone not reachable — bring it close to start the loan."
+            lastError = "iPhone not reachable — bring it close to start Show Mode."
             return
         }
         busy = true
@@ -69,7 +69,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
             Task { @MainActor in
                 self?.busy = false
                 self?.phase = .idle
-                self?.lastError = "Loan request failed: \(error.localizedDescription)"
+                self?.lastError = "Couldn't start Show Mode: \(error.localizedDescription)"
             }
         })
     }
@@ -89,7 +89,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
               grant.messageNumber != nil
         else {
             busy = false
-            phase = .denied(grant.denialReason ?? "iPhone declined the loan.")
+            phase = .denied(grant.denialReason ?? "iPhone couldn't start Show Mode.")
             return
         }
 
@@ -167,7 +167,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
                     // always because the phone still owns the connection. Stay armed
                     // so the user can power the phone off and Claim again.
                     self.phase = .armed
-                    self.lastError = "Couldn't reach the pod. Make sure the iPhone is powered off, then Claim again."
+                    self.lastError = "Couldn't reach the pod. Make sure your iPhone is powered off, then try again."
                 }
             }
         }
@@ -206,7 +206,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
         guard !busy, phase == .active else { return }
         let session = WCSession.default
         guard session.isReachable else {
-            lastError = "iPhone not reachable — bring it close to hand the pod back."
+            lastError = "iPhone not reachable — bring it close to end Show Mode."
             return
         }
         busy = true
@@ -231,7 +231,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
                 // Phone didn't confirm — keep holding the pod; the user can retry.
                 self?.busy = false
                 self?.phase = .active
-                self?.lastError = "Hand-back not confirmed by iPhone: \(error.localizedDescription). Still holding the pod."
+                self?.lastError = "Couldn't reach iPhone to end Show Mode: \(error.localizedDescription). Still in control on your watch."
             }
         })
     }

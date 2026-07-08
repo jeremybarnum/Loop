@@ -396,7 +396,7 @@
       }
     },
     "f5G-bS-9pd.text" : {
-      "comment" : "Class = \"WKInterfaceLabel\"; text = \"Untether\"; ObjectID = \"f5G-bS-9pd\";",
+      "comment" : "Class = \"WKInterfaceLabel\"; text = \"Show Mode\"; ObjectID = \"f5G-bS-9pd\";",
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "ar" : {
@@ -420,7 +420,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Untether"
+            "value" : "Show Mode"
           }
         },
         "es" : {
