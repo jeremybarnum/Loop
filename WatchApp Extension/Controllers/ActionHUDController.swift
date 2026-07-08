@@ -41,9 +41,9 @@ final class ActionHUDController: HUDInterfaceController {
     override func willActivate() {
         super.willActivate()
 
-        // The (unused) Pre-Meal button is repurposed as the "Untether" button — it
-        // starts watch-only, phone-free mode (opens the loan control screen; its
-        // storyboard action is now `openPodControl`). Icon = equestrian, since this is initially
+        // The (unused) Pre-Meal button is repurposed as the "Show Mode" button — it
+        // starts watch-only, phone-free mode for competition (opens the loan control
+        // screen; its storyboard action is now `openPodControl`). Icon = equestrian, since this is initially
         // for Caitlin riding horses; the watch context is implicit (it's on her wrist).
         // The old pre-meal state management is removed from `update()` so it stays
         // enabled. (Later option: a custom watch+rider glyph to show the watch too.)
