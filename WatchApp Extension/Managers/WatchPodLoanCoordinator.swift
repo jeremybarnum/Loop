@@ -167,7 +167,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
                     // always because the phone still owns the connection. Stay armed
                     // so the user can power the phone off and Claim again.
                     self.phase = .armed
-                    self.lastError = "Couldn't reach the pod. Make sure your iPhone is powered off, then try again."
+                    self.lastError = "Couldn't reach the pod. Make sure your iPhone's Bluetooth is off, then try again."
                 }
             }
         }

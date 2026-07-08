@@ -55,9 +55,9 @@ struct WatchPodControlView: View {
 
     private var idleSection: some View {
         VStack(spacing: 10) {
-            Text("iPhone in control")
+            Text("Watch tethered")
                 .font(.headline)
-            Text("Start Show Mode to control insulin from your watch while your iPhone is away.")
+            Text("Insulin actions run through your iPhone.")
                 .font(.footnote)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -88,14 +88,14 @@ struct WatchPodControlView: View {
             if coordinator.busy {
                 // BUG-3: give the takeover visible feedback (it can take a few seconds).
                 ProgressView()
-                Text("Taking control…").font(.footnote)
+                Text("Untethering…").font(.footnote)
             } else {
-                Text("Power your iPhone off (or turn Bluetooth off in Settings), then tap Take control to run Show Mode from your watch.")
+                Text("Disconnect Bluetooth on your iPhone, then Untether watch.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
                 Button(action: coordinator.claim) {
-                    Label("Take control", systemImage: "checkmark.circle")
+                    Label("Untether watch", systemImage: "checkmark.circle")
                 }
                 Button("Cancel", action: coordinator.cancelArmed)
             }
@@ -180,15 +180,16 @@ struct WatchPodControlView: View {
             Image(systemName: "checkmark.circle.fill")
                 .foregroundColor(.green)
                 .font(.title2)
-            Text("Show Mode ended")
+            Text("Watch tethered")
                 .font(.headline)
             if let summary = coordinator.liveSummary {
                 Text(summary)
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
-            // BUG-1: let the user start a new loan without force-quitting.
-            Button("Start again", action: coordinator.reset)
+            // Back to the resting state — start a fresh Show Mode directly (BUG-1: also
+            // the escape from the done state without force-quitting).
+            Button("Start Show Mode", action: coordinator.requestLoan)
                 .disabled(coordinator.busy)
                 .padding(.top, 4)
         }

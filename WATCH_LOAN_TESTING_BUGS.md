@@ -145,3 +145,13 @@ disconnect → ping-pong.
 Does NOT block the design: both models require software single-writer (DESIGN-GAP-1). Under
 first-locks the failure is "watch loses the pod on any link blip and is locked out"; under
 ping-pong it's "sequence-counter divergence / brick risk." Same fix either way.
+
+### OQ-2: Does Control Center Bluetooth-off actually disconnect the iPhone from the pod?
+
+Earlier finding (E5) claimed toggling Bluetooth off via **Control Center** does NOT truly
+disconnect (iOS keeps BT on for the phone's own use), so **Settings → Bluetooth** was
+required to free the pod for the watch. Jeremy is skeptical — **test it**: with the watch
+armed, toggle BT off via Control Center only, then Untether, and watch the pod side. If the
+watch takes over cleanly, Control Center is sufficient and the UI copy ("Disconnect
+Bluetooth on your iPhone") stays as-is. If the takeover fails (phone still holds the pod),
+the copy must become "in Settings" and the E5 finding stands.
