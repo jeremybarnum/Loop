@@ -78,7 +78,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
         guard let grant = PodLoanGrantUserInfo(rawValue: reply) else {
             busy = false
             phase = .idle
-            lastError = "Unexpected loan reply from iPhone."
+            lastError = "Unexpected reply from iPhone."
             return
         }
         guard grant.granted,
