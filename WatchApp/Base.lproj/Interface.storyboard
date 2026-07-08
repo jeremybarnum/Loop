@@ -113,10 +113,10 @@
                                                         <variation key="device=watch44mm" height="64" radius="32" width="64"/>
                                                     </group>
                                                     <connections>
-                                                        <action selector="togglePreMealMode" destination="rNf-Mh-tID" id="p9f-dP-MI2"/>
+                                                        <action selector="openPodControl" destination="rNf-Mh-tID" id="p9f-dP-MI2"/>
                                                     </connections>
                                                 </button>
-                                                <label alignment="center" text="Pre-Meal" id="f5G-bS-9pd">
+                                                <label alignment="center" text="Pod" id="f5G-bS-9pd">
                                                     <fontDescription key="font" style="UICTFontTextStyleFootnote"/>
                                                 </label>
                                             </items>
@@ -148,11 +148,6 @@
                             </items>
                             <variation key="device=watch38mm" spacing="6"/>
                         </group>
-                        <button width="136" alignment="left" title="Pod" id="8PN-3k-XqF">
-                            <connections>
-                                <action selector="openPodControl" destination="rNf-Mh-tID" id="4dj-gM-dQt"/>
-                            </connections>
-                        </button>
                     </items>
                     <variation key="device=watch38mm" spacing="5"/>
                     <connections>

@@ -41,6 +41,16 @@ final class ActionHUDController: HUDInterfaceController {
     override func willActivate() {
         super.willActivate()
 
+        // The Pre-Meal button is repurposed as the Pod button — it opens the pod-loan
+        // control screen (its storyboard action is now `openPodControl`, label "Pod").
+        // Set its icon here and keep it always enabled; the old pre-meal state
+        // management is removed from `update()`.
+        // TODO: swap this SF Symbol placeholder for the real Omnipod "Pod" artwork —
+        // copy OmniBLE's Pod.imageset into the WatchApp asset catalog and set the
+        // storyboard imageView image to "Pod".
+        preMealButtonImage.setImage(UIImage(systemName: "bandage.fill"))
+        preMealButtonGroup.state = .off
+
         // Update the override button description based on the feature flag; this cannot be done earlier than `-willActivate` (e.g. didSet on the IBOutlet is too soon)
         if FeatureFlags.sensitivityOverridesEnabled {
             overrideButtonLabel?.setText(NSLocalizedString("Preset", comment: "The text for the Watch button for enabling a custom preset"))
@@ -66,26 +76,22 @@ final class ActionHUDController: HUDInterfaceController {
             activeOverrideContext = nil
         }
 
-        updateForPreMeal(enabled: loopManager.settings.preMealOverride?.isActive() == true)
+        // Pre-Meal button is now the Pod button — it no longer reflects pre-meal state
+        // and stays enabled regardless of loop mode.
         updateForOverrideContext(activeOverrideContext)
 
         let isClosedLoop = loopManager.activeContext?.isClosedLoop ?? false
-        
+
+        preMealButtonGroup.state = .off
+
         if !isClosedLoop && FeatureFlags.simpleBolusCalculatorEnabled {
-            preMealButtonGroup.state = .disabled
             overrideButtonGroup.state = .disabled
             carbsButtonGroup.state = .disabled
             bolusButtonGroup.state = .disabled
         } else {
             carbsButtonGroup.state = .off
             bolusButtonGroup.state = .off
-            
-            if loopManager.settings.preMealTargetRange == nil {
-                preMealButtonGroup.state = .disabled
-            } else if preMealButtonGroup.state == .disabled {
-                preMealButtonGroup.state = .off
-            }
-            
+
             if !canEnableOverride {
                 overrideButtonGroup.state = .disabled
             } else if overrideButtonGroup.state == .disabled {

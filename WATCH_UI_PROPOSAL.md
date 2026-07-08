@@ -4,44 +4,33 @@ Branch `watch-ui` (off `vendor-podsdk`). Covers the three UI asks: pod button, b
 
 ---
 
-## 1. Pod button — replace the "Override" icon with a Pod icon (SPEC — apply in Xcode)
+## 1. Pod button — replace the Pre-Meal button (IMPLEMENTED on this branch; needs build-verify)
 
-**Current layout** (`WatchApp/Base.lproj/Interface.storyboard`, Action HUD scene):
-a 2×2 icon grid — **Pre-Meal · Override · Carbs · Bolus** — and then an **ugly full-width
-"Pod" text button** tacked on below the grid (button id `8PN-3k-XqF`, line ~151). That's
-the ugliness.
+The 2×2 grid was **Pre-Meal · Override · Carbs · Bolus**, with an ugly full-width **"Pod"
+text button** tacked on below. You said Pre-Meal is the unused one — so I turned the
+**Pre-Meal** button into the **Pod** button and deleted the text button. Result:
+**Pod · Override · Carbs · Bolus**.
 
-**Proposed:** turn the **Override** icon button into the **Pod** button, and delete the
-full-width text button. Result: a clean grid — **Pre-Meal · Pod · Carbs · Bolus**.
+**What I changed (on `watch-ui`):**
+- `WatchApp/Base.lproj/Interface.storyboard` — Pre-Meal button (`jY0-1m-ful`): action
+  `togglePreMealMode` → `openPodControl`; label "Pre-Meal" → "Pod". Deleted the full-width
+  Pod text button (`8PN-3k-XqF`). XML re-validated (tags balanced).
+- `WatchApp Extension/Controllers/ActionHUDController.swift` — set the button icon in
+  `willActivate()` and force `preMealButtonGroup.state = .off`; removed the pre-meal
+  enable/disable logic from `update()` so the Pod button is always enabled and no longer
+  reflects pre-meal state. (`togglePreMealMode`/`setPreMealEnabled`/`updateForPreMeal` are
+  now dead but left in place — harmless, minimal churn.)
 
-I did NOT hand-edit the storyboard (a wrong action connection = crash on tap, and I can't
-build-verify it here). Do it in Xcode's Interface Builder where you get visual + build
-feedback — it's ~5 minutes:
-
-**Storyboard (Override button, id `dYe-c2-Sfm`, label "Override"):**
-1. Change its `imageView` image from `workout` to a pod glyph (see *Icon* below).
-2. Change the action connection from `toggleOverride` → `openPodControl` (that IBAction
-   already exists on `HUDInterfaceController` and is what the old text button used).
-3. Change the label text "Override" → "Pod".
-4. Optionally retint: `tintColor`/`backgroundColor` from `workout`/`workout-dark` to
-   `insulin`/`insulin-dark` (or a neutral) so it reads as a device control, not a target.
-5. **Delete** the full-width "Pod" button (`8PN-3k-XqF`, the `<button width="136" title="Pod">`).
-
-**Controller (`ActionHUDController.swift`):** the Override button is state-managed in
-`update()` (disabled when `!canEnableOverride`). Once it's the Pod button that must NOT
-inherit that:
-- Remove the `overrideButtonGroup.state = .disabled/.off` lines in `update()` for this button
-  (Pod is always available while there's a pod).
-- Simplest: leave the `overrideButton` IBOutlet wired but stop touching its group state; or
-  rename the outlet to `podButton` and drop `overrideButtonGroup`, `toggleOverride`,
-  `sendOverride`, `updateForOverrideContext`, and the `OverrideSelectionControllerDelegate`
-  conformance (they're now dead for the grid — keep only if used elsewhere).
-
-**Icon:** there's no clean SF Symbol that reads as "Omnipod." Two options:
-- **(a) Reuse the phone's pod glyph** — add the OmniBLE pod image asset to the WatchApp
-  asset catalog and reference it (matches "the pod icon from the phone" literally).
-- **(b) SF Symbol placeholder** — e.g. `bandage.fill` or `cross.vial.fill`, tinted insulin.
-  Fastest; swap for the real asset later.
+**Two things for you in Xcode (I couldn't build-verify either):**
+1. **Build-check** — confirm it compiles and the Pod button opens the pod screen (the risk
+   is the repurposed-button logic).
+2. **Real icon** — I used the SF Symbol `bandage.fill` as a placeholder (set in code). To use
+   the *actual* Omnipod artwork ("the pod icon from the phone"): drag OmniBLE's
+   `Pod.imageset` (`OmniBLE/.../OmniBLEUI.xcassets/Pod.imageset`, the `pod1x/2x/3x.png`) into
+   the WatchApp asset catalog as `Pod`, then either set the storyboard imageView image to
+   `Pod` or change the code line to `preMealButtonImage.setImage(UIImage(named: "Pod"))`.
+   (`bandage.fill` needs watchOS 9+; if your target is lower it'll render blank — the real
+   asset fixes that regardless.)
 
 *(Assumption to confirm: by "temp target button" you mean the **Override** button — the
 one labeled Preset/Workout. If you meant **Pre-Meal**, same recipe, different button.)*
