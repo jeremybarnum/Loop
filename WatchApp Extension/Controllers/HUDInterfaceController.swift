@@ -123,17 +123,25 @@ class HUDInterfaceController: WKInterfaceController {
     }
 
     /// The horse button. Not in Show Mode → the start/untether flow. In Show Mode →
-    /// end Show Mode immediately (hand back to the phone) and return to the main HUD —
-    /// no screen. All dosing now lives on the main HUD, so there's nothing left to show
-    /// on an "end" screen.
+    /// end Show Mode (hand the pod back to the phone) and return to the main HUD — no
+    /// screen, since all dosing lives on the main HUD now.
     //
-    // TODO(pod-test, ~Fri): direct hand-back assumes the phone doesn't need Bluetooth
-    // pre-enabled to reclaim the pod, and shows no on-screen feedback if hand-back fails
-    // (phone unreachable — phase reverts to .active, horse goes back to green). Revisit
-    // after real-pod testing: if a confirm or "re-enable Bluetooth" step is needed,
-    // restore the presented end screen (PodControlEntry.end + endSection are retained).
+    // Ending requires the phone reachable: the phone needs its Bluetooth on to reclaim
+    // the pod over BLE (and WatchConnectivity to receive the loan journal). Show Mode is
+    // entered with the phone's BT OFF, so the user often still has it off here — confirmed
+    // on the emulator that hand-back then silently does nothing. So if the phone isn't
+    // reachable, surface an alert rather than no-op.
     @IBAction func openPodControl() {
         if isInShowMode {
+            guard ExtensionDelegate.shared().podLoanCoordinator.phoneReachable else {
+                presentAlert(
+                    withTitle: NSLocalizedString("iPhone Bluetooth Is Off", comment: "Alert title shown when ending Show Mode while the phone is unreachable"),
+                    message: NSLocalizedString("Show Mode is still on. To end it, turn your iPhone's Bluetooth on, then tap again.", comment: "Alert body shown when ending Show Mode while the phone is unreachable"),
+                    preferredStyle: .alert,
+                    actions: [WKAlertAction(title: NSLocalizedString("OK", comment: "OK button on the turn-on-Bluetooth alert"), style: .default, handler: {})]
+                )
+                return
+            }
             ExtensionDelegate.shared().podLoanCoordinator.handBack()
         } else {
             presentController(withName: WatchPodControlController.className, context: PodControlEntry.start)

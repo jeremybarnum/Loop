@@ -43,6 +43,16 @@ final class WatchPodLoanCoordinator: ObservableObject {
         return controller.loanJournalSummary
     }
 
+    /// Whether the phone can currently be reached to hand the pod back. Hand-back needs
+    /// this (WatchConnectivity to send the loan journal, and the phone's Bluetooth on to
+    /// reclaim the pod over BLE). Since Show Mode is entered with the phone's BT OFF, this
+    /// is often false when the user tries to end — the UI checks it to warn rather than
+    /// silently no-op. Always true in the sim demo so the demo end-flow still runs.
+    var phoneReachable: Bool {
+        if Self.isSimulatorDemo { return true }
+        return WCSession.default.isReachable
+    }
+
     /// Hard cap on any single correction bolus from the watch (safety bound). The
     /// dial can't exceed this. (BG-gating is a later phase; this is the current bound.)
     static let maxBolusUnits: Double = 1.0

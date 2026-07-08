@@ -155,3 +155,23 @@ armed, toggle BT off via Control Center only, then Untether, and watch the pod s
 watch takes over cleanly, Control Center is sufficient and the UI copy ("Disconnect
 Bluetooth on your iPhone") stays as-is. If the takeover fails (phone still holds the pod),
 the copy must become "in Settings" and the E5 finding stands.
+
+**RESOLVED (2026-07-08, emulator, controlled comparison — E5 inverted):**
+
+- **Control Center BT-off** (17:08 run): pod IS dropped (non-Apple accessory) → watch
+  takeover + bolus clean; watch↔phone WatchConnectivity survives (Apple-ecosystem traffic
+  is exempt from CC-off) so hand-back even works without re-enabling BT. **BUT the phone's
+  BLE stays live** — it reconnected to the pod at 17:09:17 with CC still "off", same BLE
+  address `bd:48…` (radio never cycled), and it retries the pod ~every 60 s. The test
+  session (~30 s) simply fit inside one reconnect cycle. **A longer session = the phone
+  races the watch for the pod mid-loan → the DESIGN-GAP-1 single-writer hazard.** So E5
+  inverts: CC-off DOES disconnect the pod, but does NOT disable the phone's BLE.
+- **Settings BT-off** (17:13 run): radio truly dead; phone cannot touch the pod during the
+  loan; on re-enable it returned with a NEW rotated BLE address `8a:f0…` (full radio-cycle
+  fingerprint) and reclaimed cleanly at 17:14:18.
+
+**Rule until DESIGN-GAP-1 (phone-side pod release) is built:** instruct **Settings →
+Bluetooth off** only. CC-off becomes a legitimate (and nicer, one-toggle) flow ONLY once
+the phone proactively releases the pod for the loan's duration. The "iPhone Bluetooth Is
+Off" end-alert guards on WCSession reachability — under CC-off the phone is (correctly)
+still reachable so no alert; under Settings-off it fires as designed.
