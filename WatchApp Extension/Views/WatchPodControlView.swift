@@ -118,13 +118,6 @@ struct WatchPodControlView: View {
 
             bolusControl
 
-            if let summary = coordinator.liveSummary {
-                Text(summary)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
             Divider()
 
             Button(action: coordinator.handBack) {
@@ -132,6 +125,9 @@ struct WatchPodControlView: View {
             }
             .disabled(coordinator.busy)
         }
+        // The running loan journal (liveSummary) is intentionally NOT shown here —
+        // it's verbose "what the watch has done" logging. It surfaces on the
+        // hand-back summary (doneSection) instead, keeping the active screen clean.
     }
 
     // Two-tap confirm rather than a one-tap dose (no confirmationDialog on the
