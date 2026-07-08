@@ -18,8 +18,18 @@ final class WatchPodControlController: WKHostingController<WatchPodControlView>,
     // The coordinator is owned by ExtensionDelegate (app scope), not this screen.
     // So closing this screen (the X) is a pure view dismissal — it does NOT tear
     // down the loan or its BLE connection to the pod. (B1 fix — orphaning.)
+    /// Which control to show (set from the presentController context). Read in
+    /// awake(withContext:) before `body` is evaluated — same pattern as
+    /// CarbAndBolusFlowController.
+    private var entry: PodControlEntry = .start
+
     override var body: WatchPodControlView {
-        WatchPodControlView(coordinator: ExtensionDelegate.shared().podLoanCoordinator)
+        WatchPodControlView(coordinator: ExtensionDelegate.shared().podLoanCoordinator, entry: entry)
+    }
+
+    override func awake(withContext context: Any?) {
+        super.awake(withContext: context)
+        if let entry = context as? PodControlEntry { self.entry = entry }
     }
 
     private var autoReturnCancellable: AnyCancellable?

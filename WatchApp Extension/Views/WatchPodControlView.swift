@@ -11,8 +11,18 @@
 import SwiftUI
 import OmniBLECore
 
+/// Why the pod-control screen was opened — decides what it shows while the watch
+/// holds the pod (.active). Passed as the presentController context.
+enum PodControlEntry {
+    case start   // horse tapped when NOT in Show Mode → the untether/start flow
+    case bolus   // Bolus button in Show Mode → the bolus dial
+    case basal   // Override button in Show Mode → the basal dial
+    case end     // horse tapped while in Show Mode → End Show Mode
+}
+
 struct WatchPodControlView: View {
     @ObservedObject var coordinator: WatchPodLoanCoordinator
+    var entry: PodControlEntry = .start
     @State private var confirmingBolus = false
     @State private var bolusAmount = WatchPodLoanCoordinator.defaultBolusUnits
     @State private var confirmingBasal = false
@@ -53,7 +63,7 @@ struct WatchPodControlView: View {
         case .denied(let reason):
             deniedSection(reason)
         case .active:
-            activeSection
+            activeContent
         case .handingBack:
             progress("Ending Show Mode…")
         case .done:
@@ -121,36 +131,30 @@ struct WatchPodControlView: View {
         }
     }
 
-    private var activeSection: some View {
+    // While the watch holds the pod, this screen is opened from a specific main-HUD
+    // button, and shows only that one control (single dial → the crown drives it
+    // cleanly, no two-dial focus juggling). The loan journal is intentionally not
+    // shown here — it surfaces on the hand-back summary (doneSection).
+    @ViewBuilder
+    private var activeContent: some View {
+        switch entry {
+        case .bolus:
+            VStack(spacing: 10) { statusCard; bolusControl }
+        case .basal:
+            VStack(spacing: 10) { statusCard; basalControl }
+        case .start, .end:
+            endSection
+        }
+    }
+
+    private var endSection: some View {
         VStack(spacing: 10) {
             statusCard
-
-            HStack(spacing: 6) {
-                Button(action: coordinator.suspend) {
-                    Label("Suspend", systemImage: "pause.circle")
-                }
-                Button(action: coordinator.resume) {
-                    Label("Resume", systemImage: "play.circle")
-                }
-            }
-            .disabled(coordinator.busy)
-
-            Divider()
-            basalControl
-
-            Divider()
-            bolusControl
-
-            Divider()
-
             Button(action: coordinator.handBack) {
                 Label("End Show Mode", systemImage: "iphone")
             }
             .disabled(coordinator.busy)
         }
-        // The running loan journal (liveSummary) is intentionally NOT shown here —
-        // it's verbose "what the watch has done" logging. It surfaces on the
-        // hand-back summary (doneSection) instead, keeping the active screen clean.
     }
 
     // Crown-dialed amount, hard-capped, with a two-tap confirm (no confirmationDialog

@@ -121,10 +121,14 @@ final class ActionHUDController: HUDInterfaceController {
             }
         }
 
-        // In Show Mode the phone is away, so carb entry (which routes to the phone) is
-        // unavailable — grey it out. Bolus + basal are handled on the watch (next steps).
+        // In Show Mode the phone is away: Carbs (routes to the phone) is unavailable,
+        // while Bolus and the Override button (which becomes the basal control) must
+        // stay enabled since they drive the pod directly — regardless of the loop-mode
+        // logic above that might otherwise disable them.
         if isInShowMode {
             carbsButtonGroup.state = .disabled
+            bolusButtonGroup.state = .off
+            overrideButtonGroup.state = .off
         }
 
         glucoseFormatter.updateUnit(to: loopManager.displayGlucoseUnit)
@@ -138,13 +142,8 @@ final class ActionHUDController: HUDInterfaceController {
         }
     }
 
-    /// True while the watch actually holds the pod (Show Mode is live). Derived from
-    /// the loan coordinator's real phase — never a separate flag — so the HUD can't
-    /// show green while the watch isn't really in control. In Show Mode the horse
-    /// button is green and Carbs is unavailable (there's no phone to route carbs to).
-    private var isInShowMode: Bool {
-        ExtensionDelegate.shared().podLoanCoordinator.phase == .active
-    }
+    // isInShowMode is defined on HUDInterfaceController (shared with setBolus /
+    // openPodControl). In Show Mode the horse button is green and Carbs is unavailable.
 
     private func updateForPreMeal(enabled: Bool) {
         if enabled {
@@ -246,6 +245,12 @@ final class ActionHUDController: HUDInterfaceController {
     }
 
     @IBAction func toggleOverride() {
+        // In Show Mode this button becomes the basal control (drives the pod);
+        // otherwise it's the normal phone-routed override/workout sheet.
+        if isInShowMode {
+            presentController(withName: WatchPodControlController.className, context: PodControlEntry.basal)
+            return
+        }
         if FeatureFlags.sensitivityOverridesEnabled {
             overrideButtonGroup.state == .on
                 ? sendOverride(nil)

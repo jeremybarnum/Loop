@@ -19,6 +19,14 @@ class HUDInterfaceController: WKInterfaceController {
 
     var loopManager = ExtensionDelegate.shared().loopManager
 
+    /// True while the watch actually holds the pod (Show Mode is live) — derived from
+    /// the loan coordinator's real .active phase, never a separate flag. Routes the
+    /// shared action buttons (Bolus, and the horse's pod screen) to the pod instead of
+    /// the phone. Subclasses (ActionHUDController) use it for button appearance too.
+    var isInShowMode: Bool {
+        ExtensionDelegate.shared().podLoanCoordinator.phase == .active
+    }
+
     override func willActivate() {
         super.willActivate()
 
@@ -105,12 +113,20 @@ class HUDInterfaceController: WKInterfaceController {
     }
 
     @IBAction func setBolus() {
-        presentController(withName: CarbAndBolusFlowController.className, context: CarbAndBolusFlow.Configuration.manualBolus)
+        // In Show Mode the phone is away, so Bolus drives the pod directly (capped
+        // dial); otherwise it's the normal phone-routed bolus flow.
+        if isInShowMode {
+            presentController(withName: WatchPodControlController.className, context: PodControlEntry.bolus)
+        } else {
+            presentController(withName: CarbAndBolusFlowController.className, context: CarbAndBolusFlow.Configuration.manualBolus)
+        }
     }
 
-    /// Opens the pod-loan screen (borrow the pod from the phone for a workout).
+    /// The horse button. Not in Show Mode → the start/untether flow; in Show Mode →
+    /// the End Show Mode screen (tapping the green horse ends it).
     @IBAction func openPodControl() {
-        presentController(withName: WatchPodControlController.className, context: nil)
+        let entry: PodControlEntry = isInShowMode ? .end : .start
+        presentController(withName: WatchPodControlController.className, context: entry)
     }
 
 }
