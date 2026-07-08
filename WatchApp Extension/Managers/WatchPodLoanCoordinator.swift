@@ -36,10 +36,26 @@ final class WatchPodLoanCoordinator: ObservableObject {
     @Published var lastError: String?
 
     /// Live summary of what the watch has done during the loan (for display).
-    var liveSummary: String? { controller.loanJournalSummary }
+    var liveSummary: String? {
+        #if targetEnvironment(simulator)
+        if Self.isSimulatorDemo, phase == .done { return "Delivered 1.5 U · Suspended 12m" }
+        #endif
+        return controller.loanJournalSummary
+    }
 
     /// The single fixed bolus size this build offers (safety: no arbitrary dosing).
     static let fixedBolusUnits: Double = 0.5
+
+    /// True only in the watchOS simulator (which has no Bluetooth, so it can never
+    /// reach a pod). When true, the methods below route to the simulator demo path
+    /// (see the extension at the bottom) instead of WatchConnectivity/BLE, so the
+    /// whole Show Mode flow is walkable on the sim. Compile-time FALSE on a real
+    /// watch — the demo path can never execute on hardware.
+    #if targetEnvironment(simulator)
+    static let isSimulatorDemo = true
+    #else
+    static let isSimulatorDemo = false
+    #endif
 
     private let controller = PodProofController()
 
@@ -52,6 +68,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
 
     /// Ask the phone to loan us the pod, then take it over with the returned keys.
     func requestLoan() {
+        if Self.isSimulatorDemo { demoStart(); return }
         guard !busy else { return }
         let session = WCSession.default
         guard session.activationState == .activated, session.isReachable else {
@@ -108,6 +125,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// required. Use after the iPhone is powered off (or its Bluetooth turned off),
     /// which frees the pod's BLE connection for the watch.
     func claim() {
+        if Self.isSimulatorDemo { demoClaim(); return }
         guard !busy, phase == .armed, let grant = heldGrant else { return }
         lastError = nil
         takeOver(using: grant)
@@ -175,10 +193,22 @@ final class WatchPodLoanCoordinator: ObservableObject {
 
     // MARK: - Pod control (only while the loan is active)
 
-    func suspend() { runPodCommand { self.controller.suspend(completion: $0) } }
-    func resume() { runPodCommand { self.controller.resume(completion: $0) } }
-    func bolus() { runPodCommand { self.controller.bolus(units: Self.fixedBolusUnits, completion: $0) } }
-    func refreshStatus() { runPodCommand { self.controller.getStatus(completion: $0) } }
+    func suspend() {
+        if Self.isSimulatorDemo { demoSuspend(); return }
+        runPodCommand { self.controller.suspend(completion: $0) }
+    }
+    func resume() {
+        if Self.isSimulatorDemo { demoResume(); return }
+        runPodCommand { self.controller.resume(completion: $0) }
+    }
+    func bolus() {
+        if Self.isSimulatorDemo { demoBolus(); return }
+        runPodCommand { self.controller.bolus(units: Self.fixedBolusUnits, completion: $0) }
+    }
+    func refreshStatus() {
+        if Self.isSimulatorDemo { return }
+        runPodCommand { self.controller.getStatus(completion: $0) }
+    }
 
     private func runPodCommand(_ operation: (@escaping (Result<PodProofStatus, Error>) -> Void) -> Void) {
         guard !busy, phase == .active else { return }
@@ -203,6 +233,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// the phone confirms receipt — so a failed hand-back leaves us still holding
     /// it rather than orphaning the pod.
     func handBack() {
+        if Self.isSimulatorDemo { demoHandBack(); return }
         guard !busy, phase == .active else { return }
         let session = WCSession.default
         guard session.isReachable else {
@@ -234,5 +265,83 @@ final class WatchPodLoanCoordinator: ObservableObject {
                 self?.lastError = "Couldn't reach iPhone to end Show Mode: \(error.localizedDescription). Still in control on your watch."
             }
         })
+    }
+}
+
+// MARK: - Simulator demo mode
+//
+// The watchOS simulator has no Bluetooth, so it can never reach a pod. When
+// `isSimulatorDemo` is true (simulator only — compile-time false on a real watch), the
+// methods above route here instead of WatchConnectivity/BLE, walking the real phases
+// with faked data + small delays. This makes the whole Show Mode flow reviewable on the
+// sim — no pod, no TestFlight. It can never execute on hardware.
+private extension WatchPodLoanCoordinator {
+    func demoStatus(_ delivery: String, delivered: Double) -> PodProofStatus {
+        PodProofStatus(deliveryStatus: delivery, podProgress: "Running", reservoirLevel: 128,
+                       insulinDelivered: delivered, bolusNotDelivered: 0,
+                       lastProgrammingMessageSeqNum: 5, timeActive: 3600, alerts: "None")
+    }
+
+    func demoStart() {
+        lastError = nil
+        phase = .requesting
+        busy = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            self.phase = .armed
+            self.busy = false
+        }
+    }
+
+    func demoClaim() {
+        busy = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            self.status = self.demoStatus("Scheduled Basal", delivered: 0)
+            self.phase = .active
+            self.lastError = nil
+            self.busy = false
+        }
+    }
+
+    func demoSuspend() {
+        let delivered = status?.insulinDelivered ?? 0
+        busy = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            self.status = self.demoStatus("Suspended", delivered: delivered)
+            self.busy = false
+        }
+    }
+
+    func demoResume() {
+        let delivered = status?.insulinDelivered ?? 0
+        busy = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            self.status = self.demoStatus("Scheduled Basal", delivered: delivered)
+            self.busy = false
+        }
+    }
+
+    func demoBolus() {
+        let delivered = (status?.insulinDelivered ?? 0) + Self.fixedBolusUnits
+        busy = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            self.status = self.demoStatus("Bolusing", delivered: delivered)
+            self.busy = false
+        }
+    }
+
+    func demoHandBack() {
+        lastError = nil
+        phase = .handingBack
+        busy = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            self.phase = .done
+            self.busy = false
+        }
     }
 }
