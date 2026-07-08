@@ -40,6 +40,8 @@ struct WatchPodControlView: View {
             progress("Borrowing pod…")
         case .denied(let reason):
             deniedSection(reason)
+        case .armed:
+            armedSection
         case .active:
             activeSection
         case .handingBack:
@@ -76,6 +78,27 @@ struct WatchPodControlView: View {
                 .multilineTextAlignment(.center)
             Button("Try again", action: coordinator.requestLoan)
                 .disabled(coordinator.busy)
+        }
+    }
+
+    private var armedSection: some View {
+        VStack(spacing: 10) {
+            Text("Pod keys ready")
+                .font(.headline)
+            if coordinator.busy {
+                // BUG-3: give the takeover visible feedback (it can take a few seconds).
+                ProgressView()
+                Text("Claiming pod…").font(.footnote)
+            } else {
+                Text("The iPhone loaned the pod. Power the iPhone off (or turn its Bluetooth off in Settings), then Claim to take control on your watch.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                Button(action: coordinator.claim) {
+                    Label("Claim pod", systemImage: "checkmark.circle")
+                }
+                Button("Cancel", action: coordinator.cancelArmed)
+            }
         }
     }
 
@@ -168,6 +191,10 @@ struct WatchPodControlView: View {
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
+            // BUG-1: let the user start a new loan without force-quitting.
+            Button("Borrow again", action: coordinator.reset)
+                .disabled(coordinator.busy)
+                .padding(.top, 4)
         }
     }
 

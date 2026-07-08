@@ -1,6 +1,18 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "8PN-3k-XqF.title" : {
+      "comment" : "Class = \"WKInterfaceButton\"; title = \"Pod\"; ObjectID = \"8PN-3k-XqF\";",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Pod"
+          }
+        }
+      }
+    },
     "CsQ-fc-KLC.text" : {
       "comment" : "Class = \"WKInterfaceLabel\"; text = \"–\"; ObjectID = \"CsQ-fc-KLC\";",
       "localizations" : {

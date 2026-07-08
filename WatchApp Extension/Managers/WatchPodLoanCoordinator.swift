@@ -24,6 +24,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
         case idle             // no loan
         case requesting       // asked the phone, awaiting grant + takeover
         case denied(String)   // phone declined the loan
+        case armed            // hold the keys, pod not yet taken over (phone still owns it)
         case active           // holding the pod
         case handingBack      // sending the journal to the phone
         case done             // handed back
@@ -41,6 +42,11 @@ final class WatchPodLoanCoordinator: ObservableObject {
     static let fixedBolusUnits: Double = 0.5
 
     private let controller = PodProofController()
+
+    /// Keys the phone granted, retained in memory so the pod can be claimed after
+    /// the phone goes away (which frees the pod's BLE connection). Cleared on
+    /// hand-back. In-memory only — survives suspension, lost on app termination.
+    private var heldGrant: PodLoanGrantUserInfo?
 
     // MARK: - Loan lifecycle
 
@@ -76,18 +82,73 @@ final class WatchPodLoanCoordinator: ObservableObject {
             return
         }
         guard grant.granted,
-              let ltk = grant.ltk,
-              let controllerId = grant.controllerId,
-              let podId = grant.podId,
-              let podAddress = grant.podAddress,
-              let messageNumber = grant.messageNumber
+              grant.ltk != nil,
+              grant.controllerId != nil,
+              grant.podId != nil,
+              grant.podAddress != nil,
+              grant.messageNumber != nil
         else {
             busy = false
             phase = .denied(grant.denialReason ?? "iPhone declined the loan.")
             return
         }
 
-        // Take the pod over directly from the keys — no re-pairing.
+        // Borrow only transfers the keys — it does NOT attempt the takeover. The
+        // phone still holds the pod's single BLE connection, so a takeover here would
+        // just burn its full connect timeout (~2 min) and fail. Go straight to
+        // .armed; the takeover happens on Claim, once the phone is off and the slot
+        // is free. (The armed screen tells the user to power the phone off and Claim.)
+        heldGrant = grant
+        busy = false
+        phase = .armed
+        lastError = nil
+    }
+
+    /// Take the pod over using keys the phone already granted — no phone contact
+    /// required. Use after the iPhone is powered off (or its Bluetooth turned off),
+    /// which frees the pod's BLE connection for the watch.
+    func claim() {
+        guard !busy, phase == .armed, let grant = heldGrant else { return }
+        lastError = nil
+        takeOver(using: grant)
+    }
+
+    /// Drop the retained keys and return to idle (user abandoned an armed loan).
+    func cancelArmed() {
+        guard phase == .armed, !busy else { return }
+        heldGrant = nil
+        phase = .idle
+        lastError = nil
+    }
+
+    /// Return to idle after a completed hand-back so a new loan can be started
+    /// without force-quitting the app. (BUG-1)
+    func reset() {
+        guard !busy else { return }
+        heldGrant = nil
+        status = nil
+        lastError = nil
+        phase = .idle
+    }
+
+    /// Take the pod over from a granted key set. Succeeds when the pod's BLE slot
+    /// is free (phone off / not currently connected). If the phone still holds the
+    /// pod, this fails and we drop to `.armed` — keeping the keys — so the user can
+    /// power the phone off and Claim.
+    private func takeOver(using grant: PodLoanGrantUserInfo) {
+        guard let ltk = grant.ltk,
+              let controllerId = grant.controllerId,
+              let podId = grant.podId,
+              let podAddress = grant.podAddress,
+              let messageNumber = grant.messageNumber
+        else {
+            busy = false
+            phase = .idle
+            lastError = "Pod keys were incomplete."
+            return
+        }
+
+        busy = true
         controller.takeOverExternalPod(ltk: ltk,
                                        controllerId: controllerId,
                                        podId: podId,
@@ -100,9 +161,13 @@ final class WatchPodLoanCoordinator: ObservableObject {
                 case .success(let status):
                     self.status = status
                     self.phase = .active
-                case .failure(let error):
-                    self.phase = .idle
-                    self.lastError = "Takeover failed: \(error.localizedDescription)"
+                    self.lastError = nil
+                case .failure:
+                    // We still hold the keys — the pod is just unreachable, almost
+                    // always because the phone still owns the connection. Stay armed
+                    // so the user can power the phone off and Claim again.
+                    self.phase = .armed
+                    self.lastError = "Couldn't reach the pod. Make sure the iPhone is powered off, then Claim again."
                 }
             }
         }
@@ -157,6 +222,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
                 guard let self else { return }
                 _ = self.controller.endLoan()   // finalize the journal
                 self.controller.releasePod()    // phone acked — safe to let go
+                self.heldGrant = nil            // phone owns the pod again; keys are now stale
                 self.busy = false
                 self.phase = .done
             }

@@ -328,6 +328,12 @@
 		992F41892FF9A3200071F0F0 /* PodLoanGrantUserInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 992F41832FF9A3200071F0F0 /* PodLoanGrantUserInfo.swift */; };
 		992F418A2FF9A3200071F0F0 /* PodLoanRequestUserInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 992F41842FF9A3200071F0F0 /* PodLoanRequestUserInfo.swift */; };
 		992F418C2FF9A38B0071F0F0 /* PodLoanUserInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 992F418B2FF9A38B0071F0F0 /* PodLoanUserInfoTests.swift */; };
+		992F418E2FF9A9920071F0F0 /* PodLoanIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 992F418D2FF9A9920071F0F0 /* PodLoanIdentity.swift */; };
+		992F41902FF9A9AE0071F0F0 /* PodLoanIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 992F418F2FF9A9AE0071F0F0 /* PodLoanIdentityTests.swift */; };
+		992F41932FF9B6000071F0F0 /* OmniBLECore in Frameworks */ = {isa = PBXBuildFile; productRef = 992F41922FF9B6000071F0F0 /* OmniBLECore */; };
+		992F41952FF9F7B90071F0F0 /* WatchPodLoanCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 992F41942FF9F7B90071F0F0 /* WatchPodLoanCoordinator.swift */; };
+		992F41972FF9FB060071F0F0 /* WatchPodControlView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 992F41962FF9FB060071F0F0 /* WatchPodControlView.swift */; };
+		992F41992FF9FB1F0071F0F0 /* WatchPodControlController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 992F41982FF9FB1F0071F0F0 /* WatchPodControlController.swift */; };
 		A90EF53C25DEF06200F32D61 /* PluginManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16DA84122E8E112008624C2 /* PluginManager.swift */; };
 		A90EF54425DEF0A000F32D61 /* OSLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4374B5EE209D84BE00D17AA8 /* OSLog.swift */; };
 		A91D2A3F26CF0FF80023B075 /* IconTitleSubtitleTableViewCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = A91D2A3E26CF0FF80023B075 /* IconTitleSubtitleTableViewCell.swift */; };
@@ -1143,6 +1149,11 @@
 		992F41832FF9A3200071F0F0 /* PodLoanGrantUserInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanGrantUserInfo.swift; sourceTree = "<group>"; };
 		992F41842FF9A3200071F0F0 /* PodLoanRequestUserInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanRequestUserInfo.swift; sourceTree = "<group>"; };
 		992F418B2FF9A38B0071F0F0 /* PodLoanUserInfoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanUserInfoTests.swift; sourceTree = "<group>"; };
+		992F418D2FF9A9920071F0F0 /* PodLoanIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanIdentity.swift; sourceTree = "<group>"; };
+		992F418F2FF9A9AE0071F0F0 /* PodLoanIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanIdentityTests.swift; sourceTree = "<group>"; };
+		992F41942FF9F7B90071F0F0 /* WatchPodLoanCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchPodLoanCoordinator.swift; sourceTree = "<group>"; };
+		992F41962FF9FB060071F0F0 /* WatchPodControlView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchPodControlView.swift; sourceTree = "<group>"; };
+		992F41982FF9FB1F0071F0F0 /* WatchPodControlController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchPodControlController.swift; sourceTree = "<group>"; };
 		A900531A28D60862000BC15B /* Loop.shortcut */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop.shortcut; sourceTree = "<group>"; };
 		A900531B28D608CA000BC15B /* Cancel Override.shortcut */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Cancel Override.shortcut"; sourceTree = "<group>"; };
 		A900531C28D6090D000BC15B /* Loop Remote Overrides.shortcut */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop Remote Overrides.shortcut"; sourceTree = "<group>"; };
@@ -1470,6 +1481,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				992F41932FF9B6000071F0F0 /* OmniBLECore in Frameworks */,
 				43D9002F21EB234400AF44BF /* LoopCore.framework in Frameworks */,
 				C1E2773E224177C000354103 /* ClockKit.framework in Frameworks */,
 				4344628220A7A37F00C4BE6F /* CoreBluetooth.framework in Frameworks */,
@@ -1570,6 +1582,7 @@
 		1DA7A83F24476E8C008257F0 /* Managers */ = {
 			isa = PBXGroup;
 			children = (
+				992F418F2FF9A9AE0071F0F0 /* PodLoanIdentityTests.swift */,
 				1DA7A84024476E98008257F0 /* Alerts */,
 				C16575722538AFF6004AE16E /* CGMStalenessMonitorTests.swift */,
 				A91E4C2224F86F1000BE9213 /* CriticalEventLogExportManagerTests.swift */,
@@ -1621,6 +1634,7 @@
 		4328E0121CFBE1B700E199AA /* Controllers */ = {
 			isa = PBXGroup;
 			children = (
+				992F41982FF9FB1F0071F0F0 /* WatchPodControlController.swift */,
 				4328E0151CFBE1DA00E199AA /* ActionHUDController.swift */,
 				4328E01D1CFBE25F00E199AA /* CarbAndBolusFlowController.swift */,
 				4345E40521F68E18009E00E5 /* CarbEntryListController.swift */,
@@ -2016,6 +2030,7 @@
 		43F5C2E41B93C5D4003EB13D /* Managers */ = {
 			isa = PBXGroup;
 			children = (
+				992F418D2FF9A9920071F0F0 /* PodLoanIdentity.swift */,
 				B42D124228D371C400E43D22 /* AlertMuter.swift */,
 				1D6B1B6626866D89009AC446 /* AlertPermissionsChecker.swift */,
 				439897361CD2F80600223065 /* AnalyticsServicesManager.swift */,
@@ -2171,6 +2186,7 @@
 		4FE3475F20D5D7FA00A86D03 /* Managers */ = {
 			isa = PBXGroup;
 			children = (
+				992F41942FF9F7B90071F0F0 /* WatchPodLoanCoordinator.swift */,
 				4FDDD23620DC51DF00D04B16 /* LoopDataManager.swift */,
 				898ECA62218ABD21001E9D35 /* ComplicationChartManager.swift */,
 			);
@@ -2308,6 +2324,7 @@
 		895788A3242E6947002CB114 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				992F41962FF9FB060071F0F0 /* WatchPodControlView.swift */,
 				895788B5242E6A25002CB114 /* Carb Entry & Bolus */,
 				895788B4242E69C8002CB114 /* Extensions */,
 				895788AB242E69A2002CB114 /* ActionButton.swift */,
@@ -3071,6 +3088,7 @@
 				C1CCF10B2858F4F70035389C /* XCRemoteSwiftPackageReference "SwiftCharts" */,
 				C1D6EE9E2A06C7270047DE5C /* XCRemoteSwiftPackageReference "MKRingProgressView" */,
 				C1735B1C2A0809830082BB8A /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+				992F41912FF9B6000071F0F0 /* XCLocalSwiftPackageReference "../../../WatchPodSandbox/PodSDK" */,
 			);
 			productRefGroup = 43776F8D1B8022E90074EA36 /* Products */;
 			projectDirPath = "";
@@ -3497,6 +3515,7 @@
 				A9A056B524B94123007CF06D /* CriticalEventLogExportViewModel.swift in Sources */,
 				434FF1EE1CF27EEF000DB779 /* UITableViewCell.swift in Sources */,
 				439BED2A1E76093C00B0AED5 /* CGMManager.swift in Sources */,
+				992F418E2FF9A9920071F0F0 /* PodLoanIdentity.swift in Sources */,
 				C16B983E26B4893300256B05 /* DoseEnactor.swift in Sources */,
 				3ED319962EB65A5C00820BCF /* LiveActivityManagementViewModel.swift in Sources */,
 				E98A55EF24EDD6E60008715D /* DosingDecisionStoreProtocol.swift in Sources */,
@@ -3658,6 +3677,7 @@
 				895788AD242E69A2002CB114 /* AbsorptionTimeSelection.swift in Sources */,
 				89A605EF2432925D009C1096 /* CompletionCheckmark.swift in Sources */,
 				89F9119624358E6900ECCAF3 /* BolusPickerValues.swift in Sources */,
+				992F41972FF9FB060071F0F0 /* WatchPodControlView.swift in Sources */,
 				4328E02B1CFBE2C500E199AA /* WKAlertAction.swift in Sources */,
 				4F7E8AC720E2AC0300AEA65E /* WatchPredictedGlucose.swift in Sources */,
 				4F7E8AC520E2AB9600AEA65E /* Date.swift in Sources */,
@@ -3679,6 +3699,7 @@
 				4344629220A7C19800C4BE6F /* ButtonGroup.swift in Sources */,
 				89A605E924328862009C1096 /* Checkmark.swift in Sources */,
 				891B508524342BE1005DA578 /* CarbAndBolusFlowViewModel.swift in Sources */,
+				992F41952FF9F7B90071F0F0 /* WatchPodLoanCoordinator.swift in Sources */,
 				894F6DD7243C047300CCE676 /* View+Position.swift in Sources */,
 				898ECA69218ABDA9001E9D35 /* CLKTextProvider+Compound.m in Sources */,
 				4372E48C213CB6750068E043 /* Double.swift in Sources */,
@@ -3689,6 +3710,7 @@
 				43785E972120E4500057DED1 /* INRelevantShortcutStore+Loop.swift in Sources */,
 				89A605E72432860C009C1096 /* PeriodicPublisher.swift in Sources */,
 				895788AE242E69A2002CB114 /* CarbAndBolusFlow.swift in Sources */,
+				992F41992FF9FB1F0071F0F0 /* WatchPodControlController.swift in Sources */,
 				89A605F12432BD18009C1096 /* BolusConfirmationVisual.swift in Sources */,
 				898ECA65218ABD9B001E9D35 /* CGRect.swift in Sources */,
 				43CB2B2B1D924D450079823D /* WCSession.swift in Sources */,
@@ -3759,6 +3781,7 @@
 			files = (
 				A9DF02CB24F72B9E00B7C988 /* CriticalEventLogTests.swift in Sources */,
 				1D80313D24746274002810DF /* AlertStoreTests.swift in Sources */,
+				992F41902FF9A9AE0071F0F0 /* PodLoanIdentityTests.swift in Sources */,
 				C1777A6625A125F100595963 /* ManualEntryDoseViewModelTests.swift in Sources */,
 				C16B984026B4898800256B05 /* DoseEnactorTests.swift in Sources */,
 				A9A63F8E246B271600588D5B /* NSTimeInterval.swift in Sources */,
@@ -5010,6 +5033,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		992F41912FF9B6000071F0F0 /* XCLocalSwiftPackageReference "../../../WatchPodSandbox/PodSDK" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../../WatchPodSandbox/PodSDK;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		C1735B1C2A0809830082BB8A /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -5038,6 +5068,10 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		992F41922FF9B6000071F0F0 /* OmniBLECore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = OmniBLECore;
+		};
 		C11B9D5A286778A800500CF8 /* SwiftCharts */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = C1CCF10B2858F4F70035389C /* XCRemoteSwiftPackageReference "SwiftCharts" */;

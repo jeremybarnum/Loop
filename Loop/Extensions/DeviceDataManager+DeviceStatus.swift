@@ -33,10 +33,12 @@ extension DeviceDataManager {
     }
 
     var pumpStatusHighlight: DeviceStatusHighlight? {
-        // When the pod is loaned to the watch, the phone deliberately isn't in
-        // contact with it — show that, rather than the pump's own status (which
-        // would read as "Signal Loss").
-        if podLoanedToWatch {
+        // Show "On Watch" only when a loan is in effect AND the phone genuinely
+        // isn't in contact with the pod. If the phone is still polling the pod
+        // successfully (fresh lastSync), it actually holds the pod — so a stale
+        // podLoanedToWatch flag (e.g. a loan that was never handed back) won't
+        // wrongly read as "On Watch". The pod is the source of truth, not the flag.
+        if podLoanedToWatch, isPodContactStale {
             return PodOnWatchStatusHighlight()
         }
         let bluetoothState = bluetoothProvider.bluetoothState
@@ -49,6 +51,18 @@ extension DeviceDataManager {
         } else {
             return pumpManager?.pumpStatusHighlight
         }
+    }
+
+    /// The phone hasn't successfully heard from the pod recently. Combined with
+    /// `podLoanedToWatch`, this is the signature of the pod being held elsewhere
+    /// (the watch) rather than by us: while the watch holds the pod's single BLE
+    /// connection, the phone's poll attempts fail, so `lastSync` goes — and stays —
+    /// stale. The 8-minute threshold sits above the ~5-min background poll cadence
+    /// (so a normal between-poll gap doesn't trip it) and below OmniBLE's 12-min
+    /// "Signal Loss" (so "On Watch" is what shows). No lastSync at all counts as stale.
+    private var isPodContactStale: Bool {
+        guard let lastSync = pumpManager?.lastSync else { return true }
+        return Date().timeIntervalSince(lastSync) > .minutes(8)
     }
 
     var pumpStatusBadge: DeviceStatusBadge? {
