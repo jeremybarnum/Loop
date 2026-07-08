@@ -200,6 +200,7 @@ public enum PodProofPhase: String, Equatable {
 public enum PodProofError: LocalizedError {
     case notPaired
     case bolusExceedsProofLimit(requested: Double, limit: Double)
+    case tempBasalExceedsProofLimit(requested: Double, limit: Double)
     case operationInProgress
 
     public var errorDescription: String? {
@@ -208,6 +209,8 @@ public enum PodProofError: LocalizedError {
             return "No pod is paired/connected"
         case .bolusExceedsProofLimit(let requested, let limit):
             return String(format: "Bolus %.2f U exceeds proof-build limit of %.2f U", requested, limit)
+        case .tempBasalExceedsProofLimit(let requested, let limit):
+            return String(format: "Temp basal %.2f U/hr exceeds proof-build limit of %.2f U/hr", requested, limit)
         case .operationInProgress:
             return "Another pod operation is already in progress"
         }
@@ -220,6 +223,9 @@ public final class PodProofController: NSObject {
 
     /// Hard ceiling on any bolus commanded through this facade.
     public static let bolusProofLimit: Double = 1.0
+
+    /// Hard ceiling on any temp-basal RATE commanded through this facade (U/hr).
+    public static let tempBasalRateProofLimit: Double = 1.0
 
     /// Flat basal schedule used for resumeBasal and initial setup.
     /// 0.5 U/hr, single entry starting at midnight.
@@ -537,6 +543,31 @@ public final class PodProofController: NSObject {
         }
         runCommand(named: String(format: "Bolus %.2f U", units), completion: journaling(.bolus(units: units), completion)) { session in
             let result = session.bolus(units: units, acknowledgementBeep: false, completionBeep: false)
+            switch result {
+            case .success(let statusResponse):
+                return statusResponse
+            case .certainFailure(let error):
+                throw error
+            case .unacknowledged(let error):
+                throw error
+            }
+        }
+    }
+
+    /// Set a temp basal at an absolute rate (U/hr) for a fixed duration. Hard-capped
+    /// at tempBasalRateProofLimit (1.0 U/hr). Mirrors bolus(): rate-capped, journaled,
+    /// three-way DeliveryCommandResult switch. `isHighTemp:false, automatic:false` =
+    /// a manual, user-initiated temp. The pod auto-reverts to its scheduled basal when
+    /// the duration expires — a safety backstop if the watch dies mid-loan.
+    public func setTempBasal(rate: Double, duration: TimeInterval, completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
+        guard rate <= Self.tempBasalRateProofLimit else {
+            emit(String(format: "TEMP BASAL: refused %.2f U/hr (proof limit %.2f U/hr)", rate, Self.tempBasalRateProofLimit))
+            completion(.failure(PodProofError.tempBasalExceedsProofLimit(requested: rate, limit: Self.tempBasalRateProofLimit)))
+            return
+        }
+        runCommand(named: String(format: "Temp basal %.2f U/hr for %.0f min", rate, duration / 60),
+                   completion: journaling(.tempBasal(rate: rate, duration: duration), completion)) { session in
+            let result = session.setTempBasal(rate: rate, duration: duration, isHighTemp: false, automatic: false)
             switch result {
             case .success(let statusResponse):
                 return statusResponse

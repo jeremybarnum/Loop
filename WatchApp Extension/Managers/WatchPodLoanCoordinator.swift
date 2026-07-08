@@ -49,6 +49,16 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// The amount the bolus dial starts at.
     static let defaultBolusUnits: Double = 0.5
 
+    /// Hard cap on the watch temp-basal RATE (U/hr), mirroring the bolus cap.
+    static let maxTempBasalRate: Double = 1.0
+    /// The rate the basal dial starts at.
+    static let defaultBasalRate: Double = 0.5
+    /// Fixed duration for every watch temp basal. From the user's view it's just
+    /// "set the basal" (no duration UI); it's long enough to cover a competition,
+    /// and the pod auto-reverts to the scheduled basal when it expires — a safety
+    /// backstop if the watch dies. The phone reasserts its own basal on hand-back.
+    static let tempBasalDuration: TimeInterval = 3 * 60 * 60   // 3 hours
+
     /// True only in the watchOS simulator (which has no Bluetooth, so it can never
     /// reach a pod). When true, the methods below route to the simulator demo path
     /// (see the extension at the bottom) instead of WatchConnectivity/BLE, so the
@@ -210,6 +220,15 @@ final class WatchPodLoanCoordinator: ObservableObject {
         if Self.isSimulatorDemo { demoBolus(units: capped); return }
         runPodCommand { self.controller.bolus(units: capped, completion: $0) }
     }
+    /// Set the pod's basal to an absolute rate (U/hr). 0 = suspend. Capped at
+    /// maxTempBasalRate; snapped to the pod's 0.05 U/hr resolution. Implemented as a
+    /// fixed-duration temp basal (see tempBasalDuration) that auto-reverts.
+    func setBasalRate(_ rate: Double) {
+        let snapped = (min(max(rate, 0), Self.maxTempBasalRate) / 0.05).rounded() * 0.05
+        if snapped <= 0 { suspend(); return }   // 0 U/hr = suspend
+        if Self.isSimulatorDemo { demoSetTempBasal(rate: snapped); return }
+        runPodCommand { self.controller.setTempBasal(rate: snapped, duration: Self.tempBasalDuration, completion: $0) }
+    }
     func refreshStatus() {
         if Self.isSimulatorDemo { return }
         runPodCommand { self.controller.getStatus(completion: $0) }
@@ -335,6 +354,16 @@ private extension WatchPodLoanCoordinator {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
             self.status = self.demoStatus("Bolusing", delivered: delivered)
+            self.busy = false
+        }
+    }
+
+    func demoSetTempBasal(rate: Double) {
+        let delivered = status?.insulinDelivered ?? 0
+        busy = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            self.status = self.demoStatus(String(format: "Temp basal %.2f U/hr", rate), delivered: delivered)
             self.busy = false
         }
     }

@@ -20,6 +20,7 @@ public struct PodLoanEvent: Identifiable, Equatable, Codable {
     public enum Kind: Equatable, Codable {
         case tookOver              // loan began (watch took control)
         case bolus(units: Double)
+        case tempBasal(rate: Double, duration: TimeInterval)
         case suspend
         case resume
         case handedBack            // loan ended (control returned to phone)
@@ -39,6 +40,7 @@ public struct PodLoanEvent: Identifiable, Equatable, Codable {
         switch kind {
         case .tookOver:            return "Took over pod"
         case .bolus(let u):        return String(format: "Bolus %.2f U", u)
+        case .tempBasal(let r, _): return String(format: "Set basal %.2f U/hr", r)
         case .suspend:             return "Suspended delivery"
         case .resume:              return "Resumed basal"
         case .handedBack:          return "Handed back to phone"
@@ -85,6 +87,18 @@ public struct PodLoanJournal: Equatable, Codable {
 
     public var bolusCount: Int {
         events.filter { if case .bolus = $0.kind { return true }; return false }.count
+    }
+
+    public var tempBasalCount: Int {
+        events.filter { if case .tempBasal = $0.kind { return true }; return false }.count
+    }
+
+    /// The most recent temp-basal rate set during the loan, if any.
+    public var lastTempBasalRate: Double? {
+        for e in events.reversed() {
+            if case .tempBasal(let r, _) = e.kind { return r }
+        }
+        return nil
     }
 
     /// True if the last suspend has no matching later resume.
@@ -148,7 +162,12 @@ public struct PodLoanJournal: Equatable, Codable {
             }
         }
 
-        if bolusCount == 0 && suspendWindows.isEmpty {
+        if let rate = lastTempBasalRate {
+            lines.append(String(format: "Set basal to %.2f U/hr (%d change%@).",
+                                rate, tempBasalCount, tempBasalCount == 1 ? "" : "s"))
+        }
+
+        if bolusCount == 0 && suspendWindows.isEmpty && tempBasalCount == 0 {
             lines.append("No boluses or suspends — basal only.")
         }
 

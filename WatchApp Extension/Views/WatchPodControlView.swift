@@ -15,6 +15,8 @@ struct WatchPodControlView: View {
     @ObservedObject var coordinator: WatchPodLoanCoordinator
     @State private var confirmingBolus = false
     @State private var bolusAmount = WatchPodLoanCoordinator.defaultBolusUnits
+    @State private var confirmingBasal = false
+    @State private var basalAmount = WatchPodLoanCoordinator.defaultBasalRate
 
     var body: some View {
         ScrollView {
@@ -133,6 +135,10 @@ struct WatchPodControlView: View {
             }
             .disabled(coordinator.busy)
 
+            Divider()
+            basalControl
+
+            Divider()
             bolusControl
 
             Divider()
@@ -178,6 +184,41 @@ struct WatchPodControlView: View {
                     Label("Bolus", systemImage: "syringe")
                 }
                 .disabled(coordinator.busy || bolusAmount <= 0)
+            }
+        }
+    }
+
+    // Crown-dialed absolute basal rate, hard-capped, two-tap confirm. 0 U/hr = suspend.
+    // Set-and-forget from the user's view (fixed 3h duration under the hood, auto-reverts).
+    @ViewBuilder
+    private var basalControl: some View {
+        if confirmingBasal {
+            VStack(spacing: 6) {
+                Button(basalAmount <= 0 ? "Suspend basal" : String(format: "Set %.2f U/hr", basalAmount)) {
+                    confirmingBasal = false
+                    coordinator.setBasalRate(basalAmount)
+                }
+                Button("Cancel") { confirmingBasal = false }
+            }
+            .disabled(coordinator.busy)
+        } else {
+            VStack(spacing: 4) {
+                Text(basalAmount <= 0 ? "Basal 0 (suspend)" : String(format: "Basal %.2f U/hr", basalAmount))
+                    .font(.title3)
+                    .focusable(true)
+                    .digitalCrownRotation($basalAmount,
+                                          from: 0.0,
+                                          through: WatchPodLoanCoordinator.maxTempBasalRate,
+                                          by: 0.05,
+                                          sensitivity: .medium,
+                                          isContinuous: false,
+                                          isHapticFeedbackEnabled: true)
+                Button {
+                    confirmingBasal = true
+                } label: {
+                    Label("Set basal", systemImage: "dial.medium")
+                }
+                .disabled(coordinator.busy)
             }
         }
     }
