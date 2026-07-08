@@ -3088,7 +3088,7 @@
 				C1CCF10B2858F4F70035389C /* XCRemoteSwiftPackageReference "SwiftCharts" */,
 				C1D6EE9E2A06C7270047DE5C /* XCRemoteSwiftPackageReference "MKRingProgressView" */,
 				C1735B1C2A0809830082BB8A /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
-				992F41912FF9B6000071F0F0 /* XCLocalSwiftPackageReference "../../../WatchPodSandbox/PodSDK" */,
+				992F41912FF9B6000071F0F0 /* XCLocalSwiftPackageReference "PodSDK" */,
 			);
 			productRefGroup = 43776F8D1B8022E90074EA36 /* Products */;
 			projectDirPath = "";
@@ -5034,9 +5034,9 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		992F41912FF9B6000071F0F0 /* XCLocalSwiftPackageReference "../../../WatchPodSandbox/PodSDK" */ = {
+		992F41912FF9B6000071F0F0 /* XCLocalSwiftPackageReference "PodSDK" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = ../../../WatchPodSandbox/PodSDK;
+			relativePath = PodSDK;
 		};
 /* End XCLocalSwiftPackageReference section */
 
