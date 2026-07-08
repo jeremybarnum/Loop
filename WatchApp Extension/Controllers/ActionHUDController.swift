@@ -47,7 +47,8 @@ final class ActionHUDController: HUDInterfaceController {
         // for Caitlin riding horses; the watch context is implicit (it's on her wrist).
         // The old pre-meal state management is removed from `update()` so it stays
         // enabled. (Later option: a custom watch+rider glyph to show the watch too.)
-        preMealButtonImage.setImage(UIImage(systemName: "figure.equestrian.sports"))
+        let untetherIconConfig = UIImage.SymbolConfiguration(pointSize: 32, weight: .medium)
+        preMealButtonImage.setImage(UIImage(systemName: "figure.equestrian.sports", withConfiguration: untetherIconConfig))
         preMealButtonGroup.state = .off
 
         // Update the override button description based on the feature flag; this cannot be done earlier than `-willActivate` (e.g. didSet on the IBOutlet is too soon)
