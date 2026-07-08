@@ -41,14 +41,13 @@ final class ActionHUDController: HUDInterfaceController {
     override func willActivate() {
         super.willActivate()
 
-        // The Pre-Meal button is repurposed as the Pod button — it opens the pod-loan
-        // control screen (its storyboard action is now `openPodControl`, label "Pod").
-        // Set its icon here and keep it always enabled; the old pre-meal state
-        // management is removed from `update()`.
-        // TODO: swap this SF Symbol placeholder for the real Omnipod "Pod" artwork —
-        // copy OmniBLE's Pod.imageset into the WatchApp asset catalog and set the
-        // storyboard imageView image to "Pod".
-        preMealButtonImage.setImage(UIImage(systemName: "bandage.fill"))
+        // The (unused) Pre-Meal button is repurposed as the "Solo" button — it starts
+        // watch-only, phone-free mode (opens the loan control screen; its storyboard
+        // action is now `openPodControl`). Icon = equestrian, since this is initially
+        // for Caitlin riding horses; the watch context is implicit (it's on her wrist).
+        // The old pre-meal state management is removed from `update()` so it stays
+        // enabled. (Later option: a custom watch+rider glyph to show the watch too.)
+        preMealButtonImage.setImage(UIImage(systemName: "figure.equestrian.sports"))
         preMealButtonGroup.state = .off
 
         // Update the override button description based on the feature flag; this cannot be done earlier than `-willActivate` (e.g. didSet on the IBOutlet is too soon)
