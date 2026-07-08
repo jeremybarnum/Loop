@@ -72,12 +72,9 @@ final class ActionHUDController: HUDInterfaceController {
         preMealButtonImage.setImage(UIImage(systemName: "figure.equestrian.sports", withConfiguration: untetherIconConfig))
         preMealButtonGroup.state = isInShowMode ? .on : .off
 
-        // Update the override button description based on the feature flag; this cannot be done earlier than `-willActivate` (e.g. didSet on the IBOutlet is too soon)
-        if FeatureFlags.sensitivityOverridesEnabled {
-            overrideButtonLabel?.setText(NSLocalizedString("Preset", comment: "The text for the Watch button for enabling a custom preset"))
-        } else {
-            overrideButtonLabel?.setText(NSLocalizedString("Workout", comment: "The text for the Watch button for enabling workout mode"))
-        }
+        // Update the override button description; cannot be done earlier than
+        // `-willActivate` (e.g. didSet on the IBOutlet is too soon).
+        updateOverrideLabel()
 
         let userActivity = NSUserActivity.forViewLoopStatus()
         if #available(watchOSApplicationExtension 5.0, *) {
@@ -130,6 +127,7 @@ final class ActionHUDController: HUDInterfaceController {
             bolusButtonGroup.state = .off
             overrideButtonGroup.state = .off
         }
+        updateOverrideLabel()
 
         glucoseFormatter.updateUnit(to: loopManager.displayGlucoseUnit)
     }
@@ -144,6 +142,18 @@ final class ActionHUDController: HUDInterfaceController {
 
     // isInShowMode is defined on HUDInterfaceController (shared with setBolus /
     // openPodControl). In Show Mode the horse button is green and Carbs is unavailable.
+
+    /// The override button's label. In Show Mode this button is the basal control, so
+    /// it reads "Basal"; otherwise it's the normal Preset/Workout override label.
+    private func updateOverrideLabel() {
+        if isInShowMode {
+            overrideButtonLabel?.setText(NSLocalizedString("Basal", comment: "The Watch override button relabeled as the basal control in Show Mode"))
+        } else if FeatureFlags.sensitivityOverridesEnabled {
+            overrideButtonLabel?.setText(NSLocalizedString("Preset", comment: "The text for the Watch button for enabling a custom preset"))
+        } else {
+            overrideButtonLabel?.setText(NSLocalizedString("Workout", comment: "The text for the Watch button for enabling workout mode"))
+        }
+    }
 
     private func updateForPreMeal(enabled: Bool) {
         if enabled {

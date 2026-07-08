@@ -124,7 +124,7 @@ struct WatchPodControlView: View {
         VStack(spacing: 10) {
             Text("Show Mode")
                 .font(.headline)
-            Text("Disconnect Bluetooth on your iPhone, then Untether watch.")
+            Text("Untethers from your iPhone — the watch runs the pod phone-free. Turn your iPhone's Bluetooth off, then enable.")
                 .font(.footnote)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -132,12 +132,12 @@ struct WatchPodControlView: View {
             if coordinator.busy && coordinator.phase == .armed {
                 // Takeover in progress (Untether tapped) — BUG-3: visible feedback.
                 ProgressView()
-                Text("Untethering…")
+                Text("Enabling Show Mode…")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             } else {
                 Button(action: coordinator.claim) {
-                    Label("Untether watch", systemImage: "checkmark.circle")
+                    Label("Enable Show Mode", systemImage: "checkmark.circle")
                 }
                 .disabled(coordinator.phase != .armed)   // lit only once keys have arrived
                 Button("Cancel", action: coordinator.cancelArmed)
