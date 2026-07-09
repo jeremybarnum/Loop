@@ -285,3 +285,71 @@ Wording "Pod Not Connected" is a first draft — flag for Jeremy's review.
   watch–pod separation is rare (unlike phone–pod). Watch battery also argues against
   aggressive connection-listening. The watch's real split-brain trigger is the PHONE
   reclaiming, better handled by a reclaim handshake than constant watch listening.
+
+---
+
+# REAL-POD BENCH SESSION — 2026-07-09 evening (first real DASH hardware)
+
+Three full Show Mode cycles on a real pod (open loop, bench). Build: watch-prediction
+@ eb98f39f-era TestFlight. Full phone-log evidence in the session logarchive + capture.
+
+## OQ-4 RESOLVED (real pod): EAP SQN resynchronization observed
+At 19:48:00 the phone re-established its session after the watch loan and the log shows
+"Received EAP SQN resynchronization … Updating EAP SQN to: 15" — the REAL pod gracefully
+resyncs a controller with stale session state. This is the exact operation the emulator
+crashes on ("expected 3030 received 3036") and then wedges after restart. OQ-4's wedge
+is an emulator defect; the real pod healed every handoff all night (3 cycles, zero
+wedges, reclaims in ~2 s, takeovers in ~11 s).
+
+## Validated on real hardware tonight
+- Multi-cycle enable → command → hand-back → re-enable: clean, three times.
+- Takeover ~11 s after Settings-BT-off (real pod frees the connection at supervision-
+  timeout speed — the emulator's 60 s idle-drop was an artifact; no "wait a minute"
+  copy needed).
+- WATCHCONNECTIVITY OVER WI-FI PROVEN with timestamps: hand-back #1 received 19:22:44
+  and grant #2 completed 19:23:14 — Bluetooth stayed off until 19:24:11. Both
+  directions of the loan protocol run BT-off on shared Wi-Fi.
+- Watch resume() programmed the REAL basal schedule to a real pod (accepted; scheduled
+  clicks resumed ~1/min at ~3 U/hr).
+- Negative session basal end-to-end: 7-min watch suspend → watch "Session Basal −0.36"
+  == phone shadow line "net −0.36 U" (independent computations, exact agreement).
+  First §5-gate real-pod evidence point. Loop's own IOB is knowingly ~0.36 overstated
+  (stock assumes schedule ran — see PodState.swift:302-353 findings) — the exact gap
+  the symmetric write-back (§4a/§4b options) would close.
+- Reconciliation integrity: journal boluses entered at real timestamps (0.5@19:21,
+  0.3@19:23, 0.55@19:25); failed bolus NOT journaled; negative remainders clamped;
+  basal-only journal → zero entries + hash persisted.
+
+## BUG-5: watch command failure is SILENT (top priority)
+Split-brain test: watch bolus 0.9 attempted at ~19:51 while the phone held the pod.
+Pod accepted the watch connection (dropped the phone 19:51:44) but the phone's
+auto-reconnect stole it back in 2 s → watch command never completed → NO delivery, and
+NO error shown anywhere. The dose screen dismisses optimistically on crown-confirm; the
+failure lands later on coordinator.lastError which nothing surfaces prominently. The
+journal/Session rows correctly EXCLUDE it (truthful-but-passive). FIX: failed pod
+commands — especially bolus — must alert loudly (haptic + persistent error banner).
+
+## OQ-5: podDelta=0.00 on 2 of 3 sessions (odometer freshen race suspected)
+Audits: S1 podDelta=0.00 (0.5 U definitely delivered), S2 podDelta=1.00 (plausible),
+S3 podDelta=0.00 (~0.4 U delivered). Suspect: hand-back's final getStatus freshen fails
+(S3: phone held the pod at hand-back; S1: freshen may have raced the in-flight bolus) →
+deliveredLatest stale from claim → delta 0 → remainder negative → clamped (safe, but
+the audit is blind). FIX: audit line must log raw deliveredAtStart/deliveredLatest +
+freshen success/failure; consider freshen retry.
+
+## DESIGN-3: phone auto-reconnect during an active loan (split-brain window)
+With BT re-enabled mid-loan the phone reclaimed the pod within seconds while the watch
+still showed Show Mode active. Pod = last-connector-wins (it dropped the phone to accept
+the watch at 19:51:44); the PERSISTENT reconnector (phone) beats the one-shot connector
+(watch), so the phone dominates contention. Dosing-paused-at-grant makes this safe-ish
+today (phone won't command), but the window is real: watch commands fail silently
+(BUG-5) and control is ambiguous. Policy needed: suppress phone pod-reconnect while
+podLoanedToWatch (DESIGN-GAP-1's other half), or a reclaim handshake.
+
+## DESIGN-4: hand-back received while phone BT is off → pod orphaned; nag needed
+Wi-Fi hand-back means the phone can hold the journal while unable to touch the pod
+(BT off): pod runs the watch's last program with NO controller until BT returns. The
+watch-side BT-off alert never fires in this case (phone IS reachable). FIX: phone-side
+alert on hand-back-received-while-BT-off: "Pod handed back — turn on Bluetooth to
+resume control." (The watch alert's condition tests reachability; the real question is
+pod-controllability.)
