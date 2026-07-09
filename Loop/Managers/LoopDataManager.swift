@@ -814,12 +814,19 @@ extension LoopDataManager {
             return DoseEntry(type: .bolus, startDate: dose.startDate, value: dose.units, unit: .units, syncIdentifier: syncIdentifier, insulinType: insulinType, manuallyEntered: true)
         }
 
+        // DoseStore.addDoses invokes its completion TWICE on success (once after the
+        // entries persist, again after its pump-event sync — see DoseStore.swift:842).
+        // Latch so our caller's completion (which persists idempotency state and logs)
+        // runs exactly once, on the first (authoritative) callback.
+        var completed = false
         doseStore.addDoses(entries, from: nil) { (error) in
             if error == nil {
                 self.recommendedAutomaticDose = nil
                 self.clearCachedInsulinEffects()
                 self.notify(forChange: .insulin)
             }
+            guard !completed else { return }
+            completed = true
             completion(error)
         }
     }

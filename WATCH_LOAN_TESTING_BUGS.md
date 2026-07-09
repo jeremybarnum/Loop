@@ -175,3 +175,35 @@ Bluetooth off** only. CC-off becomes a legitimate (and nicer, one-toggle) flow O
 the phone proactively releases the pod for the loan's duration. The "iPhone Bluetooth Is
 Off" end-alert guards on WCSession reachability — under CC-off the phone is (correctly)
 still reachable so no alert; under Settings-off it fires as designed.
+
+### OQ-3: Takeover after Settings-BT-off seems to require foregrounding Loop + dismissing its Bluetooth alert (found 2026-07-08, hardware)
+
+**Symptom (Jeremy):** after turning Bluetooth off in Settings, the watch takeover only
+succeeded after (a) bringing Loop to the foreground on the phone — it shows a
+"Bluetooth needs to be enabled"-style warning — and (b) dismissing that warning. Then
+Enable Show Mode worked.
+
+**Two candidate mechanisms (discriminating experiment below):**
+1. *Causal:* the phone doesn't fully release the pod BLE link (or bluetoothd keeps some
+   state alive) until Loop runs foreground and processes the BT-off transition; the
+   dismissal genuinely frees the slot.
+2. *Timing coincidence:* the pod side simply takes ~30–60 s to drop the stale phone
+   connection after BT-off, and the foreground/dismiss ritual burns exactly that time.
+   (Earlier same-day successes may have masked this because Loop was being used actively
+   around each test.)
+
+**Experiment:** Settings-BT off → do NOT touch the phone → wait 60 s → Enable Show Mode.
+Clean takeover ⇒ timing (fix: watch enable-screen copy adds "wait a moment"). Failure
+until the alert is dismissed ⇒ causal (fix: copy tells the user to open Loop and dismiss
+the warning; investigate the phone-side connection release).
+
+**Status 2026-07-08 (late):** Jeremy leans CAUSAL from repeated hardware runs, not yet
+tested to full precision. If confirmed, the mechanism is worth understanding before
+wording the UI copy — a Settings-level radio kill shouldn't need app cooperation to drop
+a BLE link, so the dismissal presumably correlates with Loop foreground-processing some
+transition it defers while backgrounded. Precision test still pending.
+
+**Either way:** DESIGN-GAP-1 (phone proactively releases the pod at loan grant)
+eliminates this whole class — no BT toggle, no alert, no ritual. This is additional
+motivation for it. **FAQ note meanwhile:** current reliable procedure is: turn BT off in
+Settings → open Loop → dismiss its Bluetooth warning → Enable Show Mode on the watch.
