@@ -155,7 +155,11 @@ final class WatchPodLoanCoordinator: ObservableObject {
     static let defaultBolusUnits: Double = 0.5
 
     /// Hard cap on the watch temp-basal RATE (U/hr), mirroring the bolus cap.
-    static let maxTempBasalRate: Double = 1.0
+    // ⚠️ TEMP-TEST-CAP: raised 1.0 → 3.0 for testing only (larger deviations from
+    // schedule are easier to observe, esp. suspend contrast). MUST REVERT TO 1.0
+    // before any real-pod / real-person use (Friday) and before release. Paired
+    // with PodProofController.tempBasalRateProofLimit — both must move together.
+    static let maxTempBasalRate: Double = 3.0   // TEMP-TEST-CAP (revert to 1.0)
     /// The rate the basal dial starts at.
     static let defaultBasalRate: Double = 0.5
     /// Fixed duration for every watch temp basal. From the user's view it's just

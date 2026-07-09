@@ -225,7 +225,11 @@ public final class PodProofController: NSObject {
     public static let bolusProofLimit: Double = 1.0
 
     /// Hard ceiling on any temp-basal RATE commanded through this facade (U/hr).
-    public static let tempBasalRateProofLimit: Double = 1.0
+    // ⚠️ TEMP-TEST-CAP: raised 1.0 → 3.0 for testing only. This is the INDEPENDENT
+    // defense-in-depth limit — raising it weakens the backstop, so it MUST REVERT
+    // TO 1.0 before any real-pod / real-person use (Friday) and before release.
+    // Paired with WatchPodLoanCoordinator.maxTempBasalRate.
+    public static let tempBasalRateProofLimit: Double = 3.0   // TEMP-TEST-CAP (revert to 1.0)
 
     /// Flat basal schedule used for resumeBasal and initial setup.
     /// 0.5 U/hr, single entry starting at midnight.
