@@ -108,7 +108,7 @@ class PodLoanInsulinMathTests: XCTestCase {
         j.record(.bolus(units: 1.0), at: t0)
         let now = t0.addingTimeInterval(.minutes(120))
         let p = j.predict(currentBG: 180, isfMgdlPerUnit: 50, at: now, model: model)
-        XCTAssertEqual(p.bolusIOB, 0.500577, accuracy: accuracy)
+        XCTAssertEqual(p.iob, 0.500577, accuracy: accuracy)
         XCTAssertEqual(p.eventualBG, 180 - 0.500577 * 50, accuracy: 0.01)
         XCTAssertEqual(p.asOf, now)
     }
@@ -117,7 +117,83 @@ class PodLoanInsulinMathTests: XCTestCase {
         let t0 = Date(timeIntervalSince1970: 1_780_000_000)
         let j = journal(startedAt: t0)
         let p = j.predict(currentBG: 140, isfMgdlPerUnit: 40, at: t0.addingTimeInterval(600))
-        XCTAssertEqual(p.bolusIOB, 0)
+        XCTAssertEqual(p.iob, 0)
         XCTAssertEqual(p.eventualBG, 140)
+    }
+
+    // MARK: - Net basal vs schedule (symmetric IOB)
+    //
+    // Expected values computed independently from the LoopKit formula with the
+    // same 5-minute slicing (see file header discipline): net contribution of a
+    // slice = (actualRate − scheduledRate) × hours × percentEffectRemaining
+    // measured from the slice midpoint.
+
+    private var flatSchedule: PodLoanBasalSchedule {
+        PodLoanBasalSchedule(items: [.init(startOffset: 0, rate: 1.0)], timeZoneSecondsFromGMT: 0)
+    }
+
+    func testScheduleRateLookup() {
+        let sched = PodLoanBasalSchedule(items: [
+            .init(startOffset: 0, rate: 0.5),
+            .init(startOffset: 43200, rate: 1.5),   // noon
+        ], timeZoneSecondsFromGMT: 0)
+        let midnight = Date(timeIntervalSince1970: 1_780_012_800)  // 2026-05-29 00:00:00 UTC
+        XCTAssertEqual(sched.rate(at: midnight.addingTimeInterval(6 * 3600)), 0.5)    // 06:00
+        XCTAssertEqual(sched.rate(at: midnight.addingTimeInterval(13 * 3600)), 1.5)   // 13:00
+        XCTAssertEqual(sched.rate(at: midnight.addingTimeInterval(23 * 3600)), 1.5)   // 23:00
+    }
+
+    func testTempAboveScheduleAddsNetIOB() {
+        let t0 = Date(timeIntervalSince1970: 1_780_000_000)
+        var j = journal(startedAt: t0)
+        j.record(.tempBasal(rate: 2.0, duration: .minutes(30)), at: t0)
+        let now = t0.addingTimeInterval(.minutes(30))
+        XCTAssertEqual(j.netBasalIOB(at: now, schedule: flatSchedule, model: model), 0.496111, accuracy: accuracy)
+    }
+
+    func testSuspendSubtractsNetIOB() {
+        let t0 = Date(timeIntervalSince1970: 1_780_000_000)
+        var j = journal(startedAt: t0)
+        j.record(.suspend, at: t0)
+        j.record(.resume, at: t0.addingTimeInterval(.minutes(60)))
+        // Read at resume: a full hour of missing 1.0 U/hr, barely decayed.
+        XCTAssertEqual(j.netBasalIOB(at: t0.addingTimeInterval(.minutes(60)), schedule: flatSchedule, model: model),
+                       -0.948783, accuracy: accuracy)
+        // An hour later the deficit has decayed toward zero.
+        XCTAssertEqual(j.netBasalIOB(at: t0.addingTimeInterval(.minutes(120)), schedule: flatSchedule, model: model),
+                       -0.666317, accuracy: accuracy)
+    }
+
+    func testTempEqualToScheduleNetsToZero() {
+        let t0 = Date(timeIntervalSince1970: 1_780_000_000)
+        var j = journal(startedAt: t0)
+        j.record(.tempBasal(rate: 1.0, duration: .minutes(60)), at: t0)
+        XCTAssertEqual(j.netBasalIOB(at: t0.addingTimeInterval(.minutes(45)), schedule: flatSchedule, model: model),
+                       0.0, accuracy: 1e-9)
+    }
+
+    func testTempExpiryRevertsToScheduleInIOB() {
+        let t0 = Date(timeIntervalSince1970: 1_780_000_000)
+        var j = journal(startedAt: t0)
+        // 30-min temp; read at 60 min — the second half hour followed schedule (net 0),
+        // so only the first 30 min contribute, decayed by the extra 30 min.
+        j.record(.tempBasal(rate: 2.0, duration: .minutes(30)), at: t0)
+        let iobAtEnd = j.netBasalIOB(at: t0.addingTimeInterval(.minutes(30)), schedule: flatSchedule, model: model)
+        let iobLater = j.netBasalIOB(at: t0.addingTimeInterval(.minutes(60)), schedule: flatSchedule, model: model)
+        XCTAssertLessThan(iobLater, iobAtEnd)   // decays, no new accrual after expiry
+        XCTAssertGreaterThan(iobLater, 0)
+    }
+
+    func testCombinedIOBIsBolusPlusNetBasal() {
+        let t0 = Date(timeIntervalSince1970: 1_780_000_000)
+        var j = journal(startedAt: t0)
+        j.record(.bolus(units: 0.5), at: t0)
+        j.record(.suspend, at: t0)
+        j.record(.resume, at: t0.addingTimeInterval(.minutes(30)))
+        let now = t0.addingTimeInterval(.minutes(30))
+        // 0.5 U bolus (0.482987 remaining) ≈ cancelled by 30-min suspend of 1.0 U/hr (−0.496111).
+        XCTAssertEqual(j.iob(at: now, schedule: flatSchedule, model: model), -0.013124, accuracy: accuracy)
+        // Without a schedule, degrades to bolus-only.
+        XCTAssertEqual(j.iob(at: now, schedule: nil, model: model), 0.482987, accuracy: accuracy)
     }
 }

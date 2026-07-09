@@ -207,17 +207,21 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
     /// no IOB/COB placeholders (dashes say nothing actionable; real IOB returns with
     /// the watch-local tracking work).
     private enum ShowModeRow: Int, CaseIterable {
-        case bolusIOB
+        case iob
         case sessionBolus
         case basalRate
 
-        var title: String {
+        /// `netIOB` = the coordinator has the phone's basal schedule, so the IOB
+        /// row is the true net figure (bolus + basal deviation, suspends count
+        /// negative) and may honestly be called "Active Insulin". Without the
+        /// schedule it is bolus-only and must be labeled "Bolus IOB" — never a
+        /// name that reads as the phone's full net figure.
+        func title(netIOB: Bool) -> String {
             switch self {
-            case .bolusIOB:
-                // "Bolus IOB", NOT "Active Insulin": this is bolus-only decay (no
-                // basal netting — the watch has no schedule) and must not read as
-                // the phone's full net-IOB figure.
-                return NSLocalizedString("Bolus IOB", comment: "HUD row title for bolus-only insulin on board in Show Mode")
+            case .iob:
+                return netIOB
+                    ? NSLocalizedString("Active Insulin", comment: "HUD row title for net IOB in Show Mode (schedule available)")
+                    : NSLocalizedString("Bolus IOB", comment: "HUD row title for bolus-only insulin on board in Show Mode")
             case .sessionBolus:
                 return NSLocalizedString("Session Bolus", comment: "HUD row title for insulin bolused during Show Mode")
             case .basalRate:
@@ -244,15 +248,16 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
     private func updateRowsForShowMode() {
         configureTable(forShowMode: true)
         let coordinator = ExtensionDelegate.shared().podLoanCoordinator
+        let netIOB = coordinator.sessionIOBIsNet
         for row in ShowModeRow.allCases {
             guard let cell = table.rowController(at: row.rawValue) as? HUDRowController else { continue }
-            cell.setTitle(row.title)
+            cell.setTitle(row.title(netIOB: netIOB))
             cell.setIsLastRow(row.isLast)
             cell.setContentInset(systemMinimumLayoutMargins)
 
             switch row {
-            case .bolusIOB:
-                cell.setDetail(String(format: "%.2f U", coordinator.sessionBolusIOB))
+            case .iob:
+                cell.setDetail(String(format: "%.2f U", coordinator.sessionIOB))
             case .sessionBolus:
                 cell.setDetail(String(format: "%.2f U", coordinator.sessionBolusUnits))
             case .basalRate:

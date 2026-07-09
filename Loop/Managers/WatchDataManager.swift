@@ -521,8 +521,10 @@ extension WatchDataManager: WCSessionDelegate {
                                           insulinTypeRaw: deviceManager.loopManager.pumpInsulinType?.rawValue)
 
         if grant.granted {
-            // Reflect in the phone UI that the pod is now on the watch (shows an
-            // "On Watch" pump status instead of the pump's own Signal Loss).
+            // Mark the loan window. The phone UI reports only its own truth
+            // ("Pod Not Connected" once contact goes stale, or the Bluetooth
+            // state) — never a claim about the watch; the grant alone doesn't
+            // prove the watch took over.
             deviceManager.podLoanedToWatch = true
             // Capture the pre-loan dosing state and pause automatic dosing — but
             // ONLY on the first grant of a loan. A repeat borrow (e.g. the watch
@@ -630,6 +632,25 @@ extension WatchDataManager: WCSessionDelegate {
             }
         } else {
             log.default("Watch loan audit skipped: no odometer baseline in journal")
+        }
+
+        // (c) SHADOW — symmetric reconciliation, computed and logged but NOT
+        // entered (docs/WATCH_INSULIN_MODEL.md §5). Reconstructs the journal's
+        // off-schedule basal timeline and reports the signed net vs schedule —
+        // including the NEGATIVE net from suspends/low temps that the active
+        // path deliberately drops. Real-pod sessions validate these shadow
+        // figures before symmetric write-back is allowed to touch dosing IOB.
+        let shadowSegments = journal.offScheduleSegments(until: handedBackAt)
+        if !shadowSegments.isEmpty,
+           let schedule = deviceManager.loopManager.basalRateScheduleApplyingOverrideHistory {
+            var shadowNet = 0.0
+            for segment in shadowSegments {
+                let deliveredUnits = segment.actualRate * segment.end.timeIntervalSince(segment.start) / 3600.0
+                let scheduledUnits = schedule.truncatingBetween(start: segment.start, end: segment.end)
+                    .reduce(0) { $0 + $1.value * $1.endDate.timeIntervalSince($1.startDate) / 3600.0 }
+                shadowNet += deliveredUnits - scheduledUnits
+            }
+            log.default("Watch loan shadow (symmetric): %{public}d basal segment(s), net %{public}.2f U vs schedule — not entered (shadow mode)", shadowSegments.count, shadowNet)
         }
 
         guard !doses.isEmpty else {
@@ -874,5 +895,55 @@ private struct WatchLoanJournal: Decodable {
         }
         if let start = openStart { windows.append((start, end)) }
         return windows.map { (start: $0.0, end: $0.1) }
+    }
+
+    /// The spans when the watch commanded delivery AWAY from the schedule (a temp
+    /// basal until superseded/suspended/expired, or a suspend until resumed) —
+    /// the raw material for symmetric reconciliation. Mirrors the walk in
+    /// OmniBLECore's PodLoanJournal.offScheduleSegments; time on-schedule is
+    /// omitted (it nets to zero).
+    func offScheduleSegments(until end: Date) -> [(start: Date, end: Date, actualRate: Double)] {
+        enum DeliveryState {
+            case following
+            case temp(rate: Double, since: Date, expiry: Date)
+            case suspended(since: Date)
+        }
+
+        var segments: [(start: Date, end: Date, actualRate: Double)] = []
+        var state = DeliveryState.following
+
+        func close(at date: Date) {
+            switch state {
+            case .following:
+                break
+            case .temp(let rate, let since, let expiry):
+                let segmentEnd = min(date, expiry)
+                if segmentEnd > since {
+                    segments.append((start: since, end: segmentEnd, actualRate: rate))
+                }
+            case .suspended(let since):
+                if date > since {
+                    segments.append((start: since, end: date, actualRate: 0))
+                }
+            }
+        }
+
+        for event in events.sorted(by: { $0.date < $1.date }) where event.date < end {
+            switch event.kind {
+            case .tempBasal(let rate, let duration):
+                close(at: event.date)
+                state = .temp(rate: rate, since: event.date, expiry: event.date.addingTimeInterval(duration))
+            case .suspend:
+                close(at: event.date)
+                state = .suspended(since: event.date)
+            case .resume, .handedBack:
+                close(at: event.date)
+                state = .following
+            case .bolus, .tookOver:
+                break
+            }
+        }
+        close(at: end)
+        return segments
     }
 }

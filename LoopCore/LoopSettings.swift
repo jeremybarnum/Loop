@@ -277,6 +277,17 @@ extension LoopSettings: RawRepresentable {
         {
             self.automaticDosingStrategy = automaticDosingStrategy
         }
+
+        // WatchPod: the watch needs the basal schedule (to net its Show Mode
+        // temp basals against schedule for IOB) and ISF (for BG projection).
+        // Optional keys — absent from settings serialized by older phones.
+        if let rawBasalSchedule = rawValue["basalRateSchedule"] as? BasalRateSchedule.RawValue {
+            self.basalRateSchedule = BasalRateSchedule(rawValue: rawBasalSchedule)
+        }
+
+        if let rawSensitivity = rawValue["insulinSensitivitySchedule"] as? InsulinSensitivitySchedule.RawValue {
+            self.insulinSensitivitySchedule = InsulinSensitivitySchedule(rawValue: rawSensitivity)
+        }
     }
 
     public var rawValue: RawValue {
@@ -295,7 +306,9 @@ extension LoopSettings: RawRepresentable {
         raw["maximumBolus"] = maximumBolus
         raw["minimumBGGuard"] = suspendThreshold?.rawValue
         raw["dosingStrategy"] = automaticDosingStrategy.rawValue
-        
+        raw["basalRateSchedule"] = basalRateSchedule?.rawValue
+        raw["insulinSensitivitySchedule"] = insulinSensitivitySchedule?.rawValue
+
         return raw
     }
 }

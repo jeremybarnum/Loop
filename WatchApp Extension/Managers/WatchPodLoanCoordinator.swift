@@ -94,14 +94,34 @@ final class WatchPodLoanCoordinator: ObservableObject {
         return controller.loanJournal?.totalBolusUnits ?? 0
     }
 
-    /// BOLUS-ONLY insulin on board (U) from this session's journal, decayed with
-    /// the insulin curve the grant selected (loanInsulinModel). Display-only; must
-    /// be labeled "Bolus IOB" — it excludes basal deltas by design (the watch has
-    /// no basal schedule to net against). The demo journal makes this decay live
-    /// on the simulator too.
-    var sessionBolusIOB: Double {
+    /// The phone's basal schedule, if it has arrived via LoopSettingsUserInfo
+    /// (older phones don't send it — see LoopSettings.rawValue). Bridged to the
+    /// Foundation-only type the insulin math in OmniBLECore consumes.
+    private var loanBasalSchedule: PodLoanBasalSchedule? {
+        guard let schedule = ExtensionDelegate.shared().loopManager.settings.basalRateSchedule else {
+            return nil
+        }
+        return PodLoanBasalSchedule(
+            items: schedule.items.map { .init(startOffset: $0.startTime, rate: $0.value) },
+            timeZoneSecondsFromGMT: schedule.timeZone.secondsFromGMT()
+        )
+    }
+
+    /// Insulin on board (U) from this session's journal, decayed with the curve
+    /// the grant selected. When the phone's basal schedule is on the watch this
+    /// is TRUE NET IOB (bolus decay + basal deviation vs schedule — a suspend
+    /// counts negative); without a schedule it degrades to bolus-only and
+    /// `sessionIOBIsNet` is false so the UI can label it honestly ("Bolus IOB").
+    /// Display-only; must not gate dosing. The demo journal makes this behave
+    /// identically on the simulator.
+    var sessionIOB: Double {
         let journal = Self.isSimulatorDemo ? demoJournal : controller.loanJournal
-        return journal?.bolusIOB(at: Date(), model: loanInsulinModel) ?? 0
+        return journal?.iob(at: Date(), schedule: loanBasalSchedule, model: loanInsulinModel) ?? 0
+    }
+
+    /// Whether sessionIOB includes the net-basal term (schedule available).
+    var sessionIOBIsNet: Bool {
+        loanBasalSchedule != nil
     }
 
     /// Insulin activity curve for this loan, chosen from the grant's insulin type
@@ -451,6 +471,7 @@ private extension WatchPodLoanCoordinator {
         let delivered = status?.insulinDelivered ?? 0
         busy = true
         demoBasalRate = nil
+        demoJournal?.record(.suspend)
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 400_000_000)
             self.status = self.demoStatus("Suspended", delivered: delivered)
@@ -462,6 +483,7 @@ private extension WatchPodLoanCoordinator {
         let delivered = status?.insulinDelivered ?? 0
         busy = true
         demoBasalRate = nil
+        demoJournal?.record(.resume)
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 400_000_000)
             self.status = self.demoStatus("Scheduled Basal", delivered: delivered)
@@ -485,6 +507,7 @@ private extension WatchPodLoanCoordinator {
         let delivered = status?.insulinDelivered ?? 0
         busy = true
         demoBasalRate = rate
+        demoJournal?.record(.tempBasal(rate: rate, duration: Self.tempBasalDuration))
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 400_000_000)
             self.status = self.demoStatus(String(format: "Temp basal %.2f U/hr", rate), delivered: delivered)
