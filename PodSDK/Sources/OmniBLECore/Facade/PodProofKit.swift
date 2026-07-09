@@ -529,11 +529,15 @@ public final class PodProofController: NSObject {
         }
     }
 
-    /// Resume basal delivery on the proof build's flat 0.5 U/hr schedule.
-    public func resume(completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
+    /// Resume basal delivery. Programs `schedule` when provided (the caller's
+    /// real basal schedule — the watch holds the phone's via settings sync);
+    /// falls back to the proof build's flat 0.5 U/hr schedule when it isn't.
+    /// Resume RE-PROGRAMS the pod's basal table, so passing the real schedule
+    /// keeps the pod's stored schedule truthful for later cancels/expiry too.
+    public func resume(schedule: BasalSchedule? = nil, completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
         runCommand(named: "Resume basal", completion: journaling(.resume, completion)) { session in
             let offset = TimeZone.currentFixed.scheduleOffset(forDate: Date())
-            return try session.resumeBasal(schedule: Self.proofBasalSchedule, scheduleOffset: offset)
+            return try session.resumeBasal(schedule: schedule ?? Self.proofBasalSchedule, scheduleOffset: offset)
         }
     }
 

@@ -297,7 +297,7 @@ struct ShowModeDoseView: View {
         VStack(spacing: 4) {
             Text(NSLocalizedString("Suspended", comment: "Show Mode suspended-state header"))
                 .font(.headline)
-            Text(NSLocalizedString("Resume restarts scheduled basal", comment: "Show Mode resume hint"))
+            Text(resumeHint)
                 .font(.caption2)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -353,6 +353,15 @@ struct ShowModeDoseView: View {
             return String(format: NSLocalizedString("Cancel resumes schedule (%.2f U/hr)", comment: "Show Mode cancel-temp hint with scheduled rate"), scheduled)
         }
         return NSLocalizedString("Cancel resumes scheduled basal", comment: "Show Mode cancel-temp hint")
+    }
+
+    /// Rate shown only when the real schedule has synced — the same condition
+    /// under which resume actually programs that schedule (honest number).
+    private var resumeHint: String {
+        if let scheduled = coordinator.currentScheduledRate {
+            return String(format: NSLocalizedString("Resume restarts schedule (%.2f U/hr)", comment: "Show Mode resume hint with scheduled rate"), scheduled)
+        }
+        return NSLocalizedString("Resume restarts scheduled basal", comment: "Show Mode resume hint")
     }
 
     // MARK: - Pick the amount

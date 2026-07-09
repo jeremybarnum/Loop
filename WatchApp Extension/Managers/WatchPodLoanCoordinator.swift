@@ -328,7 +328,22 @@ final class WatchPodLoanCoordinator: ObservableObject {
     }
     func resume() {
         if Self.isSimulatorDemo { demoResume(); return }
-        runPodCommand { self.controller.resume(completion: $0) }
+        // Resume re-programs the pod's basal table: use the phone's REAL
+        // schedule when it has synced (nil falls back to the proof flat 0.5).
+        let schedule = realBasalSchedule
+        runPodCommand { self.controller.resume(schedule: schedule, completion: $0) }
+    }
+
+    /// The phone's basal schedule as the pod-programmable OmniBLECore type,
+    /// if it has reached the watch via settings sync.
+    private var realBasalSchedule: BasalSchedule? {
+        guard let schedule = ExtensionDelegate.shared().loopManager.settings.basalRateSchedule,
+              !schedule.items.isEmpty else {
+            return nil
+        }
+        return BasalSchedule(entries: schedule.items.map {
+            BasalScheduleEntry(rate: $0.value, startTime: $0.startTime)
+        })
     }
     func bolus(units: Double) {
         let capped = min(max(units, 0), Self.maxBolusUnits)
