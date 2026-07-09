@@ -29120,9 +29120,6 @@
         }
       }
     },
-    "On Watch" : {
-      "comment" : "Pump status highlight when the pod is loaned to the Apple Watch"
-    },
     "Override Presets" : {
       "comment" : "The title text for the override presets",
       "extractionState" : "manual",
@@ -29248,6 +29245,9 @@
           }
         }
       }
+    },
+    "Pod Not\nConnected" : {
+      "comment" : "Pump status highlight when the phone has no connection to the pod"
     },
     "Possible Missed Meal" : {
       "comment" : "The notification title for a meal that was possibly not logged in Loop.",
