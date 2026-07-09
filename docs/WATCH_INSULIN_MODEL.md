@@ -87,8 +87,19 @@ IOB(at:)         = bolusIOB + netBasalIOB
 - `netBasalIOB` reuses the exact **net-basal-vs-schedule** semantics LoopKit uses
   (`DoseEntry.netBasalUnits`): scheduled basal → 0, deviation → signed. Suspends are a
   temp of rate 0 (strongly negative net). This is symmetric on the watch for free.
-- Show-Mode row becomes **"Active Insulin"** (true net) instead of "Bolus IOB". Label
-  honesty is preserved because it now *is* the net figure.
+- **Scope: session-only, and labeled as such.** This IOB reflects only what the WATCH
+  did during the loan (its boluses + basal deviation). It does NOT include insulin on
+  board when the loan began — the watch can't see that (the grant carries pod identity,
+  not the phone's starting IOB). So the Show-Mode row is titled **"Insulin during show
+  mode"** (net; can go negative), degrading to **"Bolus during show mode"** when the
+  schedule hasn't reached the watch — deliberately NOT the phone's "Active Insulin",
+  which would read as the full body figure.
+- **Future work (deferred, not current priority): seed the baseline.** To show TRUE
+  total active insulin, the phone would send its IOB at loan grant and the watch would
+  carry it forward. Note this is more than a scalar: IOB is a sum of doses at different
+  ages, so decaying a single starting number is an approximation — a faithful version
+  needs the phone's active dose history (or an accepted approximation) sent at grant.
+  Required for a real on-watch prediction; tracked with the direct-G7 BG work.
 - `predict(currentBG:)` stops shipping dark: `eventualBG = currentBG − IOB × ISF`, with
   ISF and IOB both real. Still display-only; still must not gate dosing until the
   BG-on-watch (direct-G7) work lands.
@@ -192,8 +203,10 @@ Steps 1–4 are all buildable now on `watch-prediction`; nothing merges until re
 
 1. **Transport:** full schedules via `LoopSettingsUserInfo` (recommended) vs a smaller
    grant-time payload. Recommend full — needed for prediction anyway.
-2. **Watch label:** promote "Bolus IOB" → "Active Insulin" once net basal is included
-   (recommended), or keep them as two rows during a trust-building period.
+2. **Watch label:** DECIDED (2026-07-09) — "Insulin during show mode" (net) /
+   "Bolus during show mode" (bolus-only fallback). Session-scoped wording, provisional
+   ("tweak later"); check width on the smallest watch. NOT "Active Insulin" — that reads
+   as total body IOB, which the session figure is not (see §3 future work).
 3. **Reconciliation source of record:** journal-primary with odometer-audit
    (recommended, this doc) vs keep odometer-primary. Journal-primary is the only path to
    symmetry + correct timing.

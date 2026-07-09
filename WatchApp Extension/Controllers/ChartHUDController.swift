@@ -211,17 +211,24 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
         case sessionBolus
         case basalRate
 
-        /// `netIOB` = the coordinator has the phone's basal schedule, so the IOB
-        /// row is the true net figure (bolus + basal deviation, suspends count
-        /// negative) and may honestly be called "Active Insulin". Without the
-        /// schedule it is bolus-only and must be labeled "Bolus IOB" — never a
-        /// name that reads as the phone's full net figure.
+        /// Session-scoped label. This value is the IOB from what the WATCH did
+        /// this Show Mode session — its boluses plus its basal deviation vs the
+        /// schedule — NOT total body IOB (it excludes insulin already on board
+        /// when the loan began; the watch can't see that yet — see
+        /// WATCH_INSULIN_MODEL.md future work). The label deliberately says
+        /// "during show mode" rather than the phone's "Active Insulin" so it is
+        /// never read as the full figure.
+        ///
+        /// `netIOB` = the phone's basal schedule reached the watch, so the value
+        /// is net (bolus + basal deviation) and CAN GO NEGATIVE when basal is
+        /// set below schedule / suspended. Without the schedule (not yet synced)
+        /// it degrades to bolus-only, which can't be negative — labeled so.
         func title(netIOB: Bool) -> String {
             switch self {
             case .iob:
                 return netIOB
-                    ? NSLocalizedString("Active Insulin", comment: "HUD row title for net IOB in Show Mode (schedule available)")
-                    : NSLocalizedString("Bolus IOB", comment: "HUD row title for bolus-only insulin on board in Show Mode")
+                    ? NSLocalizedString("Insulin during show mode", comment: "HUD row title for net session insulin in Show Mode")
+                    : NSLocalizedString("Bolus during show mode", comment: "HUD row title for bolus-only session insulin in Show Mode")
             case .sessionBolus:
                 return NSLocalizedString("Session Bolus", comment: "HUD row title for insulin bolused during Show Mode")
             case .basalRate:
