@@ -43,6 +43,10 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
     @IBOutlet private weak var table: WKInterfaceTable!
 
     @IBOutlet private weak var glucoseScene: WKInterfaceSKScene!
+    /// The fixed-height container around the chart. Hiding the SCENE alone leaves
+    /// this group's height as an empty band; hiding the GROUP collapses it so the
+    /// table reflows into the space (Show Mode).
+    @IBOutlet private weak var graphGroup: WKInterfaceGroup!
     private let scene = GlucoseChartScene()
     private var timer: Timer? {
         didSet {
@@ -173,7 +177,9 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
     /// session table, and we skip the render/data work entirely.
     private func applyChartVisibility() {
         let hideChart = isInShowMode
-        glucoseScene.setHidden(hideChart)
+        // Collapse the whole fixed-height graph GROUP (not just the scene), so
+        // WatchKit reflows its space to the session table.
+        graphGroup.setHidden(hideChart)
         glucoseScene.isPaused = hideChart
     }
 

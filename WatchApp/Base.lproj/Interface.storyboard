@@ -273,6 +273,7 @@
                         <outlet property="eventualGlucoseLabel" destination="6sn-Q8-nGV" id="tX0-mq-Heq"/>
                         <outlet property="glucoseLabel" destination="Dt1-kz-jMZ" id="MQj-0o-PaV"/>
                         <outlet property="glucoseScene" destination="9BI-AC-l6c" id="O4a-P8-cHI"/>
+                        <outlet property="graphGroup" destination="GqJ-yv-NKQ" id="grp-hd-shm"/>
                         <outlet property="loopHUDImage" destination="ifw-dh-btK" id="Bc0-er-dfe"/>
                         <outlet property="table" destination="Atz-83-hgn" id="yzw-fm-hhk"/>
                     </connections>
