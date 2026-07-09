@@ -202,37 +202,31 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
         }
     }
 
-    /// The two Show Mode rows: what the watch has done to the pod this session. No
-    /// reservoir (a real pod reports only ">50 U" for most of its life — useless here),
-    /// no IOB/COB placeholders (dashes say nothing actionable; real IOB returns with
-    /// the watch-local tracking work).
+    /// The Show Mode status rows — what the watch has DONE this session (raw,
+    /// undecayed cumulative amounts), plus the current basal rate:
+    ///  - Session Bolus:   boluses delivered this session.
+    ///  - Session Basal:   net insulin delivered above (+) / below (−) the
+    ///                     scheduled basal — a suspend / low temp is NEGATIVE.
+    ///  - Session Insulin: the sum of the two (net insulin this session).
+    ///  - Basal Rate:      the current watch-set rate ("Suspended" / "x U/hr" /
+    ///                     "Scheduled" when nothing's been changed).
+    /// Four rows match the normal HUD table's row count, so they fit as-is.
     private enum ShowModeRow: Int, CaseIterable {
-        case iob
         case sessionBolus
+        case sessionBasal
+        case sessionInsulin
         case basalRate
 
-        /// Session-scoped label. This value is the IOB from what the WATCH did
-        /// this Show Mode session — its boluses plus its basal deviation vs the
-        /// schedule — NOT total body IOB (it excludes insulin already on board
-        /// when the loan began; the watch can't see that yet — see
-        /// WATCH_INSULIN_MODEL.md future work). The label deliberately says
-        /// "during show mode" rather than the phone's "Active Insulin" so it is
-        /// never read as the full figure.
-        ///
-        /// `netIOB` = the phone's basal schedule reached the watch, so the value
-        /// is net (bolus + basal deviation) and CAN GO NEGATIVE when basal is
-        /// set below schedule / suspended. Without the schedule (not yet synced)
-        /// it degrades to bolus-only, which can't be negative — labeled so.
-        func title(netIOB: Bool) -> String {
+        var title: String {
             switch self {
-            case .iob:
-                return netIOB
-                    ? NSLocalizedString("Insulin during show mode", comment: "HUD row title for net session insulin in Show Mode")
-                    : NSLocalizedString("Bolus during show mode", comment: "HUD row title for bolus-only session insulin in Show Mode")
             case .sessionBolus:
-                return NSLocalizedString("Session Bolus", comment: "HUD row title for insulin bolused during Show Mode")
+                return NSLocalizedString("Session Bolus", comment: "HUD row: insulin bolused during Show Mode")
+            case .sessionBasal:
+                return NSLocalizedString("Session Basal", comment: "HUD row: net basal insulin delivered vs schedule during Show Mode")
+            case .sessionInsulin:
+                return NSLocalizedString("Session Insulin", comment: "HUD row: total net insulin (bolus + basal) during Show Mode")
             case .basalRate:
-                return NSLocalizedString("Basal Rate", comment: "HUD row title for the watch-set basal in Show Mode")
+                return NSLocalizedString("Basal Rate", comment: "HUD row: the watch-set basal rate in Show Mode")
             }
         }
 
@@ -255,18 +249,19 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
     private func updateRowsForShowMode() {
         configureTable(forShowMode: true)
         let coordinator = ExtensionDelegate.shared().podLoanCoordinator
-        let netIOB = coordinator.sessionIOBIsNet
         for row in ShowModeRow.allCases {
             guard let cell = table.rowController(at: row.rawValue) as? HUDRowController else { continue }
-            cell.setTitle(row.title(netIOB: netIOB))
+            cell.setTitle(row.title)
             cell.setIsLastRow(row.isLast)
             cell.setContentInset(systemMinimumLayoutMargins)
 
             switch row {
-            case .iob:
-                cell.setDetail(String(format: "%.2f U", coordinator.sessionIOB))
             case .sessionBolus:
                 cell.setDetail(String(format: "%.2f U", coordinator.sessionBolusUnits))
+            case .sessionBasal:
+                cell.setDetail(Self.signedInsulinString(coordinator.sessionBasalDelivered))
+            case .sessionInsulin:
+                cell.setDetail(Self.signedInsulinString(coordinator.sessionInsulinTotal))
             case .basalRate:
                 if coordinator.sessionSuspended {
                     cell.setDetail(NSLocalizedString("Suspended", comment: "HUD row detail when delivery is suspended in Show Mode"))
@@ -277,6 +272,13 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
                 }
             }
         }
+    }
+
+    /// Signed U string for a net figure that may be negative or unavailable:
+    /// "—" when nil (schedule not yet synced), else e.g. "+0.30 U" / "-0.20 U".
+    private static func signedInsulinString(_ value: Double?) -> String {
+        guard let value = value else { return "—" }
+        return String(format: "%+.2f U", value)
     }
 
     private func updateGlucoseChart() {

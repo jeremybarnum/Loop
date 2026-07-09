@@ -96,32 +96,45 @@ final class WatchPodLoanCoordinator: ObservableObject {
 
     /// The phone's basal schedule, if it has arrived via LoopSettingsUserInfo
     /// (older phones don't send it — see LoopSettings.rawValue). Bridged to the
-    /// Foundation-only type the insulin math in OmniBLECore consumes.
+    /// Foundation-only type the insulin math in OmniBLECore consumes. In the
+    /// simulator demo, a flat placeholder schedule so the session-basal math is
+    /// exercisable without a paired phone.
     private var loanBasalSchedule: PodLoanBasalSchedule? {
-        guard let schedule = ExtensionDelegate.shared().loopManager.settings.basalRateSchedule else {
-            return nil
+        if let schedule = ExtensionDelegate.shared().loopManager.settings.basalRateSchedule {
+            return PodLoanBasalSchedule(
+                items: schedule.items.map { .init(startOffset: $0.startTime, rate: $0.value) },
+                timeZoneSecondsFromGMT: schedule.timeZone.secondsFromGMT()
+            )
         }
-        return PodLoanBasalSchedule(
-            items: schedule.items.map { .init(startOffset: $0.startTime, rate: $0.value) },
-            timeZoneSecondsFromGMT: schedule.timeZone.secondsFromGMT()
-        )
+        if Self.isSimulatorDemo {
+            return PodLoanBasalSchedule(items: [.init(startOffset: 0, rate: 0.5)], timeZoneSecondsFromGMT: 0)
+        }
+        return nil
     }
 
-    /// Insulin on board (U) from this session's journal, decayed with the curve
-    /// the grant selected. When the phone's basal schedule is on the watch this
-    /// is TRUE NET IOB (bolus decay + basal deviation vs schedule — a suspend
-    /// counts negative); without a schedule it degrades to bolus-only and
-    /// `sessionIOBIsNet` is false so the UI can label it honestly ("Bolus IOB").
-    /// Display-only; must not gate dosing. The demo journal makes this behave
-    /// identically on the simulator.
+    /// RAW net basal insulin DELIVERED this session (U), above (+) or below (−)
+    /// the scheduled basal — the undecayed cumulative amount ("Session Basal").
+    /// nil when the schedule hasn't reached the watch (can't be computed).
+    var sessionBasalDelivered: Double? {
+        guard let schedule = loanBasalSchedule else { return nil }
+        let journal = Self.isSimulatorDemo ? demoJournal : controller.loanJournal
+        return journal?.netBasalDelivered(until: Date(), schedule: schedule)
+    }
+
+    /// Total net insulin this session (U) = session boluses + session basal
+    /// deviation ("Session Insulin"). nil when session basal is uncomputable.
+    var sessionInsulinTotal: Double? {
+        guard let basal = sessionBasalDelivered else { return nil }
+        return sessionBolusUnits + basal
+    }
+
+    /// Decayed net IOB (bolus decay + basal deviation vs schedule) — for the
+    /// dark predict() path only; NOT shown (the status page shows the raw
+    /// session numbers above). The demo journal makes it behave identically on
+    /// the simulator.
     var sessionIOB: Double {
         let journal = Self.isSimulatorDemo ? demoJournal : controller.loanJournal
         return journal?.iob(at: Date(), schedule: loanBasalSchedule, model: loanInsulinModel) ?? 0
-    }
-
-    /// Whether sessionIOB includes the net-basal term (schedule available).
-    var sessionIOBIsNet: Bool {
-        loanBasalSchedule != nil
     }
 
     /// Insulin activity curve for this loan, chosen from the grant's insulin type

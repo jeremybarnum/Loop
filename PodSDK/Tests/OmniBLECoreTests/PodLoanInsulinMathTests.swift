@@ -184,6 +184,28 @@ class PodLoanInsulinMathTests: XCTestCase {
         XCTAssertGreaterThan(iobLater, 0)
     }
 
+    func testNetBasalDeliveredIsRawUndecayed() {
+        let t0 = Date(timeIntervalSince1970: 1_780_000_000)
+        var j = journal(startedAt: t0)
+        // Temp 2.0 vs schedule 1.0 for 30 min → (2.0−1.0)×0.5h = +0.5 U delivered.
+        j.record(.tempBasal(rate: 2.0, duration: .minutes(30)), at: t0)
+        XCTAssertEqual(j.netBasalDelivered(until: t0.addingTimeInterval(.minutes(30)), schedule: flatSchedule),
+                       0.5, accuracy: accuracy)
+        // Read an hour later: no new accrual after expiry (temp reverted to schedule).
+        XCTAssertEqual(j.netBasalDelivered(until: t0.addingTimeInterval(.minutes(90)), schedule: flatSchedule),
+                       0.5, accuracy: accuracy)
+    }
+
+    func testNetBasalDeliveredNegativeForSuspend() {
+        let t0 = Date(timeIntervalSince1970: 1_780_000_000)
+        var j = journal(startedAt: t0)
+        j.record(.suspend, at: t0)
+        j.record(.resume, at: t0.addingTimeInterval(.minutes(60)))
+        // 60 min of missing 1.0 U/hr = −1.0 U delivered (raw, undecayed).
+        XCTAssertEqual(j.netBasalDelivered(until: t0.addingTimeInterval(.minutes(60)), schedule: flatSchedule),
+                       -1.0, accuracy: accuracy)
+    }
+
     func testCombinedIOBIsBolusPlusNetBasal() {
         let t0 = Date(timeIntervalSince1970: 1_780_000_000)
         var j = journal(startedAt: t0)

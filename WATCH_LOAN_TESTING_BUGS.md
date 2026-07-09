@@ -270,3 +270,18 @@ claim. Whether the watch holds the pod is for the WATCH to say.
 - Fresh pod contact → normal status (a stale loan flag cannot manufacture a warning).
 
 Wording "Pod Not Connected" is a first draft — flag for Jeremy's review.
+
+**PARKED 2026-07-09 — approach direction (not yet built):**
+- Responsive seconds-level icon needs the passive BLE `CBPeripheral.state` (or an
+  unthrottled poll) — both walled inside OmniBLE; blocked by the no-framework directive.
+- Framework-free alternative (Jeremy's reframe): evaluate pod-status age **at a
+  regular loop-refresh moment**, not on a free-running timer. A healthy cycle just
+  freshened the data (~0 min); if status is still >~2 min right after, the cycle
+  FAILED to reach the pod — a true signal, low false-positive. Hook: Loop already
+  emits `pumpDataTooOld` per cycle (seen in logs) — Loop app state, likely reachable
+  without touching OmniBLE. Tradeoff: resolution = loop cadence (~5 min lag), correct
+  but not fast. Investigate when un-parked.
+- WATCH side is lower priority: pod (on body) + watch (on wrist) are co-located, so
+  watch–pod separation is rare (unlike phone–pod). Watch battery also argues against
+  aggressive connection-listening. The watch's real split-brain trigger is the PHONE
+  reclaiming, better handled by a reclaim handshake than constant watch listening.

@@ -206,9 +206,32 @@ extension PodLoanJournal {
         return net
     }
 
+    /// RAW net basal insulin DELIVERED (U) above (+) or below (−) schedule over
+    /// the session — the undecayed cumulative amount, for a "what I've done this
+    /// session" display (as opposed to netBasalIOB, which decays for dosing/
+    /// prediction). Same piecewise integration, no activity-curve factor: a temp
+    /// above schedule is positive, a suspend/low temp is negative.
+    public func netBasalDelivered(until date: Date = Date(),
+                                  schedule: PodLoanBasalSchedule) -> Double {
+        let slice: TimeInterval = 5 * 60
+        var net = 0.0
+        for segment in offScheduleSegments(until: date) {
+            var t = segment.start
+            while t < segment.end {
+                let sliceEnd = min(t.addingTimeInterval(slice), segment.end)
+                let hours = sliceEnd.timeIntervalSince(t) / 3600
+                let mid = t.addingTimeInterval(sliceEnd.timeIntervalSince(t) / 2)
+                net += (segment.actualRate - schedule.rate(at: mid)) * hours
+                t = sliceEnd
+            }
+        }
+        return net
+    }
+
     /// TRUE net insulin on board: bolus decay + net basal vs schedule. This is
-    /// the number an "Active Insulin" display may honestly show. Without a
-    /// schedule it degrades to bolus-only (label that case "Bolus IOB").
+    /// the decayed figure used for prediction (predict()). Without a schedule it
+    /// degrades to bolus-only. (The Show Mode status page shows the RAW session
+    /// numbers — totalBolusUnits, netBasalDelivered, and their sum — not this.)
     public func iob(at date: Date = Date(),
                     schedule: PodLoanBasalSchedule?,
                     model: PodLoanInsulinModel = .rapidActingAdult) -> Double {
