@@ -33,18 +33,25 @@ extension DeviceDataManager {
     }
 
     var pumpStatusHighlight: DeviceStatusHighlight? {
-        // Show "On Watch" only when a loan is in effect AND the phone genuinely
-        // isn't in contact with the pod. If the phone is still polling the pod
-        // successfully (fresh lastSync), it actually holds the pod — so a stale
-        // podLoanedToWatch flag (e.g. a loan that was never handed back) won't
-        // wrongly read as "On Watch". The pod is the source of truth, not the flag.
-        if podLoanedToWatch, isPodContactStale {
-            return PodOnWatchStatusHighlight()
-        }
+        // TRUTH-ONLY REPORTING (see WATCH_LOAN_TESTING_BUGS.md): the phone
+        // states only what it knows first-hand. It never claims the pod is "on
+        // the watch" — a loan grant doesn't prove the watch took over, and with
+        // Bluetooth off the phone can't see either device. Whether the watch
+        // holds the pod is for the WATCH to say.
+        //
+        // Precedence: Bluetooth truth first (radio off → say that), then, during
+        // a loan window when the pod has genuinely gone quiet, the phone's
+        // first-hand fact: it is not connected to the pod. If the phone is still
+        // polling the pod successfully (fresh lastSync), no override — a stale
+        // podLoanedToWatch flag must not manufacture a warning.
         let bluetoothState = bluetoothProvider.bluetoothState
         if bluetoothState == .unsupported || bluetoothState == .unauthorized || bluetoothState == .poweredOff {
             return BluetoothState.enableHighlight
-        } else if let onboardingManager = onboardingManager, !onboardingManager.isComplete, pumpManager?.isOnboarded != true {
+        }
+        if podLoanedToWatch, isPodContactStale {
+            return PodNotConnectedStatusHighlight()
+        }
+        if let onboardingManager = onboardingManager, !onboardingManager.isComplete, pumpManager?.isOnboarded != true {
             return DeviceDataManager.resumeOnboardingStatusHighlight
         } else if pumpManager == nil {
             return DeviceDataManager.addPumpStatusHighlight
@@ -53,13 +60,12 @@ extension DeviceDataManager {
         }
     }
 
-    /// The phone hasn't successfully heard from the pod recently. Combined with
-    /// `podLoanedToWatch`, this is the signature of the pod being held elsewhere
-    /// (the watch) rather than by us: while the watch holds the pod's single BLE
-    /// connection, the phone's poll attempts fail, so `lastSync` goes — and stays —
-    /// stale. The 8-minute threshold sits above the ~5-min background poll cadence
-    /// (so a normal between-poll gap doesn't trip it) and below OmniBLE's 12-min
-    /// "Signal Loss" (so "On Watch" is what shows). No lastSync at all counts as stale.
+    /// The phone hasn't successfully heard from the pod recently. During a loan
+    /// window this is the phone's honest, first-hand statement — it says nothing
+    /// about who else may hold the pod. The 8-minute threshold sits above the
+    /// ~5-min background poll cadence (so a normal between-poll gap doesn't trip
+    /// it) and below OmniBLE's 12-min "Signal Loss" (so the more specific
+    /// "Pod Not Connected" is what shows). No lastSync at all counts as stale.
     private var isPodContactStale: Bool {
         guard let lastSync = pumpManager?.lastSync else { return true }
         return Date().timeIntervalSince(lastSync) > .minutes(8)
@@ -83,10 +89,12 @@ extension DeviceDataManager {
         var state: DeviceStatusHighlightState = .warning
     }
 
-    /// Placeholder shown while the pod is loaned to the Apple Watch.
-    struct PodOnWatchStatusHighlight: DeviceStatusHighlight {
-        var localizedMessage: String = NSLocalizedString("On Watch", comment: "Pump status highlight when the pod is loaned to the Apple Watch")
-        var imageName: String = "applewatch"
+    /// Shown when Bluetooth is on but the phone has no recent contact with the
+    /// pod during a loan window. Deliberately makes NO claim about the watch —
+    /// only the phone's own connection state (truth-only reporting).
+    struct PodNotConnectedStatusHighlight: DeviceStatusHighlight {
+        var localizedMessage: String = NSLocalizedString("Pod Not\nConnected", comment: "Pump status highlight when the phone has no connection to the pod")
+        var imageName: String = "antenna.radiowaves.left.and.right.slash"
         var state: DeviceStatusHighlightState = .warning
     }
 

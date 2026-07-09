@@ -231,10 +231,12 @@ final class DeviceDataManager {
 
     private var watchManager: WatchDataManager!
 
-    /// True while the pod is loaned to the Apple Watch. Set by WatchDataManager on
-    /// grant / hand-back. Drives the pump status HUD to show an "On Watch"
-    /// placeholder instead of the pump's own status (which would otherwise read as
-    /// Signal Loss). See DeviceDataManager+DeviceStatus.pumpStatusHighlight.
+    /// True during a pod-loan window (set on grant, cleared on hand-back). Lets
+    /// the pump status HUD show the phone's first-hand truth — "Pod Not
+    /// Connected" — instead of the pump's generic Signal Loss while the pod is
+    /// expected to be quiet. Deliberately NOT rendered as any claim about the
+    /// watch: the grant alone doesn't prove the watch took over.
+    /// See DeviceDataManager+DeviceStatus.pumpStatusHighlight.
     var podLoanedToWatch = false
 
     // MARK: - Status Extension

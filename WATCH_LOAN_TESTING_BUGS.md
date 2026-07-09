@@ -203,7 +203,70 @@ wording the UI copy — a Settings-level radio kill shouldn't need app cooperati
 a BLE link, so the dismissal presumably correlates with Loop foreground-processing some
 transition it defers while backgrounded. Precision test still pending.
 
+**RESOLVED 2026-07-09 (controlled no-touch run, emulator): TIMING, not causal.**
+Protocol: horse tap (BT on) → Loop backgrounded → Settings-BT off → phone locked and
+untouched → 90 s wait → Enable Show Mode → **clean takeover, no dismissal, no Loop
+foregrounding**. Pod-side timeline (clock-offset corrected): the phone's stale
+connection dropped on the pod's ~60 s idle timeout well within the wait; the slot was
+free ~80 s before the Enable tap. Last night's "needed to dismiss the alert" was the
+ritual burning exactly that window. Fix: enable-screen copy should tell the user to
+wait ~a minute after turning Bluetooth off (see wording proposal). Re-confirm the drop
+timing on a real DASH pod (different supervision/timeout semantics possible).
+
 **Either way:** DESIGN-GAP-1 (phone proactively releases the pod at loan grant)
 eliminates this whole class — no BT toggle, no alert, no ritual. This is additional
 motivation for it. **FAQ note meanwhile:** current reliable procedure is: turn BT off in
 Settings → open Loop → dismiss its Bluetooth warning → Enable Show Mode on the watch.
+
+---
+
+## OQ-4: Phone cannot re-establish its pod session after a loan — emulator wedges (found 2026-07-09)
+
+**Symptom:** After a clean hand-back (reconciliation correct: `podDelta=0.50`,
+single `reconciled: 1 dose(s)`), the phone reconnects to the pod at the BLE layer
+(`Pod connected` → `didDiscoverServices` → `needsSessionEstablishment=true`) but the
+EAP-AKA session establishment fails every ~30 s: first
+`CommunicationError("Could not send the EAP AKA challenge")`, then `emptyValue`, then
+steady `PeripheralManagerError.timeout` on the characteristic write. Loop shows
+"Signal Loss" indefinitely — it does NOT self-heal. Ran ~4–5 min (08:37–08:41) in a
+stuck retry loop. Pod-side: the phone's BLE address connects every 30 s but the
+emulator logs no command in response and does not crash.
+
+**Unstick:** `sudo systemctl restart podsim` (emulator). Immediately after the restart
+the phone's next knock re-established cleanly: `GET_STATUS` then `PROGRAM_INSULIN`
+type 01 (phone reasserting scheduled basal) within 5 s. So the phone's reclaim logic
+is CORRECT — the blocker was stale per-connection session state the emulator carried
+from having hosted the watch's keys/counter during the loan, which a fresh
+establishment could not clear.
+
+**Why it matters / Friday crux:** a real DASH pod has **no restart button**. The open
+question is whether a real pod carries the same wedged session state after the watch
+advanced its message counter, or whether it re-hosts the phone cleanly. If it wedges
+like the emulator, that is a hard DESIGN-GAP-1 blocker needing a real mitigation
+(candidates: pass the advanced messageNumber back to the phone at hand-back so it
+resumes with the correct counter instead of a stale one; or force a clean re-pair on
+reclaim). **This is now the single most important thing to prove on the real pod.**
+Do NOT conclude the reclaim "works" from emulator runs — the emulator is the flakiest
+oracle for exactly this layer, and here it needed manual intervention to recover.
+
+**Tooling note:** `idevicesyslog` (libimobiledevice, `brew install`) now streams the
+phone console without root — use `idevicesyslog -p Loop` filtered on `Watch loan` /
+`session sync` for future reclaim debugging instead of hand-pasting Console.app.
+
+---
+
+## DESIGN-2: Phone status must be truth-only — "On Watch" removed (2026-07-09)
+
+**Jeremy's principle:** the phone states only what it knows first-hand. A loan grant
+doesn't prove the watch took over (granted-but-never-enabled leaves the flag set), and
+with Bluetooth off the phone can't see either device — so "On Watch" was an unverifiable
+claim. Whether the watch holds the pod is for the WATCH to say.
+
+**Implemented** (DeviceDataManager+DeviceStatus.pumpStatusHighlight):
+- Bluetooth off/unauthorized → the Bluetooth highlight (radio truth first; previously
+  "On Watch" wrongly outranked it).
+- Bluetooth on + loan window + pod contact stale >8 min → **"Pod Not Connected"**
+  (phone's own connection state, no watch claim).
+- Fresh pod contact → normal status (a stale loan flag cannot manufacture a warning).
+
+Wording "Pod Not Connected" is a first draft — flag for Jeremy's review.
