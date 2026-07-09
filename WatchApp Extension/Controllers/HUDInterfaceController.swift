@@ -55,6 +55,23 @@ class HUDInterfaceController: WKInterfaceController {
     }
 
     func update() {
+        // Show Mode: the ring is the turf-colored OPEN loop — Show Mode's identity
+        // color (shared with the horse button) — and it does NOT age: the freshness
+        // colors encode phone-loop health, which is meaningless here (green would lie
+        // that the loop is running; yellow/red would alarm about an intentional state).
+        // No live BG exists on the watch either, so the number, trend arrow, and
+        // eventual BG are hidden entirely rather than showing a stale phone value that
+        // looks current (dashes only appear after ~15 min; the first 15 min would look
+        // live). BG history stays on the chart page, where its age is visible; live BG
+        // returns here with the direct-G7 work.
+        if isInShowMode {
+            loopHUDImage.setHidden(false)
+            loopHUDImage.setImageNamed("loop_show_open")
+            glucoseLabel.setHidden(true)
+            eventualGlucoseLabel.setHidden(true)
+            return
+        }
+
         guard let activeContext = loopManager.activeContext else {
             loopHUDImage.setHidden(true)
             return
@@ -95,7 +112,10 @@ class HUDInterfaceController: WKInterfaceController {
                     glucoseLabel.setText(glucoseValue + trend)
                 }
                 
-                if showEventualGlucose, let eventualGlucose = activeContext.eventualGlucose, let eventualGlucoseValue = formatter.string(from: eventualGlucose.doubleValue(for: unit)) {
+                // The eventual BG is the phone's prediction — in Show Mode it was
+                // computed before untethering and assumes the phone is still looping,
+                // so suppress it (the measured BG + trend above stay).
+                if showEventualGlucose, !isInShowMode, let eventualGlucose = activeContext.eventualGlucose, let eventualGlucoseValue = formatter.string(from: eventualGlucose.doubleValue(for: unit)) {
                     eventualGlucoseLabel.setText(eventualGlucoseValue)
                     eventualGlucoseLabel.setHidden(false)
                 }

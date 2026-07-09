@@ -53,6 +53,51 @@ final class WatchPodLoanCoordinator: ObservableObject {
         return WCSession.default.isReachable
     }
 
+    // MARK: - Session basal state (for the status page)
+
+    /// The basal rate the watch has set this session (U/hr), or nil when the pod is on
+    /// its scheduled basal (nothing set, or a resume since). Journal-backed on hardware;
+    /// demo-mirrored on the sim. Display-only.
+    var sessionBasalRate: Double? {
+        if Self.isSimulatorDemo { return demoBasalRate }
+        guard let events = controller.loanJournal?.events else { return nil }
+        for event in events.reversed() {
+            switch event.kind {
+            case .tempBasal(let rate, _): return rate
+            case .resume, .suspend: return nil   // scheduled / suspended (see sessionSuspended)
+            default: continue
+            }
+        }
+        return nil
+    }
+
+    /// Whether the watch's last delivery change this session was a suspend. Unlike the
+    /// journal's own isSuspended, a later temp basal counts as un-suspending (the pod
+    /// resumes delivery at the programmed rate).
+    var sessionSuspended: Bool {
+        if Self.isSimulatorDemo { return status?.deliveryStatus == "Suspended" }
+        guard let events = controller.loanJournal?.events else { return false }
+        for event in events.reversed() {
+            switch event.kind {
+            case .suspend: return true
+            case .resume, .tempBasal: return false
+            default: continue
+            }
+        }
+        return false
+    }
+
+    /// Total insulin bolused by the watch this session (U) — the journal's discrete
+    /// bolus records, the same accounting the hand-back summary reports. 0 if none.
+    var sessionBolusUnits: Double {
+        if Self.isSimulatorDemo { return demoBolusTotal }
+        return controller.loanJournal?.totalBolusUnits ?? 0
+    }
+
+    /// Sim-demo mirrors of session state (the demo has no loan journal).
+    private var demoBasalRate: Double?
+    private var demoBolusTotal: Double = 0
+
     /// Hard cap on any single correction bolus from the watch (safety bound). The
     /// dial can't exceed this. (BG-gating is a later phase; this is the current bound.)
     static let maxBolusUnits: Double = 1.0
@@ -329,6 +374,8 @@ private extension WatchPodLoanCoordinator {
 
     func demoClaim() {
         busy = true
+        demoBasalRate = nil
+        demoBolusTotal = 0
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             self.status = self.demoStatus("Scheduled Basal", delivered: 0)
@@ -341,6 +388,7 @@ private extension WatchPodLoanCoordinator {
     func demoSuspend() {
         let delivered = status?.insulinDelivered ?? 0
         busy = true
+        demoBasalRate = nil
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 400_000_000)
             self.status = self.demoStatus("Suspended", delivered: delivered)
@@ -351,6 +399,7 @@ private extension WatchPodLoanCoordinator {
     func demoResume() {
         let delivered = status?.insulinDelivered ?? 0
         busy = true
+        demoBasalRate = nil
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 400_000_000)
             self.status = self.demoStatus("Scheduled Basal", delivered: delivered)
@@ -361,6 +410,7 @@ private extension WatchPodLoanCoordinator {
     func demoBolus(units: Double) {
         let delivered = (status?.insulinDelivered ?? 0) + units
         busy = true
+        demoBolusTotal += units
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
             self.status = self.demoStatus("Bolusing", delivered: delivered)
@@ -371,6 +421,7 @@ private extension WatchPodLoanCoordinator {
     func demoSetTempBasal(rate: Double) {
         let delivered = status?.insulinDelivered ?? 0
         busy = true
+        demoBasalRate = rate
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 400_000_000)
             self.status = self.demoStatus(String(format: "Temp basal %.2f U/hr", rate), delivered: delivered)

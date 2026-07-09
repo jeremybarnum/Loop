@@ -809,6 +809,9 @@
     "Basal %.2f U/hr" : {
       "comment" : "Show Mode basal confirm summary"
     },
+    "Basal Rate" : {
+      "comment" : "HUD row title for the watch-set basal in Show Mode"
+    },
     "Bolus" : {
       "comment" : "Button text to confirm manual bolus on Apple Watch\nShow Mode bolus action",
       "localizations" : {
@@ -3770,6 +3773,9 @@
         }
       }
     },
+    "Scheduled" : {
+      "comment" : "HUD row detail when the pod runs its scheduled basal in Show Mode"
+    },
     "Send Failed" : {
       "comment" : "The title of the alert controller displayed after a glucose range override send attempt fails",
       "localizations" : {
@@ -3889,6 +3895,9 @@
         }
       }
     },
+    "Session Bolus" : {
+      "comment" : "HUD row title for insulin bolused during Show Mode"
+    },
     "Set basal" : {
       "comment" : "Show Mode basal action"
     },
@@ -3907,6 +3916,9 @@
     },
     "Suspend basal" : {
       "comment" : "Show Mode suspend confirm summary"
+    },
+    "Suspended" : {
+      "comment" : "HUD row detail when delivery is suspended in Show Mode"
     },
     "Try again" : {
       "comment" : "A button that allows the user to try borrowing the pod again if the initial attempt failed.",

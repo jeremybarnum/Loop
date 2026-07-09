@@ -31,10 +31,12 @@ final class ActionHUDController: HUDInterfaceController {
 
     // Show Mode toggle. Three visual states, respecting the HID/Loop convention that
     // GREY means "unavailable — don't press" (reserved for .disabled):
-    //   • off / available → white icon on dark  (tap to start Show Mode)
-    //   • on  / active    → green fill           (watch holds the pod)
+    //   • off / available → white icon on dark turf  (tap to start Show Mode)
+    //   • on  / active    → turf fill                 (watch holds the pod)
     //   • .disabled is never used here — the toggle is always pressable.
-    private lazy var preMealButtonGroup = ButtonGroup(button: preMealButton, image: preMealButtonImage, background: preMealButtonBackground, onBackgroundColor: .carbsColor, offBackgroundColor: .darkCarbsColor, onIconColor: .darkCarbsColor, offIconColor: .white)
+    // Turf (saddle brown) is Show Mode's identity color, shared with the open loop
+    // ring while the mode is active.
+    private lazy var preMealButtonGroup = ButtonGroup(button: preMealButton, image: preMealButtonImage, background: preMealButtonBackground, onBackgroundColor: .turfColor, offBackgroundColor: .darkTurfColor, onIconColor: .darkTurfColor, offIconColor: .white)
 
     private lazy var overrideButtonGroup = ButtonGroup(button: overrideButton, image: overrideButtonImage, background: overrideButtonBackground, onBackgroundColor: .overrideColor, offBackgroundColor: .darkOverrideColor, onIconColor: .darkOverrideColor, offIconColor: .overrideColor)
 

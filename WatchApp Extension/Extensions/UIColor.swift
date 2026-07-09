@@ -35,6 +35,16 @@ extension UIColor {
 
     static let darkDisabledButtonColor = UIColor.disabledButtonColor.withAlphaComponent(0.14)
 
+    /// Show Mode's identity color — a warm saddle/turf brown (equestrian). Used for the
+    /// horse button's active state and the open loop ring while the watch holds the pod:
+    /// intentionally NOT Loop's green (the loop isn't running) nor yellow/red (nothing
+    /// is wrong — the mode is deliberate). Matches the loop_show_open asset.
+    static let turfColor = UIColor(red: 191 / 255, green: 102 / 255, blue: 58 / 255, alpha: 1)
+
+    // Equivalent to turfColor with alpha 0.14 on a black background (opaque, matching
+    // the carbs-dark/insulin-dark pattern).
+    static let darkTurfColor = UIColor(red: 27 / 255, green: 14 / 255, blue: 8 / 255, alpha: 1)
+
     static let chartLabel = HIGWhiteColor()
 
     static let chartNowLine = HIGWhiteColor().withAlphaComponent(0.2)
