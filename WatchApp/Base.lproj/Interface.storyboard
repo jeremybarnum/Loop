@@ -234,7 +234,7 @@
                             <variation key="device=watch44mm" height="111"/>
                             <variation key="device=watch45mm" height="115"/>
                         </group>
-                        <table alignment="left" spacing="4" id="Atz-83-hgn">
+                        <table alignment="left" spacing="3" id="Atz-83-hgn">
                             <items>
                                 <tableRow identifier="HUDRowController" id="ybx-To-WWV" customClass="HUDRowController" customModule="WatchApp_Extension">
                                     <group key="rootItem" width="1" height="0.0" alignment="left" layout="vertical" radius="0.0" spacing="3" id="wRf-z0-V74">
@@ -247,7 +247,7 @@
                                                     </label>
                                                     <label alignment="left" text="–" id="CsQ-fc-KLC">
                                                         <color key="textColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
-                                                        <fontDescription key="font" type="system" weight="light" pointSize="24"/>
+                                                        <fontDescription key="font" type="system" weight="light" pointSize="21"/>
                                                     </label>
                                                 </items>
                                             </group>
