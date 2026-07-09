@@ -83,13 +83,18 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
             glucoseScene.isPaused = false
         }
 
-        // Force an update when our pixels need to move
+        // Force an update when our pixels need to move. Capped at 60 s so the
+        // Show Mode rows (Bolus IOB decays continuously) also repaint while the
+        // page stays up — swipe-in alone would leave a watched IOB frozen.
         let pixelsWide = scene.size.width * WKInterfaceDevice.current().screenScale
-        let pixelInterval = scene.visibleDuration / TimeInterval(pixelsWide)
+        let pixelInterval = min(scene.visibleDuration / TimeInterval(pixelsWide), 60)
 
         timer = Timer.scheduledTimer(withTimeInterval: pixelInterval, repeats: true) { [weak self] _ in
             self?.log.default("Timer fired, triggering update")
             self?.scene.setNeedsUpdate()
+            if self?.isInShowMode == true {
+                self?.updateRowsForShowMode()
+            }
         }
 
         // These margins are only available after we appear (sadly)
@@ -202,11 +207,17 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
     /// no IOB/COB placeholders (dashes say nothing actionable; real IOB returns with
     /// the watch-local tracking work).
     private enum ShowModeRow: Int, CaseIterable {
+        case bolusIOB
         case sessionBolus
         case basalRate
 
         var title: String {
             switch self {
+            case .bolusIOB:
+                // "Bolus IOB", NOT "Active Insulin": this is bolus-only decay (no
+                // basal netting — the watch has no schedule) and must not read as
+                // the phone's full net-IOB figure.
+                return NSLocalizedString("Bolus IOB", comment: "HUD row title for bolus-only insulin on board in Show Mode")
             case .sessionBolus:
                 return NSLocalizedString("Session Bolus", comment: "HUD row title for insulin bolused during Show Mode")
             case .basalRate:
@@ -240,6 +251,8 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
             cell.setContentInset(systemMinimumLayoutMargins)
 
             switch row {
+            case .bolusIOB:
+                cell.setDetail(String(format: "%.2f U", coordinator.sessionBolusIOB))
             case .sessionBolus:
                 cell.setDetail(String(format: "%.2f U", coordinator.sessionBolusUnits))
             case .basalRate:

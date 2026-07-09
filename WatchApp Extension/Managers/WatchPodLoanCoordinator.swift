@@ -94,9 +94,26 @@ final class WatchPodLoanCoordinator: ObservableObject {
         return controller.loanJournal?.totalBolusUnits ?? 0
     }
 
-    /// Sim-demo mirrors of session state (the demo has no loan journal).
+    /// BOLUS-ONLY insulin on board (U) from this session's journal, decayed with
+    /// the insulin curve the grant selected (loanInsulinModel). Display-only; must
+    /// be labeled "Bolus IOB" — it excludes basal deltas by design (the watch has
+    /// no basal schedule to net against). The demo journal makes this decay live
+    /// on the simulator too.
+    var sessionBolusIOB: Double {
+        let journal = Self.isSimulatorDemo ? demoJournal : controller.loanJournal
+        return journal?.bolusIOB(at: Date(), model: loanInsulinModel) ?? 0
+    }
+
+    /// Insulin activity curve for this loan, chosen from the grant's insulin type
+    /// (rapid-acting-adult fallback — the slower curve, so the fallback errs
+    /// toward showing MORE remaining insulin).
+    private(set) var loanInsulinModel: PodLoanInsulinModel = .rapidActingAdult
+
+    /// Sim-demo mirrors of session state (the demo has no controller journal;
+    /// demoJournal lets demo IOB decay exactly like hardware IOB).
     private var demoBasalRate: Double?
     private var demoBolusTotal: Double = 0
+    private var demoJournal: PodLoanJournal?
 
     /// Hard cap on any single correction bolus from the watch (safety bound). The
     /// dial can't exceed this. (BG-gating is a later phase; this is the current bound.)
@@ -184,6 +201,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
         // .armed; the takeover happens on Claim, once the phone is off and the slot
         // is free. (The armed screen tells the user to power the phone off and Claim.)
         heldGrant = grant
+        loanInsulinModel = PodLoanInsulinModel.forInsulinTypeRaw(grant.insulinTypeRaw)
         busy = false
         phase = .armed
         lastError = nil
@@ -419,6 +437,7 @@ private extension WatchPodLoanCoordinator {
         busy = true
         demoBasalRate = nil
         demoBolusTotal = 0
+        demoJournal = PodLoanJournal(startedAt: Date(), deliveredAtStart: 0)
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             self.status = self.demoStatus("Scheduled Basal", delivered: 0)
@@ -454,6 +473,7 @@ private extension WatchPodLoanCoordinator {
         let delivered = (status?.insulinDelivered ?? 0) + units
         busy = true
         demoBolusTotal += units
+        demoJournal?.record(.bolus(units: units))
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
             self.status = self.demoStatus("Bolusing", delivered: delivered)

@@ -28,16 +28,25 @@ struct PodLoanGrantUserInfo {
     let podAddress: UInt32?
     let messageNumber: Int?
 
+    /// The pump's insulin type as LoopKit's InsulinType.rawValue (0=novolog,
+    /// 1=humalog, 2=apidra, 3=fiasp, 4=lyumjev, 5=afrezza), so the watch can pick
+    /// the matching activity curve for its Bolus IOB display (see OmniBLECore's
+    /// PodLoanInsulinModel.forInsulinTypeRaw). Optional wire key ("it"): absent on
+    /// grants from older phones, and older watches ignore it — both directions
+    /// fall back to the rapid-acting-adult curve.
+    let insulinTypeRaw: Int?
+
     // Present iff !granted.
     let denialReason: String?
 
-    static func grant(ltk: Data, controllerId: UInt32, podId: UInt32, podAddress: UInt32, messageNumber: Int) -> PodLoanGrantUserInfo {
+    static func grant(ltk: Data, controllerId: UInt32, podId: UInt32, podAddress: UInt32, messageNumber: Int, insulinTypeRaw: Int? = nil) -> PodLoanGrantUserInfo {
         PodLoanGrantUserInfo(granted: true,
                              ltk: ltk,
                              controllerId: controllerId,
                              podId: podId,
                              podAddress: podAddress,
                              messageNumber: messageNumber,
+                             insulinTypeRaw: insulinTypeRaw,
                              denialReason: nil)
     }
 
@@ -48,6 +57,7 @@ struct PodLoanGrantUserInfo {
                              podId: nil,
                              podAddress: nil,
                              messageNumber: nil,
+                             insulinTypeRaw: nil,
                              denialReason: reason)
     }
 }
@@ -84,6 +94,7 @@ extension PodLoanGrantUserInfo: RawRepresentable {
             self.podId = UInt32(truncatingIfNeeded: podId)
             self.podAddress = UInt32(truncatingIfNeeded: podAddress)
             self.messageNumber = messageNumber
+            self.insulinTypeRaw = rawValue["it"] as? Int   // optional: absent from older phones
             self.denialReason = nil
         } else {
             self.ltk = nil
@@ -91,6 +102,7 @@ extension PodLoanGrantUserInfo: RawRepresentable {
             self.podId = nil
             self.podAddress = nil
             self.messageNumber = nil
+            self.insulinTypeRaw = nil
             self.denialReason = rawValue["dr"] as? String
         }
     }
@@ -108,6 +120,7 @@ extension PodLoanGrantUserInfo: RawRepresentable {
             raw["pid"] = podId.map { Int($0) }
             raw["addr"] = podAddress.map { Int($0) }
             raw["mn"] = messageNumber
+            raw["it"] = insulinTypeRaw
         } else {
             raw["dr"] = denialReason
         }

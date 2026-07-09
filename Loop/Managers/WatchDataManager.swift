@@ -517,7 +517,8 @@ extension WatchDataManager: WCSessionDelegate {
     /// see PodLoanIdentity), and pause automatic dosing for the loan. If there's
     /// no active pod, the reply is a denial and nothing is changed.
     private func handlePodLoanRequest(replyHandler: @escaping ([String: Any]) -> Void) {
-        let grant = PodLoanIdentity.grant(fromPumpManagerRawState: deviceManager.pumpManager?.rawState)
+        let grant = PodLoanIdentity.grant(fromPumpManagerRawState: deviceManager.pumpManager?.rawState,
+                                          insulinTypeRaw: deviceManager.loopManager.pumpInsulinType?.rawValue)
 
         if grant.granted {
             // Reflect in the phone UI that the pod is now on the watch (shows an

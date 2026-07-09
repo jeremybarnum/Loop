@@ -84,6 +84,30 @@ class PodLoanGrantUserInfoTests: XCTestCase {
         XCTAssertEqual(decoded?.podAddress, big)
     }
 
+    func testInsulinTypeRoundTrip() {
+        let grant = PodLoanGrantUserInfo.grant(ltk: ltk,
+                                               controllerId: controllerId,
+                                               podId: podId,
+                                               podAddress: podAddress,
+                                               messageNumber: messageNumber,
+                                               insulinTypeRaw: 3)   // fiasp
+        XCTAssertEqual(PodLoanGrantUserInfo(rawValue: grant.rawValue)?.insulinTypeRaw, 3)
+    }
+
+    func testGrantWithoutInsulinTypeStillDecodes() {
+        // Backward compatibility: grants from older phones have no "it" key —
+        // the grant must still decode (identity fields alone are required) and
+        // insulinTypeRaw must come through nil (watch falls back to the default curve).
+        var raw = PodLoanGrantUserInfo.grant(ltk: ltk, controllerId: controllerId, podId: podId, podAddress: podAddress, messageNumber: messageNumber, insulinTypeRaw: 4).rawValue
+        raw["it"] = nil
+        guard let decoded = PodLoanGrantUserInfo(rawValue: raw) else {
+            return XCTFail("grant without insulin type failed to decode")
+        }
+        XCTAssertTrue(decoded.granted)
+        XCTAssertNil(decoded.insulinTypeRaw)
+        XCTAssertEqual(decoded.controllerId, controllerId)
+    }
+
     func testDenialRoundTrip() {
         let denied = PodLoanGrantUserInfo.denied(reason: "No active pod")
         guard let decoded = PodLoanGrantUserInfo(rawValue: denied.rawValue) else {

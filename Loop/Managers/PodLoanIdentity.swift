@@ -24,7 +24,9 @@ import Foundation
 enum PodLoanIdentity {
     /// Build a loan grant from an OmniBLE pump manager's rawState, or a denial
     /// if there is no active pod / the state is missing a required field.
-    static func grant(fromPumpManagerRawState rawState: [String: Any]?) -> PodLoanGrantUserInfo {
+    /// `insulinTypeRaw` (LoopKit InsulinType.rawValue) rides along so the watch
+    /// can pick the matching activity curve for its Bolus IOB display.
+    static func grant(fromPumpManagerRawState rawState: [String: Any]?, insulinTypeRaw: Int? = nil) -> PodLoanGrantUserInfo {
         guard let rawState = rawState else {
             return .denied(reason: "No pump configured")
         }
@@ -50,7 +52,8 @@ enum PodLoanIdentity {
                       controllerId: controllerId,
                       podId: podId,
                       podAddress: podAddress,
-                      messageNumber: messageNumber)
+                      messageNumber: messageNumber,
+                      insulinTypeRaw: insulinTypeRaw)
     }
 }
 
