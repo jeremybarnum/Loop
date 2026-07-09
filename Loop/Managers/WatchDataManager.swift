@@ -141,6 +141,11 @@ final class WatchDataManager: NSObject {
         let settings = deviceManager.loopManager.settings
 
         guard let session = watchSession, session.isPaired, session.isWatchAppInstalled else {
+            // Not silent: without this line, a watch that never receives settings
+            // (unpaired / app not installed / sim WC inert) is invisible in logs.
+            log.default("Skipping settings transfer: paired=%{public}@ watchAppInstalled=%{public}@",
+                        String(describing: watchSession?.isPaired),
+                        String(describing: watchSession?.isWatchAppInstalled))
             return
         }
 
