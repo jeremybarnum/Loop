@@ -278,11 +278,43 @@ struct ShowModeDoseView: View {
     var body: some View {
         if confirming {
             confirmStep
+        } else if kind == .basal, !showingDial, coordinator.sessionSuspended {
+            // Suspended is the zero-delivery special case: a temp-cancel won't
+            // restart a suspended pod — only a resume (re-programs the schedule)
+            // does. Offer that instead of Cancel Temp.
+            suspendedOptionsStep
         } else if kind == .basal, !showingDial, let activeRate = coordinator.sessionBasalRate {
             // A temp is already running: offer Change or Cancel before the dial.
             optionsStep(activeRate: activeRate)
         } else {
             pickStep
+        }
+    }
+
+    // MARK: - Suspended: resume or set a new rate
+
+    private var suspendedOptionsStep: some View {
+        VStack(spacing: 4) {
+            Text(NSLocalizedString("Suspended", comment: "Show Mode suspended-state header"))
+                .font(.headline)
+            Text(NSLocalizedString("Resume restarts scheduled basal", comment: "Show Mode resume hint"))
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+            Spacer()
+            ActionButton(
+                title: Text(NSLocalizedString("Set Basal", comment: "Show Mode suspended action: open the dial")),
+                color: .insulin,
+                action: { showingDial = true }
+            )
+            ActionButton(
+                title: Text(NSLocalizedString("Resume", comment: "Show Mode suspended action: resume scheduled basal")),
+                color: Color(UIColor.turfColor),
+                action: {
+                    coordinator.resume()
+                    onFinish()
+                }
+            )
         }
     }
 
