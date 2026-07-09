@@ -75,25 +75,21 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
     override func didAppear() {
         super.didAppear()
 
-        if glucoseScene.isPaused {
-            log.default("didAppear() unpausing")
-            glucoseScene.isPaused = false
-        } else {
-            log.default("didAppear() not paused")
-            glucoseScene.isPaused = false
-        }
+        applyChartVisibility()
 
         // Force an update when our pixels need to move. Capped at 60 s so the
-        // Show Mode rows (Bolus IOB decays continuously) also repaint while the
-        // page stays up — swipe-in alone would leave a watched IOB frozen.
+        // Show Mode rows (session numbers, live basal accrual) also repaint while
+        // the page stays up — swipe-in alone would leave them frozen.
         let pixelsWide = scene.size.width * WKInterfaceDevice.current().screenScale
         let pixelInterval = min(scene.visibleDuration / TimeInterval(pixelsWide), 60)
 
         timer = Timer.scheduledTimer(withTimeInterval: pixelInterval, repeats: true) { [weak self] _ in
-            self?.log.default("Timer fired, triggering update")
-            self?.scene.setNeedsUpdate()
-            if self?.isInShowMode == true {
-                self?.updateRowsForShowMode()
+            guard let self = self else { return }
+            if self.isInShowMode {
+                // Chart is hidden in Show Mode; just keep the session rows current.
+                self.updateRowsForShowMode()
+            } else {
+                self.scene.setNeedsUpdate()
             }
         }
 
@@ -131,12 +127,7 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
             }
         ]
 
-        if glucoseScene.isPaused {
-            log.default("willActivate() unpausing")
-            glucoseScene.isPaused = false
-        } else {
-            log.default("willActivate()")
-        }
+        applyChartVisibility()
 
         if !hasInitialActivation && UserDefaults.standard.startOnChartPage {
             log.default("Switching to startOnChartPage")
@@ -160,23 +151,30 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
     override func update() {
         super.update()
 
+        applyChartVisibility()
+
         // In Show Mode the phone-fed context is stale by construction (the phone is
-        // away) — the watch is driving the pod, so show pod-session values instead.
+        // away) — the watch is driving the pod. Show the session rows and skip the
+        // chart entirely (it's hidden; the BG history is frozen and not actionable).
         if isInShowMode {
             updateRowsForShowMode()
-        } else {
-            guard let activeContext = loopManager.activeContext else {
-                return
-            }
-            updateRows(for: activeContext)
+            return
         }
 
-        if glucoseScene.isPaused {
-            log.default("update() unpausing")
-            glucoseScene.isPaused = false
+        guard let activeContext = loopManager.activeContext else {
+            return
         }
-
+        updateRows(for: activeContext)
         updateGlucoseChart()
+    }
+
+    /// The BG-history chart earns its screen space only in normal mode. In Show
+    /// Mode it's hidden and paused — WatchKit reflows the freed space to the
+    /// session table, and we skip the render/data work entirely.
+    private func applyChartVisibility() {
+        let hideChart = isInShowMode
+        glucoseScene.setHidden(hideChart)
+        glucoseScene.isPaused = hideChart
     }
 
     private func updateRows(for activeContext: WatchContext) {
@@ -282,6 +280,9 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
     }
 
     private func updateGlucoseChart() {
+        // The chart is hidden in Show Mode — skip the data generation and render.
+        guard !isInShowMode else { return }
+
         loopManager.generateChartData { chartData in
             DispatchQueue.main.async {
                 var chartData = chartData
