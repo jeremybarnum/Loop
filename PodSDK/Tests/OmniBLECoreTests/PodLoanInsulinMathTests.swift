@@ -206,6 +206,19 @@ class PodLoanInsulinMathTests: XCTestCase {
                        -1.0, accuracy: accuracy)
     }
 
+    func testCancelTempBasalClosesSegment() {
+        let t0 = Date(timeIntervalSince1970: 1_780_000_000)
+        var j = journal(startedAt: t0)
+        // Temp 2.0 vs schedule 1.0, canceled after 30 min of a 3 h window:
+        // only the 30 delivered minutes count → +0.5 U raw.
+        j.record(.tempBasal(rate: 2.0, duration: .minutes(180)), at: t0)
+        j.record(.cancelTempBasal, at: t0.addingTimeInterval(.minutes(30)))
+        XCTAssertEqual(j.netBasalDelivered(until: t0.addingTimeInterval(.minutes(90)), schedule: flatSchedule),
+                       0.5, accuracy: accuracy)
+        // And the status row goes back to "scheduled": no live temp rate.
+        XCTAssertNil(j.lastTempBasalRate)
+    }
+
     func testCombinedIOBIsBolusPlusNetBasal() {
         let t0 = Date(timeIntervalSince1970: 1_780_000_000)
         var j = journal(startedAt: t0)

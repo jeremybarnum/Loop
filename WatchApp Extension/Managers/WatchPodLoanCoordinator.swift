@@ -64,11 +64,17 @@ final class WatchPodLoanCoordinator: ObservableObject {
         for event in events.reversed() {
             switch event.kind {
             case .tempBasal(let rate, _): return rate
-            case .resume, .suspend: return nil   // scheduled / suspended (see sessionSuspended)
+            case .resume, .suspend, .cancelTempBasal: return nil   // scheduled / suspended (see sessionSuspended)
             default: continue
             }
         }
         return nil
+    }
+
+    /// The scheduled basal rate (U/hr) in force right now, if the schedule has
+    /// reached the watch — lets the UI say "Scheduled (0.60 U/hr)" honestly.
+    var currentScheduledRate: Double? {
+        loanBasalSchedule?.rate(at: Date())
     }
 
     /// Whether the watch's last delivery change this session was a suspend. Unlike the
@@ -339,6 +345,11 @@ final class WatchPodLoanCoordinator: ObservableObject {
         if Self.isSimulatorDemo { demoSetTempBasal(rate: snapped); return }
         runPodCommand { self.controller.setTempBasal(rate: snapped, duration: Self.tempBasalDuration, completion: $0) }
     }
+    /// Cancel the running temp basal; the pod reverts to its scheduled basal.
+    func cancelBasal() {
+        if Self.isSimulatorDemo { demoCancelTempBasal(); return }
+        runPodCommand { self.controller.cancelTempBasal(completion: $0) }
+    }
     func refreshStatus() {
         if Self.isSimulatorDemo { return }
         runPodCommand { self.controller.getStatus(completion: $0) }
@@ -528,6 +539,18 @@ private extension WatchPodLoanCoordinator {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 400_000_000)
             self.status = self.demoStatus(String(format: "Temp basal %.2f U/hr", rate), delivered: delivered)
+            self.busy = false
+        }
+    }
+
+    func demoCancelTempBasal() {
+        let delivered = status?.insulinDelivered ?? 0
+        busy = true
+        demoBasalRate = nil
+        demoJournal?.record(.cancelTempBasal)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            self.status = self.demoStatus("Scheduled Basal", delivered: delivered)
             self.busy = false
         }
     }

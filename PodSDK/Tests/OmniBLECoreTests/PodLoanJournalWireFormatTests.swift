@@ -28,6 +28,7 @@ class PodLoanJournalWireFormatTests: XCTestCase {
         journal.record(.tempBasal(rate: 0.75, duration: 3 * 60 * 60), at: t0.addingTimeInterval(120))
         journal.record(.suspend, at: t0.addingTimeInterval(180))
         journal.record(.resume, at: t0.addingTimeInterval(240))
+        journal.record(.cancelTempBasal, at: t0.addingTimeInterval(300))
         journal.noteDelivered(11.75)
         return journal
     }
@@ -43,7 +44,7 @@ class PodLoanJournalWireFormatTests: XCTestCase {
         XCTAssertEqual(root["deliveredAtStart"] as? Double, 10.55)
         XCTAssertEqual(root["deliveredLatest"] as? Double, 11.75)
         let events = try XCTUnwrap(root["events"] as? [[String: Any]])
-        XCTAssertEqual(events.count, 5)   // tookOver + 4 recorded
+        XCTAssertEqual(events.count, 6)   // tookOver + 5 recorded
 
         // Every event carries id/date/kind.
         for event in events {
@@ -54,7 +55,7 @@ class PodLoanJournalWireFormatTests: XCTestCase {
 
         // Kind encodings: case name is the key; associated values keyed by label.
         let kinds = events.compactMap { $0["kind"] as? [String: Any] }
-        XCTAssertEqual(kinds.count, 5)
+        XCTAssertEqual(kinds.count, 6)
 
         XCTAssertNotNil(kinds[0]["tookOver"])
 
@@ -67,6 +68,7 @@ class PodLoanJournalWireFormatTests: XCTestCase {
 
         XCTAssertNotNil(kinds[3]["suspend"])
         XCTAssertNotNil(kinds[4]["resume"])
+        XCTAssertNotNil(kinds[5]["cancelTempBasal"])
     }
 
     /// Dates must be ISO-8601 strings (the phone decodes with .iso8601).

@@ -583,6 +583,23 @@ public final class PodProofController: NSObject {
         }
     }
 
+    /// Cancel the running temp basal only — the pod reverts to its stored
+    /// scheduled basal on its own (0x1f STOP_DELIVERY, temp bit). Distinct from
+    /// suspend(), which stops ALL delivery.
+    public func cancelTempBasal(completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
+        runCommand(named: "Cancel temp basal", completion: journaling(.cancelTempBasal, completion)) { session in
+            let result = session.cancelDelivery(deliveryType: .tempBasal)
+            switch result {
+            case .success(let statusResponse, _):
+                return statusResponse
+            case .certainFailure(let error):
+                throw error
+            case .unacknowledged(let error):
+                throw error
+            }
+        }
+    }
+
     /// Complete pod setup after pairing: prime, program the flat proof basal
     /// schedule, insert cannula. Required before suspend/resume/bolus (the
     /// driver refuses delivery-affecting commands mid-setup). Takes several

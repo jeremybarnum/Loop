@@ -23,6 +23,7 @@ public struct PodLoanEvent: Identifiable, Equatable, Codable {
         case tempBasal(rate: Double, duration: TimeInterval)
         case suspend
         case resume
+        case cancelTempBasal       // temp canceled; pod reverts to its scheduled basal
         case handedBack            // loan ended (control returned to phone)
     }
 
@@ -43,6 +44,7 @@ public struct PodLoanEvent: Identifiable, Equatable, Codable {
         case .tempBasal(let r, _): return String(format: "Set basal %.2f U/hr", r)
         case .suspend:             return "Suspended delivery"
         case .resume:              return "Resumed basal"
+        case .cancelTempBasal:     return "Canceled temp basal"
         case .handedBack:          return "Handed back to phone"
         }
     }
@@ -93,10 +95,16 @@ public struct PodLoanJournal: Equatable, Codable {
         events.filter { if case .tempBasal = $0.kind { return true }; return false }.count
     }
 
-    /// The most recent temp-basal rate set during the loan, if any.
+    /// The most recent temp-basal rate set during the loan, if it is still in
+    /// force — a later cancel/suspend/resume means the pod is back on (or off)
+    /// its schedule, so this returns nil.
     public var lastTempBasalRate: Double? {
         for e in events.reversed() {
-            if case .tempBasal(let r, _) = e.kind { return r }
+            switch e.kind {
+            case .tempBasal(let r, _): return r
+            case .cancelTempBasal, .suspend, .resume: return nil
+            default: continue
+            }
         }
         return nil
     }

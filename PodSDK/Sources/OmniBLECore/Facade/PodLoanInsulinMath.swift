@@ -168,7 +168,7 @@ extension PodLoanJournal {
             case .suspend:
                 close(at: event.date)
                 state = .suspended(since: event.date)
-            case .resume, .handedBack:
+            case .resume, .cancelTempBasal, .handedBack:
                 close(at: event.date)
                 state = .following
             case .bolus, .tookOver:

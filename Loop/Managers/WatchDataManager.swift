@@ -841,6 +841,7 @@ private struct WatchLoanEvent: Decodable {
         case tempBasal(rate: Double, duration: TimeInterval)
         case suspend
         case resume
+        case cancelTempBasal
         case handedBack
     }
 
@@ -936,7 +937,7 @@ private struct WatchLoanJournal: Decodable {
             case .suspend:
                 close(at: event.date)
                 state = .suspended(since: event.date)
-            case .resume, .handedBack:
+            case .resume, .cancelTempBasal, .handedBack:
                 close(at: event.date)
                 state = .following
             case .bolus, .tookOver:

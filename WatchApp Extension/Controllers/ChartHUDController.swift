@@ -271,6 +271,9 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
                     cell.setDetail(NSLocalizedString("Suspended", comment: "HUD row detail when delivery is suspended in Show Mode"))
                 } else if let rate = coordinator.sessionBasalRate {
                     cell.setDetail(String(format: "%.2f U/hr", rate))
+                } else if let scheduled = coordinator.currentScheduledRate {
+                    // Following the schedule — say what that means right now.
+                    cell.setDetail(String(format: NSLocalizedString("Sched (%.2f)", comment: "HUD row detail: scheduled basal with the current rate"), scheduled))
                 } else {
                     cell.setDetail(NSLocalizedString("Scheduled", comment: "HUD row detail when the pod runs its scheduled basal in Show Mode"))
                 }

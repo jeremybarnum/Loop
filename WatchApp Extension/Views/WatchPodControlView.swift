@@ -260,6 +260,9 @@ struct ShowModeDoseView: View {
     @State private var amount: Double
     @State private var confirming = false
     @State private var confirmProgress: Double = 0
+    /// For basal with a temp already running: the user has tapped "Change" on the
+    /// options step and wants the dial.
+    @State private var showingDial = false
 
     private let step = 0.05
 
@@ -267,15 +270,57 @@ struct ShowModeDoseView: View {
         self.kind = kind
         self.coordinator = coordinator
         self.onFinish = onFinish
-        _amount = State(initialValue: kind.defaultAmount)
+        // Basal dial starts at the temp that's already running, if any.
+        let initial = (kind == .basal ? coordinator.sessionBasalRate : nil) ?? kind.defaultAmount
+        _amount = State(initialValue: initial)
     }
 
     var body: some View {
         if confirming {
             confirmStep
+        } else if kind == .basal, !showingDial, let activeRate = coordinator.sessionBasalRate {
+            // A temp is already running: offer Change or Cancel before the dial.
+            optionsStep(activeRate: activeRate)
         } else {
             pickStep
         }
+    }
+
+    // MARK: - Active temp: change or cancel
+
+    private func optionsStep(activeRate: Double) -> some View {
+        VStack(spacing: 4) {
+            Text(String(format: NSLocalizedString("Basal %.2f U/hr", comment: "Show Mode active temp header"), activeRate))
+                .font(.headline)
+            Text(cancelHint)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+            Spacer()
+            ActionButton(
+                title: Text(NSLocalizedString("Change", comment: "Show Mode active-temp action: open the dial")),
+                color: .insulin,
+                action: {
+                    amount = activeRate
+                    showingDial = true
+                }
+            )
+            ActionButton(
+                title: Text(NSLocalizedString("Cancel Temp", comment: "Show Mode active-temp action: revert to scheduled basal")),
+                color: .darkTurfColor,
+                action: {
+                    coordinator.cancelBasal()
+                    onFinish()
+                }
+            )
+        }
+    }
+
+    private var cancelHint: String {
+        if let scheduled = coordinator.currentScheduledRate {
+            return String(format: NSLocalizedString("Cancel resumes schedule (%.2f U/hr)", comment: "Show Mode cancel-temp hint with scheduled rate"), scheduled)
+        }
+        return NSLocalizedString("Cancel resumes scheduled basal", comment: "Show Mode cancel-temp hint")
     }
 
     // MARK: - Pick the amount
