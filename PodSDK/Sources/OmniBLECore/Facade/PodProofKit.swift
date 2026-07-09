@@ -221,6 +221,11 @@ public enum PodProofError: LocalizedError {
 
 public final class PodProofController: NSObject {
 
+    // ⚠️ TEMP-TEST-BEEPS: audible confirmation of every watch command for bench
+    // testing (Jeremy, 2026-07-09). Set FALSE for quiet/competition builds —
+    // silence at the show ring is a design feature. Grep TEMP-TEST-BEEPS.
+    public static let testBeepsEnabled = true   // TEMP-TEST-BEEPS (false = silent)
+
     /// Hard ceiling on any bolus commanded through this facade.
     public static let bolusProofLimit: Double = 1.0
 
@@ -517,7 +522,7 @@ public final class PodProofController: NSObject {
     /// command would fault a mid-setup pod — run completeSetup() first.
     public func suspend(completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
         runCommand(named: "Suspend delivery", completion: journaling(.suspend, completion)) { session in
-            let result = session.suspendDelivery(suspendReminder: nil, silent: true)
+            let result = session.suspendDelivery(suspendReminder: nil, silent: !Self.testBeepsEnabled)
             switch result {
             case .success(let statusResponse, _):
                 return statusResponse
@@ -537,7 +542,8 @@ public final class PodProofController: NSObject {
     public func resume(schedule: BasalSchedule? = nil, completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
         runCommand(named: "Resume basal", completion: journaling(.resume, completion)) { session in
             let offset = TimeZone.currentFixed.scheduleOffset(forDate: Date())
-            return try session.resumeBasal(schedule: schedule ?? Self.proofBasalSchedule, scheduleOffset: offset)
+            return try session.resumeBasal(schedule: schedule ?? Self.proofBasalSchedule, scheduleOffset: offset,
+                                           acknowledgementBeep: Self.testBeepsEnabled)
         }
     }
 
@@ -550,7 +556,7 @@ public final class PodProofController: NSObject {
             return
         }
         runCommand(named: String(format: "Bolus %.2f U", units), completion: journaling(.bolus(units: units), completion)) { session in
-            let result = session.bolus(units: units, acknowledgementBeep: false, completionBeep: false)
+            let result = session.bolus(units: units, acknowledgementBeep: Self.testBeepsEnabled, completionBeep: Self.testBeepsEnabled)
             switch result {
             case .success(let statusResponse):
                 return statusResponse
@@ -575,7 +581,8 @@ public final class PodProofController: NSObject {
         }
         runCommand(named: String(format: "Temp basal %.2f U/hr for %.0f min", rate, duration / 60),
                    completion: journaling(.tempBasal(rate: rate, duration: duration), completion)) { session in
-            let result = session.setTempBasal(rate: rate, duration: duration, isHighTemp: false, automatic: false)
+            let result = session.setTempBasal(rate: rate, duration: duration, isHighTemp: false, automatic: false,
+                                              acknowledgementBeep: Self.testBeepsEnabled)
             switch result {
             case .success(let statusResponse):
                 return statusResponse
@@ -592,7 +599,8 @@ public final class PodProofController: NSObject {
     /// suspend(), which stops ALL delivery.
     public func cancelTempBasal(completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
         runCommand(named: "Cancel temp basal", completion: journaling(.cancelTempBasal, completion)) { session in
-            let result = session.cancelDelivery(deliveryType: .tempBasal)
+            let result = session.cancelDelivery(deliveryType: .tempBasal,
+                                                beepType: Self.testBeepsEnabled ? .beepBeep : .noBeepCancel)
             switch result {
             case .success(let statusResponse, _):
                 return statusResponse
