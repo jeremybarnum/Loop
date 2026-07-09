@@ -293,6 +293,10 @@ final class WatchPodLoanCoordinator: ObservableObject {
         guard !busy, phase == .active else { return }
         busy = true
         lastError = nil
+        // Any new command makes a previously-snapshot hand-back payload stale (its
+        // journal wouldn't include this action) — drop it so the next hand-back
+        // re-snapshots.
+        pendingHandbackPayload = nil
         operation { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
@@ -311,6 +315,11 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// release the pod so the phone can reclaim it. The pod is NOT released until
     /// the phone confirms receipt — so a failed hand-back leaves us still holding
     /// it rather than orphaning the pod.
+    ///
+    /// The journal payload is SNAPSHOT once per hand-back intent and retries resend
+    /// the identical bytes: the phone's duplicate guard hashes the raw journal data,
+    /// so a retry after a lost ack must be byte-identical or it would double-enter
+    /// doses. The snapshot is invalidated whenever a new pod command runs.
     func handBack() {
         if Self.isSimulatorDemo { demoHandBack(); return }
         guard !busy, phase == .active else { return }
@@ -323,9 +332,40 @@ final class WatchPodLoanCoordinator: ObservableObject {
         phase = .handingBack
         lastError = nil
 
-        let summary = controller.loanJournalSummary ?? "No loan activity recorded."
-        let journalData = controller.loanJournal?.encoded() ?? Data()
-        let handback = PodHandbackUserInfo(handedBackAt: Date(), summary: summary, journalData: journalData)
+        if pendingHandbackPayload != nil {
+            // Retry of a failed hand-back: resend the exact same journal bytes.
+            sendHandback()
+        } else {
+            // Freshen the pod's delivered-odometer right before snapshotting the
+            // journal, so the phone's reconciliation audit sees delivery up to
+            // hand-back rather than up to the last command. Best-effort: hand back
+            // proceeds even if the read fails (journal keeps the last-known value).
+            controller.getStatus { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    let summary = self.controller.loanJournalSummary ?? "No loan activity recorded."
+                    let journalData = self.controller.loanJournal?.encoded() ?? Data()
+                    self.pendingHandbackPayload = (summary: summary, journalData: journalData)
+                    self.sendHandback()
+                }
+            }
+        }
+    }
+
+    /// The journal payload for the in-flight hand-back, retained across retries so
+    /// resends are byte-identical (see handBack). Cleared on success or when any
+    /// new pod command invalidates it.
+    private var pendingHandbackPayload: (summary: String, journalData: Data)?
+
+    private func sendHandback() {
+        guard let payload = pendingHandbackPayload else {
+            busy = false
+            phase = .active
+            lastError = "Couldn't prepare hand-back."
+            return
+        }
+        let session = WCSession.default
+        let handback = PodHandbackUserInfo(handedBackAt: Date(), summary: payload.summary, journalData: payload.journalData)
 
         session.sendMessage(handback.rawValue, replyHandler: { [weak self] _ in
             Task { @MainActor in
@@ -333,12 +373,15 @@ final class WatchPodLoanCoordinator: ObservableObject {
                 _ = self.controller.endLoan()   // finalize the journal
                 self.controller.releasePod()    // phone acked — safe to let go
                 self.heldGrant = nil            // phone owns the pod again; keys are now stale
+                self.pendingHandbackPayload = nil
                 self.busy = false
                 self.phase = .done
             }
         }, errorHandler: { [weak self] error in
             Task { @MainActor in
                 // Phone didn't confirm — keep holding the pod; the user can retry.
+                // pendingHandbackPayload is retained so the retry resends the SAME
+                // journal bytes (the phone's duplicate guard hashes them).
                 self?.busy = false
                 self?.phase = .active
                 self?.lastError = "Couldn't reach iPhone to end Show Mode: \(error.localizedDescription). Still in control on your watch."

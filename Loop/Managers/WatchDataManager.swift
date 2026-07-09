@@ -11,6 +11,7 @@ import UIKit
 import WatchConnectivity
 import LoopKit
 import LoopCore
+import CryptoKit
 
 final class WatchDataManager: NSObject {
 
@@ -48,8 +49,12 @@ final class WatchDataManager: NSObject {
 
     /// The user's `dosingEnabled` setting captured when the pod was loaned to the
     /// watch, so it can be restored exactly on hand-back. Non-nil while a loan is
-    /// active.
-    private var dosingEnabledBeforeWatchLoan: Bool?
+    /// active. Persisted (app group) so a phone reboot mid-loan can't lose it —
+    /// losing it would leave closed loop silently OFF after hand-back.
+    private var dosingEnabledBeforeWatchLoan: Bool? {
+        get { UserDefaults.appGroup?.dosingEnabledBeforeWatchLoan }
+        set { UserDefaults.appGroup?.dosingEnabledBeforeWatchLoan = newValue }
+    }
 
     /// The most recent hand-back summary from the watch (Phase 1: shown to the
     /// user). `lastWatchLoanJournalData` keeps the raw journal for Phase 2 IOB
@@ -557,8 +562,118 @@ extension WatchDataManager: WCSessionDelegate {
             dosingEnabledBeforeWatchLoan = nil
         }
 
+        // Phase 2 (DIST-3): reconcile the watch's delivery into IOB — guarded against
+        // duplicate hand-back messages (a retry after a lost ack resends the SAME
+        // journal bytes; the watch snapshots the payload to keep them byte-stable).
+        // The DoseStore does NOT dedupe manually-entered doses, so this hash is the
+        // only defense against double-entering.
+        let journalHash = SHA256.hash(data: handback.journalData).map { String(format: "%02x", $0) }.joined()
+        if journalHash == UserDefaults.appGroup?.lastReconciledWatchLoanJournalHash {
+            log.default("Duplicate pod hand-back (journal %{public}@… already reconciled) — state restored, dose entry skipped", String(journalHash.prefix(8)))
+        } else {
+            reconcileWatchLoan(journalData: handback.journalData, handedBackAt: handback.handedBackAt, journalHash: journalHash)
+        }
+
         // Reconnect to the pod and refresh status now that we own it again.
         deviceManager.pumpManager?.ensureCurrentPumpData(completion: { _ in })
+    }
+
+    /// DIST-3 Phase B: enter what the watch delivered into the phone's dose
+    /// accounting so IOB is correct for the hours after a loan.
+    ///
+    /// Design (see WATCH_DISTRIBUTION_SAFETY.md DIST-3): journal bolus events are
+    /// PRIMARY — entered at their real timestamps so insulin decay is computed
+    /// correctly. The pod's cumulative-delivered odometer then AUDITS the journal:
+    /// any unexplained positive remainder (odometer delta − journal boluses −
+    /// expected scheduled basal net of suspends) is entered timed-late at hand-back,
+    /// which overstates IOB → Loop doses less → errs safe. Negative remainders
+    /// (suspends/low temps below schedule) are logged, not entered (Phase C).
+    private func reconcileWatchLoan(journalData: Data, handedBackAt: Date, journalHash: String) {
+        guard let journal = WatchLoanJournal(data: journalData) else {
+            // Undecodable journal: keep Phase-1 behavior (summary already stored for
+            // display; user can record manually via Non-Pump Insulin). Do NOT persist
+            // the hash — a later valid resend must still be processable.
+            log.error("Watch loan journal could not be decoded (%{public}d bytes) — no doses entered", journalData.count)
+            return
+        }
+
+        var doses: [(startDate: Date, units: Double)] = []
+
+        // (a) Journal boluses at their real timestamps. Defense-in-depth: the watch
+        // caps any single bolus at 1.0 U, so reject larger events (corrupt journal)
+        // rather than inject phantom IOB.
+        for event in journal.events {
+            if case .bolus(let units) = event.kind {
+                guard units > 0, units <= 1.05 else {
+                    log.error("Watch loan journal bolus event of %{public}.2f U exceeds the watch cap — rejected", units)
+                    continue
+                }
+                doses.append((startDate: event.date, units: units))
+            }
+        }
+
+        // (b) Odometer audit. Skipped when the odometer baseline is missing.
+        if let podDelta = journal.podDeliveredDelta {
+            let expectedBasal = expectedScheduledBasal(from: journal.startedAt, to: handedBackAt, suspendWindows: journal.suspendWindows(endingAt: handedBackAt))
+            let remainder = podDelta - journal.totalBolusUnits - expectedBasal
+            log.default("Watch loan audit: podDelta=%{public}.2f boluses=%{public}.2f expectedBasal=%{public}.2f remainder=%{public}.2f", podDelta, journal.totalBolusUnits, expectedBasal, remainder)
+
+            let remainderThreshold = 0.05   // one pod pulse; filters quantization/staleness noise
+            let remainderSanityCap = 5.0    // implausible for one loan — odometer corruption guard
+            if remainder >= remainderThreshold && remainder <= remainderSanityCap {
+                // Timed LATE (at hand-back): zero decay elapsed → IOB maximally
+                // overstated for this insulin → Loop doses less → safe direction.
+                doses.append((startDate: handedBackAt, units: remainder))
+            } else if remainder > remainderSanityCap {
+                log.error("Watch loan audit remainder %{public}.2f U exceeds sanity cap — NOT entered; verify manually", remainder)
+            }
+        } else {
+            log.default("Watch loan audit skipped: no odometer baseline in journal")
+        }
+
+        guard !doses.isEmpty else {
+            // Nothing to enter (e.g. basal-only loan) — mark reconciled so a duplicate
+            // hand-back doesn't re-run the audit.
+            UserDefaults.appGroup?.lastReconciledWatchLoanJournalHash = journalHash
+            return
+        }
+
+        // Write doses FIRST; persist the idempotency hash only on confirmed success.
+        // A crash in between means a retry double-enters (IOB overstated → safe);
+        // the reverse order could silently LOSE doses (IOB understated → hypo risk).
+        let insulinType = deviceManager.loopManager.pumpInsulinType
+        deviceManager.loopManager.addManuallyEnteredDoses(doses, insulinType: insulinType) { [weak self] error in
+            if let error = error {
+                self?.log.error("Watch loan reconciliation dose entry failed: %{public}@ — hash not persisted; a resend will retry", String(describing: error))
+            } else {
+                UserDefaults.appGroup?.lastReconciledWatchLoanJournalHash = journalHash
+                self?.log.default("Watch loan reconciled: %{public}d dose(s) entered", doses.count)
+            }
+        }
+    }
+
+    /// Scheduled basal (U) the pod was expected to deliver over the loan window,
+    /// net of the journal's suspend windows (subtracting suspended time RAISES the
+    /// audit remainder → overstates IOB → errs safe).
+    private func expectedScheduledBasal(from start: Date, to end: Date, suspendWindows: [(start: Date, end: Date)]) -> Double {
+        guard end > start,
+              let schedule = deviceManager.loopManager.basalRateScheduleApplyingOverrideHistory else {
+            return 0
+        }
+
+        var total: Double = 0
+        for item in schedule.truncatingBetween(start: start, end: end) {
+            total += item.value * item.endDate.timeIntervalSince(item.startDate) / 3600.0
+            // Subtract the suspended portion of this schedule segment.
+            for window in suspendWindows {
+                let overlapStart = max(window.start, item.startDate)
+                let overlapEnd = min(window.end, item.endDate)
+                if overlapEnd > overlapStart {
+                    total -= item.value * overlapEnd.timeIntervalSince(overlapStart) / 3600.0
+                }
+            }
+        }
+        return max(0, total)
     }
 
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
@@ -682,7 +797,81 @@ extension WCSession {
         } else {
             timeUntilRefresh = .hours(24)
         }
-        
+
         return timeUntilRefresh / Double(remainingComplicationUserInfoTransfers + 1)
+    }
+}
+
+// MARK: - Watch loan journal mirror (decode-only)
+//
+// The phone deliberately does NOT link OmniBLECore (see PodHandbackUserInfo), so the
+// journal JSON is decoded with this minimal mirror of OmniBLECore.PodLoanJournal /
+// PodLoanEvent. Case names and associated-value labels MUST match the originals
+// exactly — synthesized Codable derives its JSON keys from them (e.g.
+// {"kind":{"bolus":{"units":0.5}}}). If the watch ever adds a new event kind, decoding
+// here fails whole → reconciliation falls back to Phase-1 display-only (by design).
+// Lives in this file rather than its own to avoid a hand-edited pbxproj entry.
+
+private struct WatchLoanEvent: Decodable {
+    enum Kind: Decodable {
+        case tookOver
+        case bolus(units: Double)
+        case tempBasal(rate: Double, duration: TimeInterval)
+        case suspend
+        case resume
+        case handedBack
+    }
+
+    let id: UUID
+    let date: Date
+    let kind: Kind
+}
+
+private struct WatchLoanJournal: Decodable {
+    let startedAt: Date
+    let deliveredAtStart: Double?
+    let deliveredLatest: Double?
+    let events: [WatchLoanEvent]
+
+    init?(data: Data) {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let decoded = try? decoder.decode(WatchLoanJournal.self, from: data) else { return nil }
+        self = decoded
+    }
+
+    var totalBolusUnits: Double {
+        events.reduce(0) { acc, event in
+            if case .bolus(let units) = event.kind { return acc + units }
+            return acc
+        }
+    }
+
+    /// The pod's own cumulative-delivered delta over the loan (basal + boluses), or
+    /// nil when either odometer reading is missing.
+    var podDeliveredDelta: Double? {
+        guard let start = deliveredAtStart, let latest = deliveredLatest else { return nil }
+        return max(0, latest - start)
+    }
+
+    /// Contiguous suspend windows, mirroring the producer's semantics (only a resume
+    /// closes a window; an open window closes at `end`). A temp basal after a suspend
+    /// does NOT close the window here — that under-credits expected basal, which
+    /// RAISES the audit remainder → overstates IOB → errs safe.
+    func suspendWindows(endingAt end: Date) -> [(start: Date, end: Date)] {
+        var windows: [(Date, Date)] = []
+        var openStart: Date?
+        for event in events {
+            switch event.kind {
+            case .suspend:
+                if openStart == nil { openStart = event.date }
+            case .resume:
+                if let start = openStart { windows.append((start, event.date)); openStart = nil }
+            default:
+                continue
+            }
+        }
+        if let start = openStart { windows.append((start, end)) }
+        return windows.map { (start: $0.0, end: $0.1) }
     }
 }

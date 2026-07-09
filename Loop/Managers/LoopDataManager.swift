@@ -803,6 +803,27 @@ extension LoopDataManager {
         }
     }
 
+    /// Logs multiple external bolus doses in a single DoseStore write (one loop
+    /// recompute), with a completion so the caller can persist idempotency state only
+    /// after a confirmed success. Used by the watch-loan reconciliation
+    /// (WatchDataManager.reconcileWatchLoan). NOTE: the store does NOT deduplicate
+    /// manually-entered doses — callers must guard against re-entry themselves.
+    func addManuallyEnteredDoses(_ doses: [(startDate: Date, units: Double)], insulinType: InsulinType? = nil, completion: @escaping (Error?) -> Void) {
+        let entries = doses.map { dose -> DoseEntry in
+            let syncIdentifier = Data(UUID().uuidString.utf8).hexadecimalString
+            return DoseEntry(type: .bolus, startDate: dose.startDate, value: dose.units, unit: .units, syncIdentifier: syncIdentifier, insulinType: insulinType, manuallyEntered: true)
+        }
+
+        doseStore.addDoses(entries, from: nil) { (error) in
+            if error == nil {
+                self.recommendedAutomaticDose = nil
+                self.clearCachedInsulinEffects()
+                self.notify(forChange: .insulin)
+            }
+            completion(error)
+        }
+    }
+
     /// Adds and stores a pump reservoir volume
     ///
     /// - Parameters:

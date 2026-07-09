@@ -17,6 +17,24 @@ extension UserDefaults {
         case loopNotRunningNotifications = "com.loopkit.Loop.loopNotRunningNotifications"
         case inFlightAutomaticDose = "com.loopkit.Loop.inFlightAutomaticDose"
         case favoriteFoods = "com.loopkit.Loop.favoriteFoods"
+        case lastReconciledWatchLoanJournalHash = "com.loopkit.Loop.LastReconciledWatchLoanJournalHash"
+        case dosingEnabledBeforeWatchLoan = "com.loopkit.Loop.DosingEnabledBeforeWatchLoan"
+    }
+
+    /// SHA-256 hex digest of the last watch-loan journal whose doses were reconciled
+    /// into the DoseStore. The duplicate-hand-back guard: the store does NOT dedupe
+    /// manually-entered doses, so this is the only defense against double entry.
+    var lastReconciledWatchLoanJournalHash: String? {
+        get { string(forKey: Key.lastReconciledWatchLoanJournalHash.rawValue) }
+        set { set(newValue, forKey: Key.lastReconciledWatchLoanJournalHash.rawValue) }
+    }
+
+    /// The user's dosingEnabled setting captured at pod-loan grant, persisted so a
+    /// phone reboot mid-loan can't lose it (which would leave closed loop silently
+    /// off after hand-back). Nil when no loan is active.
+    var dosingEnabledBeforeWatchLoan: Bool? {
+        get { object(forKey: Key.dosingEnabledBeforeWatchLoan.rawValue) as? Bool }
+        set { set(newValue, forKey: Key.dosingEnabledBeforeWatchLoan.rawValue) }
     }
 
     var legacyPumpManagerRawValue: PumpManager.RawValue? {
