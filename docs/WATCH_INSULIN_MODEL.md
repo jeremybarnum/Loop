@@ -134,6 +134,29 @@ odometer as the source.
 
 ---
 
+## 4a. Jeremy's direction on write-back mechanics (2026-07-09 evening — TO DISCUSS)
+
+Recorded verbatim-in-spirit; constrains how §4 gets built. The §4 temp-basal-DoseEntry
+reconstruction is ON HOLD in favor of this simpler frame:
+
+1. **Feeding Loop's IOB retroactive temp-basal history is a bridge too far.** Stay
+   within the **non-pump-insulin paradigm** (the mechanism already used for boluses);
+   don't reach deeper into Loop's internal dose mechanics.
+2. **Positive net basal MAY be sent back as a small "fake" bolus** at the segment's
+   midpoint — e.g. +1.6 U/hr above schedule for 30 min → a 0.8 U bolus timestamped
+   halfway through the window. (Maybe; to discuss.) Note: this is a timing refinement
+   of what Phase B already does with the odometer remainder (lump at hand-back) —
+   midpoint timing decays more accurately, journal-derived instead of odometer-derived.
+3. **Netting is potentially acceptable:** a watch bolus + a negative basal deviation
+   could be entered as the netted (reduced) bolus.
+4. **Open to small, SAFE changes to let non-pump insulin accept negative boluses**,
+   if that can be incorporated into Loop's IOB safely. Open verification item: whether
+   HealthKit/DoseStore actually rejects negative insulin quantities was ASSERTED this
+   session, never tested — test before designing on top of either answer.
+
+All four remain subject to the §5 gate (real-pod validation of journal fidelity before
+anything negative touches dosing IOB).
+
 ## 5. Safety — the pre-deployment gate (do NOT ship symmetric write-back unguarded)
 
 **The asymmetry existed for a safety reason, and removing it removes a conservative
