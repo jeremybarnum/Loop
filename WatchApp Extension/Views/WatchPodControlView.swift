@@ -307,7 +307,7 @@ struct ShowModeDoseView: View {
             )
             ActionButton(
                 title: Text(NSLocalizedString("Cancel Temp", comment: "Show Mode active-temp action: revert to scheduled basal")),
-                color: .darkTurfColor,
+                color: Color(UIColor.turfColor),
                 action: {
                     coordinator.cancelBasal()
                     onFinish()
