@@ -350,18 +350,18 @@ struct ShowModeDoseView: View {
 
     private var cancelHint: String {
         if let scheduled = coordinator.currentScheduledRate {
-            return String(format: NSLocalizedString("Cancel resumes schedule (%.2f U/hr)", comment: "Show Mode cancel-temp hint with scheduled rate"), scheduled)
+            return String(format: NSLocalizedString("Cancel → Sched (%.2f)", comment: "Show Mode cancel-temp hint with scheduled rate"), scheduled)
         }
-        return NSLocalizedString("Cancel resumes scheduled basal", comment: "Show Mode cancel-temp hint")
+        return NSLocalizedString("Cancel → scheduled", comment: "Show Mode cancel-temp hint")
     }
 
     /// Rate shown only when the real schedule has synced — the same condition
     /// under which resume actually programs that schedule (honest number).
     private var resumeHint: String {
         if let scheduled = coordinator.currentScheduledRate {
-            return String(format: NSLocalizedString("Resume restarts schedule (%.2f U/hr)", comment: "Show Mode resume hint with scheduled rate"), scheduled)
+            return String(format: NSLocalizedString("Resume → Sched (%.2f)", comment: "Show Mode resume hint with scheduled rate"), scheduled)
         }
-        return NSLocalizedString("Resume restarts scheduled basal", comment: "Show Mode resume hint")
+        return NSLocalizedString("Resume → scheduled", comment: "Show Mode resume hint")
     }
 
     // MARK: - Pick the amount
