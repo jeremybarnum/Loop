@@ -32,12 +32,13 @@ auto-revert + the 1.0 cap bound the worst case, but it is not zero-risk.
 - **Lever:** `WatchPodLoanCoordinator.maxTempBasalRate` (currently 1.0 U/hr) — trivial to lower.
 
 ## DIST-3: No automatic dose reconciliation into IOB
-Watch boluses + basal changes are recorded in the loan journal for **display only**;
-they are not written into Loop's insulin-on-board. The user reads the hand-back summary
-and manually records them (Loop's Non-Pump Insulin). Already noted as Phase 2 in
-`PodSDK/Sources/OmniBLECore/Facade/PodLoanJournal.swift`.
-- **Before distribution:** automatic reconciliation of the loan journal into IOB on
-  hand-back, so the phone's dosing math accounts for what the watch delivered.
+**STATUS: Phase B BUILT + hardware-validated 2026-07-08** (branch
+`watch-reconciliation`; design + validation record in `docs/IOB_RECONCILIATION.md`).
+Watch boluses now enter the phone's DoseStore at their real timestamps on hand-back,
+audited against the pod's delivered-odometer, guarded against duplicate hand-backs.
+- **Remaining before distribution (Phase C):** negative net delivery (suspends / temps
+  below schedule) is not written back — IOB is overstated for a few hours after such
+  sessions (safe direction, transient highs). Retroactive suspend/temp records close it.
 
 ## DIST-4: Single-writer / phone pod release (also a core safety gap, tracked elsewhere)
 The phone doesn't release the pod's BLE connection during a loan, so it can reclaim the
