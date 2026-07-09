@@ -157,6 +157,59 @@ reconstruction is ON HOLD in favor of this simpler frame:
 All four remain subject to the §5 gate (real-pod validation of journal fidelity before
 anything negative touches dosing IOB).
 
+## 4b. Negative-insulin feasibility — investigation results (2026-07-09, code-cited)
+
+Full memo: session investigation (five parallel code traces + empirical probe). Facts:
+
+1. **Exactly one gate blocks a negative non-pump bolus today, and it fails SILENTLY:**
+   LoopKit's `guard units > .ulpOfOne` (HKQuantitySample+InsulinKit.swift:75). Because
+   the Core Data cache write is gated on HK-sample *creatability*
+   (InsulinDeliveryStore.swift:437-486), a zero/negative entry is dropped from BOTH
+   stores — and `addDoses` reports **success**. ⚠️ Standing hazard: reconciliation
+   would persist its idempotency hash against a dose that never landed. (Today's code
+   never passes ≤0 — boluses are guarded 0<u≤1.05 and remainder ≥0.05 — keep it that way.)
+2. **Cache-only storage is already a tolerated steady state.** IOB reads only Core
+   Data, never HK; HK save failures don't roll back and are never retried; uuid-nil
+   cache rows are safe against the HK observer/dedupe/deletion paths. A cache-only
+   negative dose would be byte-for-byte the HK-save-failed state stock Loop tolerates.
+3. **The math is sign-clean end-to-end** (no clamps/asserts on the app path), UI
+   renders "Manual Dose: −X U" without crashing (but the dose CHART hides it —
+   observability gap), daily totals subtract it, Nightscout accepts it; **Tidepool
+   would likely reject and wedge its upload anchor** (fork-hygiene landmine).
+4. **Negative TOTAL IOB is stock-normal** (Loop constructs negative-valued DoseEntries
+   for suspends itself, LoopDataManager.swift:1763; the IOB chart has a zero line for
+   exactly this). The one deliberate clamp: SimpleBolusCalculator `max(0, activeInsulin)`.
+5. **Empirical probe (this session, macOS HealthKit):** `HKQuantitySample` CREATION
+   with −0.5 IU insulinDelivery does NOT trap — my earlier "HK rejects negatives"
+   claim was wrong at the init layer. Save-time validation remains untested (needs an
+   authorized store). Not load-bearing for the cache-only design; only decides whether
+   negatives could ever mirror to HK (assume not).
+
+**Options ranked (0 = no Loop changes):**
+- **0 status quo** — negative never represented; lump timing error up to ~50% of
+  segment units on long segments.
+- **1 midpoint fake boluses for positive net** (journal-derived, ≤60-min chunks) —
+  10-40× better IOB timing accuracy than the lump; ZERO LoopKit changes; **requires
+  audit v2** or the odometer remainder double-counts the same insulin.
+- **2 Rule-A netting** of negative segments against **timestamp-earlier** same-loan
+  entries, floor at zero — one-sided SAFE by construction (IOB approaches truth from
+  above); residual negative with no earlier bolus stays unrepresented (logged).
+- **3 cache-only negative entries** — smallest real LoopKit change (one function,
+  InsulinDeliveryStore.addDoseEntries: skip HK sample for manuallyEntered<0, keep the
+  cache object; precedent = the isMutable filter on the same line). Exact math, but:
+  hypo-direction on any journal bug, invisible on the dose chart, Tidepool wedge,
+  LoopKit fork divergence to carry.
+
+**RECOMMENDATION: build 1+2 behind the §5 gate; do NOT build 3 now.** 1+2 covers
+everything except a negative-net loan with no earlier boluses — the shadow log will
+quantify how common that case is for free; if common, promote 3 using the cache-only
+blueprint above. Implementation is entirely in the WatchDataManager reconcile path:
+(a) audit v2: remainder' = podDelta − journalBoluses − (scheduledUnits + shadowNet),
+with a negative remainder' disabling netting for that loan; (b) midpoint builder;
+(c) Rule-A netter with a hard guard that nothing ≤0 is ever passed to addDoses (the
+silent-drop trap); (d) per-segment/netting/shortfall log lines + a wouldEnter=[…]
+vector on the shadow line so real-pod sessions can diff shadow vs enabled event-for-event.
+
 ## 5. Safety — the pre-deployment gate (do NOT ship symmetric write-back unguarded)
 
 **The asymmetry existed for a safety reason, and removing it removes a conservative
