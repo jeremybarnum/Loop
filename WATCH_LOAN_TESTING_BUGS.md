@@ -466,3 +466,34 @@ resume — the full matrix.
 
 **Emulator follow-up (parked, Jeremy vetoed emulator patches for now):** modeling
 0x31 on overlapping temp programs would make the rig catch this class of bug.
+
+**Fault-safety audit (2026-07-10, post-BUG-6, three independent code audits of the
+other command paths for the same 0x31 class):**
+
+- **suspend(): SAFE by construction.** It sends a single 0x1f cancel-ALL — a stop,
+  not a program; the fault class only bites 0x1a programs over active delivery.
+  Stock issues suspendDelivery unconditionally during running temps and even
+  mid-bolus (the driver reconciles the interrupted bolus via bolusNotDelivered,
+  PodState.swift:378-386). Vendored suspend path is byte-identical to stock.
+- **resume(): SAFE on every watch-reachable path** — the vendored driver already
+  carries stock's anti-0x31 defense inside setBasalSchedule (cancel-all before the
+  program unless BOTH podState.isSuspended and lastDeliveryStatusReceived confirm
+  suspended; PodCommsSession.swift:836-843, comment names the 0x31 fault). Crash,
+  restart, unacked-command, and double-tap scenarios all force the cancel. The one
+  residual: another controller resuming the pod behind the watch's back leaves both
+  local flags stale-suspended → naked program over active delivery. That is the
+  dual-controller race the formal handoff exists to prevent; HARDENED anyway —
+  PodProofKit.resume() now does a fresh getStatus first, so the cancel-skip
+  decision rests on live pod state, not local mirrors.
+- **Nonzero→0 rate change: never reaches setTempBasal.** Dialing 0 relabels the
+  button "Suspend" and the coordinator diverts snapped<=0 to suspend()
+  (WatchPodLoanCoordinator.swift:371-376). Zero temps themselves are fully
+  supported (DASH near-zero encoding), and beep flags are independent of rate —
+  ack-beep-on-zero-temp is stock-exercised (Loop's routine 0 U/hr low temps).
+- **Latent facade-API hole (not UI-reachable): CLOSED.** setTempBasal validated
+  only the rate ceiling; an off-grid rate or sub-30-min duration would encode the
+  0x1a insulin table and 0x16 extra command INCONSISTENTLY — a command pair stock
+  can never emit, emulator-invisible, real-pod reaction unknown. Now: rate snaps
+  to the 0.05 pulse grid (negative clamps to 0 — would trap in UInt16 encoding),
+  duration must be one of Pod.supportedTempBasalDurations. 7 unit tests cover the
+  guards (PodProofKitGuardTests.swift); suite 150/150 green.

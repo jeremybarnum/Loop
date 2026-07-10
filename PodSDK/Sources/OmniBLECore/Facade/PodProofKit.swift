@@ -201,6 +201,7 @@ public enum PodProofError: LocalizedError {
     case notPaired
     case bolusExceedsProofLimit(requested: Double, limit: Double)
     case tempBasalExceedsProofLimit(requested: Double, limit: Double)
+    case tempBasalDurationNotSupported(requested: TimeInterval)
     case operationInProgress
 
     public var errorDescription: String? {
@@ -211,6 +212,8 @@ public enum PodProofError: LocalizedError {
             return String(format: "Bolus %.2f U exceeds proof-build limit of %.2f U", requested, limit)
         case .tempBasalExceedsProofLimit(let requested, let limit):
             return String(format: "Temp basal %.2f U/hr exceeds proof-build limit of %.2f U/hr", requested, limit)
+        case .tempBasalDurationNotSupported(let requested):
+            return String(format: "Temp basal duration %.0f min is not a pod-supported duration (30 min steps, 30 min – 12 h)", requested / 60)
         case .operationInProgress:
             return "Another pod operation is already in progress"
         }
@@ -541,6 +544,16 @@ public final class PodProofController: NSObject {
     /// keeps the pod's stored schedule truthful for later cancels/expiry too.
     public func resume(schedule: BasalSchedule? = nil, completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
         runCommand(named: "Resume basal", completion: journaling(.resume, completion)) { session in
+            // Fresh status first: setBasalSchedule skips its internal anti-0x31
+            // cancel-all only when BOTH podState.isSuspended and the last
+            // received delivery status agree the pod is suspended
+            // (PodCommsSession.swift:836-843). Both are local mirrors — if any
+            // other controller resumed delivery behind our back, resuming here
+            // would program basal over active delivery, the fault class that
+            // killed bench pod #2. A status read refreshes both from the pod
+            // itself (PodState.updateDeliveryStatus corrects a stale suspend),
+            // so the skip decision rests on live truth, not optimistic state.
+            _ = try session.getStatus()
             let offset = TimeZone.currentFixed.scheduleOffset(forDate: Date())
             return try session.resumeBasal(schedule: schedule ?? Self.proofBasalSchedule, scheduleOffset: offset,
                                            acknowledgementBeep: Self.testBeepsEnabled)
@@ -574,9 +587,24 @@ public final class PodProofController: NSObject {
     /// a manual, user-initiated temp. The pod auto-reverts to its scheduled basal when
     /// the duration expires — a safety backstop if the watch dies mid-loan.
     public func setTempBasal(rate: Double, duration: TimeInterval, completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
+        // Pod-legal input guards. The session layer validates neither rate nor
+        // duration, and an off-grid rate or sub-30-min duration makes the 0x1a
+        // insulin table and the 0x16 extra command encode INCONSISTENTLY — a
+        // command pair stock can never emit (it rounds via
+        // roundToSupportedBasalRate and gates duration, OmniBLEPumpManager
+        // .swift:2052-2059) and whose real-pod reaction is unknown. Snap the
+        // rate to the pod's pulse grid like stock; refuse unsupported durations.
+        // A negative rate would trap in the UInt16 command encoding — clamp to
+        // 0, which the driver encodes as a legal near-zero temp.
+        let rate = max(0, (rate / Pod.pulseSize).rounded() * Pod.pulseSize)
         guard rate <= Self.tempBasalRateProofLimit else {
             emit(String(format: "TEMP BASAL: refused %.2f U/hr (proof limit %.2f U/hr)", rate, Self.tempBasalRateProofLimit))
             completion(.failure(PodProofError.tempBasalExceedsProofLimit(requested: rate, limit: Self.tempBasalRateProofLimit)))
+            return
+        }
+        guard Pod.supportedTempBasalDurations.contains(where: { abs($0 - duration) < 1 }) else {
+            emit(String(format: "TEMP BASAL: refused duration %.0f min (pod supports 30 min steps, 30 min – 12 h)", duration / 60))
+            completion(.failure(PodProofError.tempBasalDurationNotSupported(requested: duration)))
             return
         }
         runCommand(named: String(format: "Temp basal %.2f U/hr for %.0f min", rate, duration / 60),
