@@ -10013,7 +10013,7 @@
       }
     },
     "Cancel" : {
-      "comment" : "Button label for cancel\nButton text to cancel\nCancel button for reset loop alert\nCancel export button title\nThe title of the cancel action in an action sheet",
+      "comment" : "Button label for cancel\nButton text to cancel\nCancel button for reset loop alert\nCancel export button title\nCancel reclaim\nThe title of the cancel action in an action sheet",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -29246,6 +29246,9 @@
         }
       }
     },
+    "Pod Is On Loan" : {
+      "comment" : "Title of the reclaim-pod alert"
+    },
     "Pod Not\nConnected" : {
       "comment" : "Pump status highlight when the phone has no connection to the pod"
     },
@@ -32104,6 +32107,9 @@
           }
         }
       }
+    },
+    "Reclaim Pod" : {
+      "comment" : "Confirm reclaim"
     },
     "Recommendation expired: %1$@ old" : {
       "comment" : "The error message when a recommendation has expired. (1: age of recommendation in minutes)",
@@ -37008,6 +37014,9 @@
           }
         }
       }
+    },
+    "The pod is being controlled from the watch. Reclaim control now?\n\nOnly do this if the watch can't hand back normally. Insulin delivered from the watch stays missing from the phone's records until the watch reconnects." : {
+      "comment" : "Message of the reclaim-pod alert"
     },
     "Therapy Settings" : {
       "comment" : "Title text for button to Therapy Settings",
