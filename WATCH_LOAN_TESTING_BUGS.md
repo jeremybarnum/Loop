@@ -346,6 +346,27 @@ today (phone won't command), but the window is real: watch commands fail silentl
 (BUG-5) and control is ambiguous. Policy needed: suppress phone pod-reconnect while
 podLoanedToWatch (DESIGN-GAP-1's other half), or a reclaim handshake.
 
+## THE TRANSPORT MODEL (Jeremy, 2026-07-09, empirically closed)
+> The pod speaks only Bluetooth — whoever holds its single BLE connection controls it.
+> The watch and phone talk to each other over anything available — Bluetooth or Wi-Fi.
+> Everything else is a corollary. (Addendum: the watch's pod link is also BT; the watch
+> alone never faces the radio dilemma.)
+
+Transfer matrix, all rows now evidence-backed (journal moves ONLY on ending Show Mode
+with isReachable true at that instant; no queue, no background send; payload snapshot
+retained for retry after a failed attempt):
+- BT off + shared Wi-Fi, END → delivers (proven twice, incl. deliberate isolation run:
+  claim + bolus 0.25 + hand-back entirely BT-off/Wi-Fi-on, 20:10 audit).
+- BT off + Wi-Fi off, END → ALERT fires (first execution 2026-07-09 ~20:0x); retry
+  after reconnect delivers the retained snapshot, no duplicate.
+- Any transport, NO END → nothing transfers. TRAP CELL: with BT restored the phone
+  reclaims the pod in ~2 s and looks fully healthy while holding NONE of the watch
+  doses (IOB understated = hypo direction if manually dosed against; auto-dosing safe
+  only because dosing stays paused until hand-back). Fix direction: journal streaming
+  via transferUserInfo (queued) during the session.
+- OPEN: AWDL (peer-to-peer Wi-Fi, radios on but no shared network) — the show-ring
+  case. Untested; determines whether venues need a BT-on-for-paperwork ritual.
+
 ## DESIGN-4: hand-back received while phone BT is off → pod orphaned; nag needed
 Wi-Fi hand-back means the phone can hold the journal while unable to touch the pod
 (BT off): pod runs the watch's last program with NO controller until BT returns. The
