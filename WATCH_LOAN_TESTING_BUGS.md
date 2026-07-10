@@ -103,6 +103,33 @@ phone on the Pi, no crash). The crash simply not happening is the pass signal.
 
 **Severity:** HIGH (this is the single-writer safety property; the actual point of the feature).
 
+**BUILT 2026-07-09 late (validation pending):** the formal handoff, exactly per the fix
+sketch — LoopKit PumpConnectionLendable (optional capability, hosted in
+PumpManager.swift), OmniBLE release/rearm on the forgetPod idiom + persisted
+podConnectionReleased flag honored at init, Loop releases at grant / reclaims at
+hand-back, escape-hatch reclaim alert on pump-status tap. DESIGN-3 is addressed by the
+same change (the phone no longer bids during a loan). Commits: LoopKit + Loop pushed
+(jb/watch-prediction), OmniBLE local branch watch-prediction @ 2aa9101 (no fork yet).
+
+**BENCH VALIDATION SCRIPT (run before trusting it):**
+1. RELEASE: phone BT ON throughout. Watch: horse tap → creds → Enable — should
+   succeed WITHOUT touching Bluetooth (the whole point). Watch takes pod while the
+   phone's radio is live.
+2. NO-BID: during the session, confirm the phone does NOT steal the pod: Pod Details
+   last-status AGES continuously (phone not polling); watch commands never fail from
+   contention; "Pod Not Connected" appears at the 8-min gate.
+3. RELAUNCH: force-quit Loop mid-loan, reopen — phone must STILL not reconnect
+   (persisted flag honored). The old behavior (silent reclaim on relaunch) is the bug.
+4. HAND-BACK: end Show Mode (any radio state — BT is on, so WC is alive) → journal
+   reconciles → phone reclaims in seconds → status fresh → dosing restored.
+5. RE-ENABLE: second cycle end-to-end (release → session → hand-back → reclaim).
+6. ESCAPE HATCH: start a loan, then instead of handing back, tap the phone's pump
+   status → "Pod Is On Loan" alert → Reclaim Pod → phone reconnects + loan cleared;
+   then end Show Mode on the watch anyway → journal arrives → reconciles normally
+   (duplicate guard tolerates the ordering).
+7. UI COPY (known stale, cosmetic): the enable screen still tells the user to turn
+   Bluetooth off — obsolete once 1–6 pass; reword after validation.
+
 ---
 
 ## BUG-4: Borrow hangs ~2 min before "Pod keys ready" (found 2026-07-07)
