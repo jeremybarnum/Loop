@@ -409,7 +409,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
                         WKInterfaceDevice.current().play(.failure)
                         self.commandFailure = CommandFailure(
                             title: String(format: NSLocalizedString("%@ Failed", comment: "Alert title for a failed Show Mode pod command (parameter: command name)"), label),
-                            message: error.localizedDescription + NSLocalizedString("\nNothing was delivered.", comment: "Alert body suffix for a failed Show Mode pod command")
+                            message: error.localizedDescription + NSLocalizedString("\nNo change was made to the pod.", comment: "Alert body suffix for a failed Show Mode pod command")
                         )
                     }
                 }
