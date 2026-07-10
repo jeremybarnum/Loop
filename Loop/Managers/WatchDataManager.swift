@@ -648,11 +648,16 @@ extension WatchDataManager: WCSessionDelegate {
         if let podDelta = journal.podDeliveredDelta {
             let expectedBasal = expectedScheduledBasal(from: journal.startedAt, to: handedBackAt, suspendWindows: journal.suspendWindows(endingAt: handedBackAt))
             let remainder = podDelta - journal.totalBolusUnits - expectedBasal
-            log.default("Watch loan audit: podDelta=%{public}.2f (start=%{public}@ latest=%{public}@) boluses=%{public}.2f expectedBasal=%{public}.2f remainder=%{public}.2f",
-                        podDelta,
-                        journal.deliveredAtStart.map { String(format: "%.2f", $0) } ?? "nil",
-                        journal.deliveredLatest.map { String(format: "%.2f", $0) } ?? "nil",
-                        journal.totalBolusUnits, expectedBasal, remainder)
+            // NOTE: DiagnosticLog forwards at most FIVE varargs correctly (its
+            // arity switch); a sixth argument misaligns os_log's va_list and
+            // crashes in %@ decoding (SIGSEGV, 2026-07-10 00:07 hand-back crash).
+            // Keep this call at <=5 args — the raw odometer readings are
+            // pre-formatted into one string.
+            let odometer = String(format: "start=%@ latest=%@",
+                                  journal.deliveredAtStart.map { String(format: "%.2f", $0) } ?? "nil",
+                                  journal.deliveredLatest.map { String(format: "%.2f", $0) } ?? "nil")
+            log.default("Watch loan audit: podDelta=%{public}.2f (%{public}@) boluses=%{public}.2f expectedBasal=%{public}.2f remainder=%{public}.2f",
+                        podDelta, odometer, journal.totalBolusUnits, expectedBasal, remainder)
 
             let remainderThreshold = 0.05   // one pod pulse; filters quantization/staleness noise
             let remainderSanityCap = 5.0    // implausible for one loan — odometer corruption guard

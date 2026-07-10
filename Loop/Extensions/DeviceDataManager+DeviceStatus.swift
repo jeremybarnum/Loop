@@ -136,7 +136,11 @@ extension DeviceDataManager {
         // the pod without a hand-back (watch lost/dead). Normal loans end from the
         // watch; this exists because the phone no longer reclaims accidentally
         // (formal handoff removed the BT-toggle safety net).
-        if podLoanedToWatch, (pumpManager as? PumpConnectionLendable)?.isConnectionReleased == true {
+        // Keyed on the pump manager's PERSISTED release state, NOT the volatile
+        // podLoanedToWatch flag: a crash mid-loan resets the flag on relaunch
+        // (observed 2026-07-10) while the release persists — and post-crash is
+        // exactly when the escape hatch must be reachable.
+        if (pumpManager as? PumpConnectionLendable)?.isConnectionReleased == true {
             presentReclaimPodAlert()
             return .takeNoAction
         }
