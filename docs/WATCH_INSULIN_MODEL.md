@@ -320,3 +320,29 @@ Investigation verdict (five-trace, code-cited) accepted with all four rulings:
    Recovery does NOT resurrect the live session — data first.
 4. **"Delete All" non-pump footgun: accepted + documented** (user-initiated; excluding
    loan entries from bulk delete is possible later if it ever bites).
+
+### §4c PHASE 2 FLIPPED (Jeremy approved 2026-07-10 afternoon)
+
+**Gate evidence (§5):** the 54-min real-pod walk session (2026-07-10 morning):
+shadow net −3.23 U vs schedule; pod odometer actual-vs-schedule deficit −3.24 U
+(3.34 U scheduled expectation, 0.10 U actually delivered at temp 0.10 vs sched
+3.7, ±one pulse quantization). Exact agreement; gate passed.
+
+**What changed:** reconcileWatchLoan now ENTERS everything — boluses,
+temp-basal DoseEntries, and the audit remainder — in ONE DoseStore write
+(LoopDataManager.addWatchLoanDoseEntries), a single atomic Core Data save.
+Adversarial review (2026-07-10) killed two earlier design claims: (1) the
+store does NOT upsert on syncIdentifier collision — the uniqueness constraint
+is insert-or-IGNORE under NSMergeByPropertyStoreTrumpMergePolicy, safe only
+for identical content; (2) "a resend will retry" was false for phone-side
+write failures, because the phone acks the hand-back BEFORE the async writes
+and the watch clears its retry payload on that ack. The atomic write makes
+both harmless: a failed write commits NOTHING (hash absent → any resend
+re-enters everything), a successful write is hash-guarded against duplicates,
+and deterministic syncIdentifiers (watchloan-<hash8>-{n | bolus-n | audit})
+are belt-and-braces for exact re-entries. Residual known-narrow gap
+(pre-existing, unchanged): phone crash between WC ack and the single write
+loses the reconcile with no resend. The odometer audit is v2:
+remainder = podDelta − boluses − (FULL schedule + journal net); suspends live
+exclusively in the journal-net term as rate-0 segments (the v1 suspend-window
+subtraction machinery was DELETED — keeping it invited double-subtraction).

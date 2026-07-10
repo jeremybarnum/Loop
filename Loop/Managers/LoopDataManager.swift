@@ -803,21 +803,21 @@ extension LoopDataManager {
         }
     }
 
-    /// Logs multiple external bolus doses in a single DoseStore write (one loop
-    /// recompute), with a completion so the caller can persist idempotency state only
-    /// after a confirmed success. Used by the watch-loan reconciliation
-    /// (WatchDataManager.reconcileWatchLoan). NOTE: the store does NOT deduplicate
-    /// manually-entered doses — callers must guard against re-entry themselves.
-    func addManuallyEnteredDoses(_ doses: [(startDate: Date, units: Double)], insulinType: InsulinType? = nil, completion: @escaping (Error?) -> Void) {
-        let entries = doses.map { dose -> DoseEntry in
-            let syncIdentifier = Data(UUID().uuidString.utf8).hexadecimalString
-            return DoseEntry(type: .bolus, startDate: dose.startDate, value: dose.units, unit: .units, syncIdentifier: syncIdentifier, insulinType: insulinType, manuallyEntered: true)
-        }
-
-        // DoseStore.addDoses invokes its completion TWICE on success (once after the
-        // entries persist, again after its pump-event sync — see DoseStore.swift:842).
-        // Latch so our caller's completion (which persists idempotency state and logs)
-        // runs exactly once, on the first (authoritative) callback.
+    /// §4c phase 2: enters ALL of a watch-loan reconcile's DoseEntries (boluses,
+    /// temp-basal records, audit remainder) in ONE DoseStore write — a single
+    /// atomic Core Data save, so a reconcile can never commit partially (a
+    /// basal-without-boluses partial would understate IOB with no repair path,
+    /// since the phone acks the hand-back before this write). The entries carry
+    /// deterministic journal-hash-derived syncIdentifiers; the store's
+    /// uniqueness constraint drops exact re-entries (insert-or-IGNORE — the
+    /// store does NOT update on collision, so identical content is required,
+    /// which the byte-stable journal guarantees).
+    ///
+    /// DoseStore.addDoses invokes its completion TWICE on success (once after
+    /// the entries persist, again after its pump-event sync — see
+    /// DoseStore.swift:842). Latch so the caller's completion (which persists
+    /// idempotency state and logs) runs exactly once.
+    func addWatchLoanDoseEntries(_ entries: [DoseEntry], completion: @escaping (Error?) -> Void) {
         var completed = false
         doseStore.addDoses(entries, from: nil) { (error) in
             if error == nil {
