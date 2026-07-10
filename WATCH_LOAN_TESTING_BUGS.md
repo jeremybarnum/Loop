@@ -146,6 +146,15 @@ Does NOT block the design: both models require software single-writer (DESIGN-GA
 first-locks the failure is "watch loses the pod on any link blip and is locked out"; under
 ping-pong it's "sequence-counter divergence / brick risk." Same fix either way.
 
+**RESOLVED 2026-07-09 (real pod): PING-PONG.** The split-brain bolus probe: with the
+phone holding a live session, the watch's connect attempt caused the pod to DROP the
+phone (19:51:44 "device has disconnected from us") and accept the watch — then the
+phone's auto-reconnect stole it back in ~2 s. Last-connector-wins; the persistent
+reconnector dominates. Counter divergence is evidently healed by the pod's EAP SQN
+resynchronization (observed 19:48:00), which explains why the ping-pong did NOT wedge
+or brick anything — but deliberate single-writer (DESIGN-GAP-1/DESIGN-3) remains the
+design requirement rather than leaning on resync luck.
+
 ### OQ-2: Does Control Center Bluetooth-off actually disconnect the iPhone from the pod?
 
 Earlier finding (E5) claimed toggling Bluetooth off via **Control Center** does NOT truly
