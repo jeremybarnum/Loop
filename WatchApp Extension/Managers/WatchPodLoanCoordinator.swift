@@ -252,16 +252,17 @@ final class WatchPodLoanCoordinator: ObservableObject {
             return
         }
 
-        // Borrow only transfers the keys — it does NOT attempt the takeover. The
-        // phone still holds the pod's single BLE connection, so a takeover here would
-        // just burn its full connect timeout (~2 min) and fail. Go straight to
-        // .armed; the takeover happens on Claim, once the phone is off and the slot
-        // is free. (The armed screen tells the user to power the phone off and Claim.)
+        // Formal handoff: the phone RELEASED the pod's BLE connection before
+        // replying to this grant, so the slot is already free — take over
+        // immediately, no user step between keys-arrived and takeover. `.armed`
+        // survives only as the retry surface: a failed takeover drops back to
+        // it (keys retained) with an Enable button.
         heldGrant = grant
         loanInsulinModel = PodLoanInsulinModel.forInsulinTypeRaw(grant.insulinTypeRaw)
         busy = false
         phase = .armed
         lastError = nil
+        takeOver(using: grant)
     }
 
     /// Take the pod over using keys the phone already granted — no phone contact
@@ -527,6 +528,8 @@ private extension WatchPodLoanCoordinator {
             try? await Task.sleep(nanoseconds: 600_000_000)
             self.phase = .armed
             self.busy = false
+            // Mirror the real flow: takeover follows the grant automatically.
+            self.demoClaim()
         }
     }
 

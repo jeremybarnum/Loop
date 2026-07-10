@@ -116,30 +116,27 @@ struct WatchPodControlView: View {
         }
     }
 
-    // Single Show Mode entry screen (covers both .requesting and .armed). Opened
-    // straight from the horse tap: the "disconnect Bluetooth" instruction shows
-    // immediately while credentials are fetched in the background; the Untether button
-    // is greyed until the keys arrive (.armed), then lights up and runs the takeover.
+    // Show Mode startup screen (covers .requesting and .armed). With the formal
+    // handoff, grant and takeover run back-to-back off the single horse tap, so
+    // this is normally just a progress screen. It becomes interactive only when
+    // the takeover FAILS: the coordinator drops back to .armed (keys retained,
+    // lastError set — shown by the shared error header) and offers a retry.
     private var untetherSection: some View {
         VStack(spacing: 10) {
             Text("Show Mode")
                 .font(.headline)
-            Text("Untethers from your iPhone — the watch runs the pod phone-free. Turn your iPhone's Bluetooth off, then enable.")
-                .font(.footnote)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
 
-            if coordinator.busy && coordinator.phase == .armed {
-                // Takeover in progress (Untether tapped) — BUG-3: visible feedback.
+            if coordinator.busy {
+                // Grant + takeover in flight — BUG-3: visible feedback.
                 ProgressView()
-                Text("Enabling Show Mode…")
+                Text("Starting Show Mode…")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             } else {
                 Button(action: coordinator.claim) {
-                    Label("Enable Show Mode", systemImage: "checkmark.circle")
+                    Label("Try Again", systemImage: "arrow.clockwise")
                 }
-                .disabled(coordinator.phase != .armed)   // lit only once keys have arrived
+                .disabled(coordinator.phase != .armed)   // keys must be in hand
                 Button("Cancel", action: coordinator.cancelArmed)
                     .disabled(coordinator.busy)
             }
