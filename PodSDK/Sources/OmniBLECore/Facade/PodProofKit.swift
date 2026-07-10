@@ -284,16 +284,25 @@ public final class PodProofController: NSObject {
     /// on takeover). Surfaced to the user on hand-back. See PodLoanJournal.
     public private(set) var loanJournal: PodLoanJournal?
 
-    /// A journal persisted by a PREVIOUS run (crash / app update mid-loan).
-    /// Only meaningful when no live journal exists; nil during an active loan.
+    /// A journal persisted by a PREVIOUS run (crash / app update mid-loan) or
+    /// abandoned by a revoke. The orphan slot (displaced by a newer takeover)
+    /// is preferred; during an active loan only the orphan is recoverable —
+    /// the active slot belongs to the live session.
     public var recoveredLoanJournalData: Data? {
-        guard loanJournal == nil else { return nil }
-        return PodLoanJournalStore.persistedData()
+        guard loanJournal == nil else {
+            return PodLoanJournalStore.defaults.data(forKey: PodLoanJournalStore.orphanKey)
+        }
+        return PodLoanJournalStore.recoverableData()
     }
 
     /// The phone confirmed receipt of a recovered journal — forget it.
     public func clearRecoveredLoanJournal() {
-        PodLoanJournalStore.clear()
+        if loanJournal != nil {
+            // Live session: only the orphan could have been sent.
+            PodLoanJournalStore.defaults.removeObject(forKey: PodLoanJournalStore.orphanKey)
+        } else {
+            PodLoanJournalStore.clearRecoverable()
+        }
     }
 
     /// Live human-readable summary of the current loan, or nil if none active.
@@ -340,6 +349,24 @@ public final class PodProofController: NSObject {
         PodLoanJournalStore.clear()   // acked hand-back: the phone has the journal
         emit("LOAN JOURNAL: hand-back\n" + (loanJournal?.summaryText ?? ""))
         return loanJournal
+    }
+
+    /// DESIGN-6 (loan revoke): the phone reclaimed the pod out from under this
+    /// session. Let go of the pod immediately and abandon the live session, but
+    /// KEEP the journal persisted — with no live journal it becomes recovered
+    /// data, handed back through the same path as a crash-orphaned journal.
+    /// Deliberately records NO closing event: the persisted bytes stay identical
+    /// to any hand-back snapshot already in flight, so the phone's byte-hash
+    /// duplicate guard holds across every delivery-path combination. Contrast
+    /// endLoan(), which clears persistence because the phone has already acked
+    /// receipt of the journal.
+    public func abandonLoanAsRevoked() {
+        if loanJournal != nil {
+            PodLoanJournalStore.persist(loanJournal)   // current state (persist is idempotent)
+            emit("LOAN JOURNAL: revoked by phone\n" + (loanJournal?.summaryText ?? ""))
+            loanJournal = nil
+        }
+        releasePod()
     }
 
     /// Release the pod WITHOUT deactivating it — disconnects BLE and drops it
@@ -875,6 +902,12 @@ public final class PodProofController: NSObject {
         // Start a loan journal for this takeover — records everything the watch
         // does to the pod, to tell the phone/user on hand-back. deliveredAtStart
         // is filled by the first status read below.
+        // An UNACKED prior journal (crash or revoke, not yet delivered) must not
+        // be overwritten by this session's persists — move it to the orphan slot
+        // first, where the recovery hand-back path still finds and delivers it.
+        if loanJournal == nil {
+            PodLoanJournalStore.orphanActiveJournal()
+        }
         loanJournal = PodLoanJournal(startedAt: Date())
         PodLoanJournalStore.persist(loanJournal)
 

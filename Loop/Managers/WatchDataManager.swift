@@ -27,9 +27,36 @@ final class WatchDataManager: NSObject {
 
         NotificationCenter.default.addObserver(self, selector: #selector(updateWatch(_:)), name: .LoopDataUpdated, object: deviceManager.loopManager)
         NotificationCenter.default.addObserver(self, selector: #selector(sendSupportedBolusVolumesIfNeeded), name: .PumpManagerChanged, object: deviceManager)
+        NotificationCenter.default.addObserver(self, selector: #selector(sendPodLoanRevoke), name: .PodLoanReclaimedViaEscapeHatch, object: deviceManager)
 
         watchSession?.delegate = self
         watchSession?.activate()
+    }
+
+    /// DESIGN-6: after an escape-hatch reclaim, tell the watch its loan is over.
+    /// transferUserInfo is QUEUED — it survives the watch being unreachable,
+    /// asleep, or dead, and delivers on the watch's next app run. The watch drops
+    /// its pod bid, keeps its journal, and sends it back for reconciliation.
+    /// If the WC session isn't activated yet (reclaim raced app launch), the
+    /// revoke parks in the app group and is queued on activation — a one-shot
+    /// silent drop here would leave a live watch believing it owns the pod.
+    @objc private func sendPodLoanRevoke() {
+        guard let session = watchSession, session.activationState == .activated else {
+            UserDefaults.appGroup?.pendingPodLoanRevokeDate = Date()
+            log.error("Pod loan revoke deferred: watch session not activated (parked for activation)")
+            return
+        }
+        session.transferUserInfo(PodLoanRevokeUserInfo(revokedAt: Date()).rawValue)
+        log.default("Pod loan revoke queued for watch")
+    }
+
+    /// Queue a parked revoke (see sendPodLoanRevoke) once the session activates.
+    private func sendPendingPodLoanRevokeIfNeeded(_ session: WCSession) {
+        guard session.activationState == .activated,
+              let revokedAt = UserDefaults.appGroup?.pendingPodLoanRevokeDate else { return }
+        UserDefaults.appGroup?.pendingPodLoanRevokeDate = nil
+        session.transferUserInfo(PodLoanRevokeUserInfo(revokedAt: revokedAt).rawValue)
+        log.default("Parked pod loan revoke queued for watch (from activation)")
     }
 
     private let log = DiagnosticLog(category: "WatchDataManager")
@@ -800,6 +827,7 @@ extension WatchDataManager: WCSessionDelegate {
                 sendSettingsIfNeeded()
                 sendWatchContextIfNeeded()
                 sendSupportedBolusVolumesIfNeeded()
+                sendPendingPodLoanRevokeIfNeeded(session)
             }
         case .inactive, .notActivated:
             break

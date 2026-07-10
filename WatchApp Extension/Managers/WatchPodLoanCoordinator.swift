@@ -36,6 +36,38 @@ final class WatchPodLoanCoordinator: ObservableObject {
     @Published private(set) var busy = false
     @Published var lastError: String?
 
+    /// DESIGN-6: the phone ended this loan via its escape-hatch reclaim (a
+    /// revoke message, not a watch-initiated hand-back). The done screen says
+    /// so instead of showing the normal hand-back checkmark.
+    @Published private(set) var wasRevokedByPhone = false
+
+    /// When the current keys arrived (handleGrantReply) — lets a queued revoke
+    /// from an OLDER loan be recognized as stale and ignored for this one.
+    private var armedAt: Date?
+
+    /// When the current loan request was sent — staleness anchor for a revoke
+    /// arriving in .requesting (before any grant/journal exists).
+    private var lastRequestAt: Date?
+
+    /// When the last revoke was accepted — a grant reply for a request made
+    /// BEFORE this must be dropped, or the revoked loan resurrects when the
+    /// (delayed) reply lands after the revoke.
+    private var lastRevokeAt: Date?
+
+    /// A revoke that arrived while a pod command was in flight (busy). Processing
+    /// it immediately would abandon the journal BEFORE the command's completion
+    /// records what the pod may have already delivered — a bolus lost from all
+    /// records. Instead it parks here and is processed the moment busy drops.
+    private var pendingRevokeAt: Date?
+
+    /// Run a parked revoke once the in-flight command has completed (and
+    /// journaled). Call wherever busy transitions to false.
+    private func processPendingRevoke() {
+        guard let revokedAt = pendingRevokeAt else { return }
+        pendingRevokeAt = nil
+        handleLoanRevoked(revokedAt: revokedAt)
+    }
+
     /// Live summary of what the watch has done during the loan (for display).
     var liveSummary: String? {
         #if targetEnvironment(simulator)
@@ -217,9 +249,16 @@ final class WatchPodLoanCoordinator: ObservableObject {
             lastError = "iPhone not reachable — bring it close to start Show Mode."
             return
         }
+        // An undelivered journal from a previous session (crash or revoke) gets
+        // a delivery attempt while the phone is provably reachable — BEFORE the
+        // new takeover displaces it into the orphan slot.
+        attemptRecoveredJournalHandback()
+
         busy = true
         phase = .requesting
         lastError = nil
+        wasRevokedByPhone = false
+        lastRequestAt = Date()
 
         let request = PodLoanRequestUserInfo(requestedAt: Date())
         session.sendMessage(request.rawValue, replyHandler: { [weak self] reply in
@@ -234,6 +273,16 @@ final class WatchPodLoanCoordinator: ObservableObject {
     }
 
     private func handleGrantReply(_ reply: [String: Any]) {
+        // DESIGN-6 resurrection guards: a grant reply is only meaningful while
+        // we are still asking. If a revoke was accepted after this request went
+        // out (phase left .requesting), or anything else moved the phase, the
+        // grant is void — dropping it keeps the phone the single writer.
+        guard phase == .requesting else { return }
+        if let revokedAt = lastRevokeAt, let requestedAt = lastRequestAt, revokedAt >= requestedAt {
+            busy = false
+            phase = .done
+            return
+        }
         guard let grant = PodLoanGrantUserInfo(rawValue: reply) else {
             busy = false
             phase = .idle
@@ -259,10 +308,87 @@ final class WatchPodLoanCoordinator: ObservableObject {
         // it (keys retained) with an Enable button.
         heldGrant = grant
         loanInsulinModel = PodLoanInsulinModel.forInsulinTypeRaw(grant.insulinTypeRaw)
+        armedAt = Date()
         busy = false
         phase = .armed
         lastError = nil
         takeOver(using: grant)
+    }
+
+    /// DESIGN-6: the phone reclaimed the pod via its escape hatch and queued a
+    /// revoke. The pod is NOT ours anymore — single-writer says let go NOW, no
+    /// pod commands (no leftover-temp cancel, no status freshen; those are the
+    /// phone's problem after a reclaim). The journal is kept persisted and
+    /// handed back through the recovered-journal path, which the phone
+    /// reconciles idempotently. Ignorable and idempotent by design: revokes
+    /// for finished loans and stale revokes for older loans do nothing.
+    func handleLoanRevoked(revokedAt: Date) {
+        guard !Self.isSimulatorDemo else { return }
+        switch phase {
+        case .idle, .done, .denied:
+            return   // no live loan — nothing to revoke
+        case .requesting:
+            // No grant or journal yet — the staleness anchor is the request
+            // itself. A request made AFTER the revoke is a new loan this revoke
+            // doesn't apply to. (Clocks are same-account NTP-synced; loans are
+            // minutes apart, skew is seconds — same reasoning throughout.)
+            if let requestedAt = lastRequestAt, requestedAt > revokedAt { return }
+            lastRevokeAt = revokedAt   // the in-flight grant reply must be dropped
+            // Kill any controller machinery a racing grant may have spun up —
+            // a zombie auto-connect bid would fight the phone for the pod.
+            controller.abandonLoanAsRevoked()
+            heldGrant = nil
+            armedAt = nil
+            pendingHandbackPayload = nil
+            busy = false
+            wasRevokedByPhone = true
+            phase = .done
+        case .armed:
+            if let armedAt, armedAt > revokedAt { return }
+            lastRevokeAt = revokedAt
+            // The auto-takeover may be mid-flight: podComms is scanning with a
+            // standing connect bid and pendingTakeover armed. Abandon NOW so
+            // the watch stops contending with the reclaiming phone; the takeover
+            // completion (if it fires) hits the wasRevokedByPhone guard and
+            // re-abandons idempotently.
+            controller.abandonLoanAsRevoked()
+            heldGrant = nil
+            armedAt = nil
+            pendingHandbackPayload = nil
+            busy = false
+            wasRevokedByPhone = true
+            phase = .done
+        case .active, .handingBack:
+            // Anchor staleness on the GRANT time when we have it: a genuine
+            // revoke issued in the grant→takeover window would look "stale"
+            // against journal.startedAt (stamped at takeover completion) and be
+            // wrongly ignored. journal.startedAt is the fallback anchor only.
+            let loanAnchor = armedAt ?? controller.loanJournal?.startedAt
+            if let loanAnchor, loanAnchor > revokedAt { return }
+            // In-flight pod command (or hand-back chain): park the revoke until
+            // the command completes AND journals — abandoning now would lose a
+            // dose the pod may have already delivered.
+            guard !busy else {
+                pendingRevokeAt = revokedAt
+                return
+            }
+            lastRevokeAt = revokedAt
+            wasRevokedByPhone = true
+            // Uniform for .handingBack too: abandoning records NO new journal
+            // event, so the persisted bytes equal any hand-back snapshot already
+            // in flight — whichever delivery lands first wins and the other is
+            // dropped by the phone's byte-hash duplicate guard.
+            controller.abandonLoanAsRevoked()
+            heldGrant = nil
+            armedAt = nil
+            pendingHandbackPayload = nil
+            lastError = nil
+            phase = .done
+            // Best-effort immediate send; if the phone isn't reachable right
+            // now, the persisted journal is retried on reachability changes and
+            // future activations.
+            attemptRecoveredJournalHandback()
+        }
     }
 
     /// Take the pod over using keys the phone already granted — no phone contact
@@ -290,6 +416,9 @@ final class WatchPodLoanCoordinator: ObservableObject {
         heldGrant = nil
         status = nil
         lastError = nil
+        wasRevokedByPhone = false
+        armedAt = nil
+        pendingRevokeAt = nil
         phase = .idle
     }
 
@@ -319,6 +448,14 @@ final class WatchPodLoanCoordinator: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.busy = false
+                // DESIGN-6 resurrection guard: a revoke landed while this
+                // takeover was in flight. The pod is the phone's again — let go
+                // of whatever the takeover established and stay on the revoked
+                // done screen (the trivial journal is preserved for recovery).
+                if self.wasRevokedByPhone {
+                    self.controller.abandonLoanAsRevoked()
+                    return
+                }
                 switch result {
                 case .success(let status):
                     self.status = status
@@ -397,6 +534,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.busy = false
+                defer { self.processPendingRevoke() }   // a revoke parked during this command
                 switch result {
                 case .success(let status):
                     self.status = status
@@ -459,6 +597,10 @@ final class WatchPodLoanCoordinator: ObservableObject {
             // hand-back must never be blocked by an unreachable or faulted pod.
             cancelLeftoverTempIfNeeded { [weak self] cancelWarning in
                 guard let self else { return }
+                // A revoke may have landed while the cancel ran — the journal is
+                // abandoned and the revoke path owns delivery. Sending here would
+                // snapshot an EMPTY journal whose ack could displace the real one.
+                guard !self.wasRevokedByPhone, self.controller.loanJournal != nil else { return }
                 // Freshen the pod's delivered-odometer right before snapshotting the
                 // journal, so the phone's reconciliation audit sees delivery up to
                 // hand-back rather than up to the last command. Best-effort: hand back
@@ -466,6 +608,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
                 self.controller.getStatus { [weak self] result in
                     Task { @MainActor in
                         guard let self else { return }
+                        guard !self.wasRevokedByPhone, self.controller.loanJournal != nil else { return }
                         var summary = self.controller.loanJournalSummary ?? "No loan activity recorded."
                         if let cancelWarning {
                             summary += "\n" + cancelWarning
@@ -517,15 +660,23 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// hand-back handler reconciles it (idempotent via the journal-hash guard) and
     /// reclaims the pod, so this also un-orphans a pod stranded by a crash.
     func attemptRecoveredJournalHandback() {
-        guard !Self.isSimulatorDemo, phase == .idle,
+        // .done is safe too (loan over, journal persisted) — the DESIGN-6 revoke
+        // path lands there and uses this same delivery.
+        guard !Self.isSimulatorDemo, phase == .idle || phase == .done,
               let data = controller.recoveredLoanJournalData else { return }
         let session = WCSession.default
         guard session.activationState == .activated, session.isReachable else {
             return   // keep it persisted; retry on next activation
         }
-        var summary = PodLoanJournal.decoded(from: data)?.summaryText ?? "Recovered watch loan journal."
-        summary += "\n⚠️ Recovered after the watch app restarted mid-session."
-        let handback = PodHandbackUserInfo(handedBackAt: Date(), summary: summary, journalData: data)
+        let decoded = PodLoanJournal.decoded(from: data)
+        var summary = decoded?.summaryText ?? "Recovered watch loan journal."
+        summary += "\n⚠️ Sent after Show Mode ended without a normal hand-back."
+        // Stamp the hand-back at the journal's LAST EVENT, not send time: a
+        // recovered journal can be delivered hours later, and a send-time stamp
+        // would inflate the phone's audit window (expected scheduled basal) for
+        // hours the watch never held the pod.
+        let handedBackAt = decoded?.events.last?.date ?? Date()
+        let handback = PodHandbackUserInfo(handedBackAt: handedBackAt, summary: summary, journalData: data)
         session.sendMessage(handback.rawValue, replyHandler: { [weak self] _ in
             Task { @MainActor in
                 self?.controller.clearRecoveredLoanJournal()
@@ -555,19 +706,37 @@ final class WatchPodLoanCoordinator: ObservableObject {
                 guard let self else { return }
                 _ = self.controller.endLoan()   // finalize the journal
                 self.controller.releasePod()    // phone acked — safe to let go
+                // NOTE: when a revoke landed mid-hand-back, the abandoned journal
+                // stays persisted even though the phone just acked these same
+                // bytes. Deliberate: the byte-hash duplicate guard makes a later
+                // recovery resend harmless, whereas clearing here could wipe an
+                // undelivered journal in ack-reordering corners. Cheap resend
+                // beats possible loss.
                 self.heldGrant = nil            // phone owns the pod again; keys are now stale
                 self.pendingHandbackPayload = nil
                 self.busy = false
                 self.phase = .done
+                self.processPendingRevoke()
             }
         }, errorHandler: { [weak self] error in
             Task { @MainActor in
+                guard let self else { return }
+                self.busy = false
+                // DESIGN-6: if a revoke landed while this hand-back was in
+                // flight, the pod is NOT ours anymore — "still in control" would
+                // be false and .active would offer pod commands we must not
+                // send. Stay on the revoked done screen; the persisted journal
+                // is delivered by the recovery path instead.
+                if self.wasRevokedByPhone {
+                    self.phase = .done
+                    return
+                }
                 // Phone didn't confirm — keep holding the pod; the user can retry.
                 // pendingHandbackPayload is retained so the retry resends the SAME
                 // journal bytes (the phone's duplicate guard hashes them).
-                self?.busy = false
-                self?.phase = .active
-                self?.lastError = "Couldn't reach iPhone to end Show Mode: \(error.localizedDescription). Still in control on your watch."
+                self.phase = .active
+                self.lastError = "Couldn't reach iPhone to end Show Mode: \(error.localizedDescription). Still in control on your watch."
+                self.processPendingRevoke()
             }
         })
     }

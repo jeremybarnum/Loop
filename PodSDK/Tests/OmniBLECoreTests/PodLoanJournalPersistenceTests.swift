@@ -66,4 +66,40 @@ class PodLoanJournalPersistenceTests: XCTestCase {
     func testDecodedRejectsGarbage() {
         XCTAssertNil(PodLoanJournal.decoded(from: Data([0x00, 0x01])))
     }
+
+    // MARK: - Orphan slot (DESIGN-6)
+
+    func testOrphanPreservesDisplacedJournalAcrossNewSessionPersists() {
+        let oldJournal = makeJournal()
+        PodLoanJournalStore.persist(oldJournal)
+
+        // New takeover: displace, then persist a new session's journal.
+        PodLoanJournalStore.orphanActiveJournal()
+        var newJournal = PodLoanJournal(startedAt: Date(timeIntervalSince1970: 1_780_100_000))
+        newJournal.record(.bolus(units: 0.5), at: Date(timeIntervalSince1970: 1_780_100_060))
+        PodLoanJournalStore.persist(newJournal)
+
+        // The undelivered old journal must still be the recoverable one.
+        let recoverable = PodLoanJournal.decoded(from: PodLoanJournalStore.recoverableData()!)
+        XCTAssertEqual(recoverable, oldJournal, "orphan (undelivered) journal must win over the live session's persists")
+    }
+
+    func testClearRecoverableClearsOrphanFirstThenActive() {
+        PodLoanJournalStore.persist(makeJournal())
+        PodLoanJournalStore.orphanActiveJournal()
+        let newJournal = PodLoanJournal(startedAt: Date(timeIntervalSince1970: 1_780_100_000))
+        PodLoanJournalStore.persist(newJournal)
+
+        PodLoanJournalStore.clearRecoverable()   // clears the orphan
+        let next = PodLoanJournal.decoded(from: PodLoanJournalStore.recoverableData()!)
+        XCTAssertEqual(next, newJournal, "after orphan ack, the active slot becomes recoverable")
+
+        PodLoanJournalStore.clearRecoverable()   // clears the active slot
+        XCTAssertNil(PodLoanJournalStore.recoverableData())
+    }
+
+    func testOrphanOfEmptyActiveSlotIsNoOp() {
+        PodLoanJournalStore.orphanActiveJournal()
+        XCTAssertNil(PodLoanJournalStore.recoverableData())
+    }
 }

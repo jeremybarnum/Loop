@@ -128,3 +128,46 @@ extension PodLoanGrantUserInfo: RawRepresentable {
         return raw
     }
 }
+
+// MARK: - Loan revoke (DESIGN-6)
+
+/// Phone → watch. Sent after the phone's escape-hatch reclaim
+/// (reclaimPodFromWatch): the phone has already taken the pod back without a
+/// hand-back, and the watch — whenever it next receives this — must stop
+/// treating the loan as live and send its journal for reconciliation.
+///
+/// Rides transferUserInfo (queued): delivery survives the watch being
+/// unreachable, asleep, or dead, arriving on its next app run. `revokedAt`
+/// lets the watch ignore a stale revoke that outlived its loan: a loan
+/// STARTED after this date is a new grant the revoke doesn't apply to.
+/// (Lives in this file rather than its own to avoid pbxproj surgery — same
+/// pattern as PumpConnectionLendable in LoopKit's PumpManager.swift.)
+struct PodLoanRevokeUserInfo {
+    let version = 1
+    let revokedAt: Date
+}
+
+extension PodLoanRevokeUserInfo: RawRepresentable {
+    typealias RawValue = [String: Any]
+
+    static let name = "PodLoanRevokeUserInfo"
+
+    init?(rawValue: RawValue) {
+        guard
+            rawValue["v"] as? Int == version,
+            rawValue["name"] as? String == PodLoanRevokeUserInfo.name,
+            let revokedAt = rawValue["ra"] as? Date
+            else {
+                return nil
+        }
+        self.revokedAt = revokedAt
+    }
+
+    var rawValue: RawValue {
+        return [
+            "v": version,
+            "name": PodLoanRevokeUserInfo.name,
+            "ra": revokedAt
+        ]
+    }
+}

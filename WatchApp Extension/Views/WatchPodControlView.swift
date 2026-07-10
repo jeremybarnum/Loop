@@ -53,10 +53,12 @@ struct WatchPodControlView: View {
         }
         .onAppear {
             // Tapping the horse IS the intent to start Show Mode, so begin fetching the
-            // pod credentials from the phone immediately (in the background) and land the
-            // user straight on the "disconnect Bluetooth → Untether" screen — no separate
-            // "Start" tap. Only auto-start from a resting phase (not mid-loan).
-            if coordinator.phase == .idle || coordinator.phase == .done {
+            // pod credentials from the phone immediately (in the background) — no separate
+            // "Start" tap. Only auto-start from a resting phase (not mid-loan), and NOT
+            // right after a phone-side reclaim (DESIGN-6): silently re-borrowing a pod
+            // the phone just took back needs explicit intent — the done screen's
+            // "Start Show Mode" button provides it.
+            if (coordinator.phase == .idle || coordinator.phase == .done) && !coordinator.wasRevokedByPhone {
                 coordinator.requestLoan()
             }
         }
@@ -192,11 +194,24 @@ struct WatchPodControlView: View {
 
     private var doneSection: some View {
         VStack(spacing: 8) {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundColor(.green)
-                .font(.title2)
-            Text("Watch tethered")
-                .font(.headline)
+            if coordinator.wasRevokedByPhone {
+                // DESIGN-6: the phone ended this loan via its escape hatch.
+                Image(systemName: "iphone.circle.fill")
+                    .foregroundColor(.blue)
+                    .font(.title2)
+                Text("Reclaimed by iPhone")
+                    .font(.headline)
+                Text("Show Mode was ended from your iPhone. Insulin records were sent back.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            } else {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                    .font(.title2)
+                Text("Watch tethered")
+                    .font(.headline)
+            }
             if let summary = coordinator.liveSummary {
                 Text(summary)
                     .font(.caption2)

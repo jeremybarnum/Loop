@@ -19,6 +19,7 @@ extension UserDefaults {
         case favoriteFoods = "com.loopkit.Loop.favoriteFoods"
         case lastReconciledWatchLoanJournalHash = "com.loopkit.Loop.LastReconciledWatchLoanJournalHash"
         case dosingEnabledBeforeWatchLoan = "com.loopkit.Loop.DosingEnabledBeforeWatchLoan"
+        case pendingPodLoanRevokeDate = "com.loopkit.Loop.PendingPodLoanRevokeDate"
     }
 
     /// SHA-256 hex digest of the last watch-loan journal whose doses were reconciled
@@ -35,6 +36,14 @@ extension UserDefaults {
     var dosingEnabledBeforeWatchLoan: Bool? {
         get { object(forKey: Key.dosingEnabledBeforeWatchLoan.rawValue) as? Bool }
         set { set(newValue, forKey: Key.dosingEnabledBeforeWatchLoan.rawValue) }
+    }
+
+    /// DESIGN-6: a pod-loan revoke that couldn't be queued because the WC session
+    /// wasn't activated yet (escape-hatch reclaim racing app launch). Queued to
+    /// the watch on activation, then cleared. Nil when none pending.
+    var pendingPodLoanRevokeDate: Date? {
+        get { object(forKey: Key.pendingPodLoanRevokeDate.rawValue) as? Date }
+        set { set(newValue, forKey: Key.pendingPodLoanRevokeDate.rawValue) }
     }
 
     var legacyPumpManagerRawValue: PumpManager.RawValue? {

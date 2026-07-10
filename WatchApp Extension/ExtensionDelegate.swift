@@ -214,6 +214,17 @@ extension ExtensionDelegate: WCSessionDelegate {
         }
     }
 
+    func sessionReachabilityDidChange(_ session: WCSession) {
+        // §4c-3 / DESIGN-6: an undelivered journal (crash or revoke) retries
+        // whenever the phone becomes reachable — not just on app activation.
+        // A revoke can arrive precisely while unreachable (that's the queued
+        // channel's job), so this is the delivery trigger for that case.
+        guard session.isReachable else { return }
+        Task { @MainActor in
+            self.podLoanCoordinator.attemptRecoveredJournalHandback()
+        }
+    }
+
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String : Any]) {
         log.default("didReceiveApplicationContext")
         updateContext(applicationContext)
@@ -242,6 +253,15 @@ extension ExtensionDelegate: WCSessionDelegate {
 
             DispatchQueue.main.async {
                 self.loopManager.supportedBolusVolumes = volumes
+            }
+        case PodLoanRevokeUserInfo.name:
+            // DESIGN-6: the phone reclaimed the pod via its escape hatch.
+            guard let revoke = PodLoanRevokeUserInfo(rawValue: userInfo) else {
+                log.error("Could not decode PodLoanRevokeUserInfo: %{public}@", userInfo)
+                return
+            }
+            Task { @MainActor in
+                self.podLoanCoordinator.handleLoanRevoked(revokedAt: revoke.revokedAt)
             }
         case "WatchContext":
             // WatchContext is the only userInfo type without a "name" key. This isn't a great heuristic.

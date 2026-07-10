@@ -530,7 +530,7 @@ that ENDS at hand-back.
 
 ---
 
-## DESIGN-6: loan-revoke message after escape-hatch reclaim (PLANNED, approved 2026-07-10)
+## DESIGN-6: loan-revoke message after escape-hatch reclaim (BUILT 2026-07-10, validation pending)
 
 **Gap:** the escape-hatch reclaim is phone-local by design (dead-watch case) — a
 LIVE watch is never told the loan ended. A watch left behind in Show Mode keeps
@@ -547,5 +547,51 @@ for the pod (drop takeover connection), keep the journal, transition to a
 "Reclaimed by iPhone" done-state that still sends the journal hand-back for
 reconciliation. Revoke must be idempotent and ignorable when no loan is active.
 
-**Priority:** after current validations (one-tap takeover, DESIGN-5 bench,
-live reclaim drill) pass.
+**Built (same day):** reclaimPodFromWatch posts .PodLoanReclaimedViaEscapeHatch;
+WatchDataManager queues PodLoanRevokeUserInfo(revokedAt:) via transferUserInfo
+(survives unreachable/dead watch; delivers on next app run). Watch handler
+(WatchPodLoanCoordinator.handleLoanRevoked): idempotent; stale revokes ignored
+by comparing revokedAt to the loan's start (armedAt / journal.startedAt).
+Active loan -> abandonLoanAsRevoked(): release pod IMMEDIATELY (single-writer:
+no pod commands after a reclaim — no leftover-temp cancel, no freshen; the
+phone owns those problems), keep the journal PERSISTED, live journal cleared —
+delivery then rides the recovered-journal path (idempotent phone reconcile,
+retried on every activation until acked). Done screen shows "Reclaimed by
+iPhone". Prerequisite restored en route: the §4c journal-persistence work was
+found ONLY on basal-writeback (never made formal-handoff — earlier
+"superseded" call was wrong); cherry-picked as 94418a85, PodSDK 154/154.
+
+**Bench script:**
+1. LIVE + REACHABLE: Show Mode -> bolus 0.5 -> phone Reclaim Pod -> within
+   seconds watch drops to "Reclaimed by iPhone" AND bolus appears on phone
+   (no watch touch). Then Start Show Mode again from the done screen (fresh
+   loan works; stale revoke does not kill it).
+2. OUT OF RANGE: Show Mode -> walk watch away -> phone Reclaim -> return:
+   watch drops on next WC contact; journal reconciles once.
+3. DEAD WATCH: Show Mode -> power off watch -> phone Reclaim -> power on,
+   open app: revoke + recovered journal both land; exactly one reconcile.
+4. STALE REVOKE: after (1), immediately start a new loan; confirm the old
+   revoke does not end it (loan started after revokedAt is ignored).
+
+**DESIGN-6 hardening pass (same day, pre-commit self-review + adversarial panel):**
+four races found and fixed before any commit:
+1. GRANT-REPLY RESURRECTION: a revoke landing during .requesting set .done, but
+   the in-flight grant reply then re-armed and auto-took-over the pod. Fix:
+   lastRevokeAt/lastRequestAt anchors; handleGrantReply drops a grant whose
+   request predates the last accepted revoke.
+2. TAKEOVER RESURRECTION: revoke during the async takeover; its success callback
+   set .active and re-established the connection after the revoke. Fix: takeover
+   completion checks wasRevokedByPhone -> abandonLoanAsRevoked(), stays done.
+3. JOURNAL BYTE-INSTABILITY: abandonLoanAsRevoked originally recorded .handedBack,
+   changing the persisted bytes vs an already-in-flight hand-back snapshot — the
+   phone's SHA-256 duplicate guard is byte-based, so the same insulin could
+   reconcile TWICE. Fix: abandon records NO closing event; persisted bytes always
+   equal any snapshot in flight; whichever delivery lands first wins, the other
+   dedups. sendHandback's callbacks also respect the revoked state (no return to
+   .active offering pod commands after a revoke; ack clears the persisted copy).
+4. NEW-LOAN PERSIST OVERWRITE: a new takeover's journal persists would overwrite
+   an UNDELIVERED prior journal (crash/revoke) — silent insulin-record loss. Fix:
+   orphan slot in PodLoanJournalStore (displaced journal parks there; recovery
+   prefers it; ack clears it), plus requestLoan attempts recovery delivery first
+   (a new loan requires a reachable phone, so the orphan drains before displacement).
+   3 new store tests; PodSDK 157/157.

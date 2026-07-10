@@ -242,6 +242,13 @@ public enum PodLoanJournalStore {
     /// Injectable for tests; .standard on the watch.
     public static var defaults: UserDefaults = .standard
     static let key = "PodLoanJournalStore.activeJournal"
+    /// DESIGN-6: an UNACKED journal displaced by a new takeover parks here so
+    /// the new session's persists can't overwrite undelivered records. Holds at
+    /// most one journal: a second displacement before delivery overwrites it
+    /// (requires two abandoned sessions with zero phone contact between — and
+    /// starting a new loan itself requires a reachable phone, which triggers a
+    /// recovery send first).
+    static let orphanKey = "PodLoanJournalStore.orphanJournal"
 
     public static func persist(_ journal: PodLoanJournal?) {
         guard let data = journal?.encoded() else { return }
@@ -254,5 +261,29 @@ public enum PodLoanJournalStore {
 
     public static func persistedData() -> Data? {
         return defaults.data(forKey: key)
+    }
+
+    /// Move the active slot's journal (if any) to the orphan slot. Called
+    /// before a new takeover creates its journal.
+    public static func orphanActiveJournal() {
+        guard let data = defaults.data(forKey: key) else { return }
+        defaults.set(data, forKey: orphanKey)
+        defaults.removeObject(forKey: key)
+    }
+
+    /// Undelivered journal data awaiting recovery hand-back: the orphan slot
+    /// first (displaced by a newer session), else the active slot.
+    public static func recoverableData() -> Data? {
+        return defaults.data(forKey: orphanKey) ?? defaults.data(forKey: key)
+    }
+
+    /// The phone acked a recovered journal — clear the slot it came from
+    /// (mirror of recoverableData()'s preference order).
+    public static func clearRecoverable() {
+        if defaults.data(forKey: orphanKey) != nil {
+            defaults.removeObject(forKey: orphanKey)
+        } else {
+            defaults.removeObject(forKey: key)
+        }
     }
 }

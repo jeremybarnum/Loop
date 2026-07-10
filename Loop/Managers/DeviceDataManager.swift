@@ -267,6 +267,9 @@ final class DeviceDataManager {
             loopManager.mutateSettings { $0.dosingEnabled = priorDosing }
             UserDefaults.appGroup?.dosingEnabledBeforeWatchLoan = nil
         }
+        // DESIGN-6: tell the watch its loan is over. WatchDataManager owns the
+        // WC session, so it observes this and queues the revoke message.
+        NotificationCenter.default.post(name: .PodLoanReclaimedViaEscapeHatch, object: self)
     }
 
     // MARK: - Status Extension
@@ -1470,6 +1473,7 @@ extension Notification.Name {
     static let PumpManagerChanged = Notification.Name(rawValue:  "com.loopKit.notification.PumpManagerChanged")
     static let CGMManagerChanged = Notification.Name(rawValue:  "com.loopKit.notification.CGMManagerChanged")
     static let PumpEventsAdded = Notification.Name(rawValue:  "com.loopKit.notification.PumpEventsAdded")
+    static let PodLoanReclaimedViaEscapeHatch = Notification.Name(rawValue:  "com.loopKit.notification.PodLoanReclaimedViaEscapeHatch")
 }
 
 // MARK: - ServicesManagerDosingDelegate
