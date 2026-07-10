@@ -497,3 +497,33 @@ other command paths for the same 0x31 class):**
   to the 0.05 pulse grid (negative clamps to 0 — would trap in UInt16 encoding),
   duration must be one of Pod.supportedTempBasalDurations. 7 unit tests cover the
   guards (PodProofKitGuardTests.swift); suite 150/150 green.
+
+---
+
+## DESIGN-5: hand-back cancels a leftover temp basal (built 2026-07-10, validation pending)
+
+**Why:** demonstrated live 2026-07-10 — a watch temp (0.10 vs sched 3.7) left running
+at hand-back is INVISIBLE to the phone: the status response says "Temp basal running"
+but carries no rate/duration, and stock deliberately declines to adopt unknown temps
+(the adoption line in PodState.updateDeliveryStatus is commented out upstream —
+stock adopts unknown BOLUSES because bolusNotDelivered reconstructs them; a temp has
+nothing to reconstruct from). Phone UI showed "normal", +0.0 U, while the pod ran the
+temp. Closed loop self-heals in one cycle (safe-cancel + own program — VERIFIED live
+on real pod #3: phone replaced the watch's foreign temp without a fault). Open loop
+never heals: the temp runs to expiry (up to 3 h) with phone IOB silently wrong.
+
+**Fix (built):** hand-back's first pod act cancels a running temp — journal-gated on
+sessionBasalRate (single-writer: journal state = pod state, modulo a naturally
+expired temp where the cancel is stock's sanctioned no-op). The facade journals
+.cancelTempBasal on success, closing the temp segment at hand-back time, so the loan
+window is fully self-contained. Best-effort like the odometer freshen: an
+unreachable/faulted pod does NOT block the hand-back; failure appends a ⚠ line to
+the hand-back summary. A deliberately SUSPENDED pod hands back suspended
+(sessionBasalRate is nil after suspend) — suspended hand-back's phone-side display
+is a separate open question.
+
+**Bench test:** set a temp from the watch → End Show Mode → pod should click the
+cancel; phone status pill shows scheduled; pump-manager details show
+basalDeliveryState active with pod deliveryStatus "Scheduled basal" (not temp);
+watch hand-back summary includes the cancel; audit expectedBasal matches a segment
+that ENDS at hand-back.

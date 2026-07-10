@@ -445,24 +445,67 @@ final class WatchPodLoanCoordinator: ObservableObject {
             // Retry of a failed hand-back: resend the exact same journal bytes.
             sendHandback()
         } else {
-            // Freshen the pod's delivered-odometer right before snapshotting the
-            // journal, so the phone's reconciliation audit sees delivery up to
-            // hand-back rather than up to the last command. Best-effort: hand back
-            // proceeds even if the read fails (journal keeps the last-known value).
-            controller.getStatus { [weak self] result in
-                Task { @MainActor in
-                    guard let self else { return }
-                    var summary = self.controller.loanJournalSummary ?? "No loan activity recorded."
-                    if case .failure(let error) = result {
-                        // The audit's deliveredLatest stays at the last successful
-                        // read — say so where the phone will log and show it (OQ-5
-                        // instrumentation: distinguishes freshen failure from a
-                        // genuinely idle odometer).
-                        summary += "\n⚠️ Final pod status read FAILED (\(error.localizedDescription)) — delivered total may be stale."
+            // DESIGN-5: hand the pod back running its SCHEDULE. A temp the watch
+            // leaves running is invisible to the phone — the pod's status response
+            // carries no rate or duration, and stock deliberately declines to
+            // adopt unknown temps (PodState.updateDeliveryStatus, adoption
+            // commented out). Closed loop replaces it within a cycle, but open
+            // loop would let it run to expiry with the phone's IOB none the
+            // wiser. Canceling makes the phone's "scheduled basal" belief TRUE
+            // at the moment control transfers, and closes the journal's last
+            // temp segment so the loan accounting is self-contained. A pod the
+            // user deliberately suspended stays suspended (sessionBasalRate is
+            // nil after a suspend). Best-effort like the freshen below: a
+            // hand-back must never be blocked by an unreachable or faulted pod.
+            cancelLeftoverTempIfNeeded { [weak self] cancelWarning in
+                guard let self else { return }
+                // Freshen the pod's delivered-odometer right before snapshotting the
+                // journal, so the phone's reconciliation audit sees delivery up to
+                // hand-back rather than up to the last command. Best-effort: hand back
+                // proceeds even if the read fails (journal keeps the last-known value).
+                self.controller.getStatus { [weak self] result in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        var summary = self.controller.loanJournalSummary ?? "No loan activity recorded."
+                        if let cancelWarning {
+                            summary += "\n" + cancelWarning
+                        }
+                        if case .failure(let error) = result {
+                            // The audit's deliveredLatest stays at the last successful
+                            // read — say so where the phone will log and show it (OQ-5
+                            // instrumentation: distinguishes freshen failure from a
+                            // genuinely idle odometer).
+                            summary += "\n⚠️ Final pod status read FAILED (\(error.localizedDescription)) — delivered total may be stale."
+                        }
+                        let journalData = self.controller.loanJournal?.encoded() ?? Data()
+                        self.pendingHandbackPayload = (summary: summary, journalData: journalData)
+                        self.sendHandback()
                     }
-                    let journalData = self.controller.loanJournal?.encoded() ?? Data()
-                    self.pendingHandbackPayload = (summary: summary, journalData: journalData)
-                    self.sendHandback()
+                }
+            }
+        }
+    }
+
+    /// DESIGN-5 helper: cancel a temp basal the watch believes is running, so
+    /// control transfers with the pod on its stored schedule. Journal-gated —
+    /// the watch is the single writer during a loan, so journal state matches
+    /// pod state except for a temp that expired on its own, where the cancel is
+    /// stock's sanctioned cancel-of-nothing no-op. On success the facade
+    /// journals .cancelTempBasal, closing the temp's segment at hand-back time.
+    /// On failure, returns a warning line for the hand-back summary; the
+    /// hand-back itself proceeds regardless.
+    private func cancelLeftoverTempIfNeeded(completion: @escaping (String?) -> Void) {
+        guard sessionBasalRate != nil else {
+            completion(nil)
+            return
+        }
+        controller.cancelTempBasal { result in
+            Task { @MainActor in
+                switch result {
+                case .success:
+                    completion(nil)
+                case .failure(let error):
+                    completion("⚠️ Leftover temp basal NOT canceled (\(error.localizedDescription)) — the pod continues it until it expires.")
                 }
             }
         }
@@ -611,6 +654,11 @@ private extension WatchPodLoanCoordinator {
         lastError = nil
         phase = .handingBack
         busy = true
+        // Mirror DESIGN-5: a leftover temp is canceled as part of hand-back.
+        if demoBasalRate != nil {
+            demoJournal?.record(.cancelTempBasal)
+            demoBasalRate = nil
+        }
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 600_000_000)
             self.phase = .done
