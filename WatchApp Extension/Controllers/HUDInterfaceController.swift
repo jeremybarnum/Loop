@@ -7,11 +7,13 @@
 //
 
 import WatchKit
+import Combine
 import LoopCore
 import LoopKit
 
 class HUDInterfaceController: WKInterfaceController {
     private var activeContextObserver: NSObjectProtocol?
+    private var commandFailureCancellable: AnyCancellable?
 
     @IBOutlet weak var loopHUDImage: WKInterfaceImage!
     @IBOutlet weak var glucoseLabel: WKInterfaceLabel!
@@ -43,6 +45,23 @@ class HUDInterfaceController: WKInterfaceController {
         loopManager.requestContextUpdate(completion: {
             self.loopManager.requestGlucoseBackfillIfNecessary()
         })
+
+        // LOUD surfacing of failed Show Mode pod commands (BUG-5): whichever HUD
+        // page is active presents the alert. @Published replays the current value
+        // on subscription, so a failure that lands while a dose screen is up is
+        // presented as soon as the user returns to a HUD page. Clearing before
+        // presenting dedupes across page switches.
+        let coordinator = ExtensionDelegate.shared().podLoanCoordinator
+        commandFailureCancellable = coordinator.$commandFailure
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] failure in
+                guard let self, let failure else { return }
+                coordinator.clearCommandFailure()
+                self.presentAlert(withTitle: failure.title,
+                                  message: failure.message,
+                                  preferredStyle: .alert,
+                                  actions: [WKAlertAction(title: NSLocalizedString("OK", comment: "Acknowledge failed pod command"), style: .default) {}])
+            }
     }
 
     override func didDeactivate() {
@@ -52,6 +71,7 @@ class HUDInterfaceController: WKInterfaceController {
             NotificationCenter.default.removeObserver(observer)
         }
         activeContextObserver = nil
+        commandFailureCancellable = nil
     }
 
     func update() {

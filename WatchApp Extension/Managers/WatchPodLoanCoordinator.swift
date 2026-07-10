@@ -15,6 +15,7 @@
 
 import Foundation
 import WatchConnectivity
+import WatchKit
 import OmniBLECore
 
 @MainActor
@@ -147,6 +148,19 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// (rapid-acting-adult fallback — the slower curve, so the fallback errs
     /// toward showing MORE remaining insulin).
     private(set) var loanInsulinModel: PodLoanInsulinModel = .rapidActingAdult
+
+    /// A pod command that failed DURING Show Mode, for loud surfacing (haptic +
+    /// alert on the HUD). Distinct from lastError (quiet, shown on the pod screen):
+    /// a mid-session failure — especially a bolus — must never be silent (BUG-5).
+    struct CommandFailure: Equatable {
+        let title: String
+        let message: String
+    }
+    @Published private(set) var commandFailure: CommandFailure?
+
+    func clearCommandFailure() {
+        commandFailure = nil
+    }
 
     /// Sim-demo mirrors of session state (the demo has no controller journal;
     /// demoJournal lets demo IOB decay exactly like hardware IOB).
@@ -324,14 +338,14 @@ final class WatchPodLoanCoordinator: ObservableObject {
 
     func suspend() {
         if Self.isSimulatorDemo { demoSuspend(); return }
-        runPodCommand { self.controller.suspend(completion: $0) }
+        runPodCommand(label: NSLocalizedString("Suspend", comment: "Command name: suspend")) { self.controller.suspend(completion: $0) }
     }
     func resume() {
         if Self.isSimulatorDemo { demoResume(); return }
         // Resume re-programs the pod's basal table: use the phone's REAL
         // schedule when it has synced (nil falls back to the proof flat 0.5).
         let schedule = realBasalSchedule
-        runPodCommand { self.controller.resume(schedule: schedule, completion: $0) }
+        runPodCommand(label: NSLocalizedString("Resume", comment: "Command name: resume")) { self.controller.resume(schedule: schedule, completion: $0) }
     }
 
     /// The phone's basal schedule as the pod-programmable OmniBLECore type,
@@ -349,7 +363,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
         let capped = min(max(units, 0), Self.maxBolusUnits)
         guard capped > 0 else { return }
         if Self.isSimulatorDemo { demoBolus(units: capped); return }
-        runPodCommand { self.controller.bolus(units: capped, completion: $0) }
+        runPodCommand(label: String(format: NSLocalizedString("Bolus %.2f U", comment: "Command name: bolus with units"), capped)) { self.controller.bolus(units: capped, completion: $0) }
     }
     /// Set the pod's basal to an absolute rate (U/hr). 0 = suspend. Capped at
     /// maxTempBasalRate; snapped to the pod's 0.05 U/hr resolution. Implemented as a
@@ -358,19 +372,19 @@ final class WatchPodLoanCoordinator: ObservableObject {
         let snapped = (min(max(rate, 0), Self.maxTempBasalRate) / 0.05).rounded() * 0.05
         if snapped <= 0 { suspend(); return }   // 0 U/hr = suspend
         if Self.isSimulatorDemo { demoSetTempBasal(rate: snapped); return }
-        runPodCommand { self.controller.setTempBasal(rate: snapped, duration: Self.tempBasalDuration, completion: $0) }
+        runPodCommand(label: NSLocalizedString("Set Basal", comment: "Command name: set basal")) { self.controller.setTempBasal(rate: snapped, duration: Self.tempBasalDuration, completion: $0) }
     }
     /// Cancel the running temp basal; the pod reverts to its scheduled basal.
     func cancelBasal() {
         if Self.isSimulatorDemo { demoCancelTempBasal(); return }
-        runPodCommand { self.controller.cancelTempBasal(completion: $0) }
+        runPodCommand(label: NSLocalizedString("Cancel Temp", comment: "Command name: cancel temp basal")) { self.controller.cancelTempBasal(completion: $0) }
     }
     func refreshStatus() {
         if Self.isSimulatorDemo { return }
-        runPodCommand { self.controller.getStatus(completion: $0) }
+        runPodCommand(label: NSLocalizedString("Status", comment: "Command name: status refresh")) { self.controller.getStatus(completion: $0) }
     }
 
-    private func runPodCommand(_ operation: (@escaping (Result<PodProofStatus, Error>) -> Void) -> Void) {
+    private func runPodCommand(label: String, _ operation: (@escaping (Result<PodProofStatus, Error>) -> Void) -> Void) {
         guard !busy, phase == .active else { return }
         busy = true
         lastError = nil
@@ -383,8 +397,21 @@ final class WatchPodLoanCoordinator: ObservableObject {
                 guard let self else { return }
                 self.busy = false
                 switch result {
-                case .success(let status): self.status = status
-                case .failure(let error): self.lastError = error.localizedDescription
+                case .success(let status):
+                    self.status = status
+                case .failure(let error):
+                    self.lastError = error.localizedDescription
+                    // LOUD failure (BUG-5): dose screens dismiss optimistically on
+                    // confirm, so a late failure must announce itself — haptic +
+                    // alert. The journal correctly excludes the command (recorded
+                    // only on success), so the truth is "not delivered".
+                    if self.phase == .active {
+                        WKInterfaceDevice.current().play(.failure)
+                        self.commandFailure = CommandFailure(
+                            title: String(format: NSLocalizedString("%@ Failed", comment: "Alert title for a failed Show Mode pod command (parameter: command name)"), label),
+                            message: error.localizedDescription + NSLocalizedString("\nNothing was delivered.", comment: "Alert body suffix for a failed Show Mode pod command")
+                        )
+                    }
                 }
             }
         }
@@ -421,10 +448,17 @@ final class WatchPodLoanCoordinator: ObservableObject {
             // journal, so the phone's reconciliation audit sees delivery up to
             // hand-back rather than up to the last command. Best-effort: hand back
             // proceeds even if the read fails (journal keeps the last-known value).
-            controller.getStatus { [weak self] _ in
+            controller.getStatus { [weak self] result in
                 Task { @MainActor in
                     guard let self else { return }
-                    let summary = self.controller.loanJournalSummary ?? "No loan activity recorded."
+                    var summary = self.controller.loanJournalSummary ?? "No loan activity recorded."
+                    if case .failure(let error) = result {
+                        // The audit's deliveredLatest stays at the last successful
+                        // read — say so where the phone will log and show it (OQ-5
+                        // instrumentation: distinguishes freshen failure from a
+                        // genuinely idle odometer).
+                        summary += "\n⚠️ Final pod status read FAILED (\(error.localizedDescription)) — delivered total may be stale."
+                    }
                     let journalData = self.controller.loanJournal?.encoded() ?? Data()
                     self.pendingHandbackPayload = (summary: summary, journalData: journalData)
                     self.sendHandback()

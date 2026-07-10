@@ -624,7 +624,11 @@ extension WatchDataManager: WCSessionDelegate {
         if let podDelta = journal.podDeliveredDelta {
             let expectedBasal = expectedScheduledBasal(from: journal.startedAt, to: handedBackAt, suspendWindows: journal.suspendWindows(endingAt: handedBackAt))
             let remainder = podDelta - journal.totalBolusUnits - expectedBasal
-            log.default("Watch loan audit: podDelta=%{public}.2f boluses=%{public}.2f expectedBasal=%{public}.2f remainder=%{public}.2f", podDelta, journal.totalBolusUnits, expectedBasal, remainder)
+            log.default("Watch loan audit: podDelta=%{public}.2f (start=%{public}@ latest=%{public}@) boluses=%{public}.2f expectedBasal=%{public}.2f remainder=%{public}.2f",
+                        podDelta,
+                        journal.deliveredAtStart.map { String(format: "%.2f", $0) } ?? "nil",
+                        journal.deliveredLatest.map { String(format: "%.2f", $0) } ?? "nil",
+                        journal.totalBolusUnits, expectedBasal, remainder)
 
             let remainderThreshold = 0.05   // one pod pulse; filters quantization/staleness noise
             let remainderSanityCap = 5.0    // implausible for one loan — odometer corruption guard
