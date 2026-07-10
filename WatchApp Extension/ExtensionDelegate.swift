@@ -82,6 +82,8 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
     }
 
     func applicationDidBecomeActive() {
+        // §4c-3: deliver any loan journal a previous run left behind (crash/update).
+        podLoanCoordinator.attemptRecoveredJournalHandback()
         if WCSession.default.activationState != .activated {
             WCSession.default.activate()
         }

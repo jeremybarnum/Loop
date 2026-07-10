@@ -672,23 +672,31 @@ extension WatchDataManager: WCSessionDelegate {
             log.default("Watch loan audit skipped: no odometer baseline in journal")
         }
 
-        // (c) SHADOW — symmetric reconciliation, computed and logged but NOT
-        // entered (docs/WATCH_INSULIN_MODEL.md §5). Reconstructs the journal's
-        // off-schedule basal timeline and reports the signed net vs schedule —
-        // including the NEGATIVE net from suspends/low temps that the active
-        // path deliberately drops. Real-pod sessions validate these shadow
-        // figures before symmetric write-back is allowed to touch dosing IOB.
-        let shadowSegments = journal.offScheduleSegments(until: handedBackAt)
-        if !shadowSegments.isEmpty,
-           let schedule = deviceManager.loopManager.basalRateScheduleApplyingOverrideHistory {
+        // (c) SHADOW-ALL (§4c phase 1): build the exact temp-basal DoseEntries the
+        // journal's off-schedule segments WOULD enter — the native representation
+        // where Loop derives the signed net itself — and LOG them without entering.
+        // Active behavior stays byte-identical while real-pod sessions accumulate
+        // shadow-vs-reality evidence for the §5 gate. Phase 2 (NOT a simple flag
+        // flip): enter these via DoseStore.addDoses AND rework the odometer
+        // remainder to podDelta − boluses − (scheduled + journal net), or the
+        // above-schedule delivery double-counts.
+        let shadowDoses = buildWatchLoanBasalDoses(journal: journal, handedBackAt: handedBackAt, journalHash: journalHash)
+        if !shadowDoses.isEmpty {
             var shadowNet = 0.0
-            for segment in shadowSegments {
-                let deliveredUnits = segment.actualRate * segment.end.timeIntervalSince(segment.start) / 3600.0
-                let scheduledUnits = schedule.truncatingBetween(start: segment.start, end: segment.end)
-                    .reduce(0) { $0 + $1.value * $1.endDate.timeIntervalSince($1.startDate) / 3600.0 }
-                shadowNet += deliveredUnits - scheduledUnits
+            for dose in shadowDoses {
+                shadowNet += dose.netBasalUnits
+                // One line per would-be entry; pre-formatted (DiagnosticLog arity!).
+                let desc = String(format: "%@ %.2f U/hr %@→%@ sched %.2f net %+.2f U",
+                                  dose.syncIdentifier ?? "?",
+                                  dose.unitsPerHour,
+                                  Self.shadowTimeFormatter.string(from: dose.startDate),
+                                  Self.shadowTimeFormatter.string(from: dose.endDate),
+                                  dose.scheduledBasalRate?.doubleValue(for: HKUnit.internationalUnit().unitDivided(by: .hour())) ?? 0,
+                                  dose.netBasalUnits)
+                log.default("Watch loan shadow entry: %{public}@", desc)
             }
-            log.default("Watch loan shadow (symmetric): %{public}d basal segment(s), net %{public}.2f U vs schedule — not entered (shadow mode)", shadowSegments.count, shadowNet)
+            log.default("Watch loan shadow (symmetric): %{public}d would-be entr%{public}@ net %{public}.2f U vs schedule — not entered (shadow mode)",
+                        shadowDoses.count, shadowDoses.count == 1 ? "y," : "ies,", shadowNet)
         }
 
         guard !doses.isEmpty else {
@@ -710,6 +718,49 @@ extension WatchDataManager: WCSessionDelegate {
                 self?.log.default("Watch loan reconciled: %{public}d dose(s) entered", doses.count)
             }
         }
+    }
+
+    private static let shadowTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
+    /// §4c: the temp-basal DoseEntries representing the journal's off-schedule
+    /// delivery — one per (segment × schedule slice) so scheduledBasalRate is
+    /// exact for each entry. Suspends are rate-0 temp basals (mathematically
+    /// identical to .suspend; avoids the .suspend HK path's unguarded-duration
+    /// trap). Deterministic syncIdentifiers make retries idempotent-by-hash.
+    /// Phase 1 consumes these for SHADOW logging only.
+    private func buildWatchLoanBasalDoses(journal: WatchLoanJournal, handedBackAt: Date, journalHash: String) -> [DoseEntry] {
+        guard let schedule = deviceManager.loopManager.basalRateScheduleApplyingOverrideHistory else {
+            return []
+        }
+        let insulinType = deviceManager.loopManager.pumpInsulinType
+        let rateUnit = HKUnit.internationalUnit().unitDivided(by: .hour())
+        var doses: [DoseEntry] = []
+        var seq = 0
+        for segment in journal.offScheduleSegments(until: handedBackAt) {
+            for slice in schedule.truncatingBetween(start: segment.start, end: segment.end) {
+                let duration = slice.endDate.timeIntervalSince(slice.startDate)
+                guard duration > 1 else { continue }   // degenerate slices: skip (HK duration guard)
+                doses.append(DoseEntry(
+                    type: .tempBasal,
+                    startDate: slice.startDate,
+                    endDate: slice.endDate,
+                    value: segment.actualRate,
+                    unit: .unitsPerHour,
+                    deliveredUnits: segment.actualRate * duration / 3600.0,
+                    syncIdentifier: "watchloan-\(journalHash.prefix(8))-\(seq)",
+                    scheduledBasalRate: HKQuantity(unit: rateUnit, doubleValue: slice.value),
+                    insulinType: insulinType,
+                    automatic: false,
+                    manuallyEntered: true,
+                    isMutable: false))
+                seq += 1
+            }
+        }
+        return doses
     }
 
     /// Scheduled basal (U) the pod was expected to deliver over the loan window,

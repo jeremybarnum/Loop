@@ -195,6 +195,13 @@ public struct PodLoanJournal: Equatable, Codable {
     // MARK: - WatchConnectivity transport (watch → phone on hand-back)
 
     /// Encode for sending to the phone. Small JSON blob.
+    /// Counterpart of encoded() — same coder configuration (ISO-8601 dates).
+    public static func decoded(from data: Data) -> PodLoanJournal? {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(PodLoanJournal.self, from: data)
+    }
+
     public func encoded() -> Data? {
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
@@ -221,5 +228,31 @@ public struct PodLoanJournal: Equatable, Codable {
         let f = DateFormatter()
         f.dateFormat = "HH:mm"
         return f.string(from: date)
+    }
+}
+
+
+/// §4c-3 (journal persistence): the loan journal survives watch-app crashes and
+/// updates by being written to UserDefaults on every mutation. A journal that
+/// outlives its session is RECOVERED data — handed back to the phone for
+/// reconciliation, never used to resume the session. Motivating incident:
+/// 2026-07-10, a phone crash at hand-back plus an app update destroyed an
+/// in-memory journal holding 0.85 U of delivered insulin.
+public enum PodLoanJournalStore {
+    /// Injectable for tests; .standard on the watch.
+    public static var defaults: UserDefaults = .standard
+    static let key = "PodLoanJournalStore.activeJournal"
+
+    public static func persist(_ journal: PodLoanJournal?) {
+        guard let data = journal?.encoded() else { return }
+        defaults.set(data, forKey: key)
+    }
+
+    public static func clear() {
+        defaults.removeObject(forKey: key)
+    }
+
+    public static func persistedData() -> Data? {
+        return defaults.data(forKey: key)
     }
 }

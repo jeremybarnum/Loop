@@ -511,6 +511,30 @@ final class WatchPodLoanCoordinator: ObservableObject {
         }
     }
 
+    /// §4c-3: a journal persisted by a PREVIOUS run (crash or app update killed the
+    /// watch app mid-loan) is handed back best-effort whenever the app becomes
+    /// active — DATA FIRST; the dead session is never resumed. The phone's normal
+    /// hand-back handler reconciles it (idempotent via the journal-hash guard) and
+    /// reclaims the pod, so this also un-orphans a pod stranded by a crash.
+    func attemptRecoveredJournalHandback() {
+        guard !Self.isSimulatorDemo, phase == .idle,
+              let data = controller.recoveredLoanJournalData else { return }
+        let session = WCSession.default
+        guard session.activationState == .activated, session.isReachable else {
+            return   // keep it persisted; retry on next activation
+        }
+        var summary = PodLoanJournal.decoded(from: data)?.summaryText ?? "Recovered watch loan journal."
+        summary += "\n⚠️ Recovered after the watch app restarted mid-session."
+        let handback = PodHandbackUserInfo(handedBackAt: Date(), summary: summary, journalData: data)
+        session.sendMessage(handback.rawValue, replyHandler: { [weak self] _ in
+            Task { @MainActor in
+                self?.controller.clearRecoveredLoanJournal()
+            }
+        }, errorHandler: { _ in
+            // Keep it persisted; retried on the next activation.
+        })
+    }
+
     /// The journal payload for the in-flight hand-back, retained across retries so
     /// resends are byte-identical (see handBack). Cleared on success or when any
     /// new pod command invalidates it.
