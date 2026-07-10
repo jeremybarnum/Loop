@@ -281,6 +281,18 @@ public final class PodProofController: NSObject {
     /// on takeover). Surfaced to the user on hand-back. See PodLoanJournal.
     public private(set) var loanJournal: PodLoanJournal?
 
+    /// A journal persisted by a PREVIOUS run (crash / app update mid-loan).
+    /// Only meaningful when no live journal exists; nil during an active loan.
+    public var recoveredLoanJournalData: Data? {
+        guard loanJournal == nil else { return nil }
+        return PodLoanJournalStore.persistedData()
+    }
+
+    /// The phone confirmed receipt of a recovered journal — forget it.
+    public func clearRecoveredLoanJournal() {
+        PodLoanJournalStore.clear()
+    }
+
     /// Live human-readable summary of the current loan, or nil if none active.
     public var loanJournalSummary: String? { loanJournal?.summaryText }
 
@@ -290,6 +302,7 @@ public final class PodProofController: NSObject {
     /// Note a status into the loan journal (running pod-delivered cross-check).
     private func journalNoteStatus(_ status: PodProofStatus) {
         loanJournal?.noteDelivered(status.insulinDelivered)
+        PodLoanJournalStore.persist(loanJournal)
     }
 
     /// Wrap a completion so that, on success, it records a loan event (if any)
@@ -310,6 +323,7 @@ public final class PodProofController: NSObject {
     private func journalRecord(_ kind: PodLoanEvent.Kind) {
         guard loanJournal != nil else { return }
         loanJournal?.record(kind)
+        PodLoanJournalStore.persist(loanJournal)
         emit("LOAN JOURNAL: \(PodLoanEvent(kind: kind).describedAction)")
     }
 
@@ -320,6 +334,7 @@ public final class PodProofController: NSObject {
     public func endLoan() -> PodLoanJournal? {
         guard loanJournal != nil else { return nil }
         loanJournal?.record(.handedBack)
+        PodLoanJournalStore.clear()   // acked hand-back: the phone has the journal
         emit("LOAN JOURNAL: hand-back\n" + (loanJournal?.summaryText ?? ""))
         return loanJournal
     }
@@ -807,6 +822,7 @@ public final class PodProofController: NSObject {
         // does to the pod, to tell the phone/user on hand-back. deliveredAtStart
         // is filled by the first status read below.
         loanJournal = PodLoanJournal(startedAt: Date())
+        PodLoanJournalStore.persist(loanJournal)
 
         // Build a PodState describing an ALREADY-ACTIVATED pod from the identity.
         // messageTransportState starts with no session keys (ck/noncePrefix nil);
