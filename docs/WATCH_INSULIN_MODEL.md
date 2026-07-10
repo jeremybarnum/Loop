@@ -290,3 +290,33 @@ Steps 1–4 are all buildable now on `watch-prediction`; nothing merges until re
    real-pod green. Recommend shadow — the failure direction is hypo.
 5. **Emulator fidelity:** merged-odometer accrual only (recommended, matches real pod)
    vs also expose per-type sub-totals (rejected — validates against a fiction).
+
+
+## 4c. DECISION (Jeremy, 2026-07-10): temp-basal dose entries adopted; §4b options 1+2 dropped
+
+Investigation verdict (five-trace, code-cited) accepted with all four rulings:
+
+1. **Representation = temp-basal DoseEntries through the SAME non-pump addDoses pipe**
+   as the boluses. One entry per (off-schedule segment × schedule slice):
+   type .tempBasal (rate 0 for suspend windows — mathematically identical to .suspend
+   and avoids the .suspend HK path's unguarded-duration crash trap), real start/end,
+   value = actual rate, deliveredUnits exact, scheduledBasalRate = the schedule rate
+   for that slice, deterministic syncIdentifier "watchloan-<journalHash8>-<n>",
+   automatic:false, manuallyEntered:true, isMutable:false. Negative net is DERIVED by
+   Loop (netBasalUnits), never stored. §4a's intent (no Loop-internals changes, stay
+   in the non-pump paradigm) is honored: data through a public API. Midpoint fake
+   boluses + netting are DROPPED (they falsify the record; cannot represent
+   suspend-with-no-prior-bolus — the most safety-relevant case).
+2. **Two phases.** Phase 1 SHADOW-ALL: build the full entries every hand-back, LOG
+   them, enter nothing — active behavior byte-identical; accumulate real-pod
+   shadow-vs-reality evidence (§5 gate). Phase 2 (post-gate): enter both directions
+   and rework the odometer audit to remainder' = podDelta − boluses − (scheduled +
+   journal net) so above-schedule delivery isn't double-counted. The flip is a single
+   gate constant.
+3. **Journal persistence on the watch** (promoted by the 2026-07-10 crash: a phone
+   crash at hand-back + app update destroyed an in-memory journal holding 0.85 U):
+   persist on every journal mutation; on relaunch, recover and best-effort auto-send
+   the recovered journal as a hand-back (idempotent phone-side via the hash guard).
+   Recovery does NOT resurrect the live session — data first.
+4. **"Delete All" non-pump footgun: accepted + documented** (user-initiated; excluding
+   loan entries from bulk delete is possible later if it ever bites).
