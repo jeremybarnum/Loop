@@ -527,3 +527,25 @@ cancel; phone status pill shows scheduled; pump-manager details show
 basalDeliveryState active with pod deliveryStatus "Scheduled basal" (not temp);
 watch hand-back summary includes the cancel; audit expectedBasal matches a segment
 that ENDS at hand-back.
+
+---
+
+## DESIGN-6: loan-revoke message after escape-hatch reclaim (PLANNED, approved 2026-07-10)
+
+**Gap:** the escape-hatch reclaim is phone-local by design (dead-watch case) — a
+LIVE watch is never told the loan ended. A watch left behind in Show Mode keeps
+believing it owns the pod; when it wanders back into pod range its standing BLE bid
+contests the phone's (split-brain: both devices think they're the single writer).
+No fault, journal still reconciles at the eventual End Show Mode — but the
+single-writer discipline depends on a human habit ("End Show Mode when you pick
+the watch back up").
+
+**Plan:** after reclaimPodFromWatch(), phone sends a "loan revoked" WC message
+(existing plumbing; queued userInfo so it survives unreachability and delivers
+when the watch reconnects). Watch on receipt: if in an active loan, stop bidding
+for the pod (drop takeover connection), keep the journal, transition to a
+"Reclaimed by iPhone" done-state that still sends the journal hand-back for
+reconciliation. Revoke must be idempotent and ignorable when no loan is active.
+
+**Priority:** after current validations (one-tap takeover, DESIGN-5 bench,
+live reclaim drill) pass.
