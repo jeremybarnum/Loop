@@ -581,6 +581,32 @@ public final class PodProofController: NSObject {
         }
         runCommand(named: String(format: "Temp basal %.2f U/hr for %.0f min", rate, duration / 60),
                    completion: journaling(.tempBasal(rate: rate, duration: duration), completion)) { session in
+            // SAFE CANCEL FIRST — stock OmniBLE's enactTempBasal idiom
+            // (OmniBLEPumpManager.swift:2104-2136), conservative branch:
+            // programming a temp while one is running FAULTS a real pod
+            // (0x31 "incorrect pod state" — killed bench pod #2, 2026-07-10).
+            // The emulator accepts overlapping temps, which is why this never
+            // surfaced on the rig. The cancel is deliberate plumbing, not a
+            // user action, so it is not journaled; the new .tempBasal event
+            // closes the previous temp's segment in the net-basal math anyway.
+            let cancelResult = session.cancelDelivery(deliveryType: .tempBasal, beepType: .noBeepCancel)
+            let statusAfterCancel: StatusResponse
+            switch cancelResult {
+            case .certainFailure(let error):
+                throw error
+            case .unacknowledged(let error):
+                throw error
+            case .success(let status, _):
+                statusAfterCancel = status
+            }
+            // Mirror stock guards: no temp during an in-flight bolus or while
+            // suspended (the pod would fault or misbehave).
+            guard !statusAfterCancel.deliveryStatus.bolusing else {
+                throw PodCommsError.unfinalizedBolus
+            }
+            guard !statusAfterCancel.deliveryStatus.suspended else {
+                throw PodCommsError.podSuspended
+            }
             let result = session.setTempBasal(rate: rate, duration: duration, isHighTemp: false, automatic: false,
                                               acknowledgementBeep: Self.testBeepsEnabled)
             switch result {

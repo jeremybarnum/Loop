@@ -435,3 +435,34 @@ own branch in ALL THREE repos (revert = don't merge). Build combos:
 After bench validation passes: merge formal-handoff → watch-prediction in each repo.
 LoopKit + Loop branches are on the jb fork; OmniBLE is LOCAL ONLY until a
 jeremybarnum/OmniBLE fork exists.
+
+
+---
+
+## BUG-6: temp-over-temp FAULTS a real pod — 0x31 → terminal fault 049 (found 2026-07-10 07:29, cost: bench pod #2)
+
+**Symptom:** watch basal battery: set 
+ basal (worked) → CHANGE to a new rate
+(failed, watch alert "Set Basal Failed — Pod Fault 0x31: incorrect pod state for
+command") → cancel failed (same) → hand-back's pod steps failed → phone reclaimed and
+raised Loop's own "Critical Pod Fault 049 — insulin delivery stopped, change pod now".
+Pod terminal (049 = 0x31 decimal). Journal still delivered; Non-Pump Insulin correct;
+all failures surfaced LOUDLY on the watch (BUG-5 fix working under a real fault).
+
+**Root cause:** PodProofKit.setTempBasal programmed a temp while one was running.
+A real pod requires the running temp to be CANCELED first — stock OmniBLE's
+enactTempBasal does a "safe cancel TB" whenever a temp may be running (conservative:
+even when merely lacking fresh status; OmniBLEPumpManager.swift:2104-2136) plus two
+guards (no temp during in-flight bolus; none while suspended). The facade skipped all
+three. THE EMULATOR ACCEPTS OVERLAPPING TEMPS (overwrites TempBasalEnd) — three days
+of rig testing never exercised set-then-CHANGE, and the emulator wouldn't have
+objected anyway. Second bug of the "emulator too forgiving" class (after OQ-4).
+
+**Fix (shipped):** PodProofKit.setTempBasal now mirrors the stock idiom exactly:
+safe-cancel first (not journaled — plumbing; the new .tempBasal event closes the
+prior segment in the net-basal math), then the bolusing/suspended guards, then the
+program. Bench test for pod #3: set → CHANGE → change again → cancel → suspend →
+resume — the full matrix.
+
+**Emulator follow-up (parked, Jeremy vetoed emulator patches for now):** modeling
+0x31 on overlapping temp programs would make the rig catch this class of bug.
