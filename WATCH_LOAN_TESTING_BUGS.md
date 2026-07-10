@@ -364,8 +364,11 @@ retained for retry after a failed attempt):
   doses (IOB understated = hypo direction if manually dosed against; auto-dosing safe
   only because dosing stays paused until hand-back). Fix direction: journal streaming
   via transferUserInfo (queued) during the session.
-- OPEN: AWDL (peer-to-peer Wi-Fi, radios on but no shared network) — the show-ring
-  case. Untested; determines whether venues need a BT-on-for-paperwork ritual.
+- AWDL: CLOSED NEGATIVE (2026-07-09 ~20:2x): Wi-Fi radio ON but joined to no network,
+  BT off → hand-back attempt fired the warning. Peer-to-peer Wi-Fi does NOT carry WC;
+  a genuine shared network (or BT) is required. SHOW-DAY RITUAL therefore: BT off for
+  control; to hand back, BT on briefly — which conveniently also triggers the phone's
+  ~2 s pod reclaim, so one switch performs both halves of the return.
 
 ## DESIGN-4: hand-back received while phone BT is off → pod orphaned; nag needed
 Wi-Fi hand-back means the phone can hold the journal while unable to touch the pod
