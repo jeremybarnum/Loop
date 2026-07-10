@@ -375,9 +375,12 @@ retained for retry after a failed attempt):
   via transferUserInfo (queued) during the session.
 - AWDL: CLOSED NEGATIVE (2026-07-09 ~20:2x): Wi-Fi radio ON but joined to no network,
   BT off → hand-back attempt fired the warning. Peer-to-peer Wi-Fi does NOT carry WC;
-  a genuine shared network (or BT) is required. SHOW-DAY RITUAL therefore: BT off for
-  control; to hand back, BT on briefly — which conveniently also triggers the phone's
-  ~2 s pod reclaim, so one switch performs both halves of the return.
+  a genuine shared network (or BT) is required. Refinement (same night): after a total
+  transport loss, REJOINING Wi-Fi with BT still off did NOT restore reachability — the
+  hand-back went through only once BT came on. Wi-Fi SUSTAINS an alive WC session but
+  does not reliably RE-ESTABLISH one (bootstrap rides BT). SHOW-DAY RITUAL therefore:
+  BT off for control; to hand back, BT on briefly — which conveniently also triggers
+  the phone's ~2 s pod reclaim, so one switch performs both halves of the return.
 
 ## DESIGN-4: hand-back received while phone BT is off → pod orphaned; nag needed
 Wi-Fi hand-back means the phone can hold the journal while unable to touch the pod
