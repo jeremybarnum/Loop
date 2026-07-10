@@ -416,3 +416,22 @@ watch-side BT-off alert never fires in this case (phone IS reachable). FIX: phon
 alert on hand-back-received-while-BT-off: "Pod handed back — turn on Bluetooth to
 resume control." (The watch alert's condition tests reachability; the real question is
 pod-controllability.)
+
+---
+
+## BRANCH SCHEME (2026-07-09 late): formal-handoff is a cross-repo feature branch
+
+The formal handoff is major, dosing-critical, validation-pending — so it lives on its
+own branch in ALL THREE repos (revert = don't merge). Build combos:
+
+- **STABLE** (everything through the real-pod session, no handoff):
+  Loop `watch-prediction` (= tag `pre-handoff-stable`, d54f1a2a) +
+  LoopKit `march2026` + OmniBLE detached `3782c58` (upstream main-ish).
+- **HANDOFF** (bench build):
+  Loop `formal-handoff` + LoopKit `formal-handoff` + OmniBLE `formal-handoff`.
+  All three names must match — mixed combos won't compile (Loop references the
+  LoopKit protocol) or silently lack the release behavior.
+
+After bench validation passes: merge formal-handoff → watch-prediction in each repo.
+LoopKit + Loop branches are on the jb fork; OmniBLE is LOCAL ONLY until a
+jeremybarnum/OmniBLE fork exists.
