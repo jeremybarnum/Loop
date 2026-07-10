@@ -131,7 +131,16 @@ extension DeviceDataManager {
     func didTapOnPumpStatus(_ view: BaseHUDView? = nil) -> HUDTapAction? {
         if let action = bluetoothProvider.bluetoothState.action {
             return action
-        } else if let onboardingManager = onboardingManager, !onboardingManager.isComplete, pumpManager?.isOnboarded != true {
+        }
+        // During a loan, tapping the pump status offers the ESCAPE HATCH: reclaim
+        // the pod without a hand-back (watch lost/dead). Normal loans end from the
+        // watch; this exists because the phone no longer reclaims accidentally
+        // (formal handoff removed the BT-toggle safety net).
+        if podLoanedToWatch, (pumpManager as? PumpConnectionLendable)?.isConnectionReleased == true {
+            presentReclaimPodAlert()
+            return .takeNoAction
+        }
+        if let onboardingManager = onboardingManager, !onboardingManager.isComplete, pumpManager?.isOnboarded != true {
             onboardingManager.resume()
             return .takeNoAction
         } else if let pumpManagerHUDProvider = pumpManagerHUDProvider,

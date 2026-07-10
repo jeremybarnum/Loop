@@ -522,8 +522,23 @@ extension WatchDataManager: WCSessionDelegate {
     /// see PodLoanIdentity), and pause automatic dosing for the loan. If there's
     /// no active pod, the reply is a denial and nothing is changed.
     private func handlePodLoanRequest(replyHandler: @escaping ([String: Any]) -> Void) {
-        let grant = PodLoanIdentity.grant(fromPumpManagerRawState: deviceManager.pumpManager?.rawState,
+        var grant = PodLoanIdentity.grant(fromPumpManagerRawState: deviceManager.pumpManager?.rawState,
                                           insulinTypeRaw: deviceManager.loopManager.pumpInsulinType?.rawValue)
+
+        // FORMAL HANDOFF: the phone must deliberately stop bidding for the pod's
+        // connection BEFORE granting, so the watch takes over uncontested — no
+        // Bluetooth-off ritual, no reclaim races. A pump manager that can't
+        // release gets no loan (granting while still bidding would be a lie:
+        // the phone would steal the pod back within seconds).
+        if grant.granted {
+            if let lendable = deviceManager.pumpManager as? PumpConnectionLendable {
+                lendable.releaseConnection()
+                log.default("Pod connection released for loan (phone stops bidding)")
+            } else {
+                log.error("Pod loan denied: pump manager cannot release its connection")
+                grant = .denied(reason: "Pump can't release the pod")
+            }
+        }
 
         if grant.granted {
             // Mark the loan window. The phone UI reports only its own truth
@@ -582,8 +597,17 @@ extension WatchDataManager: WCSessionDelegate {
             reconcileWatchLoan(journalData: handback.journalData, handedBackAt: handback.handedBackAt, journalHash: journalHash)
         }
 
-        // Reconnect to the pod and refresh status now that we own it again.
-        deviceManager.pumpManager?.ensureCurrentPumpData(completion: { _ in })
+        // FORMAL HANDOFF: resume bidding for the pod's connection. The standing
+        // connect re-arms, the session re-establishes on next contact (pod-side
+        // EAP resync), and the next status poll resynchronizes pump data — no
+        // manual poll here (the link isn't up yet; it would just error).
+        if let lendable = deviceManager.pumpManager as? PumpConnectionLendable {
+            lendable.reclaimConnection()
+            log.default("Pod connection reclaimed after hand-back (phone resumes bidding)")
+        } else {
+            // Legacy path (pump manager without the capability): poll to refresh.
+            deviceManager.pumpManager?.ensureCurrentPumpData(completion: { _ in })
+        }
     }
 
     /// DIST-3 Phase B: enter what the watch delivered into the phone's dose

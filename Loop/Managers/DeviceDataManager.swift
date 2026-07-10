@@ -239,6 +239,36 @@ final class DeviceDataManager {
     /// See DeviceDataManager+DeviceStatus.pumpStatusHighlight.
     var podLoanedToWatch = false
 
+    /// ESCAPE HATCH for a loan that will never be handed back (watch lost, dead,
+    /// or out of reach): reclaim the pod's connection and end the loan phone-side.
+    /// The watch's journal is NOT available on this path — any insulin it
+    /// delivered is missing from IOB until (if ever) the hand-back arrives, at
+    /// which point the normal reconciliation + duplicate guard handle it. Dosing
+    /// is restored to its pre-loan state; the user was warned in the confirm alert.
+    /// Present the reclaim confirmation (mirrors DeliveryUncertaintyAlertManager's
+    /// use of alertPresenter for pump-state recovery alerts).
+    func presentReclaimPodAlert() {
+        let alert = UIAlertController(
+            title: NSLocalizedString("Pod Is On Loan", comment: "Title of the reclaim-pod alert"),
+            message: NSLocalizedString("The pod is being controlled from the watch. Reclaim control now?\n\nOnly do this if the watch can't hand back normally. Insulin delivered from the watch stays missing from the phone's records until the watch reconnects.", comment: "Message of the reclaim-pod alert"),
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: NSLocalizedString("Reclaim Pod", comment: "Confirm reclaim"), style: .destructive) { [weak self] _ in
+            self?.reclaimPodFromWatch()
+        })
+        alert.addAction(UIAlertAction(title: NSLocalizedString("Cancel", comment: "Cancel reclaim"), style: .cancel))
+        alertPresenter.present(alert, animated: true, completion: nil)
+    }
+
+    func reclaimPodFromWatch() {
+        log.default("Manual pod reclaim from watch (escape hatch) — journal not yet received")
+        (pumpManager as? PumpConnectionLendable)?.reclaimConnection()
+        podLoanedToWatch = false
+        if let priorDosing = UserDefaults.appGroup?.dosingEnabledBeforeWatchLoan {
+            loopManager.mutateSettings { $0.dosingEnabled = priorDosing }
+            UserDefaults.appGroup?.dosingEnabledBeforeWatchLoan = nil
+        }
+    }
+
     // MARK: - Status Extension
 
     private var statusExtensionManager: ExtensionDataManager!
