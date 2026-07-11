@@ -18,12 +18,12 @@ enum PodControlEntry {
     case bolus   // Bolus button in Show Mode → the bolus dial
     case basal   // Override button in Show Mode → the basal dial
     case end     // horse tapped while in Show Mode → End Show Mode
+    case predict // Carbs button in Show Mode → prediction screen (enter BG → forecast)
 }
 
 struct WatchPodControlView: View {
     @ObservedObject var coordinator: WatchPodLoanCoordinator
     var entry: PodControlEntry = .start
-    @State private var showingPrediction = false
     /// Return to the main HUD (set by the hosting controller). Used by the dose
     /// screens to dismiss after a delivery, like the regular bolus flow.
     var dismiss: () -> Void = {}
@@ -68,7 +68,7 @@ struct WatchPodControlView: View {
     /// The crown-driven bolus/basal dose screens — rendered outside the ScrollView so the
     /// Digital Crown reaches them immediately (no tap-to-focus needed).
     private var isDoseScreen: Bool {
-        coordinator.phase == .active && (entry == .bolus || entry == .basal)
+        coordinator.phase == .active && (entry == .bolus || entry == .basal || entry == .predict)
     }
 
     @ViewBuilder
@@ -157,6 +157,12 @@ struct WatchPodControlView: View {
             ShowModeDoseView(kind: .bolus, coordinator: coordinator, onFinish: dismiss)
         case .basal:
             ShowModeDoseView(kind: .basal, coordinator: coordinator, onFinish: dismiss)
+        case .predict:
+            PredictionView(
+                engine: WatchPredictionEngine(
+                    loopManager: ExtensionDelegate.shared().loopManager,
+                    coordinator: coordinator),
+                unit: ExtensionDelegate.shared().loopManager.settings.glucoseUnit ?? .milligramsPerDeciliter)
         case .start, .end:
             endSection
         }
@@ -165,17 +171,6 @@ struct WatchPodControlView: View {
     private var endSection: some View {
         VStack(spacing: 10) {
             statusCard
-            Button(action: { showingPrediction = true }) {
-                Label("Predict", systemImage: "chart.line.uptrend.xyaxis")
-            }
-            .disabled(coordinator.busy)
-            .sheet(isPresented: $showingPrediction) {
-                PredictionView(
-                    engine: WatchPredictionEngine(
-                        loopManager: ExtensionDelegate.shared().loopManager,
-                        coordinator: coordinator),
-                    unit: ExtensionDelegate.shared().loopManager.settings.glucoseUnit ?? .milligramsPerDeciliter)
-            }
             Button(action: coordinator.handBack) {
                 Label("End Show Mode", systemImage: "iphone")
             }

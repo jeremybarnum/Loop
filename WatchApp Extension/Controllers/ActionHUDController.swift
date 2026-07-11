@@ -120,12 +120,13 @@ final class ActionHUDController: HUDInterfaceController {
             }
         }
 
-        // In Show Mode the phone is away: Carbs (routes to the phone) is unavailable,
-        // while Bolus and the Override button (which becomes the basal control) must
-        // stay enabled since they drive the pod directly — regardless of the loop-mode
-        // logic above that might otherwise disable them.
+        // In Show Mode the phone is away: the carbs slot becomes the prediction
+        // screen (see HUDInterfaceController.addCarbs), and Bolus and the Override
+        // button (which becomes the basal control) must stay enabled since they
+        // drive the pod directly — regardless of the loop-mode logic above that
+        // might otherwise disable them.
         if isInShowMode {
-            carbsButtonGroup.state = .disabled
+            carbsButtonGroup.state = .off
             bolusButtonGroup.state = .off
             overrideButtonGroup.state = .off
         }

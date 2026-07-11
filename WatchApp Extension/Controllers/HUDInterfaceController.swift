@@ -145,6 +145,13 @@ class HUDInterfaceController: WKInterfaceController {
     }
 
     @IBAction func addCarbs() {
+        // In Show Mode the phone (and its carb-entry flow) is away, so the carbs
+        // slot becomes the prediction screen: enter a BG, get the forecast and
+        // temp-basal recommendation. Display/recommend only — it doses nothing.
+        if isInShowMode {
+            presentController(withName: WatchPodControlController.className, context: PodControlEntry.predict)
+            return
+        }
         presentController(withName: CarbAndBolusFlowController.className, context: CarbAndBolusFlow.Configuration.carbEntry(nil))
     }
     
