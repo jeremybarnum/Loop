@@ -249,6 +249,11 @@ public final class PodProofController: NSObject {
     public var onDiscoveredPodsChanged: (([PodProofDiscoveredPod]) -> Void)?
     public var onPhaseChanged: ((PodProofPhase) -> Void)?
 
+    /// Fires `true` when the pod's BLE link comes up (connect / restore) and
+    /// `false` when it drops (a bare disconnect; auto-reconnect will retry). Drives
+    /// the watch's "signal lost" indicator during a loan. Delivered on the main queue.
+    public var onConnectionChanged: ((Bool) -> Void)?
+
     /// Main-thread-updated phase, for UI convenience.
     public private(set) var phase: PodProofPhase = .idle
 
@@ -1117,14 +1122,17 @@ extension PodProofController: PodCommsDelegate {
 
     func omnipodPeripheralWasRestored(manager: PeripheralManager) {
         emit("BLE: peripheral restored \(manager.peripheral.identifier.uuidString)")
+        DispatchQueue.main.async { self.onConnectionChanged?(true) }
     }
 
     func omnipodPeripheralDidConnect(manager: PeripheralManager) {
         emit("BLE: connected \(manager.peripheral.identifier.uuidString)")
+        DispatchQueue.main.async { self.onConnectionChanged?(true) }
     }
 
     func omnipodPeripheralDidDisconnect(peripheral: CBPeripheral, error: Error?) {
         emit("BLE: disconnected \(peripheral.identifier.uuidString)\(error.map { " error: \($0)" } ?? "") (auto-reconnect will retry)")
+        DispatchQueue.main.async { self.onConnectionChanged?(false) }
     }
 
     func omnipodPeripheralDidFailToConnect(peripheral: CBPeripheral, error: Error?) {

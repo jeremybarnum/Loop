@@ -47,6 +47,7 @@ final class ActionHUDController: HUDInterfaceController {
     @IBOutlet var overrideButtonLabel: WKInterfaceLabel?
 
     private var loanPhaseCancellable: AnyCancellable?
+    private var podLinkCancellable: AnyCancellable?
 
     override func awake(withContext context: Any?) {
         super.awake(withContext: context)
@@ -56,6 +57,14 @@ final class ActionHUDController: HUDInterfaceController {
         // observe the phase directly and re-run update(). dropFirst() skips the current
         // value (willActivate paints the initial state); we only need later changes.
         loanPhaseCancellable = ExtensionDelegate.shared().podLoanCoordinator.$phase
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.update() }
+
+        // 3a: the watch can lose its BLE link to the pod mid-loan (pod out of range,
+        // e.g. wristband too far during a jump). Observe that too and re-run update()
+        // so the horse button can show / clear the "signal lost" glyph.
+        podLinkCancellable = ExtensionDelegate.shared().podLoanCoordinator.$podConnected
             .dropFirst()
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.update() }
@@ -73,6 +82,7 @@ final class ActionHUDController: HUDInterfaceController {
         let untetherIconConfig = UIImage.SymbolConfiguration(pointSize: 32, weight: .medium)
         preMealButtonImage.setImage(UIImage(systemName: "figure.equestrian.sports", withConfiguration: untetherIconConfig))
         preMealButtonGroup.state = isInShowMode ? .on : .off
+        applyPodLinkTint()
 
         // Update the override button description; cannot be done earlier than
         // `-willActivate` (e.g. didSet on the IBOutlet is too soon).
@@ -104,6 +114,7 @@ final class ActionHUDController: HUDInterfaceController {
 
         // Show Mode button (repurposed Pre-Meal): green while the watch holds the pod.
         preMealButtonGroup.state = isInShowMode ? .on : .off
+        applyPodLinkTint()
 
         if !isClosedLoop && FeatureFlags.simpleBolusCalculatorEnabled {
             overrideButtonGroup.state = .disabled
@@ -133,7 +144,20 @@ final class ActionHUDController: HUDInterfaceController {
 
         glucoseFormatter.updateUnit(to: loopManager.displayGlucoseUnit)
     }
-    
+
+    /// 3a: if the watch has lost its BLE link to the pod during a loan, tint the
+    /// Show Mode (horse) button amber so it reads as "still on, but not currently
+    /// talking to the pod." Called right after the ButtonGroup applies the normal
+    /// tint, so it only overrides in the lost state; on reconnect, `update()` re-runs
+    /// (driven by the coordinator's `$podConnected`) and the ButtonGroup's green tint
+    /// is restored. watchOS can't composite a badge onto the SF Symbol in code
+    /// (UIGraphicsImageRenderer is unavailable there), so a color shift is the signal.
+    private func applyPodLinkTint() {
+        guard isInShowMode,
+              !ExtensionDelegate.shared().podLoanCoordinator.podConnected else { return }
+        preMealButtonImage.setTintColor(.agingColor)
+    }
+
     private var canEnableOverride: Bool {
         if FeatureFlags.sensitivityOverridesEnabled {
             return !loopManager.settings.overridePresets.isEmpty
