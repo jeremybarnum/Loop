@@ -16,6 +16,7 @@
 //
 
 import Foundation
+import LoopKit
 
 struct PodLoanGrantUserInfo {
     let version = 1
@@ -36,10 +37,17 @@ struct PodLoanGrantUserInfo {
     /// fall back to the rapid-acting-adult curve.
     let insulinTypeRaw: Int?
 
+    /// The phone's last 16h of dose history (PodLoanDoseHistory, binary-plist
+    /// encoded), so the watch prediction algorithm sees pre-loan IOB. The grant
+    /// is the natural "frozen at handover" carrier. Optional wire key ("dh"):
+    /// absent from older phones or if the fetch fails — the watch predicts
+    /// degraded (loan-session insulin only) and says so.
+    var doseHistoryData: Data?
+
     // Present iff !granted.
     let denialReason: String?
 
-    static func grant(ltk: Data, controllerId: UInt32, podId: UInt32, podAddress: UInt32, messageNumber: Int, insulinTypeRaw: Int? = nil) -> PodLoanGrantUserInfo {
+    static func grant(ltk: Data, controllerId: UInt32, podId: UInt32, podAddress: UInt32, messageNumber: Int, insulinTypeRaw: Int? = nil, doseHistoryData: Data? = nil) -> PodLoanGrantUserInfo {
         PodLoanGrantUserInfo(granted: true,
                              ltk: ltk,
                              controllerId: controllerId,
@@ -47,6 +55,7 @@ struct PodLoanGrantUserInfo {
                              podAddress: podAddress,
                              messageNumber: messageNumber,
                              insulinTypeRaw: insulinTypeRaw,
+                             doseHistoryData: doseHistoryData,
                              denialReason: nil)
     }
 
@@ -58,6 +67,7 @@ struct PodLoanGrantUserInfo {
                              podAddress: nil,
                              messageNumber: nil,
                              insulinTypeRaw: nil,
+                             doseHistoryData: nil,
                              denialReason: reason)
     }
 }
@@ -95,6 +105,7 @@ extension PodLoanGrantUserInfo: RawRepresentable {
             self.podAddress = UInt32(truncatingIfNeeded: podAddress)
             self.messageNumber = messageNumber
             self.insulinTypeRaw = rawValue["it"] as? Int   // optional: absent from older phones
+            self.doseHistoryData = rawValue["dh"] as? Data // optional: absent from older phones
             self.denialReason = nil
         } else {
             self.ltk = nil
@@ -103,6 +114,7 @@ extension PodLoanGrantUserInfo: RawRepresentable {
             self.podAddress = nil
             self.messageNumber = nil
             self.insulinTypeRaw = nil
+            self.doseHistoryData = nil
             self.denialReason = rawValue["dr"] as? String
         }
     }
@@ -121,11 +133,58 @@ extension PodLoanGrantUserInfo: RawRepresentable {
             raw["addr"] = podAddress.map { Int($0) }
             raw["mn"] = messageNumber
             raw["it"] = insulinTypeRaw
+            raw["dh"] = doseHistoryData
         } else {
             raw["dr"] = denialReason
         }
 
         return raw
+    }
+}
+
+// MARK: - Dose history payload
+
+/// The phone's recent dose history, slimmed for the WatchConnectivity budget
+/// (~65 KB per message): five fields per entry, binary-plist encoded. 16h of
+/// 5-minute temp cycles is ~200 entries ≈ 15 KB. Ships inside the loan grant
+/// ("dh") for the watch prediction algorithm. (Same shared-file pattern as
+/// PodLoanRevokeUserInfo below.)
+struct PodLoanDoseHistory: Codable {
+    struct Entry: Codable {
+        let t: String      // DoseType.rawValue
+        let s: Date        // startDate
+        let e: Date        // endDate
+        let v: Double      // value
+        let u: String      // DoseUnit.rawValue
+    }
+
+    let entries: [Entry]
+
+    init(doses: [DoseEntry]) {
+        // DoseEntry.value is internal; the public accessors are per-unit.
+        entries = doses.map {
+            let value = $0.unit == .unitsPerHour ? $0.unitsPerHour : $0.programmedUnits
+            return Entry(t: $0.type.rawValue, s: $0.startDate, e: $0.endDate, v: value, u: $0.unit.rawValue)
+        }
+    }
+
+    /// Back to DoseEntries for the algorithm; entries whose type/unit this
+    /// build doesn't know (newer peer) are dropped rather than guessed.
+    func doseEntries(insulinType: InsulinType? = nil) -> [DoseEntry] {
+        entries.compactMap {
+            guard let type = DoseType(rawValue: $0.t), let unit = DoseUnit(rawValue: $0.u) else { return nil }
+            return DoseEntry(type: type, startDate: $0.s, endDate: $0.e, value: $0.v, unit: unit, insulinType: insulinType)
+        }
+    }
+
+    func encoded() -> Data? {
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        return try? encoder.encode(self)
+    }
+
+    static func decode(from data: Data) -> PodLoanDoseHistory? {
+        try? PropertyListDecoder().decode(PodLoanDoseHistory.self, from: data)
     }
 }
 

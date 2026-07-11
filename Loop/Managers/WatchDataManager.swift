@@ -590,7 +590,28 @@ extension WatchDataManager: WCSessionDelegate {
             log.default("Pod loan denied: %{public}@", grant.denialReason ?? "unknown")
         }
 
-        replyHandler(grant.rawValue)
+        guard grant.granted else {
+            replyHandler(grant.rawValue)
+            return
+        }
+
+        // Attach 16h of dose history for the watch prediction algorithm. The
+        // grant is the "frozen at handover" carrier; a failed fetch degrades
+        // the watch to loan-session-only insulin, it never blocks the loan.
+        let historyStart = Date(timeIntervalSinceNow: -.hours(16))
+        deviceManager.loopManager.getDoseHistoryForWatchLoan(start: historyStart) { [log] result in
+            var grant = grant
+            switch result {
+            case .success(let doses):
+                if let data = PodLoanDoseHistory(doses: doses).encoded() {
+                    grant.doseHistoryData = data
+                    log.default("Pod loan grant carries %d doses (%d bytes)", doses.count, data.count)
+                }
+            case .failure(let error):
+                log.error("Pod loan grant without dose history: %{public}@", String(describing: error))
+            }
+            replyHandler(grant.rawValue)
+        }
     }
 
     /// The watch has handed the pod back. Record what it did (Phase 1: display;

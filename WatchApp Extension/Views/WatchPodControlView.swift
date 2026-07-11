@@ -23,6 +23,7 @@ enum PodControlEntry {
 struct WatchPodControlView: View {
     @ObservedObject var coordinator: WatchPodLoanCoordinator
     var entry: PodControlEntry = .start
+    @State private var showingPrediction = false
     /// Return to the main HUD (set by the hosting controller). Used by the dose
     /// screens to dismiss after a delivery, like the regular bolus flow.
     var dismiss: () -> Void = {}
@@ -164,6 +165,17 @@ struct WatchPodControlView: View {
     private var endSection: some View {
         VStack(spacing: 10) {
             statusCard
+            Button(action: { showingPrediction = true }) {
+                Label("Predict", systemImage: "chart.line.uptrend.xyaxis")
+            }
+            .disabled(coordinator.busy)
+            .sheet(isPresented: $showingPrediction) {
+                PredictionView(
+                    engine: WatchPredictionEngine(
+                        loopManager: ExtensionDelegate.shared().loopManager,
+                        coordinator: coordinator),
+                    unit: ExtensionDelegate.shared().loopManager.settings.glucoseUnit ?? .milligramsPerDeciliter)
+            }
             Button(action: coordinator.handBack) {
                 Label("End Show Mode", systemImage: "iphone")
             }

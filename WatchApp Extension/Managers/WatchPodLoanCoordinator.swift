@@ -181,6 +181,22 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// toward showing MORE remaining insulin).
     private(set) var loanInsulinModel: PodLoanInsulinModel = .rapidActingAdult
 
+    // MARK: - Prediction engine inputs
+
+    /// The loan-session journal (live, or the sim-demo mirror), for the
+    /// prediction engine's dose bridge.
+    var journalForPrediction: PodLoanJournal? {
+        Self.isSimulatorDemo ? demoJournal : controller.loanJournal
+    }
+
+    /// Pre-loan dose history shipped in the grant (nil: older phone, failed
+    /// fetch, or no live loan) — PodLoanDoseHistory-encoded.
+    var grantDoseHistoryData: Data? { heldGrant?.doseHistoryData }
+
+    /// The grant's insulin type as LoopKit's InsulinType.rawValue, for tagging
+    /// bridged doses with the right activity curve.
+    var grantInsulinTypeRaw: Int? { heldGrant?.insulinTypeRaw }
+
     /// A pod command that failed DURING Show Mode, for loud surfacing (haptic +
     /// alert on the HUD). Distinct from lastError (quiet, shown on the pod screen):
     /// a mid-session failure — especially a bolus — must never be silent (BUG-5).

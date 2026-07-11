@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1D76A9205C9848328BB184BC /* PredictionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EE80F2F30C742F294206E91 /* PredictionView.swift */; };
+		3302C8F122844917A598631E /* WatchPredictionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B85DC3715714C0ABB255D14 /* WatchPredictionEngine.swift */; };
 		09679CF92E9B45EABCD6B704 /* PodLoanDoseBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15469A3F83F448C2844FA3E7 /* PodLoanDoseBridge.swift */; };
 		1419606428D9550400BA86E0 /* LoopKitUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 437AFEE6203688CF008C4892 /* LoopKitUI.framework */; };
 		1419606928D9554E00BA86E0 /* LoopKitUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 437AFEE6203688CF008C4892 /* LoopKitUI.framework */; };
@@ -774,6 +776,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		6EE80F2F30C742F294206E91 /* PredictionView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PredictionView.swift; sourceTree = "<group>"; };
+		5B85DC3715714C0ABB255D14 /* WatchPredictionEngine.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WatchPredictionEngine.swift; sourceTree = "<group>"; };
 		15469A3F83F448C2844FA3E7 /* PodLoanDoseBridge.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PodLoanDoseBridge.swift; sourceTree = "<group>"; };
 		142CB7582A60BF2E0075748A /* EditMode.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = EditMode.swift; sourceTree = "<group>"; };
 		142CB75A2A60BFC30075748A /* FavoriteFoodsView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = FavoriteFoodsView.swift; sourceTree = "<group>"; };
@@ -2188,6 +2192,7 @@
 		4FE3475F20D5D7FA00A86D03 /* Managers */ = {
 			isa = PBXGroup;
 			children = (
+				5B85DC3715714C0ABB255D14 /* WatchPredictionEngine.swift */,
 				992F41942FF9F7B90071F0F0 /* WatchPodLoanCoordinator.swift */,
 				4FDDD23620DC51DF00D04B16 /* LoopDataManager.swift */,
 				898ECA62218ABD21001E9D35 /* ComplicationChartManager.swift */,
@@ -2326,6 +2331,7 @@
 		895788A3242E6947002CB114 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				6EE80F2F30C742F294206E91 /* PredictionView.swift */,
 				992F41962FF9FB060071F0F0 /* WatchPodControlView.swift */,
 				895788B5242E6A25002CB114 /* Carb Entry & Bolus */,
 				895788B4242E69C8002CB114 /* Extensions */,
@@ -3638,6 +3644,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1D76A9205C9848328BB184BC /* PredictionView.swift in Sources */,
+				3302C8F122844917A598631E /* WatchPredictionEngine.swift in Sources */,
 				09679CF92E9B45EABCD6B704 /* PodLoanDoseBridge.swift in Sources */,
 				894F6DDD243C0A2300CCE676 /* CarbAmountLabel.swift in Sources */,
 				89A605E524327F45009C1096 /* DoseVolumeInput.swift in Sources */,

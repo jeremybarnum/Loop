@@ -581,6 +581,12 @@ extension LoopDataManager: PersistenceControllerDelegate {
 // MARK: - Preferences
 extension LoopDataManager {
 
+    /// Watch loan grant: recent normalized dose history, shipped to the watch
+    /// so its prediction algorithm sees pre-loan IOB (doseStore is private).
+    func getDoseHistoryForWatchLoan(start: Date, completion: @escaping (DoseStoreResult<[DoseEntry]>) -> Void) {
+        doseStore.getNormalizedDoseEntries(start: start, end: nil, completion: completion)
+    }
+
     /// The basal rate schedule, applying recent overrides relative to the current moment in time.
     var basalRateScheduleApplyingOverrideHistory: BasalRateSchedule? {
         return doseStore.basalProfileApplyingOverrideHistory

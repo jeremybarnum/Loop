@@ -50,4 +50,29 @@ extension PodLoanJournal {
 
         return entries.sorted { $0.startDate < $1.startDate }
     }
+
+    /// The temp basal running at `date`, with its FULL programmed extent — for
+    /// the recommendation's lastTempBasal (continuation logic needs to see how
+    /// much of it remains). nil if delivery is following schedule or suspended.
+    func activeTempBasal(at date: Date, insulinType: InsulinType? = nil) -> DoseEntry? {
+        var active: (rate: Double, start: Date, end: Date)?
+        for event in events.sorted(by: { $0.date < $1.date }) where event.date <= date {
+            switch event.kind {
+            case .tempBasal(let rate, let duration):
+                active = (rate, event.date, event.date.addingTimeInterval(duration))
+            case .suspend, .resume, .cancelTempBasal, .handedBack:
+                active = nil
+            case .bolus, .tookOver:
+                break
+            }
+        }
+        guard let active, active.end > date else { return nil }
+        return DoseEntry(
+            type: .tempBasal,
+            startDate: active.start,
+            endDate: active.end,
+            value: active.rate,
+            unit: .unitsPerHour,
+            insulinType: insulinType)
+    }
 }
