@@ -288,6 +288,16 @@ extension LoopSettings: RawRepresentable {
         if let rawSensitivity = rawValue["insulinSensitivitySchedule"] as? InsulinSensitivitySchedule.RawValue {
             self.insulinSensitivitySchedule = InsulinSensitivitySchedule(rawValue: rawSensitivity)
         }
+
+        // WatchPod prediction: the watch algorithm additionally needs the carb
+        // ratio (dynamic carb absorption) and the insulin model.
+        if let rawCarbRatio = rawValue["carbRatioSchedule"] as? CarbRatioSchedule.RawValue {
+            self.carbRatioSchedule = CarbRatioSchedule(rawValue: rawCarbRatio)
+        }
+
+        if let rawInsulinModel = rawValue["defaultRapidActingModel"] as? ExponentialInsulinModelPreset.RawValue {
+            self.defaultRapidActingModel = ExponentialInsulinModelPreset(rawValue: rawInsulinModel)
+        }
     }
 
     public var rawValue: RawValue {
@@ -308,6 +318,8 @@ extension LoopSettings: RawRepresentable {
         raw["dosingStrategy"] = automaticDosingStrategy.rawValue
         raw["basalRateSchedule"] = basalRateSchedule?.rawValue
         raw["insulinSensitivitySchedule"] = insulinSensitivitySchedule?.rawValue
+        raw["carbRatioSchedule"] = carbRatioSchedule?.rawValue
+        raw["defaultRapidActingModel"] = defaultRapidActingModel?.rawValue
 
         return raw
     }
