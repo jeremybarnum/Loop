@@ -9,6 +9,7 @@
 //
 
 import XCTest
+import LoopKit
 
 @testable import Loop
 
@@ -82,6 +83,49 @@ class PodLoanGrantUserInfoTests: XCTestCase {
         let decoded = PodLoanGrantUserInfo(rawValue: grant.rawValue)
         XCTAssertEqual(decoded?.controllerId, big)
         XCTAssertEqual(decoded?.podAddress, big)
+    }
+
+    func testDoseHistoryRoundTrip() {
+        let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let doses = [
+            DoseEntry(type: .bolus, startDate: start, endDate: start, value: 1.5, unit: .units),
+            DoseEntry(type: .tempBasal, startDate: start, endDate: start.addingTimeInterval(1800), value: 0.8, unit: .unitsPerHour),
+        ]
+        guard let data = PodLoanDoseHistory(doses: doses).encoded() else {
+            return XCTFail("dose history failed to encode")
+        }
+
+        let grant = PodLoanGrantUserInfo.grant(ltk: ltk,
+                                               controllerId: controllerId,
+                                               podId: podId,
+                                               podAddress: podAddress,
+                                               messageNumber: messageNumber,
+                                               doseHistoryData: data)
+        guard let decodedData = PodLoanGrantUserInfo(rawValue: grant.rawValue)?.doseHistoryData,
+              let history = PodLoanDoseHistory.decode(from: decodedData) else {
+            return XCTFail("dose history failed to round-trip through the grant")
+        }
+
+        let roundTripped = history.doseEntries(insulinType: .fiasp)
+        XCTAssertEqual(roundTripped.count, 2)
+        XCTAssertEqual(roundTripped[0].type, .bolus)
+        XCTAssertEqual(roundTripped[0].programmedUnits, 1.5)
+        XCTAssertEqual(roundTripped[0].insulinType, .fiasp)
+        XCTAssertEqual(roundTripped[1].type, .tempBasal)
+        XCTAssertEqual(roundTripped[1].unitsPerHour, 0.8)
+        XCTAssertEqual(roundTripped[1].endDate, start.addingTimeInterval(1800))
+    }
+
+    func testGrantWithoutDoseHistoryStillDecodes() {
+        // Backward compatibility: grants from older phones have no "dh" key.
+        let grant = PodLoanGrantUserInfo.grant(ltk: ltk,
+                                               controllerId: controllerId,
+                                               podId: podId,
+                                               podAddress: podAddress,
+                                               messageNumber: messageNumber)
+        let decoded = PodLoanGrantUserInfo(rawValue: grant.rawValue)
+        XCTAssertTrue(decoded?.granted == true)
+        XCTAssertNil(decoded?.doseHistoryData)
     }
 
     func testInsulinTypeRoundTrip() {
