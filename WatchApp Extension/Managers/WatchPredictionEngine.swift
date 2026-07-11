@@ -19,7 +19,10 @@
 import Foundation
 import HealthKit
 import LoopKit
+import LoopCore
 import OmniBLECore
+import WatchConnectivity
+import os.log
 
 enum WatchPredictionError: LocalizedError {
     case missingSetting(String)
@@ -55,17 +58,67 @@ struct WatchPredictionOutput {
 final class WatchPredictionEngine {
     private let loopManager: LoopDataManager
     private let coordinator: WatchPodLoanCoordinator
+    private let log = OSLog(category: "WatchPredictionEngine")
 
     init(loopManager: LoopDataManager, coordinator: WatchPodLoanCoordinator) {
         self.loopManager = loopManager
         self.coordinator = coordinator
     }
 
-    /// Predict from a manually entered BG and recommend a temp basal.
-    /// Main-actor entry (reads coordinator state); the algorithm itself runs
-    /// off-main after the store fetches. Completion on an arbitrary queue.
+    private func settingsState(_ s: LoopSettings) -> String {
+        "basal=\(s.basalRateSchedule != nil ? "Y" : "N") isf=\(s.insulinSensitivitySchedule != nil ? "Y" : "N") cr=\(s.carbRatioSchedule != nil ? "Y" : "N") target=\(s.glucoseTargetRangeSchedule != nil ? "Y" : "N") maxBasal=\(s.maximumBasalRatePerHour != nil ? "Y" : "N")"
+    }
+
+    private func settingsIncomplete(_ s: LoopSettings) -> Bool {
+        s.basalRateSchedule == nil || s.insulinSensitivitySchedule == nil
+            || s.carbRatioSchedule == nil || s.glucoseTargetRangeSchedule == nil
+            || s.maximumBasalRatePerHour == nil
+    }
+
+    /// Predict from a manually entered BG and recommend a temp basal. If core
+    /// settings are missing, first pull them from the phone over sendMessage
+    /// (the push path loses them across a watch reinstall and is unreliable on
+    /// simulators), then run. Every branch logs — silence is not an option here.
     @MainActor
-    func predict(manualBG: HKQuantity, at date: Date = Date(), completion: @escaping (Result<WatchPredictionOutput, Error>) -> Void) {
+    func predict(manualBG: HKQuantity, at date: Date = Date(), completion: @escaping (Swift.Result<WatchPredictionOutput, Error>) -> Void) {
+        let settings = loopManager.settings
+        log.default("predict: settings state %{public}@", settingsState(settings))
+
+        guard settingsIncomplete(settings) else {
+            run(manualBG: manualBG, at: date, completion: completion)
+            return
+        }
+
+        let session = WCSession.default
+        log.default("predict: settings incomplete; WC activation=%d reachable=%d — pulling from phone",
+                    session.activationState.rawValue, session.isReachable ? 1 : 0)
+
+        guard session.activationState == .activated else {
+            session.activate()
+            return completion(.failure(WatchPredictionError.missingSetting("Settings (watch session inactive) — Basal schedule")))
+        }
+
+        session.sendMessage(["name": LoopSettingsUserInfo.name], replyHandler: { [weak self] reply in
+            Task { @MainActor in
+                guard let self else { return }
+                if let fresh = LoopSettingsUserInfo(rawValue: reply)?.settings {
+                    self.log.default("predict: settings pull succeeded: %{public}@", self.settingsState(fresh))
+                    self.loopManager.settings = fresh
+                } else {
+                    self.log.error("predict: settings pull reply failed to decode: %{public}@", String(describing: reply))
+                }
+                self.run(manualBG: manualBG, at: date, completion: completion)
+            }
+        }, errorHandler: { [weak self] error in
+            self?.log.error("predict: settings pull failed: %{public}@", String(describing: error))
+            Task { @MainActor in
+                self?.run(manualBG: manualBG, at: date, completion: completion)
+            }
+        })
+    }
+
+    @MainActor
+    private func run(manualBG: HKQuantity, at date: Date, completion: @escaping (Swift.Result<WatchPredictionOutput, Error>) -> Void) {
         let settings = loopManager.settings
 
         // Every input the algorithm can't default must have synced.
