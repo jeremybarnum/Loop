@@ -134,7 +134,7 @@ extension PodLoanJournal {
     /// the schedule: a temp basal (actualRate = its rate, until superseded,
     /// suspended, or expired) or a suspend (actualRate = 0, until resumed).
     /// Time following the schedule is omitted — it nets to zero by definition.
-    func offScheduleSegments(until end: Date) -> [(start: Date, end: Date, actualRate: Double)] {
+    public func offScheduleSegments(until end: Date) -> [(start: Date, end: Date, actualRate: Double)] {
         enum DeliveryState {
             case following
             case temp(rate: Double, since: Date, expiry: Date)
