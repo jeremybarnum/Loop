@@ -468,6 +468,13 @@ final class WatchDataManager: NSObject {
 extension WatchDataManager: WCSessionDelegate {
     func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
         switch message["name"] as? String {
+        case LoopSettingsUserInfo.name?:
+            // The watch is asking for a settings refresh: a reinstalled watch app
+            // has none, and the push path (transferUserInfo) won't resend while
+            // the phone believes nothing changed (it's also unreliable on
+            // simulators). Idempotent full-settings reply.
+            log.default("Watch requested settings refresh")
+            replyHandler(LoopSettingsUserInfo(settings: deviceManager.loopManager.settings).rawValue)
         case PotentialCarbEntryUserInfo.name?:
             if let potentialCarbEntry = PotentialCarbEntryUserInfo(rawValue: message)?.carbEntry {
                 self.createWatchContext(recommendingBolusFor: potentialCarbEntry) { (context) in

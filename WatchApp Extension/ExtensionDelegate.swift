@@ -88,7 +88,41 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
             WCSession.default.activate()
         }
 
+        requestSettingsSyncIfNeeded()
+
         NotificationCenter.default.post(name: type(of: self).didBecomeActiveNotification, object: self)
+    }
+
+    /// Pull settings from the phone when ours are incomplete. The push path
+    /// (transferUserInfo) loses them across a watch-app reinstall — the phone
+    /// skips resending while it believes nothing changed — and is unreliable on
+    /// simulators. sendMessage is synchronous and works in both places;
+    /// idempotent, so firing on every activation is safe.
+    private func requestSettingsSyncIfNeeded() {
+        let settings = loopManager.settings
+        guard settings.basalRateSchedule == nil
+            || settings.insulinSensitivitySchedule == nil
+            || settings.carbRatioSchedule == nil
+            || settings.glucoseTargetRangeSchedule == nil else {
+            return
+        }
+
+        let session = WCSession.default
+        guard session.activationState == .activated, session.isReachable else { return }
+
+        log.default("Requesting settings refresh from phone (incomplete local settings)")
+        session.sendMessage(["name": LoopSettingsUserInfo.name], replyHandler: { [weak self] reply in
+            guard let self, let settings = LoopSettingsUserInfo(rawValue: reply)?.settings else {
+                self?.log.error("Settings refresh reply failed to decode")
+                return
+            }
+            DispatchQueue.main.async {
+                self.log.default("Settings refresh received from phone")
+                self.loopManager.settings = settings
+            }
+        }, errorHandler: { [weak self] error in
+            self?.log.error("Settings refresh request failed: %{public}@", String(describing: error))
+        })
     }
 
     func applicationWillResignActive() {
