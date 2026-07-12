@@ -11,7 +11,9 @@ import Foundation
 
 extension Date {
     static var earliestGlucoseCutoff: Date {
-        return Date(timeIntervalSinceNow: .hours(-6))
+        // 10h: the prediction algorithm's ICE window (dynamic carb absorption
+        // observes glucose against insulin effects across the carb history).
+        return Date(timeIntervalSinceNow: .hours(-10))
     }
 
     static var staleGlucoseCutoff: Date {

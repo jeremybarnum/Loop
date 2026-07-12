@@ -72,7 +72,7 @@ class LoopDataManager {
         )
         glucoseStore = GlucoseStore(
             cacheStore: cacheStore,
-            cacheLength: .hours(4),
+            cacheLength: .hours(10),   // the prediction algorithm's glucose window (was 4h, chart-only)
             provenanceIdentifier: HKSource.default().bundleIdentifier
         )
 
