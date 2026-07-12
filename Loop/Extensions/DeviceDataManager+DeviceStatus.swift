@@ -35,20 +35,26 @@ extension DeviceDataManager {
     var pumpStatusHighlight: DeviceStatusHighlight? {
         // TRUTH-ONLY REPORTING (see WATCH_LOAN_TESTING_BUGS.md): the phone
         // states only what it knows first-hand. It never claims the pod is "on
-        // the watch" — a loan grant doesn't prove the watch took over, and with
-        // Bluetooth off the phone can't see either device. Whether the watch
+        // the watch" — a loan grant doesn't prove the watch took over (the watch's
+        // Bluetooth can be off, ORPHANING the pod — observed live 2026-07-11), and
+        // with Bluetooth off the phone can't see either device. Whether the watch
         // holds the pod is for the WATCH to say.
         //
-        // Precedence: Bluetooth truth first (radio off → say that), then, during
-        // a loan window when the pod has genuinely gone quiet, the phone's
-        // first-hand fact: it is not connected to the pod. If the phone is still
-        // polling the pod successfully (fresh lastSync), no override — a stale
-        // podLoanedToWatch flag must not manufacture a warning.
+        // Precedence: Bluetooth truth first (radio off → say that), then, whenever
+        // the phone has RELEASED the pod for a loan, its first-hand fact: it is not
+        // connected to the pod. 3b: shown the MOMENT of release — keyed on the pump
+        // manager's PERSISTED release state (the same authoritative signal the
+        // escape-hatch tap in didTapOnPumpStatus uses, so the indicator and the
+        // reclaim action are always consistent) — rather than waiting ~8 min for
+        // lastSync to age out. That stale-but-live-looking window misled testing on
+        // 2026-07-11: the pod tile kept looking healthy while the phone was actually
+        // released. The staleness check is retained as a secondary net.
         let bluetoothState = bluetoothProvider.bluetoothState
         if bluetoothState == .unsupported || bluetoothState == .unauthorized || bluetoothState == .poweredOff {
             return BluetoothState.enableHighlight
         }
-        if podLoanedToWatch, isPodContactStale {
+        if (pumpManager as? PumpConnectionLendable)?.isConnectionReleased == true
+            || (podLoanedToWatch && isPodContactStale) {
             return PodNotConnectedStatusHighlight()
         }
         if let onboardingManager = onboardingManager, !onboardingManager.isComplete, pumpManager?.isOnboarded != true {
