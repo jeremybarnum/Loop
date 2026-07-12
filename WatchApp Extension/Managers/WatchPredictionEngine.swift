@@ -66,6 +66,11 @@ final class WatchPredictionEngine {
     private let coordinator: WatchPodLoanCoordinator
     private let log = OSLog(category: "WatchPredictionEngine")
 
+    /// Whether run() persists the anchor BG as a user-entered sample. True for
+    /// the entry dial (the rider is REPORTING a reading); false for background
+    /// HUD refreshes, which anchor on an already-stored sample.
+    private var storeEntry = true
+
     init(loopManager: LoopDataManager, coordinator: WatchPodLoanCoordinator) {
         self.loopManager = loopManager
         self.coordinator = coordinator
@@ -100,8 +105,9 @@ final class WatchPredictionEngine {
     /// (the push path loses them across a watch reinstall and is unreliable on
     /// simulators), then run. Every branch logs — silence is not an option here.
     @MainActor
-    func predict(manualBG: HKQuantity, at date: Date = Date(), completion: @escaping (Swift.Result<WatchPredictionOutput, Error>) -> Void) {
+    func predict(manualBG: HKQuantity, at date: Date = Date(), storeEntry: Bool = true, completion: @escaping (Swift.Result<WatchPredictionOutput, Error>) -> Void) {
         let tapped = Date()
+        self.storeEntry = storeEntry
         let settings = loopManager.settings
         log.default("predict: settings state %{public}@", settingsState(settings))
 
@@ -286,9 +292,11 @@ final class WatchPredictionEngine {
                 doseRecommendationType: .tempBasal)
 
             // Persist the entry so successive predictions see the session's BG
-            // trend (and the chart shows it). Stored AFTER fetching history, so
-            // this run anchors on the appended sample without double-counting.
-            self.loopManager.glucoseStore.addGlucoseSamples([NewGlucoseSample(
+            // trend. Stored AFTER fetching history, so this run anchors on the
+            // appended sample without double-counting. Background refreshes
+            // (storeEntry == false) anchor on an existing sample — storing
+            // would fabricate readings.
+            if self.storeEntry { self.loopManager.glucoseStore.addGlucoseSamples([NewGlucoseSample(
                 date: date,
                 quantity: manualBG,
                 condition: nil,
@@ -296,7 +304,7 @@ final class WatchPredictionEngine {
                 trendRate: nil,
                 isDisplayOnly: false,
                 wasUserEntered: true,
-                syncIdentifier: UUID().uuidString)]) { _ in }
+                syncIdentifier: UUID().uuidString)]) { _ in } }
 
             do {
                 let (prediction, recommendation) = try LoopAlgorithm.generateRecommendation(

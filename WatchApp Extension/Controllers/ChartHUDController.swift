@@ -80,6 +80,7 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
         super.didAppear()
 
         applyChartVisibility()
+        refreshPredictionForShowMode(force: true)
 
         // Force an update when our pixels need to move. Capped at 60 s so the
         // Show Mode rows (session numbers, live basal accrual) also repaint while
@@ -90,8 +91,10 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
         timer = Timer.scheduledTimer(withTimeInterval: pixelInterval, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             if self.isInShowMode {
-                // Chart is hidden in Show Mode; just keep the session rows current.
+                // Chart is hidden in Show Mode; keep the session rows current and
+                // re-run the prediction at most every 5 minutes (throttled inside).
                 self.updateRowsForShowMode()
+                self.refreshPredictionForShowMode()
             } else {
                 self.scene.setNeedsUpdate()
             }
@@ -216,6 +219,9 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
     ///                     "Scheduled" when nothing's been changed).
     /// Four rows match the normal HUD table's row count, so they fit as-is.
     private enum ShowModeRow: Int, CaseIterable {
+        case currentBG
+        case eventualBG
+        case activeInsulinCarbs
         case sessionBolus
         case sessionBasal
         case sessionInsulin
@@ -223,6 +229,12 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
 
         var title: String {
             switch self {
+            case .currentBG:
+                return NSLocalizedString("Glucose", comment: "HUD row: current glucose in Show Mode (tap to enter)")
+            case .eventualBG:
+                return NSLocalizedString("Eventual", comment: "HUD row: predicted eventual glucose in Show Mode")
+            case .activeInsulinCarbs:
+                return NSLocalizedString("IOB · COB", comment: "HUD row: active insulin and carbs in Show Mode")
             case .sessionBolus:
                 return NSLocalizedString("Session Bolus", comment: "HUD row: insulin bolused during Show Mode")
             case .sessionBasal:
@@ -260,6 +272,20 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
             cell.setContentInset(systemMinimumLayoutMargins)
 
             switch row {
+            case .currentBG:
+                cell.setDetail(currentBGDetail())
+            case .eventualBG:
+                if let output = predictionOutput {
+                    cell.setDetail(formatBG(output.eventualBG, unit: output.unit))
+                } else {
+                    cell.setDetail("—")
+                }
+            case .activeInsulinCarbs:
+                if let output = predictionOutput {
+                    cell.setDetail(String(format: "%.2f U · %.0f g", output.activeInsulin, output.activeCarbs))
+                } else {
+                    cell.setDetail("—")
+                }
             case .sessionBolus:
                 cell.setDetail(String(format: "%.2f U", coordinator.sessionBolusUnits))
             case .sessionBasal:
@@ -293,6 +319,82 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
         return String(format: "%+.2f U", value)
     }
 
+    // MARK: - Show Mode prediction rows
+
+    private lazy var predictionEngine = WatchPredictionEngine(
+        loopManager: ExtensionDelegate.shared().loopManager,
+        coordinator: ExtensionDelegate.shared().podLoanCoordinator)
+    private var predictionOutput: WatchPredictionOutput?
+    private var recentSamples: [StoredGlucoseSample] = []
+    private var lastPredictionRefresh: Date = .distantPast
+
+    private var displayUnit: HKUnit {
+        loopManager.settings.glucoseUnit ?? .milligramsPerDeciliter
+    }
+
+    private func formatBG(_ quantity: HKQuantity, unit: HKUnit) -> String {
+        let value = quantity.doubleValue(for: unit)
+        return unit == .milligramsPerDeciliter ? String(format: "%.0f", value) : String(format: "%.1f", value)
+    }
+
+    /// "142 ↗ · 6m" — newest stored sample, a two-sample trend arrow, and age.
+    private func currentBGDetail() -> String {
+        guard let newest = recentSamples.last else {
+            return NSLocalizedString("Tap to enter", comment: "HUD glucose row detail when no sample exists")
+        }
+        var parts = [formatBG(newest.quantity, unit: displayUnit)]
+        if recentSamples.count >= 2 {
+            let older = recentSamples[recentSamples.count - 2]
+            let minutes = newest.startDate.timeIntervalSince(older.startDate) / 60
+            if minutes > 0, minutes <= 30 {
+                let rate = (newest.quantity.doubleValue(for: .milligramsPerDeciliter)
+                    - older.quantity.doubleValue(for: .milligramsPerDeciliter)) / minutes
+                switch rate {
+                case ..<(-3): parts.append("↓↓")
+                case ..<(-2): parts.append("↓")
+                case ..<(-1): parts.append("↘")
+                case ...1: parts.append("→")
+                case ...2: parts.append("↗")
+                case ...3: parts.append("↑")
+                default: parts.append("↑↑")
+                }
+            }
+        }
+        let age = Int(-newest.startDate.timeIntervalSinceNow / 60)
+        parts.append(age < 1 ? NSLocalizedString("now", comment: "HUD glucose row age (fresh)") : "\(age)m")
+        return parts.joined(separator: " ")
+    }
+
+    /// Re-run the prediction for the HUD rows: on activation and at most every
+    /// 5 minutes from the repaint timer. Anchors on the newest STORED sample
+    /// (storeEntry false — a refresh must not fabricate readings).
+    private func refreshPredictionForShowMode(force: Bool = false) {
+        guard isInShowMode else { return }
+        guard force || -lastPredictionRefresh.timeIntervalSinceNow > .minutes(5) else { return }
+        lastPredictionRefresh = Date()
+
+        loopManager.glucoseStore.getGlucoseSamples(start: Date(timeIntervalSinceNow: -.hours(2)), end: Date()) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if case .success(let samples) = result {
+                    self.recentSamples = samples.sorted { $0.startDate < $1.startDate }
+                }
+                guard let newest = self.recentSamples.last else {
+                    self.updateRowsForShowMode()
+                    return
+                }
+                self.predictionEngine.predict(manualBG: newest.quantity, storeEntry: false) { output in
+                    DispatchQueue.main.async {
+                        if case .success(let output) = output {
+                            self.predictionOutput = output
+                        }
+                        self.updateRowsForShowMode()
+                    }
+                }
+            }
+        }
+    }
+
     private func updateGlucoseChart() {
         // The chart is hidden in Show Mode — skip the data generation and render.
         guard !isInShowMode else { return }
@@ -314,8 +416,21 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
     }
 
     override func table(_ table: WKInterfaceTable, didSelectRowAt rowIndex: Int) {
-        // Show Mode rows have different indices (and no carb entry — the phone is away).
-        guard table == self.table, !isInShowMode, case .cob? = TableRow(rawValue: rowIndex) else {
+        guard table == self.table else { return }
+
+        if isInShowMode {
+            switch ShowModeRow(rawValue: rowIndex) {
+            case .currentBG, .eventualBG:
+                // Tap the number → the entry dial + prediction readout. (A2
+                // splits these into entry vs detail; one screen serves both today.)
+                presentController(withName: WatchPodControlController.className, context: PodControlEntry.predict)
+            default:
+                break
+            }
+            return
+        }
+
+        guard case .cob? = TableRow(rawValue: rowIndex) else {
             return
         }
 

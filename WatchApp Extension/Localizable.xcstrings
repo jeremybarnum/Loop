@@ -1704,6 +1704,12 @@
     "iPhone Bluetooth Is Off" : {
       "comment" : "Alert title shown when ending Show Mode while the phone is unreachable"
     },
+    "last reading, %d min ago" : {
+      "comment" : "Prediction BG seed caption (aged)"
+    },
+    "last reading, just now" : {
+      "comment" : "Prediction BG seed caption (fresh)"
+    },
     "Make sure your iPhone is nearby and try again" : {
       "comment" : "The recovery message displayed after a glucose range override send attempt fails",
       "localizations" : {
