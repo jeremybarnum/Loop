@@ -92,6 +92,9 @@ struct PredictionView: View {
             row("Eventual BG", "\(format(output.eventualBG)) \(unit.shortLocalizedUnitString())")
             row("Range", "\(format(output.correctionRange.lowerBound))–\(format(output.correctionRange.upperBound))")
 
+            row("Active insulin", String(format: "%.2f U", output.activeInsulin))
+            row("Active carbs", String(format: "%.0f g", output.activeCarbs))
+
             if let temp = output.recommendedTempBasal {
                 row("Temp basal", String(format: "%.2f U/hr", temp.unitsPerHour))
                 row("Duration", String(format: "%.0f min", temp.duration.minutes))

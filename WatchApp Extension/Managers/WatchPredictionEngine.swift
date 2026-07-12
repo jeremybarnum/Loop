@@ -48,6 +48,12 @@ struct WatchPredictionOutput {
     /// nil means the scheduled basal already fits the prediction.
     let recommendedTempBasal: TempBasalRecommendation?
     let scheduledBasalRate: Double
+    /// Active insulin (U) at the prediction date — same doses the prediction
+    /// used, LoopKit insulinOnBoard. Cross-checkable against the phone's HUD.
+    let activeInsulin: Double
+    /// Active carbs (g) at the prediction date — dynamic (ICE-informed) COB
+    /// from the same carb statuses the prediction used.
+    let activeCarbs: Double
     /// false: the grant carried no pre-loan history — prediction sees
     /// loan-session insulin only and understates IOB from earlier boluses.
     let usedPreLoanHistory: Bool
@@ -287,6 +293,15 @@ final class WatchPredictionEngine {
                     model: model,
                     lastTempBasal: activeTemp)
 
+                // IOB/COB for display: computed from the same inputs (and the
+                // prediction's own ICE) so the numbers are the algorithm's view.
+                let activeInsulin = doses.insulinOnBoard(from: date, to: date).last?.value ?? 0
+                let activeCarbs = carbEntries.map(
+                    to: prediction.effects.insulinCounteraction,
+                    carbRatio: algorithmSettings.carbRatio,
+                    insulinSensitivity: algorithmSettings.sensitivity
+                ).dynamicCarbsOnBoard(from: date, to: date).last?.value ?? 0
+
                 let algorithmDone = Date()
                 self.log.default("predict timing: pulls %dms, fetches %dms, algorithm %dms, total %dms",
                                  Int(pullsDone.timeIntervalSince(tapped) * 1000),
@@ -307,6 +322,8 @@ final class WatchPredictionEngine {
                     correctionRange: range,
                     recommendedTempBasal: recommendation.basalAdjustment,
                     scheduledBasalRate: basalSchedule.value(at: date),
+                    activeInsulin: activeInsulin,
+                    activeCarbs: activeCarbs,
                     usedPreLoanHistory: !grantHistory.isEmpty,
                     inputDoseCount: doses.count,
                     inputCarbCount: carbEntries.count)))
