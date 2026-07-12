@@ -193,6 +193,12 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// fetch, or no live loan) — PodLoanDoseHistory-encoded.
     var grantDoseHistoryData: Data? { heldGrant?.doseHistoryData }
 
+    /// Dose history the prediction engine pulled from the phone when the grant
+    /// carried none (sim demo; absent grant payload). Session-lifetime — kept
+    /// while the loan lives so re-opening the prediction screen with the phone
+    /// away doesn't lose it; cleared when a new loan starts.
+    var pulledDoseHistoryData: Data?
+
     /// The grant's insulin type as LoopKit's InsulinType.rawValue, for tagging
     /// bridged doses with the right activity curve.
     var grantInsulinTypeRaw: Int? { heldGrant?.insulinTypeRaw }
@@ -258,6 +264,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
 
     /// Ask the phone to loan us the pod, then take it over with the returned keys.
     func requestLoan() {
+        pulledDoseHistoryData = nil   // stale pre-loan history must not leak into a new loan
         if Self.isSimulatorDemo { demoStart(); return }
         guard !busy else { return }
         let session = WCSession.default

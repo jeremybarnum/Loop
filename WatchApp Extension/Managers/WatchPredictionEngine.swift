@@ -60,10 +60,6 @@ final class WatchPredictionEngine {
     private let coordinator: WatchPodLoanCoordinator
     private let log = OSLog(category: "WatchPredictionEngine")
 
-    /// Dose history pulled from the phone when the grant carried none (sim
-    /// demo, or a real grant whose payload was absent). Cached per engine.
-    private var pulledDoseHistoryData: Data?
-
     init(loopManager: LoopDataManager, coordinator: WatchPodLoanCoordinator) {
         self.loopManager = loopManager
         self.coordinator = coordinator
@@ -132,7 +128,7 @@ final class WatchPredictionEngine {
     /// the phone. Missing history skews IOB low, so it's worth a round-trip.
     @MainActor
     private func pullDoseHistoryIfNeededThenRun(manualBG: HKQuantity, at date: Date, completion: @escaping (Swift.Result<WatchPredictionOutput, Error>) -> Void) {
-        guard coordinator.grantDoseHistoryData == nil, pulledDoseHistoryData == nil else {
+        guard coordinator.grantDoseHistoryData == nil, coordinator.pulledDoseHistoryData == nil else {
             return run(manualBG: manualBG, at: date, completion: completion)
         }
 
@@ -148,7 +144,7 @@ final class WatchPredictionEngine {
                 guard let self else { return }
                 if let data = reply["dh"] as? Data {
                     self.log.default("predict: dose history pull succeeded (%d bytes)", data.count)
-                    self.pulledDoseHistoryData = data
+                    self.coordinator.pulledDoseHistoryData = data
                 } else {
                     self.log.error("predict: dose history pull returned no data")
                 }
@@ -190,7 +186,7 @@ final class WatchPredictionEngine {
         // active temp carried at full programmed extent (parity with the
         // phone's live path, which sees the mutable temp's future remainder).
         let journal = coordinator.journalForPrediction
-        let grantHistory = (coordinator.grantDoseHistoryData ?? pulledDoseHistoryData)
+        let grantHistory = (coordinator.grantDoseHistoryData ?? coordinator.pulledDoseHistoryData)
             .flatMap { PodLoanDoseHistory.decode(from: $0) }?
             .doseEntries(insulinType: insulinType) ?? []
         let activeTemp = journal?.activeTempBasal(at: date, insulinType: insulinType)
@@ -265,6 +261,19 @@ final class WatchPredictionEngine {
                     settings: algorithmSettings),
                 predictionDate: date,
                 doseRecommendationType: .tempBasal)
+
+            // Persist the entry so successive predictions see the session's BG
+            // trend (and the chart shows it). Stored AFTER fetching history, so
+            // this run anchors on the appended sample without double-counting.
+            self.loopManager.glucoseStore.addGlucoseSamples([NewGlucoseSample(
+                date: date,
+                quantity: manualBG,
+                condition: nil,
+                trend: nil,
+                trendRate: nil,
+                isDisplayOnly: false,
+                wasUserEntered: true,
+                syncIdentifier: UUID().uuidString)]) { _ in }
 
             do {
                 let (prediction, recommendation) = try LoopAlgorithm.generateRecommendation(
