@@ -22,6 +22,8 @@ struct PredictionView: View {
     @State private var output: WatchPredictionOutput?
     @State private var errorText: String?
     @State private var busy = false
+    @State private var seeded = false
+    @State private var seedCaption: String?
 
     init(engine: WatchPredictionEngine, unit: HKUnit) {
         self.engine = engine
@@ -60,6 +62,12 @@ struct PredictionView: View {
                     .font(.caption2)
                     .foregroundColor(.secondary)
 
+                if let seedCaption {
+                    Text(seedCaption)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+
                 Button(action: runPrediction) {
                     if busy {
                         ProgressView()
@@ -82,6 +90,22 @@ struct PredictionView: View {
             }
         }
         .navigationTitle("Predict")
+        .onAppear(perform: seedFromLatestGlucose)
+    }
+
+    /// Open the dial at the last known reading (with its age), not a default.
+    /// Seeds once; never stomps a value the user has already dialed.
+    private func seedFromLatestGlucose() {
+        guard !seeded else { return }
+        engine.latestGlucose { sample in
+            guard !seeded, let sample else { return }
+            seeded = true
+            bgValue = (sample.quantity.doubleValue(for: unit) / crownStep).rounded() * crownStep
+            let minutes = Int(-sample.startDate.timeIntervalSinceNow / 60)
+            seedCaption = minutes < 1
+                ? NSLocalizedString("last reading, just now", comment: "Prediction BG seed caption (fresh)")
+                : String(format: NSLocalizedString("last reading, %d min ago", comment: "Prediction BG seed caption (aged)"), minutes)
+        }
     }
 
     @ViewBuilder

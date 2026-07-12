@@ -81,6 +81,20 @@ final class WatchPredictionEngine {
             || s.maximumBasalRatePerHour == nil
     }
 
+    /// The newest glucose sample the watch knows (backfilled CGM or a prior
+    /// manual entry) — seeds the entry dial so the rider starts from the last
+    /// known value instead of an arbitrary default.
+    @MainActor
+    func latestGlucose(completion: @escaping (StoredGlucoseSample?) -> Void) {
+        loopManager.glucoseStore.getGlucoseSamples(start: Date(timeIntervalSinceNow: -.hours(10)), end: Date()) { result in
+            var sample: StoredGlucoseSample?
+            if case .success(let samples) = result {
+                sample = samples.max(by: { $0.startDate < $1.startDate })
+            }
+            DispatchQueue.main.async { completion(sample) }
+        }
+    }
+
     /// Predict from a manually entered BG and recommend a temp basal. If core
     /// settings are missing, first pull them from the phone over sendMessage
     /// (the push path loses them across a watch reinstall and is unreliable on
