@@ -24,6 +24,13 @@ fallback / override), cutting back only if that lands badly.
    bound as phone Loop — revisit later. Temp-basal only; **no auto-bolus** in
    the standalone loop. Frame everything Loop-native (this is a Loop project;
    avoid leaning on other systems' canon).
+5. **No graphs on the watch** (Jeremy, 2026-07-12) — "waste of space." Trend
+   ARROWS yes, glucose chart no (at least not now). When a surface needs more
+   than fits, add another swipe screen rather than cramming or charting.
+6. **Manual vs. streamed BG must follow the Loop idiom** (Jeremy, 2026-07-12) —
+   Loop already anticipates BOTH no-live-BG and dosing off manual entries.
+   Research the actual code behavior (see "Manual vs. streamed BG" below) and
+   mirror it rather than inventing watch-specific rules.
 
 ## Front screen (Show Mode HUD)
 
@@ -89,6 +96,75 @@ Cycle, every 5 minutes and after every new BG sample:
   are frozen at untether plus BG.
 - No HealthKit / Nightscout / remote — the journal is the only ledger.
 - One insulin model, one pod, one writer — no device abstraction layers.
+
+## Manual vs. streamed BG — mirroring Loop's own behavior
+
+Researched against the actual code (file:line below, workspace root
+`LoopWorkspace-prediction`). Headline: **Loop already anticipates both no-live-BG
+and dosing off manual entries, and our watch choices independently match it.**
+
+### Stale / missing glucose → don't dose, let the temp expire
+
+- One constant gates everything: `inputDataRecencyInterval = 15 min`
+  (`Loop/LoopCore/LoopCoreConstants.swift:14`). This is the same constant
+  `WatchAutoLoop.bgStalenessLimit` already uses.
+- When newest glucose is older than 15 min, Loop's automatic-dose builder
+  collects `LoopError.glucoseTooOld` and returns **before** computing any
+  recommendation (`LoopDataManager.swift:1849-1851, 1912-1916`); `loopInternal`
+  then skips `enactRecommendedAutomaticDose()` entirely
+  (`LoopDataManager.swift:944-952`). **It does not proactively cancel the
+  running temp basal** — the temp is time-boxed by the pump and left to expire.
+  ⇒ This is exactly our **lenient** staleness ruling; no change needed.
+- Distinct path: an *unreliable* (not stale) CGM reading cancels the temp only
+  if it's ABOVE schedule (`LoopDataManager.receivedUnreliableCGMReading`
+  `651-661`) — a low/neutral temp is left alone. Worth mirroring later if the
+  G7 path surfaces reading-quality; not relevant to manual entry.
+- Momentum uses the **same** 15-min window, no longer allowance
+  (`GlucoseMath.momentumDataInterval = 15 min`, `GlucoseMath.swift:13-14`); it
+  self-returns `[]` below 3 continuous same-provenance samples.
+
+### Loop doses off manual entries — via a dedicated path that drops momentum + RC
+
+- Manual BG is first-class: `predictGlucoseFromManualGlucose`
+  (`LoopDataManager.swift:1462-1555`) inserts the manual sample as the
+  prediction's **starting glucose**, then predicts with **`[.insulin, .carbs]`
+  only** (line 1543-1554). `recommendBolusForManualGlucose` (1557-1569)
+  recommends off that. Momentum and retrospective correction are deliberately
+  omitted — positive momentum/RC for manual boluses is even feature-flagged off
+  by default (`BolusEntryViewModel.swift:728`).
+- **This is precisely `WatchPredictionEngine`'s config today** (`[.insulin,
+  .carbs]`, manual BG as anchor). We arrived at the Loop-idiomatic answer.
+- Flags: `wasUserEntered` = human-typed BG; `isDisplayOnly` = calibration/
+  display value — orthogonal (`GlucoseSampleValue.swift:15-19`). Manual entries
+  are `isDisplayOnly:false, wasUserEntered:true`. Momentum's own guard filters
+  on `isDisplayOnly` + continuity + single provenance, **not** `wasUserEntered`
+  (`GlucoseMath.swift:92-100`) — so a manual entry perturbs momentum only by
+  breaking the 5-min cadence, and the clean exclusion is done by omitting
+  `.momentum` in the dosing path, not by flag.
+- A manual entry does **not** reset the CGM-staleness clock:
+  `getLatestCGMGlucose` filters `wasUserEntered == NO`
+  (`GlucoseStore.swift:527`). A manual BG is a one-shot dosing input, not a
+  stream heartbeat.
+
+### The rule for the watch (decidable per sample, no bespoke "data age" logic)
+
+Switch effects on the **newest sample's provenance**, exactly as Loop splits its
+two paths:
+
+- **Newest sample is a manual entry (`wasUserEntered`)** → `[.insulin, .carbs]`
+  (the `predictGlucoseFromManualGlucose` path). What we do now.
+- **Newest sample is from the stream (CGM, once the G7 work lands)** → the full
+  automatic-loop effect set including momentum + RC
+  (`settings.enabledEffects`, `LoopDataManager.swift:1920`), giving phone
+  parity when the data supports it.
+- **Staleness gate reads CGM-only glucose** (mirror `getLatestCGMGlucose`): a
+  manual entry keeps the display fresh but does not by itself re-arm the
+  closed loop — that needs a live stream, or a deliberate manual-dose action.
+
+This is the "adaptive by data age" option from the design fork, but grounded in
+Loop's own two-path split rather than a watch-invented heuristic. **Not yet
+implemented — awaiting the streaming-BG source; the manual path (what ships
+today) is already correct.**
 
 ## Staged implementation
 
