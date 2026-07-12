@@ -24,6 +24,7 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
     /// live BLE connection to the pod, which would orphan the pod (see B1 in
     /// docs/LIVE_TEST_FINDINGS.md). The screen is only a view of this state.
     private(set) lazy var podLoanCoordinator = WatchPodLoanCoordinator()
+    private(set) lazy var autoLoop = WatchAutoLoop(loopManager: loopManager, coordinator: podLoanCoordinator)
 
     private let log = OSLog(category: "ExtensionDelegate")
 

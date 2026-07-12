@@ -225,6 +225,7 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
         case currentBG
         case eventualBG
         case activeInsulinCarbs
+        case loopStatus
         case sessionBolus
         case sessionBasal
         case sessionInsulin
@@ -238,6 +239,8 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
                 return NSLocalizedString("Eventual", comment: "HUD row: predicted eventual glucose in Show Mode")
             case .activeInsulinCarbs:
                 return NSLocalizedString("IOB · COB", comment: "HUD row: active insulin and carbs in Show Mode")
+            case .loopStatus:
+                return NSLocalizedString("Loop", comment: "HUD row: standalone loop status in Show Mode")
             case .sessionBolus:
                 return NSLocalizedString("Session Bolus", comment: "HUD row: insulin bolused during Show Mode")
             case .sessionBasal:
@@ -288,6 +291,15 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
                     cell.setDetail(String(format: "%.2f U · %.0f g", output.activeInsulin, output.activeCarbs))
                 } else {
                     cell.setDetail("—")
+                }
+            case .loopStatus:
+                let autoLoop = ExtensionDelegate.shared().autoLoop
+                if !autoLoop.isEnabled {
+                    cell.setDetail(NSLocalizedString("Open", comment: "HUD loop row detail: loop open"))
+                } else if let cycle = autoLoop.lastCycle {
+                    cell.setDetail(String(format: NSLocalizedString("Shadow · %@", comment: "HUD loop row detail: shadow decision"), cycle.decision.detailText))
+                } else {
+                    cell.setDetail(NSLocalizedString("Shadow · starting", comment: "HUD loop row detail: shadow armed, no cycle yet"))
                 }
             case .sessionBolus:
                 cell.setDetail(String(format: "%.2f U", coordinator.sessionBolusUnits))
@@ -410,6 +422,8 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
 
         if isInShowMode {
             switch ShowModeRow(rawValue: rowIndex) {
+            case .loopStatus:
+                presentController(withName: WatchPodControlController.className, context: PodControlEntry.loopToggle)
             case .currentBG, .eventualBG:
                 // Tap the number → the entry dial + prediction readout. (A2
                 // splits these into entry vs detail; one screen serves both today.)

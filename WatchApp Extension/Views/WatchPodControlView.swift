@@ -19,6 +19,7 @@ enum PodControlEntry {
     case basal   // Override button in Show Mode → the basal dial
     case end     // horse tapped while in Show Mode → End Show Mode
     case predict // Carbs button in Show Mode → prediction screen (enter BG → forecast)
+    case loopToggle // Loop row on the HUD → open/close the standalone loop
 }
 
 struct WatchPodControlView: View {
@@ -157,6 +158,8 @@ struct WatchPodControlView: View {
             ShowModeDoseView(kind: .bolus, coordinator: coordinator, onFinish: dismiss)
         case .basal:
             ShowModeDoseView(kind: .basal, coordinator: coordinator, onFinish: dismiss)
+        case .loopToggle:
+            LoopToggleView(autoLoop: ExtensionDelegate.shared().autoLoop)
         case .predict:
             PredictionView(
                 engine: WatchPredictionEngine(
