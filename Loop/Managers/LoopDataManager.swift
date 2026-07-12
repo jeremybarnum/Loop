@@ -1775,6 +1775,6 @@ extension LoopDataManager: AutomationHistoryProvider {
 }
 
 extension CarbMath {
-    public static let dateAdjustmentPast: TimeInterval = .hours(-12)
-    public static let dateAdjustmentFuture: TimeInterval = .hours(1)
+    public static let dateAdjustmentPast = LoopConstants.maxCarbEntryPastTime
+    public static let dateAdjustmentFuture = LoopConstants.maxCarbEntryFutureTime
 }
