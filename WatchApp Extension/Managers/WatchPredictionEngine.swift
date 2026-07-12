@@ -81,6 +81,7 @@ final class WatchPredictionEngine {
     /// simulators), then run. Every branch logs — silence is not an option here.
     @MainActor
     func predict(manualBG: HKQuantity, at date: Date = Date(), completion: @escaping (Swift.Result<WatchPredictionOutput, Error>) -> Void) {
+        let tapped = Date()
         let settings = loopManager.settings
         log.default("predict: settings state %{public}@", settingsState(settings))
 
@@ -92,7 +93,7 @@ final class WatchPredictionEngine {
         loopManager.requestGlucoseBackfillIfNecessary()
 
         guard settingsIncomplete(settings) else {
-            pullDoseHistoryIfNeededThenRun(manualBG: manualBG, at: date, completion: completion)
+            pullDoseHistoryIfNeededThenRun(manualBG: manualBG, at: date, tapped: tapped, completion: completion)
             return
         }
 
@@ -114,12 +115,12 @@ final class WatchPredictionEngine {
                 } else {
                     self.log.error("predict: settings pull reply failed to decode: %{public}@", String(describing: reply))
                 }
-                self.pullDoseHistoryIfNeededThenRun(manualBG: manualBG, at: date, completion: completion)
+                self.pullDoseHistoryIfNeededThenRun(manualBG: manualBG, at: date, tapped: tapped, completion: completion)
             }
         }, errorHandler: { [weak self] error in
             self?.log.error("predict: settings pull failed: %{public}@", String(describing: error))
             Task { @MainActor in
-                self?.pullDoseHistoryIfNeededThenRun(manualBG: manualBG, at: date, completion: completion)
+                self?.pullDoseHistoryIfNeededThenRun(manualBG: manualBG, at: date, tapped: tapped, completion: completion)
             }
         })
     }
@@ -127,15 +128,15 @@ final class WatchPredictionEngine {
     /// Pre-loan insulin history: grant payload first; otherwise pull once from
     /// the phone. Missing history skews IOB low, so it's worth a round-trip.
     @MainActor
-    private func pullDoseHistoryIfNeededThenRun(manualBG: HKQuantity, at date: Date, completion: @escaping (Swift.Result<WatchPredictionOutput, Error>) -> Void) {
+    private func pullDoseHistoryIfNeededThenRun(manualBG: HKQuantity, at date: Date, tapped: Date, completion: @escaping (Swift.Result<WatchPredictionOutput, Error>) -> Void) {
         guard coordinator.grantDoseHistoryData == nil, coordinator.pulledDoseHistoryData == nil else {
-            return run(manualBG: manualBG, at: date, completion: completion)
+            return run(manualBG: manualBG, at: date, tapped: tapped, completion: completion)
         }
 
         let session = WCSession.default
         guard session.activationState == .activated else {
             log.default("predict: no dose history and WC inactive — running without")
-            return run(manualBG: manualBG, at: date, completion: completion)
+            return run(manualBG: manualBG, at: date, tapped: tapped, completion: completion)
         }
 
         log.default("predict: no grant dose history — pulling from phone")
@@ -148,18 +149,19 @@ final class WatchPredictionEngine {
                 } else {
                     self.log.error("predict: dose history pull returned no data")
                 }
-                self.run(manualBG: manualBG, at: date, completion: completion)
+                self.run(manualBG: manualBG, at: date, tapped: tapped, completion: completion)
             }
         }, errorHandler: { [weak self] error in
             self?.log.error("predict: dose history pull failed: %{public}@", String(describing: error))
             Task { @MainActor in
-                self?.run(manualBG: manualBG, at: date, completion: completion)
+                self?.run(manualBG: manualBG, at: date, tapped: tapped, completion: completion)
             }
         })
     }
 
     @MainActor
-    private func run(manualBG: HKQuantity, at date: Date, completion: @escaping (Swift.Result<WatchPredictionOutput, Error>) -> Void) {
+    private func run(manualBG: HKQuantity, at date: Date, tapped: Date, completion: @escaping (Swift.Result<WatchPredictionOutput, Error>) -> Void) {
+        let pullsDone = Date()
         let settings = loopManager.settings
 
         // Every input the algorithm can't default must have synced.
@@ -247,6 +249,7 @@ final class WatchPredictionEngine {
         }
 
         group.notify(queue: .global(qos: .userInitiated)) {
+            let fetchesDone = Date()
             // The manual entry is the anchor: strictly the newest sample.
             let manualSample = StoredGlucoseSample(startDate: date, quantity: manualBG, wasUserEntered: true)
             let history = glucoseHistory
@@ -283,6 +286,13 @@ final class WatchPredictionEngine {
                     basalRates: basalSchedule,
                     model: model,
                     lastTempBasal: activeTemp)
+
+                let algorithmDone = Date()
+                self.log.default("predict timing: pulls %dms, fetches %dms, algorithm %dms, total %dms",
+                                 Int(pullsDone.timeIntervalSince(tapped) * 1000),
+                                 Int(fetchesDone.timeIntervalSince(pullsDone) * 1000),
+                                 Int(algorithmDone.timeIntervalSince(fetchesDone) * 1000),
+                                 Int(algorithmDone.timeIntervalSince(tapped) * 1000))
 
                 let displayUnit = settings.glucoseUnit ?? .milligramsPerDeciliter
                 let eventual = prediction.glucose.last?.quantity ?? manualBG
