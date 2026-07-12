@@ -100,7 +100,10 @@ class HUDInterfaceController: WKInterfaceController {
         // engine's output, which lives with the rows).
         if isInShowMode {
             loopHUDImage.setHidden(false)
-            loopHUDImage.setImageNamed("loop_show_open")
+            // Same visual grammar as the phone: open ring = open loop, closed
+            // ring = closed loop — but in turf, Show Mode's green.
+            let loopClosed = ExtensionDelegate.shared().autoLoop.isEnabled
+            loopHUDImage.setImageNamed(loopClosed ? "loop_show_closed" : "loop_show_open")
             eventualGlucoseLabel.setHidden(true)
             updateShowModeGlucoseHeader()
             return

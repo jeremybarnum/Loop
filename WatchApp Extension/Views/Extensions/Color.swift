@@ -14,6 +14,9 @@ extension Color {
     static let darkCarbs = Color(.darkCarbsColor)
 
     static let insulin = Color(.insulin)
+
+    /// Show Mode's identity color (see UIColor.turfColor).
+    static let turf = Color(.turfColor)
     static let darkInsulin = Color(.darkInsulin)
 
     static let defaultWatchButtonGray = Color(white: 35 / 255)

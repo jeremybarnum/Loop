@@ -224,7 +224,8 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
     private enum ShowModeRow: Int, CaseIterable {
         case currentBG
         case eventualBG
-        case activeInsulinCarbs
+        case activeInsulin
+        case activeCarbs
         case loopStatus
         case sessionBolus
         case sessionBasal
@@ -237,8 +238,10 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
                 return NSLocalizedString("Glucose", comment: "HUD row: current glucose in Show Mode (tap to enter)")
             case .eventualBG:
                 return NSLocalizedString("Eventual", comment: "HUD row: predicted eventual glucose in Show Mode")
-            case .activeInsulinCarbs:
-                return NSLocalizedString("IOB · COB", comment: "HUD row: active insulin and carbs in Show Mode")
+            case .activeInsulin:
+                return NSLocalizedString("Active Insulin", comment: "HUD row: active insulin in Show Mode")
+            case .activeCarbs:
+                return NSLocalizedString("Active Carbs", comment: "HUD row: active carbs in Show Mode")
             case .loopStatus:
                 return NSLocalizedString("Loop", comment: "HUD row: standalone loop status in Show Mode")
             case .sessionBolus:
@@ -286,9 +289,15 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
                 } else {
                     cell.setDetail("—")
                 }
-            case .activeInsulinCarbs:
+            case .activeInsulin:
                 if let output = predictionOutput {
-                    cell.setDetail(String(format: "%.2f U · %.0f g", output.activeInsulin, output.activeCarbs))
+                    cell.setDetail(String(format: "%.2f U", output.activeInsulin))
+                } else {
+                    cell.setDetail("—")
+                }
+            case .activeCarbs:
+                if let output = predictionOutput {
+                    cell.setDetail(String(format: "%.0f g", output.activeCarbs))
                 } else {
                     cell.setDetail("—")
                 }
