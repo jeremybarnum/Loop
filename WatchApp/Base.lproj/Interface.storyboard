@@ -38,7 +38,14 @@
                                                 </label>
                                             </items>
                                             <variation key="device=watch42mm" height="29"/>
-                                        </group>
+                                                                                    <gestureRecognizers>
+                                                <tapGestureRecognizer id="GT1-aa-001" userLabel="Glucose Tap">
+                                                    <connections>
+                                                        <action selector="didTapGlucoseHeader:" destination="rNf-Mh-tID" id="GA1-aa-001"/>
+                                                    </connections>
+                                                </tapGestureRecognizer>
+                                            </gestureRecognizers>
+</group>
                                     </items>
                                     <variation key="device=watch40mm" widthAdjustment="-8.5"/>
                                     <variation key="device=watch41mm" widthAdjustment="-8.5"/>
@@ -201,7 +208,14 @@
                                                 </label>
                                             </items>
                                             <variation key="device=watch42mm" height="29"/>
-                                        </group>
+                                                                                    <gestureRecognizers>
+                                                <tapGestureRecognizer id="GT2-aa-002" userLabel="Glucose Tap">
+                                                    <connections>
+                                                        <action selector="didTapGlucoseHeader:" destination="v5b-sO-bb8" id="GA2-aa-002"/>
+                                                    </connections>
+                                                </tapGestureRecognizer>
+                                            </gestureRecognizers>
+</group>
                                     </items>
                                     <variation key="device=watch40mm" widthAdjustment="-8.5"/>
                                     <variation key="device=watch41mm" widthAdjustment="-8.5"/>

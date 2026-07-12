@@ -187,6 +187,13 @@ class HUDInterfaceController: WKInterfaceController {
         }
     }
 
+    /// Tap on the BG header (both HUD pages): in Show Mode, straight to the
+    /// entry dial + prediction. Tethered mode keeps the header inert.
+    @IBAction func didTapGlucoseHeader(_ sender: Any) {
+        guard isInShowMode else { return }
+        presentController(withName: WatchPodControlController.className, context: PodControlEntry.predict)
+    }
+
     @IBAction func addCarbs() {
         presentController(withName: CarbAndBolusFlowController.className, context: CarbAndBolusFlow.Configuration.carbEntry(nil))
     }
