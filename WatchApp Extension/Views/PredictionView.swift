@@ -2,10 +2,13 @@
 //  PredictionView.swift
 //  WatchApp Extension
 //
-//  Manual-BG prediction screen: dial in a glucose with the crown, run the
-//  Loop algorithm on-watch (WatchPredictionEngine), and see eventual BG, the
-//  correction range, and the temp-basal recommendation. Display/recommend
-//  only — nothing here doses.
+//  A2 split (docs/WATCH_STANDALONE_UI_AUTOLOOP.md):
+//  - BGEntryView: tap the BG number → dial a reading → Log. Stores the entry,
+//    runs the cycle, shows the checkmark, gets out of the way — results land
+//    on the HUD rows. The rider's whole interaction is dial-and-confirm.
+//  - PredictionDetailView: tap Eventual → the read-only rich readout
+//    (eventual, range, IOB/COB, temp recommendation, inputs) for
+//    cross-checking and debugging. Doses nothing, stores nothing.
 //
 //  Copyright © 2026 LoopKit Authors. All rights reserved.
 //
@@ -14,20 +17,24 @@ import SwiftUI
 import HealthKit
 import LoopKit
 
-struct PredictionView: View {
+// MARK: - Entry
+
+struct BGEntryView: View {
     let engine: WatchPredictionEngine
     let unit: HKUnit
+    var onFinish: () -> Void = {}
 
     @State private var bgValue: Double
-    @State private var output: WatchPredictionOutput?
-    @State private var errorText: String?
-    @State private var busy = false
     @State private var seeded = false
     @State private var seedCaption: String?
+    @State private var busy = false
+    @State private var done = false
+    @State private var errorText: String?
 
-    init(engine: WatchPredictionEngine, unit: HKUnit) {
+    init(engine: WatchPredictionEngine, unit: HKUnit, onFinish: @escaping () -> Void = {}) {
         self.engine = engine
         self.unit = unit
+        self.onFinish = onFinish
         _bgValue = State(initialValue: unit == .milligramsPerDeciliter ? 120 : 6.7)
     }
 
@@ -35,20 +42,18 @@ struct PredictionView: View {
     private var crownStep: Double { isMgdl ? 1 : 0.1 }
     private var crownRange: ClosedRange<Double> { isMgdl ? 40...400 : 2.2...22.2 }
 
-    private func format(_ quantity: HKQuantity) -> String {
-        let value = quantity.doubleValue(for: unit)
-        return isMgdl ? String(format: "%.0f", value) : String(format: "%.1f", value)
-    }
-
     var body: some View {
-        ScrollView {
-            VStack(spacing: 8) {
-                Text("Current BG")
-                    .font(.caption2)
+        VStack(spacing: 6) {
+            if done {
+                CompletionCheckmark(checkmarkColor: .turf, circleStrokeColor: .turf)
+                    .frame(width: 44, height: 44)
+                Text("Logged")
+                    .font(.caption)
                     .foregroundColor(.secondary)
+            } else {
                 Text(isMgdl ? String(format: "%.0f", bgValue) : String(format: "%.1f", bgValue))
-                    .font(.system(size: 38, weight: .semibold, design: .rounded))
-                    .foregroundColor(.accentColor)
+                    .font(.system(size: 42, weight: .semibold, design: .rounded))
+                    .foregroundColor(.turf)
                     .focusable(true)
                     .digitalCrownRotation(
                         $bgValue,
@@ -58,6 +63,7 @@ struct PredictionView: View {
                         sensitivity: .medium,
                         isContinuous: false,
                         isHapticFeedbackEnabled: true)
+
                 Text(unit.shortLocalizedUnitString())
                     .font(.caption2)
                     .foregroundColor(.secondary)
@@ -68,33 +74,43 @@ struct PredictionView: View {
                         .foregroundColor(.secondary)
                 }
 
-                Button(action: runPrediction) {
-                    if busy {
-                        ProgressView()
-                    } else {
-                        Label("Predict", systemImage: "chart.line.uptrend.xyaxis")
-                    }
-                }
-                .disabled(busy)
-
                 if let errorText {
                     Text(errorText)
                         .font(.caption2)
                         .foregroundColor(.orange)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .multilineTextAlignment(.center)
                 }
 
-                if let output {
-                    resultSection(output)
-                }
+                Spacer()
+
+                ActionButton(
+                    title: busy ? Text("Logging…", comment: "BG entry button while running") : Text("Log", comment: "BG entry button"),
+                    color: .turf,
+                    action: log
+                )
+                .disabled(busy)
             }
         }
-        .navigationTitle("Predict")
         .onAppear(perform: seedFromLatestGlucose)
     }
 
-    /// Open the dial at the last known reading (with its age), not a default.
-    /// Seeds once; never stomps a value the user has already dialed.
+    private func log() {
+        busy = true
+        errorText = nil
+        engine.predict(manualBG: HKQuantity(unit: unit, doubleValue: bgValue)) { result in
+            DispatchQueue.main.async {
+                busy = false
+                switch result {
+                case .success:
+                    done = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { onFinish() }
+                case .failure(let error):
+                    errorText = error.localizedDescription
+                }
+            }
+        }
+    }
+
     private func seedFromLatestGlucose() {
         guard !seeded else { return }
         engine.latestGlucose { sample in
@@ -107,40 +123,70 @@ struct PredictionView: View {
                 : String(format: NSLocalizedString("last reading, %d min ago", comment: "Prediction BG seed caption (aged)"), minutes)
         }
     }
+}
 
-    @ViewBuilder
-    private func resultSection(_ output: WatchPredictionOutput) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Divider()
+// MARK: - Detail
 
-            row("Eventual BG", "\(format(output.eventualBG)) \(unit.shortLocalizedUnitString())")
-            row("Range", "\(format(output.correctionRange.lowerBound))–\(format(output.correctionRange.upperBound))")
+struct PredictionDetailView: View {
+    let engine: WatchPredictionEngine
+    let unit: HKUnit
 
-            row("Active insulin", String(format: "%.2f U", output.activeInsulin))
-            row("Active carbs", String(format: "%.0f g", output.activeCarbs))
+    @State private var output: WatchPredictionOutput?
+    @State private var errorText: String?
 
-            if let temp = output.recommendedTempBasal {
-                row("Temp basal", String(format: "%.2f U/hr", temp.unitsPerHour))
-                row("Duration", String(format: "%.0f min", temp.duration.minutes))
-            } else {
-                row("Temp basal", String(format: "none — schedule %.2f U/hr fits", output.scheduledBasalRate))
+    private var isMgdl: Bool { unit == .milligramsPerDeciliter }
+
+    private func format(_ quantity: HKQuantity) -> String {
+        let value = quantity.doubleValue(for: unit)
+        return isMgdl ? String(format: "%.0f", value) : String(format: "%.1f", value)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 4) {
+                if let errorText {
+                    Text(errorText)
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                }
+
+                if let output {
+                    row("Glucose", "\(format(output.currentBG)) \(unit.shortLocalizedUnitString())")
+                    row("Eventual", format(output.eventualBG))
+                    row("Range", "\(format(output.correctionRange.lowerBound))–\(format(output.correctionRange.upperBound))")
+
+                    Divider()
+
+                    row("Active Insulin", String(format: "%.2f U", output.activeInsulin))
+                    row("Active Carbs", String(format: "%.0f g", output.activeCarbs))
+
+                    Divider()
+
+                    if let temp = output.recommendedTempBasal {
+                        row("Temp Basal", String(format: "%.2f U/hr", temp.unitsPerHour))
+                        row("Duration", String(format: "%.0f min", temp.duration.minutes))
+                    } else {
+                        row("Temp Basal", String(format: NSLocalizedString("none — %.2f fits", comment: "Prediction detail: schedule fits, with rate"), output.scheduledBasalRate))
+                    }
+
+                    if !output.usedPreLoanHistory {
+                        Text("⚠️ No pre-session insulin history — IOB may be understated.")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                    }
+
+                    Text("Inputs: \(output.inputDoseCount) doses, \(output.inputCarbCount) carbs")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                } else {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                }
             }
-
-            if !output.usedPreLoanHistory {
-                Text("⚠️ No pre-session insulin history — IOB may be understated.")
-                    .font(.caption2)
-                    .foregroundColor(.orange)
-            }
-
-            Text("Recommendation only — nothing is dosed from this screen.")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-
-            Text("Inputs: \(output.inputDoseCount) doses, \(output.inputCarbCount) carbs")
-                .font(.caption2)
-                .foregroundColor(.secondary)
+            .padding(.horizontal, 4)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .navigationTitle("Prediction")
+        .onAppear(perform: refresh)
     }
 
     private func row(_ label: String, _ value: String) -> some View {
@@ -154,19 +200,19 @@ struct PredictionView: View {
         }
     }
 
-    private func runPrediction() {
-        busy = true
-        errorText = nil
-        let quantity = HKQuantity(unit: unit, doubleValue: bgValue)
-        engine.predict(manualBG: quantity) { result in
-            DispatchQueue.main.async {
-                busy = false
-                switch result {
-                case .success(let prediction):
-                    output = prediction
-                case .failure(let error):
-                    output = nil
-                    errorText = error.localizedDescription
+    /// Read-only: anchors on the newest stored sample, never fabricates one.
+    private func refresh() {
+        engine.latestGlucose { sample in
+            guard let sample else {
+                errorText = NSLocalizedString("No glucose yet — log a reading first.", comment: "Prediction detail with empty store")
+                return
+            }
+            engine.predict(manualBG: sample.quantity, storeEntry: false) { result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let fresh): output = fresh
+                    case .failure(let error): errorText = error.localizedDescription
+                    }
                 }
             }
         }

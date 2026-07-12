@@ -433,10 +433,10 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
             switch ShowModeRow(rawValue: rowIndex) {
             case .loopStatus:
                 presentController(withName: WatchPodControlController.className, context: PodControlEntry.loopToggle)
-            case .currentBG, .eventualBG:
-                // Tap the number → the entry dial + prediction readout. (A2
-                // splits these into entry vs detail; one screen serves both today.)
-                presentController(withName: WatchPodControlController.className, context: PodControlEntry.predict)
+            case .currentBG:
+                presentController(withName: WatchPodControlController.className, context: PodControlEntry.bgEntry)
+            case .eventualBG:
+                presentController(withName: WatchPodControlController.className, context: PodControlEntry.predictionDetail)
             default:
                 break
             }

@@ -207,7 +207,7 @@ class HUDInterfaceController: WKInterfaceController {
     /// entry dial + prediction. Tethered mode keeps the header inert.
     @IBAction func didTapGlucoseHeader(_ sender: Any) {
         guard isInShowMode else { return }
-        presentController(withName: WatchPodControlController.className, context: PodControlEntry.predict)
+        presentController(withName: WatchPodControlController.className, context: PodControlEntry.bgEntry)
     }
 
     @IBAction func addCarbs() {

@@ -18,7 +18,8 @@ enum PodControlEntry {
     case bolus   // Bolus button in Show Mode → the bolus dial
     case basal   // Override button in Show Mode → the basal dial
     case end     // horse tapped while in Show Mode → End Show Mode
-    case predict // Carbs button in Show Mode → prediction screen (enter BG → forecast)
+    case bgEntry // tap the BG number → dial a reading, Log, done
+    case predictionDetail // tap Eventual → read-only rich prediction readout
     case loopToggle // Loop row on the HUD → open/close the standalone loop
 }
 
@@ -69,7 +70,7 @@ struct WatchPodControlView: View {
     /// The crown-driven bolus/basal dose screens — rendered outside the ScrollView so the
     /// Digital Crown reaches them immediately (no tap-to-focus needed).
     private var isDoseScreen: Bool {
-        coordinator.phase == .active && (entry == .bolus || entry == .basal || entry == .predict)
+        coordinator.phase == .active && (entry == .bolus || entry == .basal || entry == .bgEntry)
     }
 
     @ViewBuilder
@@ -160,8 +161,15 @@ struct WatchPodControlView: View {
             ShowModeDoseView(kind: .basal, coordinator: coordinator, onFinish: dismiss)
         case .loopToggle:
             LoopToggleView(autoLoop: ExtensionDelegate.shared().autoLoop)
-        case .predict:
-            PredictionView(
+        case .bgEntry:
+            BGEntryView(
+                engine: WatchPredictionEngine(
+                    loopManager: ExtensionDelegate.shared().loopManager,
+                    coordinator: coordinator),
+                unit: ExtensionDelegate.shared().loopManager.settings.glucoseUnit ?? .milligramsPerDeciliter,
+                onFinish: dismiss)
+        case .predictionDetail:
+            PredictionDetailView(
                 engine: WatchPredictionEngine(
                     loopManager: ExtensionDelegate.shared().loopManager,
                     coordinator: coordinator),
