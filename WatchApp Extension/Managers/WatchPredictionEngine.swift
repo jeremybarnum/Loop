@@ -60,6 +60,10 @@ final class WatchPredictionEngine {
     private let coordinator: WatchPodLoanCoordinator
     private let log = OSLog(category: "WatchPredictionEngine")
 
+    /// Dose history pulled from the phone when the grant carried none (sim
+    /// demo, or a real grant whose payload was absent). Cached per engine.
+    private var pulledDoseHistoryData: Data?
+
     init(loopManager: LoopDataManager, coordinator: WatchPodLoanCoordinator) {
         self.loopManager = loopManager
         self.coordinator = coordinator
@@ -84,8 +88,15 @@ final class WatchPredictionEngine {
         let settings = loopManager.settings
         log.default("predict: settings state %{public}@", settingsState(settings))
 
+        // Freshen the watch-local carb/glucose stores opportunistically; replies
+        // land async, so they enrich this run if fast and the next run if not.
+        // (The carb-list screen normally triggers this, but Show Mode repurposes
+        // its button — without this line, carbs never backfill mid-session.)
+        loopManager.requestCarbBackfill()
+        loopManager.requestGlucoseBackfillIfNecessary()
+
         guard settingsIncomplete(settings) else {
-            run(manualBG: manualBG, at: date, completion: completion)
+            pullDoseHistoryIfNeededThenRun(manualBG: manualBG, at: date, completion: completion)
             return
         }
 
@@ -107,10 +118,44 @@ final class WatchPredictionEngine {
                 } else {
                     self.log.error("predict: settings pull reply failed to decode: %{public}@", String(describing: reply))
                 }
-                self.run(manualBG: manualBG, at: date, completion: completion)
+                self.pullDoseHistoryIfNeededThenRun(manualBG: manualBG, at: date, completion: completion)
             }
         }, errorHandler: { [weak self] error in
             self?.log.error("predict: settings pull failed: %{public}@", String(describing: error))
+            Task { @MainActor in
+                self?.pullDoseHistoryIfNeededThenRun(manualBG: manualBG, at: date, completion: completion)
+            }
+        })
+    }
+
+    /// Pre-loan insulin history: grant payload first; otherwise pull once from
+    /// the phone. Missing history skews IOB low, so it's worth a round-trip.
+    @MainActor
+    private func pullDoseHistoryIfNeededThenRun(manualBG: HKQuantity, at date: Date, completion: @escaping (Swift.Result<WatchPredictionOutput, Error>) -> Void) {
+        guard coordinator.grantDoseHistoryData == nil, pulledDoseHistoryData == nil else {
+            return run(manualBG: manualBG, at: date, completion: completion)
+        }
+
+        let session = WCSession.default
+        guard session.activationState == .activated else {
+            log.default("predict: no dose history and WC inactive — running without")
+            return run(manualBG: manualBG, at: date, completion: completion)
+        }
+
+        log.default("predict: no grant dose history — pulling from phone")
+        session.sendMessage(["name": PodLoanDoseHistoryRequest.name], replyHandler: { [weak self] reply in
+            Task { @MainActor in
+                guard let self else { return }
+                if let data = reply["dh"] as? Data {
+                    self.log.default("predict: dose history pull succeeded (%d bytes)", data.count)
+                    self.pulledDoseHistoryData = data
+                } else {
+                    self.log.error("predict: dose history pull returned no data")
+                }
+                self.run(manualBG: manualBG, at: date, completion: completion)
+            }
+        }, errorHandler: { [weak self] error in
+            self?.log.error("predict: dose history pull failed: %{public}@", String(describing: error))
             Task { @MainActor in
                 self?.run(manualBG: manualBG, at: date, completion: completion)
             }
@@ -145,7 +190,7 @@ final class WatchPredictionEngine {
         // active temp carried at full programmed extent (parity with the
         // phone's live path, which sees the mutable temp's future remainder).
         let journal = coordinator.journalForPrediction
-        let grantHistory = coordinator.grantDoseHistoryData
+        let grantHistory = (coordinator.grantDoseHistoryData ?? pulledDoseHistoryData)
             .flatMap { PodLoanDoseHistory.decode(from: $0) }?
             .doseEntries(insulinType: insulinType) ?? []
         let activeTemp = journal?.activeTempBasal(at: date, insulinType: insulinType)

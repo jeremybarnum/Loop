@@ -188,6 +188,14 @@ struct PodLoanDoseHistory: Codable {
     }
 }
 
+/// Watch → phone: request recent dose history on demand. The loan grant is the
+/// primary carrier ("dh"), but the sim demo fakes the grant locally, and a real
+/// grant's payload could be absent (older phone, failed fetch). Reply:
+/// ["dh": Data] (PodLoanDoseHistory-encoded), empty reply on failure.
+enum PodLoanDoseHistoryRequest {
+    static let name = "PodLoanDoseHistoryRequest"
+}
+
 // MARK: - Loan revoke (DESIGN-6)
 
 /// Phone → watch. Sent after the phone's escape-hatch reclaim

@@ -475,6 +475,19 @@ extension WatchDataManager: WCSessionDelegate {
             // simulators). Idempotent full-settings reply.
             log.default("Watch requested settings refresh")
             replyHandler(LoopSettingsUserInfo(settings: deviceManager.loopManager.settings).rawValue)
+        case PodLoanDoseHistoryRequest.name?:
+            // The watch wants pre-loan insulin history for its prediction (the
+            // grant carries it normally; the sim demo's faked grant doesn't).
+            deviceManager.loopManager.getDoseHistoryForWatchLoan(start: Date(timeIntervalSinceNow: -.hours(16))) { [log] result in
+                var reply: [String: Any] = [:]
+                if case .success(let doses) = result, let data = PodLoanDoseHistory(doses: doses).encoded() {
+                    log.default("Replying to dose history request: %d doses (%d bytes)", doses.count, data.count)
+                    reply["dh"] = data
+                } else {
+                    log.error("Dose history request: fetch/encode failed")
+                }
+                replyHandler(reply)
+            }
         case PotentialCarbEntryUserInfo.name?:
             if let potentialCarbEntry = PotentialCarbEntryUserInfo(rawValue: message)?.carbEntry {
                 self.createWatchContext(recommendingBolusFor: potentialCarbEntry) { (context) in
