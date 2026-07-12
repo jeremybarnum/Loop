@@ -295,7 +295,12 @@ final class WatchPredictionEngine {
 
                 // IOB/COB for display: computed from the same inputs (and the
                 // prediction's own ICE) so the numbers are the algorithm's view.
-                let activeInsulin = doses.insulinOnBoard(from: date, to: date).last?.value ?? 0
+                // Annotate against the basal timeline first: netBasalUnits only
+                // nets temp segments against schedule when the annotation exists
+                // (the wire format drops it), and net-of-schedule is what the
+                // phone's Active Insulin shows. generatePrediction annotates
+                // internally the same way.
+                let activeInsulin = doses.annotated(with: algorithmSettings.basal).insulinOnBoard(from: date, to: date).last?.value ?? 0
                 let activeCarbs = carbEntries.map(
                     to: prediction.effects.insulinCounteraction,
                     carbRatio: algorithmSettings.carbRatio,
