@@ -79,16 +79,17 @@ class HUDInterfaceController: WKInterfaceController {
         // color (shared with the horse button) — and it does NOT age: the freshness
         // colors encode phone-loop health, which is meaningless here (green would lie
         // that the loop is running; yellow/red would alarm about an intentional state).
-        // No live BG exists on the watch either, so the number, trend arrow, and
-        // eventual BG are hidden entirely rather than showing a stale phone value that
-        // looks current (dashes only appear after ~15 min; the first 15 min would look
-        // live). BG history stays on the chart page, where its age is visible; live BG
-        // returns here with the direct-G7 work.
+        // The BG number + trend now come from the WATCH-LOCAL store (manual
+        // entries today, streaming sensor when the direct-G7 work lands) — the
+        // original stale-phone-value concern doesn't apply to samples we own.
+        // Values older than 30 min degrade to dashes rather than looking live.
+        // Eventual BG stays on the chart page's rows (it needs the prediction
+        // engine's output, which lives with the rows).
         if isInShowMode {
             loopHUDImage.setHidden(false)
             loopHUDImage.setImageNamed("loop_show_open")
-            glucoseLabel.setHidden(true)
             eventualGlucoseLabel.setHidden(true)
+            updateShowModeGlucoseHeader()
             return
         }
 
@@ -142,6 +143,48 @@ class HUDInterfaceController: WKInterfaceController {
             }
         }
 
+    }
+
+    /// Show Mode BG header: newest watch-local sample + two-sample trend
+    /// arrow; dashes when nothing fresh enough exists.
+    private func updateShowModeGlucoseHeader() {
+        loopManager.glucoseStore.getGlucoseSamples(start: Date(timeIntervalSinceNow: -.hours(1)), end: Date()) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let samples = ((try? result.get()) ?? []).sorted { $0.startDate < $1.startDate }
+                guard let newest = samples.last, -newest.startDate.timeIntervalSinceNow < .minutes(30) else {
+                    self.glucoseLabel.setText(NSLocalizedString("– – –", comment: "No glucose value representation (3 dashes for mg/dL)"))
+                    self.glucoseLabel.setHidden(false)
+                    return
+                }
+                let unit = self.loopManager.settings.glucoseUnit ?? .milligramsPerDeciliter
+                let formatter = NumberFormatter.glucoseFormatter(for: unit)
+                var text = formatter.string(from: newest.quantity.doubleValue(for: unit)) ?? "– – –"
+                if samples.count >= 2 {
+                    text += Self.trendSymbol(from: samples[samples.count - 2], to: newest)
+                }
+                self.glucoseLabel.setText(text)
+                self.glucoseLabel.setHidden(false)
+            }
+        }
+    }
+
+    /// Two-sample slope → arrow, mg/dL per minute thresholds. Empty when the
+    /// pair is too far apart (or inverted) to mean anything.
+    static func trendSymbol(from older: StoredGlucoseSample, to newer: StoredGlucoseSample) -> String {
+        let minutes = newer.startDate.timeIntervalSince(older.startDate) / 60
+        guard minutes > 0, minutes <= 30 else { return "" }
+        let rate = (newer.quantity.doubleValue(for: .milligramsPerDeciliter)
+            - older.quantity.doubleValue(for: .milligramsPerDeciliter)) / minutes
+        switch rate {
+        case ..<(-3): return "↓↓"
+        case ..<(-2): return "↓"
+        case ..<(-1): return "↘"
+        case ...1: return "→"
+        case ...2: return "↗"
+        case ...3: return "↑"
+        default: return "↑↑"
+        }
     }
 
     @IBAction func addCarbs() {

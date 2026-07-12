@@ -344,21 +344,8 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
         }
         var parts = [formatBG(newest.quantity, unit: displayUnit)]
         if recentSamples.count >= 2 {
-            let older = recentSamples[recentSamples.count - 2]
-            let minutes = newest.startDate.timeIntervalSince(older.startDate) / 60
-            if minutes > 0, minutes <= 30 {
-                let rate = (newest.quantity.doubleValue(for: .milligramsPerDeciliter)
-                    - older.quantity.doubleValue(for: .milligramsPerDeciliter)) / minutes
-                switch rate {
-                case ..<(-3): parts.append("↓↓")
-                case ..<(-2): parts.append("↓")
-                case ..<(-1): parts.append("↘")
-                case ...1: parts.append("→")
-                case ...2: parts.append("↗")
-                case ...3: parts.append("↑")
-                default: parts.append("↑↑")
-                }
-            }
+            let arrow = Self.trendSymbol(from: recentSamples[recentSamples.count - 2], to: newest)
+            if !arrow.isEmpty { parts.append(arrow) }
         }
         let age = Int(-newest.startDate.timeIntervalSinceNow / 60)
         parts.append(age < 1 ? NSLocalizedString("now", comment: "HUD glucose row age (fresh)") : "\(age)m")
