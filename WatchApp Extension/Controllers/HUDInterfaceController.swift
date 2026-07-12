@@ -13,6 +13,7 @@ import LoopKit
 
 class HUDInterfaceController: WKInterfaceController {
     private var activeContextObserver: NSObjectProtocol?
+    private var glucoseSamplesObserver: NSObjectProtocol?
     private var commandFailureCancellable: AnyCancellable?
 
     @IBOutlet weak var loopHUDImage: WKInterfaceImage!
@@ -38,6 +39,18 @@ class HUDInterfaceController: WKInterfaceController {
             activeContextObserver = NotificationCenter.default.addObserver(forName: LoopDataManager.didUpdateContextNotification, object: loopManager, queue: nil) { [weak self] _ in
                 DispatchQueue.main.async {
                     self?.update()
+                }
+            }
+        }
+
+        // Show Mode's BG header is driven by the WATCH-LOCAL store, so it must
+        // re-render when samples land — activation alone races the async write
+        // of a just-dialed entry (header showed the pre-entry value live).
+        if glucoseSamplesObserver == nil {
+            glucoseSamplesObserver = NotificationCenter.default.addObserver(forName: GlucoseStore.glucoseSamplesDidChange, object: loopManager.glucoseStore, queue: nil) { [weak self] _ in
+                DispatchQueue.main.async {
+                    guard let self, self.isInShowMode else { return }
+                    self.update()
                 }
             }
         }

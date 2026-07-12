@@ -130,6 +130,9 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
 
                 DispatchQueue.main.async {
                     self?.updateGlucoseChart()
+                    // New sample (dialed entry landing, backfill sync) → the
+                    // prediction rows must recompute from it, not wait 5 min.
+                    self?.refreshPredictionForShowMode(force: true)
                 }
             }
         ]
