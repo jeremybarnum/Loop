@@ -73,8 +73,9 @@ final class WatchAutoLoop: ObservableObject {
     /// Loop's own recency rule — the same constant that gates glucose
     /// freshness on the phone loop and the HUD, not a bespoke number.
     static let bgStalenessLimit: TimeInterval = LoopCoreConstants.inputDataRecencyInterval
-    /// New-sample bursts (entry + backfill sync) collapse into one cycle.
-    private static let minCycleInterval: TimeInterval = 30
+    /// Collapse only truly-simultaneous bursts (entry + backfill landing
+    /// together); a dose or entry seconds later must still re-decide.
+    private static let minCycleInterval: TimeInterval = 5
 
     private let log = OSLog(category: "WatchAutoLoop")
     private let loopManager: LoopDataManager
@@ -83,6 +84,7 @@ final class WatchAutoLoop: ObservableObject {
 
     private var timer: Timer?
     private var sampleObserver: NSObjectProtocol?
+    private var journalObserver: NSObjectProtocol?
     private var lastCycleStart: Date = .distantPast
 
     init(loopManager: LoopDataManager, coordinator: WatchPodLoanCoordinator) {
@@ -119,6 +121,10 @@ final class WatchAutoLoop: ObservableObject {
         sampleObserver = NotificationCenter.default.addObserver(forName: GlucoseStore.glucoseSamplesDidChange, object: loopManager.glucoseStore, queue: nil) { [weak self] _ in
             Task { @MainActor in self?.runCycle(reason: "new sample") }
         }
+        // A dose (bolus/temp/suspend) changes IOB → re-decide.
+        journalObserver = NotificationCenter.default.addObserver(forName: WatchPodLoanCoordinator.journalDidChangeNotification, object: nil, queue: nil) { [weak self] _ in
+            Task { @MainActor in self?.runCycle(reason: "dose") }
+        }
     }
 
     private func stopTriggers() {
@@ -127,6 +133,10 @@ final class WatchAutoLoop: ObservableObject {
         if let observer = sampleObserver {
             NotificationCenter.default.removeObserver(observer)
             sampleObserver = nil
+        }
+        if let observer = journalObserver {
+            NotificationCenter.default.removeObserver(observer)
+            journalObserver = nil
         }
     }
 

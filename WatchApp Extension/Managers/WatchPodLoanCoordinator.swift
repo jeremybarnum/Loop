@@ -31,6 +31,15 @@ final class WatchPodLoanCoordinator: ObservableObject {
         case done             // handed back
     }
 
+    /// Posted when a dose lands in the loan journal (bolus/temp/suspend/cancel),
+    /// so the prediction store and the auto-loop recompute — a dose changes IOB
+    /// and the prediction, but is neither a glucose sample nor a 5-min tick.
+    static let journalDidChangeNotification = Notification.Name("WatchPodLoanCoordinator.journalDidChange")
+
+    private func notifyJournalChanged() {
+        NotificationCenter.default.post(name: Self.journalDidChangeNotification, object: self)
+    }
+
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var status: PodProofStatus?
     @Published private(set) var busy = false
@@ -561,6 +570,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
                 switch result {
                 case .success(let status):
                     self.status = status
+                    self.notifyJournalChanged()
                 case .failure(let error):
                     self.lastError = error.localizedDescription
                     // LOUD failure (BUG-5): dose screens dismiss optimistically on
@@ -815,6 +825,7 @@ private extension WatchPodLoanCoordinator {
             try? await Task.sleep(nanoseconds: 400_000_000)
             self.status = self.demoStatus("Suspended", delivered: delivered)
             self.busy = false
+            self.notifyJournalChanged()
         }
     }
 
@@ -827,6 +838,7 @@ private extension WatchPodLoanCoordinator {
             try? await Task.sleep(nanoseconds: 400_000_000)
             self.status = self.demoStatus("Scheduled Basal", delivered: delivered)
             self.busy = false
+            self.notifyJournalChanged()
         }
     }
 
@@ -839,6 +851,7 @@ private extension WatchPodLoanCoordinator {
             try? await Task.sleep(nanoseconds: 500_000_000)
             self.status = self.demoStatus("Bolusing", delivered: delivered)
             self.busy = false
+            self.notifyJournalChanged()
         }
     }
 
@@ -851,6 +864,7 @@ private extension WatchPodLoanCoordinator {
             try? await Task.sleep(nanoseconds: 400_000_000)
             self.status = self.demoStatus(String(format: "Temp basal %.2f U/hr", rate), delivered: delivered)
             self.busy = false
+            self.notifyJournalChanged()
         }
     }
 
@@ -863,6 +877,7 @@ private extension WatchPodLoanCoordinator {
             try? await Task.sleep(nanoseconds: 400_000_000)
             self.status = self.demoStatus("Scheduled Basal", delivered: delivered)
             self.busy = false
+            self.notifyJournalChanged()
         }
     }
 

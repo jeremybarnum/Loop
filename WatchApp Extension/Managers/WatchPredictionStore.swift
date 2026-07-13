@@ -40,6 +40,7 @@ final class WatchPredictionStore {
 
     private var lastRefresh: Date = .distantPast
     private var sampleObserver: NSObjectProtocol?
+    private var journalObserver: NSObjectProtocol?
     private var phaseCancellable: AnyCancellable?
     private var heartbeat: Timer?
 
@@ -63,6 +64,12 @@ final class WatchPredictionStore {
 
         // New sample (dialed entry landing, backfill sync) → recompute now.
         sampleObserver = NotificationCenter.default.addObserver(forName: GlucoseStore.glucoseSamplesDidChange, object: loopManager.glucoseStore, queue: nil) { [weak self] _ in
+            Task { @MainActor in self?.refresh(force: true) }
+        }
+
+        // A dose landing in the journal (bolus/temp/suspend) changes IOB and the
+        // prediction — recompute even though it's not a glucose change.
+        journalObserver = NotificationCenter.default.addObserver(forName: WatchPodLoanCoordinator.journalDidChangeNotification, object: nil, queue: nil) { [weak self] _ in
             Task { @MainActor in self?.refresh(force: true) }
         }
 
@@ -105,6 +112,9 @@ final class WatchPredictionStore {
     deinit {
         if let sampleObserver {
             NotificationCenter.default.removeObserver(sampleObserver)
+        }
+        if let journalObserver {
+            NotificationCenter.default.removeObserver(journalObserver)
         }
     }
 
