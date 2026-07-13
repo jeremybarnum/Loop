@@ -24,11 +24,14 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
     /// live BLE connection to the pod, which would orphan the pod (see B1 in
     /// docs/LIVE_TEST_FINDINGS.md). The screen is only a view of this state.
     private(set) lazy var podLoanCoordinator = WatchPodLoanCoordinator()
-    private(set) lazy var autoLoop = WatchAutoLoop(loopManager: loopManager, coordinator: podLoanCoordinator)
-
-    /// The single source of the watch's current Show Mode prediction, read by
-    /// both HUD pages' eventual-BG display.
+    /// The single source of the watch's current Show Mode prediction (the
+    /// LoopDataManager analog): observes glucose/carb/journal/settings/phase,
+    /// recomputes one prediction, posts one didUpdate. Read by both HUD pages
+    /// and the auto-loop.
     private(set) lazy var predictionStore = WatchPredictionStore(loopManager: loopManager, coordinator: podLoanCoordinator)
+
+    /// The closed-loop policy layer — consumes the store's recommendation.
+    private(set) lazy var autoLoop = WatchAutoLoop(store: predictionStore, coordinator: podLoanCoordinator)
 
     private let log = OSLog(category: "ExtensionDelegate")
 
@@ -128,8 +131,9 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
             }
             DispatchQueue.main.async {
                 self.log.default("Settings refresh received from phone")
+                // Assigning settings fires LoopDataManager.didUpdateContextNotification,
+                // which the prediction store observes — no manual nudge needed.
                 self.loopManager.settings = settings
-                self.predictionStore.refresh(force: true)
             }
         }, errorHandler: { [weak self] error in
             self?.log.error("Settings refresh request failed: %{public}@", String(describing: error))

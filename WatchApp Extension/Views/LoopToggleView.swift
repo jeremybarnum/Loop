@@ -21,12 +21,26 @@ struct LoopToggleView: View {
 
     @State private var confirming = false
     @State private var confirmProgress: Double = 0
+    /// Bumped on the store's didUpdate so the live derivation re-reads.
+    @State private var storeTick = 0
+
+    private var liveMath: WatchPredictionOutput.CorrectionMath? {
+        _ = storeTick   // re-read when the store updates
+        let store = ExtensionDelegate.shared().predictionStore
+        guard !store.isAnchorStale else { return nil }
+        return store.latestOutput?.correctionMath()
+    }
 
     var body: some View {
-        if confirming {
-            confirmStep
-        } else {
-            statusStep
+        Group {
+            if confirming {
+                confirmStep
+            } else {
+                statusStep
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: WatchPredictionStore.didUpdateNotification)) { _ in
+            storeTick &+= 1
         }
     }
 
@@ -53,7 +67,7 @@ struct LoopToggleView: View {
                             .font(.caption2)
                             .foregroundColor(.secondary)
 
-                        if let math = autoLoop.lastCycle?.math {
+                        if let math = liveMath {
                             Divider()
                             derivationBlock(math)
                         }

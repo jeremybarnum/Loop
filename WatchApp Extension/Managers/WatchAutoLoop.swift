@@ -2,15 +2,21 @@
 //  WatchAutoLoop.swift
 //  WatchApp Extension
 //
-//  B1 — SHADOW MODE: runs the standalone closed-loop cycle (gate on BG
-//  freshness, predict, recommend) on the session cadence and LOGS what it
-//  would enact. It doses NOTHING. B2 puts enactment behind these same gates
-//  once shadow logs look sane on the sim and at the bench.
+//  B1 — SHADOW MODE: the standalone closed-loop policy layer. It does NOT
+//  compute the prediction — WatchPredictionStore is the single source (the
+//  watch's LoopDataManager analog) — it CONSUMES the store's already-computed
+//  recommendation and records what it would enact each time that recommendation
+//  changes. Doses nothing; B2 puts enactment behind the same gates.
 //
-//  Design: docs/WATCH_STANDALONE_UI_AUTOLOOP.md. Rails that live elsewhere
-//  and are relied on here: the pod's ≤30-min temp auto-expiry (fail-safe for
-//  the lenient staleness policy), pod-layer proof limits beneath everything,
-//  and therapy-settings max basal inside the shared recommendation math.
+//  This mirrors Loop's separation: LoopDataManager owns the prediction and the
+//  recommendedAutomaticDose; the loop()/enact path reads them. We do the same —
+//  the store recomputes on every input change (glucose/carb/journal/settings),
+//  posts one didUpdate, and this layer reacts to that single signal rather than
+//  re-observing raw sources or running a second engine.
+//
+//  Design: docs/WATCH_STANDALONE_UI_AUTOLOOP.md. Rails relied on elsewhere:
+//  the pod's ≤30-min temp auto-expiry (fail-safe for lenient staleness),
+//  pod-layer proof limits, therapy-settings max basal in the shared math.
 //
 //  Copyright © 2026 LoopKit Authors. All rights reserved.
 //
@@ -29,9 +35,8 @@ final class WatchAutoLoop: ObservableObject {
         case scheduleFits
         case staleBG(minutes: Int)
         case noBG
-        case failed(String)
 
-        /// Short form for the HUD row / toggle screen.
+        /// Short form for the HUD row / loop screen.
         var detailText: String {
             switch self {
             case .wouldSetTemp(let rate, let minutes):
@@ -42,8 +47,18 @@ final class WatchAutoLoop: ObservableObject {
                 return String(format: NSLocalizedString("paused — BG %dm old", comment: "Auto-loop decision: glucose too stale to dose"), minutes)
             case .noBG:
                 return NSLocalizedString("paused — no BG", comment: "Auto-loop decision: no glucose available")
-            case .failed(let message):
-                return message
+            }
+        }
+
+        /// Records a new history entry only when this changes — so the log
+        /// captures meaningful changes, not every 60-second re-evaluation.
+        /// (Stale minutes and small eventual drifts don't spam the history.)
+        var changeKey: String {
+            switch self {
+            case .wouldSetTemp(let rate, _): return String(format: "temp:%.2f", rate)
+            case .scheduleFits: return "fits"
+            case .staleBG: return "stale"
+            case .noBG: return "nobg"
             }
         }
     }
@@ -51,10 +66,10 @@ final class WatchAutoLoop: ObservableObject {
     struct Cycle: Identifiable {
         let id = UUID()
         let date: Date
-        let trigger: String       // what fired this cycle: timer / new sample / enabled
-        let bg: HKQuantity?       // the anchor reading (nil when there was none)
-        let eventual: HKQuantity? // the eventual it predicted (nil when it couldn't)
-        let math: WatchPredictionOutput.CorrectionMath?  // the step-by-step correction (nil when no prediction ran)
+        let trigger: String
+        let bg: HKQuantity?
+        let eventual: HKQuantity?
+        let math: WatchPredictionOutput.CorrectionMath?
         let decision: Decision
     }
 
@@ -69,26 +84,18 @@ final class WatchAutoLoop: ObservableObject {
     @Published private(set) var recentCycles: [Cycle] = []
     private static let historyLength = 12
 
-    static let cadence: TimeInterval = .minutes(5)
-    /// Loop's own recency rule — the same constant that gates glucose
-    /// freshness on the phone loop and the HUD, not a bespoke number.
+    /// Loop's own recency rule — the same constant that gates glucose freshness
+    /// on the phone loop and the HUD (via the store), not a bespoke number.
     static let bgStalenessLimit: TimeInterval = LoopCoreConstants.inputDataRecencyInterval
-    /// Collapse only truly-simultaneous bursts (entry + backfill landing
-    /// together); a dose or entry seconds later must still re-decide.
-    private static let minCycleInterval: TimeInterval = 5
 
     private let log = OSLog(category: "WatchAutoLoop")
-    private let loopManager: LoopDataManager
+    private let store: WatchPredictionStore
     private let coordinator: WatchPodLoanCoordinator
-    private lazy var engine = WatchPredictionEngine(loopManager: loopManager, coordinator: coordinator)
 
-    private var timer: Timer?
-    private var sampleObserver: NSObjectProtocol?
-    private var journalObserver: NSObjectProtocol?
-    private var lastCycleStart: Date = .distantPast
+    private var storeObserver: NSObjectProtocol?
 
-    init(loopManager: LoopDataManager, coordinator: WatchPodLoanCoordinator) {
-        self.loopManager = loopManager
+    init(store: WatchPredictionStore, coordinator: WatchPodLoanCoordinator) {
+        self.store = store
         self.coordinator = coordinator
     }
 
@@ -101,100 +108,85 @@ final class WatchAutoLoop: ObservableObject {
             guard case .active = coordinator.phase else { return }
             isEnabled = true
             log.default("auto-loop ENABLED (shadow mode — logging only, no dosing)")
-            startTriggers()
-            runCycle(reason: "enabled")
+            startObserving()
+            evaluate(trigger: "enabled")
         } else {
             isEnabled = false
-            stopTriggers()
+            stopObserving()
             recentCycles = []
             lastCycle = nil
             log.default("auto-loop disabled")
         }
     }
 
-    /// Cycle triggers: the 5-minute cadence plus every new glucose sample
-    /// (dialed entry landing, backfill sync — same signal the HUD uses).
-    private func startTriggers() {
-        timer = Timer.scheduledTimer(withTimeInterval: Self.cadence, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.runCycle(reason: "timer") }
-        }
-        sampleObserver = NotificationCenter.default.addObserver(forName: GlucoseStore.glucoseSamplesDidChange, object: loopManager.glucoseStore, queue: nil) { [weak self] _ in
-            Task { @MainActor in self?.runCycle(reason: "new sample") }
-        }
-        // A dose (bolus/temp/suspend) changes IOB → re-decide.
-        journalObserver = NotificationCenter.default.addObserver(forName: WatchPodLoanCoordinator.journalDidChangeNotification, object: nil, queue: nil) { [weak self] _ in
-            Task { @MainActor in self?.runCycle(reason: "dose") }
+    /// React to the store's single output signal — which already fires on every
+    /// input change (glucose/carb/journal/settings) and on its 60-second
+    /// heartbeat. No separate timer or raw-source observers: one source, one
+    /// signal, mirroring how Loop's dosing reads LoopDataManager.
+    private func startObserving() {
+        storeObserver = NotificationCenter.default.addObserver(forName: WatchPredictionStore.didUpdateNotification, object: nil, queue: nil) { [weak self] _ in
+            Task { @MainActor in self?.evaluate(trigger: "update") }
         }
     }
 
-    private func stopTriggers() {
-        timer?.invalidate()
-        timer = nil
-        if let observer = sampleObserver {
-            NotificationCenter.default.removeObserver(observer)
-            sampleObserver = nil
-        }
-        if let observer = journalObserver {
-            NotificationCenter.default.removeObserver(observer)
-            journalObserver = nil
+    private func stopObserving() {
+        if let storeObserver {
+            NotificationCenter.default.removeObserver(storeObserver)
+            self.storeObserver = nil
         }
     }
 
-    private func runCycle(reason: String) {
+    /// Read the store's current recommendation and record it if the decision
+    /// changed. This is the shadow analog of Loop's loop() reading
+    /// LoopDataManager.recommendedAutomaticDose; B2 enacts here.
+    private func evaluate(trigger: String) {
         guard isEnabled else { return }
         guard case .active = coordinator.phase else {
             // Session over (hand-back/revoke) — the loop dies with it.
             log.default("auto-loop disabled (session ended)")
             isEnabled = false
-            stopTriggers()
+            stopObserving()
             lastCycle = nil
             recentCycles = []
             return
         }
-        guard -lastCycleStart.timeIntervalSinceNow > Self.minCycleInterval else { return }
-        lastCycleStart = Date()
 
-        engine.latestGlucose { [weak self] sample in
-            Task { @MainActor in
-                guard let self, self.isEnabled else { return }
+        let anchor = store.anchorSample
 
-                guard let sample else {
-                    self.record(.noBG, reason: reason)
-                    return
-                }
-                let age = -sample.startDate.timeIntervalSinceNow
-                guard age <= Self.bgStalenessLimit else {
-                    // Lenient staleness (design ruling): stop issuing NEW temps;
-                    // the active one runs out on the pod's own ≤30-min clock.
-                    self.record(.staleBG(minutes: Int(age / 60)), reason: reason, bg: sample.quantity)
-                    return
-                }
+        let decision: Decision
+        let bg = anchor?.quantity
+        var eventual: HKQuantity?
+        var math: WatchPredictionOutput.CorrectionMath?
 
-                self.engine.predict(manualBG: sample.quantity, storeEntry: false) { result in
-                    Task { @MainActor in
-                        guard self.isEnabled else { return }
-                        switch result {
-                        case .success(let output):
-                            if let temp = output.recommendedTempBasal {
-                                // B2 enacts here, behind these same gates.
-                                self.record(.wouldSetTemp(unitsPerHour: temp.unitsPerHour, minutes: Int(temp.duration.minutes)), reason: reason, bg: sample.quantity, eventual: output.eventualBG, math: output.correctionMath())
-                            } else {
-                                self.record(.scheduleFits, reason: reason, bg: sample.quantity, eventual: output.eventualBG, math: output.correctionMath())
-                            }
-                        case .failure(let error):
-                            self.record(.failed(error.localizedDescription), reason: reason, bg: sample.quantity)
-                        }
-                    }
-                }
+        if anchor == nil {
+            decision = .noBG
+        } else if store.isAnchorStale {
+            // Lenient staleness (design ruling): stop issuing NEW temps; an
+            // active one runs out on the pod's own ≤30-min clock.
+            let age = anchor.map { -$0.startDate.timeIntervalSinceNow } ?? 0
+            decision = .staleBG(minutes: Int(age / 60))
+        } else if let output = store.latestOutput {
+            eventual = output.eventualBG
+            math = output.correctionMath()
+            if let temp = output.recommendedTempBasal {
+                decision = .wouldSetTemp(unitsPerHour: temp.unitsPerHour, minutes: Int(temp.duration.minutes))
+            } else {
+                decision = .scheduleFits
             }
+        } else {
+            // Fresh anchor but no successful prediction yet (settings not synced,
+            // or the recompute is in flight). Wait for the next store update
+            // rather than record a spurious decision.
+            return
         }
-    }
 
-    private func record(_ decision: Decision, reason: String, bg: HKQuantity? = nil, eventual: HKQuantity? = nil, math: WatchPredictionOutput.CorrectionMath? = nil) {
-        let cycle = Cycle(date: Date(), trigger: reason, bg: bg, eventual: eventual, math: math, decision: decision)
+        // Record only meaningful changes (see Decision.changeKey).
+        guard decision.changeKey != lastCycle?.decision.changeKey else { return }
+
+        let cycle = Cycle(date: Date(), trigger: trigger, bg: bg, eventual: eventual, math: math, decision: decision)
         lastCycle = cycle
         recentCycles.insert(cycle, at: 0)
         if recentCycles.count > Self.historyLength { recentCycles.removeLast() }
-        log.default("shadow cycle (%{public}@): %{public}@", reason, decision.detailText)
+        log.default("shadow decision (%{public}@): %{public}@", trigger, decision.detailText)
     }
 }

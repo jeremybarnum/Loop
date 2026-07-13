@@ -32,6 +32,8 @@ final class WatchPredictionStore {
     private(set) var latestOutput: WatchPredictionOutput?
     /// Recent glucose (oldest→newest) backing the header/rows' value+trend.
     private(set) var recentSamples: [StoredGlucoseSample] = []
+    /// The newest stored sample (the prediction's anchor).
+    var anchorSample: StoredGlucoseSample? { recentSamples.last }
 
     private let log = OSLog(category: "WatchPredictionStore")
     private let loopManager: LoopDataManager
@@ -40,7 +42,9 @@ final class WatchPredictionStore {
 
     private var lastRefresh: Date = .distantPast
     private var sampleObserver: NSObjectProtocol?
+    private var carbObserver: NSObjectProtocol?
     private var journalObserver: NSObjectProtocol?
+    private var settingsObserver: NSObjectProtocol?
     private var phaseCancellable: AnyCancellable?
     private var heartbeat: Timer?
 
@@ -67,9 +71,23 @@ final class WatchPredictionStore {
             Task { @MainActor in self?.refresh(force: true) }
         }
 
+        // Carbs backfilled from the phone → recompute (mirrors LoopDataManager's
+        // CarbStore.carbEntriesDidChange observer).
+        carbObserver = NotificationCenter.default.addObserver(forName: CarbStore.carbEntriesDidChange, object: loopManager.carbStore, queue: nil) { [weak self] _ in
+            Task { @MainActor in self?.refresh(force: true) }
+        }
+
         // A dose landing in the journal (bolus/temp/suspend) changes IOB and the
-        // prediction — recompute even though it's not a glucose change.
+        // prediction. The loan journal is the watch's DoseStore analog — this is
+        // the equivalent of LoopDataManager's doseStore observer.
         journalObserver = NotificationCenter.default.addObserver(forName: WatchPodLoanCoordinator.journalDidChangeNotification, object: nil, queue: nil) { [weak self] _ in
+            Task { @MainActor in self?.refresh(force: true) }
+        }
+
+        // Settings changed (schedules/ISF/model arriving or edited) → recompute.
+        // The watch's LoopDataManager posts this from settings.didSet — the
+        // equivalent of LoopDataManager.notify(forChange: .preferences).
+        settingsObserver = NotificationCenter.default.addObserver(forName: LoopDataManager.didUpdateContextNotification, object: loopManager, queue: nil) { [weak self] _ in
             Task { @MainActor in self?.refresh(force: true) }
         }
 
@@ -113,8 +131,14 @@ final class WatchPredictionStore {
         if let sampleObserver {
             NotificationCenter.default.removeObserver(sampleObserver)
         }
+        if let carbObserver {
+            NotificationCenter.default.removeObserver(carbObserver)
+        }
         if let journalObserver {
             NotificationCenter.default.removeObserver(journalObserver)
+        }
+        if let settingsObserver {
+            NotificationCenter.default.removeObserver(settingsObserver)
         }
     }
 
