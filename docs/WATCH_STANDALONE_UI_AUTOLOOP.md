@@ -174,7 +174,15 @@ today) is already correct.**
   PredictionView, minus the entry dial it no longer needs).
 - **B1** — Loop toggle screen (per-session, default OFF) + `WatchAutoLoop`
   skeleton running the cycle and LOGGING what it would enact (shadow mode).
-- **B2** — Enactment behind the toggle, after shadow-mode logs look sane on
-  the sim and at the bench.
+- **B2** — DONE (sim). Enactment behind the crown-confirm close. Structure
+  mirrors Loop: `coordinator.enactTempBasal(unitsPerHour:for:)` = the watch's
+  `PumpManager.enactTempBasal` (duration is a parameter, from the
+  recommendation; duration 0 = cancel, rate 0 = bounded zero temp);
+  `WatchAutoLoop.enactIfClosed` = the `DoseEnactor` analog (one enactTempBasal
+  from `recommendedTempBasal`, once per prediction, 5-min recency guard).
+  Manual `setBasalRate` (3h, 0→indefinite suspend) left as-is for rider hold —
+  a deliberate open question if the loop and manual paths should unify.
+  **Before real-person closed loop: revert TEMP-TEST-CAP (maxTempBasalRate
+  3.0 → 1.0) and get explicit device go-ahead.**
 - **Later** — voice entry ("Siri refresh") via App Intents on cellular watch;
   streaming-BG source replaces manual as primary; revisit caps.
