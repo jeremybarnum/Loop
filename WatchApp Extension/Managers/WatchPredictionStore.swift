@@ -28,6 +28,11 @@ final class WatchPredictionStore {
     /// so the UIKit HUD controllers re-render. Loop-idiomatic: mirrors
     /// LoopDataManager.didUpdateContextNotification.
     static let didUpdateNotification = Notification.Name("WatchPredictionStore.didUpdate")
+    /// Posted after a LOOP-WORTHY recompute (new glucose or the periodic tick),
+    /// the analog of what triggers Loop's loop(). The closed loop enacts on
+    /// this — never on dose/carb/settings recomputes, which only refresh the
+    /// display (else enacting a dose would instantly re-loop off its own effect).
+    static let didLoopTickNotification = Notification.Name("WatchPredictionStore.didLoopTick")
 
     private(set) var latestOutput: WatchPredictionOutput?
     /// Recent glucose (oldest→newest) backing the header/rows' value+trend.
@@ -68,7 +73,7 @@ final class WatchPredictionStore {
 
         // New sample (dialed entry landing, backfill sync) → recompute now.
         sampleObserver = NotificationCenter.default.addObserver(forName: GlucoseStore.glucoseSamplesDidChange, object: loopManager.glucoseStore, queue: nil) { [weak self] _ in
-            Task { @MainActor in self?.refresh(force: true) }
+            Task { @MainActor in self?.refresh(force: true, loopWorthy: true) }
         }
 
         // Carbs backfilled from the phone → recompute (mirrors LoopDataManager's
@@ -99,7 +104,7 @@ final class WatchPredictionStore {
             .sink { [weak self] phase in
                 guard let self else { return }
                 if case .active = phase {
-                    self.refresh(force: true)
+                    self.refresh(force: true, loopWorthy: true)
                     self.startHeartbeat()
                 } else {
                     self.stopHeartbeat()
@@ -117,7 +122,7 @@ final class WatchPredictionStore {
             Task { @MainActor in
                 guard let self, self.isActive else { return }
                 self.post()
-                self.refresh()
+                self.refresh(loopWorthy: true)
             }
         }
     }
@@ -143,7 +148,10 @@ final class WatchPredictionStore {
     }
 
     /// Recompute from the newest stored sample. Throttled to 5 min unless forced.
-    func refresh(force: Bool = false) {
+    /// `loopWorthy` marks triggers that should drive the closed loop (new
+    /// glucose, the periodic tick) vs display-only recomputes (dose/carb/
+    /// settings).
+    func refresh(force: Bool = false, loopWorthy: Bool = false) {
         guard isActive else { return }
         guard force || -lastRefresh.timeIntervalSinceNow > .minutes(5) else { return }
         lastRefresh = Date()
@@ -156,7 +164,7 @@ final class WatchPredictionStore {
                 }
                 guard let newest = self.recentSamples.last else {
                     self.latestOutput = nil
-                    self.post()
+                    self.post(loopWorthy: loopWorthy)
                     return
                 }
                 self.engine.predict(manualBG: newest.quantity, storeEntry: false) { output in
@@ -164,7 +172,7 @@ final class WatchPredictionStore {
                         if case .success(let output) = output {
                             self.latestOutput = output
                         }
-                        self.post()
+                        self.post(loopWorthy: loopWorthy)
                     }
                 }
             }
@@ -179,7 +187,10 @@ final class WatchPredictionStore {
         post()
     }
 
-    private func post() {
+    private func post(loopWorthy: Bool = false) {
         NotificationCenter.default.post(name: Self.didUpdateNotification, object: self)
+        if loopWorthy {
+            NotificationCenter.default.post(name: Self.didLoopTickNotification, object: self)
+        }
     }
 }

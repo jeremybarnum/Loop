@@ -106,7 +106,8 @@ final class WatchAutoLoop: ObservableObject {
     private let store: WatchPredictionStore
     private let coordinator: WatchPodLoanCoordinator
 
-    private var storeObserver: NSObjectProtocol?
+    private var updateObserver: NSObjectProtocol?
+    private var loopTickObserver: NSObjectProtocol?
     /// The prediction we last enacted, so we act once per new prediction
     /// (ifNecessary already handles continuation between them).
     private var lastEnactedPredictionDate: Date?
@@ -115,19 +116,22 @@ final class WatchAutoLoop: ObservableObject {
         self.store = store
         self.coordinator = coordinator
 
-        // Open loop runs whenever a session is live — react to the store's
-        // single output signal, which fires on every input change and its
-        // heartbeat. One source, one signal (mirrors how Loop's dosing reads
-        // LoopDataManager); no timer or raw-source observers here.
-        storeObserver = NotificationCenter.default.addObserver(forName: WatchPredictionStore.didUpdateNotification, object: nil, queue: nil) { [weak self] _ in
-            Task { @MainActor in self?.evaluate(trigger: "update") }
+        // DISPLAY trail: record the recommendation on every store recompute
+        // (open loop shows what it would do). No enactment here.
+        updateObserver = NotificationCenter.default.addObserver(forName: WatchPredictionStore.didUpdateNotification, object: nil, queue: nil) { [weak self] _ in
+            Task { @MainActor in self?.recordTrail(trigger: "update") }
+        }
+        // LOOP CYCLE: enact only on a loop-worthy tick (new glucose or the
+        // periodic tick), never on a dose/carb/settings recompute — mirrors
+        // Loop's loop() triggers and avoids re-looping off our own enactment.
+        loopTickObserver = NotificationCenter.default.addObserver(forName: WatchPredictionStore.didLoopTickNotification, object: nil, queue: nil) { [weak self] _ in
+            Task { @MainActor in self?.loopCycle(trigger: "tick") }
         }
     }
 
     deinit {
-        if let storeObserver {
-            NotificationCenter.default.removeObserver(storeObserver)
-        }
+        if let updateObserver { NotificationCenter.default.removeObserver(updateObserver) }
+        if let loopTickObserver { NotificationCenter.default.removeObserver(loopTickObserver) }
     }
 
     /// B2 will call this (behind the crown-confirm) to CLOSE the loop and begin
@@ -135,14 +139,14 @@ final class WatchAutoLoop: ObservableObject {
     func setClosed(_ closed: Bool) {
         guard closed != isClosed, case .active = coordinator.phase else { return }
         isClosed = closed
-        log.default("standalone loop %{public}@", closed ? "CLOSED (B2 will enact here)" : "opened")
+        log.default("standalone loop %{public}@", closed ? "CLOSED" : "opened")
+        if closed { loopCycle(trigger: "closed") }   // act on the current recommendation now
     }
 
-    /// Read the store's current recommendation and record it if the decision
-    /// changed — the open-loop trail. This is the analog of Loop's loop()
-    /// reading LoopDataManager.recommendedAutomaticDose; when closed (B2),
-    /// enactment happens here.
-    private func evaluate(trigger: String) {
+    /// Record the current recommendation for display if it changed — the
+    /// open/closed trail. No enactment here; that's loopCycle(), on a
+    /// loop-worthy tick only.
+    private func recordTrail(trigger: String) {
         guard case .active = coordinator.phase else {
             // No live session — nothing to recommend; clear the trail.
             if lastCycle != nil || isClosed {
@@ -181,7 +185,6 @@ final class WatchAutoLoop: ObservableObject {
             } else {
                 decision = .scheduleFits
             }
-            enactIfClosed(output)
         } else {
             // Fresh anchor but no successful prediction yet (settings not synced,
             // or the recompute is in flight). Wait for the next store update
@@ -199,21 +202,24 @@ final class WatchAutoLoop: ObservableObject {
         log.default("loop decision (%{public}@): %{public}@", trigger, decision.detailText(closed: isClosed))
     }
 
-    /// Enact the store's recommendation when the loop is CLOSED — the analog of
-    /// Loop's DoseEnactor: one duration-parameterized enactTempBasal straight
-    /// from the recommendation (unitsPerHour + duration). Acts once per new
-    /// prediction; the recommendation's ifNecessary continuation means it only
-    /// carries a temp when a change/refresh is actually needed. Failures surface
-    /// loudly via the coordinator; we stay closed and retry next cycle.
-    private func enactIfClosed(_ output: WatchPredictionOutput) {
-        guard isClosed else { return }
+    /// The loop() analog: on a loop-worthy tick (new glucose / periodic / on
+    /// close), enact the store's current recommendation if the loop is closed
+    /// and the BG is fresh. DoseEnactor-style: one duration-parameterized
+    /// enactTempBasal straight from recommendedTempBasal. Acts once per new
+    /// prediction; ifNecessary continuation means it only carries a temp when a
+    /// change/refresh is actually needed. Failures surface loudly via the
+    /// coordinator; we stay closed and retry next tick. Stale/no BG → no enact
+    /// (lenient — the active temp expires on the pod's clock).
+    private func loopCycle(trigger: String) {
+        guard isClosed, case .active = coordinator.phase else { return }
+        guard let output = store.latestOutput, !store.isAnchorStale else { return }
         guard lastEnactedPredictionDate != output.date else { return }
         // Recency guard (mirrors enactRecommendedAutomaticDose's 5-min check).
         guard abs(output.date.timeIntervalSinceNow) < .minutes(5) else { return }
         lastEnactedPredictionDate = output.date
 
         guard let temp = output.recommendedTempBasal else { return }  // schedule fits — no action
-        log.default("closed loop enact: %.2f U/hr for %.0f min", temp.unitsPerHour, temp.duration.minutes)
+        log.default("closed loop enact (%{public}@): %.2f U/hr for %.0f min", trigger, temp.unitsPerHour, temp.duration.minutes)
         coordinator.enactTempBasal(unitsPerHour: temp.unitsPerHour, for: temp.duration)
     }
 }
