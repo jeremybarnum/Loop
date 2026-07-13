@@ -42,17 +42,14 @@ struct LoopToggleView: View {
         VStack(spacing: 8) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Circle()
-                            .strokeBorder(Color.turf, lineWidth: 3)
-                            .frame(width: 22, height: 22)
-                            .opacity(autoLoop.isClosed ? 1 : 0.4)
-                        Text(autoLoop.isClosed
-                             ? NSLocalizedString("Closed Loop", comment: "Loop screen state title (closed)")
-                             : NSLocalizedString("Open Loop", comment: "Loop screen state title (open)"))
-                            .font(.headline)
-                        Spacer()
-                    }
+                    // No loop glyph here — a plain Circle reads as "closed"
+                    // regardless and would contradict the real open/closed ring
+                    // shown on the HUD. The text carries the state.
+                    Text(autoLoop.isClosed
+                         ? NSLocalizedString("Closed Loop", comment: "Loop screen state title (closed)")
+                         : NSLocalizedString("Open Loop", comment: "Loop screen state title (open)"))
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
                     Text(autoLoop.isClosed
                          ? NSLocalizedString("Recommendations are enacted automatically.", comment: "Loop screen subtitle (closed)")
