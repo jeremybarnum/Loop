@@ -228,9 +228,9 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
     private enum ShowModeRow: Int, CaseIterable {
         case currentBG
         case eventualBG
+        case loopStatus     // the loop's temp, right below eventual BG
         case activeInsulin
         case activeCarbs
-        case loopStatus
         case sessionBolus
         case sessionBasal
         case sessionInsulin
