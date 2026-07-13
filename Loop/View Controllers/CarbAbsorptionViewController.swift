@@ -148,7 +148,7 @@ final class CarbAbsorptionViewController: LoopChartsTableViewController, Identif
 
         let midnight = Calendar.current.startOfDay(for: Date())
         let listStart = min(midnight, chartStartDate, Date(timeIntervalSinceNow: -CarbMath.maximumAbsorptionTimeInterval))
-        let listEnd = Date().addingTimeInterval(CarbMath.dateAdjustmentFuture)
+        let listEnd = Date().addingTimeInterval(LoopConstants.maxCarbEntryFutureTime)
 
         let shouldUpdateGlucose = currentContext.contains(.glucose)
         let shouldUpdateCarbs = currentContext.contains(.carbs)

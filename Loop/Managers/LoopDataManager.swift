@@ -411,7 +411,7 @@ final class LoopDataManager: ObservableObject {
 
         let forecastEndTime = baseTime.addingTimeInterval(InsulinMath.defaultInsulinActivityDuration).dateCeiledToTimeInterval(GlucoseMath.defaultDelta)
 
-        let carbsStart = baseTime.addingTimeInterval(CarbMath.dateAdjustmentPast + .minutes(-1)) // additional minute to handle difference in seconds between carb entry and carb ratio
+        let carbsStart = baseTime.addingTimeInterval(LoopConstants.maxCarbEntryPastTime + .minutes(-1)) // additional minute to handle difference in seconds between carb entry and carb ratio
 
         // Include future carbs in query, but filter out ones entered after basetime. The filtering is only applicable when running in a retrospective situation.
         let carbEntries = try await carbStore.getCarbEntries(
@@ -1772,9 +1772,4 @@ extension LoopDataManager: AutomationHistoryProvider {
     func automationHistory(from start: Date, to end: Date) async throws -> [AbsoluteScheduleValue<Bool>] {
         return automationHistory.toTimeline(from: start, to: end)
     }
-}
-
-extension CarbMath {
-    public static let dateAdjustmentPast = LoopConstants.maxCarbEntryPastTime
-    public static let dateAdjustmentFuture = LoopConstants.maxCarbEntryFutureTime
 }
