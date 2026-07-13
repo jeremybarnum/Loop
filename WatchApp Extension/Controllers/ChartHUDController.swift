@@ -80,7 +80,7 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
         super.didAppear()
 
         applyChartVisibility()
-        refreshPredictionForShowMode(force: true)
+        ExtensionDelegate.shared().predictionStore.refresh(force: true)
 
         // Force an update when our pixels need to move. Capped at 60 s so the
         // Show Mode rows (session numbers, live basal accrual) also repaint while
@@ -92,9 +92,9 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
             guard let self = self else { return }
             if self.isInShowMode {
                 // Chart is hidden in Show Mode; keep the session rows current and
-                // re-run the prediction at most every 5 minutes (throttled inside).
+                // nudge the shared store to recompute (throttled to 5 min inside).
                 self.updateRowsForShowMode()
-                self.refreshPredictionForShowMode()
+                ExtensionDelegate.shared().predictionStore.refresh()
             } else {
                 self.scene.setNeedsUpdate()
             }
@@ -130,9 +130,13 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
 
                 DispatchQueue.main.async {
                     self?.updateGlucoseChart()
-                    // New sample (dialed entry landing, backfill sync) → the
-                    // prediction rows must recompute from it, not wait 5 min.
-                    self?.refreshPredictionForShowMode(force: true)
+                }
+            },
+            // The shared prediction store recomputed → repaint the Show Mode rows.
+            NotificationCenter.default.addObserver(forName: WatchPredictionStore.didUpdateNotification, object: nil, queue: nil) { [weak self] _ in
+                DispatchQueue.main.async {
+                    guard let self, self.isInShowMode else { return }
+                    self.updateRowsForShowMode()
                 }
             }
         ]
@@ -280,23 +284,24 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
             cell.setIsLastRow(row.isLast)
             cell.setContentInset(systemMinimumLayoutMargins)
 
+            let store = ExtensionDelegate.shared().predictionStore
             switch row {
             case .currentBG:
                 cell.setDetail(currentBGDetail())
             case .eventualBG:
-                if let output = predictionOutput {
+                if let output = store.latestOutput {
                     cell.setDetail(formatBG(output.eventualBG, unit: output.unit))
                 } else {
                     cell.setDetail("—")
                 }
             case .activeInsulin:
-                if let output = predictionOutput {
+                if let output = store.latestOutput {
                     cell.setDetail(String(format: "%.2f U", output.activeInsulin))
                 } else {
                     cell.setDetail("—")
                 }
             case .activeCarbs:
-                if let output = predictionOutput {
+                if let output = store.latestOutput {
                     cell.setDetail(String(format: "%.0f g", output.activeCarbs))
                 } else {
                     cell.setDetail("—")
@@ -343,14 +348,7 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
         return String(format: "%+.2f U", value)
     }
 
-    // MARK: - Show Mode prediction rows
-
-    private lazy var predictionEngine = WatchPredictionEngine(
-        loopManager: ExtensionDelegate.shared().loopManager,
-        coordinator: ExtensionDelegate.shared().podLoanCoordinator)
-    private var predictionOutput: WatchPredictionOutput?
-    private var recentSamples: [StoredGlucoseSample] = []
-    private var lastPredictionRefresh: Date = .distantPast
+    // MARK: - Show Mode prediction rows (data from the shared prediction store)
 
     private var displayUnit: HKUnit {
         loopManager.settings.glucoseUnit ?? .milligramsPerDeciliter
@@ -363,47 +361,18 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
 
     /// "142 ↗ · 6m" — newest stored sample, a two-sample trend arrow, and age.
     private func currentBGDetail() -> String {
-        guard let newest = recentSamples.last else {
+        let samples = ExtensionDelegate.shared().predictionStore.recentSamples
+        guard let newest = samples.last else {
             return NSLocalizedString("Tap to enter", comment: "HUD glucose row detail when no sample exists")
         }
         var parts = [formatBG(newest.quantity, unit: displayUnit)]
-        if recentSamples.count >= 2 {
-            let arrow = Self.trendSymbol(from: recentSamples[recentSamples.count - 2], to: newest)
+        if samples.count >= 2 {
+            let arrow = Self.trendSymbol(from: samples[samples.count - 2], to: newest)
             if !arrow.isEmpty { parts.append(arrow) }
         }
         let age = Int(-newest.startDate.timeIntervalSinceNow / 60)
         parts.append(age < 1 ? NSLocalizedString("now", comment: "HUD glucose row age (fresh)") : "\(age)m")
         return parts.joined(separator: " ")
-    }
-
-    /// Re-run the prediction for the HUD rows: on activation and at most every
-    /// 5 minutes from the repaint timer. Anchors on the newest STORED sample
-    /// (storeEntry false — a refresh must not fabricate readings).
-    private func refreshPredictionForShowMode(force: Bool = false) {
-        guard isInShowMode else { return }
-        guard force || -lastPredictionRefresh.timeIntervalSinceNow > .minutes(5) else { return }
-        lastPredictionRefresh = Date()
-
-        loopManager.glucoseStore.getGlucoseSamples(start: Date(timeIntervalSinceNow: -.hours(2)), end: Date()) { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                if case .success(let samples) = result {
-                    self.recentSamples = samples.sorted { $0.startDate < $1.startDate }
-                }
-                guard let newest = self.recentSamples.last else {
-                    self.updateRowsForShowMode()
-                    return
-                }
-                self.predictionEngine.predict(manualBG: newest.quantity, storeEntry: false) { output in
-                    DispatchQueue.main.async {
-                        if case .success(let output) = output {
-                            self.predictionOutput = output
-                        }
-                        self.updateRowsForShowMode()
-                    }
-                }
-            }
-        }
     }
 
     private func updateGlucoseChart() {

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		CE323C0B1BC7461F8962B9A1 /* WatchPredictionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7044BFF54424BF393A844F1 /* WatchPredictionStore.swift */; };
 		E8CB4E265AAA4BE6A9D852EB /* LoopToggleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 739172F5CA1046E09DA3A124 /* LoopToggleView.swift */; };
 		5B46DC7A448243258DB837A6 /* WatchAutoLoop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29E4091EAF104E6FA5B56C92 /* WatchAutoLoop.swift */; };
 		1D76A9205C9848328BB184BC /* PredictionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EE80F2F30C742F294206E91 /* PredictionView.swift */; };
@@ -778,6 +779,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		B7044BFF54424BF393A844F1 /* WatchPredictionStore.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WatchPredictionStore.swift; sourceTree = "<group>"; };
 		739172F5CA1046E09DA3A124 /* LoopToggleView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LoopToggleView.swift; sourceTree = "<group>"; };
 		29E4091EAF104E6FA5B56C92 /* WatchAutoLoop.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WatchAutoLoop.swift; sourceTree = "<group>"; };
 		6EE80F2F30C742F294206E91 /* PredictionView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PredictionView.swift; sourceTree = "<group>"; };
@@ -2196,6 +2198,7 @@
 		4FE3475F20D5D7FA00A86D03 /* Managers */ = {
 			isa = PBXGroup;
 			children = (
+				B7044BFF54424BF393A844F1 /* WatchPredictionStore.swift */,
 				29E4091EAF104E6FA5B56C92 /* WatchAutoLoop.swift */,
 				5B85DC3715714C0ABB255D14 /* WatchPredictionEngine.swift */,
 				992F41942FF9F7B90071F0F0 /* WatchPodLoanCoordinator.swift */,
@@ -3650,6 +3653,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CE323C0B1BC7461F8962B9A1 /* WatchPredictionStore.swift in Sources */,
 				E8CB4E265AAA4BE6A9D852EB /* LoopToggleView.swift in Sources */,
 				5B46DC7A448243258DB837A6 /* WatchAutoLoop.swift in Sources */,
 				1D76A9205C9848328BB184BC /* PredictionView.swift in Sources */,

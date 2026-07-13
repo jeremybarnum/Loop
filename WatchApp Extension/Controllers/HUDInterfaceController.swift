@@ -14,6 +14,7 @@ import LoopKit
 class HUDInterfaceController: WKInterfaceController {
     private var activeContextObserver: NSObjectProtocol?
     private var glucoseSamplesObserver: NSObjectProtocol?
+    private var predictionStoreObserver: NSObjectProtocol?
     private var commandFailureCancellable: AnyCancellable?
 
     @IBOutlet weak var loopHUDImage: WKInterfaceImage!
@@ -53,6 +54,20 @@ class HUDInterfaceController: WKInterfaceController {
                     self.update()
                 }
             }
+        }
+        // The shared prediction store recomputed → refresh the eventual BG (and
+        // header) on whichever HUD page is showing.
+        if predictionStoreObserver == nil {
+            predictionStoreObserver = NotificationCenter.default.addObserver(forName: WatchPredictionStore.didUpdateNotification, object: nil, queue: nil) { [weak self] _ in
+                DispatchQueue.main.async {
+                    guard let self, self.isInShowMode else { return }
+                    self.update()
+                }
+            }
+        }
+        // Kick an immediate recompute so eventual BG is present right away.
+        if isInShowMode {
+            ExtensionDelegate.shared().predictionStore.refresh(force: true)
         }
 
         loopManager.requestContextUpdate(completion: {
@@ -96,16 +111,17 @@ class HUDInterfaceController: WKInterfaceController {
         // entries today, streaming sensor when the direct-G7 work lands) — the
         // original stale-phone-value concern doesn't apply to samples we own.
         // Values older than 30 min degrade to dashes rather than looking live.
-        // Eventual BG stays on the chart page's rows (it needs the prediction
-        // engine's output, which lives with the rows).
+        // Eventual BG is the watch's own prediction (shared prediction store),
+        // shown on BOTH HUD pages — it's the key output and is valid the instant
+        // Show Mode activates (the watch has what the phone loop had a moment ago).
         if isInShowMode {
             loopHUDImage.setHidden(false)
             // Same visual grammar as the phone: open ring = open loop, closed
             // ring = closed loop — but in turf, Show Mode's green.
             let loopClosed = ExtensionDelegate.shared().autoLoop.isEnabled
             loopHUDImage.setImageNamed(loopClosed ? "loop_show_closed" : "loop_show_open")
-            eventualGlucoseLabel.setHidden(true)
             updateShowModeGlucoseHeader()
+            updateShowModeEventualGlucose()
             return
         }
 
@@ -159,6 +175,26 @@ class HUDInterfaceController: WKInterfaceController {
             }
         }
 
+    }
+
+    /// Show Mode eventual BG: the shared prediction store's latest output,
+    /// same number the swipe page's Eventual row shows. Hidden only when no
+    /// prediction exists yet (no BG at all).
+    private func updateShowModeEventualGlucose() {
+        guard FeatureFlags.showEventualBloodGlucoseOnWatchEnabled else {
+            eventualGlucoseLabel.setHidden(true)
+            return
+        }
+        let store = ExtensionDelegate.shared().predictionStore
+        guard let output = store.latestOutput else {
+            eventualGlucoseLabel.setHidden(true)
+            return
+        }
+        let formatter = NumberFormatter.glucoseFormatter(for: output.unit)
+        if let text = formatter.string(from: output.eventualBG.doubleValue(for: output.unit)) {
+            eventualGlucoseLabel.setText(text)
+            eventualGlucoseLabel.setHidden(false)
+        }
     }
 
     /// Show Mode BG header: newest watch-local sample + two-sample trend

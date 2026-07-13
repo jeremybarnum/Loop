@@ -26,6 +26,10 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
     private(set) lazy var podLoanCoordinator = WatchPodLoanCoordinator()
     private(set) lazy var autoLoop = WatchAutoLoop(loopManager: loopManager, coordinator: podLoanCoordinator)
 
+    /// The single source of the watch's current Show Mode prediction, read by
+    /// both HUD pages' eventual-BG display.
+    private(set) lazy var predictionStore = WatchPredictionStore(loopManager: loopManager, coordinator: podLoanCoordinator)
+
     private let log = OSLog(category: "ExtensionDelegate")
 
     private var observers: [NSKeyValueObservation] = []
