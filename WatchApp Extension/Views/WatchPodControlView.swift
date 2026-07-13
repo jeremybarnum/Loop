@@ -70,7 +70,10 @@ struct WatchPodControlView: View {
     /// The crown-driven bolus/basal dose screens — rendered outside the ScrollView so the
     /// Digital Crown reaches them immediately (no tap-to-focus needed).
     private var isDoseScreen: Bool {
-        coordinator.phase == .active && (entry == .bolus || entry == .basal || entry == .bgEntry)
+        // .loopToggle is here too — not because it doses, but because its
+        // crown-confirm (BolusConfirmationView) needs the crown, which the outer
+        // ScrollView would capture. LoopToggleView manages its own scrolling.
+        coordinator.phase == .active && (entry == .bolus || entry == .basal || entry == .bgEntry || entry == .loopToggle)
     }
 
     @ViewBuilder
