@@ -289,8 +289,10 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
             case .currentBG:
                 cell.setDetail(currentBGDetail())
             case .eventualBG:
-                if let output = store.latestOutput {
+                if let output = store.latestOutput, !store.isAnchorStale {
                     cell.setDetail(formatBG(output.eventualBG, unit: output.unit))
+                } else if store.isAnchorStale {
+                    cell.setDetail(NSLocalizedString("BG stale", comment: "Eventual row when the anchor glucose is too old to project"))
                 } else {
                     cell.setDetail("—")
                 }

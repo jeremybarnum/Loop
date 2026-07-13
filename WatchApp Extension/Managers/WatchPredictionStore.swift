@@ -41,6 +41,16 @@ final class WatchPredictionStore {
     private var lastRefresh: Date = .distantPast
     private var sampleObserver: NSObjectProtocol?
     private var phaseCancellable: AnyCancellable?
+    private var heartbeat: Timer?
+
+    /// The anchor BG is too old to project forward from — mirrors Loop's
+    /// `glucoseTooOld` (same `inputDataRecencyInterval`). Evaluated live so it
+    /// flips as the reading ages, not only when a new prediction is computed.
+    /// IOB/COB are unaffected (they decay from doses, not glucose).
+    var isAnchorStale: Bool {
+        guard let newest = recentSamples.last else { return true }
+        return -newest.startDate.timeIntervalSinceNow > LoopCoreConstants.inputDataRecencyInterval
+    }
 
     private var isActive: Bool {
         if case .active = coordinator.phase { return true }
@@ -62,9 +72,34 @@ final class WatchPredictionStore {
         phaseCancellable = coordinator.$phase
             .receive(on: RunLoop.main)
             .sink { [weak self] phase in
-                guard case .active = phase else { return }
-                self?.refresh(force: true)
+                guard let self else { return }
+                if case .active = phase {
+                    self.refresh(force: true)
+                    self.startHeartbeat()
+                } else {
+                    self.stopHeartbeat()
+                    self.reset()   // clear so a stale eventual can't linger past the session
+                }
             }
+    }
+
+    /// A 60-second tick while active: re-render (so the anchor's age and the
+    /// stale/fresh state flip promptly even with no new sample) and let the
+    /// throttled recompute pick up IOB decay.
+    private func startHeartbeat() {
+        heartbeat?.invalidate()
+        heartbeat = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.isActive else { return }
+                self.post()
+                self.refresh()
+            }
+        }
+    }
+
+    private func stopHeartbeat() {
+        heartbeat?.invalidate()
+        heartbeat = nil
     }
 
     deinit {

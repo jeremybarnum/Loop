@@ -186,7 +186,10 @@ class HUDInterfaceController: WKInterfaceController {
             return
         }
         let store = ExtensionDelegate.shared().predictionStore
-        guard let output = store.latestOutput else {
+        // A forward projection off a stale reading is misleading — refuse it,
+        // same threshold Loop uses to stop predicting (glucoseTooOld). The
+        // current-BG header still shows the last value + its age.
+        guard let output = store.latestOutput, !store.isAnchorStale else {
             eventualGlucoseLabel.setHidden(true)
             return
         }
