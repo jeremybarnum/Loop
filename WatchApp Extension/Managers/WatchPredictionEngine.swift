@@ -48,6 +48,10 @@ struct WatchPredictionOutput {
     /// nil means the scheduled basal already fits the prediction.
     let recommendedTempBasal: TempBasalRecommendation?
     let scheduledBasalRate: Double
+    /// ISF at the prediction date (glucose-per-U) — for the correction math.
+    let sensitivity: HKQuantity
+    /// Therapy-settings max basal (U/hr) — the temp cap.
+    let maxBasalRate: Double
     /// Active insulin (U) at the prediction date — same doses the prediction
     /// used, LoopKit insulinOnBoard. Cross-checkable against the phone's HUD.
     let activeInsulin: Double
@@ -59,6 +63,49 @@ struct WatchPredictionOutput {
     let usedPreLoanHistory: Bool
     let inputDoseCount: Int
     let inputCarbCount: Int
+}
+
+extension WatchPredictionOutput {
+    /// The correction math, step by step (eventual → target → Δ → ÷ISF →
+    /// 30-min temp), for the EVENTUAL glucose — which is exactly DoseMath's
+    /// arithmetic there (target = correction-range midpoint; temp = scheduled +
+    /// correctionUnits / durationHours, floored at 0, capped at max). It does
+    /// NOT reflect the interim-low handling (min across the whole curve, the
+    /// time-ramped target, the suspend threshold) — that lives in Loop's
+    /// `recommendedTempBasal`. When this derivation and the recommendation
+    /// diverge, a predicted low is constraining the real dose.
+    struct CorrectionMath {
+        let unit: HKUnit
+        let eventual: Double
+        let targetLow: Double
+        let targetHigh: Double
+        let sensitivity: Double      // glucose per U
+        let scheduledBasal: Double
+        let maxBasalRate: Double
+        let duration: TimeInterval
+
+        var targetMid: Double { (targetLow + targetHigh) / 2 }
+        var difference: Double { eventual - targetMid }              // + above target
+        var insulin: Double { sensitivity > 0 ? difference / sensitivity : 0 }  // ± U
+        /// Positive insulin = excess above scheduled; negative = shortage below,
+        /// floored at 0 delivery; capped at max.
+        var rawTempRate: Double { scheduledBasal + insulin / (duration / 3600) }
+        var tempRate: Double { Swift.min(maxBasalRate, Swift.max(0, rawTempRate)) }
+        var isCapped: Bool { rawTempRate > maxBasalRate }
+        var isSuspend: Bool { rawTempRate <= 0 }
+    }
+
+    func correctionMath(duration: TimeInterval = .minutes(30)) -> CorrectionMath {
+        CorrectionMath(
+            unit: unit,
+            eventual: eventualBG.doubleValue(for: unit),
+            targetLow: correctionRange.lowerBound.doubleValue(for: unit),
+            targetHigh: correctionRange.upperBound.doubleValue(for: unit),
+            sensitivity: sensitivity.doubleValue(for: unit),
+            scheduledBasal: scheduledBasalRate,
+            maxBasalRate: maxBasalRate,
+            duration: duration)
+    }
 }
 
 final class WatchPredictionEngine {
@@ -349,6 +396,8 @@ final class WatchPredictionEngine {
                     correctionRange: range,
                     recommendedTempBasal: recommendation.basalAdjustment,
                     scheduledBasalRate: basalSchedule.value(at: date),
+                    sensitivity: sensitivitySchedule.quantity(at: date),
+                    maxBasalRate: maxBasalRate,
                     activeInsulin: activeInsulin,
                     activeCarbs: activeCarbs,
                     usedPreLoanHistory: !grantHistory.isEmpty,

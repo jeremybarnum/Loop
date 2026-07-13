@@ -54,6 +54,7 @@ final class WatchAutoLoop: ObservableObject {
         let trigger: String       // what fired this cycle: timer / new sample / enabled
         let bg: HKQuantity?       // the anchor reading (nil when there was none)
         let eventual: HKQuantity? // the eventual it predicted (nil when it couldn't)
+        let math: WatchPredictionOutput.CorrectionMath?  // the step-by-step correction (nil when no prediction ran)
         let decision: Decision
     }
 
@@ -166,9 +167,9 @@ final class WatchAutoLoop: ObservableObject {
                         case .success(let output):
                             if let temp = output.recommendedTempBasal {
                                 // B2 enacts here, behind these same gates.
-                                self.record(.wouldSetTemp(unitsPerHour: temp.unitsPerHour, minutes: Int(temp.duration.minutes)), reason: reason, bg: sample.quantity, eventual: output.eventualBG)
+                                self.record(.wouldSetTemp(unitsPerHour: temp.unitsPerHour, minutes: Int(temp.duration.minutes)), reason: reason, bg: sample.quantity, eventual: output.eventualBG, math: output.correctionMath())
                             } else {
-                                self.record(.scheduleFits, reason: reason, bg: sample.quantity, eventual: output.eventualBG)
+                                self.record(.scheduleFits, reason: reason, bg: sample.quantity, eventual: output.eventualBG, math: output.correctionMath())
                             }
                         case .failure(let error):
                             self.record(.failed(error.localizedDescription), reason: reason, bg: sample.quantity)
@@ -179,8 +180,8 @@ final class WatchAutoLoop: ObservableObject {
         }
     }
 
-    private func record(_ decision: Decision, reason: String, bg: HKQuantity? = nil, eventual: HKQuantity? = nil) {
-        let cycle = Cycle(date: Date(), trigger: reason, bg: bg, eventual: eventual, decision: decision)
+    private func record(_ decision: Decision, reason: String, bg: HKQuantity? = nil, eventual: HKQuantity? = nil, math: WatchPredictionOutput.CorrectionMath? = nil) {
+        let cycle = Cycle(date: Date(), trigger: reason, bg: bg, eventual: eventual, math: math, decision: decision)
         lastCycle = cycle
         recentCycles.insert(cycle, at: 0)
         if recentCycles.count > Self.historyLength { recentCycles.removeLast() }

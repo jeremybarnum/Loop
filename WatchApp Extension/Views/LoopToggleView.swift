@@ -53,6 +53,11 @@ struct LoopToggleView: View {
                             .font(.caption2)
                             .foregroundColor(.secondary)
 
+                        if let math = autoLoop.lastCycle?.math {
+                            Divider()
+                            derivationBlock(math)
+                        }
+
                         if autoLoop.recentCycles.isEmpty {
                             Text("Waiting for the first cycle…")
                                 .font(.caption2)
@@ -110,6 +115,40 @@ struct LoopToggleView: View {
                 confirming = false
             }
             Button("Cancel") { confirming = false }
+        }
+    }
+
+    /// The correction math, shown step by step (eventual → target → Δ → ÷ISF →
+    /// 30-min temp) — Loop's arithmetic for the eventual, made visible.
+    @ViewBuilder
+    private func derivationBlock(_ math: WatchPredictionOutput.CorrectionMath) -> some View {
+        let g = NumberFormatter.glucoseFormatter(for: math.unit)
+        VStack(alignment: .leading, spacing: 2) {
+            derivationRow("Eventual", g.string(from: math.eventual) ?? "?")
+            derivationRow("Target", String(format: "%@  (%@–%@)",
+                                            g.string(from: math.targetMid) ?? "?",
+                                            g.string(from: math.targetLow) ?? "?",
+                                            g.string(from: math.targetHigh) ?? "?"))
+            derivationRow("Difference", String(format: "%@%@",
+                                               math.difference >= 0 ? "+" : "",
+                                               g.string(from: math.difference) ?? "?"))
+            derivationRow(String(format: "÷ ISF %@", g.string(from: math.sensitivity) ?? "?"),
+                          String(format: "%+.2f U", math.insulin))
+            derivationRow("Temp · 30m",
+                          math.isSuspend
+                          ? NSLocalizedString("0 (suspend)", comment: "Correction temp when floored to zero")
+                          : String(format: "%.2f U/hr%@", math.tempRate, math.isCapped ? " (max)" : ""))
+            Text(String(format: NSLocalizedString("scheduled %.2f U/hr", comment: "Scheduled basal reference under the temp"), math.scheduledBasal))
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private func derivationRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label).font(.caption2).foregroundColor(.secondary)
+            Spacer()
+            Text(value).font(.caption)
         }
     }
 
