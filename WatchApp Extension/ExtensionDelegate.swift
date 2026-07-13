@@ -84,6 +84,11 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         if #available(watchOSApplicationExtension 5.0, *) {
             INRelevantShortcutStore.default.registerShortcuts()
         }
+        // Warm the prediction store now so its phase subscription is live before
+        // the first Show Mode activation (lazy creation could miss the .active
+        // transition, so the first entry showed no eventual BG until the next
+        // event). Cheap: it does nothing until a session is active.
+        _ = predictionStore
     }
 
     func applicationDidBecomeActive() {
@@ -124,6 +129,7 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
             DispatchQueue.main.async {
                 self.log.default("Settings refresh received from phone")
                 self.loopManager.settings = settings
+                self.predictionStore.refresh(force: true)
             }
         }, errorHandler: { [weak self] error in
             self?.log.error("Settings refresh request failed: %{public}@", String(describing: error))

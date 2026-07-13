@@ -827,6 +827,9 @@
     "Basal Rate" : {
       "comment" : "HUD row: the watch-set basal rate in Show Mode"
     },
+    "BG stale" : {
+      "comment" : "Eventual row when the anchor glucose is too old to project"
+    },
     "Bolus" : {
       "comment" : "Button text to confirm manual bolus on Apple Watch\nShow Mode bolus action",
       "localizations" : {
