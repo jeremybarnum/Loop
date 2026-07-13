@@ -12,6 +12,9 @@
 //
 
 import SwiftUI
+import HealthKit
+import LoopKit
+import LoopCore
 
 struct LoopToggleView: View {
     @ObservedObject var autoLoop: WatchAutoLoop
@@ -50,18 +53,18 @@ struct LoopToggleView: View {
                             .font(.caption2)
                             .foregroundColor(.secondary)
 
-                        if let cycle = autoLoop.lastCycle {
+                        if autoLoop.recentCycles.isEmpty {
+                            Text("Waiting for the first cycle…")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        } else {
                             Divider()
-                            HStack {
-                                Text("Last cycle")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                                Text(relativeAge(of: cycle.date))
-                                    .font(.caption2)
+                            Text("Recent decisions")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            ForEach(autoLoop.recentCycles) { cycle in
+                                cycleRow(cycle)
                             }
-                            Text(cycle.decision.detailText)
-                                .font(.caption)
                         }
                     } else {
                         Text("The pod runs its schedule plus anything you dose by hand. Closing the loop is per-session — it always starts open.")
@@ -108,6 +111,40 @@ struct LoopToggleView: View {
             }
             Button("Cancel") { confirming = false }
         }
+    }
+
+    /// One line per shadow cycle: age, the BG→eventual it reasoned over, and
+    /// the decision — the log trail made legible for validation.
+    @ViewBuilder
+    private func cycleRow(_ cycle: WatchAutoLoop.Cycle) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack {
+                Text(cycle.decision.detailText)
+                    .font(.caption2)
+                Spacer()
+                Text(relativeAge(of: cycle.date))
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+            if let context = bgContext(cycle) {
+                Text(context)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.vertical, 1)
+    }
+
+    /// "BG 165 → 128" (eventual), or "BG 152" when there was no projection.
+    private func bgContext(_ cycle: WatchAutoLoop.Cycle) -> String? {
+        guard let bg = cycle.bg else { return nil }
+        let unit = ExtensionDelegate.shared().loopManager.settings.glucoseUnit ?? .milligramsPerDeciliter
+        let formatter = NumberFormatter.glucoseFormatter(for: unit)
+        let bgText = formatter.string(from: bg.doubleValue(for: unit)) ?? "?"
+        if let eventual = cycle.eventual, let evText = formatter.string(from: eventual.doubleValue(for: unit)) {
+            return String(format: NSLocalizedString("BG %@ → %@", comment: "Shadow cycle context: anchor BG to eventual"), bgText, evText)
+        }
+        return String(format: NSLocalizedString("BG %@", comment: "Shadow cycle context: anchor BG only"), bgText)
     }
 
     private func relativeAge(of date: Date) -> String {

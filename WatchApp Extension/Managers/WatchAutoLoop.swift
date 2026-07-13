@@ -48,8 +48,12 @@ final class WatchAutoLoop: ObservableObject {
         }
     }
 
-    struct Cycle {
+    struct Cycle: Identifiable {
+        let id = UUID()
         let date: Date
+        let trigger: String       // what fired this cycle: timer / new sample / enabled
+        let bg: HKQuantity?       // the anchor reading (nil when there was none)
+        let eventual: HKQuantity? // the eventual it predicted (nil when it couldn't)
         let decision: Decision
     }
 
@@ -59,6 +63,10 @@ final class WatchAutoLoop: ObservableObject {
     /// standalone session should never inherit yesterday's decision.)
     @Published private(set) var isEnabled = false
     @Published private(set) var lastCycle: Cycle?
+    /// Rolling shadow-decision history, most-recent-first, for on-wrist
+    /// validation (the log trail, made visible). Session-scoped.
+    @Published private(set) var recentCycles: [Cycle] = []
+    private static let historyLength = 12
 
     static let cadence: TimeInterval = .minutes(5)
     /// Loop's own recency rule — the same constant that gates glucose
@@ -95,6 +103,8 @@ final class WatchAutoLoop: ObservableObject {
         } else {
             isEnabled = false
             stopTriggers()
+            recentCycles = []
+            lastCycle = nil
             log.default("auto-loop disabled")
         }
     }
@@ -127,6 +137,7 @@ final class WatchAutoLoop: ObservableObject {
             isEnabled = false
             stopTriggers()
             lastCycle = nil
+            recentCycles = []
             return
         }
         guard -lastCycleStart.timeIntervalSinceNow > Self.minCycleInterval else { return }
@@ -144,7 +155,7 @@ final class WatchAutoLoop: ObservableObject {
                 guard age <= Self.bgStalenessLimit else {
                     // Lenient staleness (design ruling): stop issuing NEW temps;
                     // the active one runs out on the pod's own ≤30-min clock.
-                    self.record(.staleBG(minutes: Int(age / 60)), reason: reason)
+                    self.record(.staleBG(minutes: Int(age / 60)), reason: reason, bg: sample.quantity)
                     return
                 }
 
@@ -155,12 +166,12 @@ final class WatchAutoLoop: ObservableObject {
                         case .success(let output):
                             if let temp = output.recommendedTempBasal {
                                 // B2 enacts here, behind these same gates.
-                                self.record(.wouldSetTemp(unitsPerHour: temp.unitsPerHour, minutes: Int(temp.duration.minutes)), reason: reason)
+                                self.record(.wouldSetTemp(unitsPerHour: temp.unitsPerHour, minutes: Int(temp.duration.minutes)), reason: reason, bg: sample.quantity, eventual: output.eventualBG)
                             } else {
-                                self.record(.scheduleFits, reason: reason)
+                                self.record(.scheduleFits, reason: reason, bg: sample.quantity, eventual: output.eventualBG)
                             }
                         case .failure(let error):
-                            self.record(.failed(error.localizedDescription), reason: reason)
+                            self.record(.failed(error.localizedDescription), reason: reason, bg: sample.quantity)
                         }
                     }
                 }
@@ -168,8 +179,11 @@ final class WatchAutoLoop: ObservableObject {
         }
     }
 
-    private func record(_ decision: Decision, reason: String) {
-        lastCycle = Cycle(date: Date(), decision: decision)
+    private func record(_ decision: Decision, reason: String, bg: HKQuantity? = nil, eventual: HKQuantity? = nil) {
+        let cycle = Cycle(date: Date(), trigger: reason, bg: bg, eventual: eventual, decision: decision)
+        lastCycle = cycle
+        recentCycles.insert(cycle, at: 0)
+        if recentCycles.count > Self.historyLength { recentCycles.removeLast() }
         log.default("shadow cycle (%{public}@): %{public}@", reason, decision.detailText)
     }
 }
