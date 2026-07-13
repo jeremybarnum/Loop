@@ -309,13 +309,15 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
                     cell.setDetail("—")
                 }
             case .loopStatus:
+                // Open loop: show the current recommendation (nothing enacted).
                 let autoLoop = ExtensionDelegate.shared().autoLoop
-                if !autoLoop.isEnabled {
-                    cell.setDetail(NSLocalizedString("Open", comment: "HUD loop row detail: loop open"))
-                } else if let cycle = autoLoop.lastCycle {
-                    cell.setDetail(String(format: NSLocalizedString("Shadow · %@", comment: "HUD loop row detail: shadow decision"), cycle.decision.detailText))
+                let prefix = autoLoop.isClosed
+                    ? NSLocalizedString("Closed", comment: "HUD loop row: closed loop prefix")
+                    : NSLocalizedString("Open", comment: "HUD loop row: open loop prefix")
+                if let cycle = autoLoop.lastCycle {
+                    cell.setDetail(String(format: "%@ · %@", prefix, cycle.decision.detailText))
                 } else {
-                    cell.setDetail(NSLocalizedString("Shadow · starting", comment: "HUD loop row detail: shadow armed, no cycle yet"))
+                    cell.setDetail(prefix)
                 }
             case .sessionBolus:
                 cell.setDetail(String(format: "%.2f U", coordinator.sessionBolusUnits))

@@ -2,11 +2,12 @@
 //  WatchAutoLoop.swift
 //  WatchApp Extension
 //
-//  B1 — SHADOW MODE: the standalone closed-loop policy layer. It does NOT
-//  compute the prediction — WatchPredictionStore is the single source (the
-//  watch's LoopDataManager analog) — it CONSUMES the store's already-computed
-//  recommendation and records what it would enact each time that recommendation
-//  changes. Doses nothing; B2 puts enactment behind the same gates.
+//  The standalone loop's policy layer. OPEN loop (today): it consumes the
+//  store's already-computed recommendation and records the trail of what it
+//  WOULD enact — visible, nothing dosed — exactly like open loop on the phone.
+//  CLOSED loop (B2): `isClosed` becomes true and the same recommendation is
+//  enacted. It does NOT compute the prediction — WatchPredictionStore is the
+//  single source (the watch's LoopDataManager analog).
 //
 //  This mirrors Loop's separation: LoopDataManager owns the prediction and the
 //  recommendedAutomaticDose; the loop()/enact path reads them. We do the same —
@@ -73,11 +74,10 @@ final class WatchAutoLoop: ObservableObject {
         let decision: Decision
     }
 
-    /// Per-session opt-in; OFF by default every session — closing the loop is
-    /// a deliberate act on the toggle screen, never a remembered preference.
-    /// (Deliberate deviation from the phone's persisted `dosingEnabled`: a
-    /// standalone session should never inherit yesterday's decision.)
-    @Published private(set) var isEnabled = false
+    /// Whether the loop is CLOSED (auto-enacting). Open loop always shows the
+    /// recommendation trail below; closing the loop (B2) enacts it. Per-session,
+    /// default open — a standalone session never inherits yesterday's decision.
+    @Published private(set) var isClosed = false
     @Published private(set) var lastCycle: Cycle?
     /// Rolling shadow-decision history, most-recent-first, for on-wrist
     /// validation (the log trail, made visible). Session-scoped.
@@ -97,57 +97,42 @@ final class WatchAutoLoop: ObservableObject {
     init(store: WatchPredictionStore, coordinator: WatchPodLoanCoordinator) {
         self.store = store
         self.coordinator = coordinator
-    }
 
-    func setEnabled(_ enabled: Bool) {
-        guard enabled != isEnabled else { return }
-
-        if enabled {
-            // The loop only exists inside a live session — same single-writer
-            // boundary as everything else the watch does to the pod.
-            guard case .active = coordinator.phase else { return }
-            isEnabled = true
-            log.default("auto-loop ENABLED (shadow mode — logging only, no dosing)")
-            startObserving()
-            evaluate(trigger: "enabled")
-        } else {
-            isEnabled = false
-            stopObserving()
-            recentCycles = []
-            lastCycle = nil
-            log.default("auto-loop disabled")
-        }
-    }
-
-    /// React to the store's single output signal — which already fires on every
-    /// input change (glucose/carb/journal/settings) and on its 60-second
-    /// heartbeat. No separate timer or raw-source observers: one source, one
-    /// signal, mirroring how Loop's dosing reads LoopDataManager.
-    private func startObserving() {
+        // Open loop runs whenever a session is live — react to the store's
+        // single output signal, which fires on every input change and its
+        // heartbeat. One source, one signal (mirrors how Loop's dosing reads
+        // LoopDataManager); no timer or raw-source observers here.
         storeObserver = NotificationCenter.default.addObserver(forName: WatchPredictionStore.didUpdateNotification, object: nil, queue: nil) { [weak self] _ in
             Task { @MainActor in self?.evaluate(trigger: "update") }
         }
     }
 
-    private func stopObserving() {
+    deinit {
         if let storeObserver {
             NotificationCenter.default.removeObserver(storeObserver)
-            self.storeObserver = nil
         }
     }
 
+    /// B2 will call this (behind the crown-confirm) to CLOSE the loop and begin
+    /// enacting. Today the recommendation trail is always shown; nothing enacts.
+    func setClosed(_ closed: Bool) {
+        guard closed != isClosed, case .active = coordinator.phase else { return }
+        isClosed = closed
+        log.default("standalone loop %{public}@", closed ? "CLOSED (B2 will enact here)" : "opened")
+    }
+
     /// Read the store's current recommendation and record it if the decision
-    /// changed. This is the shadow analog of Loop's loop() reading
-    /// LoopDataManager.recommendedAutomaticDose; B2 enacts here.
+    /// changed — the open-loop trail. This is the analog of Loop's loop()
+    /// reading LoopDataManager.recommendedAutomaticDose; when closed (B2),
+    /// enactment happens here.
     private func evaluate(trigger: String) {
-        guard isEnabled else { return }
         guard case .active = coordinator.phase else {
-            // Session over (hand-back/revoke) — the loop dies with it.
-            log.default("auto-loop disabled (session ended)")
-            isEnabled = false
-            stopObserving()
-            lastCycle = nil
-            recentCycles = []
+            // No live session — nothing to recommend; clear the trail.
+            if lastCycle != nil || isClosed {
+                isClosed = false
+                lastCycle = nil
+                recentCycles = []
+            }
             return
         }
 

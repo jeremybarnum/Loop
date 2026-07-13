@@ -2,11 +2,11 @@
 //  LoopToggleView.swift
 //  WatchApp Extension
 //
-//  The open/closed loop screen for standalone Show Mode. Closing the loop is
-//  consequential, so it uses Loop's turn-crown-to-confirm ceremony (the same
-//  BolusConfirmationView the dose screens use); opening it back up is the safe
-//  direction and takes one tap. B1: closed = SHADOW — decisions are computed
-//  and logged on the session cadence, nothing doses.
+//  The standalone loop screen. Today the loop is OPEN: it always shows the
+//  recommendation (correction math) and the trail of what it would do, and
+//  doses nothing — exactly like open loop on the phone. Closing the loop
+//  (automatic enactment) is B2; the crown-confirm ceremony is scaffolded but
+//  the action is disabled until then.
 //
 //  Copyright © 2026 LoopKit Authors. All rights reserved.
 //
@@ -19,8 +19,6 @@ import LoopCore
 struct LoopToggleView: View {
     @ObservedObject var autoLoop: WatchAutoLoop
 
-    @State private var confirming = false
-    @State private var confirmProgress: Double = 0
     /// Bumped on the store's didUpdate so the live derivation re-reads.
     @State private var storeTick = 0
 
@@ -32,19 +30,13 @@ struct LoopToggleView: View {
     }
 
     var body: some View {
-        Group {
-            if confirming {
-                confirmStep
-            } else {
-                statusStep
+        statusStep
+            .onReceive(NotificationCenter.default.publisher(for: WatchPredictionStore.didUpdateNotification)) { _ in
+                storeTick &+= 1
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: WatchPredictionStore.didUpdateNotification)) { _ in
-            storeTick &+= 1
-        }
     }
 
-    // MARK: - Status + action
+    // MARK: - Status + recommendation
 
     private var statusStep: some View {
         VStack(spacing: 8) {
@@ -54,81 +46,52 @@ struct LoopToggleView: View {
                         Circle()
                             .strokeBorder(Color.turf, lineWidth: 3)
                             .frame(width: 22, height: 22)
-                            .opacity(autoLoop.isEnabled ? 1 : 0.4)
-                        Text(autoLoop.isEnabled
+                            .opacity(autoLoop.isClosed ? 1 : 0.4)
+                        Text(autoLoop.isClosed
                              ? NSLocalizedString("Closed Loop", comment: "Loop screen state title (closed)")
                              : NSLocalizedString("Open Loop", comment: "Loop screen state title (open)"))
                             .font(.headline)
                         Spacer()
                     }
 
-                    if autoLoop.isEnabled {
-                        Text("Shadow: decisions are computed every 5 minutes and on each reading, and logged. Nothing is dosed.")
+                    Text(autoLoop.isClosed
+                         ? NSLocalizedString("Recommendations are enacted automatically.", comment: "Loop screen subtitle (closed)")
+                         : NSLocalizedString("The recommendation below is shown but not enacted. The pod runs its schedule plus anything you dose by hand.", comment: "Loop screen subtitle (open)"))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+
+                    if let math = liveMath {
+                        Divider()
+                        Text("Recommendation")
                             .font(.caption2)
                             .foregroundColor(.secondary)
+                        derivationBlock(math)
+                    }
 
-                        if let math = liveMath {
-                            Divider()
-                            derivationBlock(math)
-                        }
-
-                        if autoLoop.recentCycles.isEmpty {
-                            Text("Waiting for the first cycle…")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        } else {
-                            Divider()
-                            Text("Recent decisions")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                            ForEach(autoLoop.recentCycles) { cycle in
-                                cycleRow(cycle)
-                            }
-                        }
-                    } else {
-                        Text("The pod runs its schedule plus anything you dose by hand. Closing the loop is per-session — it always starts open.")
+                    if !autoLoop.recentCycles.isEmpty {
+                        Divider()
+                        Text("Recent changes")
                             .font(.caption2)
                             .foregroundColor(.secondary)
+                        ForEach(autoLoop.recentCycles) { cycle in
+                            cycleRow(cycle)
+                        }
                     }
                 }
                 .padding(.horizontal, 4)
             }
 
-            if autoLoop.isEnabled {
-                ActionButton(
-                    title: Text("Open Loop", comment: "Button title to open the standalone loop"),
-                    color: .gray,
-                    action: { autoLoop.setEnabled(false) }
-                )
-            } else {
-                ActionButton(
-                    title: Text("Close Loop", comment: "Button title to begin closing the standalone loop"),
-                    color: .turf,
-                    action: {
-                        confirmProgress = 0
-                        confirming = true
-                    }
-                )
-            }
-        }
-    }
-
-    // MARK: - Turn-crown-to-confirm (same ceremony as dosing)
-
-    private var confirmStep: some View {
-        VStack(spacing: 6) {
-            Text("Close the loop for this session?")
-                .font(.caption)
-                .multilineTextAlignment(.center)
-            Text("Shadow mode — logs decisions, doses nothing.")
-                .font(.caption2)
+            // B2 wires this to setClosed(true). Disabled until enactment exists,
+            // so the ceremony is visible but can't dose.
+            ActionButton(
+                title: Text("Close Loop", comment: "Button title to begin closing the standalone loop"),
+                color: .gray,
+                action: {}
+            )
+            .disabled(true)
+            Text("Automatic dosing coming soon")
+                .font(.system(size: 11))
                 .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-            BolusConfirmationView(progress: $confirmProgress, helpText: Text("Turn to close the loop", comment: "Crown-confirm help text for closing the loop")) {
-                autoLoop.setEnabled(true)
-                confirming = false
-            }
-            Button("Cancel") { confirming = false }
         }
     }
 

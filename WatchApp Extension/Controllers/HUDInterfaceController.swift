@@ -118,7 +118,7 @@ class HUDInterfaceController: WKInterfaceController {
             loopHUDImage.setHidden(false)
             // Same visual grammar as the phone: open ring = open loop, closed
             // ring = closed loop — but in turf, Show Mode's green.
-            let loopClosed = ExtensionDelegate.shared().autoLoop.isEnabled
+            let loopClosed = ExtensionDelegate.shared().autoLoop.isClosed
             loopHUDImage.setImageNamed(loopClosed ? "loop_show_closed" : "loop_show_open")
             updateShowModeGlucoseHeader()
             updateShowModeEventualGlucose()

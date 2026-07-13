@@ -87,11 +87,12 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         if #available(watchOSApplicationExtension 5.0, *) {
             INRelevantShortcutStore.default.registerShortcuts()
         }
-        // Warm the prediction store now so its phase subscription is live before
-        // the first Show Mode activation (lazy creation could miss the .active
-        // transition, so the first entry showed no eventual BG until the next
-        // event). Cheap: it does nothing until a session is active.
+        // Warm the prediction store and open-loop layer now so they're live
+        // before the first Show Mode activation (lazy creation could miss the
+        // .active transition and the early recommendation trail). Cheap: they
+        // do nothing until a session is active.
         _ = predictionStore
+        _ = autoLoop
     }
 
     func applicationDidBecomeActive() {
