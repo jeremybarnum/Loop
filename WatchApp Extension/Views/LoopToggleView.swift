@@ -2,11 +2,11 @@
 //  LoopToggleView.swift
 //  WatchApp Extension
 //
-//  The standalone loop screen. Today the loop is OPEN: it always shows the
-//  recommendation (correction math) and the trail of what it would do, and
-//  doses nothing — exactly like open loop on the phone. Closing the loop
-//  (automatic enactment) is B2; the crown-confirm ceremony is scaffolded but
-//  the action is disabled until then.
+//  The standalone loop screen. OPEN loop shows the recommendation (correction
+//  math) and the trail of what it would do, doses nothing — like open loop on
+//  the phone. CLOSED loop enacts the recommendation automatically. Closing is
+//  consequential (real insulin), so it uses Loop's turn-crown-to-confirm
+//  ceremony; opening is one tap.
 //
 //  Copyright © 2026 LoopKit Authors. All rights reserved.
 //
@@ -21,6 +21,8 @@ struct LoopToggleView: View {
 
     /// Bumped on the store's didUpdate so the live derivation re-reads.
     @State private var storeTick = 0
+    @State private var confirming = false
+    @State private var confirmProgress: Double = 0
 
     private var liveMath: WatchPredictionOutput.CorrectionMath? {
         _ = storeTick   // re-read when the store updates
@@ -30,10 +32,16 @@ struct LoopToggleView: View {
     }
 
     var body: some View {
-        statusStep
-            .onReceive(NotificationCenter.default.publisher(for: WatchPredictionStore.didUpdateNotification)) { _ in
-                storeTick &+= 1
+        Group {
+            if confirming {
+                confirmStep
+            } else {
+                statusStep
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: WatchPredictionStore.didUpdateNotification)) { _ in
+            storeTick &+= 1
+        }
     }
 
     // MARK: - Status + recommendation
@@ -78,17 +86,41 @@ struct LoopToggleView: View {
                 .padding(.horizontal, 4)
             }
 
-            // B2 wires this to setClosed(true). Disabled until enactment exists,
-            // so the ceremony is visible but can't dose.
-            ActionButton(
-                title: Text("Close Loop", comment: "Button title to begin closing the standalone loop"),
-                color: .gray,
-                action: {}
-            )
-            .disabled(true)
-            Text("Automatic dosing coming soon")
-                .font(.system(size: 11))
+            if autoLoop.isClosed {
+                ActionButton(
+                    title: Text("Open Loop", comment: "Button title to open the standalone loop"),
+                    color: .gray,
+                    action: { autoLoop.setClosed(false) }
+                )
+            } else {
+                ActionButton(
+                    title: Text("Close Loop", comment: "Button title to begin closing the standalone loop"),
+                    color: .turf,
+                    action: {
+                        confirmProgress = 0
+                        confirming = true
+                    }
+                )
+            }
+        }
+    }
+
+    // MARK: - Turn-crown-to-confirm (same ceremony as dosing — this enacts insulin)
+
+    private var confirmStep: some View {
+        VStack(spacing: 6) {
+            Text("Close the loop for this session?")
+                .font(.caption)
+                .multilineTextAlignment(.center)
+            Text("The watch will set temp basals automatically from the recommendation. Opens automatically when Show Mode ends.")
+                .font(.caption2)
                 .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+            BolusConfirmationView(progress: $confirmProgress, helpText: Text("Turn to close the loop", comment: "Crown-confirm help text for closing the loop")) {
+                autoLoop.setClosed(true)
+                confirming = false
+            }
+            Button("Cancel") { confirming = false }
         }
     }
 
@@ -132,7 +164,7 @@ struct LoopToggleView: View {
     private func cycleRow(_ cycle: WatchAutoLoop.Cycle) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack {
-                Text(cycle.decision.detailText)
+                Text(cycle.decision.detailText(closed: cycle.wasClosed))
                     .font(.caption2)
                 Spacer()
                 Text(relativeAge(of: cycle.date))

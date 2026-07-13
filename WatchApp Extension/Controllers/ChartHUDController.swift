@@ -315,7 +315,7 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
                     ? NSLocalizedString("Closed", comment: "HUD loop row: closed loop prefix")
                     : NSLocalizedString("Open", comment: "HUD loop row: open loop prefix")
                 if let cycle = autoLoop.lastCycle {
-                    cell.setDetail(String(format: "%@ · %@", prefix, cycle.decision.detailText))
+                    cell.setDetail(String(format: "%@ · %@", prefix, cycle.decision.detailText(closed: autoLoop.isClosed)))
                 } else {
                     cell.setDetail(prefix)
                 }

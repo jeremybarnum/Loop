@@ -32,31 +32,44 @@ import os.log
 final class WatchAutoLoop: ObservableObject {
 
     enum Decision {
-        case wouldSetTemp(unitsPerHour: Double, minutes: Int)
-        case scheduleFits
+        case setTemp(unitsPerHour: Double, minutes: Int)  // set/refresh a temp
+        case suspend(minutes: Int)                        // bounded 0-rate temp
+        case cancelTemp                                   // revert to schedule
+        case scheduleFits                                 // no change needed
         case staleBG(minutes: Int)
         case noBG
 
-        /// Short form for the HUD row / loop screen.
-        var detailText: String {
+        /// Open loop shows "would…" (advisory); closed loop shows the action
+        /// (it was enacted). The ring/header also conveys open vs closed.
+        func detailText(closed: Bool) -> String {
             switch self {
-            case .wouldSetTemp(let rate, let minutes):
-                return String(format: NSLocalizedString("would set %.2f U/hr · %dm", comment: "Auto-loop decision: temp it would enact"), rate, minutes)
+            case .setTemp(let rate, let minutes):
+                return closed
+                    ? String(format: NSLocalizedString("temp %.2f U/hr · %dm", comment: "Loop decision (closed): temp set"), rate, minutes)
+                    : String(format: NSLocalizedString("would set %.2f U/hr · %dm", comment: "Loop decision (open): temp it would set"), rate, minutes)
+            case .suspend(let minutes):
+                return closed
+                    ? String(format: NSLocalizedString("suspend · %dm", comment: "Loop decision (closed): suspended"), minutes)
+                    : String(format: NSLocalizedString("would suspend · %dm", comment: "Loop decision (open): would suspend"), minutes)
+            case .cancelTemp:
+                return closed
+                    ? NSLocalizedString("→ schedule", comment: "Loop decision (closed): reverted to schedule")
+                    : NSLocalizedString("would revert to schedule", comment: "Loop decision (open): would revert")
             case .scheduleFits:
-                return NSLocalizedString("schedule fits", comment: "Auto-loop decision: no temp needed")
+                return NSLocalizedString("schedule fits", comment: "Loop decision: no temp needed")
             case .staleBG(let minutes):
-                return String(format: NSLocalizedString("paused — BG %dm old", comment: "Auto-loop decision: glucose too stale to dose"), minutes)
+                return String(format: NSLocalizedString("paused — BG %dm old", comment: "Loop decision: glucose too stale to dose"), minutes)
             case .noBG:
-                return NSLocalizedString("paused — no BG", comment: "Auto-loop decision: no glucose available")
+                return NSLocalizedString("paused — no BG", comment: "Loop decision: no glucose available")
             }
         }
 
-        /// Records a new history entry only when this changes — so the log
-        /// captures meaningful changes, not every 60-second re-evaluation.
-        /// (Stale minutes and small eventual drifts don't spam the history.)
+        /// Records a new history entry only when this changes.
         var changeKey: String {
             switch self {
-            case .wouldSetTemp(let rate, _): return String(format: "temp:%.2f", rate)
+            case .setTemp(let rate, _): return String(format: "temp:%.2f", rate)
+            case .suspend: return "suspend"
+            case .cancelTemp: return "cancel"
             case .scheduleFits: return "fits"
             case .staleBG: return "stale"
             case .noBG: return "nobg"
@@ -72,6 +85,7 @@ final class WatchAutoLoop: ObservableObject {
         let eventual: HKQuantity?
         let math: WatchPredictionOutput.CorrectionMath?
         let decision: Decision
+        let wasClosed: Bool
     }
 
     /// Whether the loop is CLOSED (auto-enacting). Open loop always shows the
@@ -93,6 +107,9 @@ final class WatchAutoLoop: ObservableObject {
     private let coordinator: WatchPodLoanCoordinator
 
     private var storeObserver: NSObjectProtocol?
+    /// The prediction we last enacted, so we act once per new prediction
+    /// (ifNecessary already handles continuation between them).
+    private var lastEnactedPredictionDate: Date?
 
     init(store: WatchPredictionStore, coordinator: WatchPodLoanCoordinator) {
         self.store = store
@@ -154,10 +171,17 @@ final class WatchAutoLoop: ObservableObject {
             eventual = output.eventualBG
             math = output.correctionMath()
             if let temp = output.recommendedTempBasal {
-                decision = .wouldSetTemp(unitsPerHour: temp.unitsPerHour, minutes: Int(temp.duration.minutes))
+                if temp.duration == 0 {
+                    decision = .cancelTemp
+                } else if temp.unitsPerHour == 0 {
+                    decision = .suspend(minutes: Int(temp.duration.minutes))
+                } else {
+                    decision = .setTemp(unitsPerHour: temp.unitsPerHour, minutes: Int(temp.duration.minutes))
+                }
             } else {
                 decision = .scheduleFits
             }
+            enactIfClosed(output)
         } else {
             // Fresh anchor but no successful prediction yet (settings not synced,
             // or the recompute is in flight). Wait for the next store update
@@ -168,10 +192,28 @@ final class WatchAutoLoop: ObservableObject {
         // Record only meaningful changes (see Decision.changeKey).
         guard decision.changeKey != lastCycle?.decision.changeKey else { return }
 
-        let cycle = Cycle(date: Date(), trigger: trigger, bg: bg, eventual: eventual, math: math, decision: decision)
+        let cycle = Cycle(date: Date(), trigger: trigger, bg: bg, eventual: eventual, math: math, decision: decision, wasClosed: isClosed)
         lastCycle = cycle
         recentCycles.insert(cycle, at: 0)
         if recentCycles.count > Self.historyLength { recentCycles.removeLast() }
-        log.default("shadow decision (%{public}@): %{public}@", trigger, decision.detailText)
+        log.default("loop decision (%{public}@): %{public}@", trigger, decision.detailText(closed: isClosed))
+    }
+
+    /// Enact the store's recommendation when the loop is CLOSED — the analog of
+    /// Loop's DoseEnactor: one duration-parameterized enactTempBasal straight
+    /// from the recommendation (unitsPerHour + duration). Acts once per new
+    /// prediction; the recommendation's ifNecessary continuation means it only
+    /// carries a temp when a change/refresh is actually needed. Failures surface
+    /// loudly via the coordinator; we stay closed and retry next cycle.
+    private func enactIfClosed(_ output: WatchPredictionOutput) {
+        guard isClosed else { return }
+        guard lastEnactedPredictionDate != output.date else { return }
+        // Recency guard (mirrors enactRecommendedAutomaticDose's 5-min check).
+        guard abs(output.date.timeIntervalSinceNow) < .minutes(5) else { return }
+        lastEnactedPredictionDate = output.date
+
+        guard let temp = output.recommendedTempBasal else { return }  // schedule fits — no action
+        log.default("closed loop enact: %.2f U/hr for %.0f min", temp.unitsPerHour, temp.duration.minutes)
+        coordinator.enactTempBasal(unitsPerHour: temp.unitsPerHour, for: temp.duration)
     }
 }

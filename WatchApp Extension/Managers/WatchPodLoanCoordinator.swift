@@ -549,6 +549,27 @@ final class WatchPodLoanCoordinator: ObservableObject {
         if Self.isSimulatorDemo { demoCancelTempBasal(); return }
         runPodCommand(label: NSLocalizedString("Cancel Temp", comment: "Command name: cancel temp basal")) { self.controller.cancelTempBasal(completion: $0) }
     }
+
+    /// Loop-faithful temp-basal enactment for the closed loop, mirroring
+    /// PumpManager.enactTempBasal(unitsPerHour:for:) — the DURATION is a
+    /// parameter (the recommendation's own, ~30 min), not the manual path's
+    /// fixed 3h hold. Following DoseEnactor + the pump interface: duration 0
+    /// cancels the running temp (revert to schedule); rate 0 with a duration is
+    /// a bounded zero temp that auto-reverts (Loop's "suspend"). Goes through
+    /// runPodCommand, so it gets the same journal recording, proof caps, and
+    /// loud-failure surfacing as manual control. The manual setBasalRate (3h,
+    /// 0→indefinite suspend) is deliberately left as-is for rider hold.
+    func enactTempBasal(unitsPerHour: Double, for duration: TimeInterval) {
+        guard duration > 0 else {
+            cancelBasal()   // .cancel → revert to schedule
+            return
+        }
+        let snapped = (min(max(unitsPerHour, 0), Self.maxTempBasalRate) / 0.05).rounded() * 0.05
+        if Self.isSimulatorDemo { demoSetTempBasal(rate: snapped, duration: duration); return }
+        runPodCommand(label: String(format: NSLocalizedString("Loop %.2f U/hr", comment: "Command name: loop-set temp basal"), snapped)) {
+            self.controller.setTempBasal(rate: snapped, duration: duration, completion: $0)
+        }
+    }
     func refreshStatus() {
         if Self.isSimulatorDemo { return }
         runPodCommand(label: NSLocalizedString("Status", comment: "Command name: status refresh")) { self.controller.getStatus(completion: $0) }
@@ -855,11 +876,11 @@ private extension WatchPodLoanCoordinator {
         }
     }
 
-    func demoSetTempBasal(rate: Double) {
+    func demoSetTempBasal(rate: Double, duration: TimeInterval = WatchPodLoanCoordinator.tempBasalDuration) {
         let delivered = status?.insulinDelivered ?? 0
         busy = true
         demoBasalRate = rate
-        demoJournal?.record(.tempBasal(rate: rate, duration: Self.tempBasalDuration))
+        demoJournal?.record(.tempBasal(rate: rate, duration: duration))
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 400_000_000)
             self.status = self.demoStatus(String(format: "Temp basal %.2f U/hr", rate), delivered: delivered)
