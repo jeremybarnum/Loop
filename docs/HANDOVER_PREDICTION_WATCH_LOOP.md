@@ -1,5 +1,10 @@
 # Handover: Watch Prediction + Standalone Closed Loop
 
+> **2026-07-15 UPDATE:** merged (branch `watch-standalone`, then `g7-glucose-source`), ON hardware,
+> and the "later: streamed" BG is LIVE — the watch reads the G7 directly (100%-capture
+> pending-connect) and closed-loops phone-free. Current design + consolidated to-do list:
+> [`DESIGN_G7_FULL_LOOP.md`](DESIGN_G7_FULL_LOOP.md). §5's open items are folded into that list.
+
 **For:** an agent converging / continuing this work.
 **Date:** 2026-07-12. **Status:** sim-validated, NOT merged, NOT on hardware.
 **One-line:** a phone-free Apple Watch mode that runs the real Loop algorithm

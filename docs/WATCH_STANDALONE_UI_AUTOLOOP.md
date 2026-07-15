@@ -1,5 +1,12 @@
 # Standalone Watch: UI Restructure + Closed Loop — Design
 
+> **2026-07-15 — SUPERSEDED IN PART by [`DESIGN_G7_FULL_LOOP.md`](DESIGN_G7_FULL_LOOP.md).**
+> Streaming BG landed (G7 direct reader, 100% capture, branch `g7-glucose-source`), so the
+> "optimistically for streaming BG" bet paid off: the watch now runs the **stock Loop algorithm**
+> (full effects; the manual-anchor model and its effects restriction are deleted; manual entry is
+> fallback-only). Rulings below still govern UI structure/temp semantics; the manual-BG
+> anchoring/effects rulings are superseded.
+
 **Date:** 2026-07-11 (evening, post-demo)
 **Status:** Jeremy's rulings recorded; implementation staged below.
 **Context:** The manual-BG prediction demo works end-to-end on paired sims
