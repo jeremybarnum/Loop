@@ -217,11 +217,48 @@ final class WatchAutoLoop: ObservableObject {
         guard lastEnactedPredictionDate != output.date else { return }
         // Recency guard (mirrors enactRecommendedAutomaticDose's 5-min check).
         guard abs(output.date.timeIntervalSinceNow) < .minutes(5) else { return }
+
+        // P0#2 — never enact over a manual suspend. The user affirmatively held
+        // delivery; the closed loop must not silently resume it. Mirrors the phone,
+        // where a manual suspend blocks looping until the user resumes. (Checked
+        // BEFORE marking the prediction enacted, so resuming re-loops immediately.)
+        if coordinator.sessionSuspended {
+            fileLog("closed loop SKIP (\(trigger)): delivery is manually suspended — not enacting")
+            return
+        }
         lastEnactedPredictionDate = output.date
 
         guard let temp = output.recommendedTempBasal else { return }  // schedule fits — no action
-        log.default("closed loop enact (%{public}@): %.2f U/hr for %.0f min", trigger, temp.unitsPerHour, temp.duration.minutes)
-        fileLog(String(format: "closed loop ENACT (%@): %.2f U/hr for %.0f min", trigger, temp.unitsPerHour, temp.duration.minutes))
-        coordinator.enactTempBasal(unitsPerHour: temp.unitsPerHour, for: temp.duration)
+
+        // The recommendation is already bounded by therapy max basal inside
+        // generateRecommendation. Two additional dosing-safety guards, mirroring
+        // the phone, applied here so both the log and the pod see the same number:
+        var rate = temp.unitsPerHour
+
+        // P0#3 — clamp to the pod layer's hard proof cap so the ENACT log and the
+        // pod agree. Without this the pod silently re-caps (proof limit) and the
+        // trail overstates what was delivered. Fires only if therapy max > cap.
+        let proofCap = WatchPodLoanCoordinator.maxTempBasalRate
+        if rate > proofCap {
+            fileLog(String(format: "closed loop CLAMP (%@): %.2f → %.2f U/hr (proof cap)", trigger, rate, proofCap))
+            rate = proofCap
+        }
+
+        // P0#1 — IOB clamp. Once active insulin is at/over the automatic-dosing
+        // ceiling (maxBolus×2, the phone's automaticDosingIOBLimit), refuse to ADD
+        // insulin above the scheduled basal; hold at schedule instead. Reductions
+        // and zero-temps (a predicted low pulling delivery down) always pass.
+        if let maxBolus = ExtensionDelegate.shared().loopManager.settings.maximumBolus {
+            let iobLimit = maxBolus * 2.0
+            if output.activeInsulin >= iobLimit && rate > output.scheduledBasalRate {
+                fileLog(String(format: "closed loop IOB-CLAMP (%@): IOB %.2f ≥ limit %.2f — holding at schedule %.2f (was %.2f)",
+                               trigger, output.activeInsulin, iobLimit, output.scheduledBasalRate, rate))
+                rate = output.scheduledBasalRate
+            }
+        }
+
+        log.default("closed loop enact (%{public}@): %.2f U/hr for %.0f min", trigger, rate, temp.duration.minutes)
+        fileLog(String(format: "closed loop ENACT (%@): %.2f U/hr for %.0f min", trigger, rate, temp.duration.minutes))
+        coordinator.enactTempBasal(unitsPerHour: rate, for: temp.duration)
     }
 }

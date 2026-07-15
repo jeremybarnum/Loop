@@ -933,11 +933,22 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                    Int(state ?? 0), rawEGV))
 
         onMain {
-            self.glucose = value
+            self.glucose = value       // DISPLAY: show whatever we got (even non-OK)
             self.trendState = state
             if let value {
                 self.recordReading()
-                self.onEGV?(value, Date())   // → Loop glucose store (integration hook)
+                // GATE the LOOP feed (not the display): only inject a real in-session EGV
+                // (state 0x06) within a physiologically plausible range. A warmup/ending/
+                // error reading with a numeric value must NOT enter the glucose store as a
+                // full-effect CGM sample and drive dosing (design §2.6 / topGap).
+                let inSession = (state == 0x06)
+                let plausible = (value >= 40 && value <= 400)
+                if inSession && plausible {
+                    self.onEGV?(value, Date())   // → Loop glucose store (integration hook)
+                } else {
+                    LogFile.append(String(format: "loop-bridge: EGV %d NOT injected (state=0x%02x inSession=%@ plausible=%@)",
+                                          value, Int(state ?? 0), inSession ? "y" : "n", plausible ? "y" : "n"))
+                }
             }
         }
 
