@@ -229,6 +229,8 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
     /// Four rows match the normal HUD table's row count, so they fit as-is.
     private enum ShowModeRow: Int, CaseIterable {
         case currentBG
+        case g7Direct       // CGM sovereignty: age of the last DIRECT G7 read (watch radio),
+                            // NOT store freshness — the phone may be silently pushing BG
         case eventualBG
         case loopStatus     // the loop's temp, right below eventual BG
         case basalRate      // what the pod is actually running — paired under the loop's intent
@@ -242,6 +244,8 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
             switch self {
             case .currentBG:
                 return NSLocalizedString("Glucose", comment: "HUD row: current glucose in Show Mode (tap to enter)")
+            case .g7Direct:
+                return NSLocalizedString("G7 Direct", comment: "HUD row: health of the watch's own direct G7 sensor link")
             case .eventualBG:
                 return NSLocalizedString("Eventual", comment: "HUD row: predicted eventual glucose in Show Mode")
             case .activeInsulin:
@@ -290,6 +294,17 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
             switch row {
             case .currentBG:
                 cell.setDetail(currentBGDetail())
+            case .g7Direct:
+                // Affirmative proof of CGM sovereignty: only the reader's own successful reads
+                // count. A fresh glucose store with no direct read = the phone-push trap.
+                if let last = ExtensionDelegate.shared().g7.client.lastReadDate {
+                    let mins = Int(-last.timeIntervalSinceNow / 60)
+                    cell.setDetail(mins < 1
+                        ? NSLocalizedString("✓ just now", comment: "G7 Direct row: read within the last minute")
+                        : String(format: NSLocalizedString("✓ %dm ago", comment: "G7 Direct row: minutes since the last direct read"), mins))
+                } else {
+                    cell.setDetail(NSLocalizedString("no direct read", comment: "G7 Direct row: the watch has not read the sensor itself this session"))
+                }
             case .eventualBG:
                 if let output = store.latestOutput, !store.isAnchorStale {
                     cell.setDetail(formatBG(output.eventualBG, unit: output.unit))
