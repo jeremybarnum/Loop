@@ -33,6 +33,9 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
     /// The closed-loop policy layer — consumes the store's recommendation.
     private(set) lazy var autoLoop = WatchAutoLoop(store: predictionStore, coordinator: podLoanCoordinator)
 
+    /// Phone-free CGM: the G7 direct-connect reader injects live EGVs into the loop's glucose store.
+    private(set) lazy var g7 = G7GlucoseManager(loopManager: loopManager, predictionStore: predictionStore)
+
     private let log = OSLog(category: "ExtensionDelegate")
 
     private var observers: [NSKeyValueObservation] = []
@@ -93,6 +96,7 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         // do nothing until a session is active.
         _ = predictionStore
         _ = autoLoop
+        g7.start()   // phone-free: begin the G7 reader (pending-connect reacquire + workout keepalive)
     }
 
     func applicationDidBecomeActive() {
