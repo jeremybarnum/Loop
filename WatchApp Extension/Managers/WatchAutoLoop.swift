@@ -23,6 +23,7 @@
 //
 
 import Foundation
+import Combine
 import HealthKit
 import LoopKit
 import LoopCore
@@ -130,6 +131,16 @@ final class WatchAutoLoop: ObservableObject {
     /// (ifNecessary already handles continuation between them).
     private var lastEnactedPredictionDate: Date?
 
+    // MARK: - P1#7 CGM-sovereignty activation gate
+
+    /// How long after Sport Mode activates the watch has to produce its OWN direct
+    /// sensor read before we warn. One worst-case EGV interval + handshake — see
+    /// the CGM-direct timing analysis. Until this proves out, the loop may be
+    /// silently running on a phone-pushed value (the trap the ruling targets).
+    static let cgmSovereigntyTimeout: TimeInterval = 6 * 60
+    private var phaseCancellable: AnyCancellable?
+    private var cgmSovereigntyWork: DispatchWorkItem?
+
     init(store: WatchPredictionStore, coordinator: WatchPodLoanCoordinator) {
         self.store = store
         self.coordinator = coordinator
@@ -145,11 +156,43 @@ final class WatchAutoLoop: ObservableObject {
         loopTickObserver = NotificationCenter.default.addObserver(forName: WatchPredictionStore.didLoopTickNotification, object: nil, queue: nil) { [weak self] _ in
             Task { @MainActor in self?.loopCycle(trigger: "tick") }
         }
+        // P1#7 — arm the CGM-sovereignty check on each activation.
+        phaseCancellable = coordinator.$phase.removeDuplicates().sink { [weak self] phase in
+            Task { @MainActor in self?.handlePhaseForSovereignty(phase) }
+        }
     }
 
     deinit {
         if let updateObserver { NotificationCenter.default.removeObserver(updateObserver) }
         if let loopTickObserver { NotificationCenter.default.removeObserver(loopTickObserver) }
+    }
+
+    /// P1#7 — on each Sport Mode activation, arm a timeout to verify CGM sovereignty:
+    /// the watch must land a read through its OWN radio (G7Client.lastReadDate moves
+    /// past the activation instant), not just show a fresh store value the phone may
+    /// have pushed. If the window lapses with no direct read, warn loudly — this is
+    /// the affirmative proof that prevents "left the phone behind, lost glucose".
+    private func handlePhaseForSovereignty(_ phase: WatchPodLoanCoordinator.Phase) {
+        cgmSovereigntyWork?.cancel()
+        cgmSovereigntyWork = nil
+        guard case .active = phase else { return }
+        let activatedAt = Date()
+        let work = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                guard let self, case .active = self.coordinator.phase else { return }
+                let lastDirect = ExtensionDelegate.shared().g7.client.lastReadDate
+                let provedDirect = lastDirect.map { $0 >= activatedAt } ?? false
+                if provedDirect {
+                    fileLog("P1#7: CGM sovereignty confirmed — direct read after activation")
+                } else {
+                    self.raiseNotice(
+                        title: NSLocalizedString("No Direct Sensor Yet", comment: "Alert title: the watch hasn't read the sensor directly since Sport Mode started"),
+                        message: NSLocalizedString("Sport Mode is on, but the watch hasn't read the sensor through its own radio yet (the 'G7 Direct' row still shows no read). Any glucose shown may be coming from your phone — don't rely on the watch away from your phone until G7 Direct shows a ✓. Keep the app open and stay near the sensor.", comment: "Alert body: CGM sovereignty not yet proven"))
+                }
+            }
+        }
+        cgmSovereigntyWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.cgmSovereigntyTimeout, execute: work)
     }
 
     /// B2 will call this (behind the crown-confirm) to CLOSE the loop and begin
