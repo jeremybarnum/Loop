@@ -229,12 +229,12 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
         case currentBG
         case eventualBG
         case loopStatus     // the loop's temp, right below eventual BG
+        case basalRate      // what the pod is actually running — paired under the loop's intent
         case activeInsulin
         case activeCarbs
         case sessionBolus
         case sessionBasal
         case sessionInsulin
-        case basalRate
 
         var title: String {
             switch self {
