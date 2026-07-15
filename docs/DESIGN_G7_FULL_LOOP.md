@@ -170,6 +170,33 @@ verify device **and** simulator builds + live EGV injection.
 **Parked/validated** — pending-connect reacquire (SOLVED, 100% capture); coexistence role 0x01
 (proven); D2W entitlements (unreachable, by design); HealthKit relay (dead, 3h delay).
 
+## 6a. Ruling (Jeremy, 2026-07-15): Show Mode validity = DUAL sovereignty
+
+A valid Show Mode session has TWO independent properties, and the UX must verify **both**:
+1. **Pod sovereignty** — the watch holds the loan and has a live pod link.
+2. **CGM sovereignty** — the watch is reading the G7 **directly** (affirmative proof: a fresh
+   EGV via the watch's own radio — NOT a fresh sample in the glucose store, which the phone
+   may have pushed).
+
+Rationale — observed 2026-07-15: the G7 reader was dead for 3.5h while the loop ran happily on
+phone-pushed BG. **The phone silently feeding BG is a trap**: the user leaves the phone behind
+believing they have glucose, and doesn't. Provenance matters: watch-direct samples
+(`syncIdentifier "g7-…"` / `G7Client.lastReadDate`) are the sovereignty signal; store freshness
+is not.
+
+Design:
+- **Two separate status indicators** in Show Mode: pod link (exists — horse/podConnected) and
+  **CGM-direct** (new: age of last *direct* G7 read, e.g. "G7 ✓ 2m" / "G7 — no direct read").
+- **Activation gate**: entering Show Mode runs a sovereignty check — pod session up AND a
+  direct G7 read within a timeout (~6 min ≈ one advertising interval + margin). On timeout,
+  prompt: continue **without pod control** (CGM-viewer mode) or **without direct CGM**
+  (phone-fed loop — explicitly labeled), or abort. Degraded modes are legitimate but must be
+  CHOSEN, never silent.
+- Dosing inputs unchanged: the loop may still consume phone-pushed samples when present (more
+  data, same sensor); sovereignty is a *readiness/UX* concept, surfaced separately.
+- Later: extend the status push payload (v2) with the CGM-direct flag so the PHONE tile can
+  also show both properties.
+
 ## 6b. Bench validations (2026-07-15, live)
 
 Watch-death arc, all devices nearby: Show Mode active → phone tile **"On Watch"** ✓ (update
