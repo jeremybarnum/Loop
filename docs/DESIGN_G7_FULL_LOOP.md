@@ -153,7 +153,7 @@ verify device **and** simulator builds + live EGV injection.
 20. Blind-IOB reclaim reconciliation (finding ①) + adopt leftover watch temp on reclaim (§3.6)
 21. ~~Fold in 3b-v2 phone-side status tiles~~ **LANDED 2026-07-15** (cherry-picked from
     `3b-v2-wip`, clean): phone polls the watch for Show-Mode status → pump tile shows
-    **"On Watch" / "Watch Lost Pod" / "Pod Not Connected"**. Wording still open to change.
+    **"On Watch" / "Watch Lost Pod" / "Pod Not Connected"**. Wording APPROVED by Jeremy 2026-07-15 — final.
 25. **Install-over-Show-Mode behavior** — building to the watch mid-session kills the app
     (= the reboot/kill failure mode §3.3: workout keepalive dies, closed loop resets to open,
     loan grant survives via the persisted journal, pod runs its last temp to expiry). Verify on
