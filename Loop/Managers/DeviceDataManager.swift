@@ -239,6 +239,19 @@ final class DeviceDataManager {
     /// See DeviceDataManager+DeviceStatus.pumpStatusHighlight.
     var podLoanedToWatch = false
 
+    /// 3b v2: the watch's last self-reported Show-Mode status, polled by
+    /// WatchDataManager over WatchConnectivity while a loan is active. `lastHeard`
+    /// ages out via a grace window so the pod tile falls back to the honest
+    /// "Pod Not Connected" when the watch goes quiet. In-memory (like
+    /// `podLoanedToWatch`); nil ⟺ no recent confirmed report. Read by
+    /// DeviceDataManager+DeviceStatus.pumpStatusHighlight.
+    struct WatchLoanReport {
+        var watchHoldsPod: Bool
+        var podConnected: Bool
+        var lastHeard: Date
+    }
+    var lastWatchLoanReport: WatchLoanReport?
+
     /// ESCAPE HATCH for a loan that will never be handed back (watch lost, dead,
     /// or out of reach): reclaim the pod's connection and end the loan phone-side.
     /// The watch's journal is NOT available on this path — any insulin it
@@ -263,6 +276,7 @@ final class DeviceDataManager {
         log.default("Manual pod reclaim from watch (escape hatch) — journal not yet received")
         (pumpManager as? PumpConnectionLendable)?.reclaimConnection()
         podLoanedToWatch = false
+        lastWatchLoanReport = nil
         if let priorDosing = UserDefaults.appGroup?.dosingEnabledBeforeWatchLoan {
             loopManager.mutateSettings { $0.dosingEnabled = priorDosing }
             UserDefaults.appGroup?.dosingEnabledBeforeWatchLoan = nil

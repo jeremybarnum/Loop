@@ -55,6 +55,17 @@ extension DeviceDataManager {
         }
         if (pumpManager as? PumpConnectionLendable)?.isConnectionReleased == true
             || (podLoanedToWatch && isPodContactStale) {
+            // 3b v2: reflect the watch's OWN recently-polled status — first-hand
+            // over WC, never inferred from the grant (a grant doesn't prove
+            // takeover; the pod can be orphaned). "On Watch" only when the watch
+            // confirms it holds a live pod link; "Watch Lost Pod" when it holds the
+            // loan but its link is down (its 3a signal-lost); otherwise the honest
+            // "Pod Not Connected" (no recent confirmation, or watch not holding it).
+            if let report = lastWatchLoanReport,
+               Date().timeIntervalSince(report.lastHeard) < .minutes(5),
+               report.watchHoldsPod {
+                return report.podConnected ? OnWatchStatusHighlight() : WatchLostPodStatusHighlight()
+            }
             return PodNotConnectedStatusHighlight()
         }
         if let onboardingManager = onboardingManager, !onboardingManager.isComplete, pumpManager?.isOnboarded != true {
@@ -101,6 +112,24 @@ extension DeviceDataManager {
     struct PodNotConnectedStatusHighlight: DeviceStatusHighlight {
         var localizedMessage: String = NSLocalizedString("Pod Not\nConnected", comment: "Pump status highlight when the phone has no connection to the pod")
         var imageName: String = "antenna.radiowaves.left.and.right.slash"
+        var state: DeviceStatusHighlightState = .warning
+    }
+
+    /// 3b v2: the watch has confirmed (first-hand, over WatchConnectivity) that it
+    /// holds the pod with a live BLE link. Calm/informational — the expected
+    /// Show-Mode state, so the phone stops looking falsely disconnected.
+    struct OnWatchStatusHighlight: DeviceStatusHighlight {
+        var localizedMessage: String = NSLocalizedString("On Watch", comment: "Pump status highlight when the Apple Watch is confirmed to be controlling the pod")
+        var imageName: String = "applewatch"
+        var state: DeviceStatusHighlightState = .normalPump
+    }
+
+    /// 3b v2: the watch still holds the loan but has reported its own BLE link to
+    /// the pod is down (its 3a "signal lost"). Warn — the pod is running
+    /// autonomously and neither device can currently command it.
+    struct WatchLostPodStatusHighlight: DeviceStatusHighlight {
+        var localizedMessage: String = NSLocalizedString("Watch Lost\nPod", comment: "Pump status highlight when the watch holds the loan but reports its link to the pod is lost")
+        var imageName: String = "applewatch.slash"
         var state: DeviceStatusHighlightState = .warning
     }
 

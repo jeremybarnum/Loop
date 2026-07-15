@@ -1,0 +1,51 @@
+# Show-Mode Bench Test — Session Findings (2026-07-11, morning/afternoon)
+
+Continuation of `RELEASE_TEST_FINDINGS_2026-07-10.md`. Build: `show-mode @ e129d6cf`. Bench pod, water, off body.
+**Observability caveat (CORRECTED 2026-07-11 PM):** CLI phone-log capture on the iPhone 17 DOES work — `sudo /usr/bin/log collect --device-name "JB iPhone 17" --last <t> --output <archive>` then `/usr/bin/log show <archive> --predicate 'process == "Loop"'`. The earlier "broken" claim was a `log` **shell builtin shadowing** `/usr/bin/log`; always use the full path. (libimobiledevice/`idevicesyslog` is still dead for this phone; `log collect --device` is not.) `log collect` refuses to overwrite an existing archive (`File exists (17)` → `rm -rf` it first). Still use **distinctive bolus values** (Jeremy) so every reconcile entry is traceable.
+
+## Tests completed today
+- **Takeover reliability baseline** — 3 clean back-to-back cycles, ~10s connect, no limbo, beep-confirmed. ⇒ last night's flakiness was **conditional** (degraded late-night radios + BT-off mistakes), NOT a deterministic bug. Reliable under good conditions.
+- **B1 (Faraday / pod out of range)** — PASS on mechanics: command-in-isolation fails **loud** ✓, pod autonomy ✓, **auto-reconnect on removal** ✓, reconcile correct (temp segments + boluses, failed bolus excluded by design) ✓. One P5 finding (below).
+- **B5 (phone off)** — PASS: phone-free dosing works (0.45/0.70 delivered phone-off), failed hand-back keeps the pod (no orphan), all 3 distinctive boluses (0.35/0.45/0.70) reconciled once each.
+
+## New findings (the to-do list)
+
+### HIGH
+1. **Escape-hatch dead-watch blind-dosing (over-dose direction).** When the phone reclaims a dead/gone watch's pod (DeviceDataManager.reclaimPodFromWatch), it **restores `dosingEnabled` and resumes closed loop with the watch's journal missing** — IOB is blind to every watch bolus until (if ever) the watch returns. Only mitigation = a warning dialog. Dead-battery-no-charger leaves closed loop dosing blind for hours → stacking → hypo. **Fix:** hold automatic dosing (open-loop) after an escape-hatch reclaim until the journal reconciles; optional smarter version reads the pod odometer delta (resume if ≈ scheduled basal, hold if unexplained excess). *Live bench confirmation still pending.*
+2. **Loan-grant race strands the crash-recovery flag → false "Loop Crashed while dosing".** At loan grant a loop cycle can enact concurrently with the pod release (`Enact temp basal 0.000U/hr` racing `Pod connection released for loan`). The enact hits a disconnecting pod, its completion never fires, so `CrashRecoveryManager.dosingFinished()` never clears `inFlightAutomaticDose` — the flag stays armed the whole loan. Power off mid-loan → next launch shows the crash alert + pauses looping (~1 min). Reproducible; NOT native Loop (native never grants loans). **Fix (same as the "concurrent enact at grant" item — upgrades it from MEDIUM to a concrete bug):** quiesce the loop before releasing the pod at grant, so nothing is in flight to strand.
+
+### MEDIUM / P5
+3. **STATE-VISIBILITY cluster — control/ownership state is not surfaced to the user on either device.**
+   - **3a. Watch: no liveness indicator during a loan (silent passive display).** Confirmed in code: no heartbeat/periodic poll (`refreshStatus` is never called on a timer), and BLE disconnect is handled by silent auto-reconnect (PodProofKit logs `"BLE: disconnected (auto-reconnect will retry)"`, no UI state). A silently-dropped pod link shows "Show Mode active" forever; only an active command (loud fail) or auto-reconnect reveals it. Covers B7 (BT off) + B1 (range). **Fix:** publish the existing `didDisconnect` to the UI as "Signal lost — reconnecting," clear on reconnect. **✅ DONE + validated on device (build 78, 2026-07-11):** implemented as an amber tint (`.agingColor`) on the Show-Mode horse button (`ActionHUDController`), driven by `PodProofKit.onConnectionChanged` → coordinator `podConnected` (~3s debounce). Faraday-box test passed both directions (amber on sustained loss, green on reconnect). Commit `b57a032a`. (watchOS can't composite a badge in code — `UIGraphicsImageRenderer` is unavailable — so tint is the v1; storyboard badge is the louder upgrade.)
+   - **3b. Phone: no at-a-glance pod-ownership indicator.** The phone doesn't show who controls the pod (on-watch / phone-controlled / reclaimed-records-pending) — the user must **tap the pod icon** to discover it. (Jeremy: "user would have to be trained to click.") **Fix:** persistent status indicator on the pod tile. **✅ v1 IMPLEMENTED (2026-07-11, pending on-device test):** the mechanism already existed (`DeviceDataManager+DeviceStatus.pumpStatusHighlight` → truth-only `PodNotConnectedStatusHighlight`) but only fired after **8 min** of `isPodContactStale` — the stale-but-live window that misled testing today. Now it fires the **moment the phone releases the pod**, keyed on `PumpConnectionLendable.isConnectionReleased` (the same persisted signal the escape-hatch tap uses, so indicator + reclaim action are finally consistent). **Truth-only preserved** — today's orphaned-pod episode *proved* "On Watch" would be a lie (watch BT off → nobody held the pod), so the honest "Pod Not Connected" wording stands; final wording TBD by Jeremy on-device. Richer states (WC-relay "watch confirms" vs "?", reclaimed-records-pending) are v2.
+   - **3c. Phone: abnormal hand-back marker is invisible.** The ⚠️ "Sent after Show Mode ended without a normal hand-back" marker (and the whole loan summary) is only logged + stored in `lastWatchLoanSummary`, which is **never displayed** (the "Phase 1: shown to the user" comment was never wired up). A recovered/abnormal hand-back leaves no user-visible trace. **Fix:** surface `lastWatchLoanSummary` (esp. the ⚠️ case) in the UI. Pairs with a "reclaimed — IOB may be understated" banner for finding ①.
+
+### LOW / polish
+4. **Takeover progress indicator** — 10s connect is reliable but not snappy; step-based indicator (Requesting → Pod released → Connecting to pod → Ready) manages expectations AND surfaces a stall/limbo (P5).
+5. **Takeover field-hardening** — atomic takeover / auto-reclaim-on-limbo. Downgraded from "active bug" to robustness upgrade after 3 clean cycles; still worth it for degraded field conditions (the ring).
+6. **Observability** — non-atomic duplicate-hash gate → concurrent double-delivery logs two `reconciled` lines and no `skipped` (safe by the syncID uniqueness constraint, but misleading logs).
+
+### STRUCK (not a bug)
+- ~~Deferred reconcile not automatic on phone return~~ — this is **correct behavior** (Jeremy): keeping show mode active on a failed hand-back avoids orphaning, and ending show mode should be an explicit user act, not a connectivity-triggered auto-action.
+
+### BENIGN (documented)
+- OQ-5 stale bolus-ack odometer → benign negative audit remainders (bolus entered from the journal event, not the odometer).
+
+## Late session (evening 2026-07-11) — phone BT-toggle "pod seizure" hole: confirmed in code, NOT reproducible live
+
+**Hypothesis (from a 2-agent static-analysis workflow):** during an active loan the phone has released the pod (removed from OmniBLE `autoConnectIDs`), and **every** reconnect path is gated on that set — `didDiscover`, `didDisconnect`, `didFailToConnect`, `willRestoreState` — **except** `BluetoothManager.centralManagerDidUpdateState(.poweredOn)` (`OmniBLE/.../BluetoothManager.swift:301-328`), which iterates **all** `devices` and calls `central.connect()` **un-gated**. In theory a Bluetooth off→on **while the app stays alive** mid-loan could re-arm a connect to the on-loan pod, bypassing `reclaimPodFromWatch` → (a) fake liveness (refreshes `lastSync`, clears the stale warning), (b) skip the insulin reconcile (`reconcileWatchLoan` only runs on WC hand-back), (c) violate single-writer. Trigger noticed in real use: keeping BT off for the parallel G7 work.
+
+**Live test (bench pod "TWI BOARD", green horse, loan active, all 3 devices present, Settings BT toggle, app kept alive):**
+- **3 clean toggles → 0 seizures.** Each `poweredOn` fired with the app alive (no `OmniBLEPlugin Instantiated`) — so the unprotected path WAS exercised — yet the phone did **not** materialize the pod, **not** connect, **not** establish a session. Just `Failed to fetch pod status: podNotConnected` each time. Horse stayed green throughout.
+- The connect-on-`poweredOn` only manifested on **app launch** (the *protected* path — `OmniBLEPumpManager.init` re-releases when `podConnectionReleased`). A bare in-process toggle didn't fire it.
+
+**Verdict:** static analysis **over-predicted**. The path looks un-gated on paper but does not manifest in real conditions (timing race likely resolves safely, or the pod isn't materializable in that transient). **Downgraded** from "urgent hazard blocking 3b" to "latent code path." Defense-in-depth fix still recommended but **not a blocker**: gate the `.poweredOn` reconnect loop on `autoConnectIDs.contains`, matching every other handler.
+
+**Bonus — earlier "phone has pod!" scare fully explained:** across *both* the afternoon episode and this clean test, the phone **never once seized the pod**. Every apparent "phone controlling" was a **stale pod tile + the watch's own BT being off** (orphaning the pod). This is exactly the 3b failure mode — and it's why 3b v1 makes the honest indicator fire *immediately on release* rather than after 8 min.
+
+## Tests still to run
+- **Escape-hatch dead-watch — LIVE confirmation (HIGH).** Take over → distinctive bolus on watch → power watch OFF → phone `Reclaim Pod` → verify (a) phone IOB is missing that bolus, (b) whether the loop then doses on top. Confirms finding #1 live.
+- **Loan-grant crash-flag repro (LOW/optional).** Already observed in B5 + confirmed in code; a clean repro would only re-confirm.
+- **B6 transport characterization (LOW).** WiFi-off-both / BT-off legs — partially touched, not finished.
+- **Not benchable** (need code fault-injection): ack-before-write lost-dose window; double-count on a residual phone temp.
+- **Part D pre-person gate** — DEPRIORITIZED per Jeremy (nowhere near a person). Revert TEMP-TEST-CAP/BEEPS + re-run A2/A3/A7 whenever that changes.
