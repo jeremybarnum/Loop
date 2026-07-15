@@ -69,6 +69,22 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// True while a bounded manual suspend is in force (and hasn't expired).
     var manualSuspendActive: Bool { (manualSuspendUntil.map { $0 > Date() }) ?? false }
 
+    // MARK: - P1#8 pod-takeover timeout
+
+    /// How long a pod takeover may run before the UI stops showing an open-ended
+    /// spinner and offers Keep Trying / Cancel. ~one advertising window + margin;
+    /// the armed BLE connect keeps running underneath, so this bounds the UX, not
+    /// the radio.
+    static let takeoverTimeout: TimeInterval = 40
+    /// Bumped on every takeover start / user retry / cancel, so a late completion
+    /// from a superseded attempt is ignored.
+    private var takeoverGeneration = 0
+    private var takeoverTimeoutWork: DispatchWorkItem?
+    /// True once the in-flight takeover has run past `takeoverTimeout` without
+    /// resolving — the view shows a "pod not responding" prompt instead of an
+    /// indefinite spinner. Cleared when the takeover resolves or the user acts.
+    @Published private(set) var takeoverStalled = false
+
     /// When the current keys arrived (handleGrantReply) — lets a queued revoke
     /// from an OLDER loan be recognized as stale and ignored for this one.
     private var armedAt: Date?
@@ -526,6 +542,10 @@ final class WatchPodLoanCoordinator: ObservableObject {
         }
 
         busy = true
+        takeoverStalled = false
+        takeoverGeneration &+= 1
+        let gen = takeoverGeneration
+        scheduleTakeoverTimeout(generation: gen)
         controller.takeOverExternalPod(ltk: ltk,
                                        controllerId: controllerId,
                                        podId: podId,
@@ -533,6 +553,11 @@ final class WatchPodLoanCoordinator: ObservableObject {
                                        messageNumber: messageNumber) { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
+                // P1#8 — ignore a completion from an attempt the user already
+                // superseded (Keep Trying / Cancel bumps the generation).
+                guard gen == self.takeoverGeneration else { return }
+                self.cancelTakeoverTimeout()
+                self.takeoverStalled = false
                 self.busy = false
                 // DESIGN-6 resurrection guard: a revoke landed while this
                 // takeover was in flight. The pod is the phone's again — let go
@@ -556,6 +581,55 @@ final class WatchPodLoanCoordinator: ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: - P1#8 takeover-timeout plumbing
+
+    private func scheduleTakeoverTimeout(generation gen: Int) {
+        cancelTakeoverTimeout()
+        let work = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                guard let self, gen == self.takeoverGeneration, self.busy else { return }
+                fileLog("P1#8: pod takeover stalled past \(Int(Self.takeoverTimeout))s — prompting user")
+                self.takeoverStalled = true
+            }
+        }
+        takeoverTimeoutWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.takeoverTimeout, execute: work)
+    }
+
+    private func cancelTakeoverTimeout() {
+        takeoverTimeoutWork?.cancel()
+        takeoverTimeoutWork = nil
+    }
+
+    /// P1#8 — user chose "Keep Trying" on the stall prompt. Supersede the stalled
+    /// attempt, tear down its BLE machinery, and start a fresh takeover with the
+    /// retained keys (releasePod first so the retry doesn't contend with a zombie
+    /// connect bid from the old attempt).
+    func retryStalledTakeover() {
+        guard phase == .armed, let grant = heldGrant else { return }
+        fileLog("P1#8: user chose Keep Trying — restarting takeover")
+        takeoverGeneration &+= 1        // orphan the stalled attempt's completion
+        cancelTakeoverTimeout()
+        controller.releasePod()         // tear down the current connect machinery
+        takeoverStalled = false
+        busy = false
+        lastError = nil
+        takeOver(using: grant)
+    }
+
+    /// P1#8 — user chose "Cancel" on the stall prompt. Stop trying but keep the
+    /// keys so they can retry after checking the phone's Bluetooth.
+    func cancelStalledTakeover() {
+        fileLog("P1#8: user canceled a stalled takeover")
+        takeoverGeneration &+= 1
+        cancelTakeoverTimeout()
+        controller.releasePod()
+        takeoverStalled = false
+        busy = false
+        phase = .armed
+        lastError = "Pod takeover canceled. Make sure your iPhone's Bluetooth is off, then try again."
     }
 
     // MARK: - Pod control (only while the loan is active)

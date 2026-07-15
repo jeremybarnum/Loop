@@ -153,7 +153,20 @@ struct WatchPodControlView: View {
             Text("Sport Mode")
                 .font(.headline)
 
-            if coordinator.busy {
+            if coordinator.takeoverStalled {
+                // P1#8 — the takeover has run past the timeout without connecting.
+                // Stop showing an open-ended spinner; ask instead of hanging forever.
+                Text("Pod isn't responding")
+                    .font(.caption)
+                Text("It's still trying in the background. Keep trying, or cancel and check that your iPhone's Bluetooth is off.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                Button(action: coordinator.retryStalledTakeover) {
+                    Label("Keep Trying", systemImage: "arrow.clockwise")
+                }
+                Button("Cancel", action: coordinator.cancelStalledTakeover)
+            } else if coordinator.busy {
                 // Grant + takeover in flight — BUG-3: visible feedback.
                 // Estimated-progress bar: fills toward ~90% over the ~11s a takeover
                 // usually takes, then spins if it runs longer. It NEVER hits 100% on the
