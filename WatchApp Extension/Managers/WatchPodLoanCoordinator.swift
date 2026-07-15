@@ -239,6 +239,15 @@ final class WatchPodLoanCoordinator: ObservableObject {
         commandFailure = nil
     }
 
+    /// P1#10 — surfaced once when the app relaunches to find an orphaned loan
+    /// journal (Sport Mode ended WITHOUT a normal hand-back: the app was killed
+    /// mid-session). Presented by the HUD like a command failure so the silent
+    /// transition to open-loop isn't spooky.
+    @Published private(set) var sessionEndedNotice: CommandFailure?
+    func clearSessionEndedNotice() { sessionEndedNotice = nil }
+    /// Announce the uncommanded end at most once per app launch.
+    private var announcedRecoveredSession = false
+
     /// Sim-demo mirrors of session state (the demo has no controller journal;
     /// demoJournal lets demo IOB decay exactly like hardware IOB).
     private var demoBasalRate: Double?
@@ -786,11 +795,26 @@ final class WatchPodLoanCoordinator: ObservableObject {
         // path lands there and uses this same delivery.
         guard !Self.isSimulatorDemo, phase == .idle || phase == .done,
               let data = controller.recoveredLoanJournalData else { return }
+        let decoded = PodLoanJournal.decoded(from: data)
+
+        // P1#10 — an orphaned journal in .idle means Sport Mode ended WITHOUT a normal
+        // hand-back (the app was killed/relaunched mid-session). Announce it once so
+        // the silent drop to open-loop isn't spooky. (.done is a deliberate phone
+        // revoke — the done screen already explains that; don't double-alert.)
+        if !announcedRecoveredSession, phase == .idle {
+            announcedRecoveredSession = true
+            let did = decoded?.summaryText
+            sessionEndedNotice = CommandFailure(
+                title: NSLocalizedString("Sport Mode Ended", comment: "Alert title: Sport Mode ended unexpectedly on relaunch"),
+                message: NSLocalizedString("Sport Mode ended unexpectedly (the app restarted). The loop is open and the pod is back on its schedule. Your insulin records are being sent to your phone.", comment: "Alert body: uncommanded Sport Mode end")
+                    + (did.map { "\n\n\($0)" } ?? ""))
+            fileLog("P1#10: announced uncommanded Sport Mode end (orphaned journal recovered)")
+        }
+
         let session = WCSession.default
         guard session.activationState == .activated, session.isReachable else {
             return   // keep it persisted; retry on next activation
         }
-        let decoded = PodLoanJournal.decoded(from: data)
         var summary = decoded?.summaryText ?? "Recovered watch loan journal."
         summary += "\n⚠️ Sent after Sport Mode ended without a normal hand-back."
         // Stamp the hand-back at the journal's LAST EVENT, not send time: a

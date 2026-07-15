@@ -29,6 +29,7 @@ class HUDInterfaceController: WKInterfaceController {
     private var predictionStoreObserver: NSObjectProtocol?
     private var commandFailureCancellable: AnyCancellable?
     private var loopNoticeCancellable: AnyCancellable?
+    private var sessionEndedCancellable: AnyCancellable?
 
     @IBOutlet weak var loopHUDImage: WKInterfaceImage!
     @IBOutlet weak var glucoseLabel: WKInterfaceLabel!
@@ -127,6 +128,19 @@ class HUDInterfaceController: WKInterfaceController {
                                   preferredStyle: .alert,
                                   actions: [WKAlertAction(title: NSLocalizedString("OK", comment: "Acknowledge loop notice"), style: .default) {}])
             }
+
+        // P1#10 — an uncommanded Sport Mode end (app killed mid-session, relaunched)
+        // is announced once, presented the same way.
+        sessionEndedCancellable = coordinator.$sessionEndedNotice
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] notice in
+                guard let self, let notice else { return }
+                coordinator.clearSessionEndedNotice()
+                self.presentAlert(withTitle: notice.title,
+                                  message: notice.message,
+                                  preferredStyle: .alert,
+                                  actions: [WKAlertAction(title: NSLocalizedString("OK", comment: "Acknowledge session-ended notice"), style: .default) {}])
+            }
     }
 
     override func didDeactivate() {
@@ -138,6 +152,7 @@ class HUDInterfaceController: WKInterfaceController {
         activeContextObserver = nil
         commandFailureCancellable = nil
         loopNoticeCancellable = nil
+        sessionEndedCancellable = nil
     }
 
     func update() {
