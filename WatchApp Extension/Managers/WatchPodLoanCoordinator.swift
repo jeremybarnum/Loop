@@ -50,6 +50,15 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// so instead of showing the normal hand-back checkmark.
     @Published private(set) var wasRevokedByPhone = false
 
+    /// 3a: whether the watch currently holds a live BLE link to the pod. Flips to
+    /// `false` only after a SUSTAINED loss (a quick auto-reconnect won't flash the
+    /// HUD "signal lost" glyph). Drives that glyph; starts optimistically `true`.
+    @Published private(set) var podConnected = true
+
+    /// Monotonic counter so a stale debounced "still disconnected" check can tell
+    /// it's been superseded by a newer link event and bail.
+    private var linkGeneration = 0
+
     /// When the current keys arrived (handleGrantReply) — lets a queued revoke
     /// from an OLDER loan be recognized as stale and ignored for this one.
     private var armedAt: Date?
@@ -269,6 +278,33 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// hand-back. In-memory only — survives suspension, lost on app termination.
     private var heldGrant: PodLoanGrantUserInfo?
 
+    init() {
+        // 3a: reflect the pod's BLE link into `podConnected` so the HUD can show a
+        // "signal lost" glyph while the watch still holds the loan. The callback is
+        // delivered on the main queue by PodProofController.
+        controller.onConnectionChanged = { [weak self] connected in
+            Task { @MainActor in self?.handleLinkChange(connected) }
+        }
+    }
+
+    /// Debounce BLE link changes into `podConnected`. A reconnect is reflected
+    /// immediately; a disconnect only "sticks" if it persists ~3s, so the brief
+    /// drop-and-reconnect that CoreBluetooth does routinely won't flash the glyph.
+    private func handleLinkChange(_ connected: Bool) {
+        linkGeneration &+= 1
+        let generation = linkGeneration
+        if connected {
+            podConnected = true
+        } else {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                // Bail if a newer link event superseded this one in the meantime.
+                guard self.linkGeneration == generation else { return }
+                self.podConnected = false
+            }
+        }
+    }
+
     // MARK: - Loan lifecycle
 
     /// Ask the phone to loan us the pod, then take it over with the returned keys.
@@ -291,6 +327,10 @@ final class WatchPodLoanCoordinator: ObservableObject {
         lastError = nil
         wasRevokedByPhone = false
         lastRequestAt = Date()
+        // Start optimistic; bump the generation so any debounce still pending from a
+        // previous session's teardown can't fire and flash the glyph on this loan.
+        podConnected = true
+        linkGeneration &+= 1
 
         let request = PodLoanRequestUserInfo(requestedAt: Date())
         session.sendMessage(request.rawValue, replyHandler: { [weak self] reply in

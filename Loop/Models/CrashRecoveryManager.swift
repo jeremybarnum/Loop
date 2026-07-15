@@ -30,17 +30,42 @@ class CrashRecoveryManager {
 
         doseRecoveredFromCrash = UserDefaults.appGroup?.inFlightAutomaticDose
 
+        // SHOW-MODE fix: a watch-loan grant can strand `inFlightAutomaticDose`. At
+        // grant, a loop cycle can enact a dose concurrently with the pod being
+        // released for the loan; that enact hits a disconnecting pod, its completion
+        // handler never fires, and `dosingFinished()` is never called — so the flag
+        // stays armed for the whole loan. If the app is then terminated during the
+        // loan (e.g. the phone is powered off), this reads at next launch as a false
+        // "Loop crashed while dosing." A loan being active is detectable:
+        // `dosingEnabledBeforeWatchLoan` is non-nil from grant until hand-back/reclaim,
+        // and during a loan the phone's own dosing is paused (no other in-flight dose
+        // is possible). So in that case the flag is a stale grant-race artifact, not a
+        // real mid-dose crash — the handoff was deliberate and §4c reconciles the
+        // loan's delivery at hand-back — so clear it and suppress the false alert.
+        let loanWasActive = UserDefaults.appGroup?.dosingEnabledBeforeWatchLoan != nil
+        log.default("CrashRecovery init: inFlightAutomaticDose set=%{public}@, loanWasActive=%{public}@",
+                    String(describing: doseRecoveredFromCrash != nil), String(describing: loanWasActive))
+
+        if doseRecoveredFromCrash != nil, loanWasActive {
+            UserDefaults.appGroup?.inFlightAutomaticDose = nil
+            doseRecoveredFromCrash = nil
+            log.default("CrashRecovery: suppressed stale flag stranded by an active watch loan (grant race)")
+        }
+
         if doseRecoveredFromCrash != nil {
+            log.default("CrashRecovery: issuing 'Loop Crashed' alert — flag survived to launch with NO active loan (separate cause)")
             issueCrashAlert()
         }
     }
 
     func dosingStarted(dose: AutomaticDoseRecommendation) {
         UserDefaults.appGroup?.inFlightAutomaticDose = dose
+        log.default("CrashRecovery: dosingStarted — inFlightAutomaticDose ARMED")
     }
 
     func dosingFinished() {
         UserDefaults.appGroup?.inFlightAutomaticDose = nil
+        log.default("CrashRecovery: dosingFinished — inFlightAutomaticDose cleared")
     }
 
     private func issueCrashAlert() {

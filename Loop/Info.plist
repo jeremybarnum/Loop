@@ -98,7 +98,6 @@
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>armv7</string>
-		<string>healthkit</string>
 		<string>bluetooth-le</string>
 	</array>
 	<key>UIStatusBarTintParameters</key>

@@ -124,6 +124,25 @@ struct WatchPodControlView: View {
         }
     }
 
+    // Estimated-progress fill for the takeover. Timer-driven (not TimelineView,
+    // which is watchOS 8+); @State keeps the timer stable across view rebuilds.
+    @State private var takeoverProgress: Double = 0
+    @State private var takeoverTick = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
+
+    // Takeover progress step — so the ~10s isn't a blank spinner, and a stall
+    // shows *where* it stuck (P5): the text simply sits on the stalled step
+    // ("Connecting to the pod…" not advancing = the limbo state, made visible).
+    private var startupStepText: String {
+        switch coordinator.phase {
+        case .requesting:
+            return NSLocalizedString("Requesting from iPhone…", comment: "Show Mode takeover step: awaiting the phone's grant")
+        case .armed:
+            return NSLocalizedString("Connecting to the pod…", comment: "Show Mode takeover step: establishing the pod session")
+        default:
+            return NSLocalizedString("Starting Show Mode…", comment: "Show Mode takeover: generic startup")
+        }
+    }
+
     // Show Mode startup screen (covers .requesting and .armed). With the formal
     // handoff, grant and takeover run back-to-back off the single horse tap, so
     // this is normally just a progress screen. It becomes interactive only when
@@ -136,8 +155,17 @@ struct WatchPodControlView: View {
 
             if coordinator.busy {
                 // Grant + takeover in flight — BUG-3: visible feedback.
-                ProgressView()
-                Text("Starting Show Mode…")
+                // Estimated-progress bar: fills toward ~90% over the ~11s a takeover
+                // usually takes, then spins if it runs longer. It NEVER hits 100% on the
+                // timer alone — real completion is the phase flipping to .active (which
+                // dismisses this whole screen), so it can't fake-finish ahead of reality
+                // or mask a stall; the step text below still shows WHERE it's stuck.
+                if takeoverProgress < 0.9 {
+                    ProgressView(value: takeoverProgress)
+                } else {
+                    ProgressView()   // past the estimate — spin until it truly completes
+                }
+                Text(startupStepText)
                     .font(.caption2)
                     .foregroundColor(.secondary)
             } else {
@@ -148,6 +176,11 @@ struct WatchPodControlView: View {
                 Button("Cancel", action: coordinator.cancelArmed)
                     .disabled(coordinator.busy)
             }
+        }
+        .onReceive(takeoverTick) { _ in
+            // Fill toward ~90% over ~11s while busy; reset when not. Never reaches
+            // 1.0 on the timer — real completion is the phase leaving .requesting/.armed.
+            takeoverProgress = coordinator.busy ? min(0.95, takeoverProgress + 0.2 / 11.0) : 0
         }
     }
 
