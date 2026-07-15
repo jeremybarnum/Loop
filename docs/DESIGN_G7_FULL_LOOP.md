@@ -196,6 +196,16 @@ Design:
   data, same sensor); sovereignty is a *readiness/UX* concept, surfaced separately.
 - Later: extend the status push payload (v2) with the CGM-direct flag so the PHONE tile can
   also show both properties.
+- **Pod-side timeout (Jeremy 2026-07-15, to design):** a hanging pod connect must be bounded in
+  UX, not radio — takeover: ~30-45s → one auto-retry → "Pod not responding — Keep trying /
+  Cancel" (never an indefinite spinner); mid-session: amber horse suffices unless a command is
+  queued behind the dead link. The armed BLE connect itself stays (free; instant reconnect when
+  the pod reappears). This is the pod half of the activation gate above.
+- **Watch-list (2026-07-15): 1-2 instances of Show Mode ending uncommanded.** Known innocent
+  mechanisms: app kill/relaunch (per-session state — e.g. the 14:49 background relaunch) and
+  phone-side revoke. Both now leave log evidence (SOAK START = relaunch marker; phase pushes
+  logged). Correlate next occurrence before treating as a bug; the "session ended" alert (P1#14)
+  removes the spookiness either way.
 
 ## 6b. Bench validations (2026-07-15, live)
 
