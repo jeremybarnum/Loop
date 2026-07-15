@@ -28,6 +28,7 @@ class HUDInterfaceController: WKInterfaceController {
     private var glucoseSamplesObserver: NSObjectProtocol?
     private var predictionStoreObserver: NSObjectProtocol?
     private var commandFailureCancellable: AnyCancellable?
+    private var loopNoticeCancellable: AnyCancellable?
 
     @IBOutlet weak var loopHUDImage: WKInterfaceImage!
     @IBOutlet weak var glucoseLabel: WKInterfaceLabel!
@@ -113,6 +114,19 @@ class HUDInterfaceController: WKInterfaceController {
                                   preferredStyle: .alert,
                                   actions: [WKAlertAction(title: NSLocalizedString("OK", comment: "Acknowledge failed pod command"), style: .default) {}])
             }
+
+        // P1#9 — the closed loop pausing on stale/absent BG is surfaced the same way.
+        let autoLoop = ExtensionDelegate.shared().autoLoop
+        loopNoticeCancellable = autoLoop.$notice
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] notice in
+                guard let self, let notice else { return }
+                autoLoop.clearNotice()
+                self.presentAlert(withTitle: notice.title,
+                                  message: notice.message,
+                                  preferredStyle: .alert,
+                                  actions: [WKAlertAction(title: NSLocalizedString("OK", comment: "Acknowledge loop notice"), style: .default) {}])
+            }
     }
 
     override func didDeactivate() {
@@ -123,6 +137,7 @@ class HUDInterfaceController: WKInterfaceController {
         }
         activeContextObserver = nil
         commandFailureCancellable = nil
+        loopNoticeCancellable = nil
     }
 
     func update() {

@@ -26,10 +26,28 @@ import Foundation
 import HealthKit
 import LoopKit
 import LoopCore
+import WatchKit
 import os.log
 
 @MainActor
 final class WatchAutoLoop: ObservableObject {
+
+    /// P1#9 — a user-facing loop notice (e.g. the closed loop paused because BG
+    /// went stale). Presented + haptically announced by whichever HUD page is up,
+    /// the same way a failed pod command is. Distinct from the pod-command failure
+    /// channel so the two don't clobber each other.
+    struct Notice: Equatable {
+        let title: String
+        let message: String
+    }
+    @Published var notice: Notice?
+    func clearNotice() { notice = nil }
+
+    private func raiseNotice(title: String, message: String) {
+        WKInterfaceDevice.current().play(.failure)
+        notice = Notice(title: title, message: message)
+        fileLog("LOOP NOTICE: \(title) — \(message)")
+    }
 
     enum Decision {
         case setTemp(unitsPerHour: Double, minutes: Int)  // set/refresh a temp
@@ -201,6 +219,23 @@ final class WatchAutoLoop: ObservableObject {
         if recentCycles.count > Self.historyLength { recentCycles.removeLast() }
         log.default("loop decision (%{public}@): %{public}@", trigger, decision.detailText(closed: isClosed))
         fileLog("loop decision (\(trigger)): \(decision.detailText(closed: isClosed)) · bg=\(bg.map { String(format: "%.0f", $0.doubleValue(for: .milligramsPerDeciliter)) } ?? "—")")
+
+        // P1#9 — a CLOSED loop that just transitioned into a state where it can no
+        // longer dose (BG stale/absent) taps the wrist and surfaces once. recordTrail
+        // runs only on a decision CHANGE, so this is inherently once-per-episode; the
+        // recovery back to an actionable decision is silent (nothing to warn about).
+        if isClosed {
+            switch decision {
+            case .staleBG(let minutes):
+                raiseNotice(title: NSLocalizedString("Loop Paused", comment: "Alert title: the closed loop stopped dosing"),
+                            message: String(format: NSLocalizedString("Glucose is %d min old — the loop stopped adjusting basal. The last temp expires on the pod's own timer. Check your sensor.", comment: "Alert body: closed loop paused on stale glucose"), minutes))
+            case .noBG:
+                raiseNotice(title: NSLocalizedString("Loop Paused", comment: "Alert title: the closed loop stopped dosing"),
+                            message: NSLocalizedString("No recent glucose — the loop can't adjust basal. Check your sensor.", comment: "Alert body: closed loop paused with no glucose"))
+            default:
+                break
+            }
+        }
     }
 
     /// The loop() analog: on a loop-worthy tick (new glucose / periodic / on
