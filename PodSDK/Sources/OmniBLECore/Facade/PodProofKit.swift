@@ -203,11 +203,17 @@ public enum PodProofError: LocalizedError {
     case tempBasalExceedsProofLimit(requested: Double, limit: Double)
     case tempBasalDurationNotSupported(requested: TimeInterval)
     case operationInProgress
+    /// P0#4 — the command was sent but the pod never acknowledged it, so whether
+    /// it was applied is UNKNOWN (contrast a certain failure, where the pod
+    /// definitely did not act). Callers must NOT report "no change was made".
+    case uncertainDelivery(underlying: Error)
 
     public var errorDescription: String? {
         switch self {
         case .notPaired:
             return "No pod is paired/connected"
+        case .uncertainDelivery(let underlying):
+            return "Delivery uncertain (pod did not acknowledge): \(underlying.localizedDescription)"
         case .bolusExceedsProofLimit(let requested, let limit):
             return String(format: "Bolus %.2f U exceeds proof-build limit of %.2f U", requested, limit)
         case .tempBasalExceedsProofLimit(let requested, let limit):
@@ -328,9 +334,28 @@ public final class PodProofController: NSObject {
                             _ completion: @escaping (Result<PodProofStatus, Error>) -> Void)
         -> (Result<PodProofStatus, Error>) -> Void {
         return { result in
-            if case .success(let status) = result {
+            switch result {
+            case .success(let status):
                 if let kind = kind { self.journalRecord(kind) }
                 self.journalNoteStatus(status)
+            case .failure(let error):
+                // P0#4 — uncertain (unacknowledged) delivery: the pod MAY have applied
+                // the command. Record conservatively toward MAXIMUM insulin exposure:
+                //  • a BOLUS adds insulin (acute stacking risk) → assume delivered and
+                //    record it, so IOB is never understated.
+                //  • a temp/suspend/cancel is a reduction or small change → do NOT
+                //    record: assume insulin kept flowing (never under-model IOB). The
+                //    next successful status reconciles the truth; the uncertainty is
+                //    surfaced loudly to the user by the coordinator either way.
+                // A CERTAIN failure records nothing (the pod definitely did not act).
+                if case PodProofError.uncertainDelivery = error, let kind = kind {
+                    if case .bolus = kind {
+                        self.journalRecord(kind)
+                        self.emit("⚠️ UNCERTAIN BOLUS — recorded as possibly delivered (IOB includes it)")
+                    } else {
+                        self.emit("⚠️ UNCERTAIN DELIVERY (\(PodLoanEvent(kind: kind).describedAction)) — NOT recorded; verify pod")
+                    }
+                }
             }
             completion(result)
         }
@@ -579,7 +604,7 @@ public final class PodProofController: NSObject {
             case .certainFailure(let error):
                 throw error
             case .unacknowledged(let error):
-                throw error
+                throw PodProofError.uncertainDelivery(underlying: error)   // P0#4: uncertain, not certain-failure
             }
         }
     }
@@ -623,7 +648,7 @@ public final class PodProofController: NSObject {
             case .certainFailure(let error):
                 throw error
             case .unacknowledged(let error):
-                throw error
+                throw PodProofError.uncertainDelivery(underlying: error)   // P0#4: uncertain, not certain-failure
             }
         }
     }
@@ -670,7 +695,7 @@ public final class PodProofController: NSObject {
             case .certainFailure(let error):
                 throw error
             case .unacknowledged(let error):
-                throw error
+                throw PodProofError.uncertainDelivery(underlying: error)   // P0#4: uncertain, not certain-failure
             case .success(let status, _):
                 statusAfterCancel = status
             }
@@ -690,7 +715,7 @@ public final class PodProofController: NSObject {
             case .certainFailure(let error):
                 throw error
             case .unacknowledged(let error):
-                throw error
+                throw PodProofError.uncertainDelivery(underlying: error)   // P0#4: uncertain, not certain-failure
             }
         }
     }
@@ -708,7 +733,7 @@ public final class PodProofController: NSObject {
             case .certainFailure(let error):
                 throw error
             case .unacknowledged(let error):
-                throw error
+                throw PodProofError.uncertainDelivery(underlying: error)   // P0#4: uncertain, not certain-failure
             }
         }
     }

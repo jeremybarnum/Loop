@@ -653,18 +653,25 @@ final class WatchPodLoanCoordinator: ObservableObject {
                     self.status = status
                     self.notifyJournalChanged()
                 case .failure(let error):
-                    fileLog("*** pod cmd '\(label)' FAILED: \(error.localizedDescription) ***")
+                    // P0#4 — an UNCERTAIN (unacknowledged) delivery is NOT a certain
+                    // failure: the pod may have applied the command. Never tell the
+                    // user "no change was made" in that case — say to verify the pod.
+                    var uncertain = false
+                    if case PodProofError.uncertainDelivery = error { uncertain = true }
+                    fileLog("*** pod cmd '\(label)' \(uncertain ? "UNCERTAIN" : "FAILED"): \(error.localizedDescription) ***")
                     self.lastError = error.localizedDescription
-                    // LOUD failure (BUG-5): dose screens dismiss optimistically on
-                    // confirm, so a late failure must announce itself — haptic +
-                    // alert. The journal correctly excludes the command (recorded
-                    // only on success), so the truth is "not delivered".
+                    // LOUD surfacing (BUG-5): dose screens dismiss optimistically on
+                    // confirm, so a late failure/uncertainty must announce itself —
+                    // haptic + alert.
                     if self.phase == .active {
                         WKInterfaceDevice.current().play(.failure)
-                        self.commandFailure = CommandFailure(
-                            title: String(format: NSLocalizedString("%@ Failed", comment: "Alert title for a failed Sport Mode pod command (parameter: command name)"), label),
-                            message: error.localizedDescription + NSLocalizedString("\nNo change was made to the pod.", comment: "Alert body suffix for a failed Sport Mode pod command")
-                        )
+                        let title = uncertain
+                            ? String(format: NSLocalizedString("%@ Uncertain", comment: "Alert title for an unacknowledged (uncertain) Sport Mode pod command"), label)
+                            : String(format: NSLocalizedString("%@ Failed", comment: "Alert title for a failed Sport Mode pod command (parameter: command name)"), label)
+                        let suffix = uncertain
+                            ? NSLocalizedString("\nThe pod did not confirm. It MAY have applied this — check the pod before retrying.", comment: "Alert body suffix for an uncertain Sport Mode pod command")
+                            : NSLocalizedString("\nNo change was made to the pod.", comment: "Alert body suffix for a failed Sport Mode pod command")
+                        self.commandFailure = CommandFailure(title: title, message: error.localizedDescription + suffix)
                     }
                 }
             }
