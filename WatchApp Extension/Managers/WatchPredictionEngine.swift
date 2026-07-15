@@ -3,15 +3,16 @@
 //  WatchApp Extension
 //
 //  Runs the real Loop algorithm (LoopAlgorithm.generatePrediction + DoseMath)
-//  on the watch against a manually entered BG: eventual BG, the correction
+//  on the watch against the stored glucose series: eventual BG, the correction
 //  range it was judged against, and a temp-basal recommendation.
 //
-//  Effects config: insulin + carbs only. Momentum needs a dense recent BG
-//  series and retrospective correction needs 30 min of fresh counteraction
-//  data — neither exists when the anchor is a single typed-in value, so they
-//  stay off rather than run on stale inputs.
-//
-//  DISPLAY/RECOMMEND ONLY in this stage: nothing here enacts a dose.
+//  Effects config: FULL stock pipeline (.all — insulin, carbs, momentum,
+//  retrospective correction). The direct G7 stream provides the dense 5-min
+//  series momentum/RC require; the algorithm anchors on the genuine newest
+//  stored sample (no synthetic anchor — a fabricated sample carries foreign
+//  provenance and a re-stamped clock, corrupting momentum and ICE pairing).
+//  Manual entries persist FIRST and enter the history like any other sample —
+//  exactly how stock Loop treats wasUserEntered readings.
 //
 //  Copyright © 2026 LoopKit Authors. All rights reserved.
 //
@@ -295,22 +296,44 @@ final class WatchPredictionEngine {
             sensitivity: sensitivityTimeline,
             carbRatio: carbRatioTimeline,
             target: targetTimeline,
-            algorithmEffectsOptions: [.insulin, .carbs],
+            // algorithmEffectsOptions defaults to .all — full stock pipeline.
             maximumBasalRatePerHour: maxBasalRate,
             maximumBolus: settings.maximumBolus,
             suspendThreshold: settings.suspendThreshold)
 
-        // Histories from the watch-local stores, then run.
+        // Histories from the watch-local stores, then run. STOCK-LOOP PARITY: the stored
+        // series IS the input. A manual entry persists FIRST so the fetch returns it as the
+        // genuine newest sample; the G7 stream needs no help at all.
         let group = DispatchGroup()
         var glucoseHistory: [StoredGlucoseSample] = []
         var carbEntries: [StoredCarbEntry] = []
 
         group.enter()
-        loopManager.glucoseStore.getGlucoseSamples(start: date.addingTimeInterval(-.hours(10)), end: date) { result in
-            if case .success(let samples) = result {
-                glucoseHistory = samples
+        let beginGlucoseFetch = {
+            self.loopManager.glucoseStore.getGlucoseSamples(start: date.addingTimeInterval(-.hours(10)), end: date) { result in
+                if case .success(let samples) = result {
+                    glucoseHistory = samples
+                }
+                group.leave()
             }
-            group.leave()
+        }
+        if storeEntry {
+            loopManager.glucoseStore.addGlucoseSamples([NewGlucoseSample(
+                date: date,
+                quantity: manualBG,
+                condition: nil,
+                trend: nil,
+                trendRate: nil,
+                isDisplayOnly: false,
+                wasUserEntered: true,
+                syncIdentifier: UUID().uuidString)]) { result in
+                if case .failure(let error) = result {
+                    fileLog("*** predict: manual-entry store FAILED (\(error)) — anchoring on prior sample ***")
+                }
+                beginGlucoseFetch()
+            }
+        } else {
+            beginGlucoseFetch()
         }
 
         group.enter()
@@ -323,11 +346,10 @@ final class WatchPredictionEngine {
 
         group.notify(queue: .global(qos: .userInitiated)) {
             let fetchesDone = Date()
-            // The manual entry is the anchor: strictly the newest sample.
-            let manualSample = StoredGlucoseSample(startDate: date, quantity: manualBG, wasUserEntered: true)
+            // The stored series verbatim — the algorithm anchors on its genuine newest sample.
             let history = glucoseHistory
-                .filter { $0.startDate < date }
-                .sorted { $0.startDate < $1.startDate } + [manualSample]
+                .filter { $0.startDate <= date }
+                .sorted { $0.startDate < $1.startDate }
 
             let input = LoopAlgorithmInput(
                 predictionInput: LoopPredictionInput(
@@ -337,21 +359,6 @@ final class WatchPredictionEngine {
                     settings: algorithmSettings),
                 predictionDate: date,
                 doseRecommendationType: .tempBasal)
-
-            // Persist the entry so successive predictions see the session's BG
-            // trend. Stored AFTER fetching history, so this run anchors on the
-            // appended sample without double-counting. Background refreshes
-            // (storeEntry == false) anchor on an existing sample — storing
-            // would fabricate readings.
-            if self.storeEntry { self.loopManager.glucoseStore.addGlucoseSamples([NewGlucoseSample(
-                date: date,
-                quantity: manualBG,
-                condition: nil,
-                trend: nil,
-                trendRate: nil,
-                isDisplayOnly: false,
-                wasUserEntered: true,
-                syncIdentifier: UUID().uuidString)]) { _ in } }
 
             do {
                 let (prediction, recommendation) = try LoopAlgorithm.generateRecommendation(
@@ -386,6 +393,18 @@ final class WatchPredictionEngine {
                 let displayUnit = settings.glucoseUnit ?? .milligramsPerDeciliter
                 let eventual = prediction.glucose.last?.quantity ?? manualBG
                 let range = targetSchedule.quantityRange(at: date)
+
+                // Reconciliation register: one compact line per cycle, joined offline against
+                // the phone's Nightscout devicestatus.loop.predicted. Per-effect nets localize
+                // any divergence to the responsible term (input skew vs algorithm skew).
+                let mgdl = HKUnit.milligramsPerDeciliter
+                func net(_ e: [GlucoseEffect]) -> String {
+                    guard let f = e.first, let l = e.last else { return "0" }
+                    return String(format: "%+.0f", l.quantity.doubleValue(for: mgdl) - f.quantity.doubleValue(for: mgdl))
+                }
+                let anchorBG = history.last.map { Int($0.quantity.doubleValue(for: mgdl)) } ?? -1
+                let anchorAge = history.last.map { Int(date.timeIntervalSince($0.startDate)) } ?? -1
+                fileLog("predict: anchor=\(anchorBG)mg/dL age=\(anchorAge)s nBG=\(history.count) nDose=\(doses.count) nCarb=\(carbEntries.count) eventual=\(Int(eventual.doubleValue(for: mgdl))) fx[ins=\(net(prediction.effects.insulin)) carb=\(net(prediction.effects.carbs)) mom=\(net(prediction.effects.momentum)) rc=\(net(prediction.effects.retrospectiveCorrection))] temp=\(recommendation.basalAdjustment.map { String(format: "%.2f U/hr·%.0fm", $0.unitsPerHour, $0.duration.minutes) } ?? "none") IOB=\(String(format: "%.2f", activeInsulin)) COB=\(String(format: "%.0f", activeCarbs))")
 
                 completion(.success(WatchPredictionOutput(
                     date: date,
