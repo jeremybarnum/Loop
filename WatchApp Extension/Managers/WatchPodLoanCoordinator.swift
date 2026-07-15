@@ -59,6 +59,16 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// it's been superseded by a newer link event and bail.
     private var linkGeneration = 0
 
+    /// P0#5 — BOUNDED manual suspend. A manual suspend is enacted as a fixed-duration
+    /// zero temp (not an untimed suspendDelivery) so the pod auto-reverts to its
+    /// scheduled basal if the watch dies mid-suspend, instead of withholding insulin
+    /// indefinitely. This is the watch-alive view of that bound: the instant it lapses.
+    /// Cleared by resume(), a positive manual basal, or expiry. Drives the "Suspended"
+    /// display and blocks the closed loop.
+    @Published private(set) var manualSuspendUntil: Date?
+    /// True while a bounded manual suspend is in force (and hasn't expired).
+    var manualSuspendActive: Bool { (manualSuspendUntil.map { $0 > Date() }) ?? false }
+
     /// When the current keys arrived (handleGrantReply) — lets a queued revoke
     /// from an OLDER loan be recognized as stale and ignored for this one.
     private var armedAt: Date?
@@ -133,15 +143,10 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// resumes delivery at the programmed rate).
     var sessionSuspended: Bool {
         if Self.isSimulatorDemo { return status?.deliveryStatus == "Suspended" }
-        guard let events = controller.loanJournal?.events else { return false }
-        for event in events.reversed() {
-            switch event.kind {
-            case .suspend: return true
-            case .resume, .tempBasal: return false
-            default: continue
-            }
-        }
-        return false
+        // A manual suspend is now a bounded zero temp (P0#5), so the journal no longer
+        // carries a `.suspend` kind for it — the manualSuspendUntil bound is the truth.
+        // (A loop-issued zero temp is NOT a manual suspend and must not read as one.)
+        return manualSuspendActive
     }
 
     /// Total insulin bolused by the watch this session (U) — the journal's discrete
@@ -547,10 +552,19 @@ final class WatchPodLoanCoordinator: ObservableObject {
     // MARK: - Pod control (only while the loan is active)
 
     func suspend() {
+        // P0#5 — BOUNDED manual suspend: a fixed-duration zero temp, NOT an untimed
+        // suspendDelivery. If the watch dies mid-suspend the pod auto-reverts to its
+        // scheduled basal at expiry rather than withholding insulin indefinitely (an
+        // untimed suspend has no pod-side revert net). Same mechanism the closed loop
+        // uses for a predicted-low zero temp; blocks the loop via manualSuspendActive.
+        manualSuspendUntil = Date().addingTimeInterval(Self.tempBasalDuration)
         if Self.isSimulatorDemo { demoSuspend(); return }
-        runPodCommand(label: NSLocalizedString("Suspend", comment: "Command name: suspend")) { self.controller.suspend(completion: $0) }
+        runPodCommand(label: NSLocalizedString("Suspend", comment: "Command name: suspend")) {
+            self.controller.setTempBasal(rate: 0, duration: Self.tempBasalDuration, completion: $0)
+        }
     }
     func resume() {
+        manualSuspendUntil = nil   // resuming clears the bounded manual suspend
         if Self.isSimulatorDemo { demoResume(); return }
         // Resume re-programs the pod's basal table: use the phone's REAL
         // schedule when it has synced (nil falls back to the proof flat 0.5).
@@ -581,6 +595,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
     func setBasalRate(_ rate: Double) {
         let snapped = (min(max(rate, 0), Self.maxTempBasalRate) / 0.05).rounded() * 0.05
         if snapped <= 0 { suspend(); return }   // 0 U/hr = suspend
+        manualSuspendUntil = nil   // a positive manual basal clears any bounded suspend
         if Self.isSimulatorDemo { demoSetTempBasal(rate: snapped); return }
         runPodCommand(label: NSLocalizedString("Set Basal", comment: "Command name: set basal")) { self.controller.setTempBasal(rate: snapped, duration: Self.tempBasalDuration, completion: $0) }
     }
