@@ -4,6 +4,11 @@
 <dict>
 	<key>AppGroupIdentifier</key>
 	<string>$(APP_GROUP_IDENTIFIER)</string>
+	<!-- Expose Documents (received watch g7 logs) in Files / Finder for export. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>AppStoreURL</key>
 	<string>$(APP_STORE_URL)</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>

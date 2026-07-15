@@ -200,6 +200,7 @@ final class WatchAutoLoop: ObservableObject {
         recentCycles.insert(cycle, at: 0)
         if recentCycles.count > Self.historyLength { recentCycles.removeLast() }
         log.default("loop decision (%{public}@): %{public}@", trigger, decision.detailText(closed: isClosed))
+        fileLog("loop decision (\(trigger)): \(decision.detailText(closed: isClosed)) · bg=\(bg.map { String(format: "%.0f", $0.doubleValue(for: .milligramsPerDeciliter)) } ?? "—")")
     }
 
     /// The loop() analog: on a loop-worthy tick (new glucose / periodic / on
@@ -220,6 +221,7 @@ final class WatchAutoLoop: ObservableObject {
 
         guard let temp = output.recommendedTempBasal else { return }  // schedule fits — no action
         log.default("closed loop enact (%{public}@): %.2f U/hr for %.0f min", trigger, temp.unitsPerHour, temp.duration.minutes)
+        fileLog(String(format: "closed loop ENACT (%@): %.2f U/hr for %.0f min", trigger, temp.unitsPerHour, temp.duration.minutes))
         coordinator.enactTempBasal(unitsPerHour: temp.unitsPerHour, for: temp.duration)
     }
 }

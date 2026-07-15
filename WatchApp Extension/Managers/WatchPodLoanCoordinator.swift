@@ -616,7 +616,11 @@ final class WatchPodLoanCoordinator: ObservableObject {
     }
 
     private func runPodCommand(label: String, _ operation: (@escaping (Result<PodProofStatus, Error>) -> Void) -> Void) {
-        guard !busy, phase == .active else { return }
+        guard !busy, phase == .active else {
+            fileLog("pod cmd '\(label)' DROPPED (busy=\(busy) phase=\(phase))")   // surfaced: the silent skip
+            return
+        }
+        fileLog("pod cmd '\(label)' →")
         busy = true
         lastError = nil
         // Any new command makes a previously-snapshot hand-back payload stale (its
@@ -630,9 +634,11 @@ final class WatchPodLoanCoordinator: ObservableObject {
                 defer { self.processPendingRevoke() }   // a revoke parked during this command
                 switch result {
                 case .success(let status):
+                    fileLog("pod cmd '\(label)' ✓")
                     self.status = status
                     self.notifyJournalChanged()
                 case .failure(let error):
+                    fileLog("*** pod cmd '\(label)' FAILED: \(error.localizedDescription) ***")
                     self.lastError = error.localizedDescription
                     // LOUD failure (BUG-5): dose screens dismiss optimistically on
                     // confirm, so a late failure must announce itself — haptic +

@@ -49,6 +49,13 @@
 		<key>NSExtensionPointIdentifier</key>
 		<string>com.apple.watchkit</string>
 	</dict>
+	<!-- Background runtime for the phone-free G7 reader: the HKWorkoutSession keepalive
+	     (WorkoutKeepalive.swift) requires this or the app suspends when wrist-down —
+	     without it the G7 stream dies the moment the screen sleeps. -->
+	<key>WKBackgroundModes</key>
+	<array>
+		<string>workout-processing</string>
+	</array>
 	<key>NSHealthShareUsageDescription</key>
 	<string>Meal data from the Health database is used to determine glucose effects. Glucose data from the Health database is used for graphing and momentum calculation. Sleep data from the Health database is used to optimize delivery of Apple Watch complication updates during the time you are awake.</string>
 	<key>NSHealthUpdateUsageDescription</key>

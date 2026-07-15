@@ -892,6 +892,24 @@ extension WatchDataManager: WCSessionDelegate {
         assertionFailure("We currently don't expect any userInfo messages transferred from the watch side")
     }
 
+    /// Receive the watch's g7watch.log (G7 BLE trace + loop decisions + pod commands) and save it
+    /// into the phone's Documents (file-sharing enabled → visible in Files / Finder for export).
+    func session(_ session: WCSession, didReceive file: WCSessionFile) {
+        guard (file.metadata?["kind"] as? String) == "g7log" else { return }
+        let fm = FileManager.default
+        guard let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let df = DateFormatter()
+        df.dateFormat = "MMdd-HHmm"
+        let dst = docs.appendingPathComponent("g7watch-\(df.string(from: Date())).log")
+        try? fm.removeItem(at: dst)
+        do {
+            try fm.copyItem(at: file.fileURL, to: dst)
+            log.default("saved watch g7 log → Documents/%{public}@", dst.lastPathComponent)
+        } catch {
+            log.error("failed to save watch g7 log: %{public}@", String(describing: error))
+        }
+    }
+
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
         switch activationState {
         case .activated:

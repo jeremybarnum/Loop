@@ -107,8 +107,31 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         }
 
         requestSettingsSyncIfNeeded()
+        exportG7LogIfDue()
 
         NotificationCenter.default.post(name: type(of: self).didBecomeActiveNotification, object: self)
+    }
+
+    /// Ship Documents/g7watch.log (G7 BLE trace + loop decisions + pod commands) to the phone via
+    /// WCSession.transferFile — queued, so it delivers whenever the phone is next reachable even if
+    /// it's off right now. Throttled: WatchConnectivity shares the watch's one radio with the G7
+    /// link, so exports are opportunistic on app-open, never mid-soak on a timer.
+    private var lastG7LogExport: Date? {
+        get { UserDefaults.standard.object(forKey: "lastG7LogExport") as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: "lastG7LogExport") }
+    }
+    private func exportG7LogIfDue() {
+        guard WCSession.isSupported() else { return }
+        let session = WCSession.default
+        guard session.activationState == .activated else { return }
+        guard let src = LogFile.url, FileManager.default.fileExists(atPath: src.path) else { return }
+        if let last = lastG7LogExport, Date().timeIntervalSince(last) < 10 * 60 { return }
+        lastG7LogExport = Date()
+        let dst = FileManager.default.temporaryDirectory.appendingPathComponent("g7watch-export.log")
+        try? FileManager.default.removeItem(at: dst)
+        guard (try? FileManager.default.copyItem(at: src, to: dst)) != nil else { return }
+        session.transferFile(dst, metadata: ["kind": "g7log"])
+        fileLog("export-log: queued to iPhone (reach \(session.isReachable ? "y" : "n"))")
     }
 
     /// Pull settings from the phone when ours are incomplete. The push path
