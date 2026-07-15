@@ -165,7 +165,9 @@ verify device **and** simulator builds + live EGV injection.
     (Parked 2026-07-15)
 22. 3c: surface the abnormal-hand-back ⚠ marker
 23. "Loop Crashed" false alert on phone restart (old-work list)
-24. Rebrand Show Mode → Sport Mode (bundle already `com.SportMode`; app display name stays "Loop")
+24. ~~Rebrand Show Mode → Sport Mode~~ **DONE 2026-07-15** (user-facing strings; code identifiers
+    and docs keep "Show Mode" for history; app display name stays "Loop"). **Wider-release
+    reminder: replace the horse icon with something generic** (it stays for now).
 
 **Parked/validated** — pending-connect reacquire (SOLVED, 100% capture); coexistence role 0x01
 (proven); D2W entitlements (unreachable, by design); HealthKit relay (dead, 3h delay).
