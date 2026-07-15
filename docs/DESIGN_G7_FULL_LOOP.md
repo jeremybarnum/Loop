@@ -170,6 +170,21 @@ verify device **and** simulator builds + live EGV injection.
 **Parked/validated** — pending-connect reacquire (SOLVED, 100% capture); coexistence role 0x01
 (proven); D2W entitlements (unreachable, by design); HealthKit relay (dead, 3h delay).
 
+## 6b. Bench validations (2026-07-15, live)
+
+Watch-death arc, all devices nearby: Show Mode active → phone tile **"On Watch"** ✓ (update
+felt slow — possibly pre-latest build, retest before logging as an issue) → watch battery died →
+tile transitioned to the disconnected state ✓ (§3.5 surfacing works) → watch revived on charger →
+**Show Mode not running** ✓ (per-session reset by design, §3.3) → phone **escape-hatch reclaim**
+worked ✓ (§3.6). Open follow-ups from the arc: retest tile latency on the latest build; the
+revived watch's journal hand-back (no doses this time — verify with doses on bench).
+
+**Parked (2026-07-15): pump-agnosticism.** Show Mode currently presumes Omnipod (the loan is
+OmniBLE/PodSDK-specific), but Loop supports other pumps. The phone side already has a protocol
+seam (`PumpConnectionLendable`); the correct system-shape is: Show Mode offered only when the
+active pump conforms, watch-side drivers per lendable pump. Low priority — design thought, not
+work. (P3#28)
+
 ## 7. Morning-after triage for tonight's run
 
 1. Pull `g7watch.log` (`devicectl device copy from --domain-type appDataContainer` — dev build, should work) → run `G7Watch/tools/soak_analyze.py` for capture %.
