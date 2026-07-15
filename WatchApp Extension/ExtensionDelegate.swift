@@ -42,6 +42,7 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
     private var observers: [NSKeyValueObservation] = []
     private var notifications: [NSObjectProtocol] = []
     private var loanPhasePushCancellable: AnyCancellable?
+    private var complicationReloadObserver: NSObjectProtocol?
 
     static func shared() -> ExtensionDelegate {
         return WKExtension.shared().extensionDelegate
@@ -110,6 +111,16 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
             .sink { [weak self] phase in
                 self?.pushLoanStatusToPhone(active: phase == .active)
             }
+
+        // P1#11 — in Sport Mode the phone stops pushing context, so nothing reloads
+        // the complication. Reload it on each watch-local prediction update (a fresh
+        // direct-G7 reading recomputes the store) so the wrist face tracks the real
+        // sensor instead of freezing on the last phone value.
+        complicationReloadObserver = NotificationCenter.default.addObserver(
+            forName: WatchPredictionStore.didUpdateNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.podLoanCoordinator.phase == .active else { return }
+            self.reloadComplications()
+        }
     }
 
     private func pushLoanStatusToPhone(active: Bool) {
@@ -304,7 +315,12 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
             }
         }
 
-        // Update complication data if needed
+        reloadComplications()
+    }
+
+    /// Reload every active complication timeline (phone-context update, or a
+    /// watch-local prediction update in Sport Mode — see P1#11).
+    func reloadComplications() {
         let server = CLKComplicationServer.sharedInstance()
         for complication in server.activeComplications ?? [] {
             log.default("Reloading complication timeline")

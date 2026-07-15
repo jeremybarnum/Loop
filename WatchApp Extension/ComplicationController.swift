@@ -15,6 +15,34 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
     
     private let log = OSLog(category: "ComplicationController")
 
+    /// P1#11 — the wrist face must not lie in Sport Mode. The phone-pushed
+    /// activeContext is stale or absent once the phone is away, so while a session
+    /// is live the complication is built from the WATCH's own direct-G7 reading
+    /// (the prediction store's in-memory anchor + prediction), not the phone value.
+    /// Returns nil outside Sport Mode → the normal phone context is used.
+    private func sportModeContext() -> WatchContext? {
+        let ext = ExtensionDelegate.shared()
+        guard ext.podLoanCoordinator.phase == .active else { return nil }
+        guard let anchor = ext.predictionStore.anchorSample else { return nil }
+        let context = WatchContext()
+        context.displayGlucoseUnit = ext.loopManager.settings.glucoseUnit ?? .milligramsPerDeciliter
+        context.glucose = anchor.quantity
+        context.glucoseDate = anchor.startDate
+        context.glucoseSyncIdentifier = anchor.syncIdentifier
+        if let values = ext.predictionStore.latestOutput?.predictedGlucose {
+            context.predictedGlucose = WatchPredictedGlucose(values: values)
+        }
+        context.isClosedLoop = ext.autoLoop.isClosed
+        context.loopLastRunDate = ext.predictionStore.latestOutput?.date
+        return context
+    }
+
+    /// The context the complication should render right now: the watch-local one
+    /// in Sport Mode, otherwise the phone-pushed context.
+    private var currentComplicationContext: WatchContext? {
+        sportModeContext() ?? ExtensionDelegate.shared().loopManager.activeContext
+    }
+
     // MARK: - Timeline Configuration
     
     func getSupportedTimeTravelDirections(for complication: CLKComplication, withHandler handler: @escaping (CLKComplicationTimeTravelDirections) -> Void) {
@@ -84,7 +112,7 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
             
             self.log.default("Updating current complication timeline entry")
             
-            if let context = ExtensionDelegate.shared().loopManager.activeContext,
+            if let context = self.currentComplicationContext,
                 let template = CLKComplicationTemplate.templateForFamily(complication.family,
                                                                          from: context,
                                                                          at: timelineDate,
@@ -110,7 +138,7 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
         updateChartManagerIfNeeded {
             let entries: [CLKComplicationTimelineEntry]?
             
-            guard let context = ExtensionDelegate.shared().loopManager.activeContext,
+            guard let context = self.currentComplicationContext,
                 let glucoseDate = context.glucoseDate else
             {
                 handler(nil)
