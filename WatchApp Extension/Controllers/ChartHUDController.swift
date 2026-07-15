@@ -124,6 +124,8 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
     override func willActivate() {
         super.willActivate()
 
+        setTitle(Bundle.main.buildStamp)   // TEMPORARY test aid: which build is on the wrist
+
         observers = [
             NotificationCenter.default.addObserver(forName: GlucoseStore.glucoseSamplesDidChange, object: loopManager.glucoseStore, queue: nil) { [weak self] (note) in
                 self?.log.default("Received GlucoseSamplesDidChange notification: %{public}@. Updating chart", String(describing: note.userInfo ?? [:]))

@@ -11,6 +11,18 @@ import Combine
 import LoopCore
 import LoopKit
 
+extension Bundle {
+    /// TEMPORARY test aid: build number + the binary's link-time mtime = a true build
+    /// timestamp with no build-system machinery. Shown as the HUD screen title.
+    var buildStamp: String {
+        let v = infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        let linked = executableURL.flatMap {
+            (try? FileManager.default.attributesOfItem(atPath: $0.path))?[.modificationDate] as? Date
+        }
+        return "b\(v) \(linked.map { HUDInterfaceController.buildStampFormatter.string(from: $0) } ?? "")"
+    }
+}
+
 class HUDInterfaceController: WKInterfaceController {
     private var activeContextObserver: NSObjectProtocol?
     private var glucoseSamplesObserver: NSObjectProtocol?
@@ -31,8 +43,19 @@ class HUDInterfaceController: WKInterfaceController {
         ExtensionDelegate.shared().podLoanCoordinator.phase == .active
     }
 
+    // TEMPORARY test aid (watch installs have been flaky): build number + the appex binary's
+    // link-time mtime = a true build timestamp with zero build-system machinery. Shown as the
+    // screen title on both HUD pages; delete when install reliability is no longer in question.
+    static let buildStampFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.dateFormat = "M/d HH:mm"
+        return df
+    }()
+
     override func willActivate() {
         super.willActivate()
+
+        setTitle(Bundle.main.buildStamp)   // TEMPORARY test aid: which build is on the wrist
 
         update()
 
