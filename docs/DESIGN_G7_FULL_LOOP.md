@@ -144,9 +144,12 @@ verify device **and** simulator builds + live EGV injection.
 
 **P3 — structure & product**
 18. G7DirectKit SPM package (§5)
-19. **Pod beeps off for production** — honor silent `BeepPreference` in the loan-command path
-    (`WatchPodLoanCoordinator` beep flags) + verify production default is silent; beeps stay ON
-    for bench (audible confirmation)
+19. **Pod beeps: VERIFY-ONLY (ruling 2026-07-15 — no watch-side setting).** Audited: watch-issued
+    commands are already silent (OmniBLECore beep flags all default false; the facade never sets
+    them; cancels use `.noBeepCancel`), and the pod's standing beep config (confidence reminders)
+    is phone-programmed (`BeepConfigCommand`) and persists through the loan. The phone's
+    "Silence Pod"/"Confidence Reminders" setting IS the single control — set it before granting.
+    Remaining: one bench verification (silence on phone → loan → watch temp → confirm silent).
 20. Blind-IOB reclaim reconciliation (finding ①) + adopt leftover watch temp on reclaim (§3.6)
 21. Fold in 3b-v2 phone-side status tiles after wording sign-off (`jeremybarnum/Loop @ 3b-v2-wip`)
 22. 3c: surface the abnormal-hand-back ⚠ marker
