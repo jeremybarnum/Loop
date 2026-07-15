@@ -29,12 +29,12 @@ final class ActionHUDController: HUDInterfaceController {
     @IBOutlet var bolusButtonImage: WKInterfaceImage!
     @IBOutlet var bolusButtonBackground: WKInterfaceGroup!
 
-    // Show Mode toggle. Three visual states, respecting the HID/Loop convention that
+    // Sport Mode toggle. Three visual states, respecting the HID/Loop convention that
     // GREY means "unavailable — don't press" (reserved for .disabled):
-    //   • off / available → white icon on dark turf  (tap to start Show Mode)
+    //   • off / available → white icon on dark turf  (tap to start Sport Mode)
     //   • on  / active    → turf fill                 (watch holds the pod)
     //   • .disabled is never used here — the toggle is always pressable.
-    // Turf (saddle brown) is Show Mode's identity color, shared with the open loop
+    // Turf (saddle brown) is Sport Mode's identity color, shared with the open loop
     // ring while the mode is active.
     private lazy var preMealButtonGroup = ButtonGroup(button: preMealButton, image: preMealButtonImage, background: preMealButtonBackground, onBackgroundColor: .turfColor, offBackgroundColor: .darkTurfColor, onIconColor: .darkTurfColor, offIconColor: .white)
 
@@ -73,7 +73,7 @@ final class ActionHUDController: HUDInterfaceController {
     override func willActivate() {
         super.willActivate()
 
-        // The (unused) Pre-Meal button is repurposed as the "Show Mode" button — it
+        // The (unused) Pre-Meal button is repurposed as the "Sport Mode" button — it
         // starts watch-only, phone-free mode for competition (opens the loan control
         // screen; its storyboard action is now `openPodControl`). Icon = equestrian, since this is initially
         // for Caitlin riding horses; the watch context is implicit (it's on her wrist).
@@ -112,7 +112,7 @@ final class ActionHUDController: HUDInterfaceController {
 
         let isClosedLoop = loopManager.activeContext?.isClosedLoop ?? false
 
-        // Show Mode button (repurposed Pre-Meal): green while the watch holds the pod.
+        // Sport Mode button (repurposed Pre-Meal): green while the watch holds the pod.
         preMealButtonGroup.state = isInShowMode ? .on : .off
         applyPodLinkTint()
 
@@ -131,7 +131,7 @@ final class ActionHUDController: HUDInterfaceController {
             }
         }
 
-        // In Show Mode the phone is away: Carbs (routes to the phone) is
+        // In Sport Mode the phone is away: Carbs (routes to the phone) is
         // unavailable — prediction lives on the HUD's glucose row now — while
         // Bolus and the Override button (which becomes the basal control) must
         // stay enabled since they drive the pod directly — regardless of the
@@ -147,7 +147,7 @@ final class ActionHUDController: HUDInterfaceController {
     }
 
     /// 3a: if the watch has lost its BLE link to the pod during a loan, tint the
-    /// Show Mode (horse) button amber so it reads as "still on, but not currently
+    /// Sport Mode (horse) button amber so it reads as "still on, but not currently
     /// talking to the pod." Called right after the ButtonGroup applies the normal
     /// tint, so it only overrides in the lost state; on reconnect, `update()` re-runs
     /// (driven by the coordinator's `$podConnected`) and the ButtonGroup's green tint
@@ -168,13 +168,13 @@ final class ActionHUDController: HUDInterfaceController {
     }
 
     // isInShowMode is defined on HUDInterfaceController (shared with setBolus /
-    // openPodControl). In Show Mode the horse button is green and Carbs is unavailable.
+    // openPodControl). In Sport Mode the horse button is green and Carbs is unavailable.
 
-    /// The override button's label. In Show Mode this button is the basal control, so
+    /// The override button's label. In Sport Mode this button is the basal control, so
     /// it reads "Basal"; otherwise it's the normal Preset/Workout override label.
     private func updateOverrideLabel() {
         if isInShowMode {
-            overrideButtonLabel?.setText(NSLocalizedString("Basal", comment: "The Watch override button relabeled as the basal control in Show Mode"))
+            overrideButtonLabel?.setText(NSLocalizedString("Basal", comment: "The Watch override button relabeled as the basal control in Sport Mode"))
         } else if FeatureFlags.sensitivityOverridesEnabled {
             overrideButtonLabel?.setText(NSLocalizedString("Preset", comment: "The text for the Watch button for enabling a custom preset"))
         } else {
@@ -282,7 +282,7 @@ final class ActionHUDController: HUDInterfaceController {
     }
 
     @IBAction func toggleOverride() {
-        // In Show Mode this button becomes the basal control (drives the pod);
+        // In Sport Mode this button becomes the basal control (drives the pod);
         // otherwise it's the normal phone-routed override/workout sheet.
         if isInShowMode {
             presentController(withName: WatchPodControlController.className, context: PodControlEntry.basal)

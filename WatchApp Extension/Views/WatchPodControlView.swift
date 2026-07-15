@@ -14,10 +14,10 @@ import OmniBLECore
 /// Why the pod-control screen was opened — decides what it shows while the watch
 /// holds the pod (.active). Passed as the presentController context.
 enum PodControlEntry {
-    case start   // horse tapped when NOT in Show Mode → the untether/start flow
-    case bolus   // Bolus button in Show Mode → the bolus dial
-    case basal   // Override button in Show Mode → the basal dial
-    case end     // horse tapped while in Show Mode → End Show Mode
+    case start   // horse tapped when NOT in Sport Mode → the untether/start flow
+    case bolus   // Bolus button in Sport Mode → the bolus dial
+    case basal   // Override button in Sport Mode → the basal dial
+    case end     // horse tapped while in Sport Mode → End Sport Mode
     case bgEntry // tap the BG number → dial a reading, Log, done
     case predictionDetail // tap Eventual → read-only rich prediction readout
     case loopToggle // Loop row on the HUD → open/close the standalone loop
@@ -55,12 +55,12 @@ struct WatchPodControlView: View {
             }
         }
         .onAppear {
-            // Tapping the horse IS the intent to start Show Mode, so begin fetching the
+            // Tapping the horse IS the intent to start Sport Mode, so begin fetching the
             // pod credentials from the phone immediately (in the background) — no separate
             // "Start" tap. Only auto-start from a resting phase (not mid-loan), and NOT
             // right after a phone-side reclaim (DESIGN-6): silently re-borrowing a pod
             // the phone just took back needs explicit intent — the done screen's
-            // "Start Show Mode" button provides it.
+            // "Start Sport Mode" button provides it.
             if (coordinator.phase == .idle || coordinator.phase == .done) && !coordinator.wasRevokedByPhone {
                 coordinator.requestLoan()
             }
@@ -88,7 +88,7 @@ struct WatchPodControlView: View {
         case .active:
             activeContent
         case .handingBack:
-            progress("Ending Show Mode…")
+            progress("Ending Sport Mode…")
         case .done:
             doneSection
         }
@@ -105,7 +105,7 @@ struct WatchPodControlView: View {
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
             Button(action: coordinator.requestLoan) {
-                Label("Start Show Mode", systemImage: "arrow.left.arrow.right")
+                Label("Start Sport Mode", systemImage: "arrow.left.arrow.right")
             }
             .disabled(coordinator.busy)
         }
@@ -113,7 +113,7 @@ struct WatchPodControlView: View {
 
     private func deniedSection(_ reason: String) -> some View {
         VStack(spacing: 10) {
-            Text("Couldn't start Show Mode")
+            Text("Couldn't start Sport Mode")
                 .font(.headline)
             Text(reason)
                 .font(.footnote)
@@ -135,22 +135,22 @@ struct WatchPodControlView: View {
     private var startupStepText: String {
         switch coordinator.phase {
         case .requesting:
-            return NSLocalizedString("Requesting from iPhone…", comment: "Show Mode takeover step: awaiting the phone's grant")
+            return NSLocalizedString("Requesting from iPhone…", comment: "Sport Mode takeover step: awaiting the phone's grant")
         case .armed:
-            return NSLocalizedString("Connecting to the pod…", comment: "Show Mode takeover step: establishing the pod session")
+            return NSLocalizedString("Connecting to the pod…", comment: "Sport Mode takeover step: establishing the pod session")
         default:
-            return NSLocalizedString("Starting Show Mode…", comment: "Show Mode takeover: generic startup")
+            return NSLocalizedString("Starting Sport Mode…", comment: "Sport Mode takeover: generic startup")
         }
     }
 
-    // Show Mode startup screen (covers .requesting and .armed). With the formal
+    // Sport Mode startup screen (covers .requesting and .armed). With the formal
     // handoff, grant and takeover run back-to-back off the single horse tap, so
     // this is normally just a progress screen. It becomes interactive only when
     // the takeover FAILS: the coordinator drops back to .armed (keys retained,
     // lastError set — shown by the shared error header) and offers a retry.
     private var untetherSection: some View {
         VStack(spacing: 10) {
-            Text("Show Mode")
+            Text("Sport Mode")
                 .font(.headline)
 
             if coordinator.busy {
@@ -219,7 +219,7 @@ struct WatchPodControlView: View {
         VStack(spacing: 10) {
             statusCard
             Button(action: coordinator.handBack) {
-                Label("End Show Mode", systemImage: "iphone")
+                Label("End Sport Mode", systemImage: "iphone")
             }
             .disabled(coordinator.busy)
         }
@@ -239,7 +239,7 @@ struct WatchPodControlView: View {
                     .font(.caption2)
                     .foregroundColor(.secondary)
             } else {
-                Text("In Show Mode")
+                Text("In Sport Mode")
                     .font(.headline)
             }
         }
@@ -255,7 +255,7 @@ struct WatchPodControlView: View {
                     .font(.title2)
                 Text("Reclaimed by iPhone")
                     .font(.headline)
-                Text("Show Mode was ended from your iPhone. Insulin records were sent back.")
+                Text("Sport Mode was ended from your iPhone. Insulin records were sent back.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
@@ -271,9 +271,9 @@ struct WatchPodControlView: View {
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
-            // Back to the resting state — start a fresh Show Mode directly (BUG-1: also
+            // Back to the resting state — start a fresh Sport Mode directly (BUG-1: also
             // the escape from the done state without force-quitting).
-            Button("Start Show Mode", action: coordinator.requestLoan)
+            Button("Start Sport Mode", action: coordinator.requestLoan)
                 .disabled(coordinator.busy)
                 .padding(.top, 4)
         }
@@ -287,7 +287,7 @@ struct WatchPodControlView: View {
     }
 }
 
-// The watch-resident bolus / basal control used in Show Mode, built from the same
+// The watch-resident bolus / basal control used in Sport Mode, built from the same
 // polished pieces as Loop's regular watch bolus screen — DoseVolumeInput's big rounded
 // number + BolusConfirmationView's "turn Digital Crown to confirm" — but wired straight
 // to the pod (WatchPodLoanCoordinator) instead of the phone. Bolus and basal share this
@@ -361,7 +361,7 @@ struct ShowModeDoseView: View {
 
     private var suspendedOptionsStep: some View {
         VStack(spacing: 4) {
-            Text(NSLocalizedString("Suspended", comment: "Show Mode suspended-state header"))
+            Text(NSLocalizedString("Suspended", comment: "Sport Mode suspended-state header"))
                 .font(.headline)
             Text(resumeHint)
                 .font(.caption2)
@@ -369,12 +369,12 @@ struct ShowModeDoseView: View {
                 .multilineTextAlignment(.center)
             Spacer()
             ActionButton(
-                title: Text(NSLocalizedString("Set Basal", comment: "Show Mode suspended action: open the dial")),
+                title: Text(NSLocalizedString("Set Basal", comment: "Sport Mode suspended action: open the dial")),
                 color: .insulin,
                 action: { showingDial = true }
             )
             ActionButton(
-                title: Text(NSLocalizedString("Resume", comment: "Show Mode suspended action: resume scheduled basal")),
+                title: Text(NSLocalizedString("Resume", comment: "Sport Mode suspended action: resume scheduled basal")),
                 color: Color(UIColor.turfColor),
                 action: {
                     coordinator.resume()
@@ -388,7 +388,7 @@ struct ShowModeDoseView: View {
 
     private func optionsStep(activeRate: Double) -> some View {
         VStack(spacing: 4) {
-            Text(String(format: NSLocalizedString("Basal %.2f U/hr", comment: "Show Mode active temp header"), activeRate))
+            Text(String(format: NSLocalizedString("Basal %.2f U/hr", comment: "Sport Mode active temp header"), activeRate))
                 .font(.headline)
             Text(cancelHint)
                 .font(.caption2)
@@ -396,7 +396,7 @@ struct ShowModeDoseView: View {
                 .multilineTextAlignment(.center)
             Spacer()
             ActionButton(
-                title: Text(NSLocalizedString("Change", comment: "Show Mode active-temp action: open the dial")),
+                title: Text(NSLocalizedString("Change", comment: "Sport Mode active-temp action: open the dial")),
                 color: .insulin,
                 action: {
                     amount = activeRate
@@ -404,7 +404,7 @@ struct ShowModeDoseView: View {
                 }
             )
             ActionButton(
-                title: Text(NSLocalizedString("Cancel Temp", comment: "Show Mode active-temp action: revert to scheduled basal")),
+                title: Text(NSLocalizedString("Cancel Temp", comment: "Sport Mode active-temp action: revert to scheduled basal")),
                 color: Color(UIColor.turfColor),
                 action: {
                     coordinator.cancelBasal()
@@ -416,18 +416,18 @@ struct ShowModeDoseView: View {
 
     private var cancelHint: String {
         if let scheduled = coordinator.currentScheduledRate {
-            return String(format: NSLocalizedString("Cancel → Sched (%.2f)", comment: "Show Mode cancel-temp hint with scheduled rate"), scheduled)
+            return String(format: NSLocalizedString("Cancel → Sched (%.2f)", comment: "Sport Mode cancel-temp hint with scheduled rate"), scheduled)
         }
-        return NSLocalizedString("Cancel → scheduled", comment: "Show Mode cancel-temp hint")
+        return NSLocalizedString("Cancel → scheduled", comment: "Sport Mode cancel-temp hint")
     }
 
     /// Rate shown only when the real schedule has synced — the same condition
     /// under which resume actually programs that schedule (honest number).
     private var resumeHint: String {
         if let scheduled = coordinator.currentScheduledRate {
-            return String(format: NSLocalizedString("Resume → Sched (%.2f)", comment: "Show Mode resume hint with scheduled rate"), scheduled)
+            return String(format: NSLocalizedString("Resume → Sched (%.2f)", comment: "Sport Mode resume hint with scheduled rate"), scheduled)
         }
-        return NSLocalizedString("Resume → scheduled", comment: "Show Mode resume hint")
+        return NSLocalizedString("Resume → scheduled", comment: "Sport Mode resume hint")
     }
 
     // MARK: - Pick the amount
@@ -494,19 +494,19 @@ struct ShowModeDoseView: View {
 
     private var actionTitle: String {
         switch kind {
-        case .bolus: return NSLocalizedString("Bolus", comment: "Show Mode bolus action")
+        case .bolus: return NSLocalizedString("Bolus", comment: "Sport Mode bolus action")
         case .basal: return isSuspend
-            ? NSLocalizedString("Suspend", comment: "Show Mode basal-zero action")
-            : NSLocalizedString("Set basal", comment: "Show Mode basal action")
+            ? NSLocalizedString("Suspend", comment: "Sport Mode basal-zero action")
+            : NSLocalizedString("Set basal", comment: "Sport Mode basal action")
         }
     }
 
     private var confirmSummary: String {
         switch kind {
-        case .bolus: return String(format: NSLocalizedString("Bolus %.2f U", comment: "Show Mode bolus confirm summary"), amount)
+        case .bolus: return String(format: NSLocalizedString("Bolus %.2f U", comment: "Sport Mode bolus confirm summary"), amount)
         case .basal: return isSuspend
-            ? NSLocalizedString("Suspend basal", comment: "Show Mode suspend confirm summary")
-            : String(format: NSLocalizedString("Basal %.2f U/hr", comment: "Show Mode basal confirm summary"), amount)
+            ? NSLocalizedString("Suspend basal", comment: "Sport Mode suspend confirm summary")
+            : String(format: NSLocalizedString("Basal %.2f U/hr", comment: "Sport Mode basal confirm summary"), amount)
         }
     }
 
@@ -516,8 +516,8 @@ struct ShowModeDoseView: View {
             return nil   // BolusConfirmationView's default ("Turn Digital Crown to bolus")
         case .basal:
             return Text(isSuspend
-                        ? NSLocalizedString("Turn Digital Crown\nto suspend", comment: "Show Mode suspend confirm help")
-                        : NSLocalizedString("Turn Digital Crown\nto set basal", comment: "Show Mode basal confirm help"))
+                        ? NSLocalizedString("Turn Digital Crown\nto suspend", comment: "Sport Mode suspend confirm help")
+                        : NSLocalizedString("Turn Digital Crown\nto set basal", comment: "Sport Mode basal confirm help"))
         }
     }
 }

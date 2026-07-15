@@ -96,7 +96,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
 
     /// Whether the phone can currently be reached to hand the pod back. Hand-back needs
     /// this (WatchConnectivity to send the loan journal, and the phone's Bluetooth on to
-    /// reclaim the pod over BLE). Since Show Mode is entered with the phone's BT OFF, this
+    /// reclaim the pod over BLE). Since Sport Mode is entered with the phone's BT OFF, this
     /// is often false when the user tries to end — the UI checks it to warn rather than
     /// silently no-op. Always true in the sim demo so the demo end-flow still runs.
     var phoneReachable: Bool {
@@ -221,7 +221,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// bridged doses with the right activity curve.
     var grantInsulinTypeRaw: Int? { heldGrant?.insulinTypeRaw }
 
-    /// A pod command that failed DURING Show Mode, for loud surfacing (haptic +
+    /// A pod command that failed DURING Sport Mode, for loud surfacing (haptic +
     /// alert on the HUD). Distinct from lastError (quiet, shown on the pod screen):
     /// a mid-session failure — especially a bolus — must never be silent (BUG-5).
     struct CommandFailure: Equatable {
@@ -263,7 +263,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// True only in the watchOS simulator (which has no Bluetooth, so it can never
     /// reach a pod). When true, the methods below route to the simulator demo path
     /// (see the extension at the bottom) instead of WatchConnectivity/BLE, so the
-    /// whole Show Mode flow is walkable on the sim. Compile-time FALSE on a real
+    /// whole Sport Mode flow is walkable on the sim. Compile-time FALSE on a real
     /// watch — the demo path can never execute on hardware.
     #if targetEnvironment(simulator)
     static let isSimulatorDemo = true
@@ -314,7 +314,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
         guard !busy else { return }
         let session = WCSession.default
         guard session.activationState == .activated, session.isReachable else {
-            lastError = "iPhone not reachable — bring it close to start Show Mode."
+            lastError = "iPhone not reachable — bring it close to start Sport Mode."
             return
         }
         // An undelivered journal from a previous session (crash or revoke) gets
@@ -339,7 +339,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
             Task { @MainActor in
                 self?.busy = false
                 self?.phase = .idle
-                self?.lastError = "Couldn't start Show Mode: \(error.localizedDescription)"
+                self?.lastError = "Couldn't start Sport Mode: \(error.localizedDescription)"
             }
         })
     }
@@ -369,7 +369,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
               grant.messageNumber != nil
         else {
             busy = false
-            phase = .denied(grant.denialReason ?? "iPhone couldn't start Show Mode.")
+            phase = .denied(grant.denialReason ?? "iPhone couldn't start Sport Mode.")
             return
         }
 
@@ -647,8 +647,8 @@ final class WatchPodLoanCoordinator: ObservableObject {
                     if self.phase == .active {
                         WKInterfaceDevice.current().play(.failure)
                         self.commandFailure = CommandFailure(
-                            title: String(format: NSLocalizedString("%@ Failed", comment: "Alert title for a failed Show Mode pod command (parameter: command name)"), label),
-                            message: error.localizedDescription + NSLocalizedString("\nNo change was made to the pod.", comment: "Alert body suffix for a failed Show Mode pod command")
+                            title: String(format: NSLocalizedString("%@ Failed", comment: "Alert title for a failed Sport Mode pod command (parameter: command name)"), label),
+                            message: error.localizedDescription + NSLocalizedString("\nNo change was made to the pod.", comment: "Alert body suffix for a failed Sport Mode pod command")
                         )
                     }
                 }
@@ -672,7 +672,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
         guard !busy, phase == .active else { return }
         let session = WCSession.default
         guard session.isReachable else {
-            lastError = "iPhone not reachable — bring it close to end Show Mode."
+            lastError = "iPhone not reachable — bring it close to end Sport Mode."
             return
         }
         busy = true
@@ -770,7 +770,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
         }
         let decoded = PodLoanJournal.decoded(from: data)
         var summary = decoded?.summaryText ?? "Recovered watch loan journal."
-        summary += "\n⚠️ Sent after Show Mode ended without a normal hand-back."
+        summary += "\n⚠️ Sent after Sport Mode ended without a normal hand-back."
         // Stamp the hand-back at the journal's LAST EVENT, not send time: a
         // recovered journal can be delivered hours later, and a send-time stamp
         // would inflate the phone's audit window (expected scheduled basal) for
@@ -835,7 +835,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
                 // pendingHandbackPayload is retained so the retry resends the SAME
                 // journal bytes (the phone's duplicate guard hashes them).
                 self.phase = .active
-                self.lastError = "Couldn't reach iPhone to end Show Mode: \(error.localizedDescription). Still in control on your watch."
+                self.lastError = "Couldn't reach iPhone to end Sport Mode: \(error.localizedDescription). Still in control on your watch."
                 self.processPendingRevoke()
             }
         })
@@ -847,7 +847,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
 // The watchOS simulator has no Bluetooth, so it can never reach a pod. When
 // `isSimulatorDemo` is true (simulator only — compile-time false on a real watch), the
 // methods above route here instead of WatchConnectivity/BLE, walking the real phases
-// with faked data + small delays. This makes the whole Show Mode flow reviewable on the
+// with faked data + small delays. This makes the whole Sport Mode flow reviewable on the
 // sim — no pod, no TestFlight. It can never execute on hardware.
 private extension WatchPodLoanCoordinator {
     func demoStatus(_ delivery: String, delivered: Double) -> PodProofStatus {

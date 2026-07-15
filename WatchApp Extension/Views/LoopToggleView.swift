@@ -112,7 +112,7 @@ struct LoopToggleView: View {
             Text("Close the loop for this session?")
                 .font(.caption)
                 .multilineTextAlignment(.center)
-            Text("The watch will set temp basals automatically from the recommendation. Opens automatically when Show Mode ends.")
+            Text("The watch will set temp basals automatically from the recommendation. Opens automatically when Sport Mode ends.")
                 .font(.caption2)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)

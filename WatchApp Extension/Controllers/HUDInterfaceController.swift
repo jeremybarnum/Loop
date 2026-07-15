@@ -35,7 +35,7 @@ class HUDInterfaceController: WKInterfaceController {
 
     var loopManager = ExtensionDelegate.shared().loopManager
 
-    /// True while the watch actually holds the pod (Show Mode is live) — derived from
+    /// True while the watch actually holds the pod (Sport Mode is live) — derived from
     /// the loan coordinator's real .active phase, never a separate flag. Routes the
     /// shared action buttons (Bolus, and the horse's pod screen) to the pod instead of
     /// the phone. Subclasses (ActionHUDController) use it for button appearance too.
@@ -67,7 +67,7 @@ class HUDInterfaceController: WKInterfaceController {
             }
         }
 
-        // Show Mode's BG header is driven by the WATCH-LOCAL store, so it must
+        // Sport Mode's BG header is driven by the WATCH-LOCAL store, so it must
         // re-render when samples land — activation alone races the async write
         // of a just-dialed entry (header showed the pre-entry value live).
         if glucoseSamplesObserver == nil {
@@ -97,7 +97,7 @@ class HUDInterfaceController: WKInterfaceController {
             self.loopManager.requestGlucoseBackfillIfNecessary()
         })
 
-        // LOUD surfacing of failed Show Mode pod commands (BUG-5): whichever HUD
+        // LOUD surfacing of failed Sport Mode pod commands (BUG-5): whichever HUD
         // page is active presents the alert. @Published replays the current value
         // on subscription, so a failure that lands while a dose screen is up is
         // presented as soon as the user returns to a HUD page. Clearing before
@@ -126,7 +126,7 @@ class HUDInterfaceController: WKInterfaceController {
     }
 
     func update() {
-        // Show Mode: the ring is the turf-colored OPEN loop — Show Mode's identity
+        // Sport Mode: the ring is the turf-colored OPEN loop — Sport Mode's identity
         // color (shared with the horse button) — and it does NOT age: the freshness
         // colors encode phone-loop health, which is meaningless here (green would lie
         // that the loop is running; yellow/red would alarm about an intentional state).
@@ -136,11 +136,11 @@ class HUDInterfaceController: WKInterfaceController {
         // Values older than 30 min degrade to dashes rather than looking live.
         // Eventual BG is the watch's own prediction (shared prediction store),
         // shown on BOTH HUD pages — it's the key output and is valid the instant
-        // Show Mode activates (the watch has what the phone loop had a moment ago).
+        // Sport Mode activates (the watch has what the phone loop had a moment ago).
         if isInShowMode {
             loopHUDImage.setHidden(false)
             // Same visual grammar as the phone: open ring = open loop, closed
-            // ring = closed loop — but in turf, Show Mode's green.
+            // ring = closed loop — but in turf, Sport Mode's green.
             let loopClosed = ExtensionDelegate.shared().autoLoop.isClosed
             loopHUDImage.setImageNamed(loopClosed ? "loop_show_closed" : "loop_show_open")
             updateShowModeGlucoseHeader()
@@ -188,7 +188,7 @@ class HUDInterfaceController: WKInterfaceController {
                     glucoseLabel.setText(glucoseValue + trend)
                 }
                 
-                // The eventual BG is the phone's prediction — in Show Mode it was
+                // The eventual BG is the phone's prediction — in Sport Mode it was
                 // computed before untethering and assumes the phone is still looping,
                 // so suppress it (the measured BG + trend above stay).
                 if showEventualGlucose, !isInShowMode, let eventualGlucose = activeContext.eventualGlucose, let eventualGlucoseValue = formatter.string(from: eventualGlucose.doubleValue(for: unit)) {
@@ -200,7 +200,7 @@ class HUDInterfaceController: WKInterfaceController {
 
     }
 
-    /// Show Mode eventual BG: the shared prediction store's latest output,
+    /// Sport Mode eventual BG: the shared prediction store's latest output,
     /// same number the swipe page's Eventual row shows. Hidden only when no
     /// prediction exists yet (no BG at all).
     private func updateShowModeEventualGlucose() {
@@ -223,7 +223,7 @@ class HUDInterfaceController: WKInterfaceController {
         }
     }
 
-    /// Show Mode BG header: newest watch-local sample + two-sample trend
+    /// Sport Mode BG header: newest watch-local sample + two-sample trend
     /// arrow; dashes when nothing fresh enough exists.
     private func updateShowModeGlucoseHeader() {
         loopManager.glucoseStore.getGlucoseSamples(start: Date(timeIntervalSinceNow: -.hours(1)), end: Date()) { [weak self] result in
@@ -265,7 +265,7 @@ class HUDInterfaceController: WKInterfaceController {
         }
     }
 
-    /// Tap on the BG header (both HUD pages): in Show Mode, straight to the
+    /// Tap on the BG header (both HUD pages): in Sport Mode, straight to the
     /// entry dial + prediction. Tethered mode keeps the header inert.
     @IBAction func didTapGlucoseHeader(_ sender: Any) {
         guard isInShowMode else { return }
@@ -281,7 +281,7 @@ class HUDInterfaceController: WKInterfaceController {
     }
 
     @IBAction func setBolus() {
-        // In Show Mode the phone is away, so Bolus drives the pod directly (capped
+        // In Sport Mode the phone is away, so Bolus drives the pod directly (capped
         // dial); otherwise it's the normal phone-routed bolus flow.
         if isInShowMode {
             presentController(withName: WatchPodControlController.className, context: PodControlEntry.bolus)
@@ -290,12 +290,12 @@ class HUDInterfaceController: WKInterfaceController {
         }
     }
 
-    /// The horse button. Not in Show Mode → the start/untether flow. In Show Mode →
-    /// end Show Mode (hand the pod back to the phone) and return to the main HUD — no
+    /// The horse button. Not in Sport Mode → the start/untether flow. In Sport Mode →
+    /// end Sport Mode (hand the pod back to the phone) and return to the main HUD — no
     /// screen, since all dosing lives on the main HUD now.
     //
     // Ending requires the phone reachable: the phone needs its Bluetooth on to reclaim
-    // the pod over BLE (and WatchConnectivity to receive the loan journal). Show Mode is
+    // the pod over BLE (and WatchConnectivity to receive the loan journal). Sport Mode is
     // entered with the phone's BT OFF, so the user often still has it off here — confirmed
     // on the emulator that hand-back then silently does nothing. So if the phone isn't
     // reachable, surface an alert rather than no-op.
@@ -303,8 +303,8 @@ class HUDInterfaceController: WKInterfaceController {
         if isInShowMode {
             guard ExtensionDelegate.shared().podLoanCoordinator.phoneReachable else {
                 presentAlert(
-                    withTitle: NSLocalizedString("iPhone Bluetooth Is Off", comment: "Alert title shown when ending Show Mode while the phone is unreachable"),
-                    message: NSLocalizedString("Show Mode is still on. To end it, turn your iPhone's Bluetooth on, then tap again.", comment: "Alert body shown when ending Show Mode while the phone is unreachable"),
+                    withTitle: NSLocalizedString("iPhone Bluetooth Is Off", comment: "Alert title shown when ending Sport Mode while the phone is unreachable"),
+                    message: NSLocalizedString("Sport Mode is still on. To end it, turn your iPhone's Bluetooth on, then tap again.", comment: "Alert body shown when ending Sport Mode while the phone is unreachable"),
                     preferredStyle: .alert,
                     actions: [WKAlertAction(title: NSLocalizedString("OK", comment: "OK button on the turn-on-Bluetooth alert"), style: .default, handler: {})]
                 )

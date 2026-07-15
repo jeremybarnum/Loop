@@ -34,7 +34,7 @@ enum WatchPredictionError: LocalizedError {
         case .missingSetting(let name):
             return String(format: NSLocalizedString("%@ hasn't synced from the iPhone yet.", comment: "Prediction error: a therapy setting is missing"), name)
         case .noJournal:
-            return NSLocalizedString("No Show Mode session is active.", comment: "Prediction error: no loan journal")
+            return NSLocalizedString("No Sport Mode session is active.", comment: "Prediction error: no loan journal")
         }
     }
 }
@@ -161,7 +161,7 @@ final class WatchPredictionEngine {
 
         // Freshen the watch-local carb/glucose stores opportunistically; replies
         // land async, so they enrich this run if fast and the next run if not.
-        // (The carb-list screen normally triggers this, but Show Mode repurposes
+        // (The carb-list screen normally triggers this, but Sport Mode repurposes
         // its button — without this line, carbs never backfill mid-session.)
         loopManager.requestCarbBackfill()
         loopManager.requestGlucoseBackfillIfNecessary()

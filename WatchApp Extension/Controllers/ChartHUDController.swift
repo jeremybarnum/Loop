@@ -45,7 +45,7 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
     @IBOutlet private weak var glucoseScene: WKInterfaceSKScene!
     /// The fixed-height container around the chart. Hiding the SCENE alone leaves
     /// this group's height as an empty band; hiding the GROUP collapses it so the
-    /// table reflows into the space (Show Mode).
+    /// table reflows into the space (Sport Mode).
     @IBOutlet private weak var graphGroup: WKInterfaceGroup!
     private let scene = GlucoseChartScene()
     private var timer: Timer? {
@@ -83,7 +83,7 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
         ExtensionDelegate.shared().predictionStore.refresh(force: true)
 
         // Force an update when our pixels need to move. Capped at 60 s so the
-        // Show Mode rows (session numbers, live basal accrual) also repaint while
+        // Sport Mode rows (session numbers, live basal accrual) also repaint while
         // the page stays up — swipe-in alone would leave them frozen.
         let pixelsWide = scene.size.width * WKInterfaceDevice.current().screenScale
         let pixelInterval = min(scene.visibleDuration / TimeInterval(pixelsWide), 60)
@@ -91,7 +91,7 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
         timer = Timer.scheduledTimer(withTimeInterval: pixelInterval, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             if self.isInShowMode {
-                // Chart is hidden in Show Mode; keep the session rows current and
+                // Chart is hidden in Sport Mode; keep the session rows current and
                 // nudge the shared store to recompute (throttled to 5 min inside).
                 self.updateRowsForShowMode()
                 ExtensionDelegate.shared().predictionStore.refresh()
@@ -134,7 +134,7 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
                     self?.updateGlucoseChart()
                 }
             },
-            // The shared prediction store recomputed → repaint the Show Mode rows.
+            // The shared prediction store recomputed → repaint the Sport Mode rows.
             NotificationCenter.default.addObserver(forName: WatchPredictionStore.didUpdateNotification, object: nil, queue: nil) { [weak self] _ in
                 DispatchQueue.main.async {
                     guard let self, self.isInShowMode else { return }
@@ -169,7 +169,7 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
 
         applyChartVisibility()
 
-        // In Show Mode the phone-fed context is stale by construction (the phone is
+        // In Sport Mode the phone-fed context is stale by construction (the phone is
         // away) — the watch is driving the pod. Show the session rows and skip the
         // chart entirely (it's hidden; the BG history is frozen and not actionable).
         if isInShowMode {
@@ -218,7 +218,7 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
         }
     }
 
-    /// The Show Mode status rows — what the watch has DONE this session (raw,
+    /// The Sport Mode status rows — what the watch has DONE this session (raw,
     /// undecayed cumulative amounts), plus the current basal rate:
     ///  - Session Bolus:   boluses delivered this session.
     ///  - Session Basal:   net insulin delivered above (+) / below (−) the
@@ -243,25 +243,25 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
         var title: String {
             switch self {
             case .currentBG:
-                return NSLocalizedString("Glucose", comment: "HUD row: current glucose in Show Mode (tap to enter)")
+                return NSLocalizedString("Glucose", comment: "HUD row: current glucose in Sport Mode (tap to enter)")
             case .g7Direct:
                 return NSLocalizedString("G7 Direct", comment: "HUD row: health of the watch's own direct G7 sensor link")
             case .eventualBG:
-                return NSLocalizedString("Eventual", comment: "HUD row: predicted eventual glucose in Show Mode")
+                return NSLocalizedString("Eventual", comment: "HUD row: predicted eventual glucose in Sport Mode")
             case .activeInsulin:
-                return NSLocalizedString("Active Insulin", comment: "HUD row: active insulin in Show Mode")
+                return NSLocalizedString("Active Insulin", comment: "HUD row: active insulin in Sport Mode")
             case .activeCarbs:
-                return NSLocalizedString("Active Carbs", comment: "HUD row: active carbs in Show Mode")
+                return NSLocalizedString("Active Carbs", comment: "HUD row: active carbs in Sport Mode")
             case .loopStatus:
-                return NSLocalizedString("Loop", comment: "HUD row: standalone loop status in Show Mode")
+                return NSLocalizedString("Loop", comment: "HUD row: standalone loop status in Sport Mode")
             case .sessionBolus:
-                return NSLocalizedString("Session Bolus", comment: "HUD row: insulin bolused during Show Mode")
+                return NSLocalizedString("Session Bolus", comment: "HUD row: insulin bolused during Sport Mode")
             case .sessionBasal:
-                return NSLocalizedString("Session Basal", comment: "HUD row: net basal insulin delivered vs schedule during Show Mode")
+                return NSLocalizedString("Session Basal", comment: "HUD row: net basal insulin delivered vs schedule during Sport Mode")
             case .sessionInsulin:
-                return NSLocalizedString("Session Insulin", comment: "HUD row: total net insulin (bolus + basal) during Show Mode")
+                return NSLocalizedString("Session Insulin", comment: "HUD row: total net insulin (bolus + basal) during Sport Mode")
             case .basalRate:
-                return NSLocalizedString("Basal Rate", comment: "HUD row: the watch-set basal rate in Show Mode")
+                return NSLocalizedString("Basal Rate", comment: "HUD row: the watch-set basal rate in Sport Mode")
             }
         }
 
@@ -344,7 +344,7 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
                 cell.setDetail(Self.signedInsulinString(coordinator.sessionInsulinTotal))
             case .basalRate:
                 if coordinator.sessionSuspended {
-                    cell.setDetail(NSLocalizedString("Suspended", comment: "HUD row detail when delivery is suspended in Show Mode"))
+                    cell.setDetail(NSLocalizedString("Suspended", comment: "HUD row detail when delivery is suspended in Sport Mode"))
                 } else if let rate = coordinator.sessionBasalRate {
                     if let scheduled = coordinator.currentScheduledRate {
                         // Rate plus signed deviation from schedule: "2.50 U/hr (+1.50)".
@@ -356,7 +356,7 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
                     // Following the schedule — say what that means right now.
                     cell.setDetail(String(format: NSLocalizedString("Sched (%.2f)", comment: "HUD row detail: scheduled basal with the current rate"), scheduled))
                 } else {
-                    cell.setDetail(NSLocalizedString("Scheduled", comment: "HUD row detail when the pod runs its scheduled basal in Show Mode"))
+                    cell.setDetail(NSLocalizedString("Scheduled", comment: "HUD row detail when the pod runs its scheduled basal in Sport Mode"))
                 }
             }
         }
@@ -369,7 +369,7 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
         return String(format: "%+.2f U", value)
     }
 
-    // MARK: - Show Mode prediction rows (data from the shared prediction store)
+    // MARK: - Sport Mode prediction rows (data from the shared prediction store)
 
     private var displayUnit: HKUnit {
         loopManager.settings.glucoseUnit ?? .milligramsPerDeciliter
@@ -397,13 +397,13 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
     }
 
     private func updateGlucoseChart() {
-        // The chart is hidden in Show Mode — skip the data generation and render.
+        // The chart is hidden in Sport Mode — skip the data generation and render.
         guard !isInShowMode else { return }
 
         loopManager.generateChartData { chartData in
             DispatchQueue.main.async {
                 var chartData = chartData
-                // In Show Mode the phone's prediction was computed BEFORE untethering
+                // In Sport Mode the phone's prediction was computed BEFORE untethering
                 // (assuming the phone was still running the loop) and only gets more
                 // wrong with time — actively misleading. Keep the glucose history
                 // (true data, honestly old); drop the prediction.
