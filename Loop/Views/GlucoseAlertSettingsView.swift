@@ -9,6 +9,15 @@
 
 import SwiftUI
 import AVFoundation
+import LoopAlgorithm
+import LoopKit
+import LoopKitUI
+
+/// Formats a canonical mg/dL threshold in the user's display unit (mg/dL or
+/// mmol/L). Thresholds are always *stored* in mg/dL; only display/entry convert.
+private func formatGlucose(_ mgdl: Double, _ preference: DisplayGlucosePreference) -> String {
+    preference.format(LoopQuantity(unit: .milligramsPerDeciliter, doubleValue: mgdl))
+}
 
 // MARK: - Profile list
 
@@ -140,6 +149,7 @@ struct AlertProfileDetailView: View {
     @ObservedObject var manager: GlucoseAlertManager
     let profileID: UUID
 
+    @EnvironmentObject private var displayGlucosePreference: DisplayGlucosePreference
     @Environment(\.dismiss) private var dismiss
     @State private var showDeleteConfirm = false
 
@@ -183,16 +193,16 @@ struct AlertProfileDetailView: View {
 
             Section("Glucose Alerts") {
                 alertRow(title: "Urgent Low",
-                         value: config.urgentLowEnabled ? "\(Int(config.urgentLowThresholdMgDL)) mg/dL" : "Off",
+                         value: config.urgentLowEnabled ? formatGlucose(config.urgentLowThresholdMgDL, displayGlucosePreference) : "Off",
                          destination: GlucoseAlertDetailView.urgentLow(manager: manager, profileID: profileID, detail: self))
                 alertRow(title: "Predicted Low",
                          value: config.predictedLowEnabled ? "On" : "Off",
                          destination: GlucoseAlertDetailView.predictedLow(manager: manager, profileID: profileID, detail: self))
                 alertRow(title: "Low",
-                         value: config.lowEnabled ? "\(Int(config.lowThresholdMgDL)) mg/dL" : "Off",
+                         value: config.lowEnabled ? formatGlucose(config.lowThresholdMgDL, displayGlucosePreference) : "Off",
                          destination: GlucoseAlertDetailView.low(manager: manager, profileID: profileID, detail: self))
                 alertRow(title: "High",
-                         value: config.highEnabled ? "\(Int(config.highThresholdMgDL)) mg/dL" : "Off",
+                         value: config.highEnabled ? formatGlucose(config.highThresholdMgDL, displayGlucosePreference) : "Off",
                          destination: GlucoseAlertDetailView.high(manager: manager, profileID: profileID, detail: self))
             }
             .disabled(!manager.effectiveLoopAlertsEnabled)
@@ -540,8 +550,9 @@ extension GlucoseAlertDetailView {
 
 private struct LevelPickerRow: View {
     let label: String
-    @Binding var value: Double
-    let range: ClosedRange<Double>
+    @Binding var value: Double          // canonical mg/dL
+    let range: ClosedRange<Double>      // canonical mg/dL bounds
+    @EnvironmentObject private var displayGlucosePreference: DisplayGlucosePreference
 
     var body: some View {
         NavigationLink {
@@ -550,7 +561,7 @@ private struct LevelPickerRow: View {
             HStack {
                 Text(label)
                 Spacer()
-                Text("\(Int(value)) mg/dL").foregroundStyle(.secondary).monospacedDigit()
+                Text(formatGlucose(value, displayGlucosePreference)).foregroundStyle(.secondary).monospacedDigit()
             }
         }
     }
@@ -558,17 +569,33 @@ private struct LevelPickerRow: View {
 
 private struct LevelPickerView: View {
     let label: String
-    @Binding var value: Double
-    let range: ClosedRange<Double>
+    @Binding var value: Double          // canonical mg/dL
+    let range: ClosedRange<Double>      // canonical mg/dL bounds
+    @EnvironmentObject private var displayGlucosePreference: DisplayGlucosePreference
 
     var body: some View {
-        VStack {
-            Picker(label, selection: $value) {
-                ForEach(Array(stride(from: range.lowerBound, through: range.upperBound, by: 1)), id: \.self) { v in
-                    Text("\(Int(v)) mg/dL").tag(v)
-                }
-            }
-            .pickerStyle(.wheel).labelsHidden()
+        // Store in mg/dL, display/pick in the user's unit. GlucoseValuePicker
+        // (used by therapy settings) handles the mg/dL↔mmol/L stepping and unit
+        // label; the guardrail bounds carry the mg/dL range.
+        let unit = displayGlucosePreference.unit
+        let guardrail = Guardrail(
+            absoluteBounds: range.lowerBound...range.upperBound,
+            recommendedBounds: range.lowerBound...range.upperBound,
+            unit: .milligramsPerDeciliter,
+            startingSuggestion: min(max(value, range.lowerBound), range.upperBound)
+        )
+        let quantity = Binding<LoopQuantity>(
+            get: { LoopQuantity(unit: .milligramsPerDeciliter, doubleValue: value) },
+            set: { value = $0.doubleValue(for: .milligramsPerDeciliter) }
+        )
+        return VStack {
+            GlucoseValuePicker(
+                value: quantity,
+                unit: unit,
+                guardrail: guardrail,
+                selectableValues: guardrail.allValues(forUnit: unit)
+            )
+            Spacer()
         }
         .navigationTitle(label).navigationBarTitleDisplayMode(.inline)
     }
