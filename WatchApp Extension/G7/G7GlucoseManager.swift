@@ -34,6 +34,8 @@ final class G7GlucoseManager {
     /// Start the phone-free reader (pending-connect reacquire + workout keepalive).
     func start() { log("loop-bridge: G7GlucoseManager START (reconnect mode)"); client.startSoak() }
     func stop()  { log("loop-bridge: G7GlucoseManager STOP"); client.stopSoak() }
+    /// Foreground re-arm of the keepalive (background relaunch leaves it dead — HK error 14).
+    func ensureKeepalive() { client.ensureKeepalive() }
 
     private func inject(mgdl: Int, at date: Date) {
         // The G7 emits one EGV per ~5 min; guard a duplicate within a window.

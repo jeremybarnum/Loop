@@ -509,6 +509,14 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         connect()
     }
 
+    /// Re-arm the workout keepalive if it died — e.g. watchOS relaunched the app in the
+    /// BACKGROUND (post-update), where HKWorkoutSession.start fails with HK error 14 and the
+    /// reader silently suspends. Called on every foreground activation; no-op while running.
+    func ensureKeepalive() {
+        guard soakActive else { return }
+        workout.start()
+    }
+
     /// End the soak: stop the workout keepalive and all polling.
     func stopSoak() {
         onMain { self.soakActive = false }

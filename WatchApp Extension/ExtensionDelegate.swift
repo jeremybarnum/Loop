@@ -107,6 +107,7 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         }
 
         requestSettingsSyncIfNeeded()
+        g7.ensureKeepalive()   // re-arm if a background relaunch left the workout session dead
         exportG7LogIfDue()
 
         NotificationCenter.default.post(name: type(of: self).didBecomeActiveNotification, object: self)

@@ -17,8 +17,13 @@ final class WorkoutKeepalive: NSObject, HKWorkoutSessionDelegate {
     private let healthStore = HKHealthStore()
     private var session: HKWorkoutSession?
 
-    /// Request HealthKit auth (once) then start the keepalive session.
+    /// Request HealthKit auth (once) then start the keepalive session. Idempotent — safe to
+    /// re-call on every foreground activation: a start attempted while BACKGROUNDED fails with
+    /// HealthKit error 14 ("cannot start a workout session while in the background"), e.g. when
+    /// watchOS relaunches the app in the background after an update; without a foreground retry
+    /// the G7 reader silently suspends (observed 2026-07-15, 3.5h outage).
     func start() {
+        guard session == nil else { return }   // already running (or starting)
         guard HKHealthStore.isHealthDataAvailable() else {
             log("WorkoutKeepalive: HealthKit unavailable on this device")
             return
@@ -45,6 +50,7 @@ final class WorkoutKeepalive: NSObject, HKWorkoutSessionDelegate {
             session = s
             log("WorkoutKeepalive: HKWorkoutSession(.other) started — background runtime ACTIVE")
         } catch {
+            session = nil   // stay restartable — the next foreground ensure retries
             log("WorkoutKeepalive: HKWorkoutSession start FAILED: \(error)")
         }
     }
@@ -62,5 +68,6 @@ final class WorkoutKeepalive: NSObject, HKWorkoutSessionDelegate {
     }
     func workoutSession(_ s: HKWorkoutSession, didFailWithError error: Error) {
         log("WorkoutKeepalive: session FAILED: \(error)")
+        session = nil   // stay restartable — the next foreground ensure retries (HK error 14 path)
     }
 }
