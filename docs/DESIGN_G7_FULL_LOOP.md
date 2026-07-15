@@ -151,7 +151,18 @@ verify device **and** simulator builds + live EGV injection.
     "Silence Pod"/"Confidence Reminders" setting IS the single control — set it before granting.
     Remaining: one bench verification (silence on phone → loan → watch temp → confirm silent).
 20. Blind-IOB reclaim reconciliation (finding ①) + adopt leftover watch temp on reclaim (§3.6)
-21. Fold in 3b-v2 phone-side status tiles after wording sign-off (`jeremybarnum/Loop @ 3b-v2-wip`)
+21. ~~Fold in 3b-v2 phone-side status tiles~~ **LANDED 2026-07-15** (cherry-picked from
+    `3b-v2-wip`, clean): phone polls the watch for Show-Mode status → pump tile shows
+    **"On Watch" / "Watch Lost Pod" / "Pod Not Connected"**. Wording still open to change.
+25. **Install-over-Show-Mode behavior** — building to the watch mid-session kills the app
+    (= the reboot/kill failure mode §3.3: workout keepalive dies, closed loop resets to open,
+    loan grant survives via the persisted journal, pod runs its last temp to expiry). Verify on
+    bench + decide if the installer path needs a "session was interrupted" alert. (Parked 2026-07-15)
+26. **Loop open/close UX** — replace (or complement) the open/closed status line with tapping
+    the loop indicator itself to enter the open/close ceremony. (Parked 2026-07-15)
+27. **Carb entry in Show Mode** — the watch carb UI exists; enable it during sessions (engine
+    already consumes carbEntries; "no reason not to support it at the rate we're going").
+    (Parked 2026-07-15)
 22. 3c: surface the abnormal-hand-back ⚠ marker
 23. "Loop Crashed" false alert on phone restart (old-work list)
 24. Rebrand Show Mode → Sport Mode (bundle already `com.SportMode`; app display name stays "Loop")
