@@ -119,23 +119,25 @@ verify device **and** simulator builds + live EGV injection.
 
 ## 6. Master to-do list (consolidated, ranked)
 
-**P0 — dosing correctness (before anything beyond bench)**
-1. IOB clamp in the watch enact path (§2.1)
-2. `pumpSuspended` check in `loopCycle` (§2.2)
-3. Revert TEMP-TEST-CAP → 1.0; unify display/enact caps; decide the real ceiling (§2.3)
-4. Uncertain-delivery modeling for unacked pod commands (§2.4)
-5. Bounded manual suspend (§2.5)
-6. EGV state-byte + plausibility gating in `G7GlucoseManager` (§2.6)
+**P0 — dosing correctness (before anything beyond bench) — ✅ ALL DONE 2026-07-15 (overnight batch)**
+1. ~~IOB clamp in the watch enact path~~ **DONE** — `loopCycle` holds at schedule when IOB ≥ maxBolus×2 and the temp would add insulin (reductions/zero-temps always pass). `WatchAutoLoop.swift`.
+2. ~~`pumpSuspended` check in `loopCycle`~~ **DONE** — skips enact while `sessionSuspended` (manual suspend), re-loops on resume.
+3. ~~Unify display/enact caps~~ **DONE** — enact rate clamped to the proof cap with a logged CLAMP line so trail == pod. **STILL OPEN (Jeremy's call): the cap VALUE stays 3.0 (TEMP-TEST-CAP) for bench visibility — revert to 1.0 (or set the real ceiling) before real-person use.**
+4. ~~Uncertain-delivery modeling~~ **DONE** — `PodProofError.uncertainDelivery`; journal assumes MAX insulin exposure (uncertain bolus recorded, uncertain reduction not); UI says "verify the pod," never "no change was made."
+5. ~~Bounded manual suspend~~ **DONE** — manual suspend is now a fixed-duration (3h) zero temp that auto-reverts if the watch dies; `manualSuspendUntil` drives display + loop gate.
+6. ~~EGV state-byte + plausibility gating~~ **DONE** — only state 0x06 in [40,400] reaches the glucose store (loop feed); display still shows all reads; rejections logged.
 
-**P1 — full-Loop convergence + status honesty**
-7. Delete the synthetic re-anchor (§1.1) and the effects restriction (§1.2)
+**P1 — full-Loop convergence + status honesty** (7-9 relate to §1; 8/8a/9a done in the overnight batch)
+7. Delete the synthetic re-anchor (§1.1) and the effects restriction (§1.2) — effects restriction removed (P1 earlier); synthetic re-anchor still present (`WatchPredictionEngine.swift:326-330`).
 8. `predict(fromStore:)` refresh path (§1.3)
-9. Manual entry → fallback UI; HUD shows live G7 BG + freshness (§1.4)
-10. Surface G7 reader health in the app + haptic when a closed loop pauses on stale BG (§3.1)
-11. Complication shows watch-local BG in Show Mode (§3.1)
-12. Per-sensor pairing-PIN UI (§3.7)
-13. Reader wedge fix (BT off→on `peripheral` clearing) + surface the silent busy-drop enact (§3.2/3.4)
-14. "Session ended — loop is open" alert after relaunch (§3.3)
+9. Manual entry → fallback UI; HUD shows live G7 BG + freshness (§1.4) — **G7 Direct row DONE** (age of the last direct read); manual-entry demotion still open.
+10. ~~Haptic when a closed loop pauses on stale BG~~ **DONE 2026-07-15** — `WatchAutoLoop.Notice`: wrist tap + alert once per stale/no-BG episode. Reader-health *panel* still open.
+11. ~~Complication shows watch-local BG in Sport Mode~~ **DONE 2026-07-15** — built from the prediction-store anchor+prediction, reloads on each watch-local update.
+12. Per-sensor pairing-PIN UI (§3.7) — still open (new sensor fails silently).
+13. Reader wedge fix (BT off→on `peripheral` clearing) + surface the silent busy-drop enact (§3.2/3.4).
+14. ~~"Session ended — loop is open" alert after relaunch~~ **DONE 2026-07-15** — orphaned-journal recovery in `.idle` announces once.
+15a. ~~Pod-connect timeout UX (P1#8)~~ **DONE 2026-07-15** — 40s → "Pod isn't responding — Keep Trying / Cancel"; generation-guarded, releasePod-before-retry.
+15b. **Dual-sovereignty activation gate (P1#7) — CORE DONE 2026-07-15, PICKER DEFERRED.** Done: CGM-sovereignty check warns (haptic+alert) if no DIRECT read lands within 6 min of activation (`G7Client.lastReadDate` past activation, not store freshness). **Deferred (needs Jeremy's semantics): the full 3-way degraded-mode PICKER** — "continue without pod (CGM-viewer)" / "continue phone-fed (labeled)" / "abort". Open questions: what does "phone-fed, labeled" concretely do to the loop inputs and how is it surfaced ongoing; is CGM-viewer (loop open, no pod) a first-class supported mode; exact wording. Pod half of the gate = P1#8 (done).
 
 **P2 — observability & comms**
 15. Unified file log (loop decisions + G7GlucoseManager) + WatchLink export bridge port (§4.1)
