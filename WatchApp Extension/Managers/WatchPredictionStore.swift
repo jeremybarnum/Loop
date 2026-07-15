@@ -62,9 +62,18 @@ final class WatchPredictionStore {
         return -newest.startDate.timeIntervalSinceNow > LoopCoreConstants.inputDataRecencyInterval
     }
 
+    /// Shadow prediction (reconciliation): run the prediction stack whenever the watch has a
+    /// BG stream, not only during a Show Mode loan. Compute-and-log only — enactment stays
+    /// hard-gated on phase == .active && isClosed in WatchAutoLoop.loopCycle. This is what lets
+    /// the watch predict IN PARALLEL with a normally-operating phone (pod attached, phone
+    /// predicting + uploading to Nightscout) so the two engines can be reconciled offline.
+    static var shadowPrediction: Bool {
+        UserDefaults.standard.object(forKey: "shadowPredictionV1") as? Bool ?? true
+    }
+
     private var isActive: Bool {
         if case .active = coordinator.phase { return true }
-        return false
+        return Self.shadowPrediction
     }
 
     init(loopManager: LoopDataManager, coordinator: WatchPodLoanCoordinator) {

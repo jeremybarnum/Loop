@@ -4571,6 +4571,7 @@
 				CODE_SIGN_STYLE = "$(LOOP_CODE_SIGN_STYLE)";
 				DEVELOPMENT_TEAM = 687ZSJ6WD3;
 				EXCLUDED_ARCHS = armv7k;
+				"EXCLUDED_ARCHS[sdk=watchsimulator*]" = "armv7k x86_64 i386";
 				FRAMEWORK_SEARCH_PATHS = "";
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/G7Frameworks/libg7auth-watchos.xcframework/watchos-arm64_arm64_32/Headers";
 				INFOPLIST_FILE = "WatchApp Extension/Info.plist";
@@ -4579,11 +4580,17 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				OTHER_LDFLAGS = (
+				"OTHER_LDFLAGS[sdk=watchos*]" = (
 					"-lc++",
 					"-ObjC",
 					"$(SRCROOT)/G7Frameworks/libg7auth-watchos.xcframework/watchos-arm64_arm64_32/libg7auth-watchos-device.a",
 					"$(SRCROOT)/G7Frameworks/openssl-watchos.xcframework/watchos-arm64_arm64_32/libcrypto-watchos-device.a",
+				);
+				"OTHER_LDFLAGS[sdk=watchsimulator*]" = (
+					"-lc++",
+					"-ObjC",
+					"$(SRCROOT)/G7Frameworks/libg7auth-watchos.xcframework/watchos-arm64-simulator/libg7auth-sim.a",
+					"$(SRCROOT)/G7Frameworks/openssl-watchos.xcframework/watchos-arm64-simulator/libcrypto.a",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "$(MAIN_APP_BUNDLE_IDENTIFIER).LoopWatch.watchkitextension";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -4606,6 +4613,7 @@
 				CODE_SIGN_STYLE = "$(LOOP_CODE_SIGN_STYLE)";
 				DEVELOPMENT_TEAM = 687ZSJ6WD3;
 				EXCLUDED_ARCHS = armv7k;
+				"EXCLUDED_ARCHS[sdk=watchsimulator*]" = "armv7k x86_64 i386";
 				FRAMEWORK_SEARCH_PATHS = "";
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/G7Frameworks/libg7auth-watchos.xcframework/watchos-arm64_arm64_32/Headers";
 				INFOPLIST_FILE = "WatchApp Extension/Info.plist";
@@ -4614,11 +4622,17 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				OTHER_LDFLAGS = (
+				"OTHER_LDFLAGS[sdk=watchos*]" = (
 					"-lc++",
 					"-ObjC",
 					"$(SRCROOT)/G7Frameworks/libg7auth-watchos.xcframework/watchos-arm64_arm64_32/libg7auth-watchos-device.a",
 					"$(SRCROOT)/G7Frameworks/openssl-watchos.xcframework/watchos-arm64_arm64_32/libcrypto-watchos-device.a",
+				);
+				"OTHER_LDFLAGS[sdk=watchsimulator*]" = (
+					"-lc++",
+					"-ObjC",
+					"$(SRCROOT)/G7Frameworks/libg7auth-watchos.xcframework/watchos-arm64-simulator/libg7auth-sim.a",
+					"$(SRCROOT)/G7Frameworks/openssl-watchos.xcframework/watchos-arm64-simulator/libcrypto.a",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "$(MAIN_APP_BUNDLE_IDENTIFIER).LoopWatch.watchkitextension";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -4641,6 +4655,7 @@
 				CODE_SIGN_STYLE = "$(LOOP_CODE_SIGN_STYLE)";
 				DEVELOPMENT_TEAM = 687ZSJ6WD3;
 				EXCLUDED_ARCHS = armv7k;
+				"EXCLUDED_ARCHS[sdk=watchsimulator*]" = "armv7k x86_64 i386";
 				FRAMEWORK_SEARCH_PATHS = "";
 				IBSC_MODULE = WatchApp_Extension;
 				INFOPLIST_FILE = WatchApp/Info.plist;
@@ -4666,6 +4681,7 @@
 				CODE_SIGN_STYLE = "$(LOOP_CODE_SIGN_STYLE)";
 				DEVELOPMENT_TEAM = 687ZSJ6WD3;
 				EXCLUDED_ARCHS = armv7k;
+				"EXCLUDED_ARCHS[sdk=watchsimulator*]" = "armv7k x86_64 i386";
 				FRAMEWORK_SEARCH_PATHS = "";
 				IBSC_MODULE = WatchApp_Extension;
 				INFOPLIST_FILE = WatchApp/Info.plist;
