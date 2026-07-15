@@ -270,6 +270,25 @@ extension ExtensionDelegate: WCSessionDelegate {
             break
         }
     }
+
+    // 3b v2: the phone POLLS the watch for its Show-Mode status. The watch is
+    // answer-only — it never pushes, it just replies here when asked, so there's
+    // no new watch timer or battery cost. Runs on a background thread; hop to the
+    // main actor to read the @MainActor coordinator, then reply (WCSession accepts
+    // the reply from any thread). Always call replyHandler exactly once.
+    func session(_ session: WCSession, didReceiveMessage message: [String : Any], replyHandler: @escaping ([String : Any]) -> Void) {
+        switch message["name"] as? String {
+        case WatchLoanStatusRequestUserInfo.name:
+            Task { @MainActor in
+                let coordinator = self.podLoanCoordinator
+                let status = WatchLoanStatusUserInfo(holdsPod: coordinator.phase == .active,
+                                                     podConnected: coordinator.podConnected)
+                replyHandler(status.rawValue)
+            }
+        default:
+            replyHandler([:])
+        }
+    }
 }
 
 

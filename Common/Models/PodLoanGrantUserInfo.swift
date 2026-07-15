@@ -171,3 +171,79 @@ extension PodLoanRevokeUserInfo: RawRepresentable {
         ]
     }
 }
+
+// MARK: - Show-Mode status poll (3b v2 — phone-driven ownership indicator)
+
+/// Phone → watch, sent as a WCSession message (with reply handler) on the phone's
+/// own cadence while a loan is active. The phone POLLS the watch for its live
+/// status instead of the watch pushing it — this keeps the watch answer-only (no
+/// new watch timer, no proactive send, negligible battery), and a poll that can't
+/// reach the watch simply fails, which IS the honest "can't confirm" signal.
+/// (Lives in this file to avoid pbxproj surgery — same pattern as
+/// PodLoanRevokeUserInfo above.)
+struct WatchLoanStatusRequestUserInfo {
+    let version = 1
+}
+
+extension WatchLoanStatusRequestUserInfo: RawRepresentable {
+    typealias RawValue = [String: Any]
+
+    static let name = "WatchLoanStatusRequestUserInfo"
+
+    init?(rawValue: RawValue) {
+        guard
+            rawValue["v"] as? Int == version,
+            rawValue["name"] as? String == WatchLoanStatusRequestUserInfo.name
+            else {
+                return nil
+        }
+    }
+
+    var rawValue: RawValue {
+        return [
+            "v": version,
+            "name": WatchLoanStatusRequestUserInfo.name
+        ]
+    }
+}
+
+/// Watch → phone, the reply to a WatchLoanStatusRequestUserInfo. First-hand
+/// status the phone can trust because the watch itself reports it (NOT inferred
+/// from the grant — a grant doesn't prove takeover): `holdsPod` = the watch is
+/// actively holding the pod (its `phase == .active`), and `podConnected` = its
+/// BLE link to the pod is live (3a's debounced signal). Drives the phone's
+/// "On Watch" / "Watch Lost Pod" tile; a stale/absent reply falls back to the
+/// honest "Pod Not Connected".
+struct WatchLoanStatusUserInfo {
+    let version = 1
+    let holdsPod: Bool
+    let podConnected: Bool
+}
+
+extension WatchLoanStatusUserInfo: RawRepresentable {
+    typealias RawValue = [String: Any]
+
+    static let name = "WatchLoanStatusUserInfo"
+
+    init?(rawValue: RawValue) {
+        guard
+            rawValue["v"] as? Int == version,
+            rawValue["name"] as? String == WatchLoanStatusUserInfo.name,
+            let holdsPod = rawValue["hp"] as? Bool,
+            let podConnected = rawValue["pc"] as? Bool
+            else {
+                return nil
+        }
+        self.holdsPod = holdsPod
+        self.podConnected = podConnected
+    }
+
+    var rawValue: RawValue {
+        return [
+            "v": version,
+            "name": WatchLoanStatusUserInfo.name,
+            "hp": holdsPod,
+            "pc": podConnected
+        ]
+    }
+}

@@ -28,6 +28,7 @@ final class WatchDataManager: NSObject {
         NotificationCenter.default.addObserver(self, selector: #selector(updateWatch(_:)), name: .LoopDataUpdated, object: deviceManager.loopManager)
         NotificationCenter.default.addObserver(self, selector: #selector(sendSupportedBolusVolumesIfNeeded), name: .PumpManagerChanged, object: deviceManager)
         NotificationCenter.default.addObserver(self, selector: #selector(sendPodLoanRevoke), name: .PodLoanReclaimedViaEscapeHatch, object: deviceManager)
+        NotificationCenter.default.addObserver(self, selector: #selector(pollWatchLoanStatusOnForeground), name: UIApplication.didBecomeActiveNotification, object: nil)
 
         watchSession?.delegate = self
         watchSession?.activate()
@@ -71,6 +72,7 @@ final class WatchDataManager: NSObject {
 
     private var lastSentSettings: LoopSettings?
     private var lastSentBolusVolumes: [Double]?
+    private var watchLoanPollTimer: Timer?   // 3b v2: Show-Mode status poll cadence (lives in the class; extensions can't hold stored properties)
 
     // MARK: - Pod loan (watch borrows the pod for a workout)
 
@@ -153,6 +155,10 @@ final class WatchDataManager: NSObject {
 
         // Any update context should trigger a watch update
         sendWatchContextIfNeeded()
+
+        // 3b v2: keep the Show-Mode status poll alive on the loop cadence, and
+        // (re)start it after a mid-loan relaunch. No-op when no loan is active.
+        startWatchLoanPollingIfNeeded()
 
         if case .preferences = updateContext {
             sendSettingsIfNeeded()
@@ -548,6 +554,71 @@ extension WatchDataManager: WCSessionDelegate {
     /// identity it needs to take over (read from the pump manager's rawState —
     /// see PodLoanIdentity), and pause automatic dosing for the loan. If there's
     /// no active pod, the reply is a denial and nothing is changed.
+    // MARK: - Show-Mode status poll (3b v2 — phone-driven ownership indicator)
+
+    /// Whether the phone currently has the pod out on loan — keyed on the
+    /// PERSISTED release state (matches the pod tile + escape hatch), so a phone
+    /// relaunched mid-loan still polls.
+    private var isPodLoanActive: Bool {
+        (deviceManager.pumpManager as? PumpConnectionLendable)?.isConnectionReleased == true
+    }
+
+    @objc private func pollWatchLoanStatusOnForeground() {
+        startWatchLoanPollingIfNeeded()
+    }
+
+    /// Start (or refresh) polling the watch for its Show-Mode status while a loan
+    /// is active. The phone drives the cadence; the watch just replies. A
+    /// main-runloop timer polls every 30s while the app is foreground (it
+    /// auto-suspends when backgrounded), plus an immediate poll here so a grant /
+    /// app-foreground reflects "On Watch" promptly. Idempotent; no-op with no loan.
+    func startWatchLoanPollingIfNeeded() {
+        DispatchQueue.main.async {
+            guard self.isPodLoanActive else { return }
+            self.pollWatchLoanStatus()
+            guard self.watchLoanPollTimer == nil else { return }
+            self.watchLoanPollTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+                self?.pollWatchLoanStatus()
+            }
+        }
+    }
+
+    private func stopWatchLoanPolling() {
+        DispatchQueue.main.async {
+            self.watchLoanPollTimer?.invalidate()
+            self.watchLoanPollTimer = nil
+        }
+    }
+
+    /// One poll round-trip (runs on main). On reply, record the watch's status +
+    /// a fresh timestamp. On failure (watch unreachable/asleep), leave `lastHeard`
+    /// untouched so the grace window ages it out to the honest "unknown" state —
+    /// the poll deliberately cannot wake a sleeping watch, so it costs the watch
+    /// no battery.
+    private func pollWatchLoanStatus() {
+        guard isPodLoanActive else {
+            stopWatchLoanPolling()
+            deviceManager.lastWatchLoanReport = nil
+            return
+        }
+        guard let session = watchSession,
+              session.activationState == .activated,
+              session.isReachable else {
+            return
+        }
+        session.sendMessage(WatchLoanStatusRequestUserInfo().rawValue, replyHandler: { [weak self] reply in
+            guard let self, let status = WatchLoanStatusUserInfo(rawValue: reply) else { return }
+            DispatchQueue.main.async {
+                self.deviceManager.lastWatchLoanReport = DeviceDataManager.WatchLoanReport(
+                    watchHoldsPod: status.holdsPod,
+                    podConnected: status.podConnected,
+                    lastHeard: Date())
+            }
+        }, errorHandler: { [weak self] error in
+            self?.log.default("Watch loan status poll failed (watch unreachable): %{public}@", error.localizedDescription)
+        })
+    }
+
     private func handlePodLoanRequest(replyHandler: @escaping ([String: Any]) -> Void) {
         var grant = PodLoanIdentity.grant(fromPumpManagerRawState: deviceManager.pumpManager?.rawState,
                                           insulinTypeRaw: deviceManager.loopManager.pumpInsulinType?.rawValue)
@@ -573,6 +644,7 @@ extension WatchDataManager: WCSessionDelegate {
             // state) — never a claim about the watch; the grant alone doesn't
             // prove the watch took over.
             deviceManager.podLoanedToWatch = true
+            startWatchLoanPollingIfNeeded()   // 3b v2: begin polling the watch for its status
             // Capture the pre-loan dosing state and pause automatic dosing — but
             // ONLY on the first grant of a loan. A repeat borrow (e.g. the watch
             // retried after a failed takeover) must NOT re-capture: by then dosing
@@ -606,6 +678,8 @@ extension WatchDataManager: WCSessionDelegate {
         lastWatchLoanSummary = handback.summary
         lastWatchLoanJournalData = handback.journalData
         deviceManager.podLoanedToWatch = false   // phone is back in control
+        DispatchQueue.main.async { self.deviceManager.lastWatchLoanReport = nil }
+        stopWatchLoanPolling()   // 3b v2: loan over, stop polling the watch
 
         if let priorDosing = dosingEnabledBeforeWatchLoan {
             deviceManager.loopManager.mutateSettings { $0.dosingEnabled = priorDosing }
@@ -906,6 +980,11 @@ extension WatchDataManager: WCSessionDelegate {
     func sessionReachabilityDidChange(_ session: WCSession) {
         sendSettingsIfNeeded()
         sendSupportedBolusVolumesIfNeeded()
+        // 3b v2: the Show-Mode status poll can only land while the watch is
+        // reachable, so poll the instant reachability comes up — turns the
+        // minutes-to-first-"On Watch" wait (reachability settling) into seconds.
+        // No-op when no loan is active.
+        startWatchLoanPollingIfNeeded()
     }
 }
 

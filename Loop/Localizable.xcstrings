@@ -29120,6 +29120,9 @@
         }
       }
     },
+    "On Watch" : {
+      "comment" : "Pump status highlight when the Apple Watch is confirmed to be controlling the pod"
+    },
     "Override Presets" : {
       "comment" : "The title text for the override presets",
       "extractionState" : "manual",
@@ -39736,6 +39739,9 @@
           }
         }
       }
+    },
+    "Watch Lost\nPod" : {
+      "comment" : "Pump status highlight when the watch holds the loan but reports its link to the pod is lost"
     },
     "What are examples of Critical and Time Sensitive alerts?" : {
       "localizations" : {
