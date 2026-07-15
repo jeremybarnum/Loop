@@ -962,7 +962,29 @@ extension WatchDataManager: WCSessionDelegate {
         return total
     }
 
+    /// 3b v2.1: the watch PUSHES its Show-Mode status on phase transitions (grant/end) so the
+    /// tile updates immediately; the poll remains the steady-state truth. Reachable path.
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        if let status = WatchLoanStatusUserInfo(rawValue: message) {
+            applyWatchLoanStatus(status)
+        }
+    }
+
+    private func applyWatchLoanStatus(_ status: WatchLoanStatusUserInfo) {
+        DispatchQueue.main.async {
+            self.deviceManager.lastWatchLoanReport = DeviceDataManager.WatchLoanReport(
+                watchHoldsPod: status.holdsPod,
+                podConnected: status.podConnected,
+                lastHeard: Date())
+        }
+    }
+
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        // Queued fallback for the watch's status push (phone was unreachable at the transition).
+        if let status = WatchLoanStatusUserInfo(rawValue: userInfo) {
+            applyWatchLoanStatus(status)
+            return
+        }
         assertionFailure("We currently don't expect any userInfo messages transferred from the watch side")
     }
 

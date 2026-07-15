@@ -14,6 +14,7 @@ import os
 import os.log
 import UserNotifications
 import LoopKit
+import Combine
 
 
 final class ExtensionDelegate: NSObject, WKExtensionDelegate {
@@ -40,6 +41,7 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
 
     private var observers: [NSKeyValueObservation] = []
     private var notifications: [NSObjectProtocol] = []
+    private var loanPhasePushCancellable: AnyCancellable?
 
     static func shared() -> ExtensionDelegate {
         return WKExtension.shared().extensionDelegate
@@ -97,6 +99,33 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         _ = predictionStore
         _ = autoLoop
         g7.start()   // phone-free: begin the G7 reader (pending-connect reacquire + workout keepalive)
+
+        // 3b v2.1: PUSH the Show-Mode status to the phone on phase TRANSITIONS (grant/end) so
+        // its tile updates immediately — the user just watched Show Mode activate on the wrist;
+        // the phone shouldn't take a poll interval to agree. The poll stays the steady state
+        // (watch remains timer-free); this is edge-triggered only.
+        loanPhasePushCancellable = podLoanCoordinator.$phase
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] phase in
+                self?.pushLoanStatusToPhone(active: phase == .active)
+            }
+    }
+
+    private func pushLoanStatusToPhone(active: Bool) {
+        guard WCSession.isSupported() else { return }
+        let session = WCSession.default
+        guard session.activationState == .activated else { return }
+        let status = WatchLoanStatusUserInfo(holdsPod: active,
+                                             podConnected: podLoanCoordinator.podConnected)
+        if session.isReachable {
+            session.sendMessage(status.rawValue, replyHandler: nil, errorHandler: { _ in
+                session.transferUserInfo(status.rawValue)   // fall back to the queued channel
+            })
+        } else {
+            session.transferUserInfo(status.rawValue)       // delivers on next contact
+        }
+        log.default("pushed Show-Mode status to phone (active=%d)", active ? 1 : 0)
     }
 
     func applicationDidBecomeActive() {

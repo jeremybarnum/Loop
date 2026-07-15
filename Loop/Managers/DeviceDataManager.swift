@@ -250,7 +250,18 @@ final class DeviceDataManager {
         var podConnected: Bool
         var lastHeard: Date
     }
-    var lastWatchLoanReport: WatchLoanReport?
+    var lastWatchLoanReport: WatchLoanReport? {
+        didSet {
+            // Re-render the pump tile IMMEDIATELY when the loan STATE (not just the heartbeat
+            // timestamp) changes — the status screen observes .PumpManagerChanged. This makes
+            // the watch's transition push (grant/end) visible in ~a second instead of a poll
+            // interval later.
+            if oldValue?.watchHoldsPod != lastWatchLoanReport?.watchHoldsPod ||
+               oldValue?.podConnected != lastWatchLoanReport?.podConnected {
+                NotificationCenter.default.post(name: .PumpManagerChanged, object: self)
+            }
+        }
+    }
 
     /// ESCAPE HATCH for a loan that will never be handed back (watch lost, dead,
     /// or out of reach): reclaim the pod's connection and end the loan phone-side.
