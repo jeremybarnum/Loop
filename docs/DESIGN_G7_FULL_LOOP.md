@@ -167,6 +167,15 @@ verify device **and** simulator builds + live EGV injection.
     (Parked 2026-07-15)
 22. 3c: surface the abnormal-hand-back ⚠ marker
 23. "Loop Crashed" false alert on phone restart (old-work list)
+28. **Phone "Loop Failure" (loopNotRunning) false-positive during Sport Mode** (Jeremy 2026-07-16,
+    parked). While the pod is loaned to the watch the phone intentionally pauses its own automatic
+    dosing, so its loop legitimately never completes → `AlertManager` fires the scheduled
+    `loopNotRunning` "Loop Failure" notifications (`AlertManager.swift:197-235`). Low impact (the
+    user is usually away from the phone) but semantically wrong and could alarm a remote monitor.
+    Clean fix: the phone already tracks `DeviceDataManager.podLoanedToWatch` — cancel any pending
+    `loopNotRunning` notifications when the loan starts and don't reschedule until reclaim
+    (re-arm on `reclaimConnection`). Safe (the watch is looping + has its own alerting).
+    **Recommendation: fix it — small and localized — but low priority.**
 24. ~~Rebrand Show Mode → Sport Mode~~ **DONE 2026-07-15** (user-facing strings; code identifiers
     and docs keep "Show Mode" for history; app display name stays "Loop"). **Wider-release
     reminder: replace the horse icon with something generic** (it stays for now).
