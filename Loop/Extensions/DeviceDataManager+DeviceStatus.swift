@@ -50,11 +50,18 @@ extension DeviceDataManager {
         // 2026-07-11: the pod tile kept looking healthy while the phone was actually
         // released. The staleness check is retained as a secondary net.
         let bluetoothState = bluetoothProvider.bluetoothState
-        if bluetoothState == .unsupported || bluetoothState == .unauthorized || bluetoothState == .poweredOff {
+        // A loan is the phone's own first-hand fact (it released the pod, or it holds
+        // the loan and contact has gone stale). During a loan that truth OUTRANKS the
+        // BT-off tile: Sport Mode's premise is the phone can be away with BT off, and
+        // the loan branch below (On Watch / Pod Not Connected — still delivered over
+        // WatchConnectivity even with BT off) is honest, where a red "Enable Bluetooth"
+        // demand would be misleading and would hide the real status.
+        let inLoan = (pumpManager as? PumpConnectionLendable)?.isConnectionReleased == true
+            || (podLoanedToWatch && isPodContactStale)
+        if !inLoan, bluetoothState == .unsupported || bluetoothState == .unauthorized || bluetoothState == .poweredOff {
             return BluetoothState.enableHighlight
         }
-        if (pumpManager as? PumpConnectionLendable)?.isConnectionReleased == true
-            || (podLoanedToWatch && isPodContactStale) {
+        if inLoan {
             // 3b v2: reflect the watch's OWN recently-polled status — first-hand
             // over WC, never inferred from the grant (a grant doesn't prove
             // takeover; the pod can be orphaned). "On Watch" only when the watch
@@ -164,9 +171,6 @@ extension DeviceDataManager {
     }
     
     func didTapOnPumpStatus(_ view: BaseHUDView? = nil) -> HUDTapAction? {
-        if let action = bluetoothProvider.bluetoothState.action {
-            return action
-        }
         // During a loan, tapping the pump status offers the ESCAPE HATCH: reclaim
         // the pod without a hand-back (watch lost/dead). Normal loans end from the
         // watch; this exists because the phone no longer reclaims accidentally
@@ -175,9 +179,15 @@ extension DeviceDataManager {
         // podLoanedToWatch flag: a crash mid-loan resets the flag on relaunch
         // (observed 2026-07-10) while the release persists — and post-crash is
         // exactly when the escape hatch must be reachable.
+        // Checked BEFORE the Bluetooth action so the reclaim stays reachable even with
+        // BT off during a loan (Sport Mode expects the phone away/BT-off); otherwise
+        // .poweredOff → .takeNoAction would swallow the tap and strand the escape hatch.
         if (pumpManager as? PumpConnectionLendable)?.isConnectionReleased == true {
             presentReclaimPodAlert()
             return .takeNoAction
+        }
+        if let action = bluetoothProvider.bluetoothState.action {
+            return action
         }
         if let onboardingManager = onboardingManager, !onboardingManager.isComplete, pumpManager?.isOnboarded != true {
             onboardingManager.resume()
