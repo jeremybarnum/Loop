@@ -328,7 +328,9 @@ public final class PodController: NSObject {
     }
 
     /// Live human-readable summary of the current loan, or nil if none active.
-    public var loanJournalSummary: String? { loanJournal?.summaryText }
+    public func loanJournalSummary(schedule: PodLoanBasalSchedule? = nil) -> String? {
+        loanJournal?.summaryLines(schedule: schedule).joined(separator: "\n")
+    }
 
     /// Finalize the loan (records hand-back) and return its summary text.
     public func endLoanSummary() -> String? { endLoan()?.summaryText }

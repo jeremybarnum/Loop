@@ -119,7 +119,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
         #if targetEnvironment(simulator)
         if Self.isSimulatorDemo, phase == .done { return "Delivered 1.5 U · Suspended 12m" }
         #endif
-        return controller.loanJournalSummary
+        return controller.loanJournalSummary(schedule: loanBasalSchedule)
     }
 
     /// Whether the phone can currently be reached to hand the pod back. Hand-back needs
@@ -873,7 +873,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
                     Task { @MainActor in
                         guard let self else { return }
                         guard !self.wasRevokedByPhone, self.controller.loanJournal != nil else { return }
-                        var summary = self.controller.loanJournalSummary ?? "No loan activity recorded."
+                        var summary = self.controller.loanJournalSummary(schedule: self.loanBasalSchedule) ?? "No loan activity recorded."
                         if let cancelWarning {
                             summary += "\n" + cancelWarning
                         }
@@ -936,7 +936,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
         // revoke — the done screen already explains that; don't double-alert.)
         if !announcedRecoveredSession, phase == .idle {
             announcedRecoveredSession = true
-            let did = decoded?.summaryText
+            let did = decoded?.summaryLines(schedule: loanBasalSchedule).joined(separator: "\n")
             sessionEndedNotice = CommandFailure(
                 title: NSLocalizedString("Sport Mode Ended", comment: "Alert title: Sport Mode ended unexpectedly on relaunch"),
                 message: NSLocalizedString("Sport Mode ended unexpectedly (the app restarted). The loop is open and the pod is back on its schedule. Your insulin records are being sent to your phone.", comment: "Alert body: uncommanded Sport Mode end")
@@ -948,7 +948,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
         guard session.activationState == .activated, session.isReachable else {
             return   // keep it persisted; retry on next activation
         }
-        var summary = decoded?.summaryText ?? "Recovered watch loan journal."
+        var summary = decoded?.summaryLines(schedule: loanBasalSchedule).joined(separator: "\n") ?? "Recovered watch loan journal."
         summary += "\n⚠️ Sent after Sport Mode ended without a normal hand-back."
         // Stamp the hand-back at the journal's LAST EVENT, not send time: a
         // recovered journal can be delivered hours later, and a send-time stamp
