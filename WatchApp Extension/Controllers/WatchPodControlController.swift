@@ -48,9 +48,13 @@ final class WatchPodControlController: WKHostingController<WatchPodControlView>,
             .dropFirst()
             .receive(on: RunLoop.main)
             .sink { [weak self] phase in
-                if phase == .active || phase == .done {
-                    self?.dismiss()
-                }
+                guard let self else { return }
+                if phase == .done { self.dismiss(); return }
+                // Activation (entry == .start): do NOT auto-dismiss on .active — the view
+                // holds the pod-connect screen until DIRECT-CGM sovereignty is also
+                // confirmed (or the user taps "Go to Sport Mode"), so both status
+                // indicators are visible. Other entries drop back to the HUD at once.
+                if phase == .active && self.entry != .start { self.dismiss() }
             }
     }
 

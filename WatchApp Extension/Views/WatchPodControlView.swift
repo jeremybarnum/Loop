@@ -86,7 +86,15 @@ struct WatchPodControlView: View {
         case .denied(let reason):
             deniedSection(reason)
         case .active:
-            activeContent
+            // Activation (entry == .start) HOLDS on the pod-connect screen until the
+            // watch also proves DIRECT-CGM sovereignty (a read via its own radio), so
+            // both properties are confirmed before dropping to the HUD ("Go to Sport
+            // Mode" proceeds early). Other entries (bolus/basal/end) go straight through.
+            if entry == .start {
+                untetherSection
+            } else {
+                activeContent
+            }
         case .handingBack:
             progress("Ending Sport Mode…")
         case .done:
@@ -129,6 +137,46 @@ struct WatchPodControlView: View {
     @State private var takeoverProgress: Double = 0
     @State private var takeoverTick = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
 
+    // Dual-sovereignty (P1#7 display): the CGM-direct half, shown on the activation
+    // screen next to the pod-takeover progress so the user confirms BOTH properties
+    // before Sport Mode drops to the HUD. "Confirmed" = the watch landed a read through
+    // its OWN radio since this screen appeared (or within the last minute) — affirmative
+    // proof of direct-CGM sovereignty, never a phone-pushed value.
+    @ObservedObject private var g7Client = ExtensionDelegate.shared().g7.client
+    @State private var activationShownAt = Date()
+    private var sensorConfirmed: Bool {
+        guard let last = g7Client.lastReadDate else { return false }
+        return last >= activationShownAt || -last.timeIntervalSinceNow < 60
+    }
+
+    @ViewBuilder private func sovereigntyRow(ok: Bool, label: String, text: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: ok ? "checkmark.circle.fill" : "dot.radiowaves.left.and.right")
+                .foregroundColor(ok ? .green : .secondary)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(label).font(.caption2).foregroundColor(.secondary)
+                Text(text).font(.caption)
+            }
+            Spacer()
+            if !ok { ProgressView() }
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private var sensorStatusRow: some View {
+        sovereigntyRow(ok: sensorConfirmed,
+                       label: NSLocalizedString("Sensor", comment: "Activation: CGM-direct status label"),
+                       text: sensorConfirmed
+                            ? NSLocalizedString("Reading directly", comment: "Activation: watch is reading the sensor via its own radio")
+                            : NSLocalizedString("Finding sensor…", comment: "Activation: watch has not yet read the sensor directly"))
+    }
+
+    /// Drop to the HUD once BOTH sovereignty properties are confirmed (pod held +
+    /// direct sensor read). The user can also proceed early with "Go to Sport Mode".
+    private func dismissIfBothSovereign() {
+        if coordinator.phase == .active && sensorConfirmed { dismiss() }
+    }
+
     // Takeover progress step — so the ~10s isn't a blank spinner, and a stall
     // shows *where* it stuck (P5): the text simply sits on the stalled step
     // ("Connecting to the pod…" not advancing = the limbo state, made visible).
@@ -153,7 +201,13 @@ struct WatchPodControlView: View {
             Text("Sport Mode")
                 .font(.headline)
 
-            if coordinator.takeoverStalled {
+            // POD sovereignty. Once the takeover completes (.active) it's a green row;
+            // before that, the takeover progress / stall-retry UI (P1#8).
+            if coordinator.phase == .active {
+                sovereigntyRow(ok: true,
+                               label: NSLocalizedString("Pod", comment: "Activation: pod link status label"),
+                               text: NSLocalizedString("Connected", comment: "Activation: the watch holds the pod"))
+            } else if coordinator.takeoverStalled {
                 // P1#8 — the takeover has run past the timeout without connecting.
                 // Stop showing an open-ended spinner; ask instead of hanging forever.
                 Text("Pod isn't responding")
@@ -189,12 +243,27 @@ struct WatchPodControlView: View {
                 Button("Cancel", action: coordinator.cancelArmed)
                     .disabled(coordinator.busy)
             }
+
+            // CGM sovereignty — always shown during activation, so the user watches the
+            // watch's OWN sensor link come up alongside the pod.
+            sensorStatusRow
+
+            // Once the pod is held, let the user drop to the HUD without waiting for the
+            // sensor (it keeps trying; the G7 Direct row + the 6-min warning cover it).
+            if coordinator.phase == .active {
+                Button(NSLocalizedString("Go to Sport Mode", comment: "Activation: proceed to the HUD before the sensor confirms")) { dismiss() }
+                    .font(.footnote)
+                    .padding(.top, 4)
+            }
         }
         .onReceive(takeoverTick) { _ in
             // Fill toward ~90% over ~11s while busy; reset when not. Never reaches
             // 1.0 on the timer — real completion is the phase leaving .requesting/.armed.
             takeoverProgress = coordinator.busy ? min(0.95, takeoverProgress + 0.2 / 11.0) : 0
         }
+        // Auto-dismiss to the HUD when BOTH sovereignty properties are confirmed.
+        .onChange(of: sensorConfirmed) { _ in dismissIfBothSovereign() }
+        .onChange(of: coordinator.phase) { _ in dismissIfBothSovereign() }
     }
 
     // While the watch holds the pod, this screen is opened from a specific main-HUD
