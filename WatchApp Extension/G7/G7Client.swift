@@ -677,7 +677,21 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         switch central.state {
         case .poweredOn:
             log("Bluetooth poweredOn")
-            if wantConnect && !scanWindowStarted && peripheral == nil { beginScan() }
+            // Fires both on the FIRST start (connect() created the central and is waiting
+            // for BT) and when BT is toggled back ON mid-session. Both want a fresh acquire.
+            // Two fixes here:
+            //  • WEDGE: a stale `peripheral` left over from before a power-off used to block
+            //    the old `peripheral == nil` gate → the reader stalled until relaunch. Clear
+            //    the stale link (+ scan flag) unconditionally so recovery always proceeds.
+            //  • COLD START: go through beginAcquire (not a bare beginScan), so a fresh launch
+            //    uses the non-throttled targeted connect (retrievePeripherals) before falling
+            //    back to a scan — the first-connect path the bare scan previously bypassed.
+            guard wantConnect else { return }
+            if let p = peripheral, p.state != .connected { central.cancelPeripheralConnection(p) }
+            peripheral = nil
+            scanWindowStarted = false
+            attemptActive = true
+            beginAcquire()
         case .poweredOff:
             log("Bluetooth is powered OFF")
             if attemptActive { finishAttempt(success: false, message: "Bluetooth is off") }
