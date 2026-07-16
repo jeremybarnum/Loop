@@ -725,6 +725,12 @@ extension WatchDataManager: WCSessionDelegate {
         if let priorDosing = dosingEnabledBeforeWatchLoan {
             deviceManager.loopManager.mutateSettings { $0.dosingEnabled = priorDosing }
             dosingEnabledBeforeWatchLoan = nil
+            // Clear any crash-recovery flag stranded by the loan grant (a loop enact
+            // racing the pod-connection release never completes → the flag stays armed
+            // the whole loan). Dosing was paused during the loan, so an armed flag here
+            // is a grant-race artifact, not a real in-flight dose — clearing it at
+            // hand-back stops a false "Loop Crashed" on a later reboot.
+            deviceManager.crashRecoveryManager.dosingFinished()
         }
 
         // Phase 2 (DIST-3): reconcile the watch's delivery into IOB — guarded against
