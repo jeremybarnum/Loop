@@ -1227,8 +1227,14 @@
     "Closed Loop" : {
       "comment" : "Loop screen state title (closed)"
     },
+    "Connected" : {
+      "comment" : "Activation: pod connected"
+    },
     "Connecting to the pod…" : {
       "comment" : "Sport Mode takeover step: establishing the pod session"
+    },
+    "Connecting…" : {
+      "comment" : "Activation: establishing the pod session"
     },
     "Continue" : {
       "comment" : "Button text to continue from carb entry to bolus entry on Apple Watch",
@@ -1360,6 +1366,9 @@
           }
         }
       }
+    },
+    "Couldn't reach pod" : {
+      "comment" : "Activation: pod takeover failed"
     },
     "Couldn't start Sport Mode" : {
       "comment" : "A title displayed when the watch can't start Sport Mode.",
@@ -1610,6 +1619,9 @@
     "Eventual" : {
       "comment" : "HUD row: predicted eventual glucose in Sport Mode"
     },
+    "Finding sensor…" : {
+      "comment" : "Activation: watch has not yet read the sensor directly"
+    },
     "g" : {
       "comment" : "Short unit label for gram measurement\nThe short unit display string for grams",
       "localizations" : {
@@ -1743,6 +1755,9 @@
     },
     "Glucose is %d min old — the loop stopped adjusting basal. The last temp expires on the pod's own timer. Check your sensor." : {
       "comment" : "Alert body: closed loop paused on stale glucose"
+    },
+    "Go to Sport Mode" : {
+      "comment" : "Activation: proceed to the HUD before the sensor confirms"
     },
     "In Sport Mode" : {
 
@@ -2984,6 +2999,9 @@
         }
       }
     },
+    "Pod" : {
+      "comment" : "Activation: pod link status label"
+    },
     "Pod isn't responding" : {
 
     },
@@ -3319,6 +3337,9 @@
         }
       }
     },
+    "Reading directly" : {
+      "comment" : "Activation: watch is reading the sensor via its own radio"
+    },
     "Rec: %@ U" : {
       "comment" : "The label and value showing the recommended bolus",
       "extractionState" : "manual",
@@ -3628,6 +3649,9 @@
     },
     "Requesting from iPhone…" : {
       "comment" : "Sport Mode takeover step: awaiting the phone's grant"
+    },
+    "Requesting…" : {
+      "comment" : "Activation: awaiting the phone's grant"
     },
     "Reservoir Volume" : {
       "comment" : "HUD row title for remaining reservoir volume",
@@ -4101,6 +4125,9 @@
           }
         }
       }
+    },
+    "Sensor" : {
+      "comment" : "Activation: CGM-direct status label"
     },
     "Session Basal" : {
       "comment" : "HUD row: net basal insulin delivered vs schedule during Sport Mode"
