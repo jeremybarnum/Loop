@@ -127,6 +127,14 @@ final class WatchPredictionEngine {
     /// carb+bolus flow). Cleared after each run.
     private var pendingCarb: NewCarbEntry?
 
+    /// Dedup key for the "predict:" reconciliation register so it emits ONE line per
+    /// genuinely new cycle, not per redundant recompute. Keyed on the anchor sample's
+    /// identity + dose/carb counts + the temp recommendation — deliberately excluding
+    /// age/eventual/IOB/COB, which drift every run (date = Date()) and would defeat the
+    /// dedup. A new CGM reading (new anchor startDate), a new/changed dose, a new carb,
+    /// or a none↔temp flip all change the key and still log.
+    private var lastLoggedPredictSignature: String?
+
     init(loopManager: LoopDataManager, coordinator: WatchPodLoanCoordinator) {
         self.loopManager = loopManager
         self.coordinator = coordinator
@@ -432,7 +440,14 @@ final class WatchPredictionEngine {
                 }
                 let anchorBG = history.last.map { Int($0.quantity.doubleValue(for: mgdl)) } ?? -1
                 let anchorAge = history.last.map { Int(date.timeIntervalSince($0.startDate)) } ?? -1
-                fileLog("predict: anchor=\(anchorBG)mg/dL age=\(anchorAge)s nBG=\(history.count) nDose=\(doses.count) nCarb=\(carbEntries.count) eventual=\(Int(eventual.doubleValue(for: mgdl))) fx[ins=\(net(prediction.effects.insulin)) carb=\(net(prediction.effects.carbs)) mom=\(net(prediction.effects.momentum)) rc=\(net(prediction.effects.retrospectiveCorrection))] temp=\(recommendation.basalAdjustment.map { String(format: "%.2f U/hr·%.0fm", $0.unitsPerHour, $0.duration.minutes) } ?? "none") IOB=\(String(format: "%.2f", activeInsulin)) COB=\(String(format: "%.0f", activeCarbs))")
+                let tempStr = recommendation.basalAdjustment.map { String(format: "%.2f U/hr·%.0fm", $0.unitsPerHour, $0.duration.minutes) } ?? "none"
+                // Emit one line per GENUINE cycle (see lastLoggedPredictSignature): dedup on the
+                // anchor identity + counts + temp, not the age/eventual/IOB/COB that drift each run.
+                let predictSignature = "\(history.last.map { String(Int($0.startDate.timeIntervalSince1970)) } ?? "-1")|nBG=\(history.count)|nDose=\(doses.count)|nCarb=\(carbEntries.count)|temp=\(tempStr)"
+                if predictSignature != self.lastLoggedPredictSignature {
+                    self.lastLoggedPredictSignature = predictSignature
+                    fileLog("predict: anchor=\(anchorBG)mg/dL age=\(anchorAge)s nBG=\(history.count) nDose=\(doses.count) nCarb=\(carbEntries.count) eventual=\(Int(eventual.doubleValue(for: mgdl))) fx[ins=\(net(prediction.effects.insulin)) carb=\(net(prediction.effects.carbs)) mom=\(net(prediction.effects.momentum)) rc=\(net(prediction.effects.retrospectiveCorrection))] temp=\(tempStr) IOB=\(String(format: "%.2f", activeInsulin)) COB=\(String(format: "%.0f", activeCarbs))")
+                }
 
                 completion(.success(WatchPredictionOutput(
                     date: date,

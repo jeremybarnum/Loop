@@ -56,6 +56,7 @@ class LoopDataManager {
     /// than our desired retry interval, so we allow multiple messages in-flight
     /// Main queue only
     private var lastGlucoseBackfill = Date.distantPast
+    private var lastCarbBackfill = Date.distantPast
 
     public let healthStore: HKHealthStore
 
@@ -111,6 +112,16 @@ extension LoopDataManager {
 
     func requestCarbBackfill() {
         dispatchPrecondition(condition: .onQueue(.main))
+
+        // Throttle like the glucose backfill above. Without this, WatchPredictionEngine.predict()
+        // requests a backfill on EVERY recompute; the phone's setSyncCarbObjects re-posts
+        // carbEntriesDidChange even when the carb set is byte-identical; the store then
+        // force-refreshes → predict() again → an unbounded recompute storm paced only by the
+        // WCSession round-trip (~52 full LoopAlgorithm passes/min — a real battery/CPU drain in
+        // Sport Mode and shadow mode). One request per 5 min breaks the feedback loop at its
+        // source; a genuinely new phone carb still syncs within a cycle.
+        guard Date().timeIntervalSince(lastCarbBackfill) >= .minutes(5) else { return }
+        lastCarbBackfill = Date()
 
         let start = min(Calendar.current.startOfDay(for: Date()), Date(timeIntervalSinceNow: -carbStore.maximumAbsorptionTimeInterval))
         let userInfo = CarbBackfillRequestUserInfo(startDate: start)
