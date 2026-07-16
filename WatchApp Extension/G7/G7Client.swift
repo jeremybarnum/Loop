@@ -428,6 +428,11 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     private static let savedPeripheralKey = "g7.savedPeripheralUUIDv1"
     private var reconnectArmedAt: Date?                // when the current pending connect was armed
     let reconnectWatchdog: TimeInterval = 400.0        // no connect in this long → fall back to scan
+    /// Cold reacquire: how long the targeted connect gets ALONE (one ~5-min advertising cycle
+    /// + margin) before we treat the saved handle as stale and fall back to a scan. No scan
+    /// runs during this window — a concurrent scan destabilized the fresh connection (build 69
+    /// instant-drops). With a good handle the targeted connect lands well inside this.
+    let coldScanFallbackDelay: TimeInterval = 330.0
     let chunkGap: UInt64 = 50_000_000    // 50 ms between 20-byte data-char chunks
     let chunkTail: UInt64 = 200_000_000  // 200 ms after a full bulk write
 
@@ -694,26 +699,31 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         peripheral.delegate = self
         reconnectArmedAt = Date()
         setStatus("Reconnecting…")
-        log("cold reacquire: targeted connect → \(p.identifier) ∥ parallel scan")
-        central.connect(p, options: nil)                                   // PRIMARY: non-throttled
-        central.scanForPeripherals(withServices: nil,                      // SAFETY NET: concurrent
-                                   options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+        log("cold reacquire: targeted connect → \(p.identifier) (scan fallback after \(Int(coldScanFallbackDelay))s)")
+        // TARGETED CONNECT ONLY — no concurrent scan. Scanning while a fresh connection is
+        // being established was destabilizing it (build 69: connect → instant "device has
+        // disconnected" before the handshake, ONLY on this cold path; the scan-free warm path
+        // never dropped). With a good saved handle — the common case — the targeted connect
+        // catches the next ~5-min advertisement cleanly and cheaply, and no scan ever runs.
+        central.connect(p, options: nil)
 
-        // One watchdog for BOTH paths: give up only if neither connects within a full grid
-        // cycle+ (the targeted connect gets time to catch the next ~5-min advertisement, and
-        // the scan runs alongside for a stale handle). On give-up, tear both down and let the
-        // predictive scheduler retry the next window.
+        // DELAYED fallback: only if the targeted connect hasn't fired within one advertising
+        // cycle+ (coldScanFallbackDelay) — meaning the saved handle is stale (a new/changed
+        // sensor the OS still resolves, or a dead bond) — drop it and scan to rediscover. That
+        // keeps the scan a genuine corner case (new sensors are normally seeded via onboarding
+        // pre-warm), removes the concurrent-scan interference, and saves an always-on scan's
+        // battery. A successful scan re-persists the real handle → self-healing.
         scanTimeoutWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in
+        let fallback = DispatchWorkItem { [weak self] in
             guard let self, self.attemptActive, self.peripheral?.state != .connected else { return }
-            log("cold reacquire quiet \(Int(self.reconnectWatchdog))s — giving up (scheduler retries)")
-            self.central.stopScan()
+            log("cold reacquire: targeted connect quiet \(Int(self.coldScanFallbackDelay))s — handle likely stale, falling back to scan")
             self.central.cancelPeripheralConnection(p)
+            self.savedPeripheral = nil
             self.peripheral = nil
-            self.finishAttempt(success: false, message: "No G7 sensor found (in range?)")
+            self.beginScan()   // beginScan arms its own scan-window timeout → finishAttempt if empty
         }
-        scanTimeoutWork = work
-        cbQueue.asyncAfter(deadline: .now() + reconnectWatchdog, execute: work)
+        scanTimeoutWork = fallback
+        cbQueue.asyncAfter(deadline: .now() + coldScanFallbackDelay, execute: fallback)
     }
 
     /// Pending-connect reacquire (no scan): re-arm connect() on the held bonded peripheral so the
