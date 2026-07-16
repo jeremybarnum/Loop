@@ -123,7 +123,7 @@
                                                         <action selector="openPodControl" destination="rNf-Mh-tID" id="p9f-dP-MI2"/>
                                                     </connections>
                                                 </button>
-                                                <label alignment="center" text="Show Mode" id="f5G-bS-9pd">
+                                                <label alignment="center" text="Sport Mode" id="f5G-bS-9pd">
                                                     <fontDescription key="font" style="UICTFontTextStyleFootnote"/>
                                                 </label>
                                             </items>
