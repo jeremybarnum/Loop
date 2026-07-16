@@ -43,19 +43,25 @@ public final class PumpStatusHUDView: DeviceStatusHUDView, NibLoadable {
     }
 
     override public func presentStatusHighlight() {
-        guard !statusStackView.arrangedSubviews.contains(statusHighlightView) else {
-            return
-        }
-        
-        // need to also hide these view, since they will be added back to the stack at some point
+        // Hide the pump-provided pod HUD and the basal-rate HUD whenever a highlight
+        // is shown — UNCONDITIONALLY, even if the highlight view is already in the
+        // stack. The caller re-adds the pod HUD (visible) on every re-render; guarding
+        // the whole method on "already present" (as before) left that re-added pod
+        // glyph sitting next to the highlight, widening the tile — the "On Watch is
+        // too wide, the pod is still there" regression, surfaced by more frequent
+        // re-renders. removeArrangedSubview/isHidden are idempotent, so this is safe
+        // to run every time; only the highlight-add step below stays idempotent.
         basalRateHUD.isHidden = true
         statusStackView.removeArrangedSubview(basalRateHUD)
-        
+
         if let pumpManagerProvidedHUD = pumpManagerProvidedHUD {
             pumpManagerProvidedHUD.isHidden = true
             statusStackView.removeArrangedSubview(pumpManagerProvidedHUD)
         }
 
+        guard !statusStackView.arrangedSubviews.contains(statusHighlightView) else {
+            return
+        }
         super.presentStatusHighlight()
     }
     
