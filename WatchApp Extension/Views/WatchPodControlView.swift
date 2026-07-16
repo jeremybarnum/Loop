@@ -319,7 +319,7 @@ struct ShowModeDoseView: View {
         var unit: String { self == .bolus ? "U" : "U/hr" }
         var max: Double {
             self == .bolus ? WatchPodLoanCoordinator.maxBolusUnits
-                           : WatchPodLoanCoordinator.maxTempBasalRate
+                           : ExtensionDelegate.shared().podLoanCoordinator.maxTempBasalRate
         }
         var defaultAmount: Double {
             self == .bolus ? WatchPodLoanCoordinator.defaultBolusUnits

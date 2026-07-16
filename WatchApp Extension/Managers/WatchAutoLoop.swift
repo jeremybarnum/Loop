@@ -313,25 +313,32 @@ final class WatchAutoLoop: ObservableObject {
         // the phone, applied here so both the log and the pod see the same number:
         var rate = temp.unitsPerHour
 
-        // P0#3 — clamp to the pod layer's hard proof cap so the ENACT log and the
-        // pod agree. Without this the pod silently re-caps (proof limit) and the
-        // trail overstates what was delivered. Fires only if therapy max > cap.
-        let proofCap = WatchPodLoanCoordinator.maxTempBasalRate
-        if rate > proofCap {
-            fileLog(String(format: "closed loop CLAMP (%@): %.2f → %.2f U/hr (proof cap)", trigger, rate, proofCap))
-            rate = proofCap
+        // P0#3 / cap — clamp to the operating ceiling (the wearer's therapy max-basal,
+        // which the coordinator also programs as the pod's proof limit) so the ENACT
+        // log and the pod agree. A no-op for the closed loop (generateRecommendation
+        // already bounds by max-basal); it bites only on a bug.
+        let cap = coordinator.maxTempBasalRate
+        if rate > cap {
+            fileLog(String(format: "closed loop CLAMP (%@): %.2f → %.2f U/hr (max-basal cap)", trigger, rate, cap))
+            rate = cap
         }
 
-        // P0#1 — IOB clamp. Once active insulin is at/over the automatic-dosing
-        // ceiling (maxBolus×2, the phone's automaticDosingIOBLimit), refuse to ADD
-        // insulin above the scheduled basal; hold at schedule instead. Reductions
-        // and zero-temps (a predicted low pulling delivery down) always pass.
+        // P0#1 — IOB clamp, EXACT parity with the phone's tempBasalOnly path. The phone
+        // passes `additionalActiveInsulinClamp: iobHeadroom` into DoseMath.recommendedTempBasal
+        // (LoopDataManager.swift:2003); the watch's generateRecommendation `.tempBasal`
+        // case does NOT, so we apply the identical clamp here (DoseMath.swift:426):
+        //   iobHeadroom = maxBolus×2 − IOB
+        //   maxRate     = iobHeadroom×2 + scheduledBasalRate   (30-min rate keeping IOB < limit)
+        // Applying min(rate, maxRate) to the already-max-basal-bounded recommendation is
+        // identical to the phone's min(maxBasalRate, maxRate) → asTempBasal. Flooring at 0
+        // turns an over-limit state (negative headroom) into a zero temp (auto de-stack).
         if let maxBolus = ExtensionDelegate.shared().loopManager.settings.maximumBolus {
-            let iobLimit = maxBolus * 2.0
-            if output.activeInsulin >= iobLimit && rate > output.scheduledBasalRate {
-                fileLog(String(format: "closed loop IOB-CLAMP (%@): IOB %.2f ≥ limit %.2f — holding at schedule %.2f (was %.2f)",
-                               trigger, output.activeInsulin, iobLimit, output.scheduledBasalRate, rate))
-                rate = output.scheduledBasalRate
+            let iobHeadroom = maxBolus * 2.0 - output.activeInsulin
+            let maxRateForIOB = max(0, iobHeadroom * 2.0 + output.scheduledBasalRate)
+            if rate > maxRateForIOB {
+                fileLog(String(format: "closed loop IOB-CLAMP (%@): IOB %.2f headroom %.2f → cap %.2f U/hr (was %.2f)",
+                               trigger, output.activeInsulin, iobHeadroom, maxRateForIOB, rate))
+                rate = maxRateForIOB
             }
         }
 

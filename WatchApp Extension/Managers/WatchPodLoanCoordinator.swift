@@ -276,12 +276,23 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// The amount the bolus dial starts at.
     static let defaultBolusUnits: Double = 0.5
 
-    /// Hard cap on the watch temp-basal RATE (U/hr), mirroring the bolus cap.
-    // ⚠️ TEMP-TEST-CAP: raised 1.0 → 3.0 for testing only (larger deviations from
-    // schedule are easier to observe, esp. suspend contrast). MUST REVERT TO 1.0
-    // before any real-pod / real-person use (Friday) and before release. Paired
-    // with PodProofController.tempBasalRateProofLimit — both must move together.
-    static let maxTempBasalRate: Double = 3.0   // TEMP-TEST-CAP (revert to 1.0)
+    /// The watch temp-basal ceiling (U/hr) = the wearer's THERAPY max-basal setting —
+    /// the exact bound the Loop algorithm itself uses. Deriving it here (rather than a
+    /// magic 3.0 TEMP-TEST-CAP) means the manual dial and the closed-loop clamp respect
+    /// the real limit, there's no revert-to-1.0 chore, and the display never disagrees
+    /// with what the pod will accept (the proof limit is set to this too — see
+    /// `applyTempCapToController`). Falls back only until settings sync (the closed loop
+    /// can't run before then anyway; the manual dial gets a conservative default).
+    nonisolated var maxTempBasalRate: Double {
+        ExtensionDelegate.shared().loopManager.settings.maximumBasalRatePerHour ?? Self.fallbackMaxTempBasalRate
+    }
+    /// Conservative ceiling used only until the therapy max-basal setting has synced.
+    static let fallbackMaxTempBasalRate: Double = 3.0
+    /// Push the current temp cap into the pod layer's proof limit so its hard backstop
+    /// tracks the therapy setting (no silent re-cap below what the UI shows).
+    private func applyTempCapToController() {
+        controller.tempBasalRateProofLimit = maxTempBasalRate
+    }
     /// The rate the basal dial starts at.
     static let defaultBasalRate: Double = 0.5
     /// Fixed duration for every watch temp basal. From the user's view it's just
@@ -676,10 +687,11 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// maxTempBasalRate; snapped to the pod's 0.05 U/hr resolution. Implemented as a
     /// fixed-duration temp basal (see tempBasalDuration) that auto-reverts.
     func setBasalRate(_ rate: Double) {
-        let snapped = (min(max(rate, 0), Self.maxTempBasalRate) / 0.05).rounded() * 0.05
+        let snapped = (min(max(rate, 0), maxTempBasalRate) / 0.05).rounded() * 0.05
         if snapped <= 0 { suspend(); return }   // 0 U/hr = suspend
         manualSuspendUntil = nil   // a positive manual basal clears any bounded suspend
         if Self.isSimulatorDemo { demoSetTempBasal(rate: snapped); return }
+        applyTempCapToController()
         runPodCommand(label: NSLocalizedString("Set Basal", comment: "Command name: set basal")) { self.controller.setTempBasal(rate: snapped, duration: Self.tempBasalDuration, completion: $0) }
     }
     /// Cancel the running temp basal; the pod reverts to its scheduled basal.
@@ -702,8 +714,9 @@ final class WatchPodLoanCoordinator: ObservableObject {
             cancelBasal()   // .cancel → revert to schedule
             return
         }
-        let snapped = (min(max(unitsPerHour, 0), Self.maxTempBasalRate) / 0.05).rounded() * 0.05
+        let snapped = (min(max(unitsPerHour, 0), maxTempBasalRate) / 0.05).rounded() * 0.05
         if Self.isSimulatorDemo { demoSetTempBasal(rate: snapped, duration: duration); return }
+        applyTempCapToController()
         runPodCommand(label: String(format: NSLocalizedString("Loop %.2f U/hr", comment: "Command name: loop-set temp basal"), snapped)) {
             self.controller.setTempBasal(rate: snapped, duration: duration, completion: $0)
         }

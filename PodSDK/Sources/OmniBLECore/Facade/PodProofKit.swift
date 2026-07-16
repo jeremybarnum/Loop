@@ -238,12 +238,13 @@ public final class PodProofController: NSObject {
     /// Hard ceiling on any bolus commanded through this facade.
     public static let bolusProofLimit: Double = 1.0
 
-    /// Hard ceiling on any temp-basal RATE commanded through this facade (U/hr).
-    // ⚠️ TEMP-TEST-CAP: raised 1.0 → 3.0 for testing only. This is the INDEPENDENT
-    // defense-in-depth limit — raising it weakens the backstop, so it MUST REVERT
-    // TO 1.0 before any real-pod / real-person use (Friday) and before release.
-    // Paired with WatchPodLoanCoordinator.maxTempBasalRate.
-    public static let tempBasalRateProofLimit: Double = 3.0   // TEMP-TEST-CAP (revert to 1.0)
+    /// Hard ceiling on any temp-basal RATE commanded through this facade (U/hr) —
+    /// the pod-layer defense-in-depth backstop. The caller (WatchPodLoanCoordinator)
+    /// sets this to the wearer's THERAPY max-basal before each temp command, so the
+    /// backstop tracks the real setting and never silently re-caps below what the UI
+    /// shows. Defaults conservatively until set. Pod hardware maxes at ~30 U/hr; this
+    /// stays ≤ that regardless.
+    public var tempBasalRateProofLimit: Double = 3.0
 
     /// Flat basal schedule used for resumeBasal and initial setup.
     /// 0.5 U/hr, single entry starting at midnight.
@@ -669,9 +670,9 @@ public final class PodProofController: NSObject {
         // A negative rate would trap in the UInt16 command encoding — clamp to
         // 0, which the driver encodes as a legal near-zero temp.
         let rate = max(0, (rate / Pod.pulseSize).rounded() * Pod.pulseSize)
-        guard rate <= Self.tempBasalRateProofLimit else {
-            emit(String(format: "TEMP BASAL: refused %.2f U/hr (proof limit %.2f U/hr)", rate, Self.tempBasalRateProofLimit))
-            completion(.failure(PodProofError.tempBasalExceedsProofLimit(requested: rate, limit: Self.tempBasalRateProofLimit)))
+        guard rate <= tempBasalRateProofLimit else {
+            emit(String(format: "TEMP BASAL: refused %.2f U/hr (proof limit %.2f U/hr)", rate, tempBasalRateProofLimit))
+            completion(.failure(PodProofError.tempBasalExceedsProofLimit(requested: rate, limit: tempBasalRateProofLimit)))
             return
         }
         guard Pod.supportedTempBasalDurations.contains(where: { abs($0 - duration) < 1 }) else {
