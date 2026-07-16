@@ -298,6 +298,9 @@ final class DeviceDataManager {
             // loan-end stops a false "Loop Crashed" on a later reboot.
             crashRecoveryManager.dosingFinished()
         }
+        // A1: re-arm the loop-not-running watchdog from now (loan ended via escape hatch;
+        // the phone resumes looping, so a genuine post-loan stall still alerts ~20 min later).
+        alertManager.rescheduleLoopNotRunningNotifications(Date())
         // DESIGN-6: tell the watch its loan is over. WatchDataManager owns the
         // WC session, so it observes this and queues the revoke message.
         NotificationCenter.default.post(name: .PodLoanReclaimedViaEscapeHatch, object: self)
@@ -475,6 +478,9 @@ final class DeviceDataManager {
         // Sport Mode: let LoopDataManager see the loan state so it suppresses the
         // cancel-active-temp-basal reflex during a loan (see LoopDataManager.isPodLoanedToWatch).
         loopManager.isPodLoanedToWatch = { [weak self] in self?.podLoanedToWatch == true }
+        // …and let AlertManager suppress the loop-not-running watchdog during a loan
+        // (the phone's loop is paused by design — see A1 cancel/re-arm at the loan boundaries).
+        alertManager.isPodLoanedToWatch = { [weak self] in self?.podLoanedToWatch == true }
         loopManager.presetActivationObservers.append(alertManager)
         loopManager.presetActivationObservers.append(analyticsServicesManager)
 
