@@ -282,6 +282,26 @@ public final class AlertManager {
         }
     }
 
+    /// FULLY cancel the loop-not-running watchdog: remove DELIVERED and still-PENDING
+    /// (scheduled) notifications and forget the tracking list. Use this when suppressing
+    /// the watchdog for a watch loan — unlike clearLoopNotRunningNotifications(), which is
+    /// always paired with an immediate re-schedule that replaces the pendings by
+    /// identifier. Called standalone (no re-schedule), so it must remove the pending
+    /// timers itself, or the pre-loan +20/40/60/120-min 'Loop Failure' alerts still fire.
+    func cancelLoopNotRunningNotifications() {
+        let center = UNUserNotificationCenter.current()
+        let category = LoopNotificationCategory.loopNotRunning.rawValue
+        center.getPendingNotificationRequests { requests in
+            let ids = requests.filter { $0.content.categoryIdentifier == category }.map { $0.identifier }
+            center.removePendingNotificationRequests(withIdentifiers: ids)
+        }
+        center.getDeliveredNotifications { notifications in
+            let ids = notifications.filter { $0.request.content.categoryIdentifier == category }.map { $0.request.identifier }
+            center.removeDeliveredNotifications(withIdentifiers: ids)
+        }
+        UserDefaults.appGroup?.loopNotRunningNotifications = []
+    }
+
     private func getLastLoopDate() -> Date? {
         ExtensionDataManager.lastLoopCompleted
     }

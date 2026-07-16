@@ -666,10 +666,11 @@ extension WatchDataManager: WCSessionDelegate {
             deviceManager.podLoanedToWatch = true
             startWatchLoanPollingIfNeeded()   // 3b v2: begin polling the watch for its status
             // A1: the phone's loop pauses for the loan (dosing off + pod released), so it
-            // will legitimately stop completing. Cancel the already-queued loop-not-running
-            // notifications now (gating alone can't retract them); the podLoanedToWatch gate
-            // then blocks any stray re-arm until the loan ends.
-            deviceManager.alertManager.clearLoopNotRunningNotifications()
+            // will legitimately stop completing. FULLY cancel the already-queued
+            // loop-not-running notifications now — including the still-PENDING scheduled
+            // timers (clearLoopNotRunningNotifications alone only removes DELIVERED ones);
+            // the podLoanedToWatch gate then blocks any stray re-arm until the loan ends.
+            deviceManager.alertManager.cancelLoopNotRunningNotifications()
             // Capture the pre-loan dosing state and pause automatic dosing — but
             // ONLY on the first grant of a loan. A repeat borrow (e.g. the watch
             // retried after a failed takeover) must NOT re-capture: by then dosing
