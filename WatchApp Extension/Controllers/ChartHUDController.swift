@@ -303,7 +303,11 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
                         ? NSLocalizedString("✓ just now", comment: "G7 Direct row: read within the last minute")
                         : String(format: NSLocalizedString("✓ %dm ago", comment: "G7 Direct row: minutes since the last direct read"), mins))
                 } else {
-                    cell.setDetail(NSLocalizedString("no direct read", comment: "G7 Direct row: the watch has not read the sensor itself this session"))
+                    // No direct read yet (the onboarding wait): show the EXPECTED time to the
+                    // first read instead of a bare "no read". The G7 advertises on a ~5-min
+                    // grid, so ≤5 min is the honest worst-case bound (matches the activation
+                    // screen). Flips to "✓ …" the moment a read lands.
+                    cell.setDetail(NSLocalizedString("expected ~5 min", comment: "G7 Direct row: expected time to the first direct read while onboarding"))
                 }
             case .eventualBG:
                 if let output = store.latestOutput, !store.isAnchorStale {

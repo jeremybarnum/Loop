@@ -275,7 +275,7 @@ struct WatchPodControlView: View {
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.top, 2)
-                Button(NSLocalizedString("Got it", comment: "Activation: dismiss into the Sport Mode HUD")) { dismiss() }
+                Button(NSLocalizedString("OK", comment: "Activation: dismiss into the Sport Mode HUD")) { dismiss() }
                     .font(.footnote)
                     .padding(.top, 2)
             }
