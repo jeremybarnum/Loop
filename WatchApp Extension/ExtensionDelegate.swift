@@ -386,6 +386,15 @@ extension ExtensionDelegate: WCSessionDelegate {
             Task { @MainActor in
                 self.podLoanCoordinator.handleLoanRevoked(revokedAt: revoke.revokedAt)
             }
+        case SensorCodeUserInfo.name:
+            // Component A: the phone captured a new sensor's pairing code and relayed it.
+            // Hand it to the G7 reader so its next handshake authenticates the new sensor
+            // (no watch prompt needed in the common case).
+            guard let info = SensorCodeUserInfo(rawValue: userInfo) else {
+                log.error("Could not decode SensorCodeUserInfo: %{public}@", userInfo)
+                return
+            }
+            g7.client.applySensorCode(info.code)
         case "WatchContext":
             // WatchContext is the only userInfo type without a "name" key. This isn't a great heuristic.
             updateContext(userInfo)

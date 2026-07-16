@@ -20,6 +20,8 @@ extension UserDefaults {
         case lastReconciledWatchLoanJournalHash = "com.loopkit.Loop.LastReconciledWatchLoanJournalHash"
         case dosingEnabledBeforeWatchLoan = "com.loopkit.Loop.DosingEnabledBeforeWatchLoan"
         case pendingPodLoanRevokeDate = "com.loopkit.Loop.PendingPodLoanRevokeDate"
+        case sensorPairingCodes = "com.loopkit.Loop.SensorPairingCodes"
+        case lastSeenSensorID = "com.loopkit.Loop.LastSeenSensorID"
     }
 
     /// SHA-256 hex digest of the last watch-loan journal whose doses were reconciled
@@ -44,6 +46,28 @@ extension UserDefaults {
     var pendingPodLoanRevokeDate: Date? {
         get { object(forKey: Key.pendingPodLoanRevokeDate.rawValue) as? Date }
         set { set(newValue, forKey: Key.pendingPodLoanRevokeDate.rawValue) }
+    }
+
+    /// Per-sensor G7 pairing codes (Component A): sensorID → 4-digit code. Captured on the
+    /// phone when the CGM reports a new sensor, and relayed to the watch. Low-sensitivity
+    /// (a 4-digit pairing PIN); kept out of logs.
+    var sensorPairingCodes: [String: String] {
+        get { dictionary(forKey: Key.sensorPairingCodes.rawValue) as? [String: String] ?? [:] }
+        set { set(newValue, forKey: Key.sensorPairingCodes.rawValue) }
+    }
+
+    func sensorPairingCode(for sensorID: String) -> String? { sensorPairingCodes[sensorID] }
+    func setSensorPairingCode(_ code: String, for sensorID: String) {
+        var codes = sensorPairingCodes
+        codes[sensorID] = code
+        sensorPairingCodes = codes
+    }
+
+    /// The most recent G7 sensorID the phone has seen a `.sensorStart` for — so a repeated
+    /// start event for the SAME sensor doesn't re-prompt.
+    var lastSeenSensorID: String? {
+        get { string(forKey: Key.lastSeenSensorID.rawValue) }
+        set { set(newValue, forKey: Key.lastSeenSensorID.rawValue) }
     }
 
     var legacyPumpManagerRawValue: PumpManager.RawValue? {

@@ -311,8 +311,64 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             if !autoRepeat { cancelAutoRepeat() }
         }
     }
-    /// 4-digit sensor pairing code (default 3102). Editable in the UI. TODO: per-sensor.
-    @Published var pin: String = "3102"
+    /// The active sensor's 4-digit pairing code. PERSISTED so it survives relaunch. Set by
+    /// (a) the phone relaying a new sensor's code (primary — Component A), (b) the watch's
+    /// just-in-time prompt on a wrong-code auth failure (fallback), or (c) the current bench
+    /// sensor's default. There's ONE active sensor at a time, so a single current-code is
+    /// enough on the watch; the phone owns the per-sensor-ID keying + relay.
+    static let sensorCodeKey = "g7.sensorCodeV1"
+    @Published var pin: String = UserDefaults.standard.string(forKey: "g7.sensorCodeV1") ?? "3102" {
+        didSet { UserDefaults.standard.set(pin, forKey: Self.sensorCodeKey) }
+    }
+
+    /// Apply a sensor pairing code (from the phone relay or the JIT prompt). Digits-only,
+    /// exactly 4; ignored otherwise. Takes effect on the next connect attempt. Clears the
+    /// `needsSensorCode` prompt flag.
+    func applySensorCode(_ code: String) {
+        let digits = String(code.filter { $0.isNumber })
+        guard digits.count == 4 else { return }
+        onMain { self.pin = digits; self.needsSensorCode = false }
+        log("sensor code applied (\(digits.count) digits)")
+    }
+
+    /// FALLBACK trigger (Component A): set when a connect reaches the sensor but the code is
+    /// WRONG (aesVerifyFailed) — the watch UI shows a just-in-time code prompt. Cleared by
+    /// applySensorCode. The phone-primary relay normally sets the code before we ever get
+    /// here, so this is the safety net (older phone / race / mistyped).
+    @Published var needsSensorCode: Bool = false
+
+    /// Consecutive aesVerifyFailed count — the JIT prompt fires only after this REPEATS, so a
+    /// rare transient decrypt glitch (a dropped BLE chunk also surfaces as aesVerifyFailed)
+    /// doesn't nag. Reset on any successful read.
+    private var consecutiveAuthFailures = 0
+
+    #if FAKE_NEW_SENSOR
+    // MARK: - Test hooks (Component E) — exercise the new-sensor path WITHOUT burning a real
+    // sensor. Compiled OUT of release builds; enable with `-D FAKE_NEW_SENSOR` (SWIFT_ACTIVE_
+    // COMPILATION_CONDITIONS). Surfaced via a debug control in the watch UI.
+
+    /// TEST: forget the current sensor — clear the persisted bond identifier AND the stored
+    /// code, so the next attempt behaves like a brand-new sensor (must rediscover via scan and
+    /// needs a fresh code from the phone relay or the JIT prompt). Lets the ENTIRE first-time
+    /// path — code acquisition → handshake → bond → save identifier — run against the EXISTING
+    /// sensor, repeatably, for free (and it exercises the REAL handshake, not a mock). The one
+    /// thing it can't vary is the code value; that's what a single real new-sensor test covers.
+    func forgetCurrentSensor() {
+        cbQueue.async {
+            UserDefaults.standard.removeObject(forKey: Self.savedPeripheralKey)
+            self.savedPeripheral = nil
+        }
+        onMain { self.pin = ""; self.needsSensorCode = false; self.consecutiveAuthFailures = 0 }
+        log("TEST: forgot current sensor (cleared bond identifier + code)")
+    }
+
+    /// TEST: set a deliberately WRONG code so the next handshake fails aesVerifyFailed — to
+    /// exercise the fallback JIT prompt path without a real new sensor.
+    func injectWrongCode() {
+        onMain { self.pin = "0000"; self.consecutiveAuthFailures = 0 }
+        log("TEST: injected wrong code 0000")
+    }
+    #endif
 
     // MARK: Coexistence / whitelabeling probe (receiver-role experiment, task #1)
     /// Client SLOT/role byte — the trailing byte of the AES-auth request (see doAesAuth).
@@ -934,6 +990,8 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             try await handshake()
             finished = true
             log("*** SUCCESS — full G7 handshake to live glucose on iOS! ***")
+            consecutiveAuthFailures = 0
+            onMain { self.needsSensorCode = false }
             let g = await MainActor.run { self.glucose }
             let msg = g.map { "Glucose \($0) mg/dL" } ?? "Read complete (no value)"
             // Read done. Disconnect (the G7 will drop us in a few seconds anyway) and let the
@@ -941,6 +999,14 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             finishAttempt(success: true, message: msg)
         } catch {
             log("*** FAILED: \(error) ***")
+            // A WRONG CODE surfaces as aesVerifyFailed at the AES challenge step — but so can a
+            // rare dropped BLE chunk. Only raise the JIT code prompt after it REPEATS, so a
+            // transient decrypt glitch doesn't nag. (The phone-primary relay normally sets the
+            // right code before we ever reach here — this is the fallback.)
+            if case G7Error.aesVerifyFailed = error {
+                consecutiveAuthFailures += 1
+                if consecutiveAuthFailures >= 2 { onMain { self.needsSensorCode = true } }
+            }
             if attemptActive { finishAttempt(success: false, message: "Failed: \(error)") }
         }
     }

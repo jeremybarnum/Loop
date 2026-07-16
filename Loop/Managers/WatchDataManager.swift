@@ -28,6 +28,7 @@ final class WatchDataManager: NSObject {
         NotificationCenter.default.addObserver(self, selector: #selector(updateWatch(_:)), name: .LoopDataUpdated, object: deviceManager.loopManager)
         NotificationCenter.default.addObserver(self, selector: #selector(sendSupportedBolusVolumesIfNeeded), name: .PumpManagerChanged, object: deviceManager)
         NotificationCenter.default.addObserver(self, selector: #selector(sendPodLoanRevoke), name: .PodLoanReclaimedViaEscapeHatch, object: deviceManager)
+        NotificationCenter.default.addObserver(self, selector: #selector(sendSensorCodeToWatch(_:)), name: .SensorCodeCapturedForWatch, object: deviceManager)
         NotificationCenter.default.addObserver(self, selector: #selector(pollWatchLoanStatusOnForeground), name: UIApplication.didBecomeActiveNotification, object: nil)
 
         watchSession?.delegate = self
@@ -49,6 +50,20 @@ final class WatchDataManager: NSObject {
         }
         session.transferUserInfo(PodLoanRevokeUserInfo(revokedAt: Date()).rawValue)
         log.default("Pod loan revoke queued for watch")
+    }
+
+    /// Component A: DeviceDataManager captured a new sensor's pairing code (or is re-relaying
+    /// a known one). Push it to the watch — queued, so it survives the watch being asleep.
+    @objc private func sendSensorCodeToWatch(_ note: Notification) {
+        guard let code = note.userInfo?["code"] as? String,
+              let sensorID = note.userInfo?["sid"] as? String else { return }
+        let activatedAt = note.userInfo?["act"] as? Date
+        guard let session = watchSession, session.activationState == .activated else {
+            log.error("Sensor code relay deferred: watch session not activated")
+            return
+        }
+        session.transferUserInfo(SensorCodeUserInfo(code: code, sensorID: sensorID, activatedAt: activatedAt).rawValue)
+        log.default("Relayed sensor code to watch for sensor %{public}@", sensorID)
     }
 
     /// Queue a parked revoke (see sendPodLoanRevoke) once the session activates.

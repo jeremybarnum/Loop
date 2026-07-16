@@ -258,6 +258,52 @@ extension PodLoanRevokeUserInfo: RawRepresentable {
     }
 }
 
+// MARK: - Per-sensor pairing code (Component A — phone captures, watch authenticates)
+
+/// Phone → watch: the per-sensor 4-digit pairing code (+ the sensor ID and its activation
+/// time) so the watch's G7 reader can authenticate a NEW sensor. The phone captures the
+/// code once — prompted when its CGM reports `.sensorStart` — and RELAYS it here, so the
+/// watch never has to prompt in the common case. Queued via `transferUserInfo`, so it
+/// survives the watch being asleep/off-wrist and delivers on its next run. (Lives in this
+/// file to avoid pbxproj surgery — same pattern as PodLoanRevokeUserInfo above.)
+struct SensorCodeUserInfo {
+    let version = 1
+    let code: String        // 4-digit pairing code
+    let sensorID: String    // the G7 sensor name/ID this code belongs to
+    let activatedAt: Date?
+}
+
+extension SensorCodeUserInfo: RawRepresentable {
+    typealias RawValue = [String: Any]
+
+    static let name = "SensorCodeUserInfo"
+
+    init?(rawValue: RawValue) {
+        guard
+            rawValue["v"] as? Int == version,
+            rawValue["name"] as? String == SensorCodeUserInfo.name,
+            let code = rawValue["code"] as? String,
+            let sensorID = rawValue["sid"] as? String
+            else {
+                return nil
+        }
+        self.code = code
+        self.sensorID = sensorID
+        self.activatedAt = rawValue["act"] as? Date
+    }
+
+    var rawValue: RawValue {
+        var r: RawValue = [
+            "v": version,
+            "name": SensorCodeUserInfo.name,
+            "code": code,
+            "sid": sensorID
+        ]
+        if let activatedAt { r["act"] = activatedAt }
+        return r
+    }
+}
+
 // MARK: - Show-Mode status poll (3b v2 — phone-driven ownership indicator)
 
 /// Phone → watch, sent as a WCSession message (with reply handler) on the phone's
