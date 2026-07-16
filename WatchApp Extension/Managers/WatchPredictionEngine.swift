@@ -134,6 +134,10 @@ final class WatchPredictionEngine {
     /// dedup. A new CGM reading (new anchor startDate), a new/changed dose, a new carb,
     /// or a none↔temp flip all change the key and still log.
     private var lastLoggedPredictSignature: String?
+    /// Guards lastLoggedPredictSignature: the dedup check runs inside run()'s
+    /// group.notify(queue: .global) block, so overlapping predicts would otherwise race
+    /// on the String property (undefined behavior, not just a stray log line).
+    private let predictSignatureLock = NSLock()
 
     init(loopManager: LoopDataManager, coordinator: WatchPodLoanCoordinator) {
         self.loopManager = loopManager
@@ -444,8 +448,11 @@ final class WatchPredictionEngine {
                 // Emit one line per GENUINE cycle (see lastLoggedPredictSignature): dedup on the
                 // anchor identity + counts + temp, not the age/eventual/IOB/COB that drift each run.
                 let predictSignature = "\(history.last.map { String(Int($0.startDate.timeIntervalSince1970)) } ?? "-1")|nBG=\(history.count)|nDose=\(doses.count)|nCarb=\(carbEntries.count)|temp=\(tempStr)"
-                if predictSignature != self.lastLoggedPredictSignature {
-                    self.lastLoggedPredictSignature = predictSignature
+                self.predictSignatureLock.lock()
+                let shouldLogPredict = predictSignature != self.lastLoggedPredictSignature
+                if shouldLogPredict { self.lastLoggedPredictSignature = predictSignature }
+                self.predictSignatureLock.unlock()
+                if shouldLogPredict {
                     fileLog("predict: anchor=\(anchorBG)mg/dL age=\(anchorAge)s nBG=\(history.count) nDose=\(doses.count) nCarb=\(carbEntries.count) eventual=\(Int(eventual.doubleValue(for: mgdl))) fx[ins=\(net(prediction.effects.insulin)) carb=\(net(prediction.effects.carbs)) mom=\(net(prediction.effects.momentum)) rc=\(net(prediction.effects.retrospectiveCorrection))] temp=\(tempStr) IOB=\(String(format: "%.2f", activeInsulin)) COB=\(String(format: "%.0f", activeCarbs))")
                 }
 
