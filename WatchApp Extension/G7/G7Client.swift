@@ -365,6 +365,11 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         didSet { UserDefaults.standard.set(reconnectMode, forKey: "reconnectModeV1") }
     }
     private var savedPeripheral: CBPeripheral?         // bonded G7 held for pending reconnect
+    /// Persisted identifier of the bonded G7 so a COLD start (fresh app launch, which
+    /// loses `savedPeripheral`) can go straight to the non-throttled targeted-connect
+    /// path via retrievePeripherals — instead of a background-throttled scan that can
+    /// take many minutes to catch an advertising window (the observed 53-min gap).
+    private static let savedPeripheralKey = "g7.savedPeripheralUUIDv1"
     private var reconnectArmedAt: Date?                // when the current pending connect was armed
     let reconnectWatchdog: TimeInterval = 400.0        // no connect in this long → fall back to scan
     let chunkGap: UInt64 = 50_000_000    // 50 ms between 20-byte data-char chunks
@@ -543,7 +548,10 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     private func finishAttempt(success: Bool, message: String) {   // on cbQueue
         scanTimeoutWork?.cancel(); scanTimeoutWork = nil
         if central != nil, central.state == .poweredOn { central.stopScan() }
-        if success { savedPeripheral = peripheral }   // hold the bonded G7 for pending reconnect
+        if success, let p = peripheral {
+            savedPeripheral = p                        // hold the bonded G7 for pending reconnect
+            UserDefaults.standard.set(p.identifier.uuidString, forKey: Self.savedPeripheralKey)   // survive relaunch
+        }
         if let p = peripheral { central?.cancelPeripheralConnection(p) }
         dataStream.close(); authStream.close(); ctrlStream.close()
         attemptActive = false
@@ -583,6 +591,20 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     // MARK: Acquisition — scan (default) or pending-connect (A/B experiment)
 
     private func beginAcquire() {   // on cbQueue
+        // COLD-START reacquire: a fresh launch loses the in-memory savedPeripheral, so
+        // without this we drop to a background-throttled scan (the 53-min gap). Restore
+        // the bonded G7 by its persisted identifier and take the non-throttled targeted-
+        // connect path. If the restored peripheral is stale (a new sensor) or out of
+        // range, beginReconnect's watchdog falls back to a scan and finishAttempt then
+        // re-persists the real one — self-healing.
+        if reconnectMode, savedPeripheral == nil,
+           let uuidString = UserDefaults.standard.string(forKey: Self.savedPeripheralKey),
+           let uuid = UUID(uuidString: uuidString),
+           central?.state == .poweredOn,
+           let restored = central.retrievePeripherals(withIdentifiers: [uuid]).first {
+            savedPeripheral = restored
+            log("cold-start reacquire: restored bonded G7 \(restored.identifier) — targeted connect (no scan)")
+        }
         if reconnectMode, let saved = savedPeripheral {
             beginReconnect(saved)
         } else {
