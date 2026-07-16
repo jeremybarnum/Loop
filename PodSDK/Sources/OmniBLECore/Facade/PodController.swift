@@ -18,9 +18,9 @@
 //  run loop.
 //
 //  DANGER: this facade can command insulin delivery on a real pod once the
-//  BLE path works. It is intended ONLY for use against the pod emulator or
-//  saline pods. It enforces a hard 1.0 U bolus ceiling as defense in depth;
-//  the WatchProof app further limits boluses to 0.5 U.
+//  BLE path works. As defense in depth it enforces bolus/temp-basal proof
+//  limits that the caller sets to the wearer's therapy max-bolus / max-basal
+//  before each command (see WatchPodLoanCoordinator.applyControllerPrefs).
 //
 
 import Foundation
@@ -241,8 +241,12 @@ public final class PodController: NSObject {
     /// instead of a hard-coded flag. Defaults to SILENT (quiet/safe).
     public var commandBeepsEnabled: Bool = false
 
-    /// Hard ceiling on any bolus commanded through this facade.
-    public static let bolusProofLimit: Double = 1.0
+    /// Hard ceiling on any bolus commanded through this facade (U) — the pod-layer
+    /// defense-in-depth backstop. The caller (WatchPodLoanCoordinator) sets this to the
+    /// wearer's THERAPY max-bolus before each command (see applyControllerPrefs), so the
+    /// backstop tracks the real setting and never silently re-caps below what the UI
+    /// shows. Defaults conservatively until set.
+    public var bolusProofLimit: Double = 1.0
 
     /// Hard ceiling on any temp-basal RATE commanded through this facade (U/hr) —
     /// the pod-layer defense-in-depth backstop. The caller (WatchPodLoanCoordinator)
@@ -650,12 +654,12 @@ public final class PodController: NSObject {
         }
     }
 
-    /// Deliver a bolus. Hard-capped at bolusProofLimit (1.0 U); the WatchProof
-    /// app further restricts this to 0.5 U.
+    /// Deliver a bolus. Rate-capped at `bolusProofLimit`, which the caller sets to the
+    /// wearer's therapy max-bolus before each command (pod-layer defense-in-depth).
     public func bolus(units: Double, completion: @escaping (Result<PodControlStatus, Error>) -> Void) {
-        guard units <= Self.bolusProofLimit else {
-            emit(String(format: "BOLUS: refused %.2f U (proof limit %.2f U)", units, Self.bolusProofLimit))
-            completion(.failure(PodControlError.bolusExceedsProofLimit(requested: units, limit: Self.bolusProofLimit)))
+        guard units <= bolusProofLimit else {
+            emit(String(format: "BOLUS: refused %.2f U (proof limit %.2f U)", units, bolusProofLimit))
+            completion(.failure(PodControlError.bolusExceedsProofLimit(requested: units, limit: bolusProofLimit)))
             return
         }
         runCommand(named: String(format: "Bolus %.2f U", units), completion: journaling(.bolus(units: units), completion)) { session in

@@ -146,10 +146,10 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
                     Task { @MainActor in
                         guard let self else { return }
                         self.isComputingRecommendedBolus = false
-                        // Cap the SHOWN recommendation at what Sport Mode can actually deliver
-                        // (the pod-command bolus cap), so display == delivery — no surprise
-                        // clamp. Raising it for full meal boluses is a cap decision (needs the
-                        // Sport Mode cap AND the phone reconciliation cap raised together).
+                        // Bound the shown recommendation by the same therapy max-bolus the pod
+                        // command clamp uses (maxBolusUnits = settings.maximumBolus), so display
+                        // == delivery. The engine already caps at maximumBolus, so this is
+                        // normally a no-op — it just guarantees parity if the two ever skew.
                         let reco = (try? result.get())?.recommendedBolus ?? 0
                         self.recommendedBolusAmount = min(reco, WatchPodLoanCoordinator.maxBolusUnits)
                     }

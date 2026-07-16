@@ -272,9 +272,18 @@ final class WatchPodLoanCoordinator: ObservableObject {
     private var demoBolusTotal: Double = 0
     private var demoJournal: PodLoanJournal?
 
-    /// Hard cap on any single correction bolus from the watch (safety bound). The
-    /// dial can't exceed this. (BG-gating is a later phase; this is the current bound.)
-    static let maxBolusUnits: Double = 1.0
+    /// Ceiling on any single bolus from the watch = the wearer's THERAPY max-bolus
+    /// setting (settings.maximumBolus) — the exact bound Loop-on-the-phone uses. Mirrors
+    /// `maxTempBasalRate`: the manual dial, the Sport Mode meal-bolus reco, AND the pod
+    /// command clamp all respect the real therapy limit (no bench 1.0, no revert chore,
+    /// and the display never disagrees with what the pod will accept — the pod-facade
+    /// proof limit is set to this too, see `applyControllerPrefs`). Falls back to a
+    /// conservative value only until settings sync.
+    nonisolated static var maxBolusUnits: Double {
+        ExtensionDelegate.shared().loopManager.settings.maximumBolus ?? fallbackMaxBolusUnits
+    }
+    /// Conservative ceiling used only until the therapy max-bolus setting has synced.
+    static let fallbackMaxBolusUnits: Double = 1.0
     /// The amount the bolus dial starts at.
     static let defaultBolusUnits: Double = 0.5
 
@@ -304,6 +313,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// the watch has no independent code-only beep switch.
     private func applyControllerPrefs(automatic: Bool) {
         controller.tempBasalRateProofLimit = maxTempBasalRate
+        controller.bolusProofLimit = Self.maxBolusUnits
         controller.commandBeepsEnabled = automatic ? loanBeepsAutomatic : loanBeepsManual
     }
     /// The rate the basal dial starts at.

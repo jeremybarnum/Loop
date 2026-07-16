@@ -776,6 +776,15 @@ extension WatchDataManager: WCSessionDelegate {
 
         let insulinType = deviceManager.loopManager.pumpInsulinType
 
+        // Reconciliation caps track the phone's THERAPY settings, in lock-step with the
+        // watch (which caps its own doses at the same therapy max — see
+        // WatchPodLoanCoordinator.maxBolusUnits). If these stayed at a bench 1.0 while
+        // the watch delivered a full therapy-max meal bolus, the over-cap event would be
+        // rejected here and dropped from IOB (phantom un-accounted insulin → over-dose).
+        // A small epsilon covers pod pulse rounding / a momentary settings-sync skew.
+        let maxBolus = deviceManager.loopManager.settings.maximumBolus ?? 1.0
+        let bolusRejectCap = maxBolus + 0.05
+
         // ALL of this hand-back's records enter in ONE DoseStore write (single
         // atomic Core Data save): a partial reconcile — basal entered, boluses
         // lost — would understate IOB by the boluses (over-dosing direction) and,
@@ -788,13 +797,14 @@ extension WatchDataManager: WCSessionDelegate {
         // syncIdentifiers (journal-hash-derived, like the basal entries): the
         // CachedInsulinDeliveryObject uniqueness constraint then drops exact
         // re-entries (insert-or-ignore) if a duplicate ever slips past the hash
-        // guard. Defense-in-depth: the watch caps any single bolus at 1.0 U, so
-        // reject larger events (corrupt journal) rather than inject phantom IOB.
+        // guard. Defense-in-depth: the watch caps any single bolus at the therapy
+        // max-bolus, so reject only events ABOVE that (corrupt journal) rather than
+        // inject phantom IOB.
         var bolusSeq = 0
         for event in journal.events {
             if case .bolus(let units) = event.kind {
-                guard units > 0, units <= 1.05 else {
-                    log.error("Watch loan journal bolus event of %{public}.2f U exceeds the watch cap — rejected", units)
+                guard units > 0, units <= bolusRejectCap else {
+                    log.error("Watch loan journal bolus event of %{public}.2f U exceeds the therapy max-bolus cap (%{public}.2f U) — rejected", units, bolusRejectCap)
                     continue
                 }
                 entries.append(DoseEntry(type: .bolus,
@@ -852,7 +862,10 @@ extension WatchDataManager: WCSessionDelegate {
                         podDelta, odometer, journal.totalBolusUnits, expectedBasal, remainder)
 
             let remainderThreshold = 0.05   // one pod pulse; filters quantization/staleness noise
-            let remainderSanityCap = 5.0    // implausible for one loan — odometer corruption guard
+            // Odometer-corruption guard: a plausible single unaccounted dose can't exceed
+            // the therapy max-bolus (the watch's own ceiling). Scale with it so a legit
+            // large bolus isn't wrongly rejected, but never below the historical 5.0 floor.
+            let remainderSanityCap = max(5.0, maxBolus + 0.05)
             if remainder >= remainderThreshold && remainder <= remainderSanityCap {
                 // Timed LATE (at hand-back): zero decay elapsed → IOB maximally
                 // overstated for this insulin → Loop doses less → safe direction.
