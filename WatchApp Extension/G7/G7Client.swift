@@ -591,20 +591,11 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     // MARK: Acquisition — scan (default) or pending-connect (A/B experiment)
 
     private func beginAcquire() {   // on cbQueue
-        // COLD-START reacquire: a fresh launch loses the in-memory savedPeripheral, so
-        // without this we drop to a background-throttled scan (the 53-min gap). Restore
-        // the bonded G7 by its persisted identifier and take the non-throttled targeted-
-        // connect path. If the restored peripheral is stale (a new sensor) or out of
-        // range, beginReconnect's watchdog falls back to a scan and finishAttempt then
-        // re-persists the real one — self-healing.
-        if reconnectMode, savedPeripheral == nil,
-           let uuidString = UserDefaults.standard.string(forKey: Self.savedPeripheralKey),
-           let uuid = UUID(uuidString: uuidString),
-           central?.state == .poweredOn,
-           let restored = central.retrievePeripherals(withIdentifiers: [uuid]).first {
-            savedPeripheral = restored
-            log("cold-start reacquire: restored bonded G7 \(restored.identifier) — targeted connect (no scan)")
-        }
+        // Proven path: warm reconnect via the in-memory bonded peripheral, else scan.
+        // (A cold-start retrievePeripherals restore was tried and REVERTED — it regressed
+        // first-connect: a restored handle that didn't connect promptly stalled on the
+        // 400s reconnect watchdog. Re-approach cold start separately, e.g. scan + targeted
+        // connect in PARALLEL so a bad restore can never block discovery.)
         if reconnectMode, let saved = savedPeripheral {
             beginReconnect(saved)
         } else {
@@ -677,21 +668,18 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         switch central.state {
         case .poweredOn:
             log("Bluetooth poweredOn")
-            // Fires both on the FIRST start (connect() created the central and is waiting
-            // for BT) and when BT is toggled back ON mid-session. Both want a fresh acquire.
-            // Two fixes here:
-            //  • WEDGE: a stale `peripheral` left over from before a power-off used to block
-            //    the old `peripheral == nil` gate → the reader stalled until relaunch. Clear
-            //    the stale link (+ scan flag) unconditionally so recovery always proceeds.
-            //  • COLD START: go through beginAcquire (not a bare beginScan), so a fresh launch
-            //    uses the non-throttled targeted connect (retrievePeripherals) before falling
-            //    back to a scan — the first-connect path the bare scan previously bypassed.
+            // Fires on the FIRST start (connect() created the central and is waiting for BT)
+            // and when BT is toggled back ON mid-session. WEDGE FIX (safe half, kept): clear a
+            // stale `peripheral` left from before a power-off — it used to block the old
+            // `peripheral == nil` gate and stall the reader until relaunch — then take the
+            // PROVEN scan path. (Routing this through beginAcquire/retrievePeripherals was
+            // REVERTED — it regressed first-connect.)
             guard wantConnect else { return }
             if let p = peripheral, p.state != .connected { central.cancelPeripheralConnection(p) }
             peripheral = nil
             scanWindowStarted = false
             attemptActive = true
-            beginAcquire()
+            beginScan()
         case .poweredOff:
             log("Bluetooth is powered OFF")
             if attemptActive { finishAttempt(success: false, message: "Bluetooth is off") }
