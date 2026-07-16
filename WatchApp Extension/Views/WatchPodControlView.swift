@@ -149,26 +149,58 @@ struct WatchPodControlView: View {
         return last >= activationShownAt || -last.timeIntervalSinceNow < 60
     }
 
-    @ViewBuilder private func sovereigntyRow(ok: Bool, label: String, text: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: ok ? "checkmark.circle.fill" : "dot.radiowaves.left.and.right")
-                .foregroundColor(ok ? .green : .secondary)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(label).font(.caption2).foregroundColor(.secondary)
-                Text(text).font(.caption)
+    /// Worst-case first-read latency for the sensor bar: one G7 advertising-grid
+    /// interval (~5 min) + handshake margin. A real bound (the sensor's cadence),
+    /// so a determinate bar toward it is honest, not invented — and an early read
+    /// just snaps it to full.
+    private static let sensorWorstCase: TimeInterval = 5.5 * 60
+    @State private var sensorFraction: Double = 0
+
+    /// One activation status line: label + status (+ ✓ when done) over a progress bar.
+    @ViewBuilder private func connectionRow<Bar: View>(label: String, status: String, done: Bool, @ViewBuilder bar: () -> Bar) -> some View {
+        VStack(spacing: 5) {
+            HStack(spacing: 4) {
+                Text(label).font(.caption).fontWeight(.semibold).foregroundColor(.white)
+                Spacer()
+                if done { Image(systemName: "checkmark.circle.fill").font(.caption2).foregroundColor(.green) }
+                Text(status).font(.caption2).foregroundColor(done ? .green : .secondary)
             }
-            Spacer()
-            if !ok { ProgressView() }
+            bar()
         }
         .padding(.horizontal, 4)
     }
 
+    /// A determinate progress bar that fills to `fraction` (or full when `done`).
+    /// Both activation bars use it: the pod fills toward its ~11s takeover estimate,
+    /// the sensor toward its ~5.5-min worst-case window — both real bounds that just
+    /// snap to full the moment the thing actually connects.
+    private func progressBar(fraction: Double, done: Bool) -> some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.14))
+                Capsule().fill(Color.green)
+                    .frame(width: done ? geo.size.width : geo.size.width * min(max(fraction, 0), 1))
+            }
+        }
+        .frame(height: 6)
+    }
+
+    private var podStatusText: String {
+        switch coordinator.phase {
+        case .active: return NSLocalizedString("Connected", comment: "Activation: pod connected")
+        case .requesting: return NSLocalizedString("Requesting…", comment: "Activation: awaiting the phone's grant")
+        default: return NSLocalizedString("Connecting…", comment: "Activation: establishing the pod session")
+        }
+    }
+
     private var sensorStatusRow: some View {
-        sovereigntyRow(ok: sensorConfirmed,
-                       label: NSLocalizedString("Sensor", comment: "Activation: CGM-direct status label"),
-                       text: sensorConfirmed
+        connectionRow(label: NSLocalizedString("Sensor", comment: "Activation: CGM-direct status label"),
+                      status: sensorConfirmed
                             ? NSLocalizedString("Reading directly", comment: "Activation: watch is reading the sensor via its own radio")
-                            : NSLocalizedString("Finding sensor…", comment: "Activation: watch has not yet read the sensor directly"))
+                            : NSLocalizedString("Finding sensor…", comment: "Activation: watch has not yet read the sensor directly"),
+                      done: sensorConfirmed) {
+            progressBar(fraction: sensorFraction, done: sensorConfirmed)
+        }
     }
 
     /// Drop to the HUD once BOTH sovereignty properties are confirmed (pod held +
@@ -201,13 +233,9 @@ struct WatchPodControlView: View {
             Text("Sport Mode")
                 .font(.headline)
 
-            // POD sovereignty. Once the takeover completes (.active) it's a green row;
-            // before that, the takeover progress / stall-retry UI (P1#8).
-            if coordinator.phase == .active {
-                sovereigntyRow(ok: true,
-                               label: NSLocalizedString("Pod", comment: "Activation: pod link status label"),
-                               text: NSLocalizedString("Connected", comment: "Activation: the watch holds the pod"))
-            } else if coordinator.takeoverStalled {
+            // POD sovereignty — the determinate takeover bar (green + ✓ on connect);
+            // the P1#8 stall prompt or a failure retry when it can't reach the pod.
+            if coordinator.takeoverStalled {
                 // P1#8 — the takeover has run past the timeout without connecting.
                 // Stop showing an open-ended spinner; ask instead of hanging forever.
                 Text("Pod isn't responding")
@@ -220,28 +248,26 @@ struct WatchPodControlView: View {
                     Label("Keep Trying", systemImage: "arrow.clockwise")
                 }
                 Button("Cancel", action: coordinator.cancelStalledTakeover)
-            } else if coordinator.busy {
-                // Grant + takeover in flight — BUG-3: visible feedback.
-                // Estimated-progress bar: fills toward ~90% over the ~11s a takeover
-                // usually takes, then spins if it runs longer. It NEVER hits 100% on the
-                // timer alone — real completion is the phase flipping to .active (which
-                // dismisses this whole screen), so it can't fake-finish ahead of reality
-                // or mask a stall; the step text below still shows WHERE it's stuck.
-                if takeoverProgress < 0.9 {
-                    ProgressView(value: takeoverProgress)
-                } else {
-                    ProgressView()   // past the estimate — spin until it truly completes
-                }
-                Text(startupStepText)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            } else {
+            } else if coordinator.phase != .active && !coordinator.busy {
+                // Takeover failed with keys retained (pod unreachable) — offer a retry.
+                connectionRow(label: NSLocalizedString("Pod", comment: "Activation: pod link status label"),
+                              status: NSLocalizedString("Couldn't reach pod", comment: "Activation: pod takeover failed"),
+                              done: false) { progressBar(fraction: 0, done: false) }
                 Button(action: coordinator.claim) {
                     Label("Try Again", systemImage: "arrow.clockwise")
                 }
                 .disabled(coordinator.phase != .armed)   // keys must be in hand
                 Button("Cancel", action: coordinator.cancelArmed)
                     .disabled(coordinator.busy)
+            } else {
+                // In-progress (busy) → bar fills toward the ~11s estimate; connected
+                // (.active) → full green + ✓.
+                connectionRow(label: NSLocalizedString("Pod", comment: "Activation: pod link status label"),
+                              status: podStatusText,
+                              done: coordinator.phase == .active) {
+                    progressBar(fraction: coordinator.phase == .active ? 1 : takeoverProgress,
+                                done: coordinator.phase == .active)
+                }
             }
 
             // CGM sovereignty — always shown during activation, so the user watches the
@@ -260,6 +286,10 @@ struct WatchPodControlView: View {
             // Fill toward ~90% over ~11s while busy; reset when not. Never reaches
             // 1.0 on the timer — real completion is the phase leaving .requesting/.armed.
             takeoverProgress = coordinator.busy ? min(0.95, takeoverProgress + 0.2 / 11.0) : 0
+            // Sensor bar: elapsed since this screen appeared, as a fraction of the
+            // ~5.5-min worst-case window. Capped at 0.97 so it never claims "done"
+            // before an actual read lands (which snaps it to full via sensorConfirmed).
+            sensorFraction = min(0.97, -activationShownAt.timeIntervalSinceNow / Self.sensorWorstCase)
         }
         // Auto-dismiss to the HUD when BOTH sovereignty properties are confirmed.
         .onChange(of: sensorConfirmed) { _ in dismissIfBothSovereign() }
