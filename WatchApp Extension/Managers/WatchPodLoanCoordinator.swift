@@ -41,7 +41,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
     }
 
     @Published private(set) var phase: Phase = .idle
-    @Published private(set) var status: PodProofStatus?
+    @Published private(set) var status: PodControlStatus?
     @Published private(set) var busy = false
     @Published var lastError: String?
 
@@ -323,7 +323,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
     static let isSimulatorDemo = false
     #endif
 
-    private let controller = PodProofController()
+    private let controller = PodController()
 
     /// Keys the phone granted, retained in memory so the pod can be claimed after
     /// the phone goes away (which frees the pod's BLE connection). Cleared on
@@ -333,7 +333,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
     init() {
         // 3a: reflect the pod's BLE link into `podConnected` so the HUD can show a
         // "signal lost" glyph while the watch still holds the loan. The callback is
-        // delivered on the main queue by PodProofController.
+        // delivered on the main queue by PodController.
         controller.onConnectionChanged = { [weak self] connected in
             Task { @MainActor in self?.handleLinkChange(connected) }
         }
@@ -744,7 +744,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
         runPodCommand(label: NSLocalizedString("Status", comment: "Command name: status refresh")) { self.controller.getStatus(completion: $0) }
     }
 
-    private func runPodCommand(label: String, _ operation: (@escaping (Result<PodProofStatus, Error>) -> Void) -> Void) {
+    private func runPodCommand(label: String, _ operation: (@escaping (Result<PodControlStatus, Error>) -> Void) -> Void) {
         guard !busy, phase == .active else {
             fileLog("pod cmd '\(label)' DROPPED (busy=\(busy) phase=\(phase))")   // surfaced: the silent skip
             return
@@ -771,7 +771,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
                     // failure: the pod may have applied the command. Never tell the
                     // user "no change was made" in that case — say to verify the pod.
                     var uncertain = false
-                    if case PodProofError.uncertainDelivery = error { uncertain = true }
+                    if case PodControlError.uncertainDelivery = error { uncertain = true }
                     fileLog("*** pod cmd '\(label)' \(uncertain ? "UNCERTAIN" : "FAILED"): \(error.localizedDescription) ***")
                     self.lastError = error.localizedDescription
                     // LOUD surfacing (BUG-5): dose screens dismiss optimistically on
@@ -1001,8 +1001,8 @@ final class WatchPodLoanCoordinator: ObservableObject {
 // with faked data + small delays. This makes the whole Sport Mode flow reviewable on the
 // sim — no pod, no TestFlight. It can never execute on hardware.
 private extension WatchPodLoanCoordinator {
-    func demoStatus(_ delivery: String, delivered: Double) -> PodProofStatus {
-        PodProofStatus(deliveryStatus: delivery, podProgress: "Running", reservoirLevel: 128,
+    func demoStatus(_ delivery: String, delivered: Double) -> PodControlStatus {
+        PodControlStatus(deliveryStatus: delivery, podProgress: "Running", reservoirLevel: 128,
                        insulinDelivered: delivered, bolusNotDelivered: 0,
                        lastProgrammingMessageSeqNum: 5, timeActive: 3600, alerts: "None")
     }

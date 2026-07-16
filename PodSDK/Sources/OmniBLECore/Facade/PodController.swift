@@ -1,5 +1,5 @@
 //
-//  PodProofKit.swift
+//  PodController.swift
 //  OmniBLECore
 //
 //  NEW for the WatchPod project — not part of upstream OmniBLE.
@@ -31,7 +31,7 @@ import os.log
 // MARK: - Public value types
 
 /// A single timestamped log line for display in the proof app.
-public struct PodProofLogEvent: Identifiable, Equatable {
+public struct PodControlLogEvent: Identifiable, Equatable {
     public let id = UUID()
     public let date: Date
     public let message: String
@@ -56,7 +56,7 @@ public struct PodProofLogEvent: Identifiable, Equatable {
 /// Decoded DASH advertisement for a discovered pod / pod emulator.
 /// Mirrors PodAdvertisement.swift (and tools/blescan) decoding, including the
 /// emulator's 7-of-9 service UUID padding quirk.
-public struct PodProofDiscoveredPod: Identifiable, Equatable {
+public struct PodControlDiscoveredPod: Identifiable, Equatable {
     /// CoreBluetooth peripheral identifier (NOT stable across devices).
     public let id: UUID
     public let peripheralName: String?
@@ -95,7 +95,7 @@ public struct PodProofDiscoveredPod: Identifiable, Equatable {
 }
 
 /// Snapshot of a pod StatusResponse, pre-formatted for simple display.
-public struct PodProofStatus: Equatable {
+public struct PodControlStatus: Equatable {
     public let deliveryStatus: String
     public let podProgress: String
     /// Units remaining; nil when the pod only reports "above 50 U".
@@ -148,8 +148,8 @@ public struct PodProofStatus: Equatable {
 ///
 /// The durable secret is the `ltk` (+ controller/pod ids); everything else is
 /// either metadata or (for `bleIdentifier`) a same-device convenience — see the
-/// note on `PodProofController.takeOverPod`.
-public struct PodProofIdentity: Equatable {
+/// note on `PodController.takeOverPod`.
+public struct PodControlIdentity: Equatable {
     public let ltk: Data
     public let controllerId: UInt32
     public let podId: UInt32
@@ -189,7 +189,7 @@ public struct PodProofIdentity: Equatable {
     }
 }
 
-public enum PodProofPhase: String, Equatable {
+public enum PodControlPhase: String, Equatable {
     case idle
     case scanning
     case connecting
@@ -197,7 +197,7 @@ public enum PodProofPhase: String, Equatable {
     case paired
 }
 
-public enum PodProofError: LocalizedError {
+public enum PodControlError: LocalizedError {
     case notPaired
     case bolusExceedsProofLimit(requested: Double, limit: Double)
     case tempBasalExceedsProofLimit(requested: Double, limit: Double)
@@ -226,9 +226,9 @@ public enum PodProofError: LocalizedError {
     }
 }
 
-// MARK: - PodProofController
+// MARK: - PodController
 
-public final class PodProofController: NSObject {
+public final class PodController: NSObject {
 
     // ⚠️ TEMP-TEST-BEEPS: audible confirmation of every watch command for bench
     // testing (Jeremy, 2026-07-09). Set FALSE for quiet/competition builds —
@@ -258,9 +258,9 @@ public final class PodProofController: NSObject {
 
     // MARK: Public callbacks — all delivered on the main queue.
 
-    public var onLog: ((PodProofLogEvent) -> Void)?
-    public var onDiscoveredPodsChanged: (([PodProofDiscoveredPod]) -> Void)?
-    public var onPhaseChanged: ((PodProofPhase) -> Void)?
+    public var onLog: ((PodControlLogEvent) -> Void)?
+    public var onDiscoveredPodsChanged: (([PodControlDiscoveredPod]) -> Void)?
+    public var onPhaseChanged: ((PodControlPhase) -> Void)?
 
     /// Fires `true` when the pod's BLE link comes up (connect / restore) and
     /// `false` when it drops (a bare disconnect; auto-reconnect will retry). Drives
@@ -268,7 +268,7 @@ public final class PodProofController: NSObject {
     public var onConnectionChanged: ((Bool) -> Void)?
 
     /// Main-thread-updated phase, for UI convenience.
-    public private(set) var phase: PodProofPhase = .idle
+    public private(set) var phase: PodControlPhase = .idle
 
     public var isPaired: Bool {
         stateLock.lock()
@@ -278,13 +278,13 @@ public final class PodProofController: NSObject {
 
     // MARK: Private state
 
-    private let log = OSLog(category: "PodProofController")
+    private let log = OSLog(category: "PodController")
 
     // Display-only scanner (mirrors tools/blescan). The actual
     // connect-for-pairing path goes through PodComms' own BluetoothManager.
     private var scanCentral: CBCentralManager?
     private var wantScanning = false
-    private var discovered: [UUID: PodProofDiscoveredPod] = [:]
+    private var discovered: [UUID: PodControlDiscoveredPod] = [:]
     private let scanQueue = DispatchQueue(label: "com.watchpod.proof.scan")
 
     private var podComms: PodComms?
@@ -296,7 +296,7 @@ public final class PodProofController: NSObject {
 
     /// Set while a takeOverPod() is waiting for the imported-LTK session to
     /// establish; fulfilled (once) from podCommsDidEstablishSession.
-    private var pendingTakeover: ((Result<PodProofStatus, Error>) -> Void)?
+    private var pendingTakeover: ((Result<PodControlStatus, Error>) -> Void)?
 
     /// Record of what the watch did to the pod during the current loan (started
     /// on takeover). Surfaced to the user on hand-back. See PodLoanJournal.
@@ -330,7 +330,7 @@ public final class PodProofController: NSObject {
     public func endLoanSummary() -> String? { endLoan()?.summaryText }
 
     /// Note a status into the loan journal (running pod-delivered cross-check).
-    private func journalNoteStatus(_ status: PodProofStatus) {
+    private func journalNoteStatus(_ status: PodControlStatus) {
         loanJournal?.noteDelivered(status.insulinDelivered)
         PodLoanJournalStore.persist(loanJournal)
     }
@@ -338,8 +338,8 @@ public final class PodProofController: NSObject {
     /// Wrap a completion so that, on success, it records a loan event (if any)
     /// and notes the pod-delivered cross-check before forwarding the result.
     private func journaling(_ kind: PodLoanEvent.Kind?,
-                            _ completion: @escaping (Result<PodProofStatus, Error>) -> Void)
-        -> (Result<PodProofStatus, Error>) -> Void {
+                            _ completion: @escaping (Result<PodControlStatus, Error>) -> Void)
+        -> (Result<PodControlStatus, Error>) -> Void {
         return { result in
             switch result {
             case .success(let status):
@@ -355,7 +355,7 @@ public final class PodProofController: NSObject {
                 //    next successful status reconciles the truth; the uncertainty is
                 //    surfaced loudly to the user by the coordinator either way.
                 // A CERTAIN failure records nothing (the pod definitely did not act).
-                if case PodProofError.uncertainDelivery = error, let kind = kind {
+                if case PodControlError.uncertainDelivery = error, let kind = kind {
                     if case .bolus = kind {
                         self.journalRecord(kind)
                         self.emit("⚠️ UNCERTAIN BOLUS — recorded as possibly delivered (IOB includes it)")
@@ -426,13 +426,13 @@ public final class PodProofController: NSObject {
 
     private func emit(_ message: String) {
         log.default("%{public}@", message)
-        let event = PodProofLogEvent(message)
+        let event = PodControlLogEvent(message)
         DispatchQueue.main.async {
             self.onLog?(event)
         }
     }
 
-    private func setPhase(_ newPhase: PodProofPhase) {
+    private func setPhase(_ newPhase: PodControlPhase) {
         DispatchQueue.main.async {
             guard self.phase != newPhase else { return }
             self.phase = newPhase
@@ -499,7 +499,7 @@ public final class PodProofController: NSObject {
     /// Must be called on the main thread (PodComms.connectToNewPod schedules
     /// a Timer on the calling run loop). Uses PodComms' internal discovery,
     /// which connects to the first pairable pod it sees (10 s timeout).
-    public func connectAndPair(completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
+    public func connectAndPair(completion: @escaping (Result<PodControlStatus, Error>) -> Void) {
         dispatchPrecondition(condition: .onQueue(.main))
 
         stopScanning()
@@ -540,18 +540,18 @@ public final class PodProofController: NSObject {
     /// re-establishes; this is the manual path). Internally this re-runs
     /// pairAndSetupPod, which detects the paired state and only performs
     /// EAP-AKA session establishment.
-    public func establishSession(completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
+    public func establishSession(completion: @escaping (Result<PodControlStatus, Error>) -> Void) {
         guard podComms != nil, isPaired else {
-            completion(.failure(PodProofError.notPaired))
+            completion(.failure(PodControlError.notPaired))
             return
         }
         emit("SESSION: re-establishing EAP-AKA session")
         pairAndSetup(completion: completion)
     }
 
-    private func pairAndSetup(completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
+    private func pairAndSetup(completion: @escaping (Result<PodControlStatus, Error>) -> Void) {
         guard let podComms = podComms else {
-            DispatchQueue.main.async { completion(.failure(PodProofError.notPaired)) }
+            DispatchQueue.main.async { completion(.failure(PodControlError.notPaired)) }
             return
         }
 
@@ -580,7 +580,7 @@ public final class PodProofController: NSObject {
                     let status = try session.getStatus()
                     self.emit("PAIR: initial getStatus OK")
                     self.setPhase(.paired)
-                    DispatchQueue.main.async { completion(.success(PodProofStatus(status))) }
+                    DispatchQueue.main.async { completion(.success(PodControlStatus(status))) }
                 } catch {
                     self.emit("PAIR: initial getStatus failed: \(error)")
                     self.setPhase(.paired) // pairing itself succeeded
@@ -593,7 +593,7 @@ public final class PodProofController: NSObject {
     // MARK: - Commands
 
     /// Run a getStatus round-trip. THE radio-proof milestone command.
-    public func getStatus(completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
+    public func getStatus(completion: @escaping (Result<PodControlStatus, Error>) -> Void) {
         runCommand(named: "Get status", completion: journaling(nil, completion)) { session in
             return try session.getStatus()
         }
@@ -602,7 +602,7 @@ public final class PodProofController: NSObject {
     /// Suspend insulin delivery (untimed, silent). NOTE: the driver refuses
     /// this before pod setup is complete (setupNotComplete) because a cancel
     /// command would fault a mid-setup pod — run completeSetup() first.
-    public func suspend(completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
+    public func suspend(completion: @escaping (Result<PodControlStatus, Error>) -> Void) {
         runCommand(named: "Suspend delivery", completion: journaling(.suspend, completion)) { session in
             let result = session.suspendDelivery(suspendReminder: nil, silent: !self.commandBeepsEnabled)
             switch result {
@@ -611,7 +611,7 @@ public final class PodProofController: NSObject {
             case .certainFailure(let error):
                 throw error
             case .unacknowledged(let error):
-                throw PodProofError.uncertainDelivery(underlying: error)   // P0#4: uncertain, not certain-failure
+                throw PodControlError.uncertainDelivery(underlying: error)   // P0#4: uncertain, not certain-failure
             }
         }
     }
@@ -621,7 +621,7 @@ public final class PodProofController: NSObject {
     /// falls back to the proof build's flat 0.5 U/hr schedule when it isn't.
     /// Resume RE-PROGRAMS the pod's basal table, so passing the real schedule
     /// keeps the pod's stored schedule truthful for later cancels/expiry too.
-    public func resume(schedule: BasalSchedule? = nil, completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
+    public func resume(schedule: BasalSchedule? = nil, completion: @escaping (Result<PodControlStatus, Error>) -> Void) {
         runCommand(named: "Resume basal", completion: journaling(.resume, completion)) { session in
             // Fresh status first: setBasalSchedule skips its internal anti-0x31
             // cancel-all only when BOTH podState.isSuspended and the last
@@ -641,10 +641,10 @@ public final class PodProofController: NSObject {
 
     /// Deliver a bolus. Hard-capped at bolusProofLimit (1.0 U); the WatchProof
     /// app further restricts this to 0.5 U.
-    public func bolus(units: Double, completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
+    public func bolus(units: Double, completion: @escaping (Result<PodControlStatus, Error>) -> Void) {
         guard units <= Self.bolusProofLimit else {
             emit(String(format: "BOLUS: refused %.2f U (proof limit %.2f U)", units, Self.bolusProofLimit))
-            completion(.failure(PodProofError.bolusExceedsProofLimit(requested: units, limit: Self.bolusProofLimit)))
+            completion(.failure(PodControlError.bolusExceedsProofLimit(requested: units, limit: Self.bolusProofLimit)))
             return
         }
         runCommand(named: String(format: "Bolus %.2f U", units), completion: journaling(.bolus(units: units), completion)) { session in
@@ -655,7 +655,7 @@ public final class PodProofController: NSObject {
             case .certainFailure(let error):
                 throw error
             case .unacknowledged(let error):
-                throw PodProofError.uncertainDelivery(underlying: error)   // P0#4: uncertain, not certain-failure
+                throw PodControlError.uncertainDelivery(underlying: error)   // P0#4: uncertain, not certain-failure
             }
         }
     }
@@ -665,7 +665,7 @@ public final class PodProofController: NSObject {
     /// three-way DeliveryCommandResult switch. `isHighTemp:false, automatic:false` =
     /// a manual, user-initiated temp. The pod auto-reverts to its scheduled basal when
     /// the duration expires — a safety backstop if the watch dies mid-loan.
-    public func setTempBasal(rate: Double, duration: TimeInterval, completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
+    public func setTempBasal(rate: Double, duration: TimeInterval, completion: @escaping (Result<PodControlStatus, Error>) -> Void) {
         // Pod-legal input guards. The session layer validates neither rate nor
         // duration, and an off-grid rate or sub-30-min duration makes the 0x1a
         // insulin table and the 0x16 extra command encode INCONSISTENTLY — a
@@ -678,12 +678,12 @@ public final class PodProofController: NSObject {
         let rate = max(0, (rate / Pod.pulseSize).rounded() * Pod.pulseSize)
         guard rate <= tempBasalRateProofLimit else {
             emit(String(format: "TEMP BASAL: refused %.2f U/hr (proof limit %.2f U/hr)", rate, tempBasalRateProofLimit))
-            completion(.failure(PodProofError.tempBasalExceedsProofLimit(requested: rate, limit: tempBasalRateProofLimit)))
+            completion(.failure(PodControlError.tempBasalExceedsProofLimit(requested: rate, limit: tempBasalRateProofLimit)))
             return
         }
         guard Pod.supportedTempBasalDurations.contains(where: { abs($0 - duration) < 1 }) else {
             emit(String(format: "TEMP BASAL: refused duration %.0f min (pod supports 30 min steps, 30 min – 12 h)", duration / 60))
-            completion(.failure(PodProofError.tempBasalDurationNotSupported(requested: duration)))
+            completion(.failure(PodControlError.tempBasalDurationNotSupported(requested: duration)))
             return
         }
         runCommand(named: String(format: "Temp basal %.2f U/hr for %.0f min", rate, duration / 60),
@@ -702,7 +702,7 @@ public final class PodProofController: NSObject {
             case .certainFailure(let error):
                 throw error
             case .unacknowledged(let error):
-                throw PodProofError.uncertainDelivery(underlying: error)   // P0#4: uncertain, not certain-failure
+                throw PodControlError.uncertainDelivery(underlying: error)   // P0#4: uncertain, not certain-failure
             case .success(let status, _):
                 statusAfterCancel = status
             }
@@ -722,7 +722,7 @@ public final class PodProofController: NSObject {
             case .certainFailure(let error):
                 throw error
             case .unacknowledged(let error):
-                throw PodProofError.uncertainDelivery(underlying: error)   // P0#4: uncertain, not certain-failure
+                throw PodControlError.uncertainDelivery(underlying: error)   // P0#4: uncertain, not certain-failure
             }
         }
     }
@@ -730,7 +730,7 @@ public final class PodProofController: NSObject {
     /// Cancel the running temp basal only — the pod reverts to its stored
     /// scheduled basal on its own (0x1f STOP_DELIVERY, temp bit). Distinct from
     /// suspend(), which stops ALL delivery.
-    public func cancelTempBasal(completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
+    public func cancelTempBasal(completion: @escaping (Result<PodControlStatus, Error>) -> Void) {
         runCommand(named: "Cancel temp basal", completion: journaling(.cancelTempBasal, completion)) { session in
             let result = session.cancelDelivery(deliveryType: .tempBasal,
                                                 beepType: self.commandBeepsEnabled ? .beepBeep : .noBeepCancel)
@@ -740,7 +740,7 @@ public final class PodProofController: NSObject {
             case .certainFailure(let error):
                 throw error
             case .unacknowledged(let error):
-                throw PodProofError.uncertainDelivery(underlying: error)   // P0#4: uncertain, not certain-failure
+                throw PodControlError.uncertainDelivery(underlying: error)   // P0#4: uncertain, not certain-failure
             }
         }
     }
@@ -752,9 +752,9 @@ public final class PodProofController: NSObject {
     /// real activation sequence. UNVERIFIED against hardware/emulator; the
     /// emulator's PodProgress state machine (prime -> basal -> cannula ->
     /// running) implements the same steps.
-    public func completeSetup(completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
+    public func completeSetup(completion: @escaping (Result<PodControlStatus, Error>) -> Void) {
         guard let podComms = podComms, isPaired else {
-            completion(.failure(PodProofError.notPaired))
+            completion(.failure(PodControlError.notPaired))
             return
         }
 
@@ -779,9 +779,9 @@ public final class PodProofController: NSObject {
         }
     }
 
-    private func setupStep2(completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
+    private func setupStep2(completion: @escaping (Result<PodControlStatus, Error>) -> Void) {
         guard let podComms = podComms else {
-            completion(.failure(PodProofError.notPaired))
+            completion(.failure(PodControlError.notPaired))
             return
         }
         emit("SETUP: step 2/3 program initial basal schedule + insert cannula")
@@ -808,7 +808,7 @@ public final class PodProofController: NSObject {
         }
     }
 
-    private func setupStep3(completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
+    private func setupStep3(completion: @escaping (Result<PodControlStatus, Error>) -> Void) {
         emit("SETUP: step 3/3 check insertion completed")
         runCommand(named: "Check insertion completed", completion: completion) { session in
             try session.checkInsertionCompleted()
@@ -820,7 +820,7 @@ public final class PodProofController: NSObject {
     /// (restart it with -fresh to pair again).
     public func deactivate(completion: @escaping (Result<Void, Error>) -> Void) {
         guard let podComms = podComms, isPaired else {
-            completion(.failure(PodProofError.notPaired))
+            completion(.failure(PodControlError.notPaired))
             return
         }
         emit("=== Deactivate pod ===")
@@ -846,10 +846,10 @@ public final class PodProofController: NSObject {
     // MARK: - Command plumbing
 
     private func runCommand(named name: String,
-                            completion: @escaping (Result<PodProofStatus, Error>) -> Void,
+                            completion: @escaping (Result<PodControlStatus, Error>) -> Void,
                             _ body: @escaping (PodCommsSession) throws -> StatusResponse) {
         guard let podComms = podComms, isPaired else {
-            completion(.failure(PodProofError.notPaired))
+            completion(.failure(PodControlError.notPaired))
             return
         }
         emit("=== \(name) ===")
@@ -862,7 +862,7 @@ public final class PodProofController: NSObject {
                 do {
                     let statusResponse = try body(session)
                     self.emit("\(name): OK")
-                    DispatchQueue.main.async { completion(.success(PodProofStatus(statusResponse))) }
+                    DispatchQueue.main.async { completion(.success(PodControlStatus(statusResponse))) }
                 } catch {
                     self.emit("\(name): failed: \(error)")
                     DispatchQueue.main.async { completion(.failure(error)) }
@@ -878,11 +878,11 @@ public final class PodProofController: NSObject {
     /// paired. In the real product this blob would be sent phone→watch over
     /// WatchConnectivity; here it lets the app hand a pod off to itself to prove
     /// the takeover mechanism.
-    public func exportIdentity() -> PodProofIdentity? {
+    public func exportIdentity() -> PodControlIdentity? {
         stateLock.lock()
         defer { stateLock.unlock() }
         guard let ps = podState, ps.ltk.count > 0 else { return nil }
-        return PodProofIdentity(
+        return PodControlIdentity(
             ltk: ps.ltk,
             controllerId: myId,
             podId: podId,
@@ -908,8 +908,8 @@ public final class PodProofController: NSObject {
     /// bleIdentifier (valid because it is the same watch). A true cross-device
     /// handoff would re-scan for the pod by podAddress to obtain the watch's own
     /// bleIdentifier; the session establishment is otherwise identical.
-    public func takeOverPod(identity: PodProofIdentity,
-                            completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
+    public func takeOverPod(identity: PodControlIdentity,
+                            completion: @escaping (Result<PodControlStatus, Error>) -> Void) {
         dispatchPrecondition(condition: .onQueue(.main))
         emit("=== TAKE OVER POD (simulated handoff) ===")
         emit("TAKEOVER: importing identity \(identity.summary)")
@@ -932,8 +932,8 @@ public final class PodProofController: NSObject {
         }
     }
 
-    private func buildTakeoverComms(identity: PodProofIdentity,
-                                    completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
+    private func buildTakeoverComms(identity: PodControlIdentity,
+                                    completion: @escaping (Result<PodControlStatus, Error>) -> Void) {
         dispatchPrecondition(condition: .onQueue(.main))
 
         // Start a loan journal for this takeover — records everything the watch
@@ -988,7 +988,7 @@ public final class PodProofController: NSObject {
             guard let self = self, let pending = self.pendingTakeover else { return }
             self.pendingTakeover = nil
             self.emit("TAKEOVER: timed out waiting for session establishment from imported LTK")
-            pending(.failure(PodProofError.notPaired))
+            pending(.failure(PodControlError.notPaired))
         }
     }
 
@@ -1008,7 +1008,7 @@ public final class PodProofController: NSObject {
     /// Must be called on the main thread.
     public func takeOverExternalPod(ltk: Data, controllerId: UInt32, podId: UInt32,
                                     podAddress: UInt32, messageNumber: Int,
-                                    completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
+                                    completion: @escaping (Result<PodControlStatus, Error>) -> Void) {
         dispatchPrecondition(condition: .onQueue(.main))
         emit("=== TAKE OVER EXTERNAL POD (cross-device handoff) ===")
         emit(String(format: "TAKEOVER-EXT: scanning for pod addr=%08X to take over with imported keys (ltk=%@…)",
@@ -1028,7 +1028,7 @@ public final class PodProofController: NSObject {
         let deadline = Date().addingTimeInterval(25)
         pollForExternalPod(podAddress: podAddress, deadline: deadline) { [weak self] bleIdentifier in
             guard let self = self else { return }
-            let identity = PodProofIdentity(
+            let identity = PodControlIdentity(
                 ltk: ltk, controllerId: controllerId, podId: podId, podAddress: podAddress,
                 messageNumber: messageNumber, lotNo: 0, lotSeq: 0, productId: 0,
                 firmwareVersion: "0.0.0", bleFirmwareVersion: "0.0.0", bleIdentifier: bleIdentifier)
@@ -1036,7 +1036,7 @@ public final class PodProofController: NSObject {
             self.buildTakeoverComms(identity: identity, completion: completion)
         } notFound: { [weak self] in
             self?.emit("TAKEOVER-EXT: pod addr not found in scan within timeout")
-            completion(.failure(PodProofError.notPaired))
+            completion(.failure(PodControlError.notPaired))
         }
     }
 
@@ -1065,7 +1065,7 @@ public final class PodProofController: NSObject {
 
 // MARK: - CBCentralManagerDelegate (display-only scanner)
 
-extension PodProofController: CBCentralManagerDelegate {
+extension PodController: CBCentralManagerDelegate {
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         emit("SCAN: Bluetooth state -> \(central.state.rawValue)")
         startScanIfPossible()
@@ -1078,7 +1078,7 @@ extension PodProofController: CBCentralManagerDelegate {
             return
         }
         let padded = adv.serviceUUIDs.count == 7
-        let pod = PodProofDiscoveredPod(
+        let pod = PodControlDiscoveredPod(
             id: peripheral.identifier,
             peripheralName: peripheral.name,
             podAddress: adv.podId,
@@ -1105,7 +1105,7 @@ extension PodProofController: CBCentralManagerDelegate {
 
 // MARK: - MessageLogger (protocol-level tracing)
 
-extension PodProofController: MessageLogger {
+extension PodController: MessageLogger {
     func didSend(_ message: Data) {
         emit("SEND: \(message.hexadecimalString)")
     }
@@ -1121,7 +1121,7 @@ extension PodProofController: MessageLogger {
 
 // MARK: - PodCommsDelegate (connection + state changes)
 
-extension PodProofController: PodCommsDelegate {
+extension PodController: PodCommsDelegate {
     func podComms(_ podComms: PodComms, didChange podState: PodState?) {
         stateLock.lock()
         self.podState = podState
