@@ -99,10 +99,13 @@ now that we've verified the phone gets a precise new-sensor signal (§1).
 1. **Hook the new-sensor event on the phone** — in `DeviceDataManager` (the
    `CGMManagerDelegate`) catch the `.sensorStart` `PersistedCgmEvent`, or subscribe to the
    G7's `G7StateObserver`. Both carry the new `sensorID` + `activatedAt`.
-2. **Prompt on the phone** (real keyboard, exactly when the sensor is added). Draft copy —
-   refine:
+2. **Prompt on the phone** (exactly when the sensor is added). Draft copy — refine:
    > "Please input the sensor code from the Dexcom applicator to enable Sport Mode on the
    > watch."
+   - **MUST use the phone's native NUMERIC keypad** (`keyboardType = .numberPad`, or a
+     `UIAlertController` text field set to `.numberPad`). Big keys, the standard phone
+     number pad — NOT a custom in-app tiny picker/wheel. (Jeremy: hates tiny in-app number
+     entry.) 4 digits, digits-only, with a clear/backspace.
 3. **Store the code keyed by sensor ID** on the phone, and **relay to the watch** over
    WatchConnectivity — bundle the `code` + `sensorID` + `activatedAt` (the watch needs the
    ID/activation anyway for known-vs-first-time detection and phase seeding).
@@ -170,17 +173,65 @@ countdown, no first-time uncertainty at the moment the user actually wants to go
 
 ---
 
+## 6b. Component E — Test hooks: fake a new sensor WITHOUT burning one
+
+Real G7 sensors are expensive and single-use, so we can't activate one per test iteration.
+The workflow must be exercisable in software, reserving **one** real new-sensor run for the
+final check. The key realization is that there are two layers, and only one of them actually
+needs a real sensor:
+
+- **Plumbing** — event → phone prompt (keypad) → store code → relay to watch → watch stores
+  code per sensor ID → known/first-time detection → countdown. **Fully fakeable.** This is
+  the bulk of the new code.
+- **The authenticated handshake with a DIFFERENT code** — needs a real sensor (a real BLE
+  device with a real, different code). But it's the *same* J-PAKE handshake already proven
+  with the current sensor; the only new variable is "does a different 4-digit code bond." So
+  it's a **single** final validation, not something to repeat.
+
+Hooks — all behind a `FAKE_NEW_SENSOR` compile flag (and/or `#if DEBUG`), so they compile
+OUT of release builds but are one flag away for regression (prefer a flag over commenting
+out, per Jeremy — commented-out code rots):
+
+1. **Phone: "Simulate new sensor"** — fabricate a `.sensorStart` `PersistedCgmEvent` with a
+   synthetic `sensorID` + `activatedAt` and feed it through the SAME `DeviceDataManager`
+   handler the real event uses. Exercises the phone prompt (keypad), code storage, and the
+   watch relay end-to-end. Assert the watch receives `code + sensorID + activatedAt`.
+
+2. **Watch: "Forget this sensor"** ← the star hook. Clear the persisted bonded identifier +
+   stored code for the CURRENT (real) sensor. The watch then treats the real sensor as
+   first-time on the next attempt, so the ENTIRE first-time path — code prompt/relay →
+   handshake → bond → save identifier → countdown → "known" — runs against the **real**
+   sensor, repeatably, for free. Crucially this exercises the REAL handshake and bond, not a
+   mock. The one thing it can't vary is the code value (the real sensor's is fixed) — which
+   is exactly what the single real-new-sensor test covers.
+
+3. **Watch: "Force wrong code once"** — inject a bad code so the handshake throws
+   `aesVerifyFailed`, to exercise the FALLBACK watch prompt + retry, then succeed on the
+   correct code.
+
+4. **Phone: sensor-ID override** (optional) — report a synthetic `sensorID` so the
+   known/first-time detection sees a "different" sensor with no physical change.
+
+Coverage: #1 = phone plumbing; #2 = full watch first-time path *including the real handshake*
+(free, repeatable); #3 = fallback prompt; #4 = detection logic. **Real new sensor (once):**
+only the "a genuinely different code bonds" case. Wrap the real-sensor checklist in the test
+plan so we spend at most one sensor confirming it.
+
+---
+
 ## 7. Dependencies & sequencing
 
 1. **Cold-start fix** (this branch) — DONE, needs on-device validation (force-quit test).
-2. **Component A (per-sensor code)** — the prerequisite; nothing new-sensor works without
-   it. Build the phone-primary path first: hook `.sensorStart` in `DeviceDataManager` →
-   phone prompt → relay code+ID+activation to the watch; add the watch fallback prompt.
-   Test with an actual new sensor.
-3. **Phase/countdown plumbing (B)** — verify glucose-timestamp granularity, seed the
+2. **Test hooks (E)** — build these ALONGSIDE Component A, not after, so A is exercisable
+   without burning sensors from day one. Especially the "Forget this sensor" watch hook.
+3. **Component A (per-sensor code)** — the prerequisite; nothing new-sensor works without
+   it. Build the phone-primary path: hook `.sensorStart` in `DeviceDataManager` → phone
+   prompt (numeric keypad) → relay code+ID+activation to the watch; add the watch fallback
+   prompt. Iterate against the fake hooks; spend ONE real new sensor on the final check.
+4. **Phase/countdown plumbing (B)** — verify glucose-timestamp granularity, seed the
    scheduler from phone history, surface the countdown.
-4. **Messaging (C)** — cheap once A + B exist.
-5. **Pre-warm (D)** — optional polish.
+5. **Messaging (C)** — cheap once A + B exist.
+6. **Pre-warm (D)** — optional polish.
 
 Also fold in (separate, pre-existing): **gate the reader to Sport Mode** for production,
 instead of the always-on bench behavior.
