@@ -137,24 +137,20 @@ struct WatchPodControlView: View {
     @State private var takeoverProgress: Double = 0
     @State private var takeoverTick = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
 
-    // Dual-sovereignty (P1#7 display): the CGM-direct half, shown on the activation
-    // screen next to the pod-takeover progress so the user confirms BOTH properties
-    // before Sport Mode drops to the HUD. "Confirmed" = the watch landed a read through
-    // its OWN radio since this screen appeared (or within the last minute) — affirmative
-    // proof of direct-CGM sovereignty, never a phone-pushed value.
+    // POD-DRIVEN activation: this screen dismisses on the POD (fast + reliable). The
+    // CGM-direct half is shown as an EXPECTATION, not a gate — "confirmed" still means the
+    // watch landed a read through its OWN radio since this screen appeared (or within the
+    // last minute), never a phone-pushed value, and it snaps the line to ✓ if a read lands
+    // before the user taps through. (The old dual-sovereignty gate that WAITED on the
+    // sensor was relaxed: with the reliable cold-start reader the loop simply holds — no
+    // BG, no dose — until the first reading arrives, so gating on it isn't needed. See
+    // docs/DESIGN_NEW_SENSOR_WORKFLOW.md.)
     @ObservedObject private var g7Client = ExtensionDelegate.shared().g7.client
     @State private var activationShownAt = Date()
     private var sensorConfirmed: Bool {
         guard let last = g7Client.lastReadDate else { return false }
         return last >= activationShownAt || -last.timeIntervalSinceNow < 60
     }
-
-    /// Worst-case first-read latency for the sensor bar: one G7 advertising-grid
-    /// interval (~5 min) + handshake margin. A real bound (the sensor's cadence),
-    /// so a determinate bar toward it is honest, not invented — and an early read
-    /// just snaps it to full.
-    private static let sensorWorstCase: TimeInterval = 5.5 * 60
-    @State private var sensorFraction: Double = 0
 
     /// One activation status line: label + status (+ ✓ when done) over a progress bar.
     @ViewBuilder private func connectionRow<Bar: View>(label: String, status: String, done: Bool, @ViewBuilder bar: () -> Bar) -> some View {
@@ -193,20 +189,18 @@ struct WatchPodControlView: View {
         }
     }
 
+    // The CGM is shown as an EXPECTATION, not a gate: Sport Mode dismisses on the pod, and
+    // the watch keeps finding the sensor in the background — the first reading fills into
+    // the HUD (~5 min worst case = one G7 advertising cycle). No gating progress bar; if a
+    // read lands before the user taps through, the line snaps to a confirmed ✓.
     private var sensorStatusRow: some View {
-        connectionRow(label: NSLocalizedString("Sensor", comment: "Activation: CGM-direct status label"),
+        connectionRow(label: NSLocalizedString("Glucose", comment: "Activation: CGM timing label"),
                       status: sensorConfirmed
-                            ? NSLocalizedString("Reading directly", comment: "Activation: watch is reading the sensor via its own radio")
-                            : NSLocalizedString("Finding sensor…", comment: "Activation: watch has not yet read the sensor directly"),
+                            ? NSLocalizedString("Reading directly", comment: "Activation: a direct read already landed")
+                            : NSLocalizedString("in ~5 min", comment: "Activation: expected time to first direct glucose"),
                       done: sensorConfirmed) {
-            progressBar(fraction: sensorFraction, done: sensorConfirmed)
+            EmptyView()
         }
-    }
-
-    /// Drop to the HUD once BOTH sovereignty properties are confirmed (pod held +
-    /// direct sensor read). The user can also proceed early with "Go to Sport Mode".
-    private func dismissIfBothSovereign() {
-        if coordinator.phase == .active && sensorConfirmed { dismiss() }
     }
 
     // Takeover progress step — so the ~10s isn't a blank spinner, and a stall
@@ -270,30 +264,27 @@ struct WatchPodControlView: View {
                 }
             }
 
-            // CGM sovereignty — always shown during activation, so the user watches the
-            // watch's OWN sensor link come up alongside the pod.
+            // CGM shown as an expectation (not a gate) — see sensorStatusRow.
             sensorStatusRow
 
-            // Once the pod is held, let the user drop to the HUD without waiting for the
-            // sensor (it keeps trying; the G7 Direct row + the 6-min warning cover it).
+            // Pod up = Sport Mode is yours and you can leave the phone; the CGM follows on
+            // its own. One tap into the existing HUD, no waiting on the sensor.
             if coordinator.phase == .active {
-                Button(NSLocalizedString("Go to Sport Mode", comment: "Activation: proceed to the HUD before the sensor confirms")) { dismiss() }
+                Text(NSLocalizedString("OK to leave your phone", comment: "Activation: reassurance that the phone can be left behind"))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 2)
+                Button(NSLocalizedString("Got it", comment: "Activation: dismiss into the Sport Mode HUD")) { dismiss() }
                     .font(.footnote)
-                    .padding(.top, 4)
+                    .padding(.top, 2)
             }
         }
         .onReceive(takeoverTick) { _ in
             // Fill toward ~90% over ~11s while busy; reset when not. Never reaches
             // 1.0 on the timer — real completion is the phase leaving .requesting/.armed.
             takeoverProgress = coordinator.busy ? min(0.95, takeoverProgress + 0.2 / 11.0) : 0
-            // Sensor bar: elapsed since this screen appeared, as a fraction of the
-            // ~5.5-min worst-case window. Capped at 0.97 so it never claims "done"
-            // before an actual read lands (which snaps it to full via sensorConfirmed).
-            sensorFraction = min(0.97, -activationShownAt.timeIntervalSinceNow / Self.sensorWorstCase)
         }
-        // Auto-dismiss to the HUD when BOTH sovereignty properties are confirmed.
-        .onChange(of: sensorConfirmed) { _ in dismissIfBothSovereign() }
-        .onChange(of: coordinator.phase) { _ in dismissIfBothSovereign() }
     }
 
     // While the watch holds the pod, this screen is opened from a specific main-HUD
