@@ -24,16 +24,29 @@ What EXISTS:
   start, restore the persisted bonded identifier and run a targeted `connect()` in
   PARALLEL with a scan. Converts the failing "background scan" reacquire into the
   proven "named" path.
+- **A phone-side new-sensor SIGNAL (verified — the key enabler).** The phone DOES know
+  when a new sensor starts. `G7CGMManager.sensor(_:didDiscoverNewSensor:activatedAt:)`
+  fires on a new sensor: it logs it (`logDeviceCommunication`), persists `sensorID` (the
+  sensor name, e.g. `DXCMp5`) + `activatedAt` into `G7CGMManagerState`, and emits a
+  first-class `PersistedCgmEvent(type: .sensorStart, deviceIdentifier: name…)` up to the
+  `CGMManagerDelegate` — Loop's `DeviceDataManager`. There's also a public `G7StateObserver`
+  interface (`addStateObserver`) and `sensorName` / `sensorActivatedAt` / `lifecycleState`
+  accessors. **Loop receives this event today; it just doesn't act on it for our workflow.**
 
 What does NOT exist:
 - **Per-sensor pairing code.** The code is HARDCODED to `3102` (`G7Client.pin`). Nothing
   reads or writes it — no entry UI, no phone hand-off. It works today only because the
   current sensor's code is 3102. **A real new sensor (different code) fails auth
   outright** (`aesVerifyFailed`). This is the gating gap.
-- **Any handling of `aesVerifyFailed`** beyond throwing it — the chosen "Option 3"
-  just-in-time code prompt was never built.
-- **Sensor-change detection** — nothing reacts to a new sensor ID / activation.
+- **Any handling of `aesVerifyFailed`** beyond throwing it.
+- **A phone→watch relay of the sensor ID / activation / code**, and any hook on the
+  `.sensorStart` event (the signal arrives at `DeviceDataManager` but is unused for this).
 - **A CGM-connection countdown** — nothing predicts or surfaces the expected connect time.
+
+The one thing the phone still does NOT know: the **4-digit code itself**. G7SensorKit reads
+glucose without it (lower-privilege path than the watch's authenticated handshake). So the
+phone knows a new sensor *started* and its *ID/activation* — the user still types the code
+once per sensor; we just do it at the right moment and place.
 
 ---
 
@@ -58,7 +71,8 @@ What does NOT exist:
   - Precision caveat: depends on the granularity of the glucose timestamps the watch
     actually holds. Second-resolution → "~10:05:10 ±10–15s jitter"; if snapped to the
     minute/5-min mark → a coarser but still useful window. **VERIFY against the watch's
-    glucose store when building.**
+    glucose store when building.** (`activatedAt` from the phone is a fallback phase
+    anchor — the grid is set at activation.)
   - The predictive scheduler already predicts the grid (`predictive 300s grid, lead
     45s`) but self-calibrates from the watch's OWN reads. The new piece is **seeding the
     phase from the phone's history** so it's known *immediately* at Sport Mode start.
@@ -71,28 +85,44 @@ Expected connect time, per case:
 
 ---
 
-## 3. Component A — Per-sensor pairing code (the prerequisite, "Option 3")
+## 3. Component A — Per-sensor pairing code (the prerequisite)
 
-Each G7 has a unique 4-digit code. We cannot hardcode it, cannot read it from the phone
-(G7SensorKit stores no code; it rides the OS bond), and cannot derive it from a scan.
-Jeremy chose the **watch just-in-time prompt** among the three options.
+Each G7 has a unique 4-digit code (printed on the applicator/box). We cannot hardcode it,
+the phone never learns it, and it can't be derived from a scan. So the user must type it
+once per sensor — the design decision is *where and when*.
 
-Design:
-1. Store the working code **keyed by sensor** (persist to disk; key by the phone-reported
-   sensor ID when available, else "current").
-2. **Detect a new sensor** two ways (whichever fires first):
-   - The phone reports a new sensor ID / activation date (relay it to the watch), OR
-   - The handshake throws `aesVerifyFailed` (the stored code doesn't match this sensor).
-3. On detection, surface a watch prompt: *"New sensor — enter its 4-digit code"* (Digital
-   Crown / keypad entry). Reuse the existing editable `G7Client.pin` field as the sink.
-4. Persist the entered code (per sensor) and **retry the handshake** immediately.
-5. On success, the durable identifier is bonded + saved → the sensor becomes "known" for
-   all future (named) reconnects.
+### PRIMARY: phone-driven, triggered by the phone's `.sensorStart` event
 
-Failure copy: if the entered code also fails, *"That code didn't match — check the code on
-the sensor or in the Dexcom app and try again."*
+Ruling (2026-07-16): make this the primary path — it is strictly better than a watch prompt
+now that we've verified the phone gets a precise new-sensor signal (§1).
 
-This is the backbone: without it, a new sensor cannot connect at all.
+1. **Hook the new-sensor event on the phone** — in `DeviceDataManager` (the
+   `CGMManagerDelegate`) catch the `.sensorStart` `PersistedCgmEvent`, or subscribe to the
+   G7's `G7StateObserver`. Both carry the new `sensorID` + `activatedAt`.
+2. **Prompt on the phone** (real keyboard, exactly when the sensor is added). Draft copy —
+   refine:
+   > "Please input the sensor code from the Dexcom applicator to enable Sport Mode on the
+   > watch."
+3. **Store the code keyed by sensor ID** on the phone, and **relay to the watch** over
+   WatchConnectivity — bundle the `code` + `sensorID` + `activatedAt` (the watch needs the
+   ID/activation anyway for known-vs-first-time detection and phase seeding).
+4. The watch stores the code per sensor; its next authenticated handshake uses the right
+   code → bonds → saves the durable identifier → "known" thereafter.
+
+Why phone-primary: the phone has a real keyboard, *knows* precisely when a new sensor
+starts, and is where the user already is when adding a sensor. The code is a low-sensitivity
+4-digit pairing PIN; relaying it phone→watch over the existing encrypted WC channel is fine
+(store it in the app group / keychain, keep it out of plaintext logs).
+
+### FALLBACK: watch just-in-time prompt
+
+If the watch tries to connect and the stored code is missing or wrong (`aesVerifyFailed`),
+prompt on the watch (Digital Crown / keypad, reusing `G7Client.pin`). Covers the phone never
+prompting (older phone, a race, or code entered before this feature existed) or a mistyped
+code. Retry copy: *"That code didn't match — check the code on the sensor or in the Dexcom
+app and try again."*
+
+This is the backbone: without a per-sensor code, a new sensor cannot connect at all.
 
 ---
 
@@ -101,41 +131,42 @@ This is the backbone: without it, a new sensor cannot connect at all.
 Extend the existing `WatchPodControlView` (which already shows pod + "G7 Direct"):
 
 - **Screen 1 — Pod.** The pod-connection / sovereignty half (already built).
-- **Screen 2 — CGM.** Replace the bare "waiting" state with an honest, phase-driven
-  status:
+- **Screen 2 — CGM.** Replace the bare "waiting" state with an honest, phase-driven status:
   - Compute the next expected chirp from the phone's recent glucose timestamps at the
     moment Sport Mode starts.
   - Show a **countdown**: *"Sensor: reading expected in ~3 min (10:05)."* Update live.
   - When a read lands, snap to the confirmed ✓ (existing `sensorConfirmed`).
-- **Arm the reader to the prediction.** Since we know the chirp time, arm the named
-  connect just before it — the countdown is not just informational, it's what the reader
-  times itself to. Keep the app **foreground** through the predicted chirp (the countdown
-  screen naturally does this, which is also what keeps a first-ever scan unthrottled).
+- **Arm the reader to the prediction.** Since we know the chirp time, arm the named connect
+  just before it — the countdown is not just informational, it's what the reader times
+  itself to. Keep the app **foreground** through the predicted chirp (the countdown screen
+  naturally does this, which is also what keeps a first-ever scan unthrottled).
 
 ---
 
 ## 5. Component C — Known vs first-time messaging
 
-Detect which case we're in (do we hold a durable identifier for the *current* sensor ID?)
-and set expectations honestly:
+Detect which case we're in and set expectations honestly. Detection is now clean: the phone
+relays the current `sensorID`; the watch checks whether it holds a durable bonded identifier
+for that ID.
 
 | Case | Detection | Copy |
 |---|---|---|
-| **Known sensor** | persisted identifier matches current sensor ID | "Reconnecting — glucose expected ~10:05." (near-promise; named path) |
+| **Known sensor** | watch holds a bonded identifier for the phone-relayed sensor ID | "Reconnecting — glucose expected ~10:05." (near-promise; named path) |
 | **First-time on this sensor** | no identifier for this sensor ID | "First-time setup for this sensor — expect glucose around 10:05, but first connections can take a few minutes. We'll alert you if it doesn't land." |
 
-The first-time path should also trigger Component A's code prompt if the stored code
-fails.
+The first-time path relies on Component A having supplied the code (phone-primary, watch
+fallback).
 
 ---
 
-## 6. Component D (optional) — Pre-warm the bond on new-sensor detection
+## 6. Component D (optional, now cheap) — Pre-warm the bond on new-sensor detection
 
-The durable name needs only ONE foreground bond. When the phone reports a *new* sensor
-ID, optionally prompt: *"New sensor — open the watch near it once to pair."* Do a single
-foreground handshake (code prompt + bond + save identifier). Then even the FIRST Sport
-Mode on that sensor is a "known" sensor: fast named path, confident countdown, no
-first-time uncertainty at the moment the user actually wants to go phone-free.
+The durable name needs only ONE foreground bond, and the phone now has the exact trigger
+(the `.sensorStart` event). On new-sensor detection, after collecting the code (§3), the
+phone can nudge: *"New sensor — open the watch near it once to pair."* The watch does a
+single foreground handshake (it already has the code) → bonds → saves the identifier. Then
+even the FIRST Sport Mode on that sensor is a "known" sensor: fast named path, confident
+countdown, no first-time uncertainty at the moment the user actually wants to go phone-free.
 
 ---
 
@@ -143,7 +174,9 @@ first-time uncertainty at the moment the user actually wants to go phone-free.
 
 1. **Cold-start fix** (this branch) — DONE, needs on-device validation (force-quit test).
 2. **Component A (per-sensor code)** — the prerequisite; nothing new-sensor works without
-   it. Build + test first with an actual new sensor.
+   it. Build the phone-primary path first: hook `.sensorStart` in `DeviceDataManager` →
+   phone prompt → relay code+ID+activation to the watch; add the watch fallback prompt.
+   Test with an actual new sensor.
 3. **Phase/countdown plumbing (B)** — verify glucose-timestamp granularity, seed the
    scheduler from phone history, surface the countdown.
 4. **Messaging (C)** — cheap once A + B exist.
@@ -160,7 +193,11 @@ instead of the always-on bench behavior.
 - **Service-filtered scan**: does the G7 advertise its service UUID *discoverably* (vs
   only in service data)? If yes, `scanForPeripherals(withServices: [G7 service])` beats
   the current `nil` scan in the background. Check the nRF sniffer captures.
-- **Sensor-ID relay**: confirm the phone can relay the current sensor ID / activation to
-  the watch (for keying the per-sensor code and known/first-time detection).
-- **`aesVerifyFailed` vs other failures**: make sure the code-prompt trigger fires only on
-  a genuine wrong-code, not on a dropped-chunk/transient decrypt error.
+- **`.sensorStart` timing**: confirm the phone's event fires promptly when a new sensor is
+  activated in the Dexcom app (i.e. as soon as Loop's G7CGMManager first reads the new
+  sensor), not only after a long delay — that sets how "at the right moment" the phone
+  prompt is. (The signal exists; the open item is exactly *when* it lands.)
+- **Code relay storage**: store the per-sensor code in the app group / keychain, keyed by
+  sensor ID; keep it out of the log file. Low-sensitivity PIN, but not in plaintext logs.
+- **`aesVerifyFailed` vs other failures**: make sure the watch-fallback code prompt fires
+  only on a genuine wrong-code, not on a dropped-chunk/transient decrypt error.
