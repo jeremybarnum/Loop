@@ -48,12 +48,28 @@ enum PodLoanIdentity {
         let controllerId = rawState["controllerId"] as? UInt32 ?? 0
         let podId = rawState["podId"] as? UInt32 ?? podAddress
 
+        // Beep preference, derived from the pump's own setting so the watch's pod
+        // beeps FOLLOW the phone (parity with OmniBLEPumpManager.swift:468's
+        // `beepPreference.shouldBeepForManualCommand && !silencePod`). Read straight
+        // from rawState (the phone deliberately does not link OmniBLECore):
+        //   confirmationBeeps: BeepPreference.RawValue Int — 0=silent, 1=manual, 2=extended
+        //   silencePod: Bool
+        // Manual commands (user bolus/basal/suspend on the watch) beep at ≥1; automatic
+        // commands (the closed loop's temps) beep only at 2 (extended). silencePod
+        // overrides both. Defaults to the OmniBLE default (.manualCommands) if absent.
+        let silencePod = rawState["silencePod"] as? Bool ?? false
+        let beepsRaw = rawState["confirmationBeeps"] as? Int ?? 1
+        let beepsForManual = (beepsRaw >= 1) && !silencePod
+        let beepsForAutomatic = (beepsRaw >= 2) && !silencePod
+
         return .grant(ltk: ltk,
                       controllerId: controllerId,
                       podId: podId,
                       podAddress: podAddress,
                       messageNumber: messageNumber,
-                      insulinTypeRaw: insulinTypeRaw)
+                      insulinTypeRaw: insulinTypeRaw,
+                      beepsForManual: beepsForManual,
+                      beepsForAutomatic: beepsForAutomatic)
     }
 }
 

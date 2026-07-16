@@ -44,10 +44,19 @@ struct PodLoanGrantUserInfo {
     /// degraded (loan-session insulin only) and says so.
     var doseHistoryData: Data?
 
+    /// Whether the phone's beep setting says to beep for MANUAL commands (user
+    /// bolus/basal/suspend on the watch) and for AUTOMATIC commands (the closed
+    /// loop's temps), derived phone-side from `confirmationBeeps` + `silencePod`
+    /// so the watch's pod beeps follow the phone's setting instead of a hard-coded
+    /// flag. Optional wire keys ("bm"/"ba"): absent from older phones → the watch
+    /// defaults to SILENT (safe/quiet).
+    let beepsForManual: Bool?
+    let beepsForAutomatic: Bool?
+
     // Present iff !granted.
     let denialReason: String?
 
-    static func grant(ltk: Data, controllerId: UInt32, podId: UInt32, podAddress: UInt32, messageNumber: Int, insulinTypeRaw: Int? = nil, doseHistoryData: Data? = nil) -> PodLoanGrantUserInfo {
+    static func grant(ltk: Data, controllerId: UInt32, podId: UInt32, podAddress: UInt32, messageNumber: Int, insulinTypeRaw: Int? = nil, doseHistoryData: Data? = nil, beepsForManual: Bool? = nil, beepsForAutomatic: Bool? = nil) -> PodLoanGrantUserInfo {
         PodLoanGrantUserInfo(granted: true,
                              ltk: ltk,
                              controllerId: controllerId,
@@ -56,6 +65,8 @@ struct PodLoanGrantUserInfo {
                              messageNumber: messageNumber,
                              insulinTypeRaw: insulinTypeRaw,
                              doseHistoryData: doseHistoryData,
+                             beepsForManual: beepsForManual,
+                             beepsForAutomatic: beepsForAutomatic,
                              denialReason: nil)
     }
 
@@ -68,6 +79,8 @@ struct PodLoanGrantUserInfo {
                              messageNumber: nil,
                              insulinTypeRaw: nil,
                              doseHistoryData: nil,
+                             beepsForManual: nil,
+                             beepsForAutomatic: nil,
                              denialReason: reason)
     }
 }
@@ -106,6 +119,8 @@ extension PodLoanGrantUserInfo: RawRepresentable {
             self.messageNumber = messageNumber
             self.insulinTypeRaw = rawValue["it"] as? Int   // optional: absent from older phones
             self.doseHistoryData = rawValue["dh"] as? Data // optional: absent from older phones
+            self.beepsForManual = rawValue["bm"] as? Bool  // optional: absent from older phones → silent
+            self.beepsForAutomatic = rawValue["ba"] as? Bool
             self.denialReason = nil
         } else {
             self.ltk = nil
@@ -115,6 +130,8 @@ extension PodLoanGrantUserInfo: RawRepresentable {
             self.messageNumber = nil
             self.insulinTypeRaw = nil
             self.doseHistoryData = nil
+            self.beepsForManual = nil
+            self.beepsForAutomatic = nil
             self.denialReason = rawValue["dr"] as? String
         }
     }
@@ -134,6 +151,8 @@ extension PodLoanGrantUserInfo: RawRepresentable {
             raw["mn"] = messageNumber
             raw["it"] = insulinTypeRaw
             raw["dh"] = doseHistoryData
+            raw["bm"] = beepsForManual
+            raw["ba"] = beepsForAutomatic
         } else {
             raw["dr"] = denialReason
         }

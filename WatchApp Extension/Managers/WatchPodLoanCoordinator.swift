@@ -288,10 +288,21 @@ final class WatchPodLoanCoordinator: ObservableObject {
     }
     /// Conservative ceiling used only until the therapy max-basal setting has synced.
     static let fallbackMaxTempBasalRate: Double = 3.0
-    /// Push the current temp cap into the pod layer's proof limit so its hard backstop
-    /// tracks the therapy setting (no silent re-cap below what the UI shows).
-    private func applyTempCapToController() {
+
+    /// The phone's beep preference, carried in the loan grant (see PodLoanIdentity):
+    /// whether the pod should beep for MANUAL commands (user bolus/basal/suspend on
+    /// the watch) and AUTOMATIC commands (the closed loop's temps). Default SILENT
+    /// until a grant lands (or for an older phone that doesn't send it).
+    private var loanBeepsManual = false
+    private var loanBeepsAutomatic = false
+
+    /// Program the pod-layer prefs that depend on the session/grant before a command:
+    /// the temp-rate proof cap (therapy max) and whether THIS command beeps — manual
+    /// vs the closed loop's automatic, per the phone's setting. Follows the phone so
+    /// the watch has no independent code-only beep switch.
+    private func applyControllerPrefs(automatic: Bool) {
         controller.tempBasalRateProofLimit = maxTempBasalRate
+        controller.commandBeepsEnabled = automatic ? loanBeepsAutomatic : loanBeepsManual
     }
     /// The rate the basal dial starts at.
     static let defaultBasalRate: Double = 0.5
@@ -421,6 +432,9 @@ final class WatchPodLoanCoordinator: ObservableObject {
         // it (keys retained) with an Enable button.
         heldGrant = grant
         loanInsulinModel = PodLoanInsulinModel.forInsulinTypeRaw(grant.insulinTypeRaw)
+        // Adopt the phone's beep preference for this loan (default silent if absent).
+        loanBeepsManual = grant.beepsForManual ?? false
+        loanBeepsAutomatic = grant.beepsForAutomatic ?? false
         armedAt = Date()
         busy = false
         phase = .armed
@@ -653,6 +667,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
         // uses for a predicted-low zero temp; blocks the loop via manualSuspendActive.
         manualSuspendUntil = Date().addingTimeInterval(Self.tempBasalDuration)
         if Self.isSimulatorDemo { demoSuspend(); return }
+        applyControllerPrefs(automatic: false)
         runPodCommand(label: NSLocalizedString("Suspend", comment: "Command name: suspend")) {
             self.controller.setTempBasal(rate: 0, duration: Self.tempBasalDuration, completion: $0)
         }
@@ -663,6 +678,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
         // Resume re-programs the pod's basal table: use the phone's REAL
         // schedule when it has synced (nil falls back to the proof flat 0.5).
         let schedule = realBasalSchedule
+        applyControllerPrefs(automatic: false)
         runPodCommand(label: NSLocalizedString("Resume", comment: "Command name: resume")) { self.controller.resume(schedule: schedule, completion: $0) }
     }
 
@@ -681,6 +697,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
         let capped = min(max(units, 0), Self.maxBolusUnits)
         guard capped > 0 else { return }
         if Self.isSimulatorDemo { demoBolus(units: capped); return }
+        applyControllerPrefs(automatic: false)
         runPodCommand(label: String(format: NSLocalizedString("Bolus %.2f U", comment: "Command name: bolus with units"), capped)) { self.controller.bolus(units: capped, completion: $0) }
     }
     /// Set the pod's basal to an absolute rate (U/hr). 0 = suspend. Capped at
@@ -691,12 +708,13 @@ final class WatchPodLoanCoordinator: ObservableObject {
         if snapped <= 0 { suspend(); return }   // 0 U/hr = suspend
         manualSuspendUntil = nil   // a positive manual basal clears any bounded suspend
         if Self.isSimulatorDemo { demoSetTempBasal(rate: snapped); return }
-        applyTempCapToController()
+        applyControllerPrefs(automatic: false)
         runPodCommand(label: NSLocalizedString("Set Basal", comment: "Command name: set basal")) { self.controller.setTempBasal(rate: snapped, duration: Self.tempBasalDuration, completion: $0) }
     }
     /// Cancel the running temp basal; the pod reverts to its scheduled basal.
     func cancelBasal() {
         if Self.isSimulatorDemo { demoCancelTempBasal(); return }
+        applyControllerPrefs(automatic: false)
         runPodCommand(label: NSLocalizedString("Cancel Temp", comment: "Command name: cancel temp basal")) { self.controller.cancelTempBasal(completion: $0) }
     }
 
@@ -716,7 +734,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
         }
         let snapped = (min(max(unitsPerHour, 0), maxTempBasalRate) / 0.05).rounded() * 0.05
         if Self.isSimulatorDemo { demoSetTempBasal(rate: snapped, duration: duration); return }
-        applyTempCapToController()
+        applyControllerPrefs(automatic: true)   // closed-loop enact → beeps follow the phone's AUTOMATIC pref
         runPodCommand(label: String(format: NSLocalizedString("Loop %.2f U/hr", comment: "Command name: loop-set temp basal"), snapped)) {
             self.controller.setTempBasal(rate: snapped, duration: duration, completion: $0)
         }

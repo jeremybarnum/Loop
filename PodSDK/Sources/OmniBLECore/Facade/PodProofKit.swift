@@ -233,7 +233,13 @@ public final class PodProofController: NSObject {
     // ⚠️ TEMP-TEST-BEEPS: audible confirmation of every watch command for bench
     // testing (Jeremy, 2026-07-09). Set FALSE for quiet/competition builds —
     // silence at the show ring is a design feature. Grep TEMP-TEST-BEEPS.
-    public static let testBeepsEnabled = true   // TEMP-TEST-BEEPS (false = silent)
+    public static let testBeepsEnabled = true   // TEMP-TEST-BEEPS — superseded by commandBeepsEnabled below
+
+    /// Whether pod commands issued through this facade should beep. Set by the caller
+    /// (WatchPodLoanCoordinator) from the PHONE's beep preference — carried in the loan
+    /// grant — before each command, so the watch's pod beeps follow the phone's setting
+    /// instead of a hard-coded flag. Defaults to SILENT (quiet/safe).
+    public var commandBeepsEnabled: Bool = false
 
     /// Hard ceiling on any bolus commanded through this facade.
     public static let bolusProofLimit: Double = 1.0
@@ -598,7 +604,7 @@ public final class PodProofController: NSObject {
     /// command would fault a mid-setup pod — run completeSetup() first.
     public func suspend(completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
         runCommand(named: "Suspend delivery", completion: journaling(.suspend, completion)) { session in
-            let result = session.suspendDelivery(suspendReminder: nil, silent: !Self.testBeepsEnabled)
+            let result = session.suspendDelivery(suspendReminder: nil, silent: !self.commandBeepsEnabled)
             switch result {
             case .success(let statusResponse, _):
                 return statusResponse
@@ -629,7 +635,7 @@ public final class PodProofController: NSObject {
             _ = try session.getStatus()
             let offset = TimeZone.currentFixed.scheduleOffset(forDate: Date())
             return try session.resumeBasal(schedule: schedule ?? Self.proofBasalSchedule, scheduleOffset: offset,
-                                           acknowledgementBeep: Self.testBeepsEnabled)
+                                           acknowledgementBeep: self.commandBeepsEnabled)
         }
     }
 
@@ -642,7 +648,7 @@ public final class PodProofController: NSObject {
             return
         }
         runCommand(named: String(format: "Bolus %.2f U", units), completion: journaling(.bolus(units: units), completion)) { session in
-            let result = session.bolus(units: units, acknowledgementBeep: Self.testBeepsEnabled, completionBeep: Self.testBeepsEnabled)
+            let result = session.bolus(units: units, acknowledgementBeep: self.commandBeepsEnabled, completionBeep: self.commandBeepsEnabled)
             switch result {
             case .success(let statusResponse):
                 return statusResponse
@@ -709,7 +715,7 @@ public final class PodProofController: NSObject {
                 throw PodCommsError.podSuspended
             }
             let result = session.setTempBasal(rate: rate, duration: duration, isHighTemp: false, automatic: false,
-                                              acknowledgementBeep: Self.testBeepsEnabled)
+                                              acknowledgementBeep: self.commandBeepsEnabled)
             switch result {
             case .success(let statusResponse):
                 return statusResponse
@@ -727,7 +733,7 @@ public final class PodProofController: NSObject {
     public func cancelTempBasal(completion: @escaping (Result<PodProofStatus, Error>) -> Void) {
         runCommand(named: "Cancel temp basal", completion: journaling(.cancelTempBasal, completion)) { session in
             let result = session.cancelDelivery(deliveryType: .tempBasal,
-                                                beepType: Self.testBeepsEnabled ? .beepBeep : .noBeepCancel)
+                                                beepType: self.commandBeepsEnabled ? .beepBeep : .noBeepCancel)
             switch result {
             case .success(let statusResponse, _):
                 return statusResponse
