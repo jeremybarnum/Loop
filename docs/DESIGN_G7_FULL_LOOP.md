@@ -135,6 +135,17 @@ verify device **and** simulator builds + live EGV injection.
 11. ~~Complication shows watch-local BG in Sport Mode~~ **DONE 2026-07-15** — built from the prediction-store anchor+prediction, reloads on each watch-local update.
 12. Per-sensor pairing-PIN UI (§3.7) — still open (new sensor fails silently).
 13. Reader wedge fix (BT off→on `peripheral` clearing) + surface the silent busy-drop enact (§3.2/3.4).
+    **Reader-health PANEL: DROPPED (Jeremy 2026-07-16).** No bespoke reader diagnostics on the
+    watch — "to the extent reliability is verified, we don't need more diagnosis tools on the watch
+    than we have on the phone." Production indicates BG staleness via the **standard Loop freshness
+    color scheme** (green/aging/stale), driven by the watch's own loop/BG recency — same grammar
+    as the phone. The wedge fix (a real stall bug) stays. **Open, intertwined decision — the watch
+    color scheme as a whole:** Sport Mode currently SUPPRESSES freshness colors and shows a
+    turf-green ("chestnut") identity ring that doesn't age (`HUDInterfaceController.update()`).
+    Adopting standard freshness coloring means the ring reverts to green/aging/stale (which is what
+    we want for staleness) but then can NO LONGER double as the "you're in Sport Mode" identity
+    signal — hence Jeremy's "the chestnut thing might not work; may need to go back to the chrome
+    solution." TBD: how to signal in-Sport-Mode once the ring is standard-colored.
 14. ~~"Session ended — loop is open" alert after relaunch~~ **DONE 2026-07-15** — orphaned-journal recovery in `.idle` announces once.
 15a. ~~Pod-connect timeout UX (P1#8)~~ **DONE 2026-07-15** — 40s → "Pod isn't responding — Keep Trying / Cancel"; generation-guarded, releasePod-before-retry.
 15b. **Dual-sovereignty activation gate (P1#7) — CORE DONE 2026-07-15, PICKER DEFERRED.** Done: CGM-sovereignty check warns (haptic+alert) if no DIRECT read lands within 6 min of activation (`G7Client.lastReadDate` past activation, not store freshness). **Deferred (needs Jeremy's semantics): the full 3-way degraded-mode PICKER** — "continue without pod (CGM-viewer)" / "continue phone-fed (labeled)" / "abort". Open questions: what does "phone-fed, labeled" concretely do to the loop inputs and how is it surfaced ongoing; is CGM-viewer (loop open, no pod) a first-class supported mode; exact wording. Pod half of the gate = P1#8 (done).
