@@ -64,6 +64,10 @@ struct WatchPredictionOutput {
     let usedPreLoanHistory: Bool
     let inputDoseCount: Int
     let inputCarbCount: Int
+    /// The stock manual-bolus recommendation (U) for the current prediction — used by
+    /// the Sport Mode carb+bolus flow to recommend a meal bolus locally (phone-free),
+    /// same as the phone. Includes any `pendingCarb` passed to `predict`.
+    let recommendedBolus: Double?
 }
 
 extension WatchPredictionOutput {
@@ -118,6 +122,10 @@ final class WatchPredictionEngine {
     /// the entry dial (the rider is REPORTING a reading); false for background
     /// HUD refreshes, which anchor on an already-stored sample.
     private var storeEntry = true
+    /// A carb the user is CONSIDERING (not yet stored) — injected into this run's carb
+    /// history so the manual-bolus recommendation accounts for it (the Sport Mode
+    /// carb+bolus flow). Cleared after each run.
+    private var pendingCarb: NewCarbEntry?
 
     init(loopManager: LoopDataManager, coordinator: WatchPodLoanCoordinator) {
         self.loopManager = loopManager
@@ -153,9 +161,10 @@ final class WatchPredictionEngine {
     /// (the push path loses them across a watch reinstall and is unreliable on
     /// simulators), then run. Every branch logs — silence is not an option here.
     @MainActor
-    func predict(manualBG: HKQuantity, at date: Date = Date(), storeEntry: Bool = true, completion: @escaping (Swift.Result<WatchPredictionOutput, Error>) -> Void) {
+    func predict(manualBG: HKQuantity, at date: Date = Date(), storeEntry: Bool = true, pendingCarb: NewCarbEntry? = nil, completion: @escaping (Swift.Result<WatchPredictionOutput, Error>) -> Void) {
         let tapped = Date()
         self.storeEntry = storeEntry
+        self.pendingCarb = pendingCarb
         let settings = loopManager.settings
         log.default("predict: settings state %{public}@", settingsState(settings))
 
@@ -351,6 +360,13 @@ final class WatchPredictionEngine {
                 .filter { $0.startDate <= date }
                 .sorted { $0.startDate < $1.startDate }
 
+            // Inject the carb under consideration (not yet stored) so the manual-bolus
+            // recommendation below accounts for it. Additive; nil for the normal loop path.
+            if let pending = self.pendingCarb {
+                carbEntries.append(StoredCarbEntry(startDate: pending.startDate, quantity: pending.quantity,
+                                                   foodType: pending.foodType, absorptionTime: pending.absorptionTime))
+            }
+
             let input = LoopAlgorithmInput(
                 predictionInput: LoopPredictionInput(
                     glucoseHistory: history,
@@ -368,6 +384,18 @@ final class WatchPredictionEngine {
                     basalRates: basalSchedule,
                     model: model,
                     lastTempBasal: activeTemp)
+
+                // Stock manual-bolus recommendation for this curve (the meal bolus for the
+                // Sport Mode carb+bolus flow — includes any pendingCarb injected above).
+                // pendingInsulin 0: the watch has no in-flight manual bolus. maxBolus-capped
+                // exactly like the phone.
+                let recommendedBolus: Double? = settings.maximumBolus.map { maxBolus in
+                    prediction.glucose.recommendedManualBolus(
+                        to: targetSchedule, at: date,
+                        suspendThreshold: settings.suspendThreshold?.quantity,
+                        sensitivity: sensitivitySchedule, model: model,
+                        pendingInsulin: 0, maxBolus: maxBolus).amount
+                }
 
                 // IOB/COB for display: computed from the same inputs (and the
                 // prediction's own ICE) so the numbers are the algorithm's view.
@@ -421,7 +449,8 @@ final class WatchPredictionEngine {
                     activeCarbs: activeCarbs,
                     usedPreLoanHistory: !grantHistory.isEmpty,
                     inputDoseCount: doses.count,
-                    inputCarbCount: carbEntries.count)))
+                    inputCarbCount: carbEntries.count,
+                    recommendedBolus: recommendedBolus)))
             } catch {
                 completion(.failure(error))
             }

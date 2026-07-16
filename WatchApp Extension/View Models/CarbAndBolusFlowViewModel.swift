@@ -130,14 +130,31 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
     }
 
     private func recommendBolus(for entry: NewCarbEntry) {
-        // SPORT MODE: the phone is away, so we can't round-trip to it for a
-        // recommendation. Skip it — the carb still lands in the watch's own store and
-        // the closed loop doses for the COB via temp basal. (A LOCAL meal-bolus
-        // recommendation from the watch's own engine is a follow-up.) This flow is
-        // UI-driven, so it runs on the main actor where the coordinator lives.
+        // SPORT MODE: the phone is away, so compute the meal-bolus recommendation LOCALLY
+        // with the watch's own prediction engine — the SAME stock algorithm the phone
+        // runs — with this carb injected. UI-driven, so on the main actor.
         if MainActor.assumeIsolated({ ExtensionDelegate.shared().podLoanCoordinator.phase == .active }) {
-            recommendedBolusAmount = 0
-            isComputingRecommendedBolus = false
+            isComputingRecommendedBolus = true
+            MainActor.assumeIsolated {
+                let engine = WatchPredictionEngine(loopManager: ExtensionDelegate.shared().loopManager,
+                                                   coordinator: ExtensionDelegate.shared().podLoanCoordinator)
+                // storeEntry:false → the algorithm anchors on the stored G7 series; manualBG is
+                // display-only here, so the store's newest reading (or a neutral placeholder) is fine.
+                let anchorBG = ExtensionDelegate.shared().predictionStore.anchorSample?.quantity
+                    ?? HKQuantity(unit: .milligramsPerDeciliter, doubleValue: 100)
+                engine.predict(manualBG: anchorBG, storeEntry: false, pendingCarb: entry) { [weak self] result in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        self.isComputingRecommendedBolus = false
+                        // Cap the SHOWN recommendation at what Sport Mode can actually deliver
+                        // (the pod-command bolus cap), so display == delivery — no surprise
+                        // clamp. Raising it for full meal boluses is a cap decision (needs the
+                        // Sport Mode cap AND the phone reconciliation cap raised together).
+                        let reco = (try? result.get())?.recommendedBolus ?? 0
+                        self.recommendedBolusAmount = min(reco, WatchPodLoanCoordinator.maxBolusUnits)
+                    }
+                }
+            }
             return
         }
         let potentialEntry = PotentialCarbEntryUserInfo(carbEntry: entry)
