@@ -187,7 +187,7 @@ final class WatchAutoLoop: ObservableObject {
                 } else {
                     self.raiseNotice(
                         title: NSLocalizedString("No Direct Sensor Yet", comment: "Alert title: the watch hasn't read the sensor directly since Sport Mode started"),
-                        message: NSLocalizedString("Sport Mode is on, but the watch hasn't read the sensor through its own radio yet (the 'G7 Direct' row still shows no read). Any glucose shown may be coming from your phone — don't rely on the watch away from your phone until G7 Direct shows a ✓. Keep the app open and stay near the sensor.", comment: "Alert body: CGM sovereignty not yet proven"))
+                        message: NSLocalizedString("Sport Mode is on, but the watch hasn't read the sensor directly yet. Watch will continue trying to connect to sensor but once you move away from phone you will not have fresh BG until the watch connects.", comment: "Alert body: CGM sovereignty not yet proven"))
                 }
             }
         }
