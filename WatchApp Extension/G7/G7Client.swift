@@ -591,16 +591,73 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     // MARK: Acquisition — scan (default) or pending-connect (A/B experiment)
 
     private func beginAcquire() {   // on cbQueue
-        // Proven path: warm reconnect via the in-memory bonded peripheral, else scan.
-        // (A cold-start retrievePeripherals restore was tried and REVERTED — it regressed
-        // first-connect: a restored handle that didn't connect promptly stalled on the
-        // 400s reconnect watchdog. Re-approach cold start separately, e.g. scan + targeted
-        // connect in PARALLEL so a bad restore can never block discovery.)
         if reconnectMode, let saved = savedPeripheral {
+            // WARM: in-memory bonded handle → targeted pending connect (the proven 15/15 path).
             beginReconnect(saved)
+        } else if reconnectMode, let restored = restorePersistedPeripheral() {
+            // COLD (post-relaunch/crash): no in-memory handle, but the bonded identifier is
+            // persisted. Restore it and run the non-throttled targeted connect IN PARALLEL with
+            // a scan. The targeted path catches the sensor's sparse advertisement that a
+            // throttled background scan misses — the whole reason warm reconnect is 15/15 while
+            // cold scan whiffs — and the concurrent scan is the safety net so a STALE handle (a
+            // new sensor) can never block discovery the way the reverted retrievePeripherals-only
+            // version did (it armed a targeted connect with a 400s watchdog and NO scan).
+            beginColdReacquire(restored)
         } else {
+            // No handle at all (first-ever sensor, or the OS forgot the bond) → scan only.
             beginScan()
         }
+    }
+
+    /// Restore the bonded G7 by its PERSISTED identifier (survives relaunch, unlike the
+    /// in-memory `savedPeripheral`). This is what lets a cold start take the non-throttled
+    /// targeted-connect path instead of a background-throttled scan. Returns nil if we've
+    /// never bonded, the OS no longer knows the peripheral, or Bluetooth isn't up yet.
+    private func restorePersistedPeripheral() -> CBPeripheral? {
+        guard central?.state == .poweredOn,
+              let s = UserDefaults.standard.string(forKey: Self.savedPeripheralKey),
+              let uuid = UUID(uuidString: s) else { return nil }
+        return central.retrievePeripherals(withIdentifiers: [uuid]).first
+    }
+
+    /// COLD-start reacquire: a targeted `connect()` to the restored bonded peripheral
+    /// (non-throttled) running CONCURRENTLY with a scan (the safety net for a stale/changed
+    /// sensor). Whichever path yields a connection first wins — `didConnect` stops the scan;
+    /// `didDiscover` drops a stale targeted handle before connecting to the discovered sensor.
+    /// A SINGLE watchdog gives up only if BOTH stay silent, so — unlike the reverted version —
+    /// a bad restored handle can never blind us: the scan runs the whole time.
+    private func beginColdReacquire(_ p: CBPeripheral) {   // on cbQueue
+        candidates = []
+        scanWindowStarted = false
+        finished = false
+        dataStream = ByteStream(label: "g7.data")
+        authStream = MessageStream(label: "g7.auth", name: "auth")
+        ctrlStream = MessageStream(label: "g7.ctrl", name: "ctrl")
+
+        peripheral = p
+        peripheral.delegate = self
+        reconnectArmedAt = Date()
+        setStatus("Reconnecting…")
+        log("cold reacquire: targeted connect → \(p.identifier) ∥ parallel scan")
+        central.connect(p, options: nil)                                   // PRIMARY: non-throttled
+        central.scanForPeripherals(withServices: nil,                      // SAFETY NET: concurrent
+                                   options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+
+        // One watchdog for BOTH paths: give up only if neither connects within a full grid
+        // cycle+ (the targeted connect gets time to catch the next ~5-min advertisement, and
+        // the scan runs alongside for a stale handle). On give-up, tear both down and let the
+        // predictive scheduler retry the next window.
+        scanTimeoutWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.attemptActive, self.peripheral?.state != .connected else { return }
+            log("cold reacquire quiet \(Int(self.reconnectWatchdog))s — giving up (scheduler retries)")
+            self.central.stopScan()
+            self.central.cancelPeripheralConnection(p)
+            self.peripheral = nil
+            self.finishAttempt(success: false, message: "No G7 sensor found (in range?)")
+        }
+        scanTimeoutWork = work
+        cbQueue.asyncAfter(deadline: .now() + reconnectWatchdog, execute: work)
     }
 
     /// Pending-connect reacquire (no scan): re-arm connect() on the held bonded peripheral so the
@@ -671,15 +728,17 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             // Fires on the FIRST start (connect() created the central and is waiting for BT)
             // and when BT is toggled back ON mid-session. WEDGE FIX (safe half, kept): clear a
             // stale `peripheral` left from before a power-off — it used to block the old
-            // `peripheral == nil` gate and stall the reader until relaunch — then take the
-            // PROVEN scan path. (Routing this through beginAcquire/retrievePeripherals was
-            // REVERTED — it regressed first-connect.)
+            // `peripheral == nil` gate and stall the reader until relaunch. Then route through
+            // beginAcquire so the COLD first-connect takes the persisted-UUID targeted connect
+            // (∥ scan) — NOT a bare scan. (The earlier retrievePeripherals-only routing was
+            // reverted for regressing first-connect; beginColdReacquire's concurrent scan is
+            // the fix that makes this safe.)
             guard wantConnect else { return }
             if let p = peripheral, p.state != .connected { central.cancelPeripheralConnection(p) }
             peripheral = nil
             scanWindowStarted = false
             attemptActive = true
-            beginScan()
+            beginAcquire()
         case .poweredOff:
             log("Bluetooth is powered OFF")
             if attemptActive { finishAttempt(success: false, message: "Bluetooth is off") }
@@ -715,9 +774,16 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         if !scanWindowStarted {
             scanWindowStarted = true
             cbQueue.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                guard let self, !self.candidates.isEmpty, self.attemptActive else { return }
+                // Bail if a concurrent targeted connect (cold reacquire) already won.
+                guard let self, !self.candidates.isEmpty, self.attemptActive,
+                      self.peripheral?.state != .connected else { return }
                 self.central.stopScan()
                 let best = self.candidates.max(by: { $0.rssi < $1.rssi })!
+                // Cold reacquire: if a targeted connect to a DIFFERENT (stale) handle is
+                // pending, drop it before connecting to the freshly discovered sensor.
+                if let cur = self.peripheral, cur.identifier != best.p.identifier {
+                    self.central.cancelPeripheralConnection(cur)
+                }
                 self.peripheral = best.p
                 self.peripheral.delegate = self
                 log("connecting to strongest candidate \(best.p.identifier) RSSI=\(best.rssi)")
@@ -728,7 +794,8 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        scanTimeoutWork?.cancel(); scanTimeoutWork = nil          // stop the reconnect watchdog
+        central.stopScan()                                        // cold reacquire ran a concurrent scan
+        scanTimeoutWork?.cancel(); scanTimeoutWork = nil          // stop the reconnect/cold watchdog
         if let armed = reconnectArmedAt {
             log("pending connect FIRED after \(Int(Date().timeIntervalSince(armed)))s")   // key A/B metric
             reconnectArmedAt = nil
