@@ -307,7 +307,7 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
                     // first read instead of a bare "no read". The G7 advertises on a ~5-min
                     // grid, so ≤5 min is the honest worst-case bound (matches the activation
                     // screen). Flips to "✓ …" the moment a read lands.
-                    cell.setDetail(NSLocalizedString("expected ~5 min", comment: "G7 Direct row: expected time to the first direct read while onboarding"))
+                    cell.setDetail(String(format: NSLocalizedString("expected %@", comment: "G7 Direct row: expected time to the next reading while onboarding"), store.nextReadingETAText))
                 }
             case .eventualBG:
                 if let output = store.latestOutput, !store.isAnchorStale {

@@ -40,6 +40,28 @@ final class WatchPredictionStore {
     /// The newest stored sample (the prediction's anchor).
     var anchorSample: StoredGlucoseSample? { recentSamples.last }
 
+    /// The G7 reads on a fixed ~5-min grid, so the next reading is the next grid point after
+    /// the newest sample's timestamp — a real countdown, not a flat worst-case. Anchored on
+    /// `anchorSample` (the watch's own read OR the phone's relay; same sensor, same grid).
+    /// Nil until we have any sample (caller shows a "~5 min" fallback).
+    var secondsToNextExpectedReading: TimeInterval? {
+        guard let anchored = anchorSample?.startDate else { return nil }
+        let cycle: TimeInterval = 60 * 5
+        let elapsed = Date().timeIntervalSince(anchored)
+        guard elapsed >= 0 else { return cycle }
+        return cycle - elapsed.truncatingRemainder(dividingBy: cycle)
+    }
+
+    /// Short "next reading" estimate for the CGM-onboarding UI, from the grid phase above.
+    /// "~N min" (rounded up, so it never under-promises); "~5 min" fallback when no sample yet.
+    var nextReadingETAText: String {
+        guard let s = secondsToNextExpectedReading else {
+            return NSLocalizedString("~5 min", comment: "CGM onboarding: worst-case wait when the reading phase isn't known yet")
+        }
+        let mins = min(5, max(1, Int(ceil(s / 60))))
+        return String(format: NSLocalizedString("~%d min", comment: "CGM onboarding: minutes to the next expected reading"), mins)
+    }
+
     private let log = OSLog(category: "WatchPredictionStore")
     private let loopManager: LoopDataManager
     private let coordinator: WatchPodLoanCoordinator

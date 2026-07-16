@@ -197,7 +197,8 @@ struct WatchPodControlView: View {
         connectionRow(label: NSLocalizedString("Glucose", comment: "Activation: CGM timing label"),
                       status: sensorConfirmed
                             ? NSLocalizedString("Reading directly", comment: "Activation: a direct read already landed")
-                            : NSLocalizedString("in ~5 min", comment: "Activation: expected time to first direct glucose"),
+                            : String(format: NSLocalizedString("in %@", comment: "Activation: expected time to the next reading"),
+                                     ExtensionDelegate.shared().predictionStore.nextReadingETAText),
                       done: sensorConfirmed) {
             EmptyView()
         }
