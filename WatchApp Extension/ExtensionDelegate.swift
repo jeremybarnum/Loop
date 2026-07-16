@@ -99,17 +99,26 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         // do nothing until a session is active.
         _ = predictionStore
         _ = autoLoop
-        g7.start()   // phone-free: begin the G7 reader (pending-connect reacquire + workout keepalive)
 
-        // 3b v2.1: PUSH the Show-Mode status to the phone on phase TRANSITIONS (grant/end) so
-        // its tile updates immediately — the user just watched Show Mode activate on the wrist;
-        // the phone shouldn't take a poll interval to agree. The poll stays the steady state
-        // (watch remains timer-free); this is edge-triggered only.
+        // The G7 reader is GATED to Sport Mode: it runs ONLY while the loan is active
+        // (phase == .active). Outside Sport Mode the watch gets glucose from the phone, so
+        // running the reader (scan/connect + WorkoutKeepalive) would only drain the battery.
+        // A crash/force-quit ends the session (→ .idle, orphaned journal, P1#10), so the reader
+        // correctly stops; re-activating starts it fresh (→ cold reacquire from the saved handle).
+        //
+        // 3b v2.1 also lives here: PUSH the Show-Mode status to the phone on phase TRANSITIONS so
+        // its tile updates immediately (the poll stays the steady state; edge-triggered only).
         loanPhasePushCancellable = podLoanCoordinator.$phase
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] phase in
-                self?.pushLoanStatusToPhone(active: phase == .active)
+                guard let self else { return }
+                self.pushLoanStatusToPhone(active: phase == .active)
+                if phase == .active {
+                    self.g7.start()   // Sport Mode active → begin the direct reader
+                } else {
+                    self.g7.stop()    // not active (incl. post-crash .idle) → reader off, save battery
+                }
             }
 
         // P1#11 — in Sport Mode the phone stops pushing context, so nothing reloads
