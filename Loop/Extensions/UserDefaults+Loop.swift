@@ -22,6 +22,7 @@ extension UserDefaults {
         case pendingPodLoanRevokeDate = "com.loopkit.Loop.PendingPodLoanRevokeDate"
         case sensorPairingCodes = "com.loopkit.Loop.SensorPairingCodes"
         case lastSeenSensorID = "com.loopkit.Loop.LastSeenSensorID"
+        case pendingSensorCodeRelay = "com.loopkit.Loop.PendingSensorCodeRelay"
     }
 
     /// SHA-256 hex digest of the last watch-loan journal whose doses were reconciled
@@ -68,6 +69,14 @@ extension UserDefaults {
     var lastSeenSensorID: String? {
         get { string(forKey: Key.lastSeenSensorID.rawValue) }
         set { set(newValue, forKey: Key.lastSeenSensorID.rawValue) }
+    }
+
+    /// A sensor-code relay that couldn't be sent because the watch session wasn't activated
+    /// yet (a sensor change racing app launch). Fired to the watch on activation, then cleared.
+    /// Stores the SensorCodeUserInfo rawValue (plist-safe: strings + a date).
+    var pendingSensorCodeRelay: [String: Any]? {
+        get { dictionary(forKey: Key.pendingSensorCodeRelay.rawValue) }
+        set { set(newValue, forKey: Key.pendingSensorCodeRelay.rawValue) }
     }
 
     var legacyPumpManagerRawValue: PumpManager.RawValue? {

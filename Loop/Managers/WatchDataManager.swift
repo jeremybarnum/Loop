@@ -58,12 +58,26 @@ final class WatchDataManager: NSObject {
         guard let code = note.userInfo?["code"] as? String,
               let sensorID = note.userInfo?["sid"] as? String else { return }
         let activatedAt = note.userInfo?["act"] as? Date
+        let info = SensorCodeUserInfo(code: code, sensorID: sensorID, activatedAt: activatedAt)
         guard let session = watchSession, session.activationState == .activated else {
-            log.error("Sensor code relay deferred: watch session not activated")
+            // Session not up yet (sensor change raced app launch): PARK it and fire on
+            // activation, rather than dropping the code — mirrors sendPodLoanRevoke. Once
+            // sent, transferUserInfo itself queues delivery to an asleep/absent watch.
+            UserDefaults.appGroup?.pendingSensorCodeRelay = info.rawValue
+            log.error("Sensor code relay parked: watch session not activated (will fire on activation)")
             return
         }
-        session.transferUserInfo(SensorCodeUserInfo(code: code, sensorID: sensorID, activatedAt: activatedAt).rawValue)
+        session.transferUserInfo(info.rawValue)
         log.default("Relayed sensor code to watch for sensor %{public}@", sensorID)
+    }
+
+    /// Fire a parked sensor-code relay once the session activates (see sendSensorCodeToWatch).
+    private func sendPendingSensorCodeIfNeeded(_ session: WCSession) {
+        guard session.activationState == .activated,
+              let raw = UserDefaults.appGroup?.pendingSensorCodeRelay else { return }
+        UserDefaults.appGroup?.pendingSensorCodeRelay = nil
+        session.transferUserInfo(raw)
+        log.default("Parked sensor code relayed to watch (from activation)")
     }
 
     /// Queue a parked revoke (see sendPodLoanRevoke) once the session activates.
@@ -1066,6 +1080,7 @@ extension WatchDataManager: WCSessionDelegate {
                 sendWatchContextIfNeeded()
                 sendSupportedBolusVolumesIfNeeded()
                 sendPendingPodLoanRevokeIfNeeded(session)
+                sendPendingSensorCodeIfNeeded(session)
             }
         case .inactive, .notActivated:
             break
