@@ -20,7 +20,10 @@ APPICON_NAME = AppIcon
 APP_STORE_URL = 
 
 // Features [DEFAULT]
-SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited)
+// FAKE_NEW_SENSOR: enables the new-sensor TEST hooks/controls (Component E) so the flow can
+// be exercised against the current sensor without activating a real one. On this
+// g7-build-next TEST branch ONLY — STRIP before a production build.
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) FAKE_NEW_SENSOR
 
 // General [DEFAULT]
 LOOP_LOCAL_CACHE_DURATION_DAYS = 7
