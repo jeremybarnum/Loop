@@ -223,7 +223,7 @@ struct WatchPodControlView: View {
     // the takeover FAILS: the coordinator drops back to .armed (keys retained,
     // lastError set — shown by the shared error header) and offers a retry.
     private var untetherSection: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             Text("Sport Mode")
                 .font(.headline)
 
@@ -264,21 +264,21 @@ struct WatchPodControlView: View {
                 }
             }
 
-            // CGM shown as an expectation (not a gate) — see sensorStatusRow.
-            sensorStatusRow
-
-            // Pod up = Sport Mode is yours and you can leave the phone; the CGM follows on
-            // its own. One tap into the existing HUD, no waiting on the sensor.
+            // Pod up = Sport Mode is yours. Put the primary action (OK → HUD) RIGHT HERE —
+            // under the pod status and above the fold — so the user taps OK instead of
+            // hunting for the awkward system X. Full-size (not .footnote) so it reads as the
+            // action. The CGM expectation follows below; it's informational, not a gate.
             if coordinator.phase == .active {
+                Button(NSLocalizedString("OK", comment: "Activation: dismiss into the Sport Mode HUD")) { dismiss() }
+                    .padding(.top, 2)
                 Text(NSLocalizedString("OK to leave your phone", comment: "Activation: reassurance that the phone can be left behind"))
                     .font(.caption2)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
-                    .padding(.top, 2)
-                Button(NSLocalizedString("OK", comment: "Activation: dismiss into the Sport Mode HUD")) { dismiss() }
-                    .font(.footnote)
-                    .padding(.top, 2)
             }
+
+            // CGM shown as an expectation (not a gate) — see sensorStatusRow.
+            sensorStatusRow
         }
         .onReceive(takeoverTick) { _ in
             // Fill toward ~90% over ~11s while busy; reset when not. Never reaches
