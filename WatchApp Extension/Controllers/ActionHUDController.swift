@@ -131,13 +131,13 @@ final class ActionHUDController: HUDInterfaceController {
             }
         }
 
-        // In Sport Mode the phone is away: Carbs (routes to the phone) is
-        // unavailable — prediction lives on the HUD's glucose row now — while
-        // Bolus and the Override button (which becomes the basal control) must
-        // stay enabled since they drive the pod directly — regardless of the
-        // loop-mode logic above that might otherwise disable them.
+        // In Sport Mode the phone is away, but Carbs, Bolus, and the Override button
+        // (which becomes the basal control) all stay enabled and drive the pod / the
+        // watch's own stores directly — regardless of the loop-mode logic above that
+        // might otherwise disable them. (Carbs route into the watch's carb store + loan
+        // journal now, phone-free — see CarbAndBolusFlowViewModel.)
         if isInShowMode {
-            carbsButtonGroup.state = .disabled
+            carbsButtonGroup.state = .off
             bolusButtonGroup.state = .off
             overrideButtonGroup.state = .off
         }

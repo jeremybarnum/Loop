@@ -872,8 +872,10 @@ extension WatchDataManager: WCSessionDelegate {
         }
 
         guard !entries.isEmpty else {
-            // Nothing to enter (e.g. schedule-only loan) — mark reconciled so a
-            // duplicate hand-back doesn't re-run the audit.
+            // No insulin to enter (e.g. a carbs-only loan) — but carbs might still
+            // exist. Enter them, then mark reconciled so a duplicate hand-back doesn't
+            // re-run the audit.
+            enterWatchLoanCarbs(journal)
             UserDefaults.appGroup?.lastReconciledWatchLoanJournalHash = journalHash
             return
         }
@@ -894,9 +896,29 @@ extension WatchDataManager: WCSessionDelegate {
             if let error = error {
                 self?.log.error("Watch loan reconciliation failed: %{public}@ — nothing entered, hash not persisted; a resend re-enters everything", String(describing: error))
             } else {
+                self?.enterWatchLoanCarbs(journal)   // carbs only after the dose write commits (hash persists)
                 UserDefaults.appGroup?.lastReconciledWatchLoanJournalHash = journalHash
                 self?.log.default("Watch loan reconciled: %{public}d entr%{public}@ in one write (basal net %{public}+.2f U)",
                                   count, count == 1 ? "y" : "ies", journalNet)
+            }
+        }
+    }
+
+    /// Enter the journal's watch-logged carbs into the phone's carb store, so the
+    /// phone's COB is correct after the loan (a meal logged on the watch would
+    /// otherwise be invisible to the phone). Called only where the reconcile hash is
+    /// persisted, so the handback dedup guard prevents any double-entry.
+    private func enterWatchLoanCarbs(_ journal: WatchLoanJournal) {
+        guard let carbs = journal.carbs, !carbs.isEmpty else { return }
+        for carb in carbs {
+            let entry = NewCarbEntry(quantity: HKQuantity(unit: .gram(), doubleValue: carb.grams),
+                                     startDate: carb.date, foodType: nil, absorptionTime: carb.absorptionTime)
+            deviceManager.loopManager.addCarbEntry(entry) { [weak self] result in
+                if case .failure(let error) = result {
+                    self?.log.error("Watch loan carb reconciliation failed (%{public}.0f g): %{public}@", carb.grams, String(describing: error))
+                } else {
+                    self?.log.default("Watch loan carb reconciled: %{public}.0f g", carb.grams)
+                }
             }
         }
     }
@@ -1160,11 +1182,22 @@ private struct WatchLoanEvent: Decodable {
     let kind: Kind
 }
 
+/// Mirror of OmniBLECore.PodLoanCarb — carbs the watch logged during the loan.
+/// Field names MUST match the original (synthesized Codable keys).
+private struct WatchLoanCarb: Decodable {
+    let id: UUID
+    let date: Date
+    let grams: Double
+    let absorptionTime: TimeInterval
+}
+
 private struct WatchLoanJournal: Decodable {
     let startedAt: Date
     let deliveredAtStart: Double?
     let deliveredLatest: Double?
     let events: [WatchLoanEvent]
+    /// Optional so a journal from a PRE-carb watch build still decodes (absent → nil).
+    let carbs: [WatchLoanCarb]?
 
     init?(data: Data) {
         let decoder = JSONDecoder()

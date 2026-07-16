@@ -376,6 +376,17 @@ public final class PodController: NSObject {
         emit("LOAN JOURNAL: \(PodLoanEvent(kind: kind).describedAction)")
     }
 
+    /// Record a carb the watch logged during the loan, so it rides the hand-back
+    /// channel and the phone can reconcile it into its own carb store / Nightscout.
+    /// Not a pod action — it goes in the journal's separate `carbs` list, leaving
+    /// the insulin math untouched.
+    public func recordLoanCarb(grams: Double, absorptionTime: TimeInterval, at date: Date = Date()) {
+        guard loanJournal != nil else { return }
+        loanJournal?.recordCarb(PodLoanCarb(date: date, grams: grams, absorptionTime: absorptionTime))
+        PodLoanJournalStore.persist(loanJournal)
+        emit(String(format: "LOAN JOURNAL: carb %.0f g (%.0f min absorption)", grams, absorptionTime / 60))
+    }
+
     /// End the current loan (records hand-back) and return its summary, or nil
     /// if no loan is active. The journal is retained for display until the next
     /// takeover starts a new one.

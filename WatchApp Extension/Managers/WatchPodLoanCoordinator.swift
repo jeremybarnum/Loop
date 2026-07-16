@@ -16,6 +16,8 @@
 import Foundation
 import WatchConnectivity
 import WatchKit
+import HealthKit
+import LoopKit
 import OmniBLECore
 
 @MainActor
@@ -711,6 +713,22 @@ final class WatchPodLoanCoordinator: ObservableObject {
         applyControllerPrefs(automatic: false)
         runPodCommand(label: NSLocalizedString("Set Basal", comment: "Command name: set basal")) { self.controller.setTempBasal(rate: snapped, duration: Self.tempBasalDuration, completion: $0) }
     }
+    /// Log a carb the user ate during Sport Mode. NOT a pod command (no BLE): it
+    /// stores the entry in the watch's LOCAL carb store — so the watch prediction and
+    /// closed loop dose for the resulting COB via temp basal — and records it in the
+    /// loan journal's `carbs` list so the phone reconciles it into its own carb store /
+    /// Nightscout on hand-back (otherwise a watch-logged meal would be silently lost).
+    func logCarb(_ entry: NewCarbEntry) {
+        let grams = entry.quantity.doubleValue(for: .gram())
+        guard grams > 0 else { return }
+        ExtensionDelegate.shared().loopManager.carbStore.addCarbEntry(entry) { [weak self] _ in
+            // Recompute AFTER the store write lands, so the fetched carb history includes it.
+            Task { @MainActor in self?.notifyJournalChanged() }
+        }
+        controller.recordLoanCarb(grams: grams, absorptionTime: entry.absorptionTime ?? .hours(3), at: entry.startDate)
+        fileLog(String(format: "Sport Mode carb logged: %.0f g", grams))
+    }
+
     /// Cancel the running temp basal; the pod reverts to its scheduled basal.
     func cancelBasal() {
         if Self.isSimulatorDemo { demoCancelTempBasal(); return }

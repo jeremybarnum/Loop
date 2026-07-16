@@ -50,6 +50,24 @@ public struct PodLoanEvent: Identifiable, Equatable, Codable {
     }
 }
 
+/// A carb entry the user logged on the watch during a loan. Not a pod action (so
+/// it lives beside `events`, not in `PodLoanEvent.Kind`, keeping the insulin math
+/// pure) — but it rides the same hand-back channel so the phone can reconcile it
+/// into its own carb store / Nightscout when the loan ends.
+public struct PodLoanCarb: Identifiable, Equatable, Codable {
+    public let id: UUID
+    public let date: Date              // when eaten (the entry's startDate)
+    public let grams: Double
+    public let absorptionTime: TimeInterval
+
+    public init(id: UUID = UUID(), date: Date = Date(), grams: Double, absorptionTime: TimeInterval) {
+        self.id = id
+        self.date = date
+        self.grams = grams
+        self.absorptionTime = absorptionTime
+    }
+}
+
 /// A record of a watch "loan" of the pod. Codable so it can travel watch→phone
 /// over WatchConnectivity on hand-back (encode with `encoded()` / decode with
 /// `init?(data:)`).
@@ -61,6 +79,9 @@ public struct PodLoanJournal: Equatable, Codable {
     /// Latest pod cumulative insulinDelivered (U) seen during the loan.
     public var deliveredLatest: Double?
     public private(set) var events: [PodLoanEvent] = []
+    /// Carbs logged on the watch during the loan. Optional so a journal persisted
+    /// by a PRE-carb app version still decodes across an update (absent → nil → []).
+    public private(set) var carbs: [PodLoanCarb]?
 
     public init(startedAt: Date = Date(), deliveredAtStart: Double? = nil) {
         self.startedAt = startedAt
@@ -70,6 +91,10 @@ public struct PodLoanJournal: Equatable, Codable {
 
     public mutating func record(_ kind: PodLoanEvent.Kind, at date: Date = Date()) {
         events.append(PodLoanEvent(date: date, kind: kind))
+    }
+
+    public mutating func recordCarb(_ carb: PodLoanCarb) {
+        carbs = (carbs ?? []) + [carb]
     }
 
     /// Update the running pod-delivered cross-check from a status read.

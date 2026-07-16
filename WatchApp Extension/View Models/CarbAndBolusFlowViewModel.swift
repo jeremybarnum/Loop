@@ -130,6 +130,16 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
     }
 
     private func recommendBolus(for entry: NewCarbEntry) {
+        // SPORT MODE: the phone is away, so we can't round-trip to it for a
+        // recommendation. Skip it — the carb still lands in the watch's own store and
+        // the closed loop doses for the COB via temp basal. (A LOCAL meal-bolus
+        // recommendation from the watch's own engine is a follow-up.) This flow is
+        // UI-driven, so it runs on the main actor where the coordinator lives.
+        if MainActor.assumeIsolated({ ExtensionDelegate.shared().podLoanCoordinator.phase == .active }) {
+            recommendedBolusAmount = 0
+            isComputingRecommendedBolus = false
+            return
+        }
         let potentialEntry = PotentialCarbEntryUserInfo(carbEntry: entry)
         do {
             isComputingRecommendedBolus = true
@@ -207,6 +217,23 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
             return
         }
         self.hasSentConfirmationMessage = true
+
+        // SPORT MODE: the phone is away. Store the carb in the WATCH's own carb store +
+        // loan journal (so the loop doses for it and it reconciles on hand-back) and send
+        // any bolus straight to the pod — instead of messaging the phone. UI-driven, so
+        // on the main actor where the coordinator lives.
+        let handledInSportMode = MainActor.assumeIsolated { () -> Bool in
+            let coordinator = ExtensionDelegate.shared().podLoanCoordinator
+            guard coordinator.phase == .active else { return false }
+            if let carbEntry { coordinator.logCarb(carbEntry) }
+            if bolus > 0 { coordinator.bolus(units: bolus) }
+            return true
+        }
+        if handledInSportMode {
+            WKInterfaceDevice.current().play(.success)
+            DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(1)) { self.dismiss() }
+            return
+        }
 
         let bolus = SetBolusUserInfo(value: bolus, startDate: Date(), contextDate: self.contextDate, carbEntry: carbEntry, activationType: .activationTypeFor(recommendedAmount: recommendedBolusAmount, bolusAmount: bolus))
         do {
