@@ -141,6 +141,20 @@ guards can't fix): keep the PodSDK package but port `OmniBLEPumpManager` +
 upstream *semantics* are preserved even if the packaging isn't. This is strictly a fallback:
 it re-opens the copy-drift problem the review documented.
 
+#### M2 outcome (2026-07-17) — OmnipodKit, not OmniBLE
+
+Executed against upstream dev 3.14.3, this section's plan changed in one respect: **that
+vintage has no OmniBLE submodule.** Stock 3.14.3 ships loopandlearn's unified **OmnipodKit**
+(Dash + Eros in one kit), whose `OmniPumpManager` is directly descended from
+`OmniBLEPumpManager` — same `PendingCommand`/`UnfinalizedDose`/`recoverUnacknowledgedCommand`
+machinery — but **subclasses `RileyLinkPumpManager`** and imports RileyLinkKit
+unconditionally. So the pod-driver port spans **three** submodules instead of one: new
+watchOS framework targets in `OmnipodKit` and `RileyLinkKit` (`OmnipodKit-watchOS`,
+`RileyLinkKit-watchOS`, `RileyLinkBLEKit-watchOS`), plus one LoopKit target addition
+(`PumpManager.swift` into `LoopKit-watchOS` — upstream's watch target omitted the whole
+PumpManager protocol family). 10 `#if os(iOS)` guard sites in 4 files, zero behavior change
+on iOS; the compile gate passed. Details and the full file inventory: `M2_NOTES.md`.
+
 Pairing/activation stays phone-side (unchanged from crude): the watch receives an
 already-activated pod via the loan. The facade's setup/prime/cannula paths were already
 quarantined as hardware-unverified in `SAFETY_PARADIGM` §P3 — they don't move to the watch.
