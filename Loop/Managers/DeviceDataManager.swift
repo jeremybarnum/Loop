@@ -301,6 +301,9 @@ final class DeviceDataManager {
         // A1: re-arm the loop-not-running watchdog from now (loan ended via escape hatch;
         // the phone resumes looping, so a genuine post-loan stall still alerts ~20 min later).
         alertManager.rescheduleLoopNotRunningNotifications(Date())
+        // C8: loan over — stand down both loan watchdogs.
+        alertManager.cancelLoanStartWatchdog()
+        alertManager.cancelLoanDurationReminder()
         // DESIGN-6: tell the watch its loan is over. WatchDataManager owns the
         // WC session, so it observes this and queues the revoke message.
         NotificationCenter.default.post(name: .PodLoanReclaimedViaEscapeHatch, object: self)

@@ -702,6 +702,13 @@ extension WatchDataManager: WCSessionDelegate {
             // timers (clearLoopNotRunningNotifications alone only removes DELIVERED ones);
             // the podLoanedToWatch gate then blocks any stray re-arm until the loan ends.
             deviceManager.alertManager.cancelLoopNotRunningNotifications()
+            // C8: the boats are burned above (pod released, dosing pausing, loop
+            // watchdog silenced) before the watch confirms takeover. Arm the
+            // start watchdog — cancelled by the watch's holdsPod status push —
+            // and the long-session reminder. Re-arms on a re-grant (a retried
+            // takeover is unconfirmed again).
+            deviceManager.alertManager.scheduleLoanStartWatchdog()
+            deviceManager.alertManager.scheduleLoanDurationReminder()
             // Capture the pre-loan dosing state and pause automatic dosing — but
             // ONLY on the first grant of a loan. A repeat borrow (e.g. the watch
             // retried after a failed takeover) must NOT re-capture: by then dosing
@@ -774,6 +781,9 @@ extension WatchDataManager: WCSessionDelegate {
         // after hand-back, so a genuine failure to loop post-loan still alerts ~20 min
         // later (without waiting for a .LoopCompleted that may take a while post-reclaim).
         deviceManager.alertManager.rescheduleLoopNotRunningNotifications(Date())
+        // C8: loan over — stand down both loan watchdogs.
+        deviceManager.alertManager.cancelLoanStartWatchdog()
+        deviceManager.alertManager.cancelLoanDurationReminder()
 
         // Phase 2 (DIST-3): reconcile the watch's delivery into IOB — guarded against
         // duplicate hand-back messages (a retry after a lost ack resends the SAME
@@ -1071,6 +1081,11 @@ extension WatchDataManager: WCSessionDelegate {
     }
 
     private func applyWatchLoanStatus(_ status: WatchLoanStatusUserInfo) {
+        // C8: holdsPod straight from the watch is the loan-activation proof —
+        // the takeover happened, so the did-Sport-Mode-start watchdog stands down.
+        if status.holdsPod {
+            deviceManager.alertManager.cancelLoanStartWatchdog()
+        }
         DispatchQueue.main.async {
             self.deviceManager.lastWatchLoanReport = DeviceDataManager.WatchLoanReport(
                 watchHoldsPod: status.holdsPod,

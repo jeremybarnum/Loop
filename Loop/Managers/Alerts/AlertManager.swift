@@ -302,6 +302,61 @@ public final class AlertManager {
         UserDefaults.appGroup?.loopNotRunningNotifications = []
     }
 
+    // MARK: - Sport Mode loan watchdogs (review C8)
+
+    private static let loanStartWatchdogIdentifier = "Loop.podLoanStartWatchdog"
+    private static let loanDurationReminderIdentifier = "Loop.podLoanDurationReminder"
+
+    /// C8: the grant's side effects (pod released, dosing paused, loop-not-running
+    /// ladder silenced) all commit BEFORE the watch confirms takeover. If the grant
+    /// reply is lost or takeover fails, nobody is looping and nothing else will
+    /// ever alarm. Pre-scheduled so it fires even with the app backgrounded;
+    /// cancelled by the watch's holdsPod=true status push (activation proof) or by
+    /// hand-back/reclaim. The grant always happens with the devices together, so
+    /// this window cannot false-alarm on a healthy out-of-range session.
+    func scheduleLoanStartWatchdog(timeout: TimeInterval = .minutes(5)) {
+        let content = UNMutableNotificationContent()
+        content.title = NSLocalizedString("Sport Mode May Not Have Started", comment: "Notification title: watch has not confirmed pod takeover after a loan grant")
+        content.body = NSLocalizedString("The watch hasn't confirmed it took over the pod. Automatic dosing on this iPhone is paused — check the watch, or reclaim the pod in Loop.", comment: "Notification body: watch has not confirmed pod takeover after a loan grant")
+        if #available(iOS 15.0, *) {
+            content.interruptionLevel = FeatureFlags.criticalAlertsEnabled ? .critical : .timeSensitive
+        }
+        content.sound = FeatureFlags.criticalAlertsEnabled ? .defaultCritical : .default
+        content.threadIdentifier = Self.loanStartWatchdogIdentifier
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: timeout, repeats: false)
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: Self.loanStartWatchdogIdentifier, content: content, trigger: trigger))
+    }
+
+    func cancelLoanStartWatchdog() {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [Self.loanStartWatchdogIdentifier])
+        center.removeDeliveredNotifications(withIdentifiers: [Self.loanStartWatchdogIdentifier])
+    }
+
+    /// C8: gentle ceiling on the silent-forever case (watch died mid-session —
+    /// indistinguishable phone-side from a healthy out-of-range session, so it
+    /// asks rather than alarms). Cancelled at hand-back/reclaim.
+    func scheduleLoanDurationReminder(after interval: TimeInterval = .hours(6)) {
+        let content = UNMutableNotificationContent()
+        content.title = NSLocalizedString("Sport Mode Still Running", comment: "Notification title: loan duration reminder")
+        content.body = NSLocalizedString("Sport Mode has been running for 6 hours. If the session is over, end it on the watch or reclaim the pod in Loop.", comment: "Notification body: loan duration reminder")
+        if #available(iOS 15.0, *) {
+            content.interruptionLevel = .timeSensitive
+        }
+        content.sound = .default
+        content.threadIdentifier = Self.loanDurationReminderIdentifier
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: false)
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: Self.loanDurationReminderIdentifier, content: content, trigger: trigger))
+    }
+
+    func cancelLoanDurationReminder() {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [Self.loanDurationReminderIdentifier])
+        center.removeDeliveredNotifications(withIdentifiers: [Self.loanDurationReminderIdentifier])
+    }
+
     private func getLastLoopDate() -> Date? {
         ExtensionDataManager.lastLoopCompleted
     }
