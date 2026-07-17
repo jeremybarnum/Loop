@@ -319,6 +319,59 @@ final class WatchPodLoanCoordinator: ObservableObject {
         // against the wearer's schedule; nil (not yet synced) falls back to
         // journal-local heuristics.
         controller.currentScheduledBasalRate = loanBasalSchedule?.rate(at: Date())
+        // LAYER 1: surface uncertainty verdicts (idempotent assignment).
+        controller.onUncertaintyResolved = { [weak self] delivered, kind, stillSuspendedUntil in
+            self?.handleUncertaintyVerdict(delivered: delivered, kind: kind, stillSuspendedUntil: stillSuspendedUntil)
+        }
+    }
+
+    /// LAYER 1: the pod answered whether an uncertain command actually executed.
+    /// Refuted phantoms leave the records within minutes instead of at hand-back;
+    /// the user is told when it changes what they should do.
+    private func handleUncertaintyVerdict(delivered: Bool, kind: PodLoanEvent.Kind, stillSuspendedUntil: Date?) {
+        notifyJournalChanged()   // IOB/HUD refresh from the corrected journal
+        if delivered {
+            fileLog("LAYER1 verdict: \(PodLoanEvent(kind: kind).describedAction) CONFIRMED applied")
+            lastError = nil
+            return
+        }
+        fileLog("LAYER1 verdict: \(PodLoanEvent(kind: kind).describedAction) REFUTED — records corrected")
+        switch kind {
+        case .bolus(let units):
+            // The rider thinks they bolused for food — this must be loud and actionable.
+            WKInterfaceDevice.current().play(.failure)
+            commandFailure = CommandFailure(
+                title: NSLocalizedString("Bolus Did Not Deliver", comment: "Alert title: pod refuted an uncertain bolus"),
+                message: String(format: NSLocalizedString("The pod never received the %.2f U bolus. It has been removed from your records — bolus again if you still need it.", comment: "Alert body: pod refuted an uncertain bolus (parameter: units)"), units))
+        case .cancelTempBasal where stillSuspendedUntil != nil:
+            // The resume didn't land: delivery is genuinely still suspended.
+            manualSuspendUntil = stillSuspendedUntil
+            WKInterfaceDevice.current().play(.failure)
+            commandFailure = CommandFailure(
+                title: NSLocalizedString("Resume Did Not Apply", comment: "Alert title: pod refuted an uncertain resume/cancel"),
+                message: String(format: NSLocalizedString("Delivery is still suspended until %@ (it auto-resumes then). Try Resume again.", comment: "Alert body: pod refuted an uncertain resume (parameter: time)"), Self.noticeTimeFormatter.string(from: stillSuspendedUntil!)))
+        default:
+            // Temps/cancels the loop manages: records are corrected; the next
+            // cycle converges the pod. A status line suffices.
+            lastError = String(format: NSLocalizedString("%@ was not applied — records corrected.", comment: "Status line: pod refuted an uncertain command (parameter: command)"), PodLoanEvent(kind: kind).describedAction)
+        }
+    }
+
+    /// LAYER 1: after an uncertain outcome, ask the pod for the verdict before
+    /// anything else talks to it (a new programming command destroys the seq
+    /// evidence). Quiet status reads at growing delays; stops as soon as the
+    /// verdict lands, the session ends, or a user command supersedes.
+    private func scheduleUncertaintyResolution(attempt: Int = 0) {
+        let delays: [TimeInterval] = [5, 20, 60]
+        guard attempt < delays.count else { return }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delays[attempt] * 1_000_000_000))
+            guard let self, self.phase == .active, self.controller.hasUnresolvedUncertainty else { return }
+            if !self.busy {
+                self.runPodCommand(label: NSLocalizedString("Verify", comment: "Command name: uncertainty-resolution status read"), loudDrop: false) { self.controller.getStatus(completion: $0) }
+            }
+            self.scheduleUncertaintyResolution(attempt: attempt + 1)
+        }
     }
     /// The rate the basal dial starts at.
     static let defaultBasalRate: Double = 0.5
@@ -877,10 +930,13 @@ final class WatchPodLoanCoordinator: ObservableObject {
                             ? String(format: NSLocalizedString("%@ Uncertain", comment: "Alert title for an unacknowledged (uncertain) Sport Mode pod command"), label)
                             : String(format: NSLocalizedString("%@ Failed", comment: "Alert title for a failed Sport Mode pod command (parameter: command name)"), label)
                         let suffix = uncertain
-                            ? NSLocalizedString("\nThe pod did not confirm. It MAY have applied this — check the pod before retrying.", comment: "Alert body suffix for an uncertain Sport Mode pod command")
+                            ? NSLocalizedString("\nThe pod did not confirm. It MAY have applied this — the watch is checking and will correct the records.", comment: "Alert body suffix for an uncertain Sport Mode pod command")
                             : NSLocalizedString("\nNo change was made to the pod.", comment: "Alert body suffix for a failed Sport Mode pod command")
                         self.commandFailure = CommandFailure(title: title, message: error.localizedDescription + suffix)
                     }
+                    // LAYER 1: chase the verdict with quiet status reads before
+                    // anything else programs the pod.
+                    if uncertain { self.scheduleUncertaintyResolution() }
                 }
             }
         }

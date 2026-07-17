@@ -89,8 +89,20 @@ public struct PodLoanJournal: Equatable, Codable {
         self.events.append(PodLoanEvent(date: startedAt, kind: .tookOver))
     }
 
-    public mutating func record(_ kind: PodLoanEvent.Kind, at date: Date = Date()) {
-        events.append(PodLoanEvent(date: date, kind: kind))
+    @discardableResult
+    public mutating func record(_ kind: PodLoanEvent.Kind, at date: Date = Date()) -> UUID {
+        let event = PodLoanEvent(date: date, kind: kind)
+        events.append(event)
+        return event.id
+    }
+
+    /// LAYER 1 (uncertainty resolution): annul assumption entries the pod has
+    /// REFUTED — its lastProgrammingMessageSeqNum proves the command was never
+    /// received, so these events describe insulin that never moved. Only ever
+    /// called for assumption-tagged (uncertain/orphan-folded) entries, before
+    /// hand-back; confirmed entries are never removed.
+    public mutating func removeEvents(withIDs ids: Set<UUID>) {
+        events.removeAll { ids.contains($0.id) }
     }
 
     public mutating func recordCarb(_ carb: PodLoanCarb) {

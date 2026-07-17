@@ -109,10 +109,16 @@ public struct PodControlStatus: Equatable {
     /// True when the pod reports ALL delivery suspended (a real suspendDelivery
     /// state — NOT the bounded rate-0 temp Sport Mode uses for its suspend).
     public let suspended: Bool
+    /// LAYER 1 corroboration flags: a bolus in progress / a temp running right
+    /// now, straight from the pod's delivery-status bits.
+    public let bolusing: Bool
+    public let tempBasalRunning: Bool
 
     init(_ response: StatusResponse, at date: Date = Date()) {
         self.deliveryStatus = String(describing: response.deliveryStatus)
         self.suspended = response.deliveryStatus.suspended
+        self.bolusing = response.deliveryStatus.bolusing
+        self.tempBasalRunning = response.deliveryStatus.tempBasalRunning
         self.podProgress = String(describing: response.podProgressStatus)
         if response.reservoirLevel >= Pod.reservoirLevelAboveThresholdMagicNumber {
             self.reservoirLevel = nil
@@ -132,7 +138,8 @@ public struct PodControlStatus: Equatable {
     public init(deliveryStatus: String, podProgress: String, reservoirLevel: Double?,
                 insulinDelivered: Double, bolusNotDelivered: Double,
                 lastProgrammingMessageSeqNum: UInt8, timeActive: TimeInterval,
-                alerts: String, receivedAt: Date = Date(), suspended: Bool = false) {
+                alerts: String, receivedAt: Date = Date(), suspended: Bool = false,
+                bolusing: Bool = false, tempBasalRunning: Bool = false) {
         self.deliveryStatus = deliveryStatus
         self.podProgress = podProgress
         self.reservoirLevel = reservoirLevel
@@ -143,6 +150,8 @@ public struct PodControlStatus: Equatable {
         self.alerts = alerts
         self.receivedAt = receivedAt
         self.suspended = suspended
+        self.bolusing = bolusing
+        self.tempBasalRunning = tempBasalRunning
     }
 }
 
@@ -357,6 +366,41 @@ public final class PodController: NSObject {
     /// the pod actually executed. Reset at the start of every command.
     private var plumbingCancelCommitted = false
 
+    // MARK: - LAYER 1: uncertainty resolution (ask the pod, don't guess forever)
+
+    /// An uncertain command retained until the pod itself answers whether it
+    /// executed. The session layer already computes the verdict
+    /// (recoverUnacknowledgedCommand: lastProgrammingMessageSeqNum equality,
+    /// PodCommsSession.swift:1028) but discarded it journal-side — the review's
+    /// "phantom boluses persist" finding. This record lets the NEXT status read
+    /// convert the max-exposure assumption into truth: refuted assumption
+    /// entries are annulled; a skipped below-schedule entry is recorded
+    /// retroactively on confirmation. In-memory only: if the app dies first,
+    /// the conservative assumptions stand and hand-back/v2 layers own it.
+    private struct UncertainCommandRecord {
+        let kind: PodLoanEvent.Kind
+        let date: Date
+        /// transport messageNumber of the lost command (from the session's
+        /// PendingCommand); nil = no seq evidence, resolution impossible.
+        let sequence: Int?
+        /// Journal entries to annul if the pod refutes the command. The C2
+        /// plumbing-cancel entry is NEVER here (that cancel was confirmed).
+        let removableEventIDs: Set<UUID>
+        /// A below-schedule temp/cancel max-exposure deliberately did NOT
+        /// journal; recorded retroactively at `date` if the pod confirms.
+        let skippedKind: PodLoanEvent.Kind?
+    }
+    private var uncertainRecord: UncertainCommandRecord?
+
+    /// True while an uncertain command awaits its verdict — the coordinator
+    /// drives status reads while this is set.
+    public var hasUnresolvedUncertainty: Bool { uncertainRecord != nil }
+
+    /// (delivered, kind, stillSuspendedUntil) — fired on main when a verdict
+    /// lands. stillSuspendedUntil is non-nil when a REFUTED cancel-of-zero-temp
+    /// means delivery is in fact still suspended until that time.
+    public var onUncertaintyResolved: ((Bool, PodLoanEvent.Kind, Date?) -> Void)?
+
     /// Wrap a completion so the journal always reflects the command's outcome.
     /// C10 (intent-before-transmission): creating the wrapper — which happens
     /// synchronously on main at command initiation, before any BLE — persists a
@@ -367,6 +411,14 @@ public final class PodController: NSObject {
         -> (Result<PodControlStatus, Error>) -> Void {
         if let kind = kind, loanJournal != nil {
             PodLoanJournalStore.persistPending(PodLoanPendingCommand(kind: kind))
+            // LAYER 1: a NEW programming command destroys the seq evidence for a
+            // prior unresolved uncertainty (the session clears its pending on the
+            // next non-getStatus send, and the pod's counter moves on). Keep the
+            // conservative assumptions and stop waiting for a verdict.
+            if uncertainRecord != nil {
+                emit("LAYER1: verdict lost (new command before resolution) — conservative records stand")
+                uncertainRecord = nil
+            }
         }
         plumbingCancelCommitted = false
         return { result in
@@ -375,6 +427,7 @@ public final class PodController: NSObject {
             self.plumbingCancelCommitted = false
             switch result {
             case .success(let status):
+                if kind == nil { self.resolveUncertainty(with: status) }   // LAYER 1: a status read carries the verdict
                 if let kind = kind { self.journalRecord(kind) }
                 self.journalNoteStatus(status)
             case .failure(let error):
@@ -399,15 +452,28 @@ public final class PodController: NSObject {
                     // The coordinator surfaces every uncertain outcome loudly.
                     if cancelCommitted {
                         // The pod DID cancel the previous temp before the set went
-                        // uncertain — record the true sequence.
+                        // uncertain — record the true sequence. (Confirmed, so it is
+                        // never in the removable set below.)
                         self.journalRecord(.cancelTempBasal)
                     }
+                    var removable: Set<UUID> = []
+                    var skipped: PodLoanEvent.Kind? = nil
                     if self.shouldRecordUncertain(kind) {
-                        self.journalRecord(kind)
+                        if let id = self.journalRecord(kind) { removable.insert(id) }
                         self.emit("⚠️ UNCERTAIN DELIVERY (\(PodLoanEvent(kind: kind).describedAction)) — recorded as applied (max-exposure; IOB includes it)")
                     } else {
+                        skipped = kind
                         self.emit("⚠️ UNCERTAIN DELIVERY (\(PodLoanEvent(kind: kind).describedAction)) — NOT recorded (max-exposure models more insulin without it); verify pod")
                     }
+                    // LAYER 1: retain the assumption + the lost command's seq (the
+                    // session parked it in podState.unacknowledgedCommand) so the
+                    // next status read can convert the guess into truth.
+                    self.stateLock.lock()
+                    let seq = self.podState?.unacknowledgedCommand?.sequence
+                    self.stateLock.unlock()
+                    self.uncertainRecord = UncertainCommandRecord(
+                        kind: kind, date: Date(), sequence: seq,
+                        removableEventIDs: removable, skippedKind: skipped)
                 } else if cancelCommitted {
                     // C2 — the safe-cancel succeeded but the follow-on set CERTAINLY
                     // failed: the pod reverted to scheduled basal, so the journal
@@ -439,12 +505,72 @@ public final class PodController: NSObject {
         }
     }
 
-    /// Record a discrete loan action if a loan is active.
-    private func journalRecord(_ kind: PodLoanEvent.Kind) {
-        guard loanJournal != nil else { return }
-        loanJournal?.record(kind)
+    /// Record a discrete loan action if a loan is active; returns the event's
+    /// stable ID (nil when no loan is active).
+    @discardableResult
+    private func journalRecord(_ kind: PodLoanEvent.Kind, at date: Date = Date()) -> UUID? {
+        guard loanJournal != nil else { return nil }
+        let id = loanJournal?.record(kind, at: date)
         PodLoanJournalStore.persist(loanJournal)
         emit("LOAN JOURNAL: \(PodLoanEvent(kind: kind).describedAction)")
+        return id
+    }
+
+    /// LAYER 1: consume a status read's verdict on an unresolved uncertain
+    /// command. Primary evidence mirrors the session's own resolution
+    /// (PodCommsSession.recoverUnacknowledgedCommand, :1028): the pod's
+    /// lastProgrammingMessageSeqNum equals the lost command's messageNumber iff
+    /// the pod accepted it. Delivery-status flags corroborate DELIVERED only
+    /// (they can never turn a seq-match into a refutation): a running temp
+    /// after an uncertain setTempBasal, active bolusing after an uncertain
+    /// bolus, an ended temp after an uncertain cancel. Refuted → annul the
+    /// assumption entries (phantom insulin leaves the records within minutes,
+    /// not at hand-back); confirmed → record any max-exposure-skipped
+    /// reduction retroactively (the C-prime case: a real zero-temp becomes
+    /// exact instead of over-counted). No seq evidence → keep the conservative
+    /// assumptions (status quo ante).
+    private func resolveUncertainty(with status: PodControlStatus) {
+        guard let record = uncertainRecord else { return }
+        guard let seq = record.sequence else {
+            emit("LAYER1: no seq evidence for the uncertain \(PodLoanEvent(kind: record.kind).describedAction) — conservative records stand")
+            uncertainRecord = nil
+            return
+        }
+        let seqMatch = Int(status.lastProgrammingMessageSeqNum) == seq
+        let corroborated: Bool
+        switch record.kind {
+        case .tempBasal:              corroborated = status.tempBasalRunning   // a rate-0 temp IS a running temp on the pod
+        case .bolus:                  corroborated = status.bolusing
+        case .cancelTempBasal:        corroborated = !status.tempBasalRunning
+        case .resume:                 corroborated = !status.suspended
+        case .suspend:                corroborated = status.suspended
+        case .tookOver, .handedBack:  corroborated = false
+        }
+        let delivered = seqMatch || corroborated
+
+        var stillSuspendedUntil: Date? = nil
+        if delivered {
+            if let skipped = record.skippedKind {
+                journalRecord(skipped, at: record.date)
+                emit("LAYER1: CONFIRMED \(PodLoanEvent(kind: skipped).describedAction) — recorded retroactively (records now exact)")
+            } else {
+                emit("LAYER1: CONFIRMED \(PodLoanEvent(kind: record.kind).describedAction) — assumption entries now truth-backed")
+            }
+        } else {
+            if !record.removableEventIDs.isEmpty {
+                loanJournal?.removeEvents(withIDs: record.removableEventIDs)
+                PodLoanJournalStore.persist(loanJournal)
+            }
+            emit("LAYER1: REFUTED \(PodLoanEvent(kind: record.kind).describedAction) — pod never received it; assumption entries annulled")
+            // A refuted cancel-of-zero-temp means delivery is still suspended;
+            // tell the coordinator until when, so the UI returns to the truth.
+            if case .cancelTempBasal = record.kind,
+               let temp = loanJournal?.lastUnclosedTemp(), temp.rate == 0, temp.programmedEnd > Date() {
+                stillSuspendedUntil = temp.programmedEnd
+            }
+        }
+        uncertainRecord = nil
+        onUncertaintyResolved?(delivered, record.kind, stillSuspendedUntil)
     }
 
     /// Record a carb the watch logged during the loan, so it rides the hand-back

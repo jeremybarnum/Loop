@@ -165,4 +165,21 @@ class PodLoanJournalPersistenceTests: XCTestCase {
                        "pending resume must ride the journal into the orphan slot")
         XCTAssertNil(PodLoanJournalStore.pending())
     }
+
+    // MARK: - Layer 1 (uncertainty resolution) annulment
+
+    func testRemoveEventsAnnulsOnlyTheGivenIDs() {
+        var journal = makeJournal()
+        let phantomID = journal.record(.bolus(units: 2.0), at: Date(timeIntervalSince1970: 1_780_000_400))
+        XCTAssertEqual(journal.totalBolusUnits, 2.85)
+
+        journal.removeEvents(withIDs: [phantomID])
+        XCTAssertEqual(journal.totalBolusUnits, 0.85, "only the refuted phantom is annulled")
+        XCTAssertEqual(journal.bolusCount, 1)
+
+        // Round-trips: the annulment survives encode/persist/decode.
+        PodLoanJournalStore.persist(journal)
+        let recovered = PodLoanJournalStore.recoverableData().flatMap(PodLoanJournal.decoded(from:))
+        XCTAssertEqual(recovered?.totalBolusUnits, 0.85)
+    }
 }
