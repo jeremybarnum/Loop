@@ -690,6 +690,10 @@ extension WatchDataManager: WCSessionDelegate {
         }
 
         if grant.granted {
+            // RACE GUARD input: stamp the grant so a stale dead-session
+            // hand-back arriving after this can be told apart from the live
+            // loan's own hand-back (see handlePodHandback).
+            UserDefaults.appGroup?.podLoanLastGrantedAt = Date()
             // Mark the loan window. The phone UI reports only its own truth
             // ("Pod Not Connected" once contact goes stale, or the Bluetooth
             // state) — never a claim about the watch; the grant alone doesn't
@@ -757,6 +761,33 @@ extension WatchDataManager: WCSessionDelegate {
         guard let handback = PodHandbackUserInfo(rawValue: message) else {
             log.error("Could not decode pod hand-back message: %{public}@", String(describing: message))
             ackHandback()   // undecodable message: ack to avoid an infinite resend loop
+            return
+        }
+
+        // RACE GUARD (observed 2026-07-17): a recovered dead-session hand-back
+        // can race a NEW grant — the user re-enables Sport Mode moments after
+        // the watch relaunches, and this handler's reclaim then lands AFTER the
+        // new grant's release, stealing the pod back from the watch mid-takeover
+        // (phone-pod sessions at 15:56/15:58 while the watch failed to connect).
+        // Discriminate by session identity: a journal that STARTED before the
+        // most recent grant belongs to a dead session, and its hand-back is
+        // DATA ONLY — reconcile the doses and ack, but skip every "loan over"
+        // side effect (flags, dosing restore, watchdog re-arm, reclaim,
+        // schedule assert): those belong to the LIVE loan's lifecycle.
+        let journalStartedAt = WatchLoanJournal(data: handback.journalData)?.startedAt
+        let staleSession = deviceManager.podLoanedToWatch
+            && journalStartedAt.map { $0 < (UserDefaults.appGroup?.podLoanLastGrantedAt ?? .distantPast) } == true
+        if staleSession {
+            log.default("Hand-back from a DEAD session (journal started %{public}@, current loan granted later) — reconciling data only; live loan untouched",
+                        String(describing: journalStartedAt))
+            lastWatchLoanSummary = handback.summary
+            lastWatchLoanJournalData = handback.journalData
+            let journalHash = SHA256.hash(data: handback.journalData).map { String(format: "%02x", $0) }.joined()
+            if journalHash == UserDefaults.appGroup?.lastReconciledWatchLoanJournalHash {
+                ackHandback()
+            } else {
+                reconcileWatchLoan(journalData: handback.journalData, handedBackAt: handback.handedBackAt, journalHash: journalHash, onWriteCommitted: ackHandback)
+            }
             return
         }
 

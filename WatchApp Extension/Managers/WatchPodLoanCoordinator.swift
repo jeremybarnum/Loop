@@ -672,7 +672,10 @@ final class WatchPodLoanCoordinator: ObservableObject {
                     // always because the phone still owns the connection. Stay armed
                     // so the user can power the phone off and Claim again.
                     self.phase = .armed
-                    self.lastError = "Couldn't reach the pod. Make sure your iPhone's Bluetooth is off, then try again."
+                    // Formal handoff made "phone BT off" advice STALE and misleading
+                    // (2026-07-17: it sent Jeremy checking Bluetooth when the real cause
+                    // was the old session's reclaim racing the new grant).
+                    self.lastError = "Couldn't reach the pod. Your iPhone may still be finishing the previous session — wait a few seconds and try again."
                 }
             }
         }
@@ -724,7 +727,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
         takeoverStalled = false
         busy = false
         phase = .armed
-        lastError = "Pod takeover canceled. Make sure your iPhone's Bluetooth is off, then try again."
+        lastError = "Pod takeover canceled. If you just restarted Sport Mode, wait a few seconds (your iPhone may be finishing the previous session), then try again."
     }
 
     // MARK: - Pod control (only while the loan is active)

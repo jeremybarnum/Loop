@@ -235,7 +235,7 @@ struct WatchPodControlView: View {
                 // Stop showing an open-ended spinner; ask instead of hanging forever.
                 Text("Pod isn't responding")
                     .font(.caption)
-                Text("It's still trying in the background. Keep trying, or cancel and check that your iPhone's Bluetooth is off.")
+                Text("It's still trying in the background. Keep trying, or cancel, wait a few seconds, and start again.")
                     .font(.caption2)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)

@@ -19,6 +19,7 @@ extension UserDefaults {
         case favoriteFoods = "com.loopkit.Loop.favoriteFoods"
         case lastReconciledWatchLoanJournalHash = "com.loopkit.Loop.LastReconciledWatchLoanJournalHash"
         case watchLoanReconcileState = "com.loopkit.Loop.WatchLoanReconcileState"
+        case podLoanLastGrantedAt = "com.loopkit.Loop.PodLoanLastGrantedAt"
         case dosingEnabledBeforeWatchLoan = "com.loopkit.Loop.DosingEnabledBeforeWatchLoan"
         case pendingPodLoanRevokeDate = "com.loopkit.Loop.PendingPodLoanRevokeDate"
         case sensorPairingCodes = "com.loopkit.Loop.SensorPairingCodes"
@@ -42,6 +43,16 @@ extension UserDefaults {
     var watchLoanReconcileStateData: Data? {
         get { data(forKey: Key.watchLoanReconcileState.rawValue) }
         set { set(newValue, forKey: Key.watchLoanReconcileState.rawValue) }
+    }
+
+    /// When the most recent pod-loan grant was issued. Discriminates a
+    /// hand-back belonging to the CURRENT loan (journal started after this)
+    /// from a stale dead-session hand-back racing a new grant (started before
+    /// it) — see handlePodHandback's race guard. Persisted: the race can span
+    /// phone relaunches.
+    var podLoanLastGrantedAt: Date? {
+        get { object(forKey: Key.podLoanLastGrantedAt.rawValue) as? Date }
+        set { set(newValue, forKey: Key.podLoanLastGrantedAt.rawValue) }
     }
 
     /// The user's dosingEnabled setting captured at pod-loan grant, persisted so a
