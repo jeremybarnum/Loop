@@ -677,21 +677,30 @@ final class WatchPodLoanCoordinator: ObservableObject {
         // scheduled basal at expiry rather than withholding insulin indefinitely (an
         // untimed suspend has no pod-side revert net). Same mechanism the closed loop
         // uses for a predicted-low zero temp; blocks the loop via manualSuspendActive.
-        manualSuspendUntil = Date().addingTimeInterval(Self.tempBasalDuration)
-        if Self.isSimulatorDemo { demoSuspend(); return }
+        // C4: the suspended note follows the command outcome — applied only if
+        // the command was accepted (optimistic while in flight, like the dose
+        // screens), rolled back on a definitive refusal. A busy-drop changes
+        // nothing and alerts "try again".
+        let until = Date().addingTimeInterval(Self.tempBasalDuration)
+        if Self.isSimulatorDemo { manualSuspendUntil = until; demoSuspend(); return }
         applyControllerPrefs(automatic: false)
-        runPodCommand(label: NSLocalizedString("Suspend", comment: "Command name: suspend")) {
+        let prior = manualSuspendUntil
+        let accepted = runPodCommand(label: NSLocalizedString("Suspend", comment: "Command name: suspend"),
+                                     onCertainFailure: { [weak self] in self?.manualSuspendUntil = prior }) {
             self.controller.setTempBasal(rate: 0, duration: Self.tempBasalDuration, completion: $0)
         }
+        if accepted { manualSuspendUntil = until }
     }
     func resume() {
-        manualSuspendUntil = nil   // resuming clears the bounded manual suspend
-        if Self.isSimulatorDemo { demoResume(); return }
+        if Self.isSimulatorDemo { manualSuspendUntil = nil; demoResume(); return }
         // Resume re-programs the pod's basal table: use the phone's REAL
         // schedule when it has synced (nil falls back to the proof flat 0.5).
         let schedule = realBasalSchedule
         applyControllerPrefs(automatic: false)
-        runPodCommand(label: NSLocalizedString("Resume", comment: "Command name: resume")) { self.controller.resume(schedule: schedule, completion: $0) }
+        let prior = manualSuspendUntil
+        let accepted = runPodCommand(label: NSLocalizedString("Resume", comment: "Command name: resume"),
+                                     onCertainFailure: { [weak self] in self?.manualSuspendUntil = prior }) { self.controller.resume(schedule: schedule, completion: $0) }
+        if accepted { manualSuspendUntil = nil }   // resuming clears the bounded manual suspend
     }
 
     /// The phone's basal schedule as the pod-programmable OmniBLECore type,
@@ -718,10 +727,12 @@ final class WatchPodLoanCoordinator: ObservableObject {
     func setBasalRate(_ rate: Double) {
         let snapped = (min(max(rate, 0), maxTempBasalRate) / 0.05).rounded() * 0.05
         if snapped <= 0 { suspend(); return }   // 0 U/hr = suspend
-        manualSuspendUntil = nil   // a positive manual basal clears any bounded suspend
-        if Self.isSimulatorDemo { demoSetTempBasal(rate: snapped); return }
+        if Self.isSimulatorDemo { manualSuspendUntil = nil; demoSetTempBasal(rate: snapped); return }
         applyControllerPrefs(automatic: false)
-        runPodCommand(label: NSLocalizedString("Set Basal", comment: "Command name: set basal")) { self.controller.setTempBasal(rate: snapped, duration: Self.tempBasalDuration, completion: $0) }
+        let prior = manualSuspendUntil
+        let accepted = runPodCommand(label: NSLocalizedString("Set Basal", comment: "Command name: set basal"),
+                                     onCertainFailure: { [weak self] in self?.manualSuspendUntil = prior }) { self.controller.setTempBasal(rate: snapped, duration: Self.tempBasalDuration, completion: $0) }
+        if accepted { manualSuspendUntil = nil }   // a positive manual basal clears any bounded suspend
     }
     /// Log a carb the user ate during Sport Mode. NOT a pod command (no BLE): it
     /// stores the entry in the watch's LOCAL carb store — so the watch prediction and
@@ -740,10 +751,11 @@ final class WatchPodLoanCoordinator: ObservableObject {
     }
 
     /// Cancel the running temp basal; the pod reverts to its scheduled basal.
-    func cancelBasal() {
+    /// `loudDrop: false` when the closed loop is the caller (it retries itself).
+    func cancelBasal(loudDrop: Bool = true) {
         if Self.isSimulatorDemo { demoCancelTempBasal(); return }
         applyControllerPrefs(automatic: false)
-        runPodCommand(label: NSLocalizedString("Cancel Temp", comment: "Command name: cancel temp basal")) { self.controller.cancelTempBasal(completion: $0) }
+        runPodCommand(label: NSLocalizedString("Cancel Temp", comment: "Command name: cancel temp basal"), loudDrop: loudDrop) { self.controller.cancelTempBasal(completion: $0) }
     }
 
     /// Loop-faithful temp-basal enactment for the closed loop, mirroring
@@ -757,25 +769,41 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// 0→indefinite suspend) is deliberately left as-is for rider hold.
     func enactTempBasal(unitsPerHour: Double, for duration: TimeInterval) {
         guard duration > 0 else {
-            cancelBasal()   // .cancel → revert to schedule
+            cancelBasal(loudDrop: false)   // .cancel → revert to schedule
             return
         }
         let snapped = (min(max(unitsPerHour, 0), maxTempBasalRate) / 0.05).rounded() * 0.05
         if Self.isSimulatorDemo { demoSetTempBasal(rate: snapped, duration: duration); return }
         applyControllerPrefs(automatic: true)   // closed-loop enact → beeps follow the phone's AUTOMATIC pref
-        runPodCommand(label: String(format: NSLocalizedString("Loop %.2f U/hr", comment: "Command name: loop-set temp basal"), snapped)) {
+        runPodCommand(label: String(format: NSLocalizedString("Loop %.2f U/hr", comment: "Command name: loop-set temp basal"), snapped), loudDrop: false) {
             self.controller.setTempBasal(rate: snapped, duration: duration, completion: $0)
         }
     }
     func refreshStatus() {
         if Self.isSimulatorDemo { return }
-        runPodCommand(label: NSLocalizedString("Status", comment: "Command name: status refresh")) { self.controller.getStatus(completion: $0) }
+        runPodCommand(label: NSLocalizedString("Status", comment: "Command name: status refresh"), loudDrop: false) { self.controller.getStatus(completion: $0) }
     }
 
-    private func runPodCommand(label: String, _ operation: (@escaping (Result<PodControlStatus, Error>) -> Void) -> Void) {
+    /// Returns whether the command was accepted (false = dropped by the
+    /// busy/phase guard, nothing sent). C4: manual callers use this to make
+    /// state transactional — apply optimistic state only when accepted, and
+    /// pass `onCertainFailure` to roll it back when the pod definitively
+    /// refuses (UNCERTAIN outcomes keep the optimistic state; the
+    /// may-have-applied alert fires). `loudDrop` surfaces a busy-drop with
+    /// haptic + alert — true for manual commands, false for the loop's own
+    /// enacts and status refreshes, which retry on their own cadence.
+    @discardableResult
+    private func runPodCommand(label: String, loudDrop: Bool = true, onCertainFailure: (() -> Void)? = nil, _ operation: (@escaping (Result<PodControlStatus, Error>) -> Void) -> Void) -> Bool {
         guard !busy, phase == .active else {
             fileLog("pod cmd '\(label)' DROPPED (busy=\(busy) phase=\(phase))")   // surfaced: the silent skip
-            return
+            if loudDrop, phase == .active {
+                WKInterfaceDevice.current().play(.retry)
+                lastError = NSLocalizedString("Pod is busy — not sent.", comment: "Status line when a Sport Mode pod command is dropped because another is in progress")
+                commandFailure = CommandFailure(
+                    title: String(format: NSLocalizedString("%@ Not Sent", comment: "Alert title for a Sport Mode pod command dropped while the pod is busy (parameter: command name)"), label),
+                    message: NSLocalizedString("The pod is busy with another command. Nothing was sent — try again in a moment.", comment: "Alert body for a Sport Mode pod command dropped while the pod is busy"))
+            }
+            return false
         }
         fileLog("pod cmd '\(label)' →")
         busy = true
@@ -801,6 +829,9 @@ final class WatchPodLoanCoordinator: ObservableObject {
                     var uncertain = false
                     if case PodControlError.uncertainDelivery = error { uncertain = true }
                     fileLog("*** pod cmd '\(label)' \(uncertain ? "UNCERTAIN" : "FAILED"): \(error.localizedDescription) ***")
+                    // C4: a DEFINITIVE refusal rolls back the caller's optimistic
+                    // state (uncertain keeps it — the pod may have applied it).
+                    if !uncertain { onCertainFailure?() }
                     self.lastError = error.localizedDescription
                     // LOUD surfacing (BUG-5): dose screens dismiss optimistically on
                     // confirm, so a late failure/uncertainty must announce itself —
@@ -818,6 +849,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
                 }
             }
         }
+        return true
     }
 
     // MARK: - Hand back to the phone
