@@ -615,7 +615,13 @@ extension LoopAppManager: TemporaryScheduleOverrideHistoryDelegate {
 
 extension LoopAppManager: ResetLoopManagerDelegate {
     func askUserToConfirmLoopReset() {
-        resetLoopManager.askUserToConfirmLoopReset()
+        // nil until launchManagers() runs. resumeLaunch() calls this unconditionally,
+        // including pre-first-unlock launches where checkProtectedDataAvailable()
+        // defers the launch — force-unwrapping there crashed every boot-time
+        // background relaunch (upstream Loop bug; hit 100% here because the watch
+        // app's WatchConnectivity traffic relaunches the phone app at boot).
+        // The deferred launch resumes after unlock and asks then.
+        resetLoopManager?.askUserToConfirmLoopReset()
     }
     
     func presentConfirmationAlert(confirmAction: @escaping (PumpManager?, @escaping () -> Void) -> Void, cancelAction: @escaping () -> Void) {
