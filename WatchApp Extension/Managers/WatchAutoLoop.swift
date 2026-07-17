@@ -129,7 +129,7 @@ final class WatchAutoLoop: ObservableObject {
     private var loopTickObserver: NSObjectProtocol?
     /// The prediction we last enacted, so we act once per new prediction
     /// (ifNecessary already handles continuation between them).
-    private var lastEnactedPredictionDate: Date?
+    private var lastEnactedAnchorDate: Date?
 
     // MARK: - P1#7 CGM-sovereignty activation gate
 
@@ -292,7 +292,11 @@ final class WatchAutoLoop: ObservableObject {
     private func loopCycle(trigger: String) {
         guard isClosed, case .active = coordinator.phase else { return }
         guard let output = store.latestOutput, !store.isAnchorStale else { return }
-        guard lastEnactedPredictionDate != output.date else { return }
+        // Enact at most once per genuinely-new reading. Keyed on the anchor sample's identity, NOT
+        // output.date (which is wall-clock-at-predict and always fresh, so it never deduped) — this
+        // collapses every redundant loop-worthy trigger for the same reading into a single enact
+        // (root fix for the pod-command storm). A distinct new reading → distinct anchor → enacts.
+        guard lastEnactedAnchorDate != output.anchorDate else { return }
         // Recency guard (mirrors enactRecommendedAutomaticDose's 5-min check).
         guard abs(output.date.timeIntervalSinceNow) < .minutes(5) else { return }
 
@@ -304,7 +308,7 @@ final class WatchAutoLoop: ObservableObject {
             fileLog("closed loop SKIP (\(trigger)): delivery is manually suspended — not enacting")
             return
         }
-        lastEnactedPredictionDate = output.date
+        lastEnactedAnchorDate = output.anchorDate
 
         guard let temp = output.recommendedTempBasal else { return }  // schedule fits — no action
 

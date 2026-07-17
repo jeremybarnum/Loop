@@ -41,6 +41,12 @@ enum WatchPredictionError: LocalizedError {
 
 struct WatchPredictionOutput {
     let date: Date
+    /// startDate of the newest glucose sample this prediction is anchored on — the READING's
+    /// identity. The closed loop dedups on this so it enacts AT MOST ONCE per genuinely-new
+    /// reading, no matter how many refresh triggers fire for the same reading (observer +
+    /// backfills/purges + phase activation + any stray phone push). `date` above is wall-clock
+    /// at predict-time and is NOT a stable per-reading key.
+    let anchorDate: Date
     let unit: HKUnit
     let currentBG: HKQuantity
     let eventualBG: HKQuantity
@@ -436,6 +442,7 @@ final class WatchPredictionEngine {
 
                 completion(.success(WatchPredictionOutput(
                     date: date,
+                    anchorDate: history.last?.startDate ?? date,   // the reading this prediction is anchored on
                     unit: displayUnit,
                     currentBG: manualBG,
                     eventualBG: eventual,
