@@ -710,6 +710,17 @@ public final class PodController: NSObject {
         }
         runCommand(named: String(format: "Temp basal %.2f U/hr for %.0f min", rate, duration / 60),
                    completion: journaling(.tempBasal(rate: rate, duration: duration), completion)) { session in
+            // STOCK-ORDER PRE-CHECKS (OmniBLEPumpManager.swift:2090-2110): refuse
+            // BEFORE the safe cancel. Cancelling first would destroy a running
+            // temp — e.g. the loop's zero-temp suspend — and then throw with
+            // nothing re-programmed, leaving the pod on full scheduled basal
+            // while the journal still models the temp (review C3).
+            self.stateLock.lock()
+            let bolusInFlight = self.podState?.unfinalizedBolus?.isFinished() == false
+            let podSuspended = self.podState?.isSuspended == true
+            self.stateLock.unlock()
+            guard !bolusInFlight else { throw PodCommsError.unfinalizedBolus }
+            guard !podSuspended else { throw PodCommsError.podSuspended }
             // SAFE CANCEL FIRST — stock OmniBLE's enactTempBasal idiom
             // (OmniBLEPumpManager.swift:2104-2136), conservative branch:
             // programming a temp while one is running FAULTS a real pod
