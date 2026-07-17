@@ -18,6 +18,7 @@ extension UserDefaults {
         case inFlightAutomaticDose = "com.loopkit.Loop.inFlightAutomaticDose"
         case favoriteFoods = "com.loopkit.Loop.favoriteFoods"
         case lastReconciledWatchLoanJournalHash = "com.loopkit.Loop.LastReconciledWatchLoanJournalHash"
+        case watchLoanReconcileState = "com.loopkit.Loop.WatchLoanReconcileState"
         case dosingEnabledBeforeWatchLoan = "com.loopkit.Loop.DosingEnabledBeforeWatchLoan"
         case pendingPodLoanRevokeDate = "com.loopkit.Loop.PendingPodLoanRevokeDate"
         case sensorPairingCodes = "com.loopkit.Loop.SensorPairingCodes"
@@ -31,6 +32,16 @@ extension UserDefaults {
     var lastReconciledWatchLoanJournalHash: String? {
         get { string(forKey: Key.lastReconciledWatchLoanJournalHash.rawValue) }
         set { set(newValue, forKey: Key.lastReconciledWatchLoanJournalHash.rawValue) }
+    }
+
+    /// C7: per-loan incremental reconcile bookkeeping (encoded
+    /// WatchLoanReconcileState) — which journal entry IDs have been entered,
+    /// through when the basal timeline is covered, and how much audit remainder
+    /// has been entered. Lets a GROWN journal resend (lost ack + further watch
+    /// activity) reconcile only its new content instead of re-entering everything.
+    var watchLoanReconcileStateData: Data? {
+        get { data(forKey: Key.watchLoanReconcileState.rawValue) }
+        set { set(newValue, forKey: Key.watchLoanReconcileState.rawValue) }
     }
 
     /// The user's dosingEnabled setting captured at pod-loan grant, persisted so a

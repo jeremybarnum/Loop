@@ -795,6 +795,9 @@ extension WatchDataManager: WCSessionDelegate {
         // only defense against double-entering.
         let journalHash = SHA256.hash(data: handback.journalData).map { String(format: "%02x", $0) }.joined()
         if journalHash == UserDefaults.appGroup?.lastReconciledWatchLoanJournalHash {
+            // Fast path: a byte-identical resend (lost ack, no further watch
+            // activity). C7: a GROWN resend hashes differently and proceeds into
+            // the per-event incremental reconcile below.
             log.default("Duplicate pod hand-back (journal %{public}@… already reconciled) — state restored, dose entry skipped", String(journalHash.prefix(8)))
             ackHandback()   // already reconciled — safe to let the watch clear its journal
         } else {
@@ -829,6 +832,43 @@ extension WatchDataManager: WCSessionDelegate {
     /// positive remainder (odometer delta − boluses − (full schedule + journal
     /// net)) is entered timed-late at hand-back, which overstates IOB → Loop doses
     /// less → errs safe. Negative remainders are logged, not entered.
+    /// C7: per-loan incremental reconcile bookkeeping. A resend after a lost ack
+    /// is byte-identical (fast-skipped by hash) UNLESS the watch did anything
+    /// more first — then the journal GREW and hashes differently. Every journal
+    /// entry has carried a stable UUID since day one; tracking which IDs are
+    /// already entered makes the phone idempotent per-entry, so a grown resend
+    /// enters only its new content. This is the phone half of the loan-protocol-v2
+    /// cursor design, with no watch or wire-format change.
+    private struct WatchLoanReconcileState: Codable {
+        var loanStartedAt: Date
+        var journalHash: String
+        var reconciledEventIDs: Set<UUID>
+        var reconciledCarbIDs: Set<UUID>
+        /// Basal timeline entered through here (the previous hand-back stamp);
+        /// a grown resend enters basal only after this instant — no overlap and
+        /// no gap, because the prior reconcile's last segment ended exactly here.
+        var basalEnteredUntil: Date
+        var remainderEnteredUnits: Double
+
+        static func load(forLoanStartedAt startedAt: Date) -> WatchLoanReconcileState? {
+            guard let data = UserDefaults.appGroup?.watchLoanReconcileStateData,
+                  let state = try? Self.decoder.decode(WatchLoanReconcileState.self, from: data),
+                  abs(state.loanStartedAt.timeIntervalSince(startedAt)) < 1 else { return nil }
+            return state
+        }
+
+        func save() {
+            UserDefaults.appGroup?.watchLoanReconcileStateData = try? Self.encoder.encode(self)
+        }
+
+        private static let encoder: JSONEncoder = {
+            let e = JSONEncoder(); e.dateEncodingStrategy = .iso8601; return e
+        }()
+        private static let decoder: JSONDecoder = {
+            let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601; return d
+        }()
+    }
+
     private func reconcileWatchLoan(journalData: Data, handedBackAt: Date, journalHash: String, onWriteCommitted: @escaping () -> Void) {
         guard let journal = WatchLoanJournal(data: journalData) else {
             // Undecodable journal: keep Phase-1 behavior (summary already stored for
@@ -837,6 +877,15 @@ extension WatchDataManager: WCSessionDelegate {
             log.error("Watch loan journal could not be decoded (%{public}d bytes) — no doses entered", journalData.count)
             onWriteCommitted()   // ack: the same bytes would never decode on retry — avoid a resend loop
             return
+        }
+
+        // C7: prior bookkeeping for THIS loan (matched on startedAt) → incremental;
+        // a different/first loan starts fresh.
+        let priorState = WatchLoanReconcileState.load(forLoanStartedAt: journal.startedAt)
+        if let prior = priorState {
+            log.default("Watch loan reconcile is INCREMENTAL: %{public}d events / %{public}d carbs already entered, basal covered to %{public}@",
+                        prior.reconciledEventIDs.count, prior.reconciledCarbIDs.count,
+                        Self.shadowTimeFormatter.string(from: prior.basalEnteredUntil))
         }
 
         let insulinType = deviceManager.loopManager.pumpInsulinType
@@ -866,20 +915,25 @@ extension WatchDataManager: WCSessionDelegate {
         // ever fire on a REAL over-phone-cap delivery — genuine corruption fails to decode
         // into a valid journal, and the watch can't journal a bolus above its own cap since
         // it records the CAPPED value — so it only ever dropped real insulin.)
-        var enteredBolusUnits = 0.0
-        var bolusSeq = 0
+        // C7: totalBolusUnits = cumulative across ALL reconciles of this loan (the
+        // audit needs the full-loan figure); only NEW events become entries.
+        // syncIdentifiers are now the events' own stable UUIDs, so the store's
+        // insert-or-ignore uniqueness is a true per-event second defense.
+        var totalBolusUnits = 0.0
+        var newEventIDs: Set<UUID> = []
         for event in journal.events {
             if case .bolus(let units) = event.kind, units > 0 {
+                totalBolusUnits += units
+                guard priorState?.reconciledEventIDs.contains(event.id) != true else { continue }
                 entries.append(DoseEntry(type: .bolus,
                                          startDate: event.date,
                                          value: units,
                                          unit: .units,
-                                         syncIdentifier: "watchloan-\(journalHash.prefix(8))-bolus-\(bolusSeq)",
+                                         syncIdentifier: "watchloan-bolus-\(event.id.uuidString)",
                                          insulinType: insulinType,
                                          manuallyEntered: true,
                                          isMutable: false))
-                enteredBolusUnits += units
-                bolusSeq += 1
+                newEventIDs.insert(event.id)
             }
         }
 
@@ -889,11 +943,21 @@ extension WatchDataManager: WCSessionDelegate {
         // gate (§5) was passed 2026-07-10: a 54-min real-pod session's shadow
         // net (−3.23 U) matched the pod odometer's actual-vs-schedule deficit
         // (−3.24 U) to one pulse.
-        let basalDoses = buildWatchLoanBasalDoses(journal: journal, handedBackAt: handedBackAt, journalHash: journalHash)
+        // C7: entries are clipped to start after the prior reconcile's coverage
+        // (no overlap, no gap — its last segment ended exactly at basalEnteredUntil);
+        // the audit's journal-net term must span the FULL loan, so compute that
+        // from the unclipped build.
+        let basalDoses = buildWatchLoanBasalDoses(journal: journal, handedBackAt: handedBackAt, journalHash: journalHash,
+                                                  enteringAfter: priorState?.basalEnteredUntil)
         entries.append(contentsOf: basalDoses)
+        let fullBasalDoses = priorState == nil
+            ? basalDoses
+            : buildWatchLoanBasalDoses(journal: journal, handedBackAt: handedBackAt, journalHash: journalHash, enteringAfter: nil)
         var journalNet = 0.0
-        for dose in basalDoses {
+        for dose in fullBasalDoses {
             journalNet += dose.netBasalUnits
+        }
+        for dose in basalDoses {
             // One line per entry; pre-formatted (DiagnosticLog arity!).
             let desc = String(format: "%@ %.2f U/hr %@→%@ sched %.2f net %+.2f U",
                               dose.syncIdentifier ?? "?",
@@ -911,12 +975,12 @@ extension WatchDataManager: WCSessionDelegate {
         // (schedule net of suspends) would double-count above-schedule delivery.
         // The remainder therefore isolates UNJOURNALED delivery only.
         // Skipped when the odometer baseline is missing.
+        var remainderEnteredThisPass = 0.0
         if let podDelta = journal.podDeliveredDelta {
             let expectedBasal = expectedScheduledBasal(from: journal.startedAt, to: handedBackAt) + journalNet
-            // Reconcile against what was ACTUALLY entered into IOB, not what the journal
-            // claims (journal.totalBolusUnits): any delivery the itemization didn't capture
-            // then surfaces here as a positive remainder and gets entered — never cancels out.
-            let remainder = podDelta - enteredBolusUnits - expectedBasal
+            // Full-loan remainder, minus what earlier reconciles of this loan already
+            // entered (C7): only the increment is new information.
+            let remainder = podDelta - totalBolusUnits - expectedBasal - (priorState?.remainderEnteredUnits ?? 0)
             // NOTE: DiagnosticLog forwards at most FIVE varargs correctly (its
             // arity switch); a sixth argument misaligns os_log's va_list and
             // crashes in %@ decoding (SIGSEGV, 2026-07-10 00:07 hand-back crash).
@@ -925,8 +989,8 @@ extension WatchDataManager: WCSessionDelegate {
             let odometer = String(format: "start=%@ latest=%@",
                                   journal.deliveredAtStart.map { String(format: "%.2f", $0) } ?? "nil",
                                   journal.deliveredLatest.map { String(format: "%.2f", $0) } ?? "nil")
-            log.default("Watch loan audit v2: podDelta=%{public}.2f (%{public}@) enteredBoluses=%{public}.2f expected(sched+net)=%{public}.2f remainder=%{public}.2f",
-                        podDelta, odometer, enteredBolusUnits, expectedBasal, remainder)
+            log.default("Watch loan audit v2: podDelta=%{public}.2f (%{public}@) totalBoluses=%{public}.2f expected(sched+net)=%{public}.2f remainder=%{public}.2f",
+                        podDelta, odometer, totalBolusUnits, expectedBasal, remainder)
 
             let remainderThreshold = 0.05   // one pod pulse; filters quantization/staleness noise
             // ENTER any positive remainder (delivery the journal didn't itemize) into IOB:
@@ -951,6 +1015,7 @@ extension WatchDataManager: WCSessionDelegate {
                                          insulinType: insulinType,
                                          manuallyEntered: true,
                                          isMutable: false))
+                remainderEnteredThisPass = remainder
             } else if remainder > remainderHardCap {
                 log.error("Watch loan audit remainder %{public}.2f U implausibly large — NOT entered; verify delivery manually", remainder)
             }
@@ -958,12 +1023,25 @@ extension WatchDataManager: WCSessionDelegate {
             log.default("Watch loan audit skipped: no odometer baseline in journal")
         }
 
+        // C7: bookkeeping this reconcile persists on success — cumulative over
+        // every reconcile of this loan.
+        var newState = WatchLoanReconcileState(
+            loanStartedAt: journal.startedAt,
+            journalHash: journalHash,
+            reconciledEventIDs: (priorState?.reconciledEventIDs ?? []).union(newEventIDs),
+            reconciledCarbIDs: priorState?.reconciledCarbIDs ?? [],
+            basalEnteredUntil: handedBackAt,
+            remainderEnteredUnits: (priorState?.remainderEnteredUnits ?? 0) + remainderEnteredThisPass)
+
         guard !entries.isEmpty else {
-            // No insulin to enter (e.g. a carbs-only loan) — but carbs might still
-            // exist. Enter them, then mark reconciled so a duplicate hand-back doesn't
-            // re-run the audit.
-            enterWatchLoanCarbs(journal)
+            // No insulin to enter (e.g. a carbs-only loan, or a grown resend whose
+            // increment is carbs/on-schedule only). Enter any new carbs, persist the
+            // bookkeeping, and ACK — this path previously never called
+            // onWriteCommitted, so no-dose hand-backs were re-sent forever (H21).
+            newState.reconciledCarbIDs.formUnion(enterWatchLoanCarbs(journal, skipping: newState.reconciledCarbIDs))
+            newState.save()
             UserDefaults.appGroup?.lastReconciledWatchLoanJournalHash = journalHash
+            onWriteCommitted()
             return
         }
 
@@ -986,7 +1064,10 @@ extension WatchDataManager: WCSessionDelegate {
                 // retries (the resend re-enters everything; the hash guard makes a
                 // retry-after-a-late-success harmless).
             } else {
-                self?.enterWatchLoanCarbs(journal)   // carbs only after the dose write commits (hash persists)
+                // Carbs only after the dose write commits (bookkeeping persists with them).
+                var state = newState
+                state.reconciledCarbIDs.formUnion(self?.enterWatchLoanCarbs(journal, skipping: state.reconciledCarbIDs) ?? [])
+                state.save()
                 UserDefaults.appGroup?.lastReconciledWatchLoanJournalHash = journalHash
                 self?.log.default("Watch loan reconciled: %{public}d entr%{public}@ in one write (basal net %{public}+.2f U)",
                                   count, count == 1 ? "y" : "ies", journalNet)
@@ -999,9 +1080,14 @@ extension WatchDataManager: WCSessionDelegate {
     /// phone's COB is correct after the loan (a meal logged on the watch would
     /// otherwise be invisible to the phone). Called only where the reconcile hash is
     /// persisted, so the handback dedup guard prevents any double-entry.
-    private func enterWatchLoanCarbs(_ journal: WatchLoanJournal) {
-        guard let carbs = journal.carbs, !carbs.isEmpty else { return }
-        for carb in carbs {
+    /// C7: enters only carbs whose IDs aren't in `skipping`; returns the IDs it
+    /// dispatched so the caller can extend the per-loan bookkeeping.
+    @discardableResult
+    private func enterWatchLoanCarbs(_ journal: WatchLoanJournal, skipping: Set<UUID>) -> Set<UUID> {
+        guard let carbs = journal.carbs, !carbs.isEmpty else { return [] }
+        var dispatched: Set<UUID> = []
+        for carb in carbs where !skipping.contains(carb.id) {
+            dispatched.insert(carb.id)
             let entry = NewCarbEntry(quantity: HKQuantity(unit: .gram(), doubleValue: carb.grams),
                                      startDate: carb.date, foodType: nil, absorptionTime: carb.absorptionTime)
             deviceManager.loopManager.addCarbEntry(entry) { [weak self] result in
@@ -1012,6 +1098,7 @@ extension WatchDataManager: WCSessionDelegate {
                 }
             }
         }
+        return dispatched
     }
 
     private static let shadowTimeFormatter: DateFormatter = {
@@ -1026,7 +1113,12 @@ extension WatchDataManager: WCSessionDelegate {
     /// identical to .suspend; avoids the .suspend HK path's unguarded-duration
     /// trap). Deterministic syncIdentifiers make retries idempotent-by-hash.
     /// Entered via LoopDataManager.addWatchLoanDoseEntries (§4c phase 2).
-    private func buildWatchLoanBasalDoses(journal: WatchLoanJournal, handedBackAt: Date, journalHash: String) -> [DoseEntry] {
+    /// C7 `enteringAfter`: when non-nil, slices ending at or before the cutoff are
+    /// dropped and a straddling slice is trimmed to start AT the cutoff — a grown
+    /// resend enters only the timeline the prior reconcile didn't cover (its last
+    /// segment ended exactly at the cutoff, so there is no overlap and no gap).
+    /// Pass nil for the full-loan build (fresh reconcile, or the audit's net term).
+    private func buildWatchLoanBasalDoses(journal: WatchLoanJournal, handedBackAt: Date, journalHash: String, enteringAfter cutoff: Date?) -> [DoseEntry] {
         guard let schedule = deviceManager.loopManager.basalRateScheduleApplyingOverrideHistory else {
             return []
         }
@@ -1036,11 +1128,16 @@ extension WatchDataManager: WCSessionDelegate {
         var seq = 0
         for segment in journal.offScheduleSegments(until: handedBackAt) {
             for slice in schedule.truncatingBetween(start: segment.start, end: segment.end) {
-                let duration = slice.endDate.timeIntervalSince(slice.startDate)
+                var sliceStart = slice.startDate
+                if let cutoff = cutoff {
+                    guard slice.endDate > cutoff else { continue }   // fully covered by a prior reconcile
+                    if sliceStart < cutoff { sliceStart = cutoff }   // straddling: enter only the tail
+                }
+                let duration = slice.endDate.timeIntervalSince(sliceStart)
                 guard duration > 1 else { continue }   // degenerate slices: skip (HK duration guard)
                 doses.append(DoseEntry(
                     type: .tempBasal,
-                    startDate: slice.startDate,
+                    startDate: sliceStart,
                     endDate: slice.endDate,
                     value: segment.actualRate,
                     unit: .unitsPerHour,
