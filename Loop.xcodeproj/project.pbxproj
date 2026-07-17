@@ -499,6 +499,10 @@
 		C1F00C78285A8256006302C5 /* SwiftCharts in Embed Frameworks */ = {isa = PBXBuildFile; productRef = C1F00C5F285A802A006302C5 /* SwiftCharts */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		C1F2075C26D6F9B0007AB7EB /* AppExpirationAlerter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1F2075B26D6F9B0007AB7EB /* AppExpirationAlerter.swift */; };
 		FADE0001000000000000DE02 /* DevelopmentBranchAlerter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE0001000000000000DE01 /* DevelopmentBranchAlerter.swift */; };
+		FADE00030000000000000011 /* G7Client.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00030000000000000001 /* G7Client.swift */; };
+		FADE00030000000000000012 /* WorkoutKeepalive.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00030000000000000002 /* WorkoutKeepalive.swift */; };
+		FADE00030000000000000013 /* G7SensorKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00030000000000000004 /* G7SensorKit.framework */; };
+		FADE00030000000000000014 /* G7SensorKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00030000000000000004 /* G7SensorKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		C1F7822627CC056900C0919A /* SettingsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1F7822527CC056900C0919A /* SettingsManager.swift */; };
 		C1F8B243223E73FD00DD66CF /* BolusProgressTableViewCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1F8B1D122375E4200DD66CF /* BolusProgressTableViewCell.swift */; };
 		C1FB428C217806A400FAB378 /* StateColorPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1FB428B217806A300FAB378 /* StateColorPalette.swift */; };
@@ -729,6 +733,7 @@
 			files = (
 				43C05CB221EBD88A006FB252 /* LoopCore.framework in Embed Frameworks */,
 				C19C8C1F28663B040056D5E4 /* LoopKit.framework in Embed Frameworks */,
+				FADE00030000000000000014 /* G7SensorKit.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1320,6 +1325,10 @@
 		C1EF747128D6A44A00C8C083 /* CrashRecoveryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrashRecoveryManager.swift; sourceTree = "<group>"; };
 		C1F2075B26D6F9B0007AB7EB /* AppExpirationAlerter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppExpirationAlerter.swift; sourceTree = "<group>"; };
 		FADE0001000000000000DE01 /* DevelopmentBranchAlerter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevelopmentBranchAlerter.swift; sourceTree = "<group>"; };
+		FADE00030000000000000001 /* G7Client.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = G7Client.swift; sourceTree = "<group>"; };
+		FADE00030000000000000002 /* WorkoutKeepalive.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WorkoutKeepalive.swift; sourceTree = "<group>"; };
+		FADE00030000000000000003 /* G7watchOS-Bridging-Header.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = "G7watchOS-Bridging-Header.h"; sourceTree = "<group>"; };
+		FADE00030000000000000004 /* G7SensorKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = G7SensorKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1F48FF62995821600C8BD69 /* pl */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = pl; path = pl.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		C1F7822527CC056900C0919A /* SettingsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsManager.swift; sourceTree = "<group>"; };
 		C1F8B1D122375E4200DD66CF /* BolusProgressTableViewCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BolusProgressTableViewCell.swift; sourceTree = "<group>"; };
@@ -1466,6 +1475,7 @@
 				4344628220A7A37F00C4BE6F /* CoreBluetooth.framework in Frameworks */,
 				C19C8C1E28663B040056D5E4 /* LoopKit.framework in Frameworks */,
 				4396BD50225159C0005AA4D3 /* HealthKit.framework in Frameworks */,
+				FADE00030000000000000013 /* G7SensorKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1777,6 +1787,7 @@
 				43A9438F1B926B7B0051FA24 /* Assets.xcassets */,
 				4328E0121CFBE1B700E199AA /* Controllers */,
 				4328E01F1CFBE2B100E199AA /* Extensions */,
+				FADE00030000000000000005 /* G7 */,
 				4FE3475F20D5D7FA00A86D03 /* Managers */,
 				898ECA5D218ABD17001E9D35 /* Models */,
 				4F75F0052100146B00B5570E /* Scenes */,
@@ -1785,6 +1796,16 @@
 				895788A3242E6947002CB114 /* Views */,
 			);
 			path = "WatchApp Extension";
+			sourceTree = "<group>";
+		};
+		FADE00030000000000000005 /* G7 */ = {
+			isa = PBXGroup;
+			children = (
+				FADE00030000000000000001 /* G7Client.swift */,
+				FADE00030000000000000002 /* WorkoutKeepalive.swift */,
+				FADE00030000000000000003 /* G7watchOS-Bridging-Header.h */,
+			);
+			path = G7;
 			sourceTree = "<group>";
 		};
 		43A943831B926B7B0051FA24 /* Supporting Files */ = {
@@ -3591,6 +3612,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FADE00030000000000000011 /* G7Client.swift in Sources */,
+				FADE00030000000000000012 /* WorkoutKeepalive.swift in Sources */,
 				894F6DDD243C0A2300CCE676 /* CarbAmountLabel.swift in Sources */,
 				89A605E524327F45009C1096 /* DoseVolumeInput.swift in Sources */,
 				4372E488213C862B0068E043 /* SampleValue.swift in Sources */,
@@ -4304,7 +4327,7 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VERSIONING_SYSTEM = "apple-generic";
 				WARNING_CFLAGS = "-Wall";
-				WATCHOS_DEPLOYMENT_TARGET = 7.1;
+				WATCHOS_DEPLOYMENT_TARGET = 8.0;
 			};
 			name = Debug;
 		};
@@ -4416,7 +4439,7 @@
 				VALIDATE_PRODUCT = YES;
 				VERSIONING_SYSTEM = "apple-generic";
 				WARNING_CFLAGS = "-Wall";
-				WATCHOS_DEPLOYMENT_TARGET = 7.1;
+				WATCHOS_DEPLOYMENT_TARGET = 8.0;
 			};
 			name = Release;
 		};
@@ -4485,12 +4508,27 @@
 				CODE_SIGN_IDENTITY = "$(LOOP_CODE_SIGN_IDENTITY_DEBUG)";
 				CODE_SIGN_STYLE = "$(LOOP_CODE_SIGN_STYLE)";
 				DEVELOPMENT_TEAM = "$(LOOP_DEVELOPMENT_TEAM)";
+				EXCLUDED_ARCHS = armv7k;
+				"EXCLUDED_ARCHS[sdk=watchsimulator*]" = "armv7k x86_64 i386";
 				FRAMEWORK_SEARCH_PATHS = "";
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/G7Frameworks/libg7auth-watchos.xcframework/watchos-arm64_arm64_32/Headers";
 				INFOPLIST_FILE = "WatchApp Extension/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
+				);
+				"OTHER_LDFLAGS[sdk=watchos*]" = (
+					"-lc++",
+					"-ObjC",
+					"$(SRCROOT)/G7Frameworks/libg7auth-watchos.xcframework/watchos-arm64_arm64_32/libg7auth-watchos-device.a",
+					"$(SRCROOT)/G7Frameworks/openssl-watchos.xcframework/watchos-arm64_arm64_32/libcrypto-watchos-device.a",
+				);
+				"OTHER_LDFLAGS[sdk=watchsimulator*]" = (
+					"-lc++",
+					"-ObjC",
+					"$(SRCROOT)/G7Frameworks/libg7auth-watchos.xcframework/watchos-arm64-simulator/libg7auth-sim.a",
+					"$(SRCROOT)/G7Frameworks/openssl-watchos.xcframework/watchos-arm64-simulator/libcrypto.a",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "$(MAIN_APP_BUNDLE_IDENTIFIER).LoopWatch.watchkitextension";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -4512,12 +4550,27 @@
 				CODE_SIGN_IDENTITY = "$(LOOP_CODE_SIGN_IDENTITY_RELEASE)";
 				CODE_SIGN_STYLE = "$(LOOP_CODE_SIGN_STYLE)";
 				DEVELOPMENT_TEAM = "$(LOOP_DEVELOPMENT_TEAM)";
+				EXCLUDED_ARCHS = armv7k;
+				"EXCLUDED_ARCHS[sdk=watchsimulator*]" = "armv7k x86_64 i386";
 				FRAMEWORK_SEARCH_PATHS = "";
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/G7Frameworks/libg7auth-watchos.xcframework/watchos-arm64_arm64_32/Headers";
 				INFOPLIST_FILE = "WatchApp Extension/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
+				);
+				"OTHER_LDFLAGS[sdk=watchos*]" = (
+					"-lc++",
+					"-ObjC",
+					"$(SRCROOT)/G7Frameworks/libg7auth-watchos.xcframework/watchos-arm64_arm64_32/libg7auth-watchos-device.a",
+					"$(SRCROOT)/G7Frameworks/openssl-watchos.xcframework/watchos-arm64_arm64_32/libcrypto-watchos-device.a",
+				);
+				"OTHER_LDFLAGS[sdk=watchsimulator*]" = (
+					"-lc++",
+					"-ObjC",
+					"$(SRCROOT)/G7Frameworks/libg7auth-watchos.xcframework/watchos-arm64-simulator/libg7auth-sim.a",
+					"$(SRCROOT)/G7Frameworks/openssl-watchos.xcframework/watchos-arm64-simulator/libcrypto.a",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "$(MAIN_APP_BUNDLE_IDENTIFIER).LoopWatch.watchkitextension";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -4539,6 +4592,8 @@
 				CODE_SIGN_IDENTITY = "$(LOOP_CODE_SIGN_IDENTITY_DEBUG)";
 				CODE_SIGN_STYLE = "$(LOOP_CODE_SIGN_STYLE)";
 				DEVELOPMENT_TEAM = "$(LOOP_DEVELOPMENT_TEAM)";
+				EXCLUDED_ARCHS = armv7k;
+				"EXCLUDED_ARCHS[sdk=watchsimulator*]" = "armv7k x86_64 i386";
 				FRAMEWORK_SEARCH_PATHS = "";
 				IBSC_MODULE = WatchApp_Extension;
 				INFOPLIST_FILE = WatchApp/Info.plist;
@@ -4563,6 +4618,8 @@
 				CODE_SIGN_IDENTITY = "$(LOOP_CODE_SIGN_IDENTITY_RELEASE)";
 				CODE_SIGN_STYLE = "$(LOOP_CODE_SIGN_STYLE)";
 				DEVELOPMENT_TEAM = "$(LOOP_DEVELOPMENT_TEAM)";
+				EXCLUDED_ARCHS = armv7k;
+				"EXCLUDED_ARCHS[sdk=watchsimulator*]" = "armv7k x86_64 i386";
 				FRAMEWORK_SEARCH_PATHS = "";
 				IBSC_MODULE = WatchApp_Extension;
 				INFOPLIST_FILE = WatchApp/Info.plist;
