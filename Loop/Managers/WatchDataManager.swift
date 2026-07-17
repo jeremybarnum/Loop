@@ -817,6 +817,20 @@ extension WatchDataManager: WCSessionDelegate {
             // Legacy path (pump manager without the capability): poll to refresh.
             deviceManager.pumpManager?.ensureCurrentPumpData(completion: { _ in })
         }
+        // C11: assert scheduled basal. A RECOVERED hand-back (watch died) can
+        // leave the watch's last temp still running on the pod — the dead
+        // session couldn't cancel it, and this phone's pump state doesn't know
+        // it exists. duration 0 = the stock cancel-and-resume-schedule
+        // semantics; after a clean hand-back it's a harmless no-op (the watch
+        // already cancelled). Best-effort — the link may take a moment to
+        // re-establish; the closed loop's first enact is the backstop.
+        deviceManager.pumpManager?.enactTempBasal(unitsPerHour: 0, for: 0) { [log] error in
+            if let error = error {
+                log.error("Post-handback schedule assert failed (loop's next enact is the backstop): %{public}@", String(describing: error))
+            } else {
+                log.default("Post-handback schedule assert: any leftover watch temp cancelled")
+            }
+        }
     }
 
     /// DIST-3 Phase B: enter what the watch delivered into the phone's dose

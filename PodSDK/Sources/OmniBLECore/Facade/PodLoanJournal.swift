@@ -154,6 +154,25 @@ public struct PodLoanJournal: Equatable, Codable {
         return max(0, latest - start)
     }
 
+    /// C11: the last temp basal not closed by a later cancel/suspend/resume,
+    /// with its PROGRAMMED end. After a session dies, the pod keeps executing
+    /// this command autonomously until that end — recovery uses it to account
+    /// the true extent (clamped to now) and to tell the user what is still
+    /// running. nil when the journal ends on-schedule.
+    public func lastUnclosedTemp() -> (rate: Double, start: Date, programmedEnd: Date)? {
+        for e in events.reversed() {
+            switch e.kind {
+            case .tempBasal(let rate, let duration):
+                return (rate: rate, start: e.date, programmedEnd: e.date.addingTimeInterval(duration))
+            case .cancelTempBasal, .suspend, .resume:
+                return nil
+            default:
+                continue
+            }
+        }
+        return nil
+    }
+
     /// Contiguous suspend windows as (start, end?) — end nil if still suspended.
     public var suspendWindows: [(start: Date, end: Date?)] {
         var windows: [(Date, Date?)] = []

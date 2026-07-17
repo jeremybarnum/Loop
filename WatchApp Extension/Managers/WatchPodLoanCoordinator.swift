@@ -1004,13 +1004,22 @@ final class WatchPodLoanCoordinator: ObservableObject {
               let data = controller.recoveredLoanJournalData else { return }
         let decoded = PodLoanJournal.decoded(from: data)
 
-        // The real loan-end time is the journal's LAST EVENT, not this (possibly hours-later)
-        // relaunch. Use it for BOTH the summary's net-basal integration + suspend-duration
-        // text (else an open suspend integrates from suspend-time all the way to relaunch →
-        // a grossly inflated "Basal delivered vs schedule") AND the phone hand-back stamp
-        // (a send-time stamp would inflate the phone's audit window for hours the watch
-        // never held the pod).
-        let handedBackAt = decoded?.events.last?.date ?? Date()
+        // C11: the loan-end stamp. Base = the journal's LAST EVENT, not this
+        // (possibly hours-later) relaunch — a send-time stamp would inflate the
+        // phone's audit window for hours the watch never held the pod. BUT the
+        // pod keeps executing the last temp/suspend AUTONOMOUSLY after the
+        // session dies, so when the final command is an unclosed temp, extend
+        // the stamp through min(its programmed end, now): the pod really ran
+        // exactly that rate for exactly that window, and truncating at the
+        // event's own date used to exclude the temp from accounting entirely
+        // (zero-width segment — the review's C11 arithmetic hole).
+        let now = Date()
+        let lastEventAt = decoded?.events.last?.date ?? now
+        let unclosedTemp = decoded?.lastUnclosedTemp()
+        let handedBackAt = unclosedTemp.map { max(lastEventAt, min($0.programmedEnd, now)) } ?? lastEventAt
+        // Still running right now → the user must know delivery is NOT back on
+        // schedule yet (and the phone will assert a cancel on reclaim).
+        let tempStillRunning = unclosedTemp.flatMap { $0.programmedEnd > now ? $0 : nil }
 
         // P1#10 — an orphaned journal in .idle means Sport Mode ended WITHOUT a normal
         // hand-back (the app was killed/relaunched mid-session). Announce it once so
@@ -1019,9 +1028,22 @@ final class WatchPodLoanCoordinator: ObservableObject {
         if !announcedRecoveredSession, phase == .idle {
             announcedRecoveredSession = true
             let did = decoded?.summaryLines(now: handedBackAt, schedule: loanBasalSchedule).joined(separator: "\n")
+            // C11: honest state line — "back on its schedule" was false while an
+            // orphan temp/suspend keeps running.
+            let stateLine: String
+            if let running = tempStillRunning {
+                let untilText = Self.noticeTimeFormatter.string(from: running.programmedEnd)
+                stateLine = running.rate == 0
+                    ? String(format: NSLocalizedString("Delivery is still SUSPENDED until %@ (the pod resumes your schedule then, or your iPhone resumes it when it reconnects).", comment: "Recovered-session notice: suspend still running (parameter: end time)"), untilText)
+                    : String(format: NSLocalizedString("The pod is still running your last basal of %.2f U/hr until %@ (your iPhone cancels it when it reconnects).", comment: "Recovered-session notice: temp still running (parameters: rate, end time)"), running.rate, untilText)
+            } else {
+                stateLine = NSLocalizedString("The pod is back on its schedule.", comment: "Recovered-session notice: no temp running")
+            }
             sessionEndedNotice = CommandFailure(
                 title: NSLocalizedString("Sport Mode Ended", comment: "Alert title: Sport Mode ended unexpectedly on relaunch"),
-                message: NSLocalizedString("Sport Mode ended unexpectedly (the app restarted). The loop is open and the pod is back on its schedule. Your insulin records are being sent to your phone.", comment: "Alert body: uncommanded Sport Mode end")
+                message: NSLocalizedString("Sport Mode ended unexpectedly (the app restarted). The loop is open. ", comment: "Alert body: uncommanded Sport Mode end")
+                    + stateLine
+                    + NSLocalizedString(" Your insulin records are being sent to your phone.", comment: "Alert body suffix: uncommanded Sport Mode end")
                     + (did.map { "\n\n\($0)" } ?? ""))
             fileLog("P1#10: announced uncommanded Sport Mode end (orphaned journal recovered)")
         }
@@ -1041,6 +1063,14 @@ final class WatchPodLoanCoordinator: ObservableObject {
             // Keep it persisted; retried on the next activation.
         })
     }
+
+    /// C11: end-time shown in the recovered-session notice.
+    private static let noticeTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.timeStyle = .short
+        f.dateStyle = .none
+        return f
+    }()
 
     /// The journal payload for the in-flight hand-back, retained across retries so
     /// resends are byte-identical (see handBack). Cleared on success or when any
