@@ -856,8 +856,8 @@ final class WatchPodLoanCoordinator: ObservableObject {
             // wiser. Canceling makes the phone's "scheduled basal" belief TRUE
             // at the moment control transfers, and closes the journal's last
             // temp segment so the loan accounting is self-contained. A pod the
-            // user deliberately suspended stays suspended (sessionBasalRate is
-            // nil after a suspend). Best-effort like the freshen below: a
+            // user deliberately suspended (a rate-0 temp) stays suspended —
+            // cancelLeftoverTempIfNeeded skips rate-0 temps. Best-effort like the freshen below: a
             // hand-back must never be blocked by an unreachable or faulted pod.
             cancelLeftoverTempIfNeeded { [weak self] cancelWarning in
                 guard let self else { return }
@@ -902,7 +902,14 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// On failure, returns a warning line for the hand-back summary; the
     /// hand-back itself proceeds regardless.
     private func cancelLeftoverTempIfNeeded(completion: @escaping (String?) -> Void) {
-        guard sessionBasalRate != nil else {
+        // A rate-0 temp is a deliberate WITHHOLD — a manual bounded suspend, or a
+        // closed-loop predicted-low zero temp. Leave it running so the pod hands back in
+        // the suspended state and the phone re-evaluates from there (the bounded temp
+        // auto-reverts at expiry). Only a POSITIVE leftover temp is cancelled back to
+        // scheduled. NOTE: `sessionBasalRate` is 0 — NOT nil — after a suspend, because a
+        // suspend is a rate-0 temp basal (P0#5), not a `.suspend` event; the old
+        // `!= nil` guard therefore cancelled suspends and silently resumed basal.
+        guard let rate = sessionBasalRate, rate != 0 else {
             completion(nil)
             return
         }
