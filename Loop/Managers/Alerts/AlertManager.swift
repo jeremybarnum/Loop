@@ -357,6 +357,33 @@ public final class AlertManager {
         center.removeDeliveredNotifications(withIdentifiers: [Self.loanDurationReminderIdentifier])
     }
 
+    private static let dosingPausedAfterReclaimIdentifier = "Loop.podReclaimDosingPausedReminder"
+
+    /// C6: after an escape-hatch reclaim, automatic dosing deliberately stays
+    /// paused until the watch's journal arrives and reconciles. That state must
+    /// not persist silently — remind once. Cancelled when the recovered journal
+    /// restores dosing; if the user already re-enabled Closed Loop manually, the
+    /// reminder is a harmless one-time no-op.
+    func scheduleDosingPausedAfterReclaimReminder(after interval: TimeInterval = .hours(1)) {
+        let content = UNMutableNotificationContent()
+        content.title = NSLocalizedString("Automatic Dosing Still Paused", comment: "Notification title: dosing paused since escape-hatch reclaim")
+        content.body = NSLocalizedString("Dosing has been paused since the pod was reclaimed — the watch's insulin records haven't arrived. Bring the watch in range, or re-enable Closed Loop in settings if the watch isn't coming back.", comment: "Notification body: dosing paused since escape-hatch reclaim")
+        if #available(iOS 15.0, *) {
+            content.interruptionLevel = .timeSensitive
+        }
+        content.sound = .default
+        content.threadIdentifier = Self.dosingPausedAfterReclaimIdentifier
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: false)
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: Self.dosingPausedAfterReclaimIdentifier, content: content, trigger: trigger))
+    }
+
+    func cancelDosingPausedAfterReclaimReminder() {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [Self.dosingPausedAfterReclaimIdentifier])
+        center.removeDeliveredNotifications(withIdentifiers: [Self.dosingPausedAfterReclaimIdentifier])
+    }
+
     private func getLastLoopDate() -> Date? {
         ExtensionDataManager.lastLoopCompleted
     }

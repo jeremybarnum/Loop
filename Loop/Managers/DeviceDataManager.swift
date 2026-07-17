@@ -266,15 +266,17 @@ final class DeviceDataManager {
     /// ESCAPE HATCH for a loan that will never be handed back (watch lost, dead,
     /// or out of reach): reclaim the pod's connection and end the loan phone-side.
     /// The watch's journal is NOT available on this path — any insulin it
-    /// delivered is missing from IOB until (if ever) the hand-back arrives, at
-    /// which point the normal reconciliation + duplicate guard handle it. Dosing
-    /// is restored to its pre-loan state; the user was warned in the confirm alert.
+    /// delivered is missing from IOB, so automatic dosing STAYS PAUSED (C6:
+    /// closed-looping blind to the watch's insulin doses on understated IOB —
+    /// the hypo direction). When the journal later arrives on watch contact, the
+    /// normal hand-back reconciliation restores dosing; if the watch is gone for
+    /// good, re-enabling Closed Loop in settings is the explicit override.
     /// Present the reclaim confirmation (mirrors DeliveryUncertaintyAlertManager's
     /// use of alertPresenter for pump-state recovery alerts).
     func presentReclaimPodAlert() {
         let alert = UIAlertController(
             title: NSLocalizedString("Pod Is On Loan", comment: "Title of the reclaim-pod alert"),
-            message: NSLocalizedString("The pod is being controlled from the watch. Reclaim control now?\n\nOnly do this if the watch can't hand back normally. Insulin delivered from the watch stays missing from the phone's records until the watch reconnects.", comment: "Message of the reclaim-pod alert"),
+            message: NSLocalizedString("The pod is being controlled from the watch. Reclaim control now?\n\nOnly do this if the watch can't hand back normally. Insulin delivered from the watch is missing from the phone's records, so automatic dosing stays paused until the watch's records arrive — or until you re-enable Closed Loop in settings if the watch is gone.", comment: "Message of the reclaim-pod alert"),
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: NSLocalizedString("Reclaim Pod", comment: "Confirm reclaim"), style: .destructive) { [weak self] _ in
             self?.reclaimPodFromWatch()
@@ -284,26 +286,32 @@ final class DeviceDataManager {
     }
 
     func reclaimPodFromWatch() {
-        log.default("Manual pod reclaim from watch (escape hatch) — journal not yet received")
+        log.default("Manual pod reclaim from watch (escape hatch) — journal not received; dosing STAYS paused")
         (pumpManager as? PumpConnectionLendable)?.reclaimConnection()
         podLoanedToWatch = false
         lastWatchLoanReport = nil
-        if let priorDosing = UserDefaults.appGroup?.dosingEnabledBeforeWatchLoan {
-            loopManager.mutateSettings { $0.dosingEnabled = priorDosing }
-            UserDefaults.appGroup?.dosingEnabledBeforeWatchLoan = nil
-            // Clear any crash-recovery flag stranded by the loan grant (a loop enact
-            // racing the pod-connection release never completes → the flag stays armed
-            // the whole loan). Dosing was paused during the loan, so an armed flag here
-            // is a grant-race artifact, not a real in-flight dose — clearing it at
-            // loan-end stops a false "Loop Crashed" on a later reboot.
-            crashRecoveryManager.dosingFinished()
-        }
-        // A1: re-arm the loop-not-running watchdog from now (loan ended via escape hatch;
-        // the phone resumes looping, so a genuine post-loan stall still alerts ~20 min later).
+        // C6: do NOT restore dosingEnabled here — the watch's journal hasn't
+        // arrived, so phone IOB is missing everything the watch delivered and a
+        // resumed closed loop would dose on top of it. `dosingEnabledBeforeWatchLoan`
+        // stays SET: when the recovered journal arrives on the watch's next contact,
+        // the normal hand-back handler reconciles it and restores dosing from that
+        // marker, exactly like a clean hand-back. If the watch is gone for good,
+        // re-enabling Closed Loop in settings is the user's explicit override.
+        //
+        // Clear any crash-recovery flag stranded by the loan grant (a loop enact
+        // racing the pod-connection release never completes → the flag stays armed
+        // the whole loan). Dosing was paused during the loan, so an armed flag here
+        // is a grant-race artifact, not a real in-flight dose.
+        crashRecoveryManager.dosingFinished()
+        // A1: re-arm the loop-not-running watchdog from now (open-loop cycles still
+        // complete, so this only fires on a genuine post-reclaim stall).
         alertManager.rescheduleLoopNotRunningNotifications(Date())
-        // C8: loan over — stand down both loan watchdogs.
+        // C8: loan over — stand down both loan watchdogs; C6 arms its own reminder
+        // for the new "dosing paused awaiting records" state so it can't silently
+        // persist forever.
         alertManager.cancelLoanStartWatchdog()
         alertManager.cancelLoanDurationReminder()
+        alertManager.scheduleDosingPausedAfterReclaimReminder()
         // DESIGN-6: tell the watch its loan is over. WatchDataManager owns the
         // WC session, so it observes this and queues the revoke message.
         NotificationCenter.default.post(name: .PodLoanReclaimedViaEscapeHatch, object: self)

@@ -781,9 +781,12 @@ extension WatchDataManager: WCSessionDelegate {
         // after hand-back, so a genuine failure to loop post-loan still alerts ~20 min
         // later (without waiting for a .LoopCompleted that may take a while post-reclaim).
         deviceManager.alertManager.rescheduleLoopNotRunningNotifications(Date())
-        // C8: loan over — stand down both loan watchdogs.
+        // C8: loan over — stand down both loan watchdogs. C6: the journal has
+        // arrived (this handler restores dosing above), so the paused-dosing
+        // reminder from an earlier escape-hatch reclaim also stands down.
         deviceManager.alertManager.cancelLoanStartWatchdog()
         deviceManager.alertManager.cancelLoanDurationReminder()
+        deviceManager.alertManager.cancelDosingPausedAfterReclaimReminder()
 
         // Phase 2 (DIST-3): reconcile the watch's delivery into IOB — guarded against
         // duplicate hand-back messages (a retry after a lost ack resends the SAME
