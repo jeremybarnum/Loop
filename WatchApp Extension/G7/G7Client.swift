@@ -302,6 +302,17 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     /// Fired on every fresh EGV (mg/dL + read time). The Loop integration sets this to inject the
     /// reading into the glucose store. Not @Published — it's a data sink, not UI state.
     var onEGV: ((Int, Date, UInt32) -> Void)?   // (value, on-body measurement time, sensor-clock reading id)
+    // M3 (watch-from-stock): raw EGV frame hook for the stock-parsing adapter
+    // (G7ClientTransportAdapter). Carries the COMPLETE control-characteristic notification
+    // (opcode 0x4E frame) so stock G7GlucoseMessage(data:) can parse trend/predicted/sequence/
+    // display-only — fields the inline parser and onEGV drop. Fired on every glucose
+    // notification, BEFORE the legacy in-session/plausibility gate: state gating is the stock
+    // manager's job in the from-stock stack.
+    var onRawEGV: ((Data) -> Void)?
+    // M3 (watch-from-stock): connect/disconnect hook for the stock adapter (mapped onto
+    // G7SensorDelegate sensorDidConnect/sensorDisconnected). Bool = connected; String? = the
+    // peripheral name when known.
+    var onConnectionChange: ((Bool, String?) -> Void)?
     @Published var trendState: UInt8?     // EGV algorithm-state byte (0x06 = OK/in-session)
     @Published var statusText: String = "Idle"
     @Published var logLines: [String] = []
@@ -1037,6 +1048,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             reconnectArmedAt = nil
         }
         log("*** CONNECTED — discovering services ***")
+        onConnectionChange?(true, peripheral.name)   // M3 (watch-from-stock): stock-adapter hook
         setStatus("Connected — discovering…")
         peripheral.discoverServices([G7UUID.service])
     }
@@ -1050,6 +1062,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     func centralManager(_ central: CBCentralManager,
                         didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         log("!! disconnected (\(error?.localizedDescription ?? "clean"))")
+        onConnectionChange?(false, peripheral.name)   // M3 (watch-from-stock): stock-adapter hook
         dataStream.close(); authStream.close(); ctrlStream.close()
         // If we disconnected before finishing, the awaiting handshake throws .disconnected
         // and runHandshake() -> finishAttempt() reports it. Do NOT exit the app.
@@ -1265,6 +1278,8 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         }
         guard gotEGV else { throw G7Error.timeout("glucose read — encryption/pairing never established") }
         log("*** GLUCOSE<- \(hex(egv)) ***")
+
+        onRawEGV?(Data(egv))   // M3 (watch-from-stock): full frame to the stock-parsing adapter
 
         let rawEGV: Int = egv.count >= 14 ? Int(egv[12]) | (Int(egv[13]) << 8) : 0xffff
         let value: Int? = rawEGV == 0xffff ? nil : (rawEGV & 0x0fff)
