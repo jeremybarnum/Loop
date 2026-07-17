@@ -158,6 +158,7 @@
 		43A943881B926B7B0051FA24 /* ExtensionDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A943871B926B7B0051FA24 /* ExtensionDelegate.swift */; };
 		43A9438A1B926B7B0051FA24 /* NotificationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A943891B926B7B0051FA24 /* NotificationController.swift */; };
 		43A9438E1B926B7B0051FA24 /* ComplicationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A9438D1B926B7B0051FA24 /* ComplicationController.swift */; };
+		719E8520897E95ED87F4E8DA /* StoreBringup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA80B78F27D11A9B06274C /* StoreBringup.swift */; };
 		43A943901B926B7B0051FA24 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 43A9438F1B926B7B0051FA24 /* Assets.xcassets */; };
 		43A943941B926B7B0051FA24 /* WatchApp.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 43A943721B926B7B0051FA24 /* WatchApp.app */; };
 		43B260491ED248FB008CAA77 /* CarbEntryTableViewCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43B260481ED248FB008CAA77 /* CarbEntryTableViewCell.swift */; };
@@ -901,6 +902,7 @@
 		43A943871B926B7B0051FA24 /* ExtensionDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionDelegate.swift; sourceTree = "<group>"; };
 		43A943891B926B7B0051FA24 /* NotificationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationController.swift; sourceTree = "<group>"; };
 		43A9438D1B926B7B0051FA24 /* ComplicationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComplicationController.swift; sourceTree = "<group>"; };
+		2FFA80B78F27D11A9B06274C /* StoreBringup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreBringup.swift; sourceTree = "<group>"; };
 		43A9438F1B926B7B0051FA24 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		43A943911B926B7B0051FA24 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		43B260481ED248FB008CAA77 /* CarbEntryTableViewCell.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = CarbEntryTableViewCell.swift; sourceTree = "<group>"; };
@@ -1771,6 +1773,7 @@
 				B66D1F242E6A5D6500471149 /* InfoPlist.xcstrings */,
 				43A9438D1B926B7B0051FA24 /* ComplicationController.swift */,
 				43A943871B926B7B0051FA24 /* ExtensionDelegate.swift */,
+				2FFA80B78F27D11A9B06274C /* StoreBringup.swift */,
 				43A9438F1B926B7B0051FA24 /* Assets.xcassets */,
 				4328E0121CFBE1B700E199AA /* Controllers */,
 				4328E01F1CFBE2B100E199AA /* Extensions */,
@@ -3666,6 +3669,7 @@
 				43BFF0B51E45C1E700FF19A9 /* NumberFormatter.swift in Sources */,
 				C1201E2D23ECDF3D002DA84A /* WatchContextRequestUserInfo.swift in Sources */,
 				43A9438E1B926B7B0051FA24 /* ComplicationController.swift in Sources */,
+				719E8520897E95ED87F4E8DA /* StoreBringup.swift in Sources */,
 				43517917230A0E1A0072ECC0 /* WKInterfaceLabel.swift in Sources */,
 				A9347F3224E7522400C99C34 /* CarbBackfillRequestUserInfo.swift in Sources */,
 				895788B3242E69A2002CB114 /* ActionButton.swift in Sources */,
