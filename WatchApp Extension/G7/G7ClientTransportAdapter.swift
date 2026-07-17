@@ -14,7 +14,7 @@
 //           -> G7CGMManager.sensor(_:didRead:)                     [stock G7SensorDelegate seam]
 //           -> CGMManagerDelegate.cgmManager(_:hasNew:)            [stock provenance, dedup,
 //              reliability gating, below-40 clamp-with-condition]
-//           -> (M4) watch device manager -> GlucoseStore -> loop
+//           -> WatchLoopManager (M4) -> GlucoseStore -> loop       [wired in StockLoopStack]
 //
 //  The stock G7CGMManager owns an idle G7Sensor (and thus an idle CBCentralManager). This
 //  adapter NEVER starts the stock scanner: it always maps disconnects as
@@ -33,9 +33,9 @@ final class G7ClientTransportAdapter {
     let client: G7Client
 
     /// The stock manager. Its CGMManagerDelegate output (readings, sensor-start events, state
-    /// persistence) is the M4 watch loop's input: the future watch device manager sets
-    /// `manager.cgmManagerDelegate` + `manager.delegateQueue` and routes samples into the
-    /// watch GlucoseStore.
+    /// persistence) is the watch loop's input: StockLoopStack.assemble() sets
+    /// `manager.cgmManagerDelegate` + `manager.delegateQueue` to the WatchLoopManager, which
+    /// routes samples into the watch GlucoseStore (M4).
     let manager: G7CGMManager
 
     /// Serializes all traffic into the stock delegate seam (G7Client fires its hooks from the
@@ -139,21 +139,6 @@ final class G7ClientTransportAdapter {
     }
 }
 
-// MARK: - M3 bring-up (compile-construction proof only)
-
-/// M3 scaffolding, mirroring M1's StoreBringup: an UNINVOKED entry point proving the whole
-/// stock-CGM-over-proven-transport stack constructs. No UI, no call sites, zero behavior
-/// change to the stock watch app. Deleted when the real watch device manager (M4) takes
-/// ownership of the CGM stack.
-enum G7TransportBringup {
-
-    /// Constructs the full M3 stack: proven transport + stock manager + the adapter that
-    /// drives the stock G7SensorDelegate seam. The caller (M4's watch device manager) becomes
-    /// the manager's CGMManagerDelegate and starts the transport (client.startSoak() /
-    /// prewarmIfPending()).
-    static func makeStack() -> G7ClientTransportAdapter {
-        let client = G7Client()
-        let manager = G7CGMManager()
-        return G7ClientTransportAdapter(client: client, manager: manager)
-    }
-}
+// The M3 bring-up entry point (G7TransportBringup.makeStack) retired in M4: its purpose —
+// proving this stack constructs — is absorbed by StockLoopStack.assemble(), which builds the
+// same stack and wires its CGMManagerDelegate output into the WatchLoopManager.
