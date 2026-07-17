@@ -821,14 +821,11 @@ extension WatchDataManager: WCSessionDelegate {
 
         let insulinType = deviceManager.loopManager.pumpInsulinType
 
-        // Reconciliation caps track the phone's THERAPY settings, in lock-step with the
-        // watch (which caps its own doses at the same therapy max — see
-        // WatchPodLoanCoordinator.maxBolusUnits). If these stayed at a bench 1.0 while
-        // the watch delivered a full therapy-max meal bolus, the over-cap event would be
-        // rejected here and dropped from IOB (phantom un-accounted insulin → over-dose).
-        // A small epsilon covers pod pulse rounding / a momentary settings-sync skew.
+        // The phone's therapy max-bolus — used below ONLY as the threshold above which an
+        // odometer-audit remainder is flagged for review (never as a reject: the journal is
+        // a record of ACTUAL delivery and the pod odometer is the reconciliation authority,
+        // so no delivered dose is dropped — see the audit).
         let maxBolus = deviceManager.loopManager.settings.maximumBolus ?? 1.0
-        let bolusRejectCap = maxBolus + 0.05
 
         // ALL of this hand-back's records enter in ONE DoseStore write (single
         // atomic Core Data save): a partial reconcile — basal entered, boluses
@@ -839,19 +836,20 @@ extension WatchDataManager: WCSessionDelegate {
         var entries: [DoseEntry] = []
 
         // (a) Journal boluses at their real timestamps, with deterministic
-        // syncIdentifiers (journal-hash-derived, like the basal entries): the
-        // CachedInsulinDeliveryObject uniqueness constraint then drops exact
-        // re-entries (insert-or-ignore) if a duplicate ever slips past the hash
-        // guard. Defense-in-depth: the watch caps any single bolus at the therapy
-        // max-bolus, so reject only events ABOVE that (corrupt journal) rather than
-        // inject phantom IOB.
+        // syncIdentifiers (journal-hash-derived, like the basal entries); the
+        // CachedInsulinDeliveryObject uniqueness constraint drops exact re-entries
+        // (insert-or-ignore) if a duplicate ever slips past the hash guard.
+        // ITEMIZE EVERY bolus: the journal is a record of ACTUAL delivery, and the pod
+        // odometer (podDelta, audit below) is the reconciliation AUTHORITY, so a recorded
+        // delivery is NEVER silently dropped here — dropping one would understate IOB (the
+        // over-dose direction). (The old `bolusRejectCap` reject was removed: it could only
+        // ever fire on a REAL over-phone-cap delivery — genuine corruption fails to decode
+        // into a valid journal, and the watch can't journal a bolus above its own cap since
+        // it records the CAPPED value — so it only ever dropped real insulin.)
+        var enteredBolusUnits = 0.0
         var bolusSeq = 0
         for event in journal.events {
-            if case .bolus(let units) = event.kind {
-                guard units > 0, units <= bolusRejectCap else {
-                    log.error("Watch loan journal bolus event of %{public}.2f U exceeds the therapy max-bolus cap (%{public}.2f U) — rejected", units, bolusRejectCap)
-                    continue
-                }
+            if case .bolus(let units) = event.kind, units > 0 {
                 entries.append(DoseEntry(type: .bolus,
                                          startDate: event.date,
                                          value: units,
@@ -860,6 +858,7 @@ extension WatchDataManager: WCSessionDelegate {
                                          insulinType: insulinType,
                                          manuallyEntered: true,
                                          isMutable: false))
+                enteredBolusUnits += units
                 bolusSeq += 1
             }
         }
@@ -894,7 +893,10 @@ extension WatchDataManager: WCSessionDelegate {
         // Skipped when the odometer baseline is missing.
         if let podDelta = journal.podDeliveredDelta {
             let expectedBasal = expectedScheduledBasal(from: journal.startedAt, to: handedBackAt) + journalNet
-            let remainder = podDelta - journal.totalBolusUnits - expectedBasal
+            // Reconcile against what was ACTUALLY entered into IOB, not what the journal
+            // claims (journal.totalBolusUnits): any delivery the itemization didn't capture
+            // then surfaces here as a positive remainder and gets entered — never cancels out.
+            let remainder = podDelta - enteredBolusUnits - expectedBasal
             // NOTE: DiagnosticLog forwards at most FIVE varargs correctly (its
             // arity switch); a sixth argument misaligns os_log's va_list and
             // crashes in %@ decoding (SIGSEGV, 2026-07-10 00:07 hand-back crash).
@@ -903,15 +905,22 @@ extension WatchDataManager: WCSessionDelegate {
             let odometer = String(format: "start=%@ latest=%@",
                                   journal.deliveredAtStart.map { String(format: "%.2f", $0) } ?? "nil",
                                   journal.deliveredLatest.map { String(format: "%.2f", $0) } ?? "nil")
-            log.default("Watch loan audit v2: podDelta=%{public}.2f (%{public}@) boluses=%{public}.2f expected(sched+net)=%{public}.2f remainder=%{public}.2f",
-                        podDelta, odometer, journal.totalBolusUnits, expectedBasal, remainder)
+            log.default("Watch loan audit v2: podDelta=%{public}.2f (%{public}@) enteredBoluses=%{public}.2f expected(sched+net)=%{public}.2f remainder=%{public}.2f",
+                        podDelta, odometer, enteredBolusUnits, expectedBasal, remainder)
 
             let remainderThreshold = 0.05   // one pod pulse; filters quantization/staleness noise
-            // Odometer-corruption guard: a plausible single unaccounted dose can't exceed
-            // the therapy max-bolus (the watch's own ceiling). Scale with it so a legit
-            // large bolus isn't wrongly rejected, but never below the historical 5.0 floor.
-            let remainderSanityCap = max(5.0, maxBolus + 0.05)
-            if remainder >= remainderThreshold && remainder <= remainderSanityCap {
+            // ENTER any positive remainder (delivery the journal didn't itemize) into IOB:
+            // under-counting IOB is the dangerous (over-dose) direction and the odometer is
+            // ground truth. Above the therapy max-bolus it's suspicious, so still enter it
+            // (safe direction) but FLAG it for manual verification. Only a physically
+            // implausible remainder (odometer corruption — a phantom that large would itself
+            // withhold dosing for a long time) is withheld and surfaced instead of entered.
+            let remainderReviewCap = max(5.0, maxBolus + 0.05)
+            let remainderHardCap = 30.0   // implausible unjournaled delivery for one loan session
+            if remainder >= remainderThreshold && remainder <= remainderHardCap {
+                if remainder > remainderReviewCap {
+                    log.error("Watch loan audit remainder %{public}.2f U is large — entered (IOB errs safe) but FLAGGED; verify delivery", remainder)
+                }
                 // Timed LATE (at hand-back): zero decay elapsed → IOB maximally
                 // overstated for this insulin → Loop doses less → safe direction.
                 entries.append(DoseEntry(type: .bolus,
@@ -922,8 +931,8 @@ extension WatchDataManager: WCSessionDelegate {
                                          insulinType: insulinType,
                                          manuallyEntered: true,
                                          isMutable: false))
-            } else if remainder > remainderSanityCap {
-                log.error("Watch loan audit remainder %{public}.2f U exceeds sanity cap — NOT entered; verify manually", remainder)
+            } else if remainder > remainderHardCap {
+                log.error("Watch loan audit remainder %{public}.2f U implausibly large — NOT entered; verify delivery manually", remainder)
             }
         } else {
             log.default("Watch loan audit skipped: no odometer baseline in journal")
