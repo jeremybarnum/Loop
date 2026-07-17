@@ -4,8 +4,11 @@
     "\nNo change was made to the pod." : {
       "comment" : "Alert body suffix for a failed Sport Mode pod command"
     },
-    "\nThe pod did not confirm. It MAY have applied this — check the pod before retrying." : {
+    "\nThe pod did not confirm. It MAY have applied this — the watch is checking and will correct the records." : {
       "comment" : "Alert body suffix for an uncertain Sport Mode pod command"
+    },
+    " Your insulin records are being sent to your phone." : {
+      "comment" : "Alert body suffix: uncommanded Sport Mode end"
     },
     "---" : {
       "comment" : "No glucose value representation (3 dashes for mg/dL; no spaces as this will get truncated in the watch complication)",
@@ -227,6 +230,9 @@
         }
       }
     },
+    "%.2f U/hr for" : {
+      "comment" : "Sport Mode temp duration header (parameter: chosen rate)"
+    },
     "%@" : {
       "localizations" : {
         "da" : {
@@ -315,8 +321,14 @@
     "%@ hasn't synced from the iPhone yet." : {
       "comment" : "Prediction error: a therapy setting is missing"
     },
+    "%@ Not Sent" : {
+      "comment" : "Alert title for a Sport Mode pod command dropped while the pod is busy (parameter: command name)"
+    },
     "%@ Uncertain" : {
       "comment" : "Alert title for an unacknowledged (uncertain) Sport Mode pod command"
+    },
+    "%@ was not applied — records corrected." : {
+      "comment" : "Status line: pod refuted an uncertain command (parameter: command)"
     },
     "%1$@ – %2$@ %3$@" : {
       "comment" : "Format string for glucose range (1: lower bound)(2: upper bound)(3: unit)",
@@ -442,6 +454,23 @@
           }
         }
       }
+    },
+    "%d h" : {
+      "comment" : "Duration format, whole hours"
+    },
+    "%d h %d min" : {
+      "comment" : "Duration format, hours and minutes",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$d h %2$d min"
+          }
+        }
+      }
+    },
+    "%d min" : {
+      "comment" : "Duration format, minutes only"
     },
     "%dm ago" : {
       "comment" : "Auto-loop last cycle age"
@@ -846,10 +875,24 @@
       "comment" : "The Watch override button relabeled as the basal control in Sport Mode"
     },
     "Basal %.2f U/hr" : {
-      "comment" : "Sport Mode active temp header\nSport Mode basal confirm summary"
+      "comment" : "Sport Mode active temp header"
+    },
+    "Basal %.2f U/hr for %@" : {
+      "comment" : "Sport Mode basal confirm summary (parameters: rate, duration)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Basal %1$.2f U/hr for %2$@"
+          }
+        }
+      }
     },
     "Basal Rate" : {
       "comment" : "HUD row: the watch-set basal rate in Sport Mode"
+    },
+    "Basal schedule hasn't synced from iPhone." : {
+      "comment" : "Status line: resume refused, no synced basal schedule"
     },
     "BG %@" : {
       "comment" : "Shadow cycle context: anchor BG only"
@@ -989,6 +1032,9 @@
     },
     "Bolus %.2f U" : {
       "comment" : "Command name: bolus with units\nSport Mode bolus confirm summary"
+    },
+    "Bolus Did Not Deliver" : {
+      "comment" : "Alert title: pod refuted an uncertain bolus"
     },
     "Bolus Failed" : {
       "comment" : "The title of the alert controller displayed after a bolus attempt fails",
@@ -1203,6 +1249,9 @@
           }
         }
       }
+    },
+    "Can't Resume" : {
+      "comment" : "Alert title: resume refused without a synced basal schedule"
     },
     "Cancel" : {
       "comment" : "A button that cancels a pending action, like confirming a bolus dose.",
@@ -1498,6 +1547,12 @@
           }
         }
       }
+    },
+    "Delivery is still suspended until %@ (it auto-resumes then). Try Resume again." : {
+      "comment" : "Alert body: pod refuted an uncertain resume (parameter: time)"
+    },
+    "Delivery is still SUSPENDED until %@ (the pod resumes your schedule then, or your iPhone resumes it when it reconnects)." : {
+      "comment" : "Recovered-session notice: suspend still running (parameter: end time)"
     },
     "Dismiss" : {
       "comment" : "The action button title to dismiss an error message",
@@ -3011,6 +3066,9 @@
     "Pod" : {
       "comment" : "Activation: pod link status label"
     },
+    "Pod is busy — not sent." : {
+      "comment" : "Status line when a Sport Mode pod command is dropped because another is in progress"
+    },
     "Pod isn't responding" : {
 
     },
@@ -3790,6 +3848,9 @@
     "Resume → scheduled" : {
       "comment" : "Sport Mode resume hint"
     },
+    "Resume Did Not Apply" : {
+      "comment" : "Alert title: pod refuted an uncertain resume/cancel"
+    },
     "Save" : {
       "comment" : "Button text to confirm carb entry without bolusing on Apple Watch",
       "localizations" : {
@@ -4156,7 +4217,7 @@
     "Sport Mode Ended" : {
       "comment" : "Alert title: Sport Mode ended unexpectedly on relaunch"
     },
-    "Sport Mode ended unexpectedly (the app restarted). The loop is open and the pod is back on its schedule. Your insulin records are being sent to your phone." : {
+    "Sport Mode ended unexpectedly (the app restarted). The loop is open. " : {
       "comment" : "Alert body: uncommanded Sport Mode end"
     },
     "Sport Mode is on, but the watch hasn't read the sensor directly yet. Watch will continue trying to connect to sensor but once you move away from phone you will not have fresh BG until the watch connects." : {
@@ -4184,8 +4245,11 @@
     "suspend · %dm" : {
       "comment" : "Loop decision (closed): suspended"
     },
-    "Suspend basal" : {
-      "comment" : "Sport Mode suspend confirm summary"
+    "Suspend for" : {
+      "comment" : "Sport Mode suspend duration header"
+    },
+    "Suspend for %@" : {
+      "comment" : "Sport Mode suspend confirm summary (parameter: duration)"
     },
     "Suspended" : {
       "comment" : "HUD row detail when delivery is suspended in Sport Mode\nSport Mode suspended-state header"
@@ -4207,8 +4271,31 @@
         }
       }
     },
+    "The pod is back on its schedule." : {
+      "comment" : "Recovered-session notice: no temp running"
+    },
+    "The pod is busy with another command. Nothing was sent — try again in a moment." : {
+      "comment" : "Alert body for a Sport Mode pod command dropped while the pod is busy"
+    },
+    "The pod is still running your last basal of %.2f U/hr until %@ (your iPhone cancels it when it reconnects)." : {
+      "comment" : "Recovered-session notice: temp still running (parameters: rate, end time)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The pod is still running your last basal of %1$.2f U/hr until %2$@ (your iPhone cancels it when it reconnects)."
+          }
+        }
+      }
+    },
+    "The pod never received the %.2f U bolus. It has been removed from your records — bolus again if you still need it." : {
+      "comment" : "Alert body: pod refuted an uncertain bolus (parameter: units)"
+    },
     "The recommendation below is shown but not enacted. The pod runs its schedule plus anything you dose by hand." : {
       "comment" : "Loop screen subtitle (open)"
+    },
+    "The watch doesn't have your basal schedule yet, and resuming would program the pod with made-up rates. Resume from the iPhone, or bring it in range and try again." : {
+      "comment" : "Alert body: resume refused without a synced basal schedule"
     },
     "The watch will set temp basals automatically from the recommendation. Opens automatically when Sport Mode ends." : {
       "comment" : "A description of what happens when the watch automatically starts insulin delivery during Sport Mode.",
@@ -4640,6 +4727,9 @@
           }
         }
       }
+    },
+    "Verify" : {
+      "comment" : "Command name: uncertainty-resolution status read"
     },
     "Watch tethered" : {
       "comment" : "A message displayed to the user when the watch is tethered to their phone.",

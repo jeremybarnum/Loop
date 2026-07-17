@@ -8516,6 +8516,9 @@
         }
       }
     },
+    "Automatic Dosing Still Paused" : {
+      "comment" : "Notification title: dosing paused since escape-hatch reclaim"
+    },
     "Basal Rate Schedule" : {
       "comment" : "Details for configuration error when basal rate schedule is missing",
       "localizations" : {
@@ -16664,6 +16667,9 @@
           }
         }
       }
+    },
+    "Dosing has been paused since the pod was reclaimed — the watch's insulin records haven't arrived. Bring the watch in range, or re-enable Closed Loop in settings if the watch isn't coming back." : {
+      "comment" : "Notification body: dosing paused since escape-hatch reclaim"
     },
     "Dosing Strategy" : {
       "comment" : "The title of the Dosing Strategy section in settings",
@@ -34661,6 +34667,15 @@
         }
       }
     },
+    "Sport Mode has been running for 6 hours. If the session is over, end it on the watch or reclaim the pod in Loop." : {
+      "comment" : "Notification body: loan duration reminder"
+    },
+    "Sport Mode May Not Have Started" : {
+      "comment" : "Notification title: watch has not confirmed pod takeover after a loan grant"
+    },
+    "Sport Mode Still Running" : {
+      "comment" : "Notification title: loan duration reminder"
+    },
     "Start time is out of range: %@" : {
       "comment" : "Carb error description: invalid start time is out of range.",
       "localizations" : {
@@ -37031,8 +37046,11 @@
         }
       }
     },
-    "The pod is being controlled from the watch. Reclaim control now?\n\nOnly do this if the watch can't hand back normally. Insulin delivered from the watch stays missing from the phone's records until the watch reconnects." : {
+    "The pod is being controlled from the watch. Reclaim control now?\n\nOnly do this if the watch can't hand back normally. Insulin delivered from the watch is missing from the phone's records, so automatic dosing stays paused until the watch's records arrive — or until you re-enable Closed Loop in settings if the watch is gone." : {
       "comment" : "Message of the reclaim-pod alert"
+    },
+    "The watch hasn't confirmed it took over the pod. Automatic dosing on this iPhone is paused — check the watch, or reclaim the pod in Loop." : {
+      "comment" : "Notification body: watch has not confirmed pod takeover after a loan grant"
     },
     "Therapy Settings" : {
       "comment" : "Title text for button to Therapy Settings",
