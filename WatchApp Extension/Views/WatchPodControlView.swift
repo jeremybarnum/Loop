@@ -300,7 +300,7 @@ struct WatchPodControlView: View {
         case .basal:
             ShowModeDoseView(kind: .basal, coordinator: coordinator, onFinish: dismiss)
         case .loopToggle:
-            LoopToggleView(autoLoop: ExtensionDelegate.shared().autoLoop)
+            LoopToggleView(autoLoop: ExtensionDelegate.shared().autoLoop, onFinish: dismiss)
         case .bgEntry:
             BGEntryView(
                 engine: WatchPredictionEngine(

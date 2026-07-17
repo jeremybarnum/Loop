@@ -19,6 +19,13 @@ import LoopCore
 struct LoopToggleView: View {
     @ObservedObject var autoLoop: WatchAutoLoop
 
+    /// Pop back to the Sport Mode HUD once the loop state has been changed. Both actions
+    /// dismiss (symmetric) — you came in to flip the state, and once it's flipped you're
+    /// done, so we don't strand you on the toggle screen staring at the inverse button.
+    /// The crown-confirm asymmetry stays: closing enacts insulin so it earns the ceremony;
+    /// opening is one tap. Cancel does NOT dismiss — it returns to the status view.
+    var onFinish: () -> Void = {}
+
     /// Bumped on the store's didUpdate so the live derivation re-reads.
     @State private var storeTick = 0
     @State private var confirming = false
@@ -90,7 +97,7 @@ struct LoopToggleView: View {
                 ActionButton(
                     title: Text("Open Loop", comment: "Button title to open the standalone loop"),
                     color: .gray,
-                    action: { autoLoop.setClosed(false) }
+                    action: { autoLoop.setClosed(false); onFinish() }
                 )
             } else {
                 ActionButton(
@@ -119,6 +126,7 @@ struct LoopToggleView: View {
             BolusConfirmationView(progress: $confirmProgress, helpText: Text("Turn to close the loop", comment: "Crown-confirm help text for closing the loop")) {
                 autoLoop.setClosed(true)
                 confirming = false
+                onFinish()
             }
             Button("Cancel") { confirming = false }
         }
