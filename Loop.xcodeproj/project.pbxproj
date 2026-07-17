@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		FADE00040000000000000031 /* OmnipodKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000001 /* OmnipodKit.framework */; };
+		FADE00040000000000000032 /* RileyLinkKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000002 /* RileyLinkKit.framework */; };
+		FADE00040000000000000033 /* RileyLinkBLEKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000003 /* RileyLinkBLEKit.framework */; };
+		FADE00040000000000000034 /* OmnipodKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000001 /* OmnipodKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		FADE00040000000000000035 /* RileyLinkKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000002 /* RileyLinkKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		FADE00040000000000000036 /* RileyLinkBLEKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000003 /* RileyLinkBLEKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		1419606428D9550400BA86E0 /* LoopKitUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 437AFEE6203688CF008C4892 /* LoopKitUI.framework */; };
 		1419606928D9554E00BA86E0 /* LoopKitUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 437AFEE6203688CF008C4892 /* LoopKitUI.framework */; };
 		1419606A28D955BC00BA86E0 /* MockKitUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C101947127DD473C004E7EB8 /* MockKitUI.framework */; };
@@ -735,6 +741,9 @@
 				43C05CB221EBD88A006FB252 /* LoopCore.framework in Embed Frameworks */,
 				C19C8C1F28663B040056D5E4 /* LoopKit.framework in Embed Frameworks */,
 				FADE00030000000000000014 /* G7SensorKit.framework in Embed Frameworks */,
+				FADE00040000000000000034 /* OmnipodKit.framework in Embed Frameworks */,
+				FADE00040000000000000035 /* RileyLinkKit.framework in Embed Frameworks */,
+				FADE00040000000000000036 /* RileyLinkBLEKit.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1330,6 +1339,9 @@
 		FADE00030000000000000002 /* WorkoutKeepalive.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WorkoutKeepalive.swift; sourceTree = "<group>"; };
 		FADE00030000000000000003 /* G7watchOS-Bridging-Header.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = "G7watchOS-Bridging-Header.h"; sourceTree = "<group>"; };
 		FADE00030000000000000004 /* G7SensorKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = G7SensorKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		FADE00040000000000000001 /* OmnipodKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = OmnipodKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		FADE00040000000000000002 /* RileyLinkKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = RileyLinkKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		FADE00040000000000000003 /* RileyLinkBLEKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = RileyLinkBLEKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		FADE00030000000000000015 /* G7ClientTransportAdapter.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = G7ClientTransportAdapter.swift; sourceTree = "<group>"; };
 		C1F48FF62995821600C8BD69 /* pl */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = pl; path = pl.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		C1F7822527CC056900C0919A /* SettingsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsManager.swift; sourceTree = "<group>"; };
@@ -1478,6 +1490,9 @@
 				C19C8C1E28663B040056D5E4 /* LoopKit.framework in Frameworks */,
 				4396BD50225159C0005AA4D3 /* HealthKit.framework in Frameworks */,
 				FADE00030000000000000013 /* G7SensorKit.framework in Frameworks */,
+				FADE00040000000000000031 /* OmnipodKit.framework in Frameworks */,
+				FADE00040000000000000032 /* RileyLinkKit.framework in Frameworks */,
+				FADE00040000000000000033 /* RileyLinkBLEKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
