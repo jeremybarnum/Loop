@@ -102,4 +102,67 @@ class PodLoanJournalPersistenceTests: XCTestCase {
         PodLoanJournalStore.orphanActiveJournal()
         XCTAssertNil(PodLoanJournalStore.recoverableData())
     }
+
+    // MARK: - C10 pending-command slot (intent-before-transmission)
+
+    func testOrphanedPendingBolusFoldsIntoActiveJournal() {
+        PodLoanJournalStore.persist(makeJournal())
+        let t = Date(timeIntervalSince1970: 1_780_000_500)
+        PodLoanJournalStore.persistPending(PodLoanPendingCommand(date: t, kind: .bolus(units: 1.0)))
+
+        let recovered = PodLoanJournalStore.recoverableData().flatMap(PodLoanJournal.decoded(from:))
+        // 0.85 from makeJournal + the folded 1.0 orphan
+        XCTAssertEqual(recovered?.totalBolusUnits, 1.85)
+        XCTAssertEqual(recovered?.events.last?.date, t)
+        XCTAssertNil(PodLoanJournalStore.pending(), "fold must consume the pending slot")
+    }
+
+    func testOrphanedPendingZeroTempIsNotFolded() {
+        PodLoanJournalStore.persist(makeJournal())
+        PodLoanJournalStore.persistPending(PodLoanPendingCommand(kind: .tempBasal(rate: 0, duration: 1800)))
+
+        let recovered = PodLoanJournalStore.recoverableData().flatMap(PodLoanJournal.decoded(from:))
+        // Max-exposure: an unconfirmed zero-temp must NOT reduce modeled insulin.
+        XCTAssertEqual(recovered?.tempBasalCount, 0)
+        XCTAssertNil(PodLoanJournalStore.pending(), "slot is consumed even when nothing is recorded")
+    }
+
+    func testOrphanedPendingPositiveTempIsFolded() {
+        PodLoanJournalStore.persist(makeJournal())
+        PodLoanJournalStore.persistPending(PodLoanPendingCommand(kind: .tempBasal(rate: 2.5, duration: 10800)))
+
+        let recovered = PodLoanJournalStore.recoverableData().flatMap(PodLoanJournal.decoded(from:))
+        XCTAssertEqual(recovered?.tempBasalCount, 1)
+        XCTAssertEqual(recovered?.lastTempBasalRate, 2.5)
+    }
+
+    func testOrphanedPendingCancelFoldedOnlyOverZeroTemp() {
+        // Over a zero-temp: cancelling resumes schedule -> more insulin -> fold.
+        var journal = makeJournal()
+        journal.record(.tempBasal(rate: 0, duration: 1800), at: Date(timeIntervalSince1970: 1_780_000_300))
+        PodLoanJournalStore.persist(journal)
+        PodLoanJournalStore.persistPending(PodLoanPendingCommand(kind: .cancelTempBasal))
+        var recovered = PodLoanJournalStore.recoverableData().flatMap(PodLoanJournal.decoded(from:))
+        XCTAssertNil(recovered?.lastTempBasalRate, "cancel over zero-temp is folded (temp no longer modeled)")
+        PodLoanJournalStore.clear()
+
+        // Over a positive temp: NOT folded (journal keeps modeling the higher temp).
+        var journal2 = makeJournal()
+        journal2.record(.tempBasal(rate: 3.0, duration: 1800), at: Date(timeIntervalSince1970: 1_780_000_300))
+        PodLoanJournalStore.persist(journal2)
+        PodLoanJournalStore.persistPending(PodLoanPendingCommand(kind: .cancelTempBasal))
+        recovered = PodLoanJournalStore.recoverableData().flatMap(PodLoanJournal.decoded(from:))
+        XCTAssertEqual(recovered?.lastTempBasalRate, 3.0, "cancel over above-zero temp must NOT be folded")
+    }
+
+    func testTakeoverDisplacementFoldsPendingBeforeOrphaning() {
+        PodLoanJournalStore.persist(makeJournal())
+        PodLoanJournalStore.persistPending(PodLoanPendingCommand(kind: .resume))
+        PodLoanJournalStore.orphanActiveJournal()
+
+        let orphan = PodLoanJournalStore.recoverableData().flatMap(PodLoanJournal.decoded(from:))
+        XCTAssertEqual(orphan?.events.filter { $0.kind == .resume }.count, 1,
+                       "pending resume must ride the journal into the orphan slot")
+        XCTAssertNil(PodLoanJournalStore.pending())
+    }
 }

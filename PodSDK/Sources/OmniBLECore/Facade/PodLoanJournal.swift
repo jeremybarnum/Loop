@@ -272,10 +272,41 @@ public struct PodLoanJournal: Equatable, Codable {
 /// reconciliation, never used to resume the session. Motivating incident:
 /// 2026-07-10, a phone crash at hand-back plus an app update destroyed an
 /// in-memory journal holding 0.85 U of delivered insulin.
+/// C10 (intent-before-transmission): the dosing command the app is ABOUT to send,
+/// persisted before the BLE round trip so a crash/kill mid-command cannot erase
+/// the fact that insulin may have moved. Resolved by the command's completion
+/// (converted to a journal event or discarded); an ORPHANED record found at
+/// recovery is folded into the journal under the maximum-insulin-exposure rule.
+public struct PodLoanPendingCommand: Equatable, Codable {
+    public let date: Date
+    public let kind: PodLoanEvent.Kind
+
+    public init(date: Date = Date(), kind: PodLoanEvent.Kind) {
+        self.date = date
+        self.kind = kind
+    }
+
+    public func encoded() -> Data? {
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        return try? enc.encode(self)
+    }
+
+    public static func decoded(from data: Data) -> PodLoanPendingCommand? {
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        return try? dec.decode(PodLoanPendingCommand.self, from: data)
+    }
+}
+
 public enum PodLoanJournalStore {
     /// Injectable for tests; .standard on the watch.
     public static var defaults: UserDefaults = .standard
     static let key = "PodLoanJournalStore.activeJournal"
+    /// C10: at most one dosing command is in flight at a time (the coordinator's
+    /// busy latch); its intent record lives here from just-before-transmission
+    /// until the completion resolves it.
+    static let pendingKey = "PodLoanJournalStore.pendingCommand"
     /// DESIGN-6: an UNACKED journal displaced by a new takeover parks here so
     /// the new session's persists can't overwrite undelivered records. Holds at
     /// most one journal: a second displacement before delivery overwrites it
@@ -297,9 +328,62 @@ public enum PodLoanJournalStore {
         return defaults.data(forKey: key)
     }
 
+    // MARK: - Pending command (C10 intent-before-transmission)
+
+    public static func persistPending(_ pending: PodLoanPendingCommand) {
+        guard let data = pending.encoded() else { return }
+        defaults.set(data, forKey: pendingKey)
+    }
+
+    public static func clearPending() {
+        defaults.removeObject(forKey: pendingKey)
+    }
+
+    public static func pending() -> PodLoanPendingCommand? {
+        return defaults.data(forKey: pendingKey).flatMap(PodLoanPendingCommand.decoded(from:))
+    }
+
+    /// An orphaned pending record means the app died between transmitting a
+    /// dosing command and its completion — the pod may have executed it with no
+    /// journal trace. Fold it into the ACTIVE slot's journal (the session it
+    /// belonged to) under the maximum-insulin-exposure rule: record it only when
+    /// "applied" models MORE insulin than "not applied", so IOB is never
+    /// understated:
+    ///  • bolus / resume → record (both add insulin if applied);
+    ///  • cancelTempBasal → record only if the journal's running temp is a
+    ///    zero-temp (cancelling a suspend resumes schedule = more insulin);
+    ///  • tempBasal → record only a POSITIVE rate (assumed above schedule — the
+    ///    manual dial's normal use; the schedule itself is unknown at store
+    ///    level). A zero-temp is NOT recorded: modeling the pre-command state
+    ///    is the higher-insulin assumption.
+    /// Runs only from phases with no command in flight (recovery read and
+    /// takeover displacement), so it cannot double-record a live command.
+    static func foldPendingIntoActiveJournal() {
+        guard let pending = pending() else { return }
+        defer { clearPending() }
+        guard let data = defaults.data(forKey: key),
+              var journal = PodLoanJournal.decoded(from: data) else { return }
+
+        let record: Bool
+        switch pending.kind {
+        case .bolus, .resume:
+            record = true
+        case .cancelTempBasal:
+            record = journal.lastTempBasalRate == 0
+        case .tempBasal(let rate, _):
+            record = rate > 0
+        case .suspend, .tookOver, .handedBack:
+            record = false
+        }
+        guard record else { return }
+        journal.record(pending.kind, at: pending.date)
+        persist(journal)
+    }
+
     /// Move the active slot's journal (if any) to the orphan slot. Called
     /// before a new takeover creates its journal.
     public static func orphanActiveJournal() {
+        foldPendingIntoActiveJournal()   // C10: don't strand a died-mid-command intent
         guard let data = defaults.data(forKey: key) else { return }
         defaults.set(data, forKey: orphanKey)
         defaults.removeObject(forKey: key)
@@ -308,6 +392,7 @@ public enum PodLoanJournalStore {
     /// Undelivered journal data awaiting recovery hand-back: the orphan slot
     /// first (displaced by a newer session), else the active slot.
     public static func recoverableData() -> Data? {
+        foldPendingIntoActiveJournal()   // C10: only reachable in .idle/.done (no command in flight)
         return defaults.data(forKey: orphanKey) ?? defaults.data(forKey: key)
     }
 

@@ -315,6 +315,10 @@ final class WatchPodLoanCoordinator: ObservableObject {
         controller.tempBasalRateProofLimit = maxTempBasalRate
         controller.bolusProofLimit = Self.maxBolusUnits
         controller.commandBeepsEnabled = automatic ? loanBeepsAutomatic : loanBeepsManual
+        // C1: the max-exposure rules for UNCERTAIN outcomes compare command rates
+        // against the wearer's schedule; nil (not yet synced) falls back to
+        // journal-local heuristics.
+        controller.currentScheduledBasalRate = loanBasalSchedule?.rate(at: Date())
     }
     /// The rate the basal dial starts at.
     static let defaultBasalRate: Double = 0.5

@@ -341,36 +341,96 @@ public final class PodController: NSObject {
         PodLoanJournalStore.persist(loanJournal)
     }
 
-    /// Wrap a completion so that, on success, it records a loan event (if any)
-    /// and notes the pod-delivered cross-check before forwarding the result.
+    /// The wearer's scheduled basal rate right now, pushed by the coordinator
+    /// before every command (applyControllerPrefs). nil = schedule unknown
+    /// (settings not yet synced) — the uncertain-delivery rules then fall back
+    /// to journal-local heuristics.
+    public var currentScheduledBasalRate: Double?
+
+    /// C2: set (on main, from the session queue) after setTempBasal's internal
+    /// safe-cancel SUCCEEDS, so a follow-on set failure can journal the cancel
+    /// the pod actually executed. Reset at the start of every command.
+    private var plumbingCancelCommitted = false
+
+    /// Wrap a completion so the journal always reflects the command's outcome.
+    /// C10 (intent-before-transmission): creating the wrapper — which happens
+    /// synchronously on main at command initiation, before any BLE — persists a
+    /// pending-command record; every completion path resolves it. An app death
+    /// in between leaves an orphan that recovery folds into the journal.
     private func journaling(_ kind: PodLoanEvent.Kind?,
                             _ completion: @escaping (Result<PodControlStatus, Error>) -> Void)
         -> (Result<PodControlStatus, Error>) -> Void {
+        if let kind = kind, loanJournal != nil {
+            PodLoanJournalStore.persistPending(PodLoanPendingCommand(kind: kind))
+        }
+        plumbingCancelCommitted = false
         return { result in
+            defer { PodLoanJournalStore.clearPending() }
+            let cancelCommitted = self.plumbingCancelCommitted
+            self.plumbingCancelCommitted = false
             switch result {
             case .success(let status):
                 if let kind = kind { self.journalRecord(kind) }
                 self.journalNoteStatus(status)
             case .failure(let error):
-                // P0#4 — uncertain (unacknowledged) delivery: the pod MAY have applied
-                // the command. Record conservatively toward MAXIMUM insulin exposure:
-                //  • a BOLUS adds insulin (acute stacking risk) → assume delivered and
-                //    record it, so IOB is never understated.
-                //  • a temp/suspend/cancel is a reduction or small change → do NOT
-                //    record: assume insulin kept flowing (never under-model IOB). The
-                //    next successful status reconciles the truth; the uncertainty is
-                //    surfaced loudly to the user by the coordinator either way.
-                // A CERTAIN failure records nothing (the pod definitely did not act).
-                if case PodControlError.uncertainDelivery = error, let kind = kind {
-                    if case .bolus = kind {
-                        self.journalRecord(kind)
-                        self.emit("⚠️ UNCERTAIN BOLUS — recorded as possibly delivered (IOB includes it)")
-                    } else {
-                        self.emit("⚠️ UNCERTAIN DELIVERY (\(PodLoanEvent(kind: kind).describedAction)) — NOT recorded; verify pod")
+                guard let kind = kind else { break }
+                var uncertain = false
+                if case PodControlError.uncertainDelivery = error { uncertain = true }
+                if uncertain {
+                    // P0#4/C1 — uncertain (unacknowledged) delivery: the pod MAY have
+                    // applied the command. MAXIMUM-INSULIN-EXPOSURE rule, per command
+                    // semantics: record the command as applied ONLY when "applied"
+                    // models MORE insulin than "not applied" — so IOB is never
+                    // understated whichever way the pod actually landed:
+                    //  • bolus → record (adds insulin if applied);
+                    //  • resume → record (suspend ended = schedule delivering);
+                    //  • cancelTempBasal → record iff it cancels a temp BELOW schedule
+                    //    (canceling a zero-temp resumes schedule = more insulin);
+                    //    canceling an above-schedule temp stays unrecorded so the
+                    //    journal keeps modeling the higher temp;
+                    //  • tempBasal → record iff the new rate is ABOVE schedule
+                    //    (its safe-cancel already committed, so "not applied" =
+                    //    schedule); a zero/below-schedule temp stays unrecorded.
+                    // The coordinator surfaces every uncertain outcome loudly.
+                    if cancelCommitted {
+                        // The pod DID cancel the previous temp before the set went
+                        // uncertain — record the true sequence.
+                        self.journalRecord(.cancelTempBasal)
                     }
+                    if self.shouldRecordUncertain(kind) {
+                        self.journalRecord(kind)
+                        self.emit("⚠️ UNCERTAIN DELIVERY (\(PodLoanEvent(kind: kind).describedAction)) — recorded as applied (max-exposure; IOB includes it)")
+                    } else {
+                        self.emit("⚠️ UNCERTAIN DELIVERY (\(PodLoanEvent(kind: kind).describedAction)) — NOT recorded (max-exposure models more insulin without it); verify pod")
+                    }
+                } else if cancelCommitted {
+                    // C2 — the safe-cancel succeeded but the follow-on set CERTAINLY
+                    // failed: the pod reverted to scheduled basal, so the journal
+                    // must stop modeling the previous temp.
+                    self.journalRecord(.cancelTempBasal)
+                    self.emit("LOAN JOURNAL: plumbing cancel recorded — temp change failed after its safe-cancel (pod is on scheduled basal)")
                 }
+                // A CERTAIN failure with no committed cancel records nothing (the
+                // pod definitely did not act).
             }
             completion(result)
+        }
+    }
+
+    /// Max-exposure decision for an uncertain command (see journaling()).
+    private func shouldRecordUncertain(_ kind: PodLoanEvent.Kind) -> Bool {
+        switch kind {
+        case .bolus, .resume:
+            return true
+        case .tempBasal(let rate, _):
+            if let sched = currentScheduledBasalRate { return rate > sched }
+            return rate > 0   // schedule unknown: positive manual/loop temps assumed above it
+        case .cancelTempBasal:
+            guard let prior = loanJournal?.lastTempBasalRate else { return false }
+            if let sched = currentScheduledBasalRate { return prior < sched }
+            return prior == 0   // schedule unknown: only a zero-temp cancel is clearly insulin-increasing
+        case .suspend, .tookOver, .handedBack:
+            return false
         }
     }
 
@@ -738,6 +798,11 @@ public final class PodController: NSObject {
                 throw PodControlError.uncertainDelivery(underlying: error)   // P0#4: uncertain, not certain-failure
             case .success(let status, _):
                 statusAfterCancel = status
+                // C2: the pod HAS reverted to scheduled basal. If the follow-on set
+                // fails, journaling() records this cancel so the journal stops
+                // modeling the old temp. (Enqueued to main before the completion,
+                // so the flag is visible when the completion consumes it.)
+                DispatchQueue.main.async { self.plumbingCancelCommitted = true }
             }
             // Mirror stock guards: no temp during an in-flight bolus or while
             // suspended (the pod would fault or misbehave).
