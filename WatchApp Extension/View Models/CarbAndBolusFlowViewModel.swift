@@ -134,14 +134,23 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
         // with the watch's own prediction engine — the SAME stock algorithm the phone
         // runs — with this carb injected. UI-driven, so on the main actor.
         if MainActor.assumeIsolated({ ExtensionDelegate.shared().podLoanCoordinator.phase == .active }) {
-            isComputingRecommendedBolus = true
             MainActor.assumeIsolated {
+                // C12: same recency gate as the phone's manual-bolus path
+                // (recommendBolusValidatingDataRecency → glucoseTooOld) and the
+                // auto-loop's enact gate. A missing or stale anchor produces NO
+                // recommendation — never a dose computed from old glucose, and
+                // never a fabricated placeholder BG. Carbs still log; the user
+                // can still dial a bolus from their own judgment.
+                let store = ExtensionDelegate.shared().predictionStore
+                guard let anchorBG = store.anchorSample?.quantity, !store.isAnchorStale else {
+                    self.recommendedBolusAmount = nil
+                    return
+                }
+                self.isComputingRecommendedBolus = true
                 let engine = WatchPredictionEngine(loopManager: ExtensionDelegate.shared().loopManager,
                                                    coordinator: ExtensionDelegate.shared().podLoanCoordinator)
                 // storeEntry:false → the algorithm anchors on the stored G7 series; manualBG is
-                // display-only here, so the store's newest reading (or a neutral placeholder) is fine.
-                let anchorBG = ExtensionDelegate.shared().predictionStore.anchorSample?.quantity
-                    ?? HKQuantity(unit: .milligramsPerDeciliter, doubleValue: 100)
+                // display-only here.
                 engine.predict(manualBG: anchorBG, storeEntry: false, pendingCarb: entry) { [weak self] result in
                     Task { @MainActor in
                         guard let self else { return }
