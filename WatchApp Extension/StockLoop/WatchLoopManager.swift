@@ -86,9 +86,11 @@ final class WatchLoopManager {
     /// Typed against the stock `PumpManager` protocol — the same protocol methods the phone's
     /// DoseEnactor calls (`enactTempBasal`/`enactBolus`) and the M2 `OmniPumpManager`
     /// implements. nil in M4: assembly is proven, dosing is not.
-    /// TODO(M5-ruling): connecting a live pump manager is gated on the loan/handoff protocol
-    /// v2 (design doc §2) and on risk-register rulings #1 (bolus-cap layering) and #2
-    /// (max-temp derivation from therapy max-basal) — do not wire without them.
+    /// Wiring a live pump manager happens via the loan protocol v2 controller
+    /// (DESIGN_LOAN_PROTOCOL_V2.md §10): the grant's PodState snapshot constructs the
+    /// OmniPumpManager and hands it here. The ruling dependencies are discharged (R16:
+    /// therapy-settings-only limits; max-temp = therapy max-basal) — the remaining gate
+    /// is the protocol itself, never a direct assignment from app code.
     var pumpManager: PumpManager?
 
     // MARK: The CGM input (stock G7CGMManager over the proven transport — M3)
@@ -483,17 +485,18 @@ final class WatchLoopManager {
 
             switch settings.automaticDosingStrategy {
             case .automaticBolus:
-                // TODO(M5-ruling): automatic-bolus dosing on the watch is gated on
-                // risk-register ruling #1 (bolus-cap layering and any per-loan cumulative
-                // ceiling). Until ruled, the strategy DENIES dosing — it does not silently
-                // fall back to tempBasalOnly.
-                return .configurationError("automaticDosingStrategy: automaticBolus is not ruled for the watch")
+                // RULED (R16, 2026-07-17): the watch strategy is temp basals only — every
+                // bolus is human-confirmed. The denial is explicit, not a silent fallback
+                // to tempBasalOnly, so a phone-pushed automaticBolus setting is surfaced
+                // rather than quietly reinterpreted.
+                return .configurationError("automaticDosingStrategy: automaticBolus is not supported on the watch (R16: temps only)")
 
             case .tempBasalOnly:
                 // The same DoseMath entry point, same argument surface as the phone (:1858).
-                // TODO(M5-ruling): maxBasal here is the raw therapy maximumBasalRatePerHour;
-                // risk-register ruling #2 (max-temp derives from therapy max-basal + its
-                // pod-proof-limit companion) confirms or adjusts this in the stock-driver world.
+                // RULED (R16, 2026-07-17): maxBasal is the raw therapy maximumBasalRatePerHour
+                // — the only configured limit, exactly as on the phone. No watch-side
+                // companion cap; stock DoseMath clamp + driver rounding + pod ceiling are
+                // the layers.
                 let temp = predictedGlucose.recommendedTempBasal(
                     to: glucoseTargetRange,
                     at: predictedGlucose[0].startDate,
@@ -531,8 +534,11 @@ final class WatchLoopManager {
     /// The stock recency-validated manual-bolus path: glucose/pump staleness gates and no
     /// fabricated glucose placeholder (the crude version's 100 mg/dL stand-in is a review
     /// finding and does not return).
-    /// TODO(M5-ruling): the on-watch presentation of a recency denial (what replaces the
-    /// placeholder UX) is risk-register ruling #4; this method only supplies the policy.
+    /// RULED (R17, 2026-07-17): a recency denial surfaces as an explicit "No recent
+    /// glucose — no recommendation" notice in the recommendation slot; the dial stays
+    /// usable for a manual bolus under therapy maxBolus and carbs still log. The notice
+    /// rendering lands with the bolus-flow UI integration; this method supplies policy
+    /// only (the thrown recency error is the notice's trigger).
     func recommendManualBolus(completion: @escaping (Swift.Result<ManualBolusRecommendation, Error>) -> Void) {
         dataAccessQueue.async {
             do {
