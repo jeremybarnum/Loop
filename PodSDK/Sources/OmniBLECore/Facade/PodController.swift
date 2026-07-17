@@ -659,6 +659,11 @@ public final class PodController: NSObject {
     /// Deliver a bolus. Rate-capped at `bolusProofLimit`, which the caller sets to the
     /// wearer's therapy max-bolus before each command (pod-layer defense-in-depth).
     public func bolus(units: Double, completion: @escaping (Result<PodControlStatus, Error>) -> Void) {
+        // Snap to the pod's pulse grid like setTempBasal does: the pod only delivers in
+        // whole 0.05 U pulses, and an off-grid value can encode inconsistently in the
+        // command and fault the pod. Clamp negatives too. The journaled amount then equals
+        // what the pod actually delivers.
+        let units = max(0, (units / Pod.pulseSize).rounded() * Pod.pulseSize)
         guard units <= bolusProofLimit else {
             emit(String(format: "BOLUS: refused %.2f U (proof limit %.2f U)", units, bolusProofLimit))
             completion(.failure(PodControlError.bolusExceedsProofLimit(requested: units, limit: bolusProofLimit)))
