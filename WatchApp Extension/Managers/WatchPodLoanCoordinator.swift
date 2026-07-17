@@ -322,11 +322,12 @@ final class WatchPodLoanCoordinator: ObservableObject {
     }
     /// The rate the basal dial starts at.
     static let defaultBasalRate: Double = 0.5
-    /// Fixed duration for every watch temp basal. From the user's view it's just
-    /// "set the basal" (no duration UI); it's long enough to cover a competition,
-    /// and the pod auto-reverts to the scheduled basal when it expires — a safety
-    /// backstop if the watch dies. The phone reasserts its own basal on hand-back.
-    static let tempBasalDuration: TimeInterval = 3 * 60 * 60   // 3 hours
+    /// Stock-parity default for the manual temp-basal duration picker
+    /// (ManualTempBasalEntryView defaults to 30 min). The picker's options are
+    /// Pod.supportedTempBasalDurations — the pod's own 30-min grid, 30 min–12 h,
+    /// the same source stock uses. Every temp auto-reverts at expiry: the
+    /// pod-side safety backstop if the watch dies.
+    static let defaultTempBasalDuration: TimeInterval = .minutes(30)
 
     /// True only in the watchOS simulator (which has no Bluetooth, so it can never
     /// reach a pod). When true, the methods below route to the simulator demo path
@@ -675,23 +676,29 @@ final class WatchPodLoanCoordinator: ObservableObject {
 
     // MARK: - Pod control (only while the loan is active)
 
-    func suspend() {
-        // P0#5 — BOUNDED manual suspend: a fixed-duration zero temp, NOT an untimed
-        // suspendDelivery. If the watch dies mid-suspend the pod auto-reverts to its
-        // scheduled basal at expiry rather than withholding insulin indefinitely (an
-        // untimed suspend has no pod-side revert net). Same mechanism the closed loop
-        // uses for a predicted-low zero temp; blocks the loop via manualSuspendActive.
+    /// Stock-parity suspend duration options (OmniBLESettingsView's action sheet:
+    /// 30 min / 1 h / 1 h 30 min / 2 h). Semantics here are STRONGER than stock:
+    /// stock's chosen time only programs a reminder beep on an untimed suspend;
+    /// ours is a bounded zero-temp the pod itself auto-resumes at expiry.
+    static let supportedSuspendDurations: [TimeInterval] = [.minutes(30), .hours(1), .hours(1.5), .hours(2)]
+
+    func suspend(duration: TimeInterval) {
+        // P0#5 — BOUNDED manual suspend: a user-chosen-duration zero temp, NOT an
+        // untimed suspendDelivery. If the watch dies mid-suspend the pod
+        // auto-reverts to its scheduled basal at expiry rather than withholding
+        // insulin indefinitely. Same mechanism the closed loop uses for a
+        // predicted-low zero temp; blocks the loop via manualSuspendActive.
         // C4: the suspended note follows the command outcome — applied only if
         // the command was accepted (optimistic while in flight, like the dose
         // screens), rolled back on a definitive refusal. A busy-drop changes
         // nothing and alerts "try again".
-        let until = Date().addingTimeInterval(Self.tempBasalDuration)
+        let until = Date().addingTimeInterval(duration)
         if Self.isSimulatorDemo { manualSuspendUntil = until; demoSuspend(); return }
         applyControllerPrefs(automatic: false)
         let prior = manualSuspendUntil
         let accepted = runPodCommand(label: NSLocalizedString("Suspend", comment: "Command name: suspend"),
                                      onCertainFailure: { [weak self] in self?.manualSuspendUntil = prior }) {
-            self.controller.setTempBasal(rate: 0, duration: Self.tempBasalDuration, completion: $0)
+            self.controller.setTempBasal(rate: 0, duration: duration, completion: $0)
         }
         if accepted { manualSuspendUntil = until }
     }
@@ -748,17 +755,18 @@ final class WatchPodLoanCoordinator: ObservableObject {
         applyControllerPrefs(automatic: false)
         runPodCommand(label: String(format: NSLocalizedString("Bolus %.2f U", comment: "Command name: bolus with units"), capped)) { self.controller.bolus(units: capped, completion: $0) }
     }
-    /// Set the pod's basal to an absolute rate (U/hr). 0 = suspend. Capped at
-    /// maxTempBasalRate; snapped to the pod's 0.05 U/hr resolution. Implemented as a
-    /// fixed-duration temp basal (see tempBasalDuration) that auto-reverts.
-    func setBasalRate(_ rate: Double) {
+    /// Set the pod's basal to an absolute rate (U/hr) for a USER-CHOSEN duration
+    /// (stock parity: rate + duration are both picked, Pod.supportedTempBasalDurations
+    /// grid). 0 = suspend for the chosen window. Capped at maxTempBasalRate; snapped
+    /// to the pod's 0.05 U/hr resolution; auto-reverts at expiry.
+    func setBasalRate(_ rate: Double, duration: TimeInterval) {
         let snapped = (min(max(rate, 0), maxTempBasalRate) / 0.05).rounded() * 0.05
-        if snapped <= 0 { suspend(); return }   // 0 U/hr = suspend
-        if Self.isSimulatorDemo { manualSuspendUntil = nil; demoSetTempBasal(rate: snapped); return }
+        if snapped <= 0 { suspend(duration: duration); return }   // 0 U/hr = suspend for the chosen window
+        if Self.isSimulatorDemo { manualSuspendUntil = nil; demoSetTempBasal(rate: snapped, duration: duration); return }
         applyControllerPrefs(automatic: false)
         let prior = manualSuspendUntil
         let accepted = runPodCommand(label: NSLocalizedString("Set Basal", comment: "Command name: set basal"),
-                                     onCertainFailure: { [weak self] in self?.manualSuspendUntil = prior }) { self.controller.setTempBasal(rate: snapped, duration: Self.tempBasalDuration, completion: $0) }
+                                     onCertainFailure: { [weak self] in self?.manualSuspendUntil = prior }) { self.controller.setTempBasal(rate: snapped, duration: duration, completion: $0) }
         if accepted { manualSuspendUntil = nil }   // a positive manual basal clears any bounded suspend
     }
     /// Log a carb the user ate during Sport Mode. NOT a pod command (no BLE): it
@@ -1170,7 +1178,7 @@ private extension WatchPodLoanCoordinator {
         }
     }
 
-    func demoSetTempBasal(rate: Double, duration: TimeInterval = WatchPodLoanCoordinator.tempBasalDuration) {
+    func demoSetTempBasal(rate: Double, duration: TimeInterval = WatchPodLoanCoordinator.defaultTempBasalDuration) {
         let delivered = status?.insulinDelivered ?? 0
         busy = true
         demoBasalRate = rate

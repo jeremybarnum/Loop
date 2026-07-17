@@ -433,6 +433,12 @@ struct ShowModeDoseView: View {
     /// For basal with a temp already running: the user has tapped "Change" on the
     /// options step and wants the dial.
     @State private var showingDial = false
+    /// Stock parity: basal (and suspend) require a user-chosen duration — the
+    /// phone's ManualTempBasalEntryView pairs the rate with a duration picker,
+    /// and its suspend action sheet forces a duration choice. Set on the
+    /// duration step; nil until chosen.
+    @State private var pickingDuration = false
+    @State private var duration: TimeInterval = WatchPodLoanCoordinator.defaultTempBasalDuration
 
     private let step = 0.05
 
@@ -448,6 +454,8 @@ struct ShowModeDoseView: View {
     var body: some View {
         if confirming {
             confirmStep
+        } else if pickingDuration {
+            durationStep
         } else if kind == .basal, !showingDial, coordinator.sessionSuspended {
             // Suspended is the zero-delivery special case: a temp-cancel won't
             // restart a suspended pod — only a resume (re-programs the schedule)
@@ -558,12 +566,54 @@ struct ShowModeDoseView: View {
                 title: Text(actionTitle),
                 color: actionEnabled ? .insulin : .gray,
                 action: {
-                    confirmProgress = 0
-                    confirming = true
+                    if kind == .basal {
+                        // Stock parity: rate is paired with a user-chosen duration.
+                        pickingDuration = true
+                    } else {
+                        confirmProgress = 0
+                        confirming = true
+                    }
                 }
             )
             .disabled(!actionEnabled)
         }
+    }
+
+    // MARK: - Pick the duration (basal/suspend only — stock parity)
+
+    /// Suspend gets stock's four action-sheet options; a positive temp gets the
+    /// pod's own 30-min grid (Pod.supportedTempBasalDurations), stock's picker data.
+    private var durationOptions: [TimeInterval] {
+        isSuspend ? WatchPodLoanCoordinator.supportedSuspendDurations
+                  : Pod.supportedTempBasalDurations
+    }
+
+    private var durationStep: some View {
+        VStack(spacing: 2) {
+            Text(isSuspend
+                 ? NSLocalizedString("Suspend for", comment: "Sport Mode suspend duration header")
+                 : String(format: NSLocalizedString("%.2f U/hr for", comment: "Sport Mode temp duration header (parameter: chosen rate)"), amount))
+                .font(.caption)
+            List(durationOptions, id: \.self) { option in
+                Button {
+                    duration = option
+                    pickingDuration = false
+                    confirmProgress = 0
+                    confirming = true
+                } label: {
+                    Text(Self.formatDuration(option))
+                        .fontWeight(option == duration ? .semibold : .regular)
+                }
+            }
+        }
+    }
+
+    static func formatDuration(_ interval: TimeInterval) -> String {
+        let totalMinutes = Int((interval / 60).rounded())
+        let h = totalMinutes / 60, m = totalMinutes % 60
+        if h == 0 { return String(format: NSLocalizedString("%d min", comment: "Duration format, minutes only"), m) }
+        if m == 0 { return String(format: NSLocalizedString("%d h", comment: "Duration format, whole hours"), h) }
+        return String(format: NSLocalizedString("%d h %d min", comment: "Duration format, hours and minutes"), h, m)
     }
 
     /// Bolus needs a positive amount; basal is always actionable (0 = suspend).
@@ -587,7 +637,7 @@ struct ShowModeDoseView: View {
         let dose = (amount / step).rounded() * step   // snap to pod resolution
         switch kind {
         case .bolus: coordinator.bolus(units: dose)
-        case .basal: coordinator.setBasalRate(dose)
+        case .basal: coordinator.setBasalRate(dose, duration: duration)
         }
         onFinish()
     }
@@ -609,8 +659,8 @@ struct ShowModeDoseView: View {
         switch kind {
         case .bolus: return String(format: NSLocalizedString("Bolus %.2f U", comment: "Sport Mode bolus confirm summary"), amount)
         case .basal: return isSuspend
-            ? NSLocalizedString("Suspend basal", comment: "Sport Mode suspend confirm summary")
-            : String(format: NSLocalizedString("Basal %.2f U/hr", comment: "Sport Mode basal confirm summary"), amount)
+            ? String(format: NSLocalizedString("Suspend for %@", comment: "Sport Mode suspend confirm summary (parameter: duration)"), Self.formatDuration(duration))
+            : String(format: NSLocalizedString("Basal %.2f U/hr for %@", comment: "Sport Mode basal confirm summary (parameters: rate, duration)"), amount, Self.formatDuration(duration))
         }
     }
 
