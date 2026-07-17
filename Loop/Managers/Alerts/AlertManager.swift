@@ -158,6 +158,14 @@ public final class AlertManager {
 
     // MARK: - Loop Not Running alerts
 
+    /// Reports whether the pod is currently loaned to the watch (Sport Mode). While a
+    /// loan is active the phone deliberately pauses its own loop and can be away, so its
+    /// loop legitimately never completes — the loop-not-running watchdog must not fire.
+    /// Wired by DeviceDataManager; defaults false so ordinary open/closed-loop users
+    /// still get the watchdog. Cancel + re-arm at the loan boundaries handle the queued
+    /// notifications (this only stops a stray re-arm mid-loan).
+    var isPodLoanedToWatch: () -> Bool = { false }
+
     func loopDidComplete(_ lastLoopDate: Date? = nil) {
         // use now if there is no lastLoopDate
         rescheduleLoopNotRunningNotifications(lastLoopDate ?? Date())
@@ -174,6 +182,12 @@ public final class AlertManager {
     }
 
     func scheduleLoopNotRunningNotifications(_ lastLoopDate: Date) {
+        // Sport Mode: while the pod is loaned to the watch the phone's loop is paused by
+        // design, so don't arm the loop-not-running watchdog (a final in-flight
+        // .LoopCompleted right after the grant could otherwise re-queue it). Re-armed
+        // explicitly from hand-back time when the loan ends.
+        guard !isPodLoanedToWatch() else { return }
+
         // Give a little extra time for a loop-in-progress to complete
         let gracePeriod = TimeInterval(minutes: 0.5)
 
@@ -266,6 +280,26 @@ public final class AlertManager {
 
             UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: loopNotRunningIdentifiers)
         }
+    }
+
+    /// FULLY cancel the loop-not-running watchdog: remove DELIVERED and still-PENDING
+    /// (scheduled) notifications and forget the tracking list. Use this when suppressing
+    /// the watchdog for a watch loan — unlike clearLoopNotRunningNotifications(), which is
+    /// always paired with an immediate re-schedule that replaces the pendings by
+    /// identifier. Called standalone (no re-schedule), so it must remove the pending
+    /// timers itself, or the pre-loan +20/40/60/120-min 'Loop Failure' alerts still fire.
+    func cancelLoopNotRunningNotifications() {
+        let center = UNUserNotificationCenter.current()
+        let category = LoopNotificationCategory.loopNotRunning.rawValue
+        center.getPendingNotificationRequests { requests in
+            let ids = requests.filter { $0.content.categoryIdentifier == category }.map { $0.identifier }
+            center.removePendingNotificationRequests(withIdentifiers: ids)
+        }
+        center.getDeliveredNotifications { notifications in
+            let ids = notifications.filter { $0.request.content.categoryIdentifier == category }.map { $0.request.identifier }
+            center.removeDeliveredNotifications(withIdentifiers: ids)
+        }
+        UserDefaults.appGroup?.loopNotRunningNotifications = []
     }
 
     private func getLastLoopDate() -> Date? {

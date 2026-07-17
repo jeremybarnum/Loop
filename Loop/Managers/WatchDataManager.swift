@@ -694,6 +694,12 @@ extension WatchDataManager: WCSessionDelegate {
             // prove the watch took over.
             deviceManager.podLoanedToWatch = true
             startWatchLoanPollingIfNeeded()   // 3b v2: begin polling the watch for its status
+            // A1: the phone's loop pauses for the loan (dosing off + pod released), so it
+            // will legitimately stop completing. FULLY cancel the already-queued
+            // loop-not-running notifications now — including the still-PENDING scheduled
+            // timers (clearLoopNotRunningNotifications alone only removes DELIVERED ones);
+            // the podLoanedToWatch gate then blocks any stray re-arm until the loan ends.
+            deviceManager.alertManager.cancelLoopNotRunningNotifications()
             // Capture the pre-loan dosing state and pause automatic dosing — but
             // ONLY on the first grant of a loan. A repeat borrow (e.g. the watch
             // retried after a failed takeover) must NOT re-capture: by then dosing
@@ -754,7 +760,17 @@ extension WatchDataManager: WCSessionDelegate {
         if let priorDosing = dosingEnabledBeforeWatchLoan {
             deviceManager.loopManager.mutateSettings { $0.dosingEnabled = priorDosing }
             dosingEnabledBeforeWatchLoan = nil
+            // Clear any crash-recovery flag stranded by the loan grant (a loop enact
+            // racing the pod-connection release never completes → the flag stays armed
+            // the whole loan). Dosing was paused during the loan, so an armed flag here
+            // is a grant-race artifact, not a real in-flight dose — clearing it at
+            // hand-back stops a false "Loop Crashed" on a later reboot.
+            deviceManager.crashRecoveryManager.dosingFinished()
         }
+        // A1: re-arm the loop-not-running watchdog from now — the phone resumes looping
+        // after hand-back, so a genuine failure to loop post-loan still alerts ~20 min
+        // later (without waiting for a .LoopCompleted that may take a while post-reclaim).
+        deviceManager.alertManager.rescheduleLoopNotRunningNotifications(Date())
 
         // Phase 2 (DIST-3): reconcile the watch's delivery into IOB — guarded against
         // duplicate hand-back messages (a retry after a lost ack resends the SAME

@@ -174,7 +174,7 @@ public struct PodLoanJournal: Equatable, Codable {
 
     // MARK: - Human-readable summary (the Phase-1 hand-back screen)
 
-    public func summaryLines(now: Date = Date()) -> [String] {
+    public func summaryLines(now: Date = Date(), schedule: PodLoanBasalSchedule? = nil) -> [String] {
         var lines: [String] = []
 
         let loanMinutes = Int((now.timeIntervalSince(startedAt) / 60).rounded())
@@ -204,7 +204,16 @@ public struct PodLoanJournal: Equatable, Codable {
             lines.append("No boluses or suspends — basal only.")
         }
 
-        if let delta = podDeliveredDelta {
+        if let schedule = schedule {
+            // Net basal vs the wearer's schedule — the IOB-relevant figure (delivered
+            // above/below scheduled), matching the live Show Mode HUD. Preferred over the
+            // raw pod-odometer total below, which lumps basal + boluses together and is
+            // meaningless without the schedule baseline.
+            let net = netBasalDelivered(until: now, schedule: schedule)
+            lines.append(String(format: "Basal delivered %+.2f U vs schedule.", net))
+        } else if let delta = podDeliveredDelta {
+            // Fallback when no schedule is available (e.g. the force-quit recovery path,
+            // where the journal is decoded from storage without the live schedule).
             lines.append(String(format: "Pod reports %.2f U total delivered during the loan (basal + boluses).", delta))
         }
 

@@ -291,7 +291,16 @@ final class DeviceDataManager {
         if let priorDosing = UserDefaults.appGroup?.dosingEnabledBeforeWatchLoan {
             loopManager.mutateSettings { $0.dosingEnabled = priorDosing }
             UserDefaults.appGroup?.dosingEnabledBeforeWatchLoan = nil
+            // Clear any crash-recovery flag stranded by the loan grant (a loop enact
+            // racing the pod-connection release never completes → the flag stays armed
+            // the whole loan). Dosing was paused during the loan, so an armed flag here
+            // is a grant-race artifact, not a real in-flight dose — clearing it at
+            // loan-end stops a false "Loop Crashed" on a later reboot.
+            crashRecoveryManager.dosingFinished()
         }
+        // A1: re-arm the loop-not-running watchdog from now (loan ended via escape hatch;
+        // the phone resumes looping, so a genuine post-loan stall still alerts ~20 min later).
+        alertManager.rescheduleLoopNotRunningNotifications(Date())
         // DESIGN-6: tell the watch its loan is over. WatchDataManager owns the
         // WC session, so it observes this and queues the revoke message.
         NotificationCenter.default.post(name: .PodLoanReclaimedViaEscapeHatch, object: self)
@@ -466,6 +475,12 @@ final class DeviceDataManager {
             trustedTimeOffset: { trustedTimeChecker.detectedSystemTimeOffset }
         )
         cacheStore.delegate = loopManager
+        // Sport Mode: let LoopDataManager see the loan state so it suppresses the
+        // cancel-active-temp-basal reflex during a loan (see LoopDataManager.isPodLoanedToWatch).
+        loopManager.isPodLoanedToWatch = { [weak self] in self?.podLoanedToWatch == true }
+        // …and let AlertManager suppress the loop-not-running watchdog during a loan
+        // (the phone's loop is paused by design — see A1 cancel/re-arm at the loan boundaries).
+        alertManager.isPodLoanedToWatch = { [weak self] in self?.podLoanedToWatch == true }
         loopManager.presetActivationObservers.append(alertManager)
         loopManager.presetActivationObservers.append(analyticsServicesManager)
 

@@ -49,6 +49,15 @@ final class LoopDataManager {
 
     weak var delegate: LoopDataManagerDelegate?
 
+    /// Reports whether the pod is currently loaned to the watch (Sport Mode). When
+    /// true, the phone has paused its own automatic dosing BY DESIGN and released the
+    /// pod connection, so the "cancel the active temp basal when automatic dosing is
+    /// disabled" reflex must NOT fire: it would enact a cancel into the just-released
+    /// pod connection (stranding the crash-recovery flag), and the watch supersedes the
+    /// temp anyway. Wired by DeviceDataManager; defaults false so non-loan behavior is
+    /// unchanged.
+    var isPodLoanedToWatch: () -> Bool = { false }
+
     private let logger = DiagnosticLog(category: "LoopDataManager")
     private let widgetLog = DiagnosticLog(category: "LoopWidgets")
     
@@ -244,7 +253,15 @@ final class LoopDataManager {
                 self.mutateSettings { settings in
                     settings.clearOverride(matching: .preMeal)
                 }
-                self.cancelActiveTempBasal(for: .automaticDosingDisabled)
+                // Sport Mode handoff: do NOT cancel the active temp basal when dosing
+                // was paused because the pod was loaned to the watch. The watch takes
+                // over the pod and supersedes the temp, and the pod auto-reverts on
+                // expiry — so canceling here would only enact into the just-released
+                // pod connection (stranding the crash-recovery flag), and it's more
+                // natural to keep the last BG-informed rate running through the gap.
+                if !self.isPodLoanedToWatch() {
+                    self.cancelActiveTempBasal(for: .automaticDosingDisabled)
+                }
             } }
             .store(in: &cancellables)
     }

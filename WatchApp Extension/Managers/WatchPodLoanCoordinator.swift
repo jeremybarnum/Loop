@@ -119,7 +119,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
         #if targetEnvironment(simulator)
         if Self.isSimulatorDemo, phase == .done { return "Delivered 1.5 U · Suspended 12m" }
         #endif
-        return controller.loanJournalSummary
+        return controller.loanJournalSummary(schedule: loanBasalSchedule)
     }
 
     /// Whether the phone can currently be reached to hand the pod back. Hand-back needs
@@ -873,7 +873,7 @@ final class WatchPodLoanCoordinator: ObservableObject {
                     Task { @MainActor in
                         guard let self else { return }
                         guard !self.wasRevokedByPhone, self.controller.loanJournal != nil else { return }
-                        var summary = self.controller.loanJournalSummary ?? "No loan activity recorded."
+                        var summary = self.controller.loanJournalSummary(schedule: self.loanBasalSchedule) ?? "No loan activity recorded."
                         if let cancelWarning {
                             summary += "\n" + cancelWarning
                         }
@@ -930,13 +930,21 @@ final class WatchPodLoanCoordinator: ObservableObject {
               let data = controller.recoveredLoanJournalData else { return }
         let decoded = PodLoanJournal.decoded(from: data)
 
+        // The real loan-end time is the journal's LAST EVENT, not this (possibly hours-later)
+        // relaunch. Use it for BOTH the summary's net-basal integration + suspend-duration
+        // text (else an open suspend integrates from suspend-time all the way to relaunch →
+        // a grossly inflated "Basal delivered vs schedule") AND the phone hand-back stamp
+        // (a send-time stamp would inflate the phone's audit window for hours the watch
+        // never held the pod).
+        let handedBackAt = decoded?.events.last?.date ?? Date()
+
         // P1#10 — an orphaned journal in .idle means Sport Mode ended WITHOUT a normal
         // hand-back (the app was killed/relaunched mid-session). Announce it once so
         // the silent drop to open-loop isn't spooky. (.done is a deliberate phone
         // revoke — the done screen already explains that; don't double-alert.)
         if !announcedRecoveredSession, phase == .idle {
             announcedRecoveredSession = true
-            let did = decoded?.summaryText
+            let did = decoded?.summaryLines(now: handedBackAt, schedule: loanBasalSchedule).joined(separator: "\n")
             sessionEndedNotice = CommandFailure(
                 title: NSLocalizedString("Sport Mode Ended", comment: "Alert title: Sport Mode ended unexpectedly on relaunch"),
                 message: NSLocalizedString("Sport Mode ended unexpectedly (the app restarted). The loop is open and the pod is back on its schedule. Your insulin records are being sent to your phone.", comment: "Alert body: uncommanded Sport Mode end")
@@ -948,13 +956,8 @@ final class WatchPodLoanCoordinator: ObservableObject {
         guard session.activationState == .activated, session.isReachable else {
             return   // keep it persisted; retry on next activation
         }
-        var summary = decoded?.summaryText ?? "Recovered watch loan journal."
+        var summary = decoded?.summaryLines(now: handedBackAt, schedule: loanBasalSchedule).joined(separator: "\n") ?? "Recovered watch loan journal."
         summary += "\n⚠️ Sent after Sport Mode ended without a normal hand-back."
-        // Stamp the hand-back at the journal's LAST EVENT, not send time: a
-        // recovered journal can be delivered hours later, and a send-time stamp
-        // would inflate the phone's audit window (expected scheduled basal) for
-        // hours the watch never held the pod.
-        let handedBackAt = decoded?.events.last?.date ?? Date()
         let handback = PodHandbackUserInfo(handedBackAt: handedBackAt, summary: summary, journalData: data)
         session.sendMessage(handback.rawValue, replyHandler: { [weak self] _ in
             Task { @MainActor in
