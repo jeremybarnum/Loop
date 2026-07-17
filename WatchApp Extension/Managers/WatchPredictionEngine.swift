@@ -283,7 +283,16 @@ final class WatchPredictionEngine {
         }
 
         let insulinType = coordinator.grantInsulinTypeRaw.flatMap { InsulinType(rawValue: $0) }
-        let model: ExponentialInsulinModelPreset = settings.defaultRapidActingModel ?? .rapidActingAdult
+        // Correction/bolus math uses the curve for the PUMP's insulin type, exactly
+        // as the phone does via PresetInsulinModelProvider.model(for:) — fixed-curve
+        // types get their own preset; rapid-acting types use the settings default.
+        let model: ExponentialInsulinModelPreset
+        switch insulinType {
+        case .fiasp:   model = .fiasp
+        case .lyumjev: model = .lyumjev
+        case .afrezza: model = .afrezza
+        default:       model = settings.defaultRapidActingModel ?? .rapidActingAdult
+        }
 
         // Doses: pre-loan history from the grant + the loan journal, with the
         // active temp carried at full programmed extent (parity with the
