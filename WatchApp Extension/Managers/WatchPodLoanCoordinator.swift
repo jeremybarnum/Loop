@@ -697,13 +697,36 @@ final class WatchPodLoanCoordinator: ObservableObject {
     }
     func resume() {
         if Self.isSimulatorDemo { manualSuspendUntil = nil; demoResume(); return }
-        // Resume re-programs the pod's basal table: use the phone's REAL
-        // schedule when it has synced (nil falls back to the proof flat 0.5).
-        let schedule = realBasalSchedule
         applyControllerPrefs(automatic: false)
         let prior = manualSuspendUntil
+
+        if status?.suspended == true, !manualSuspendActive {
+            // TRUE pod suspend (a pre-loan edge — Sport Mode itself never issues
+            // one): resuming RE-PROGRAMS the pod's stored basal table, which
+            // outlives the loan, so it requires the wearer's REAL schedule. No
+            // schedule, no command — never a fabricated table (C9).
+            guard let schedule = realBasalSchedule else {
+                WKInterfaceDevice.current().play(.failure)
+                lastError = NSLocalizedString("Basal schedule hasn't synced from iPhone.", comment: "Status line: resume refused, no synced basal schedule")
+                commandFailure = CommandFailure(
+                    title: NSLocalizedString("Can't Resume", comment: "Alert title: resume refused without a synced basal schedule"),
+                    message: NSLocalizedString("The watch doesn't have your basal schedule yet, and resuming would program the pod with made-up rates. Resume from the iPhone, or bring it in range and try again.", comment: "Alert body: resume refused without a synced basal schedule"))
+                return
+            }
+            // Program in the schedule's own timezone (captured at grant), not
+            // the watch's current zone.
+            let tz = loanBasalSchedule.flatMap { TimeZone(secondsFromGMT: $0.timeZoneSecondsFromGMT) } ?? .current
+            let accepted = runPodCommand(label: NSLocalizedString("Resume", comment: "Command name: resume"),
+                                         onCertainFailure: { [weak self] in self?.manualSuspendUntil = prior }) { self.controller.resume(schedule: schedule, timeZone: tz, completion: $0) }
+            if accepted { manualSuspendUntil = nil }
+            return
+        }
+
+        // Bounded zero-temp suspend (the only suspend Sport Mode creates):
+        // cancel the temp — the pod reverts to its own STORED true schedule.
+        // No reprogramming, no schedule needed, works with zero settings sync (C9).
         let accepted = runPodCommand(label: NSLocalizedString("Resume", comment: "Command name: resume"),
-                                     onCertainFailure: { [weak self] in self?.manualSuspendUntil = prior }) { self.controller.resume(schedule: schedule, completion: $0) }
+                                     onCertainFailure: { [weak self] in self?.manualSuspendUntil = prior }) { self.controller.cancelTempBasal(completion: $0) }
         if accepted { manualSuspendUntil = nil }   // resuming clears the bounded manual suspend
     }
 

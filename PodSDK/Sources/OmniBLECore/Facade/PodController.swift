@@ -106,9 +106,13 @@ public struct PodControlStatus: Equatable {
     public let timeActive: TimeInterval
     public let alerts: String
     public let receivedAt: Date
+    /// True when the pod reports ALL delivery suspended (a real suspendDelivery
+    /// state — NOT the bounded rate-0 temp Sport Mode uses for its suspend).
+    public let suspended: Bool
 
     init(_ response: StatusResponse, at date: Date = Date()) {
         self.deliveryStatus = String(describing: response.deliveryStatus)
+        self.suspended = response.deliveryStatus.suspended
         self.podProgress = String(describing: response.podProgressStatus)
         if response.reservoirLevel >= Pod.reservoirLevelAboveThresholdMagicNumber {
             self.reservoirLevel = nil
@@ -128,7 +132,7 @@ public struct PodControlStatus: Equatable {
     public init(deliveryStatus: String, podProgress: String, reservoirLevel: Double?,
                 insulinDelivered: Double, bolusNotDelivered: Double,
                 lastProgrammingMessageSeqNum: UInt8, timeActive: TimeInterval,
-                alerts: String, receivedAt: Date = Date()) {
+                alerts: String, receivedAt: Date = Date(), suspended: Bool = false) {
         self.deliveryStatus = deliveryStatus
         self.podProgress = podProgress
         self.reservoirLevel = reservoirLevel
@@ -138,6 +142,7 @@ public struct PodControlStatus: Equatable {
         self.timeActive = timeActive
         self.alerts = alerts
         self.receivedAt = receivedAt
+        self.suspended = suspended
     }
 }
 
@@ -693,12 +698,14 @@ public final class PodController: NSObject {
         }
     }
 
-    /// Resume basal delivery. Programs `schedule` when provided (the caller's
-    /// real basal schedule — the watch holds the phone's via settings sync);
-    /// falls back to the proof build's flat 0.5 U/hr schedule when it isn't.
-    /// Resume RE-PROGRAMS the pod's basal table, so passing the real schedule
-    /// keeps the pod's stored schedule truthful for later cancels/expiry too.
-    public func resume(schedule: BasalSchedule? = nil, completion: @escaping (Result<PodControlStatus, Error>) -> Void) {
+    /// Resume basal delivery after a TRUE pod suspend (suspendDelivery). This
+    /// RE-PROGRAMS the pod's stored basal table — a state that OUTLIVES the loan
+    /// — so the caller MUST supply the wearer's real schedule and its timezone;
+    /// there is deliberately no fallback (C9: the old flat-0.5 proof-schedule
+    /// default could permanently reprogram a wearer's pod with fabricated rates,
+    /// invisible to the phone). The bounded rate-0 temp Sport Mode uses for its
+    /// suspend is resumed with cancelTempBasal instead — no reprogramming.
+    public func resume(schedule: BasalSchedule, timeZone: TimeZone, completion: @escaping (Result<PodControlStatus, Error>) -> Void) {
         runCommand(named: "Resume basal", completion: journaling(.resume, completion)) { session in
             // Fresh status first: setBasalSchedule skips its internal anti-0x31
             // cancel-all only when BOTH podState.isSuspended and the last
@@ -710,8 +717,8 @@ public final class PodController: NSObject {
             // itself (PodState.updateDeliveryStatus corrects a stale suspend),
             // so the skip decision rests on live truth, not optimistic state.
             _ = try session.getStatus()
-            let offset = TimeZone.currentFixed.scheduleOffset(forDate: Date())
-            return try session.resumeBasal(schedule: schedule ?? Self.proofBasalSchedule, scheduleOffset: offset,
+            let offset = timeZone.scheduleOffset(forDate: Date())
+            return try session.resumeBasal(schedule: schedule, scheduleOffset: offset,
                                            acknowledgementBeep: self.commandBeepsEnabled)
         }
     }
