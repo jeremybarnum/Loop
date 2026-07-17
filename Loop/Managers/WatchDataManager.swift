@@ -592,8 +592,10 @@ extension WatchDataManager: WCSessionDelegate {
         case PodLoanRequestUserInfo.name?:
             handlePodLoanRequest(replyHandler: replyHandler)
         case PodHandbackUserInfo.name?:
-            handlePodHandback(message)
-            replyHandler([:])
+            // Ack ONLY after the reconcile write commits (the closure) — not synchronously
+            // here. The watch discards its journal on our ack, so a premature ack + a failed
+            // write would lose the delivered doses from IOB with no resend.
+            handlePodHandback(message) { replyHandler([:]) }
         default:
             replyHandler([:])
         }
@@ -744,9 +746,10 @@ extension WatchDataManager: WCSessionDelegate {
     /// The watch has handed the pod back. Record what it did (Phase 1: display;
     /// Phase 2: reconcile), restore automatic dosing to its pre-loan state, and
     /// re-establish the phone's own pod session so the pump data is current again.
-    private func handlePodHandback(_ message: [String: Any]) {
+    private func handlePodHandback(_ message: [String: Any], ackHandback: @escaping () -> Void) {
         guard let handback = PodHandbackUserInfo(rawValue: message) else {
             log.error("Could not decode pod hand-back message: %{public}@", String(describing: message))
+            ackHandback()   // undecodable message: ack to avoid an infinite resend loop
             return
         }
 
@@ -780,8 +783,11 @@ extension WatchDataManager: WCSessionDelegate {
         let journalHash = SHA256.hash(data: handback.journalData).map { String(format: "%02x", $0) }.joined()
         if journalHash == UserDefaults.appGroup?.lastReconciledWatchLoanJournalHash {
             log.default("Duplicate pod hand-back (journal %{public}@… already reconciled) — state restored, dose entry skipped", String(journalHash.prefix(8)))
+            ackHandback()   // already reconciled — safe to let the watch clear its journal
         } else {
-            reconcileWatchLoan(journalData: handback.journalData, handedBackAt: handback.handedBackAt, journalHash: journalHash)
+            // Ack only once the write COMMITS (onWriteCommitted); on write failure we stay
+            // silent so the watch's send times out, keeps the journal, and retries.
+            reconcileWatchLoan(journalData: handback.journalData, handedBackAt: handback.handedBackAt, journalHash: journalHash, onWriteCommitted: ackHandback)
         }
 
         // FORMAL HANDOFF: resume bidding for the pod's connection. The standing
@@ -810,12 +816,13 @@ extension WatchDataManager: WCSessionDelegate {
     /// positive remainder (odometer delta − boluses − (full schedule + journal
     /// net)) is entered timed-late at hand-back, which overstates IOB → Loop doses
     /// less → errs safe. Negative remainders are logged, not entered.
-    private func reconcileWatchLoan(journalData: Data, handedBackAt: Date, journalHash: String) {
+    private func reconcileWatchLoan(journalData: Data, handedBackAt: Date, journalHash: String, onWriteCommitted: @escaping () -> Void) {
         guard let journal = WatchLoanJournal(data: journalData) else {
             // Undecodable journal: keep Phase-1 behavior (summary already stored for
             // display; user can record manually via Non-Pump Insulin). Do NOT persist
             // the hash — a later valid resend must still be processable.
             log.error("Watch loan journal could not be decoded (%{public}d bytes) — no doses entered", journalData.count)
+            onWriteCommitted()   // ack: the same bytes would never decode on retry — avoid a resend loop
             return
         }
 
@@ -962,11 +969,15 @@ extension WatchDataManager: WCSessionDelegate {
         deviceManager.loopManager.addWatchLoanDoseEntries(entries) { [weak self] error in
             if let error = error {
                 self?.log.error("Watch loan reconciliation failed: %{public}@ — nothing entered, hash not persisted; a resend re-enters everything", String(describing: error))
+                // Do NOT ack: the watch's send times out, so it keeps the journal and
+                // retries (the resend re-enters everything; the hash guard makes a
+                // retry-after-a-late-success harmless).
             } else {
                 self?.enterWatchLoanCarbs(journal)   // carbs only after the dose write commits (hash persists)
                 UserDefaults.appGroup?.lastReconciledWatchLoanJournalHash = journalHash
                 self?.log.default("Watch loan reconciled: %{public}d entr%{public}@ in one write (basal net %{public}+.2f U)",
                                   count, count == 1 ? "y" : "ies", journalNet)
+                onWriteCommitted()   // ack ONLY now that the write has committed
             }
         }
     }
