@@ -74,11 +74,82 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   phone selects it (PresetInsulinModelProvider mapping), never a hardcoded
   default (fixed 0f9e23ca).
 
+- **R16 — From-stock watch caps: R1 confirmed; strategy is temps-only**
+  (M5 session, 2026-07-17). No per-loan cumulative bolus ceiling ("no cap,
+  for now"); the automatic-bolus dosing strategy is DENIED on the watch —
+  temp basals only, every bolus human-confirmed. Resolves the :486 and :494
+  TODO(M5-ruling) sites: current WatchLoopManager code (therapy-settings-
+  only, deny-on-missing) is the ruled behavior.
+- **R17 — Manual-bolus recency denial shows an explicit notice** (M5,
+  2026-07-17). "No recent glucose — no recommendation" in the
+  recommendation slot — "can't recommend" never masquerades as
+  "recommend 0 U". The dial stays usable for a manual bolus under therapy
+  maxBolus and carbs still log (C12 semantics). No confirmation
+  interstitial. Resolves the :534 site.
+- **R18 — Glucose input gating: chosen, never silent** (M5, 2026-07-17;
+  completes DESIGN_G7_FULL_LOOP.md §6a, which ruled sovereignty
+  display/readiness and deferred inputs). During a loan, dosing consumes
+  only the watch's own direct-G7 stream by default; a stale direct stream
+  pauses NEW dosing per R9's lenient rule. Phone-fed dosing exists only as
+  the picker's explicitly chosen, labeled degraded mode — offered only when
+  the phone is genuinely reachable and pushing fresh readings. StatusReport
+  carries the sovereignty flag + dosing mode.
+- **R19 — Watch HealthKit writes OFF; watch→Nightscout out of v2** (M5,
+  2026-07-17). The phone is the single Health writer, after
+  reconciliation; the watch stores run in LoopKit's no-HealthKit mode.
+  CHALLENGE REVIEW COMPLETED same day, verdict: UPHELD, decisive
+  mechanism code-verified — this vintage's phone observes other-app
+  insulin/glucose from HealthKit BY DEFAULT (FeatureFlags.swift:140-157)
+  and its HK-ingestion paths dedupe by HK UUID only (GlucoseStore
+  :488-506, InsulinDeliveryStore :604-627), so a watch that writes HK
+  guarantees duplicate phone cache rows; mixed provenance then silently
+  zeroes glucose momentum (GlucoseMath.swift:92-100) in exactly the
+  post-session windows that matter, and remote uploads/totals double.
+  IOB itself survives (syncIdentifier union). FLIP CONDITION recorded:
+  if a bench test proves cross-source syncIdentifier dedup with
+  syncVersion precedence (watch v0 / phone v1) AND deletion propagation
+  to anchored queries, HK-on-watch becomes a defensible durability
+  upgrade (total-watch-loss is the one case the protocol can't cover) —
+  the bench script lives in the challenge report; revisit only with that
+  evidence. Nightscout: the phone remains the sole uploader; live
+  remote-following during phone-away sessions is future scope, not v2.
+- **R20 — Degraded-mode picker semantics** (M5, 2026-07-17). At
+  activation: CGM-viewer (first-class: direct-G7 display, loop open, pod
+  stays with phone) / phone-fed (offered ONLY when actually available,
+  per R18) / abort. Mid-session CGM death: continue phone-fed (if real) /
+  stay paused / hand back. Degraded modes are never silent (§6a) and
+  options are never shown when they'd be lies.
+- **R21 — The loan ring is live, not frozen** (M5, 2026-07-17; supersedes
+  the crude build's constant saddle-brown ring). The watch now genuinely
+  loops, so the ring shows stock freshness semantics of the WATCH's own
+  loop during a loan; saddle-brown (#BF663A) becomes the Sport-Mode accent
+  (tint/icon). CGM-viewer mode shows stock's open-loop glyph. The crude
+  frozen ring was correct THEN (freshness meant phone-loop staleness);
+  the premise changed.
+
+- **R22 — Negative-remainder allocation: fingerprints only** (M5,
+  2026-07-17; the R6 layer-2/3 detail). Layer 2 acts ONLY on fingerprint
+  matches: exact-size annulment of a single `.assumed` event (within one
+  0.05 U pulse; tie → the event closest to the failure) and retroactive
+  recording of a flagged `.assumed(.skippedReduction)` window the
+  remainder fits inside (the C′ case). Never `.confirmed`, never below
+  zero. EVERY ambiguous remainder touches no record and surfaces whole as
+  the layer-3 notice — IOB left overstated is the safe direction;
+  newest-first partial reduction was proposed and REJECTED (a wrong
+  reduction understates IOB in exactly the least-understood scenarios).
+  Notice wording ruled verbatim (the shorter form): "The pod delivered
+  X.XX U less than the watch session recorded. Records were not changed.
+  Possible causes: pod fault, occlusion, or an interrupted command. Check
+  the pod and review the session in Event History." — persistent phone
+  notification + banner until acknowledged + Event History line.
+  Mid-loan settings freeze also APPROVED same day (settings changes take
+  effect at the next grant; the watch doses on the grant snapshot in its
+  captured timezone).
+
 ## Not yet ruled (do not decide without Jeremy)
 
-The eight reserved decisions in DESIGN_FROM_STOCK_REBUILD.md's risk
-register, plus the four TODO(M5-ruling) sites in
-"WatchApp Extension/StockLoop/WatchLoopManager.swift" (:89 pump connection,
-:486 automatic-bolus strategy, :494 max-temp derivation, :534 manual-bolus
-recency-denial UX), plus layer-2/3 implementation details (provenance tag
-schema, allocation order, residual-notice wording).
+- Risk-register #8: any on-body session of any milestone build — per-build,
+  per-event authorization; never assumed.
+- The :89 pump-connection TODO is not a ruling — it unblocks mechanically
+  when loan-protocol-v2 exists (its ruling dependencies R16 are
+  discharged); the v2 spec itself requires Jeremy's sign-off.
