@@ -301,7 +301,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     @Published var glucose: Int?          // mg/dL, nil = no valid reading
     /// Fired on every fresh EGV (mg/dL + read time). The Loop integration sets this to inject the
     /// reading into the glucose store. Not @Published — it's a data sink, not UI state.
-    var onEGV: ((Int, Date) -> Void)?
+    var onEGV: ((Int, Date, UInt32) -> Void)?   // (value, on-body measurement time, sensor-clock reading id)
     @Published var trendState: UInt8?     // EGV algorithm-state byte (0x06 = OK/in-session)
     @Published var statusText: String = "Idle"
     @Published var logLines: [String] = []
@@ -324,11 +324,92 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     /// Apply a sensor pairing code (from the phone relay or the JIT prompt). Digits-only,
     /// exactly 4; ignored otherwise. Takes effect on the next connect attempt. Clears the
     /// `needsSensorCode` prompt flag.
-    func applySensorCode(_ code: String) {
+    ///
+    /// `sensorID` is supplied by the phone relay (Component A) and omitted by the watch's JIT
+    /// prompt. When it names a sensor DIFFERENT from the one we last bonded, this is a genuinely
+    /// new sensor: we (a) invalidate the stale bonded handle so the reader scans fresh instead of
+    /// chasing a dead handle for 330s at the next Sport Mode, and (b) mark a pre-warm pending so
+    /// the next foreground activation bonds it ahead of the workout.
+    /// Returns true iff this was a genuinely NEW sensor (pre-warm armed) — the app uses that to
+    /// schedule the "tap to enable" watch notification.
+    @discardableResult
+    func applySensorCode(_ code: String, sensorID: String? = nil) -> Bool {
         let digits = String(code.filter { $0.isNumber })
-        guard digits.count == 4 else { return }
+        guard digits.count == 4 else { return false }
         onMain { self.pin = digits; self.needsSensorCode = false }
         log("sensor code applied (\(digits.count) digits)")
+
+        guard let sensorID, !sensorID.isEmpty,
+              sensorID != UserDefaults.standard.string(forKey: Self.lastKnownSensorIDKey) else { return false }
+        UserDefaults.standard.set(sensorID, forKey: Self.lastKnownSensorIDKey)
+        UserDefaults.standard.set(sensorID, forKey: Self.pendingPrewarmKey)
+        UserDefaults.standard.removeObject(forKey: Self.prewarmFailKey)   // fresh sensor, fresh retry budget
+        cbQueue.async {   // invalidate the stale handle so beginAcquire scans for the NEW sensor
+            UserDefaults.standard.removeObject(forKey: Self.savedPeripheralKey)
+            self.savedPeripheral = nil
+        }
+        log("new sensor \(sensorID) — cleared stale bond, pre-warm pending")
+        return true
+    }
+
+    /// Pre-warm entry — call on every FOREGROUND activation. If a new sensor's code has arrived
+    /// but we haven't bonded it yet, and we're NOT in Sport Mode, run a one-time, bounded,
+    /// workout-backed bond so the first Sport Mode on this sensor is a fast targeted connect
+    /// instead of a cold scan. No-op unless a pre-warm is pending. MUST be foreground — the
+    /// HKWorkoutSession keepalive can't be started in the background (HK error 14).
+    func prewarmIfPending() {
+        guard UserDefaults.standard.string(forKey: Self.pendingPrewarmKey) != nil else { return }
+        guard !soakActive else { return }        // Sport Mode owns the reader; its cold path will bond
+        guard !needsSensorCode else { return }   // code is known-bad (JIT prompt up) — don't hammer
+        guard pin.filter({ $0.isNumber }).count == 4 else { return }   // need a valid code first
+        cbQueue.async {
+            guard !self.attemptActive, !self.prewarmActive else { return }   // already working
+            self.prewarmActive = true
+            log("=== PRE-WARM: bonding new sensor (bounded \(Int(self.prewarmWindow))s scan, workout-backed) · \(batteryTag()) ===")
+            // Bounded backstop: if we never bond within the window (BT off, sensor out of range,
+            // no chirp), stop cleanly and leave the pending flag set to retry next app open.
+            self.prewarmTimeoutWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.prewarmActive else { return }
+                log("pre-warm window elapsed — no bond; will retry on next app open")
+                self.stop()   // tears down the attempt AND the pre-warm (see stop() / teardownPrewarm)
+            }
+            self.prewarmTimeoutWork = work
+            self.cbQueue.asyncAfter(deadline: .now() + self.prewarmWindow, execute: work)
+            self.onMain { self.workout.acquire("prewarm"); self.connect() }   // foreground-legal keepalive + one cycle
+        }
+    }
+
+    /// Tear down an in-flight pre-warm (runs on cbQueue — finishAttempt is routed through cbQueue,
+    /// and stop()/the timeout call it there too). RELEASES the "prewarm" keepalive hold: because
+    /// the keepalive is reference-counted, this can never stop the session while Sport Mode's
+    /// "soak" hold is present — so there is no soakActive read and no adopt-handoff race. On a
+    /// successful bond it clears the pending flag; on failure it bumps a bounded retry counter and
+    /// gives up after prewarmMaxFails. No-op when no pre-warm is active — normal teardown untouched.
+    private func teardownPrewarm(bonded: Bool) {   // cbQueue
+        guard prewarmActive else { return }
+        prewarmActive = false
+        prewarmTimeoutWork?.cancel(); prewarmTimeoutWork = nil
+        var resolved = false   // pending flag cleared → the "tap to enable" notification is now moot
+        if bonded {
+            UserDefaults.standard.removeObject(forKey: Self.pendingPrewarmKey)
+            UserDefaults.standard.removeObject(forKey: Self.prewarmFailKey)
+            resolved = true
+            log("=== PRE-WARM DONE: new sensor bonded + handle saved; first Sport Mode will be fast ===")
+        } else {
+            let fails = UserDefaults.standard.integer(forKey: Self.prewarmFailKey) + 1
+            if fails >= prewarmMaxFails {
+                UserDefaults.standard.removeObject(forKey: Self.pendingPrewarmKey)
+                UserDefaults.standard.removeObject(forKey: Self.prewarmFailKey)
+                resolved = true
+                log("pre-warm gave up after \(fails) tries; the first Sport Mode will bond via the cold path")
+            } else {
+                UserDefaults.standard.set(fails, forKey: Self.prewarmFailKey)
+                log("pre-warm attempt \(fails)/\(prewarmMaxFails) failed; will retry on next app open")
+            }
+        }
+        if resolved { NotificationCenter.default.post(name: Self.prewarmDidResolveNotification, object: nil) }
+        onMain { self.workout.release("prewarm") }
     }
 
     /// FALLBACK trigger (Component A): set when a connect reaches the sensor but the code is
@@ -367,6 +448,20 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     func injectWrongCode() {
         onMain { self.pin = "0000"; self.consecutiveAuthFailures = 0 }
         log("TEST: injected wrong code 0000")
+    }
+
+    /// TEST: arm a pre-warm as if a new sensor's code just arrived — clears the bonded handle and
+    /// sets the pending flag while KEEPING the current (correct) code, so the next foreground
+    /// activation (or a direct prewarmIfPending call) runs the ENTIRE pre-warm path — continuous
+    /// scan → handshake → bond → save handle → stop keepalive — against the EXISTING sensor,
+    /// repeatably, for free.
+    func armPrewarm() {
+        UserDefaults.standard.set("TEST-PREWARM", forKey: Self.pendingPrewarmKey)
+        cbQueue.async {
+            UserDefaults.standard.removeObject(forKey: Self.savedPeripheralKey)
+            self.savedPeripheral = nil
+        }
+        log("TEST: armed pre-warm (cleared handle, set pending); foreground the app to fire it")
     }
     #endif
 
@@ -433,6 +528,36 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     /// runs during this window — a concurrent scan destabilized the fresh connection (build 69
     /// instant-drops). With a good handle the targeted connect lands well inside this.
     let coldScanFallbackDelay: TimeInterval = 330.0
+
+    // MARK: Pre-warm — one-time, bounded, foreground-initiated bond of a NEWLY changed sensor.
+    // A brand-new sensor has never been bonded, so the FIRST Sport Mode on it would have to
+    // discover it by SCAN (the throttled path) — a fat-tailed wait if the wrist is down. Pre-warm
+    // moves that one slow discovery OFF the workout's critical path: when the phone relays a new
+    // sensor's code, we bond it opportunistically the next time the watch app is foregrounded, so
+    // the first Sport Mode is a fast targeted connect. It MUST run in the foreground — HKWorkoutSession
+    // (the only keepalive) can't start in the background (HK error 14). See DESIGN_NEW_SENSOR_WORKFLOW.md.
+    /// Persisted "pre-warm pending for this sensorID" flag; survives suspension, retried on each
+    /// foreground activation until the bond lands, then cleared.
+    private static let pendingPrewarmKey = "g7.pendingPrewarmSensorIDv1"
+    /// The sensorID we last saw a code for — so we can tell a genuinely NEW sensor (→ pre-warm)
+    /// from a re-relay of the current one (→ nothing to do).
+    private static let lastKnownSensorIDKey = "g7.lastKnownSensorIDv1"
+    /// A bounded pre-warm bond is in flight (transient; cbQueue). Kept separate from `soakActive`
+    /// so pre-warm never masquerades as Sport Mode in the UI/gating.
+    private var prewarmActive = false
+    private var prewarmTimeoutWork: DispatchWorkItem?
+    /// Bounded pre-warm window: one advertising cycle (~5 min) + margin to catch a chirp on a
+    /// continuous scan AND complete the handshake. On expiry we stop and retry on the next app open.
+    let prewarmWindow: TimeInterval = 360.0
+    /// Give up after this many failed pre-warm attempts (absent or mis-coded sensor) so we don't
+    /// burn a workout+scan on EVERY foreground forever; the first Sport Mode's cold path then does
+    /// the bond (no worse than pre-pre-warm). A fresh code relay resets the count and re-arms.
+    private static let prewarmFailKey = "g7.prewarmFailCountV1"
+    let prewarmMaxFails = 3
+    /// Posted (main) when a pending pre-warm RESOLVES — the sensor bonded, or pre-warm gave up. The
+    /// app observes it to pull the "new sensor — tap to enable" watch notification.
+    static let prewarmDidResolveNotification = Notification.Name("com.loopkit.Loop.g7.prewarmDidResolve")
+
     let chunkGap: UInt64 = 50_000_000    // 50 ms between 20-byte data-char chunks
     let chunkTail: UInt64 = 200_000_000  // 200 ms after a full bulk write
 
@@ -462,6 +587,13 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     private var pin4: [UInt8] = Array("3102".utf8)
     private var finished = false
     private var attemptActive = false
+    /// Monotonic identity for the current connect→handshake→read attempt (bumped every time an
+    /// attempt starts). runHandshake runs on a Task executor and its finishAttempt hops back onto
+    /// cbQueue several hops later; if the attempt was SUPERSEDED in between (Sport Mode preempting
+    /// a pre-warm, or a Bluetooth toggle re-arming), a stale terminus must NOT tear down the fresh
+    /// attempt. attemptActive alone can't tell them apart (it's true for BOTH), so the terminus is
+    /// gated on this generation matching the one captured when the handshake began.
+    private var attemptGeneration = 0
     private var wantConnect = false
     private var autoRepeatWork: DispatchWorkItem?
 
@@ -509,6 +641,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         cbQueue.async {
             guard !self.attemptActive else { return }
             self.attemptActive = true
+            self.attemptGeneration &+= 1   // new attempt identity (see attemptGeneration / runHandshake guard)
             self.finished = false
             self.wantConnect = true
             self.pin4 = pinBytes
@@ -548,6 +681,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                 self.attemptActive = false
                 self.finished = true   // suppress the disconnect->fail path
             }
+            self.teardownPrewarm(bonded: false)   // release a pre-warm keepalive if one was running
             self.onMain { self.isRunning = false; self.statusText = "Stopped" }
         }
     }
@@ -562,6 +696,26 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     /// `autoRepeatInterval` (5 min). Each successful read updates the freshness stats so a
     /// glance shows current staleness + the worst gap this session (task #12).
     func startSoak() {
+        // Hold the keepalive for "soak" FIRST (before preempting any pre-warm) so the session never
+        // lapses across the handoff — reference-counted, so this adopts a live pre-warm session.
+        workout.acquire("soak")
+        // Preempt an in-flight pre-warm: tear its attempt DOWN and release its keepalive hold, then
+        // Sport Mode starts a fresh, properly-bounded attempt below. We don't try to keep the
+        // in-flight attempt — a still-scanning pre-warm has no backstop of its own once we cancel
+        // its timer, and a mid-handshake one re-bonds in seconds anyway (the sensor is right here).
+        cbQueue.async {
+            if self.prewarmActive {
+                self.prewarmActive = false
+                self.prewarmTimeoutWork?.cancel(); self.prewarmTimeoutWork = nil
+                self.scanTimeoutWork?.cancel(); self.scanTimeoutWork = nil
+                if self.central != nil, self.central.state == .poweredOn { self.central.stopScan() }
+                if let p = self.peripheral { self.central?.cancelPeripheralConnection(p) }
+                self.dataStream.close(); self.authStream.close(); self.ctrlStream.close()
+                self.attemptActive = false
+                self.finished = true
+                self.workout.release("prewarm")   // hand the hold to "soak" (already acquired above)
+            }
+        }
         onMain {
             self.soakStartDate = Date()
             self.lastReadDate = nil
@@ -570,24 +724,24 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             self.soakActive = true
         }
         log("=== SOAK START: role 0x\(String(format: "%02X", authEndByte)) · predictive \(Int(autoRepeatInterval))s grid (lead \(Int(scanLeadTime))s) · \(batteryTag()) ===")
-        workout.start()
         autoRepeat = true
         connect()
     }
 
     /// Re-arm the workout keepalive if it died — e.g. watchOS relaunched the app in the
     /// BACKGROUND (post-update), where HKWorkoutSession.start fails with HK error 14 and the
-    /// reader silently suspends. Called on every foreground activation; no-op while running.
+    /// reader silently suspends. Called on every foreground activation; the refcount decides
+    /// whether anything (soak/prewarm) still wants it, so no soakActive gate here.
     func ensureKeepalive() {
-        guard soakActive else { return }
-        workout.start()
+        workout.ensureRunning()
     }
 
-    /// End the soak: stop the workout keepalive and all polling.
+    /// End the soak: release the "soak" keepalive hold and stop all polling. The session actually
+    /// ends only when no other holder (a pre-warm) still wants it.
     func stopSoak() {
         onMain { self.soakActive = false }
         log("=== SOAK STOP ===")
-        workout.stop()
+        workout.release("soak")
         stop()
     }
 
@@ -613,9 +767,16 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             savedPeripheral = p                        // hold the bonded G7 for pending reconnect
             UserDefaults.standard.set(p.identifier.uuidString, forKey: Self.savedPeripheralKey)   // survive relaunch
         }
+        // NOTE: we deliberately do NOT clear the pending-pre-warm flag on a generic success — during
+        // a G7 sensor OVERLAP (old + new both transmitting ~12h) an in-flight attempt using the OLD
+        // code can succeed reading the OLD sensor and would wrongly drop the NEW sensor's pending
+        // pre-warm. The flag is cleared only by a genuine pre-warm resolution in teardownPrewarm.
+        // Cost: a Sport-Mode-preempted pre-warm triggers one redundant, self-correcting pre-warm
+        // later — cheap, and strictly safer than a wrong-clear.
         if let p = peripheral { central?.cancelPeripheralConnection(p) }
         dataStream.close(); authStream.close(); ctrlStream.close()
         attemptActive = false
+        teardownPrewarm(bonded: success)   // no-op unless a pre-warm bond was in flight
         let useReconnect = reconnectMode && savedPeripheral != nil
         onMain {
             self.isRunning = false
@@ -652,7 +813,11 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     // MARK: Acquisition — scan (default) or pending-connect (A/B experiment)
 
     private func beginAcquire() {   // on cbQueue
-        if reconnectMode, let saved = savedPeripheral {
+        if prewarmActive {
+            // Pre-warm always SCANS for the new (never-bonded) sensor — never a targeted reconnect
+            // to a stale handle. beginScan runs continuously for the whole bounded pre-warm window.
+            beginScan()
+        } else if reconnectMode, let saved = savedPeripheral {
             // WARM: in-memory bonded handle → targeted pending connect (the proven 15/15 path).
             beginReconnect(saved)
         } else if reconnectMode, let restored = restorePersistedPeripheral() {
@@ -774,7 +939,11 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         central.scanForPeripherals(withServices: nil,
                                    options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
 
-        // Fail gracefully if no sensor turns up in the scan window.
+        // Fail gracefully if no sensor turns up in the scan window. Pre-warm SKIPS this short
+        // cutoff: it scans continuously for the whole bounded pre-warm window (its own
+        // prewarmTimeoutWork is the single backstop), because catching the sensor's sparse ~5-min
+        // chirp needs far longer than the 20s a normal attempt allows.
+        guard !prewarmActive else { return }
         scanTimeoutWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.attemptActive, self.peripheral == nil else { return }
@@ -804,6 +973,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             peripheral = nil
             scanWindowStarted = false
             attemptActive = true
+            attemptGeneration &+= 1   // BT-toggle resume is a new attempt too — supersede any stale handshake
             beginAcquire()
         case .poweredOff:
             log("Bluetooth is powered OFF")
@@ -919,7 +1089,8 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         log("characteristics found: auth(3535), data(3538), control(3534)")
         setStatus("Authenticating…")
         // Kick off the linear async handshake.
-        Task { await self.runHandshake() }
+        let gen = attemptGeneration   // snapshot on cbQueue so a superseded handshake can't tear down a fresh attempt
+        Task { await self.runHandshake(generation: gen) }
     }
 
     func peripheral(_ peripheral: CBPeripheral,
@@ -995,7 +1166,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
 
     // MARK: The handshake — linear port of the macOS client / g7att_new.py
 
-    private func runHandshake() async {
+    private func runHandshake(generation gen: Int) async {
         do {
             try await handshake()
             finished = true
@@ -1005,8 +1176,10 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             let g = await MainActor.run { self.glucose }
             let msg = g.map { "Glucose \($0) mg/dL" } ?? "Read complete (no value)"
             // Read done. Disconnect (the G7 will drop us in a few seconds anyway) and let the
-            // predictive scheduler queue the next 5-min window.
-            finishAttempt(success: true, message: msg)
+            // predictive scheduler queue the next 5-min window. runHandshake runs on the Task
+            // cooperative executor, NOT cbQueue — so hop back onto cbQueue to serialize teardown
+            // (incl. teardownPrewarm) with startSoak's preempt block and every other reader mutation.
+            cbQueue.async { if self.attemptActive, self.attemptGeneration == gen { self.finishAttempt(success: true, message: msg) } }
         } catch {
             log("*** FAILED: \(error) ***")
             // A WRONG CODE surfaces as aesVerifyFailed at the AES challenge step — but so can a
@@ -1017,7 +1190,9 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                 consecutiveAuthFailures += 1
                 if consecutiveAuthFailures >= 2 { onMain { self.needsSensorCode = true } }
             }
-            if attemptActive { finishAttempt(success: false, message: "Failed: \(error)") }
+            // Same as the success path: hop onto cbQueue so teardown is serialized (not run from
+            // the Task executor, which would race the cbQueue reader state).
+            cbQueue.async { if self.attemptActive, self.attemptGeneration == gen { self.finishAttempt(success: false, message: "Failed: \(error)") } }
         }
     }
 
@@ -1095,8 +1270,22 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         let value: Int? = rawEGV == 0xffff ? nil : (rawEGV & 0x0fff)
         let state: UInt8? = egv.count >= 15 ? egv[14] : nil
 
+        // Sensor-TIME timestamping (mirrors G7SensorKit/G7GlucoseMessage byte layout): bytes 2-5 =
+        // the sensor clock at message time; bytes 10-11 = the reading's AGE (sec from on-body
+        // measurement to BLE comms). The TRUE measurement time is Date()-age — NOT Date() (the
+        // read-completion time, which we used before). `glucoseTimestamp` (messageTimestamp-age) is
+        // the reading's STABLE sensor-clock id; the store syncIdentifier is derived from it so a
+        // RE-READ of the same EGV dedups instead of looking like a fresh reading (which, stamped
+        // Date(), could defeat the loop's staleness gate and dose off stale BG — safety-audit HIGH).
+        let msgTimestamp: UInt32 = egv.count >= 6
+            ? UInt32(egv[2]) | (UInt32(egv[3]) << 8) | (UInt32(egv[4]) << 16) | (UInt32(egv[5]) << 24)
+            : 0
+        let egvAge: UInt16 = egv.count >= 12 ? UInt16(egv[10]) | (UInt16(egv[11]) << 8) : 0
+        let glucoseTimestamp = msgTimestamp &- UInt32(egvAge)      // reading's fixed sensor-clock id
+        let readingDate = Date().addingTimeInterval(-Double(egvAge))   // true on-body measurement time
+
         let valStr = value.map { "\($0)" } ?? "nil"
-        log(String(format: "*** VALUE = \(valStr) mg/dL  state=0x%02x (0x06=OK/in-session)  rawEGV=0x%04x ***",
+        log(String(format: "*** VALUE = \(valStr) mg/dL  state=0x%02x (0x06=OK/in-session)  rawEGV=0x%04x  age=\(egvAge)s ***",
                    Int(state ?? 0), rawEGV))
 
         onMain {
@@ -1111,7 +1300,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                 let inSession = (state == 0x06)
                 let plausible = (value >= 40 && value <= 400)
                 if inSession && plausible {
-                    self.onEGV?(value, Date())   // → Loop glucose store (integration hook)
+                    self.onEGV?(value, readingDate, glucoseTimestamp)   // → Loop glucose store (measurement-time stamped)
                 } else {
                     LogFile.append(String(format: "loop-bridge: EGV %d NOT injected (state=0x%02x inSession=%@ plausible=%@)",
                                           value, Int(state ?? 0), inSession ? "y" : "n", plausible ? "y" : "n"))

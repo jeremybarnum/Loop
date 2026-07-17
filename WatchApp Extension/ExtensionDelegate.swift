@@ -43,6 +43,10 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
     private var notifications: [NSObjectProtocol] = []
     private var loanPhasePushCancellable: AnyCancellable?
     private var complicationReloadObserver: NSObjectProtocol?
+    private var prewarmResolveObserver: NSObjectProtocol?
+
+    /// Identifier of the watch-LOCAL "new sensor — tap to enable" pre-warm prompt.
+    static let prewarmNotificationID = "g7.prewarm.notify"
 
     static func shared() -> ExtensionDelegate {
         return WKExtension.shared().extensionDelegate
@@ -89,6 +93,14 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
     }
 
     func applicationDidFinishLaunching() {
+        // Build boundary: g7watch.log is append-only and NEVER rotated, so it concatenates every
+        // build's output into one file. Stamp a loud, unmistakable banner as the FIRST line of each
+        // launch so build-to-build boundaries are obvious when reading the merged log. This is
+        // reader-independent (unlike the G7Client banner, which post-gating only fires in Sport Mode).
+        let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let bld = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        fileLog("======================== LAUNCH · build \(ver) (\(bld)) ========================")
+
         UNUserNotificationCenter.current().delegate = self
         if #available(watchOSApplicationExtension 5.0, *) {
             INRelevantShortcutStore.default.registerShortcuts()
@@ -130,6 +142,17 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
             guard let self, self.podLoanCoordinator.phase == .active else { return }
             self.reloadComplications()
         }
+
+        // Ask (once) for notification permission so the watch-local "new sensor — tap to enable"
+        // pre-warm prompt can surface. Idempotent — a no-op after the first grant/deny.
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+
+        // Pull the pre-warm prompt the moment the sensor is bonded (or pre-warm gives up), so it
+        // never lingers saying "enable your new sensor" once that's done.
+        prewarmResolveObserver = NotificationCenter.default.addObserver(
+            forName: G7Client.prewarmDidResolveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.removePrewarmNotification()
+        }
     }
 
     private func pushLoanStatusToPhone(active: Bool) {
@@ -157,6 +180,7 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
 
         requestSettingsSyncIfNeeded()
         g7.ensureKeepalive()   // re-arm if a background relaunch left the workout session dead
+        g7.client.prewarmIfPending()   // foreground = the one legal window to bond a newly-changed sensor
         exportG7LogIfDue()
 
         NotificationCenter.default.post(name: type(of: self).didBecomeActiveNotification, object: self)
@@ -403,7 +427,9 @@ extension ExtensionDelegate: WCSessionDelegate {
                 log.error("Could not decode SensorCodeUserInfo: %{public}@", userInfo)
                 return
             }
-            g7.client.applySensorCode(info.code)
+            if g7.client.applySensorCode(info.code, sensorID: info.sensorID) {
+                scheduleNewSensorPrewarmNotification()   // watch-local prompt: tap → foreground → pre-warm
+            }
         case "WatchContext":
             // WatchContext is the only userInfo type without a "name" key. This isn't a great heuristic.
             updateContext(userInfo)
@@ -437,6 +463,13 @@ extension ExtensionDelegate: UNUserNotificationCenterDelegate {
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
         switch response.actionIdentifier {
         case UNNotificationDefaultActionIdentifier:
+            if response.notification.request.identifier == Self.prewarmNotificationID {
+                // Tapped the new-sensor prompt → the app is foreground now (the legal window to start
+                // the workout-backed bond). Kick the bounded pre-warm. applicationDidBecomeActive also
+                // calls this on the same tap; prewarmIfPending is idempotent, so double-firing is safe.
+                g7.client.prewarmIfPending()
+                break
+            }
             guard
                 response.notification.request.identifier == LoopNotificationCategory.missedMeal.rawValue,
                 let statusController = WKExtension.shared().visibleInterfaceController as? HUDInterfaceController
@@ -469,6 +502,35 @@ extension ExtensionDelegate: UNUserNotificationCenterDelegate {
     
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.badge, .sound, .list, .banner])
+    }
+
+    /// Schedule the watch-LOCAL "new sensor — tap to enable" pre-warm prompt. Local origin matters:
+    /// it targets THIS watch and is not subject to the iPhone→watch "deliver where the user is
+    /// looking" mirroring — so it sits in the watch's Notification Center until acted on rather than
+    /// possibly never reaching the wrist. Tapping it foregrounds the app → prewarmIfPending().
+    /// (There is no watchOS API for an un-dismissable / must-engage notification; .timeSensitive is
+    /// the strongest lever, breaking through Focus — it needs the time-sensitive entitlement to take
+    /// full effect and silently downgrades to .active without it.)
+    func scheduleNewSensorPrewarmNotification() {
+        let content = UNMutableNotificationContent()
+        content.title = NSLocalizedString("New sensor", comment: "Pre-warm prompt title")
+        content.body = NSLocalizedString("Tap to enable it for Sport Mode.", comment: "Pre-warm prompt body")
+        content.sound = .default
+        content.interruptionLevel = .timeSensitive   // watchOS 8+ (deployment target is well above); breaks through Focus
+        // Fire ~immediately; watchOS surfaces it on the watch when the user next engages it (or on
+        // wrist-raise). A one-shot request keyed by a stable identifier so a re-relay just replaces it.
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        let request = UNNotificationRequest(identifier: Self.prewarmNotificationID, content: content, trigger: trigger)
+        UNUserNotificationCenter.current().add(request) { [weak self] error in
+            if let error { self?.log.error("failed to schedule pre-warm notification: %{public}@", String(describing: error)) }
+        }
+    }
+
+    /// Pull the pre-warm prompt (pending and delivered). Idempotent.
+    func removePrewarmNotification() {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [Self.prewarmNotificationID])
+        center.removeDeliveredNotifications(withIdentifiers: [Self.prewarmNotificationID])
     }
 }
 

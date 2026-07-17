@@ -449,6 +449,12 @@
     "→ schedule" : {
       "comment" : "Loop decision (closed): reverted to schedule"
     },
+    "~%d min" : {
+      "comment" : "CGM onboarding: minutes to the next expected reading"
+    },
+    "~5 min" : {
+      "comment" : "CGM onboarding: worst-case wait when the reading phase isn't known yet"
+    },
     "⚠️ No pre-session insulin history — IOB may be understated." : {
 
     },
@@ -1619,8 +1625,8 @@
     "Eventual" : {
       "comment" : "HUD row: predicted eventual glucose in Sport Mode"
     },
-    "Finding sensor…" : {
-      "comment" : "Activation: watch has not yet read the sensor directly"
+    "expected %@" : {
+      "comment" : "G7 Direct row: expected time to the next reading while onboarding"
     },
     "g" : {
       "comment" : "Short unit label for gram measurement\nThe short unit display string for grams",
@@ -1751,13 +1757,13 @@
       "comment" : "HUD row: health of the watch's own direct G7 sensor link"
     },
     "Glucose" : {
-      "comment" : "HUD row: current glucose in Sport Mode (tap to enter)"
+      "comment" : "Activation: CGM timing label\nHUD row: current glucose in Sport Mode (tap to enter)"
     },
     "Glucose is %d min old — the loop stopped adjusting basal. The last temp expires on the pod's own timer. Check your sensor." : {
       "comment" : "Alert body: closed loop paused on stale glucose"
     },
-    "Go to Sport Mode" : {
-      "comment" : "Activation: proceed to the HUD before the sensor confirms"
+    "in %@" : {
+      "comment" : "Activation: expected time to the next reading"
     },
     "In Sport Mode" : {
 
@@ -2388,8 +2394,8 @@
         }
       }
     },
-    "no direct read" : {
-      "comment" : "G7 Direct row: the watch has not read the sensor itself this session"
+    "New sensor" : {
+      "comment" : "Pre-warm prompt title"
     },
     "No Direct Sensor Yet" : {
       "comment" : "Alert title: the watch hasn't read the sensor directly since Sport Mode started"
@@ -2511,7 +2517,7 @@
       }
     },
     "OK" : {
-      "comment" : "Acknowledge failed pod command\nAcknowledge loop notice\nAcknowledge session-ended notice\nOK button on the turn-on-Bluetooth alert",
+      "comment" : "Acknowledge failed pod command\nAcknowledge loop notice\nAcknowledge session-ended notice\nActivation: dismiss into the Sport Mode HUD\nOK button on the turn-on-Bluetooth alert",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -2640,6 +2646,9 @@
           }
         }
       }
+    },
+    "OK to leave your phone" : {
+      "comment" : "Activation: reassurance that the phone can be left behind"
     },
     "On" : {
       "comment" : "Label for on button",
@@ -3338,7 +3347,7 @@
       }
     },
     "Reading directly" : {
-      "comment" : "Activation: watch is reading the sensor via its own radio"
+      "comment" : "Activation: a direct read already landed"
     },
     "Rec: %@ U" : {
       "comment" : "The label and value showing the recommended bolus",
@@ -4126,9 +4135,6 @@
         }
       }
     },
-    "Sensor" : {
-      "comment" : "Activation: CGM-direct status label"
-    },
     "Session Basal" : {
       "comment" : "HUD row: net basal insulin delivered vs schedule during Sport Mode"
     },
@@ -4153,7 +4159,7 @@
     "Sport Mode ended unexpectedly (the app restarted). The loop is open and the pod is back on its schedule. Your insulin records are being sent to your phone." : {
       "comment" : "Alert body: uncommanded Sport Mode end"
     },
-    "Sport Mode is on, but the watch hasn't read the sensor through its own radio yet (the 'G7 Direct' row still shows no read). Any glucose shown may be coming from your phone — don't rely on the watch away from your phone until G7 Direct shows a ✓. Keep the app open and stay near the sensor." : {
+    "Sport Mode is on, but the watch hasn't read the sensor directly yet. Watch will continue trying to connect to sensor but once you move away from phone you will not have fresh BG until the watch connects." : {
       "comment" : "Alert body: CGM sovereignty not yet proven"
     },
     "Sport Mode is still on. To end it, turn your iPhone's Bluetooth on, then tap again." : {
@@ -4183,6 +4189,9 @@
     },
     "Suspended" : {
       "comment" : "HUD row detail when delivery is suspended in Sport Mode\nSport Mode suspended-state header"
+    },
+    "Tap to enable it for Sport Mode." : {
+      "comment" : "Pre-warm prompt body"
     },
     "Tap to enter" : {
       "comment" : "HUD glucose row detail when no sample exists"

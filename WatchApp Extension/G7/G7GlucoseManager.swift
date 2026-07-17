@@ -26,8 +26,8 @@ final class G7GlucoseManager {
         self.loopManager = loopManager
         self.predictionStore = predictionStore
         client.reconnectMode = true   // the validated pending-connect reacquire (NOT background scan)
-        client.onEGV = { [weak self] mgdl, date in
-            self?.inject(mgdl: mgdl, at: date)
+        client.onEGV = { [weak self] mgdl, date, timestamp in
+            self?.inject(mgdl: mgdl, at: date, timestamp: timestamp)
         }
     }
 
@@ -37,8 +37,9 @@ final class G7GlucoseManager {
     /// Foreground re-arm of the keepalive (background relaunch leaves it dead — HK error 14).
     func ensureKeepalive() { client.ensureKeepalive() }
 
-    private func inject(mgdl: Int, at date: Date) {
-        // The G7 emits one EGV per ~5 min; guard a duplicate within a window.
+    private func inject(mgdl: Int, at date: Date, timestamp: UInt32) {
+        // `date` is the on-body measurement time (not read-completion time). The G7 emits one EGV
+        // per ~5 min; guard a duplicate within a window (a re-read has the SAME measurement date).
         if let last = lastInjected, date.timeIntervalSince(last) < 60 {
             log("loop-bridge: EGV \(mgdl) mg/dL skipped (duplicate <60s)")
             return
@@ -54,7 +55,7 @@ final class G7GlucoseManager {
             trendRate: nil,
             isDisplayOnly: false,
             wasUserEntered: false,   // real CGM → full effects (momentum / retrospective correction)
-            syncIdentifier: "g7-\(Int(date.timeIntervalSince1970))"
+            syncIdentifier: "g7-\(timestamp)"   // sensor-clock reading id → a RE-READ of the same EGV dedups in the store
         )
         loopManager.glucoseStore.addGlucoseSamples([sample]) { [weak self] result in
             switch result {
@@ -64,9 +65,12 @@ final class G7GlucoseManager {
                 log("*** loop-bridge: glucoseStore INJECTION FAILED: \(error) ***")
             }
             DispatchQueue.main.async {
-                // New glucose is a loop tick: run the prediction and (if the loop is closed) enact.
-                // Refresh even after a store failure so staleness surfaces rather than freezes.
-                self?.predictionStore.refresh(force: true, loopWorthy: true)
+                // DISPLAY-only refresh. On a successful store, addGlucoseSamples already posted
+                // glucoseSamplesDidChange, which drives the store's own loopWorthy refresh → the
+                // enact; adding loopWorthy here too was a redundant SECOND enact-trigger per reading
+                // (a contributor to the pod-command storm). We keep a forced display refresh so
+                // staleness surfaces even after a store failure (where no observer fires).
+                self?.predictionStore.refresh(force: true)
             }
         }
     }
