@@ -109,15 +109,15 @@ class LoopAppManager: NSObject {
 
         registerBackgroundTasks()
 
-        if FeatureFlags.remoteCommandsEnabled {
-            DispatchQueue.main.async {
-#if targetEnvironment(simulator)
-                self.remoteNotificationRegistrationDidFinish(.failure(SimulatorError.remoteNotificationsNotAvailable))
-#else
-                UIApplication.shared.registerForRemoteNotifications()
-#endif
-            }
-        }
+        // STOCK LAUNCH-CRASH FIX #2 (upstream candidate; not part of the watch
+        // feature). Sibling of fix #1: registerForRemoteNotifications() ran here in
+        // initialize() (pre-unlock). On a pre-first-unlock launch the launch is
+        // deferred, so launchManagers() — which assigns `settingsManager` — never
+        // runs, yet the async push-token callback fires and force-unwraps the nil
+        // settingsManager in remoteNotificationRegistrationDidFinish → SIGTRAP.
+        // Moved to launchManagers() so registration only happens once settingsManager
+        // exists (remote commands can't be serviced pre-unlock anyway). Revert if
+        // fixed upstream.
         self.state = state.next
     }
 
@@ -209,6 +209,17 @@ class LoopAppManager: NSObject {
         settingsManager.deviceStatusProvider = deviceDataManager
         settingsManager.displayGlucosePreference = deviceDataManager.displayGlucosePreference
 
+        // STOCK LAUNCH-CRASH FIX #2 (moved here from initialize() — see the comment
+        // there). settingsManager now exists, so the async push-token callback is safe.
+        if FeatureFlags.remoteCommandsEnabled {
+            DispatchQueue.main.async {
+#if targetEnvironment(simulator)
+                self.remoteNotificationRegistrationDidFinish(.failure(SimulatorError.remoteNotificationsNotAvailable))
+#else
+                UIApplication.shared.registerForRemoteNotifications()
+#endif
+            }
+        }
 
         overrideHistory.delegate = self
 
@@ -615,7 +626,14 @@ extension LoopAppManager: TemporaryScheduleOverrideHistoryDelegate {
 
 extension LoopAppManager: ResetLoopManagerDelegate {
     func askUserToConfirmLoopReset() {
-        resetLoopManager.askUserToConfirmLoopReset()
+        // STOCK LAUNCH-CRASH FIX #1 (upstream candidate; not part of the watch
+        // feature). resumeLaunch() calls this unconditionally, including a
+        // pre-first-unlock launch where checkProtectedDataAvailable() defers the
+        // launch and `resetLoopManager` (an IUO assigned only in launchManagers())
+        // is still nil → SIGTRAP. The always-on watch app relaunches Loop pre-unlock
+        // at boot, so this fires reliably. Optional-chain it; the deferred launch
+        // resumes and asks at first unlock. Revert if fixed upstream.
+        resetLoopManager?.askUserToConfirmLoopReset()
     }
     
     func presentConfirmationAlert(confirmAction: @escaping (PumpManager?, @escaping () -> Void) -> Void, cancelAction: @escaping () -> Void) {

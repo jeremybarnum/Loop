@@ -209,3 +209,27 @@ closed, not re-opened:
   manager serializes commands rather than silently dropping on busy. Do NOT port
   the anchor latch; deleting it IS the fix. (The safety branch has an interim
   set-latch-on-accept patch; this tree supersedes it.)
+
+## Two stock launch-crash fixes carried on this branch (upstream candidates)
+
+Building the watch feature SURFACED two latent crashes in base Loop's launch
+sequence — not bugs this project authored (the code is byte-identical to
+upstream/dev), but ones our always-on watch app exposes by relaunching Loop
+BEFORE first unlock on every boot (BLE state-restoration + WatchConnectivity).
+Both are the same shape: an async launch callback touches an IUO manager that
+is only assigned in launchManagers(), which a pre-first-unlock launch defers.
+
+- **Fix #1 — resetLoopManager**: resumeLaunch() → askUserToConfirmLoopReset()
+  force-unwrapped the nil `resetLoopManager`. Optional-chained
+  (LoopAppManager.swift askUserToConfirmLoopReset).
+- **Fix #2 — settingsManager**: registerForRemoteNotifications() ran in
+  initialize() (pre-unlock); the async push-token callback
+  (remoteNotificationRegistrationDidFinish) force-unwrapped the nil
+  `settingsManager`. Moved the registration into launchManagers() after
+  settingsManager is wired.
+
+Both are marked `STOCK LAUNCH-CRASH FIX` in-code (deliberately NOT PODLOAN —
+they are not part of the watch module) and are UPSTREAM CANDIDATES: they fix
+real base-Loop crashes any pre-unlock relaunch can hit. Jeremy will submit the
+PRs when ready (separate from this project). The honest demonstration framing:
+"this watch project found and fixed two latent stock launch crashes."
