@@ -26,8 +26,8 @@ final class G7GlucoseManager {
         self.loopManager = loopManager
         self.predictionStore = predictionStore
         client.reconnectMode = true   // the validated pending-connect reacquire (NOT background scan)
-        client.onEGV = { [weak self] mgdl, date, timestamp in
-            self?.inject(mgdl: mgdl, at: date, timestamp: timestamp)
+        client.onEGV = { [weak self] mgdl, displayOnly, date, timestamp in
+            self?.inject(mgdl: mgdl, displayOnly: displayOnly, at: date, timestamp: timestamp)
         }
     }
 
@@ -37,7 +37,7 @@ final class G7GlucoseManager {
     /// Foreground re-arm of the keepalive (background relaunch leaves it dead — HK error 14).
     func ensureKeepalive() { client.ensureKeepalive() }
 
-    private func inject(mgdl: Int, at date: Date, timestamp: UInt32) {
+    private func inject(mgdl: Int, displayOnly: Bool, at date: Date, timestamp: UInt32) {
         // `date` is the on-body measurement time (not read-completion time). The G7 emits one EGV
         // per ~5 min; guard a duplicate within a window (a re-read has the SAME measurement date).
         if let last = lastInjected, date.timeIntervalSince(last) < 60 {
@@ -61,14 +61,19 @@ final class G7GlucoseManager {
         else { clamped = mgdl; condition = nil }
         log("loop-bridge: injecting EGV \(mgdl) mg/dL\(condition != nil ? " (\(condition!.rawValue) → \(clamped))" : "") → glucoseStore")
 
+        // M5: a display-only (calibration-shifted) reading enters the store but is
+        // flagged so it does NOT drive full effects (momentum / retrospective
+        // correction) — exactly as stock G7CGMManager sets isDisplayOnly /
+        // wasUserEntered from G7GlucoseMessage.glucoseIsDisplayOnly. A normal EGV
+        // is a real CGM sample → full effects.
         let sample = NewGlucoseSample(
             date: date,
             quantity: HKQuantity(unit: .milligramsPerDeciliter, doubleValue: Double(clamped)),
             condition: condition,
             trend: nil,
             trendRate: nil,
-            isDisplayOnly: false,
-            wasUserEntered: false,   // real CGM → full effects (momentum / retrospective correction)
+            isDisplayOnly: displayOnly,
+            wasUserEntered: displayOnly,
             syncIdentifier: "g7-\(timestamp)"   // sensor-clock reading id → a RE-READ of the same EGV dedups in the store
         )
         loopManager.glucoseStore.addGlucoseSamples([sample]) { [weak self] result in

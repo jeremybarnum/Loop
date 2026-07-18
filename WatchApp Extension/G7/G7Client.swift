@@ -301,7 +301,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     @Published var glucose: Int?          // mg/dL, nil = no valid reading
     /// Fired on every fresh EGV (mg/dL + read time). The Loop integration sets this to inject the
     /// reading into the glucose store. Not @Published — it's a data sink, not UI state.
-    var onEGV: ((Int, Date, UInt32) -> Void)?   // (value, on-body measurement time, sensor-clock reading id)
+    var onEGV: ((Int, Bool, Date, UInt32) -> Void)?   // (value, displayOnly, on-body measurement time, sensor-clock reading id)
     @Published var trendState: UInt8?     // EGV algorithm-state byte (0x06 = OK/in-session)
     @Published var statusText: String = "Idle"
     @Published var logLines: [String] = []
@@ -1279,6 +1279,10 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         let rawEGV: Int = egv.count >= 14 ? Int(egv[12]) | (Int(egv[13]) << 8) : 0xffff
         let value: Int? = rawEGV == 0xffff ? nil : (rawEGV & 0x0fff)
         let state: UInt8? = egv.count >= 15 ? egv[14] : nil
+        // M5: byte 18 bit 0x10 = "display only" (calibration-shifted / not a
+        // full-effect reading), exactly as stock G7GlucoseMessage parses it. Must
+        // NOT drive momentum/retrospective correction — plumbed through onEGV.
+        let displayOnly: Bool = egv.count >= 19 ? (egv[18] & 0x10) != 0 : false
 
         // Sensor-TIME timestamping (mirrors G7SensorKit/G7GlucoseMessage byte layout): bytes 2-5 =
         // the sensor clock at message time; bytes 10-11 = the reading's AGE (sec from on-body
@@ -1313,7 +1317,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                 // applied downstream in G7GlucoseManager.inject (the LoopKit-aware
                 // layer), mirroring stock G7GlucoseMessage.condition.
                 if state == 0x06 {
-                    self.onEGV?(value, readingDate, glucoseTimestamp)   // raw value → clamped + conditioned downstream
+                    self.onEGV?(value, displayOnly, readingDate, glucoseTimestamp)   // raw value → clamped + conditioned downstream
                 } else {
                     LogFile.append(String(format: "loop-bridge: EGV %d NOT injected (state=0x%02x not in-session)",
                                           value, Int(state ?? 0)))
