@@ -71,6 +71,9 @@ struct GlanceUIState {
     /// disallows dosing (the watch can't close what the phone opened) or when suspended.
     var loopClosed: Bool = false
     var canToggleLoop: Bool = false
+
+    /// Idle-only: why the last Start attempt returned to idle (timeout / refusal).
+    var idleNote: String? = nil
 }
 
 // MARK: - View model
@@ -125,7 +128,8 @@ final class GlanceViewModel: ObservableObject {
         switch snap.phase {
         case .idle, .requested:
             state = Self.idleState(context: ExtensionDelegate.shared().loopManager.activeContext,
-                                   requested: snap.phase == .requested)
+                                   requested: snap.phase == .requested,
+                                   note: snap.lastIdleNote)
         case .takingOver:
             var s = GlanceUIState(); s.phase = .starting
             s.loopStatusText = NSLocalizedString("starting…", comment: "Glance status while taking over the pod")
@@ -149,7 +153,7 @@ final class GlanceViewModel: ObservableObject {
 
     // MARK: State builders (static + pure, so previews and tests can drive them)
 
-    static func idleState(context: WatchContext?, requested: Bool) -> GlanceUIState {
+    static func idleState(context: WatchContext?, requested: Bool, note: String? = nil) -> GlanceUIState {
         var s = GlanceUIState()
         s.phase = .idle
         s.viaPhone = true
@@ -158,9 +162,14 @@ final class GlanceViewModel: ObservableObject {
             s.bgText = String(format: "%.0f", quantity.doubleValue(for: .milligramsPerDeciliter))
             s.trendSymbol = context?.glucoseTrend?.symbol
         }
-        s.loopStatusText = requested
-            ? NSLocalizedString("requesting…", comment: "Glance status after a loan request")
-            : NSLocalizedString("phone loop active", comment: "Glance status when the phone runs the loop")
+        if requested {
+            s.loopStatusText = NSLocalizedString("requesting…", comment: "Glance status after a loan request")
+        } else if let note = note {
+            s.loopStatusText = NSLocalizedString("phone loop active", comment: "Glance status when the phone runs the loop")
+            s.idleNote = note   // why the last start attempt returned to idle
+        } else {
+            s.loopStatusText = NSLocalizedString("phone loop active", comment: "Glance status when the phone runs the loop")
+        }
         return s
     }
 
@@ -339,18 +348,27 @@ struct GlanceView: View {
             }
             .padding(.bottom, 2)
         case .idle:
-            Button {
-                confirmingStart = true
-            } label: {
-                Text("Start Sport Mode").font(.system(size: 15, weight: .semibold))
-            }
-            .tint(.glanceAccent)
-            .alert(isPresented: $confirmingStart) {
-                Alert(
-                    title: Text("Start Sport Mode?"),
-                    message: Text("Borrows the pod from the phone and runs the loop here, on direct G7."),
-                    primaryButton: .default(Text("Start")) { model.startSportMode() },
-                    secondaryButton: .cancel())
+            VStack(spacing: 4) {
+                Button {
+                    confirmingStart = true
+                } label: {
+                    Text("Start Sport Mode").font(.system(size: 15, weight: .semibold))
+                }
+                .tint(.glanceAccent)
+                .alert(isPresented: $confirmingStart) {
+                    Alert(
+                        title: Text("Start Sport Mode?"),
+                        message: Text("Borrows the pod from the phone and runs the loop here, on direct G7."),
+                        primaryButton: .default(Text("Start")) { model.startSportMode() },
+                        secondaryButton: .cancel())
+                }
+                if let note = model.state.idleNote {
+                    Text(note)
+                        .font(.system(size: 11))
+                        .foregroundColor(.glanceWarn)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .padding(.bottom, 2)
         case .starting, .handingBack, .draining:

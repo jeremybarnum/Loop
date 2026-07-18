@@ -64,6 +64,10 @@ final class PodLoanWatchController {
     private var pendingUncertainEventID: UUID?
     private var chaseWorkItem: DispatchWorkItem?
     private var resendWorkItem: DispatchWorkItem?
+    private var requestTimeoutWork: DispatchWorkItem?
+    /// Surfaced on the glance idle screen after a failed/timed-out start, so the user
+    /// sees WHY instead of a silent return to idle.
+    private(set) var lastIdleNote: String?
     /// Manual bounded suspend end (R3/R4); a running bounded suspend survives
     /// hand-back (46f16d01) and reports mode .suspended.
     private var manualSuspendEnd: Date?
@@ -141,12 +145,26 @@ final class PodLoanWatchController {
                 return
             }
             self.phase = .requested
+            self.lastIdleNote = nil
             SportLog.event("loan", "REQUEST sent (build \(watchBuild)) — awaiting grant")
             self.sendMessage(.request(LoanRequest(watchBuild: watchBuild)))
+
+            // No grant in 25 s → the phone refused, is busy, or isn't reachable. Return
+            // to idle with a visible reason instead of hanging on "requesting…".
+            self.requestTimeoutWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self = self, self.phase == .requested else { return }
+                self.phase = .idle
+                self.lastIdleNote = NSLocalizedString("No response from iPhone — check the phone (loan refused, or busy) and try again.", comment: "Glance: loan request timed out")
+                SportLog.event("loan", "REQUEST TIMED OUT — no grant in 25s (phone refused / busy / unreachable)")
+            }
+            self.requestTimeoutWork = work
+            self.queue.asyncAfter(deadline: .now() + 25, execute: work)
         }
     }
 
     private func handleGrant(_ grant: LoanGrant) {
+        requestTimeoutWork?.cancel()
         SportLog.event("loan", "GRANT received — epoch \(grant.epoch), \(grant.pumpManagerRawState.count)B pod state")
         guard phase == .idle || phase == .requested else {
             SportLog.event("loan", "grant ignored — wrong phase (\(phase.rawValue))")
@@ -189,6 +207,7 @@ final class PodLoanWatchController {
               let manager = OmniPumpManager(rawState: rawState) else {
             teardownPump()
             phase = .idle
+            lastIdleNote = NSLocalizedString("Couldn't read the pod from the phone. Try again.", comment: "Glance: pump snapshot rejected")
             SportLog.event("loan", "grant FAILED — could not rebuild the pump from the phone's snapshot")
             sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "pump state snapshot rejected")))
             return
@@ -219,6 +238,7 @@ final class PodLoanWatchController {
                 } else {
                     self.teardownPump()
                     self.phase = .idle
+                    self.lastIdleNote = NSLocalizedString("Pod didn't answer. Check the pod is nearby and try again.", comment: "Glance: pod unreachable at takeover")
                     SportLog.event("loan", "TAKEOVER FAILED — pod unreachable, epoch \(grant.epoch)")
                     self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "pod unreachable at takeover")))
                 }
@@ -408,6 +428,7 @@ final class PodLoanWatchController {
         let unackedCount: Int
         let pendingUncertain: Bool
         let suspendEndsAt: Date?
+        let lastIdleNote: String?
     }
 
     func debugSnapshot() -> DebugSnapshot {
@@ -422,7 +443,8 @@ final class PodLoanWatchController {
                 lastEventSeq: journal.lastEventSeq,
                 unackedCount: journal.unackedEvents().count,
                 pendingUncertain: pendingUncertainEventID != nil,
-                suspendEndsAt: (manualSuspendEnd ?? .distantPast) > Date() ? manualSuspendEnd : nil)
+                suspendEndsAt: (manualSuspendEnd ?? .distantPast) > Date() ? manualSuspendEnd : nil,
+                lastIdleNote: lastIdleNote)
         }
     }
 
