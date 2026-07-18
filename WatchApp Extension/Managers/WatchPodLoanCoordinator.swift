@@ -847,10 +847,13 @@ final class WatchPodLoanCoordinator: ObservableObject {
 
     /// Cancel the running temp basal; the pod reverts to its scheduled basal.
     /// `loudDrop: false` when the closed loop is the caller (it retries itself).
-    func cancelBasal(loudDrop: Bool = true) {
-        if Self.isSimulatorDemo { demoCancelTempBasal(); return }
+    /// Returns whether the command was ACCEPTED (false = busy/phase-dropped) so
+    /// the closed loop can retry a dropped enact (H2).
+    @discardableResult
+    func cancelBasal(loudDrop: Bool = true) -> Bool {
+        if Self.isSimulatorDemo { demoCancelTempBasal(); return true }
         applyControllerPrefs(automatic: false)
-        runPodCommand(label: NSLocalizedString("Cancel Temp", comment: "Command name: cancel temp basal"), loudDrop: loudDrop) { self.controller.cancelTempBasal(completion: $0) }
+        return runPodCommand(label: NSLocalizedString("Cancel Temp", comment: "Command name: cancel temp basal"), loudDrop: loudDrop) { self.controller.cancelTempBasal(completion: $0) }
     }
 
     /// Loop-faithful temp-basal enactment for the closed loop, mirroring
@@ -862,15 +865,17 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// runPodCommand, so it gets the same journal recording, proof caps, and
     /// loud-failure surfacing as manual control. The manual setBasalRate (3h,
     /// 0→indefinite suspend) is deliberately left as-is for rider hold.
-    func enactTempBasal(unitsPerHour: Double, for duration: TimeInterval) {
+    /// Returns whether the command was ACCEPTED (false = busy/phase-dropped), so
+    /// the closed loop leaves the reading unlatched and retries next tick (H2).
+    @discardableResult
+    func enactTempBasal(unitsPerHour: Double, for duration: TimeInterval) -> Bool {
         guard duration > 0 else {
-            cancelBasal(loudDrop: false)   // .cancel → revert to schedule
-            return
+            return cancelBasal(loudDrop: false)   // .cancel → revert to schedule
         }
         let snapped = (min(max(unitsPerHour, 0), maxTempBasalRate) / 0.05).rounded() * 0.05
-        if Self.isSimulatorDemo { demoSetTempBasal(rate: snapped, duration: duration); return }
+        if Self.isSimulatorDemo { demoSetTempBasal(rate: snapped, duration: duration); return true }
         applyControllerPrefs(automatic: true)   // closed-loop enact → beeps follow the phone's AUTOMATIC pref
-        runPodCommand(label: String(format: NSLocalizedString("Loop %.2f U/hr", comment: "Command name: loop-set temp basal"), snapped), loudDrop: false) {
+        return runPodCommand(label: String(format: NSLocalizedString("Loop %.2f U/hr", comment: "Command name: loop-set temp basal"), snapped), loudDrop: false) {
             self.controller.setTempBasal(rate: snapped, duration: duration, completion: $0)
         }
     }

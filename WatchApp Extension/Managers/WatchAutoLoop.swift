@@ -308,9 +308,22 @@ final class WatchAutoLoop: ObservableObject {
             fileLog("closed loop SKIP (\(trigger)): delivery is manually suspended — not enacting")
             return
         }
-        lastEnactedAnchorDate = output.anchorDate
 
-        guard let temp = output.recommendedTempBasal else { return }  // schedule fits — no action
+        // H2: the anchor latch (line 299 — the storm guard: one action per reading)
+        // is now claimed AFTER the pod actually accepts the command, not before it.
+        // enactTempBasal/cancelBasal go through runPodCommand, which DROPS silently
+        // if the pod is busy (another command in flight); previously the latch was
+        // set first, so a dropped enact stranded this reading's decision until the
+        // NEXT reading (~5 min) — over-delivery direction when a reduction is
+        // dropped. Setting on-accept leaves a busy-dropped enact unlatched, so the
+        // next tick (≤60 s heartbeat) retries — approximating stock, which never
+        // latches: it re-derives against the running temp via DoseMath.ifNecessary
+        // every cycle. (Proper fix — a pod-grid rateRounder into generateRecommendation
+        // so ifNecessary works, then delete this latch — is from-stock; see M12.)
+        guard let temp = output.recommendedTempBasal else {
+            lastEnactedAnchorDate = output.anchorDate   // no action needed — this reading is handled
+            return
+        }
 
         // The recommendation is already bounded by therapy max basal inside
         // generateRecommendation. Two additional dosing-safety guards, mirroring
@@ -348,6 +361,12 @@ final class WatchAutoLoop: ObservableObject {
 
         log.default("closed loop enact (%{public}@): %.2f U/hr for %.0f min", trigger, rate, temp.duration.minutes)
         fileLog(String(format: "closed loop ENACT (%@): %.2f U/hr for %.0f min", trigger, rate, temp.duration.minutes))
-        coordinator.enactTempBasal(unitsPerHour: rate, for: temp.duration)
+        // H2: latch only if the pod accepted the command; a busy-drop stays
+        // unlatched so the next tick retries this reading.
+        if coordinator.enactTempBasal(unitsPerHour: rate, for: temp.duration) {
+            lastEnactedAnchorDate = output.anchorDate
+        } else {
+            fileLog("closed loop enact DROPPED (busy) — anchor left unlatched; retry next tick")
+        }
     }
 }
