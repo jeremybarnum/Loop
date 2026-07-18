@@ -100,6 +100,51 @@ final class WatchLoopManager {
         set { doseEnactor.loanRecorder = newValue }
     }
 
+    // MARK: - Glance surface (R23; display only — no dosing paths read this)
+
+    struct GlanceData {
+        let glucose: HKQuantity?
+        let glucoseDate: Date?
+        let trend: GlucoseTrend?
+        let eventual: HKQuantity?
+        let iob: Double?
+        /// nil = no temp running (pod on schedule).
+        let tempRate: Double?
+        let lastLoopCompleted: Date?
+        let suspendThreshold: HKQuantity?
+    }
+
+    /// Synchronous snapshot of the cached loop state for the glance screen.
+    func glanceData() -> GlanceData {
+        return dataAccessQueue.sync {
+            let latest = glucoseStore.latestGlucose
+            var tempRate: Double?
+            if case .some(.tempBasal(let dose)) = pumpManager?.status.basalDeliveryState {
+                tempRate = dose.unitsPerHour
+            }
+            return GlanceData(
+                glucose: latest?.quantity,
+                glucoseDate: latest?.startDate,
+                trend: (latest as? StoredGlucoseSample)?.trend,
+                eventual: predictedGlucose?.last?.quantity,
+                iob: insulinOnBoard?.value,
+                tempRate: tempRate,
+                lastLoopCompleted: lastLoopCompleted,
+                suspendThreshold: settings.suspendThreshold?.quantity)
+        }
+    }
+
+    /// COB for the glance rail (async — the store computes it).
+    func glanceCarbsOnBoard(_ completion: @escaping (Double?) -> Void) {
+        carbStore.carbsOnBoard(at: now()) { result in
+            if case .success(let value) = result {
+                completion(value.quantity.doubleValue(for: .gram()))
+            } else {
+                completion(nil)
+            }
+        }
+    }
+
     // MARK: The CGM input (stock G7CGMManager over the proven transport — M3)
 
     /// Held so the stack has an owner; delegate wiring happens in StockLoopStack.assemble().

@@ -389,6 +389,7 @@ final class PodLoanWatchController {
         let lastEventSeq: Int
         let unackedCount: Int
         let pendingUncertain: Bool
+        let suspendEndsAt: Date?
     }
 
     func debugSnapshot() -> DebugSnapshot {
@@ -402,7 +403,8 @@ final class PodLoanWatchController {
                 podFault: pumpManager?.podLoanFaultDescription,
                 lastEventSeq: journal.lastEventSeq,
                 unackedCount: journal.unackedEvents().count,
-                pendingUncertain: pendingUncertainEventID != nil)
+                pendingUncertain: pendingUncertainEventID != nil,
+                suspendEndsAt: (manualSuspendEnd ?? .distantPast) > Date() ? manualSuspendEnd : nil)
         }
     }
 

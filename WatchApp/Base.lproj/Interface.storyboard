@@ -276,7 +276,7 @@
                         <outlet property="glucoseScene" destination="9BI-AC-l6c" id="O4a-P8-cHI"/>
                         <outlet property="loopHUDImage" destination="ifw-dh-btK" id="Bc0-er-dfe"/>
                         <outlet property="table" destination="Atz-83-hgn" id="yzw-fm-hhk"/>
-                        <segue destination="LDc-01-ctl" kind="relationship" relationship="nextPage" id="LDg-01-sgu"/>
+                        <segue destination="GLc-01-ctl" kind="relationship" relationship="nextPage" id="LDg-01-sgu"/>
                     </connections>
                 </controller>
             </objects>
@@ -409,6 +409,17 @@
                 <hostingController identifier="OnOffSelectionController" id="xhP-v4-5Vx" customClass="OnOffSelectionController" customModule="WatchApp_Extension"/>
             </objects>
             <point key="canvasLocation" x="369" y="370"/>
+        </scene>
+        <!--GlanceController (R23 Sport Mode glance page)-->
+        <scene sceneID="GLs-01-scn">
+            <objects>
+                <hostingController identifier="GlanceController" id="GLc-01-ctl" customClass="GlanceController" customModule="WatchApp_Extension">
+                    <connections>
+                        <segue destination="LDc-01-ctl" kind="relationship" relationship="nextPage" id="GLg-01-sgu"/>
+                    </connections>
+                </hostingController>
+            </objects>
+            <point key="canvasLocation" x="500" y="751"/>
         </scene>
         <!--LoanDebugController (M5 bench page; stock pages untouched)-->
         <scene sceneID="LDs-01-scn">

@@ -37,6 +37,8 @@ final class StockLoopSession {
                 os_log("Loan active: starting G7 transport", log: self.log, type: .default)
                 self.stack.client.prewarmIfPending()
                 self.stack.client.startSoak()
+                // R23: the glance page is the landing surface during a loan.
+                DispatchQueue.main.async { GlanceController.current?.becomeCurrentPage() }
             } else {
                 os_log("Loan ended: stopping G7 transport", log: self.log, type: .default)
                 self.stack.client.stopSoak()
