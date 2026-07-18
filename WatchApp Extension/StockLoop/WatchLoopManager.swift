@@ -685,6 +685,53 @@ final class WatchLoopManager {
         }
     }
 
+    /// R5 manual bolus: the user is PRESENT — never defers to the radio arbiter
+    /// (unlike the automatic path), capped by the granted therapy maximumBolus
+    /// (R1/R16: therapy settings are the only limits), journaled through the same
+    /// loan hooks as automatic doses. Completion on main.
+    func enactManualBolus(units: Double, activationType: BolusActivationType, completion: @escaping (Error?) -> Void) {
+        dataAccessQueue.async {
+            guard let pumpManager = self.pumpManager else {
+                DispatchQueue.main.async { completion(WatchLoopError.pumpManagerUnconnected) }
+                return
+            }
+            guard let maxBolus = self.settings.maximumBolus else {
+                DispatchQueue.main.async { completion(WatchLoopError.configurationError("maximumBolus")) }
+                return
+            }
+            guard units <= maxBolus + .ulpOfOne else {
+                DispatchQueue.main.async { completion(WatchLoopError.configurationError("bolus exceeds therapy maximum")) }
+                return
+            }
+            let rounded = pumpManager.roundToSupportedBolusVolume(units: units)
+            SportLog.event("loan", String(format: "MANUAL BOLUS %.2f U — enacting on the watch pump", rounded))
+            let eventID = self.doseEnactor.loanRecorder?.loanWillEnactBolus(units: rounded)
+            pumpManager.enactBolus(units: rounded, activationType: activationType) { error in
+                self.doseEnactor.loanRecorder?.loanDidEnact(eventID: eventID, error: error)
+                if let error = error {
+                    SportLog.event("loan", "MANUAL BOLUS FAILED — \(String(describing: error))")
+                } else {
+                    SportLog.event("loan", "MANUAL BOLUS delivering")
+                }
+                DispatchQueue.main.async { completion(error) }
+            }
+        }
+    }
+
+    /// Loan-time carb entry: lands in the WATCH's carb store so THIS loop's COB and
+    /// dosing see it immediately (stores are isolated — R19 HK-off; the phone still
+    /// receives the stock relay as the durable record).
+    func addLoanCarbEntry(_ entry: NewCarbEntry) {
+        carbStore.addCarbEntry(entry) { result in
+            switch result {
+            case .success(let stored):
+                SportLog.event("loan", String(format: "carbs logged locally: %.0f g", stored.quantity.doubleValue(for: .gram())))
+            case .failure(let error):
+                SportLog.event("loan", "carb store add FAILED — \(String(describing: error))")
+            }
+        }
+    }
+
     // MARK: - Enactment (mirrors enactRecommendedAutomaticDose() — :1894 — via the seam)
 
     /// Freshness and suspension gates are the phone's; delivery goes through the stock

@@ -212,12 +212,21 @@ final class GlanceViewModel: ObservableObject {
     /// R24 G7 prediction: the transmitter sends on a fixed 5-minute grid anchored to
     /// the sensor session, so the next transmit is predictable from ANY prior reading
     /// (phone-fed or direct — the cadence belongs to the sensor, not the receiver).
-    static func g7EtaText(lastReading: Date?, now: Date) -> String? {
+    static func g7EtaText(lastReading: Date?, now: Date, firstConnect: Bool = false) -> String? {
         let cadence: TimeInterval = 5 * 60
         guard let last = lastReading, last <= now else {
             return NSLocalizedString("G7 within 5 min", comment: "Glance G7 prediction without a prior reading")
         }
         let untilNext = cadence - now.timeIntervalSince(last).truncatingRemainder(dividingBy: cadence)
+        if firstConnect {
+            // Field data (2026-07-18): a session's FIRST connection can miss its
+            // window and need the fallback ladder — one extra cycle. Promise a
+            // clock time with that slack instead of a countdown that can lie.
+            let by = now.addingTimeInterval(untilNext + cadence)
+            let formatter = DateFormatter(); formatter.timeStyle = .short
+            return String(format: NSLocalizedString("G7 by ~%@", comment: "Glance G7 first-connection promise (1: clock time)"),
+                          formatter.string(from: by))
+        }
         let seconds = Int(untilNext.rounded())
         guard seconds > 10 else {
             // Imminent (or just past — BLE delivery adds seconds): no "~0:00" flicker.
@@ -323,8 +332,16 @@ struct GlanceView: View {
     private var statusLine: some View {
         HStack {
             if model.state.canToggleLoop {
-                Button(action: onLoopTap) { loopPill }
-                    .buttonStyle(.plain)
+                // Tappable = LOOKS tappable (bordered capsule) — the bare pill read
+                // as a status label and the open/close control went undiscovered
+                // (Jeremy, 2026-07-18: "no handle for opening and closing the loop").
+                Button(action: onLoopTap) {
+                    loopPill
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .overlay(Capsule().stroke(Color.glanceDim.opacity(0.6), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
             } else {
                 loopPill
             }

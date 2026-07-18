@@ -472,6 +472,12 @@ final class PodLoanWatchController {
         let startedAt: Date?
     }
 
+    /// True while this watch owns the pod (phase .active) — the carb/bolus flow
+    /// routes delivery LOCALLY during a loan (the phone's pod link is released).
+    var isLoanActive: Bool {
+        return queue.sync { phase == .active }
+    }
+
     func debugSnapshot() -> DebugSnapshot {
         return queue.sync {
             DebugSnapshot(

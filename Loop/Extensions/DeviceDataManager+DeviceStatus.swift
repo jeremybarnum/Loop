@@ -40,9 +40,25 @@ extension DeviceDataManager {
             return DeviceDataManager.resumeOnboardingStatusHighlight
         } else if pumpManager == nil {
             return DeviceDataManager.addPumpStatusHighlight
+        } else if (pumpManager as? PumpConnectionLendable)?.isConnectionReleased == true {
+            // PODLOAN (ported from the crude branch's "instant status update"): while
+            // the pod is loaned to the watch, keying on the persisted release flag
+            // flips this tile the MOMENT of release/reclaim — instead of the stock
+            // signal-loss presentation aging in ~8 min later (and reading as a fault).
+            return DeviceDataManager.podOnWatchStatusHighlight
         } else {
             return pumpManager?.pumpStatusHighlight
         }
+    }
+
+    static var podOnWatchStatusHighlight: PodOnWatchStatusHighlight {
+        return PodOnWatchStatusHighlight()
+    }
+
+    struct PodOnWatchStatusHighlight: DeviceStatusHighlight {
+        var localizedMessage: String = NSLocalizedString("Pod on Watch", comment: "Title text for the pump tile while the pod is loaned to the watch")
+        var imageName: String = "applewatch"
+        var state: DeviceStatusHighlightState = .normalPump
     }
 
     var pumpStatusBadge: DeviceStatusBadge? {

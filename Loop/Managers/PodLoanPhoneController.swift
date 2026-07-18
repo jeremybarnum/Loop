@@ -43,6 +43,10 @@ final class PodLoanPhoneController {
         var doseHistory: (_ start: Date, _ completion: @escaping ([DoseEntry]) -> Void) -> Void
         /// Loud surfacing (banner + Event History line at integration).
         var issueNotice: (_ title: String, _ body: String) -> Void
+        /// PODLOAN instant-tile port (crude f3784d49/674e1b13): fired when pod
+        /// OWNERSHIP flips (owner <-> not-owner) so the phone HUD re-renders the
+        /// pump tile immediately instead of aging into signal-loss.
+        var ownershipDidChange: () -> Void = {}
         var now: () -> Date = { Date() }
     }
 
@@ -51,7 +55,22 @@ final class PodLoanPhoneController {
     private var deps: Dependencies
 
     private(set) var state: State {
-        didSet { UserDefaults.standard.set(state.rawValue, forKey: Keys.state) }
+        didSet {
+            UserDefaults.standard.set(state.rawValue, forKey: Keys.state)
+            // Instant-tile port: only OWNERSHIP flips re-render (not every
+            // intermediate transition — reconciling/reclaimPending are still
+            // "not owner" and the tile already shows it).
+            if (oldValue == .owner) != (state == .owner) {
+                deps.ownershipDidChange()
+            }
+        }
+    }
+
+    /// True whenever this phone does NOT own the pod's connection (any non-owner
+    /// state — the link is released or in flux). Delivery attempts made here while
+    /// true would die in a BLE timeout; callers should refuse loudly instead.
+    var isPodLoanedOut: Bool {
+        return queue.sync { state != .owner }
     }
     private var epoch: Int {
         didSet { UserDefaults.standard.set(epoch, forKey: Keys.epoch) }

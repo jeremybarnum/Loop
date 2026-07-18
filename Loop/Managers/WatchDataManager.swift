@@ -118,6 +118,16 @@ final class WatchDataManager: NSObject {
                 content.body = body
                 content.sound = .default
                 UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "podloan.notice.\(UUID().uuidString)", content: content, trigger: nil))
+            },
+            ownershipDidChange: { [weak self] in
+                // Instant-tile port (crude f3784d49): the status screen observes
+                // .PumpManagerChanged (object-filtered on deviceManager) and
+                // re-presents pumpStatusHighlight, which keys on the persisted
+                // isConnectionReleased — so the tile flips the moment ownership does.
+                DispatchQueue.main.async {
+                    guard let deviceManager = self?.deviceManager else { return }
+                    NotificationCenter.default.post(name: .PumpManagerChanged, object: deviceManager)
+                }
             }
         ))
     }()
@@ -455,6 +465,17 @@ final class WatchDataManager: NSObject {
         // Prevent any delayed messages from enacting.
         guard bolus.startDate.timeIntervalSinceNow > -30 else {
             log.error("Could not enact expired bolus from watch: %{public}@", String(describing: message))
+            return
+        }
+
+        // PODLOAN: while the pod is loaned to the watch this phone CANNOT deliver —
+        // its pod link is deliberately released. Current watch builds enact locally
+        // and never send a bolus here mid-loan; this guard catches stale/legacy
+        // requests LOUDLY instead of letting them die in a BLE timeout. Carbs still
+        // store (bolus.value == 0 path) — only delivery is refused.
+        if bolus.value > 0, podLoanController.isPodLoanedOut {
+            log.error("Refusing watch bolus while the pod is on loan: %{public}@", String(describing: message))
+            NotificationManager.sendBolusFailureNotificationForPodLoan(units: bolus.value)
             return
         }
 

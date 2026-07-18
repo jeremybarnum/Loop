@@ -208,6 +208,37 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
         }
         self.hasSentConfirmationMessage = true
 
+        // PODLOAN (R5): during an active loan the PHONE's pod link is released — a
+        // bolus relayed there dies undelivered (found on-wrist 2026-07-18). Deliver
+        // on the WATCH's pump; carbs go BOTH to the local store (this loop's COB
+        // sees them now) and to the phone via the stock relay (the durable record,
+        // bolus zeroed so nothing double-delivers).
+        let session = ExtensionDelegate.shared().stockLoopSession
+        if session.loanController.isLoanActive {
+            let activationType: BolusActivationType = .activationTypeFor(recommendedAmount: recommendedBolusAmount, bolusAmount: bolus)
+            if let carbEntry = carbEntry {
+                session.stack.loopManager.addLoanCarbEntry(carbEntry)
+                let carbOnly = SetBolusUserInfo(value: 0, startDate: Date(), contextDate: self.contextDate, carbEntry: carbEntry, activationType: .manualNoRecommendation)
+                try? WCSession.default.sendBolusMessage(carbOnly) { _ in }   // best-effort; local store already has it
+            }
+            if bolus > 0 {
+                session.stack.loopManager.enactManualBolus(units: bolus, activationType: activationType) { [weak self] error in
+                    if let error = error {
+                        ExtensionDelegate.shared().present(error)
+                        self?.hasSentConfirmationMessage = false
+                    } else {
+                        WKInterfaceDevice.current().play(.success)
+                    }
+                }
+            } else if carbEntry != nil {
+                WKInterfaceDevice.current().play(.success)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(1)) {
+                self.dismiss()
+            }
+            return
+        }
+
         let bolus = SetBolusUserInfo(value: bolus, startDate: Date(), contextDate: self.contextDate, carbEntry: carbEntry, activationType: .activationTypeFor(recommendedAmount: recommendedBolusAmount, bolusAmount: bolus))
         do {
             try WCSession.default.sendBolusMessage(bolus) { [weak self] (error) in
