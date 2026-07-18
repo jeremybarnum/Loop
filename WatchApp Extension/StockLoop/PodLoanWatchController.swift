@@ -377,6 +377,43 @@ final class PodLoanWatchController {
             faultCode: pumpManager?.podLoanFaultDescription)
     }
 
+    // MARK: - Debug surface (the bare-bones bench screen; real UI comes later)
+
+    struct DebugSnapshot {
+        let phase: Phase
+        let epoch: Int?
+        let mode: LoanDosingMode
+        let hasPumpManager: Bool
+        let deliveredUnits: Double?
+        let podFault: String?
+        let lastEventSeq: Int
+        let unackedCount: Int
+        let pendingUncertain: Bool
+    }
+
+    func debugSnapshot() -> DebugSnapshot {
+        return queue.sync {
+            DebugSnapshot(
+                phase: phase,
+                epoch: epoch ?? journal.activeEpoch,
+                mode: currentMode(),
+                hasPumpManager: pumpManager != nil,
+                deliveredUnits: pumpManager?.podLoanInsulinDelivered,
+                podFault: pumpManager?.podLoanFaultDescription,
+                lastEventSeq: journal.lastEventSeq,
+                unackedCount: journal.unackedEvents().count,
+                pendingUncertain: pendingUncertainEventID != nil)
+        }
+    }
+
+    /// Bench helper: force a real pod status round-trip and report reachability.
+    func debugReadStatus(completion: @escaping (Bool) -> Void) {
+        queue.async {
+            guard let manager = self.pumpManager else { completion(false); return }
+            manager.podLoanReadStatus(completion: completion)
+        }
+    }
+
     // MARK: - Internals
 
     private func sendMessage(_ message: LoanMessage) {
