@@ -15,6 +15,10 @@ import LoopCore
 final class WatchDataManager: NSObject {
 
     private unowned let deviceManager: DeviceDataManager
+
+    /// Minimal decode of a loan envelope's kind — routing stays in the controller;
+    /// this only answers "is this a request?" for the sensor-code re-arm above.
+    private struct LoanKindPeek: Decodable { let kind: String }
     
     init(deviceManager: DeviceDataManager, healthStore: HKHealthStore) {
         self.deviceManager = deviceManager
@@ -581,6 +585,16 @@ extension WatchDataManager: WCSessionDelegate {
         // and ignored — never asserted on (failure-matrix row 17: WC redelivers
         // queued userInfo across reinstalls).
         if userInfo[LoanProtocol.userInfoKey] != nil {
+            // Component A re-arm: a loan REQUEST is the moment the watch needs the
+            // current sensor's pairing code (its direct-G7 bond/prewarm path). The
+            // automatic .sensorStart capture only fires for sensors started after
+            // install — for the sensor already on-body, re-relay the held code or
+            // prompt for it now.
+            if let data = userInfo[LoanProtocol.userInfoKey] as? Data,
+               let peek = try? JSONDecoder().decode(LoanKindPeek.self, from: data),
+               peek.kind == "request" {
+                deviceManager.ensureSensorCodeRelayed()
+            }
             podLoanController.handleIncoming(userInfo: userInfo)
             return
         }

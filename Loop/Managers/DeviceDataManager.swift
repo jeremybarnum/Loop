@@ -1049,8 +1049,25 @@ extension DeviceDataManager: CGMManagerDelegate {
         }
     }
 
+    /// Loan-time re-arm (Component A): make sure the WATCH holds the CURRENT sensor's
+    /// pairing code — re-relay a held code, or prompt for it. Fired when the watch
+    /// requests a loan, because the automatic .sensorStart capture above only fires
+    /// for sensors started after install; the sensor already on-body at install time
+    /// never got relayed (observed 2026-07-18: watch stuck with the compiled-in
+    /// default code and no bond → throttled cold-scan acquisition).
+    func ensureSensorCodeRelayed() {
+        DispatchQueue.main.async {
+            let sensorID = UserDefaults.appGroup?.lastSeenSensorID ?? "MANUAL"
+            if let existing = UserDefaults.appGroup?.sensorPairingCode(for: sensorID) {
+                self.relaySensorCode(existing, sensorID: sensorID, activatedAt: nil)
+            } else {
+                self.presentSensorCodePrompt(sensorID: sensorID, activatedAt: nil)
+            }
+        }
+    }
+
     /// Prompt (numeric keypad) for the new sensor's code, store it, and relay it.
-    private func presentSensorCodePrompt(sensorID: String, activatedAt: Date) {
+    private func presentSensorCodePrompt(sensorID: String, activatedAt: Date?) {
         let alert = UIAlertController(
             title: NSLocalizedString("New Sensor", comment: "Title of the new-sensor pairing-code prompt"),
             message: NSLocalizedString("Enter the sensor code from the Dexcom applicator to enable Sport Mode on the watch.", comment: "Message of the new-sensor pairing-code prompt"),

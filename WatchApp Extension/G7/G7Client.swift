@@ -401,6 +401,36 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     /// workout-backed bond so the first Sport Mode on this sensor is a fast targeted connect
     /// instead of a cold scan. No-op unless a pre-warm is pending. MUST be foreground — the
     /// HKWorkoutSession keepalive can't be started in the background (HK error 14).
+    // MARK: Bench visibility (Diagnostics page) — why is acquisition cold?
+
+    /// The identity state that decides fast (targeted reconnect) vs slow (throttled
+    /// cold scan) acquisition, surfaced so a TestFlight session can be diagnosed
+    /// from the wrist instead of from log archaeology.
+    struct IdentitySnapshot {
+        let reconnectMode: Bool
+        let bondedPeripheral: String?   // watch-local UUID prefix of the saved G7, nil = never bonded here
+        let lastKnownSensorID: String?
+        let pendingPrewarm: String?
+        let sensorCode: String
+    }
+
+    func identitySnapshot() -> IdentitySnapshot {
+        IdentitySnapshot(
+            reconnectMode: reconnectMode,
+            bondedPeripheral: UserDefaults.standard.string(forKey: Self.savedPeripheralKey).map { String($0.prefix(8)) },
+            lastKnownSensorID: UserDefaults.standard.string(forKey: Self.lastKnownSensorIDKey),
+            pendingPrewarm: UserDefaults.standard.string(forKey: Self.pendingPrewarmKey),
+            sensorCode: pin)
+    }
+
+    /// Bench: force a pre-warm bond of the current sensor NOW (must be foreground —
+    /// the standard pre-warm path enforces its own guards: valid code, not soaking).
+    func forcePrewarmNow() {
+        let sid = UserDefaults.standard.string(forKey: Self.lastKnownSensorIDKey) ?? "MANUAL"
+        UserDefaults.standard.set(sid, forKey: Self.pendingPrewarmKey)
+        prewarmIfPending()
+    }
+
     func prewarmIfPending() {
         guard UserDefaults.standard.string(forKey: Self.pendingPrewarmKey) != nil else { return }
         guard !soakActive else { return }        // Sport Mode owns the reader; its cold path will bond
@@ -556,7 +586,13 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     // scan throttle that caps us at ~20% capture at rest) instead of scanForPeripherals. A scan
     // fallback fires if a pending connect goes quiet — so a stale bonded identifier (address
     // rotation) degrades to today's behavior instead of a silent false-negative.
-    @Published var reconnectMode: Bool = UserDefaults.standard.bool(forKey: "reconnectModeV1") {
+    // Default ON when the key has never been written: the A/B on the proven branch
+    // settled this — targeted reconnect IS the fast path, and the fromstock install's
+    // fresh UserDefaults (bundle-ID change) silently reverted it to the throttled
+    // cold-scan path, which presented as "G7 never found" (2026-07-18 sessions).
+    @Published var reconnectMode: Bool = (UserDefaults.standard.object(forKey: "reconnectModeV1") == nil)
+        ? true
+        : UserDefaults.standard.bool(forKey: "reconnectModeV1") {
         didSet { UserDefaults.standard.set(reconnectMode, forKey: "reconnectModeV1") }
     }
     private var savedPeripheral: CBPeripheral?         // bonded G7 held for pending reconnect

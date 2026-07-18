@@ -21,6 +21,7 @@ final class LoanDebugController: WKHostingController<LoanDebugView> {
 
 struct LoanDebugView: View {
     @State private var snapshot: PodLoanWatchController.DebugSnapshot?
+    @State private var g7: G7Client.IdentitySnapshot?
     @State private var lastAction: String = "—"
 
     private let refresh = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
@@ -76,6 +77,23 @@ struct LoanDebugView: View {
 
                 Divider().padding(.vertical, 2)
 
+                // G7 identity: the state that decides fast (targeted reconnect) vs
+                // slow (throttled cold scan) acquisition. "bonded: none" on a session
+                // that can't find the G7 IS the diagnosis — run Prewarm (foreground,
+                // sensor nearby) to bond once; every later session is then targeted.
+                Text("G7 IDENTITY").font(.footnote).foregroundColor(.secondary)
+                row("reconnect", (g7?.reconnectMode ?? false) ? "on" : "OFF")
+                row("bonded", g7?.bondedPeripheral ?? "none")
+                row("sensor id", g7?.lastKnownSensorID ?? "none")
+                row("code", g7?.sensorCode ?? "—")
+                row("prewarm", g7?.pendingPrewarm ?? "—")
+                Button("Prewarm G7 Now") {
+                    session.stack.client.forcePrewarmNow()
+                    lastAction = "prewarm started (keep app open)"
+                }
+
+                Divider().padding(.vertical, 2)
+
                 NavigationLink("Logs") { LogView() }
                     .font(.caption)
                 #if DEBUG
@@ -87,9 +105,11 @@ struct LoanDebugView: View {
         }
         .onReceive(refresh) { _ in
             snapshot = session.loanController.debugSnapshot()
+            g7 = session.stack.client.identitySnapshot()
         }
         .onAppear {
             snapshot = session.loanController.debugSnapshot()
+            g7 = session.stack.client.identitySnapshot()
         }
     }
 
