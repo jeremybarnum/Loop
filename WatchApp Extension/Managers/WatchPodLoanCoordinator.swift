@@ -850,10 +850,10 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// Returns whether the command was ACCEPTED (false = busy/phase-dropped) so
     /// the closed loop can retry a dropped enact (H2).
     @discardableResult
-    func cancelBasal(loudDrop: Bool = true) -> Bool {
+    func cancelBasal(loudDrop: Bool = true, onCertainFailure: (() -> Void)? = nil) -> Bool {
         if Self.isSimulatorDemo { demoCancelTempBasal(); return true }
         applyControllerPrefs(automatic: false)
-        return runPodCommand(label: NSLocalizedString("Cancel Temp", comment: "Command name: cancel temp basal"), loudDrop: loudDrop) { self.controller.cancelTempBasal(completion: $0) }
+        return runPodCommand(label: NSLocalizedString("Cancel Temp", comment: "Command name: cancel temp basal"), loudDrop: loudDrop, onCertainFailure: onCertainFailure) { self.controller.cancelTempBasal(completion: $0) }
     }
 
     /// Loop-faithful temp-basal enactment for the closed loop, mirroring
@@ -868,14 +868,14 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// Returns whether the command was ACCEPTED (false = busy/phase-dropped), so
     /// the closed loop leaves the reading unlatched and retries next tick (H2).
     @discardableResult
-    func enactTempBasal(unitsPerHour: Double, for duration: TimeInterval) -> Bool {
+    func enactTempBasal(unitsPerHour: Double, for duration: TimeInterval, onCertainFailure: (() -> Void)? = nil) -> Bool {
         guard duration > 0 else {
-            return cancelBasal(loudDrop: false)   // .cancel → revert to schedule
+            return cancelBasal(loudDrop: false, onCertainFailure: onCertainFailure)   // .cancel → revert to schedule
         }
         let snapped = (min(max(unitsPerHour, 0), maxTempBasalRate) / 0.05).rounded() * 0.05
         if Self.isSimulatorDemo { demoSetTempBasal(rate: snapped, duration: duration); return true }
         applyControllerPrefs(automatic: true)   // closed-loop enact → beeps follow the phone's AUTOMATIC pref
-        return runPodCommand(label: String(format: NSLocalizedString("Loop %.2f U/hr", comment: "Command name: loop-set temp basal"), snapped), loudDrop: false) {
+        return runPodCommand(label: String(format: NSLocalizedString("Loop %.2f U/hr", comment: "Command name: loop-set temp basal"), snapped), loudDrop: false, onCertainFailure: onCertainFailure) {
             self.controller.setTempBasal(rate: snapped, duration: duration, completion: $0)
         }
     }

@@ -378,8 +378,23 @@ final class WatchAutoLoop: ObservableObject {
         fileLog(String(format: "closed loop ENACT (%@): %.2f U/hr for %.0f min", trigger, rate, temp.duration.minutes))
         // H2: latch only if the pod accepted the command; a busy-drop stays
         // unlatched so the next tick retries this reading.
-        if coordinator.enactTempBasal(unitsPerHour: rate, for: temp.duration) {
-            lastEnactedAnchorDate = output.anchorDate
+        //
+        // A2 (Empty Value fix): enactTempBasal returns true the moment the command is
+        // DISPATCHED, not when the pod acknowledges. So a command that dispatches and
+        // then fails ASYNCHRONOUSLY (e.g. "Empty Value" — the pod never received it under
+        // radio contention) would otherwise stay latched and never retry until the next
+        // NEW reading (~5 min) — the over-delivery direction when the dropped command was
+        // a reduction/suspend. Fix: latch optimistically on dispatch (so the ≤60 s
+        // heartbeat doesn't re-fire mid-command), then UN-latch on a CERTAIN failure so
+        // the next tick re-enacts on fresh BG. An UNCERTAIN outcome stays latched — the
+        // pod may have applied it; retrying could double-dose (matches the C4 rule).
+        let enactedAnchor = output.anchorDate
+        if coordinator.enactTempBasal(unitsPerHour: rate, for: temp.duration, onCertainFailure: { [weak self] in
+            guard let self, self.lastEnactedAnchorDate == enactedAnchor else { return }
+            self.lastEnactedAnchorDate = nil
+            fileLog("closed loop enact FAILED (certain) — anchor un-latched; retry next tick")
+        }) {
+            lastEnactedAnchorDate = enactedAnchor
         } else {
             fileLog("closed loop enact DROPPED (busy) — anchor left unlatched; retry next tick")
         }
