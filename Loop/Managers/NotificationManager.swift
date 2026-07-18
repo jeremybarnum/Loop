@@ -16,7 +16,12 @@ enum NotificationManager {
     enum Action: String {
         case retryBolus
         case acknowledgeAlert
+        case reclaimPodLoan
     }
+
+    /// Category for the silent "pod is on the watch" notice (M5 bench control; the
+    /// real escape-hatch UI replaces this surface in the UI phase).
+    static let podLoanCategoryIdentifier = "podLoanOnLoan"
 }
 
 extension NotificationManager {
@@ -47,6 +52,19 @@ extension NotificationManager {
             actions: [acknowledgeAlertAction],
             intentIdentifiers: [],
             options: .customDismissAction
+        ))
+
+        let reclaimPodLoanAction = UNNotificationAction(
+            identifier: Action.reclaimPodLoan.rawValue,
+            title: NSLocalizedString("Reclaim Pod", comment: "The title of the notification action to reclaim a pod on loan to the watch"),
+            options: [.destructive, .authenticationRequired]
+        )
+
+        categories.append(UNNotificationCategory(
+            identifier: podLoanCategoryIdentifier,
+            actions: [reclaimPodLoanAction],
+            intentIdentifiers: [],
+            options: []
         ))
 
         return Set(categories)

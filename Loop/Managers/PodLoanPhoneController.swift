@@ -85,6 +85,9 @@ final class PodLoanPhoneController {
         static let t1 = "podloan.t1"           // start-confirmation, 5 min (R8)
         static let duration = "podloan.6h"     // loan-duration reminder, 6 h (R8)
         static let paused = "podloan.paused1h" // paused-dosing reminder, 1 h repeating (R8)
+        /// Silent informational notice carrying the bench reclaim action — NOT an
+        /// alarm (R8's inventory governs alarms); replaced by real UI later.
+        static let onLoan = "podloan.onloan"
     }
 
     /// Derived — what v1 kept as the volatile `podLoanedToWatch` flag (:480/:697).
@@ -279,6 +282,14 @@ final class PodLoanPhoneController {
         scheduleNotification(id: NotificationID.duration, title: "Pod Still On Loan",
                              body: "The pod has been on the watch for 6 hours.",
                              delay: .hours(6), repeats: false)
+
+        // Silent on-loan notice with the escape-hatch action (long-press → Reclaim
+        // Pod). The bench trigger for drills 12/13; the UI phase replaces it.
+        let content = UNMutableNotificationContent()
+        content.title = "Pod Is On the Watch"
+        content.body = "The watch is running the loop. Long-press for the escape hatch."
+        content.categoryIdentifier = NotificationManager.podLoanCategoryIdentifier
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: NotificationID.onLoan, content: content, trigger: nil))
     }
 
     private func handleTakeoverFailed(_ failed: TakeoverFailed) {
@@ -382,6 +393,7 @@ final class PodLoanPhoneController {
     private func finishLoanAfterCommit() {
         cancelNotification(id: NotificationID.duration)
         cancelNotification(id: NotificationID.paused)
+        cancelNotification(id: NotificationID.onLoan)
         (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
         pendingRevoke = false
         state = .owner
@@ -410,6 +422,7 @@ final class PodLoanPhoneController {
         queue.async {
             guard self.podIsOnLoan else { return }
             self.pendingRevoke = true
+            self.cancelNotification(id: NotificationID.onLoan)
             self.sendMessage(.revoke(Revoke(epoch: self.epoch)))
             (self.deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
             self.state = .reclaimPending
@@ -431,6 +444,7 @@ final class PodLoanPhoneController {
     // MARK: - Helpers
 
     private func reclaimToOwner(alert: (title: String, body: String)) {
+        cancelNotification(id: NotificationID.onLoan)
         (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
         state = .owner
         deps.setAutomaticDosingPaused(false)

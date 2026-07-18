@@ -567,6 +567,10 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
                let managerIdentifier = userInfo[LoopNotificationUserInfoKey.managerIDForAlert.rawValue] as? String {
                 alertManager?.acknowledgeAlert(identifier: Alert.Identifier(managerIdentifier: managerIdentifier, alertIdentifier: alertIdentifier))
             }
+        case NotificationManager.Action.reclaimPodLoan.rawValue:
+            // M5 escape hatch (spec §3.1 RECLAIM_PENDING, R7): dosing stays paused
+            // until the watch's records reconcile or Closed Loop is re-enabled.
+            deviceDataManager?.reclaimPodLoanFromWatch()
         case UNNotificationDefaultActionIdentifier:
             guard response.notification.request.identifier == LoopNotificationCategory.missedMeal.rawValue else {
                 break

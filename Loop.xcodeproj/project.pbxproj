@@ -295,6 +295,7 @@
 		8968B1122408B3520074BB48 /* UIFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8968B1112408B3520074BB48 /* UIFont.swift */; };
 		8968B114240C55F10074BB48 /* LoopSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8968B113240C55F10074BB48 /* LoopSettingsTests.swift */; };
 		43D0E4A92F1A000100000009 /* LoanProtocolV2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A82F1A000100000008 /* LoanProtocolV2Tests.swift */; };
+		43D0E4AB2F1A00010000000B /* PodLoanPhoneControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4AA2F1A00010000000A /* PodLoanPhoneControllerTests.swift */; };
 		897A5A9624C2175B00C4E71D /* BolusEntryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 897A5A9524C2175B00C4E71D /* BolusEntryView.swift */; };
 		897A5A9924C22DE800C4E71D /* BolusEntryViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 897A5A9824C22DE800C4E71D /* BolusEntryViewModel.swift */; };
 		898ECA60218ABD17001E9D35 /* GlucoseChartScaler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 898ECA5E218ABD17001E9D35 /* GlucoseChartScaler.swift */; };
@@ -1118,6 +1119,7 @@
 		8968B1112408B3520074BB48 /* UIFont.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIFont.swift; sourceTree = "<group>"; };
 		8968B113240C55F10074BB48 /* LoopSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopSettingsTests.swift; sourceTree = "<group>"; };
 		43D0E4A82F1A000100000008 /* LoanProtocolV2Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanProtocolV2Tests.swift; sourceTree = "<group>"; };
+		43D0E4AA2F1A00010000000A /* PodLoanPhoneControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanPhoneControllerTests.swift; sourceTree = "<group>"; };
 		897A5A9524C2175B00C4E71D /* BolusEntryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BolusEntryView.swift; sourceTree = "<group>"; };
 		897A5A9824C22DE800C4E71D /* BolusEntryViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BolusEntryViewModel.swift; sourceTree = "<group>"; };
 		898ECA5E218ABD17001E9D35 /* GlucoseChartScaler.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = GlucoseChartScaler.swift; sourceTree = "<group>"; };
@@ -2137,6 +2139,7 @@
 				A9DAE7CF2332D77F006AE942 /* LoopTests.swift */,
 				8968B113240C55F10074BB48 /* LoopSettingsTests.swift */,
 				43D0E4A82F1A000100000008 /* LoanProtocolV2Tests.swift */,
+				43D0E4AA2F1A00010000000A /* PodLoanPhoneControllerTests.swift */,
 				E93E86AC24DDE02C00FF40C8 /* Mock Stores */,
 			);
 			path = LoopTests;
@@ -3834,6 +3837,7 @@
 				C1D476B42A8ED179002C1C87 /* LoopAlgorithmTests.swift in Sources */,
 				8968B114240C55F10074BB48 /* LoopSettingsTests.swift in Sources */,
 				43D0E4A92F1A000100000009 /* LoanProtocolV2Tests.swift in Sources */,
+				43D0E4AB2F1A00010000000B /* PodLoanPhoneControllerTests.swift in Sources */,
 				A9BD28E7272226B40071DF15 /* TestLocalizedError.swift in Sources */,
 				A9F5F1F5251050EC00E7C8A4 /* ZipArchiveTests.swift in Sources */,
 				E9B3552D293592B40076AB04 /* MealDetectionManagerTests.swift in Sources */,

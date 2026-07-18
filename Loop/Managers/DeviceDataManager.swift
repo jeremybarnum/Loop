@@ -403,7 +403,7 @@ final class DeviceDataManager {
         loopManager.presetActivationObservers.append(alertManager)
         loopManager.presetActivationObservers.append(analyticsServicesManager)
 
-        watchManager = WatchDataManager(deviceManager: self, healthStore: healthStore)
+        watchManager = WatchDataManager(deviceManager: self, healthStore: healthStore)   // PODLOAN consumer: see reclaimPodLoanFromWatch()
 
         let remoteDataServicesManager = RemoteDataServicesManager(
             alertStore: alertManager.alertStore,
@@ -829,6 +829,12 @@ extension DeviceDataManager {
 
 // MARK: - Client API
 extension DeviceDataManager {
+    /// M5 escape-hatch entry (notification action + future UI): revoke the watch
+    /// loan and reclaim the pod; dosing stays paused until reconciliation (R7).
+    func reclaimPodLoanFromWatch() {
+        watchManager.podLoanController.reclaimNow()
+    }
+
     func enactBolus(units: Double, activationType: BolusActivationType, completion: @escaping (_ error: Error?) -> Void = { _ in }) {
         guard let pumpManager = pumpManager else {
             completion(LoopError.configurationError(.pumpManager))
