@@ -233,6 +233,14 @@ final class WatchLoopManager {
                 error = self.updatePredictedGlucoseAndRecommendedDose()
             }
 
+            // H19 port: the loop proved ALIVE (fresh data -> effects -> prediction).
+            // Push the dead-man forward BEFORE enact: a deliberate suspend denies the
+            // enact but is not a stall. Recency failures deliberately do NOT refresh —
+            // a prolonged reading gap is exactly what the watchdog exists to catch.
+            if error == nil, self.pumpManager != nil {
+                LoopStallWatchdog.refresh()
+            }
+
             // Mirrors loopInternal(): enact only when automatic dosing is enabled — the
             // watch analogue is the phone-pushed `dosingEnabled` plus the per-session
             // closed-loop opt-in (crown ceremony), which arrives with M5 integration.

@@ -22,6 +22,9 @@ authorization (risk-register #8) — nothing here goes on a person._
   notification once so the pre-warm bonds it while slow is costless. With the bond
   warm, loan-start readings land within one 5-min window and authenticate instantly;
   without it, the first loan reading pays the full slow first-connection.
+- **Watch HealthKit permission (first launch):** allow the workout/Health prompt on
+  the watch — the background keepalive is an HKWorkoutSession and cannot run without
+  it (the loop would die on wrist-down, and D16's stall watchdog would fire).
 - **Reset between drills:** hand back cleanly (D-baseline below) or delete/reinstall
   both apps; check the bench page shows `idle` and the phone has no loan
   notifications before starting the next drill.

@@ -37,11 +37,15 @@ final class StockLoopSession {
                 os_log("Loan active: starting G7 transport", log: self.log, type: .default)
                 self.stack.client.prewarmIfPending()
                 self.stack.client.startSoak()
+                // H19: arm the loop-stall dead-man for the session; every live loop
+                // cycle re-defers it (WatchLoopManager), so it fires only on a stall.
+                LoopStallWatchdog.refresh()
                 // R23: the glance page is the landing surface during a loan.
                 DispatchQueue.main.async { GlanceController.current?.becomeCurrentPage() }
             } else {
                 os_log("Loan ended: stopping G7 transport", log: self.log, type: .default)
                 self.stack.client.stopSoak()
+                LoopStallWatchdog.disarm()   // clean end — the loop stops on purpose
             }
         }
     }
