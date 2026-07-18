@@ -4226,6 +4226,9 @@
     "Sport Mode is still on. To end it, turn your iPhone's Bluetooth on, then tap again." : {
       "comment" : "Alert body shown when ending Sport Mode while the phone is unreachable"
     },
+    "Sport Mode Loop Stopped" : {
+      "comment" : "Title: the watch closed loop has stopped completing cycles"
+    },
     "Sport Mode was ended from your iPhone. Insulin records were sent back." : {
 
     },
@@ -4296,6 +4299,9 @@
     },
     "The watch doesn't have your basal schedule yet, and resuming would program the pod with made-up rates. Resume from the iPhone, or bring it in range and try again." : {
       "comment" : "Alert body: resume refused without a synced basal schedule"
+    },
+    "The watch hasn't looped in a while — check your pod and glucose. Your pod reverts to its scheduled basal when its last temp expires." : {
+      "comment" : "Body: the watch closed loop has stopped completing cycles"
     },
     "The watch will set temp basals automatically from the recommendation. Opens automatically when Sport Mode ends." : {
       "comment" : "A description of what happens when the watch automatically starts insulin delivery during Sport Mode.",
