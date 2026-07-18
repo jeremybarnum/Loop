@@ -385,6 +385,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
 
         guard let sensorID, !sensorID.isEmpty,
               sensorID != UserDefaults.standard.string(forKey: Self.lastKnownSensorIDKey) else { return false }
+        let hadBond = UserDefaults.standard.string(forKey: Self.savedPeripheralKey) != nil
         UserDefaults.standard.set(sensorID, forKey: Self.lastKnownSensorIDKey)
         UserDefaults.standard.set(sensorID, forKey: Self.pendingPrewarmKey)
         UserDefaults.standard.removeObject(forKey: Self.prewarmFailKey)   // fresh sensor, fresh retry budget
@@ -392,7 +393,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             UserDefaults.standard.removeObject(forKey: Self.savedPeripheralKey)
             self.savedPeripheral = nil
         }
-        log("new sensor \(sensorID) — cleared stale bond, pre-warm pending")
+        log("new sensor \(sensorID) — \(hadBond ? "cleared stale bond, " : "")pre-warm pending")
         return true
     }
 

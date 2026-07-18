@@ -277,6 +277,21 @@ extension LoopSettings: RawRepresentable {
         {
             self.automaticDosingStrategy = automaticDosingStrategy
         }
+
+        // Sport Mode (pod-loan grant): the watch loop doses from THIS serialized
+        // snapshot, so the therapy schedules must survive the raw round-trip. Stock
+        // omitted them (the phone rebuilds schedules from its stores at launch and
+        // never needed them here), which starved the granted settings — every watch
+        // cycle died with configurationError("basalRateSchedule") (2026-07-18 logs).
+        if let rawBasal = rawValue["basalRateSchedule"] as? BasalRateSchedule.RawValue {
+            self.basalRateSchedule = BasalRateSchedule(rawValue: rawBasal)
+        }
+        if let rawSensitivity = rawValue["insulinSensitivitySchedule"] as? InsulinSensitivitySchedule.RawValue {
+            self.insulinSensitivitySchedule = InsulinSensitivitySchedule(rawValue: rawSensitivity)
+        }
+        if let rawCarbRatio = rawValue["carbRatioSchedule"] as? CarbRatioSchedule.RawValue {
+            self.carbRatioSchedule = CarbRatioSchedule(rawValue: rawCarbRatio)
+        }
     }
 
     public var rawValue: RawValue {
@@ -295,7 +310,12 @@ extension LoopSettings: RawRepresentable {
         raw["maximumBolus"] = maximumBolus
         raw["minimumBGGuard"] = suspendThreshold?.rawValue
         raw["dosingStrategy"] = automaticDosingStrategy.rawValue
-        
+
+        // Sport Mode: full therapy snapshot for the pod-loan grant (see init above).
+        raw["basalRateSchedule"] = basalRateSchedule?.rawValue
+        raw["insulinSensitivitySchedule"] = insulinSensitivitySchedule?.rawValue
+        raw["carbRatioSchedule"] = carbRatioSchedule?.rawValue
+
         return raw
     }
 }
