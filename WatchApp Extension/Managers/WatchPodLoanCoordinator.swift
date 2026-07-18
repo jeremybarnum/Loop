@@ -894,6 +894,18 @@ final class WatchPodLoanCoordinator: ObservableObject {
     /// enacts and status refreshes, which retry on their own cadence.
     @discardableResult
     private func runPodCommand(label: String, loudDrop: Bool = true, onCertainFailure: (() -> Void)? = nil, _ operation: (@escaping (Result<PodControlStatus, Error>) -> Void) -> Void) -> Bool {
+        // Fix B (radio arbiter): BG wins the single watch radio. A LOOP command
+        // (loudDrop == false — the loop's own enacts/status refreshes, which retry on
+        // their own cadence) YIELDS to an in-flight G7 handshake so it doesn't collide
+        // and starve both ("Empty Value"). Returns not-accepted → the loop leaves the
+        // reading unlatched (A2) and re-enacts on the next tick, which is the fresh
+        // reading landing. The G7 is never held off, so a reading is never at risk.
+        // Manual commands (loudDrop == true, user present) are NOT deferred. The residual
+        // race — a handshake STARTING mid-command — is caught by A2's certain-failure retry.
+        if !loudDrop, ExtensionDelegate.shared().g7.client.isHandshakeActive {
+            fileLog("pod cmd '\(label)' DEFERRED — G7 handshake owns the radio (BG wins); retry next tick")
+            return false
+        }
         guard !busy, phase == .active else {
             fileLog("pod cmd '\(label)' DROPPED (busy=\(busy) phase=\(phase))")   // surfaced: the silent skip
             if loudDrop, phase == .active {

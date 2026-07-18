@@ -587,6 +587,23 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     private var pin4: [UInt8] = Array("3102".utf8)
     private var finished = false
     private var attemptActive = false
+    /// Fix B (radio arbiter): true ONLY during the ACTIVE handshake — set at didConnect (the
+    /// ~8-10s heavy J-PAKE/cert burst that saturates the single watch radio) and cleared at
+    /// finishAttempt. Deliberately NOT set during the idle scan / pending-connect wait (the
+    /// lightweight "pounce"); attemptActive already covers that, and blocking the pod through
+    /// those long idle waits would be wrong. Read cross-thread from the pod command path (on the
+    /// main actor) so a LOOP pod command yields to an in-flight handshake instead of colliding
+    /// with it ("Empty Value"); the pod retries next tick (A2). The G7 never yields to the pod,
+    /// so a reading is never at risk. Written on cbQueue / in finishAttempt; NSLock-guarded.
+    private let handshakeActiveLock = NSLock()
+    private var _handshakeActive = false
+    var isHandshakeActive: Bool {
+        handshakeActiveLock.lock(); defer { handshakeActiveLock.unlock() }
+        return _handshakeActive
+    }
+    private func setHandshakeActive(_ active: Bool) {
+        handshakeActiveLock.lock(); _handshakeActive = active; handshakeActiveLock.unlock()
+    }
     /// Monotonic identity for the current connect→handshake→read attempt (bumped every time an
     /// attempt starts). runHandshake runs on a Task executor and its finishAttempt hops back onto
     /// cbQueue several hops later; if the attempt was SUPERSEDED in between (Sport Mode preempting
@@ -643,6 +660,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             self.attemptActive = true
             self.attemptGeneration &+= 1   // new attempt identity (see attemptGeneration / runHandshake guard)
             self.finished = false
+            self.setHandshakeActive(false)   // Fix B: a fresh attempt begins in the lightweight pounce phase
             self.wantConnect = true
             self.pin4 = pinBytes
 
@@ -776,6 +794,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         if let p = peripheral { central?.cancelPeripheralConnection(p) }
         dataStream.close(); authStream.close(); ctrlStream.close()
         attemptActive = false
+        setHandshakeActive(false)   // Fix B: handshake window closed → the pod may use the radio again
         teardownPrewarm(bonded: success)   // no-op unless a pre-warm bond was in flight
         let useReconnect = reconnectMode && savedPeripheral != nil
         onMain {
@@ -1037,6 +1056,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             reconnectArmedAt = nil
         }
         log("*** CONNECTED — discovering services ***")
+        setHandshakeActive(true)   // Fix B: heavy handshake begins → a loop pod command yields the radio to this read
         setStatus("Connected — discovering…")
         peripheral.discoverServices([G7UUID.service])
     }
