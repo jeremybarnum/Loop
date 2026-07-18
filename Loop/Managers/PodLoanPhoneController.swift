@@ -1,0 +1,517 @@
+//
+//  PodLoanPhoneController.swift
+//  Loop
+//
+//  The phone half of loan protocol v2 (docs/DESIGN_LOAN_PROTOCOL_V2.md §3.1, §10).
+//  Persisted state machine (podLoanedToWatch is DERIVED from this state, never a
+//  volatile flag), epoch minting, grant assembly with deny-on-missing, the R8 alarm
+//  inventory (exactly: T1 start-confirmation 5 min / loan-duration 6 h / paused-dosing
+//  1 h repeating — deliberately NO heartbeat), record staging (the trap-cell defense),
+//  and reconcile-commit-ack ordering (ack ONLY after the store writes commit).
+//
+//  Dependencies are injected closures so the state machine and ordering invariants
+//  are testable without the live device stack; app integration wires the real
+//  DeviceDataManager/WatchDataManager/AlertManager surfaces.
+//
+
+import Foundation
+import HealthKit
+import LoopKit
+import LoopCore
+import UserNotifications
+import os.log
+
+final class PodLoanPhoneController {
+
+    enum State: String {
+        case owner, grantOffered, loaned, reconciling, reclaimPending
+    }
+
+    struct Dependencies {
+        /// The current pump manager, if any (conditionally cast for lending).
+        var pumpManager: () -> PumpManager?
+        /// The live therapy settings (snapshot travels in the grant).
+        var settings: () -> LoopSettings
+        /// Pause/resume the phone's automatic dosing (loan-gated, R7).
+        var setAutomaticDosingPaused: (Bool) -> Void
+        /// Transport out (WCSession.transferUserInfo at integration).
+        var send: ([String: Any]) -> Void
+        /// Store writes.
+        var addDoses: ([DoseEntry], @escaping (Error?) -> Void) -> Void
+        var addCarb: (NewCarbEntry, @escaping (Error?) -> Void) -> Void
+        /// 16 h insulin history for the grant.
+        var doseHistory: (_ start: Date, _ completion: @escaping ([DoseEntry]) -> Void) -> Void
+        /// Loud surfacing (banner + Event History line at integration).
+        var issueNotice: (_ title: String, _ body: String) -> Void
+        var now: () -> Date = { Date() }
+    }
+
+    private let log = OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanPhoneController")
+    private let queue = DispatchQueue(label: "com.loopkit.Loop.PodLoanPhoneController", qos: .utility)
+    private var deps: Dependencies
+
+    private(set) var state: State {
+        didSet { UserDefaults.standard.set(state.rawValue, forKey: Keys.state) }
+    }
+    private var epoch: Int {
+        didSet { UserDefaults.standard.set(epoch, forKey: Keys.epoch) }
+    }
+    private var committedCursor: Int {
+        didSet { UserDefaults.standard.set(committedCursor, forKey: Keys.cursor) }
+    }
+    /// Committed event IDs for the CURRENT epoch (secondary idempotency; the cursor
+    /// is primary). Bounded: cleared when a loan fully closes.
+    private var committedIDs: Set<UUID>
+    /// Staged (received, not-yet-committed) events for the current epoch — persisted
+    /// on every batch so a phone relaunch keeps the trap-cell defense.
+    private var staged: [UUID: LoanEvent] = [:]
+    private var stagedTombstones: Set<UUID> = []
+    private var loanStartedAt: Date?
+    private var pendingRevoke: Bool {
+        didSet { UserDefaults.standard.set(pendingRevoke, forKey: Keys.pendingRevoke) }
+    }
+    private var t1WorkItem: DispatchWorkItem?
+
+    private enum Keys {
+        static let state = "PodLoanPhoneController.state"
+        static let epoch = "PodLoanPhoneController.epoch"
+        static let cursor = "PodLoanPhoneController.cursor"
+        static let pendingRevoke = "PodLoanPhoneController.pendingRevoke"
+        static let committedIDs = "PodLoanPhoneController.committedIDs"
+        static let loanStartedAt = "PodLoanPhoneController.loanStartedAt"
+    }
+
+    private enum NotificationID {
+        static let t1 = "podloan.t1"           // start-confirmation, 5 min (R8)
+        static let duration = "podloan.6h"     // loan-duration reminder, 6 h (R8)
+        static let paused = "podloan.paused1h" // paused-dosing reminder, 1 h repeating (R8)
+    }
+
+    /// Derived — what v1 kept as the volatile `podLoanedToWatch` flag (:480/:697).
+    var podIsOnLoan: Bool {
+        switch state {
+        case .owner: return false
+        case .grantOffered, .loaned, .reconciling, .reclaimPending: return true
+        }
+    }
+
+    init(dependencies: Dependencies) {
+        self.deps = dependencies
+        self.state = State(rawValue: UserDefaults.standard.string(forKey: Keys.state) ?? "") ?? .owner
+        self.epoch = UserDefaults.standard.object(forKey: Keys.epoch) as? Int ?? 0
+        self.committedCursor = UserDefaults.standard.object(forKey: Keys.cursor) as? Int ?? 0
+        self.pendingRevoke = UserDefaults.standard.bool(forKey: Keys.pendingRevoke)
+        self.loanStartedAt = UserDefaults.standard.object(forKey: Keys.loanStartedAt) as? Date
+        if let raw = UserDefaults.standard.array(forKey: Keys.committedIDs) as? [String] {
+            self.committedIDs = Set(raw.compactMap(UUID.init(uuidString:)))
+        } else {
+            self.committedIDs = []
+        }
+        loadStaged()
+
+        // Relaunch during a non-owner state: dosing stays paused (persisted-state
+        // derivation is the whole point) and the paused reminder is re-armed.
+        if podIsOnLoan {
+            deps.setAutomaticDosingPaused(true)
+            if state == .reconciling || state == .reclaimPending {
+                armPausedReminder()
+            }
+        }
+    }
+
+    // MARK: - Incoming
+
+    func handleIncoming(userInfo: [String: Any]) {
+        queue.async { self.handleIncomingOnQueue(userInfo) }
+    }
+
+    private func handleIncomingOnQueue(_ userInfo: [String: Any]) {
+        let message: LoanMessage?
+        do {
+            message = try LoanMessage.decode(fromTransport: userInfo)
+        } catch {
+            sendMessage(.nack(ProtocolNack(seenVersion: nil)))
+            deps.issueNotice("Loan Protocol Error", "The watch sent a message this phone build cannot read. Update one of the builds. Nothing was discarded.")
+            return
+        }
+        guard let message = message else { return }
+
+        switch message {
+        case .request(let request):
+            handleRequest(request)
+        case .takeoverComplete(let complete):
+            handleTakeoverComplete(complete)
+        case .takeoverFailed(let failed):
+            handleTakeoverFailed(failed)
+        case .doseRecordBatch(let batch):
+            handleBatch(batch)
+        case .handbackOffer(let offer):
+            handleHandbackOffer(offer)
+        case .statusReport(let report):
+            handleStatusReport(report)
+        case .nack:
+            deps.issueNotice("Loan Protocol Error", "The watch could not read this phone's messages. Update one of the builds.")
+        case .grant, .handbackAck, .revoke, .statusQuery:
+            break  // watch-bound kinds
+        }
+    }
+
+    // MARK: - Grant (§2.2)
+
+    private func handleRequest(_ request: LoanRequest) {
+        guard request.supportedVersions.contains(LoanProtocol.version) else {
+            sendMessage(.nack(ProtocolNack(seenVersion: request.supportedVersions.max())))
+            return
+        }
+        guard state == .owner else {
+            os_log("Loan request while %{public}@ — ignored", log: log, type: .default, state.rawValue)
+            return
+        }
+        beginGrant()
+    }
+
+    private func beginGrant() {
+        guard let pump = deps.pumpManager() else {
+            deps.issueNotice("Pod Loan Refused", "No pump is configured.")
+            return
+        }
+        guard let lendable = pump as? PumpConnectionLendable else {
+            deps.issueNotice("Pod Loan Refused", "This pump cannot be loaned.")
+            return
+        }
+
+        // Deny-on-missing (R1/R16): the grant is refused, never defaulted.
+        let settings = deps.settings()
+        guard settings.basalRateSchedule != nil,
+              settings.insulinSensitivitySchedule != nil,
+              settings.carbRatioSchedule != nil,
+              settings.glucoseTargetRangeSchedule != nil,
+              settings.maximumBasalRatePerHour != nil,
+              settings.maximumBolus != nil else {
+            deps.issueNotice("Pod Loan Refused", "Therapy settings are incomplete; the watch cannot dose without them.")
+            return
+        }
+
+        // Boundary record (R2/C5): capture the running temp BEFORE release closes its
+        // record; the pod keeps executing it — this is bookkeeping, not a command.
+        var boundary: LoanDoseRecord?
+        let handedOverAt = deps.now()
+        if case .tempBasal(let dose) = pump.status.basalDeliveryState {
+            boundary = LoanDoseRecord(
+                kind: .boundaryTruncation,
+                startDate: dose.startDate,
+                endDate: handedOverAt,
+                unitsPerHour: dose.unitsPerHour)
+        }
+
+        // Pause dosing, then stop bidding for the pod (C5 truncation happens inside).
+        deps.setAutomaticDosingPaused(true)
+        lendable.releaseConnection()
+
+        epoch += 1
+        state = .grantOffered
+        committedCursor = 0
+        committedIDs = []
+        persistCommittedIDs()
+        staged = [:]
+        stagedTombstones = []
+        persistStaged()
+        loanStartedAt = handedOverAt
+        UserDefaults.standard.set(handedOverAt, forKey: Keys.loanStartedAt)
+
+        let grantEpoch = epoch
+        deps.doseHistory(handedOverAt.addingTimeInterval(-.hours(16))) { [weak self] history in
+            guard let self = self else { return }
+            self.queue.async {
+                guard self.state == .grantOffered, self.epoch == grantEpoch else { return }
+                guard let stateData = try? PropertyListSerialization.data(fromPropertyList: pump.rawValue, format: .binary, options: 0),
+                      let settingsData = try? PropertyListSerialization.data(fromPropertyList: settings.rawValue, format: .binary, options: 0) else {
+                    self.abortGrant(reason: "snapshot encoding failed")
+                    return
+                }
+                let grant = LoanGrant(
+                    epoch: grantEpoch,
+                    expiresAt: handedOverAt.addingTimeInterval(.minutes(5)),
+                    pumpManagerRawState: stateData,
+                    podAddress: 0,
+                    therapySettingsRaw: settingsData,
+                    settingsTimeZoneID: settings.basalRateSchedule?.timeZone.identifier ?? TimeZone.current.identifier,
+                    doseHistory: history.compactMap(Self.loanRecord(from:)),
+                    boundaryRecord: boundary)
+                self.sendMessage(.grant(grant))
+                self.armT1(for: grantEpoch)
+            }
+        }
+    }
+
+    private func abortGrant(reason: String) {
+        os_log("Grant aborted: %{public}@", log: log, type: .error, reason)
+        reclaimToOwner(alert: ("Pod Loan Failed", "The loan could not start (\(reason)). The phone kept the pod."))
+    }
+
+    /// T1 (R8): 5 min start-confirmation, cancelled by TakeoverComplete. Row 4:
+    /// query-before-reclaim — a watch whose TakeoverComplete was lost gets one chance
+    /// to prove it holds the pod before auto-reclaim.
+    private func armT1(for grantEpoch: Int) {
+        scheduleNotification(id: NotificationID.t1, title: "Watch Loan Not Confirmed",
+                             body: "The watch never confirmed taking the pod. The phone reclaimed it.",
+                             delay: .minutes(5), repeats: false)
+        t1WorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, self.state == .grantOffered, self.epoch == grantEpoch else { return }
+            self.sendMessage(.statusQuery(StatusQuery(epoch: grantEpoch)))
+            let confirm = DispatchWorkItem { [weak self] in
+                guard let self = self, self.state == .grantOffered, self.epoch == grantEpoch else { return }
+                self.reclaimToOwner(alert: ("Watch Loan Failed", "The watch never confirmed taking the pod. The phone reclaimed it."))
+            }
+            self.t1WorkItem = confirm
+            self.queue.asyncAfter(deadline: .now() + 15, execute: confirm)
+        }
+        t1WorkItem = work
+        queue.asyncAfter(deadline: .now() + .minutes(5), execute: work)
+    }
+
+    private func handleTakeoverComplete(_ complete: TakeoverComplete) {
+        guard complete.epoch == epoch, state == .grantOffered else { return }
+        t1WorkItem?.cancel()
+        cancelNotification(id: NotificationID.t1)
+        state = .loaned
+        scheduleNotification(id: NotificationID.duration, title: "Pod Still On Loan",
+                             body: "The pod has been on the watch for 6 hours.",
+                             delay: .hours(6), repeats: false)
+    }
+
+    private func handleTakeoverFailed(_ failed: TakeoverFailed) {
+        guard failed.epoch == epoch, state == .grantOffered else { return }
+        t1WorkItem?.cancel()
+        cancelNotification(id: NotificationID.t1)
+        reclaimToOwner(alert: ("Watch Loan Failed", "The watch could not take the pod (\(failed.reason)). The phone kept it."))
+    }
+
+    private func handleStatusReport(_ report: StatusReport) {
+        guard report.epoch == epoch else { return }
+        // Row 4: the query-before-reclaim answer.
+        if state == .grantOffered, report.holdsPod {
+            handleTakeoverComplete(TakeoverComplete(epoch: report.epoch, firstPodStatus: LoanPodStatus(timestamp: deps.now(), deliveredUnits: nil, reservoirLevel: nil, isSuspended: false, faultCode: report.podFault)))
+        }
+        if let fault = report.podFault {
+            deps.issueNotice("Pod Fault During Loan", "The pod reported a fault while on the watch: \(fault). Check the pod.")
+        }
+    }
+
+    // MARK: - Records (§2.4-2.6)
+
+    private func handleBatch(_ batch: DoseRecordBatch) {
+        guard batch.epoch == epoch, state == .loaned || state == .reclaimPending else { return }
+        stage(events: batch.events, tombstones: batch.tombstones)
+    }
+
+    private func handleHandbackOffer(_ offer: HandbackOffer) {
+        // Stale epoch (rows 13/14): the records still drain — they are historical
+        // truth, idempotent by ID — but loan STATE is untouched and the ack says
+        // stale so the sender stops retrying. Dead loans cannot speak.
+        let isStale = offer.epoch < epoch
+        guard offer.epoch == epoch || isStale else { return }
+
+        if !isStale {
+            guard state == .loaned || state == .reclaimPending || state == .grantOffered else {
+                // Duplicate offer after commit: re-ack idempotently (row 10).
+                sendMessage(.handbackAck(HandbackAck(epoch: epoch, committedCursor: committedCursor)))
+                return
+            }
+            state = .reconciling
+        }
+
+        stage(events: offer.events, tombstones: offer.tombstones)
+        let events = staged.values
+            .filter { !stagedTombstones.contains($0.id) && !committedIDs.contains($0.id) && $0.seq > committedCursor }
+            .sorted { $0.seq < $1.seq }
+
+        let input = LoanReconciler.Input(
+            events: events,
+            odometer: offer.odometer,
+            schedule: deps.settings().basalRateSchedule,
+            loanStart: loanStartedAt ?? offer.handedBackAt.addingTimeInterval(-.hours(2)),
+            loanEnd: offer.handedBackAt)
+        let outcome = LoanReconciler.reconcile(input)
+
+        var doses = outcome.doses
+        if let positive = outcome.positiveRemainderUnits {
+            // R6 valve: timed at hand-back, zero decay elapsed — conservative.
+            doses.append(DoseEntry(type: .bolus, startDate: offer.handedBackAt, endDate: offer.handedBackAt,
+                                   value: positive, unit: .units,
+                                   syncIdentifier: "loanv2-audit-\(offer.epoch)"))
+        }
+
+        // Write-doses-first; ack ONLY after commit (a897d22c). Failure: no ack, stay
+        // reconciling, 1 h reminder repeats (row 11) — never dose on incomplete records.
+        deps.addDoses(doses) { [weak self] error in
+            guard let self = self else { return }
+            self.queue.async {
+                if let error = error {
+                    os_log("Reconcile write failed: %{public}@", log: self.log, type: .fault, String(describing: error))
+                    self.deps.issueNotice("Watch Records Not Saved", "The watch session's records could not be saved. Dosing stays paused; will retry on the next hand-back attempt.")
+                    self.armPausedReminder()
+                    return
+                }
+
+                for carb in outcome.carbs {
+                    self.deps.addCarb(carb) { _ in }  // merge-not-replace at integration
+                }
+
+                if let shortfall = outcome.residualShortfallUnits {
+                    // The RULED layer-3 notice, verbatim (R22).
+                    self.deps.issueNotice("Pod Delivery Check",
+                        String(format: "The pod delivered %.2f U less than the watch session recorded. Records were not changed. Possible causes: pod fault, occlusion, or an interrupted command. Check the pod and review the session in Event History.", shortfall))
+                }
+
+                let newCursor = events.map(\.seq).max() ?? self.committedCursor
+                if !isStale {
+                    self.committedCursor = max(self.committedCursor, newCursor)
+                    self.committedIDs.formUnion(events.map(\.id))
+                    self.persistCommittedIDs()
+                    self.sendMessage(.handbackAck(HandbackAck(epoch: self.epoch, committedCursor: self.committedCursor)))
+                    self.finishLoanAfterCommit()
+                } else {
+                    self.sendMessage(.handbackAck(HandbackAck(epoch: offer.epoch, committedCursor: newCursor, stale: true)))
+                }
+            }
+        }
+    }
+
+    private func finishLoanAfterCommit() {
+        cancelNotification(id: NotificationID.duration)
+        cancelNotification(id: NotificationID.paused)
+        (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
+        pendingRevoke = false
+        state = .owner
+        deps.setAutomaticDosingPaused(false)
+        staged = [:]
+        stagedTombstones = []
+        persistStaged()
+        schedulePostReclaimReAudit()
+    }
+
+    /// §5.3.3: the phone asks the pod the same forensic questions after reclaim,
+    /// shrinking the dead-watch blind window. Integration supplies the concrete
+    /// pump read (podLoanReadStatus + odometer/seq comparison); the hook is here so
+    /// the ordering (after reclaim, after session re-establishes) is owned by the
+    /// state machine.
+    var postReclaimReAudit: (() -> Void)?
+    private func schedulePostReclaimReAudit() {
+        queue.asyncAfter(deadline: .now() + 60) { [weak self] in
+            self?.postReclaimReAudit?()
+        }
+    }
+
+    // MARK: - Escape hatch (§3.1 RECLAIM_PENDING, R7)
+
+    func reclaimNow() {
+        queue.async {
+            guard self.podIsOnLoan else { return }
+            self.pendingRevoke = true
+            self.sendMessage(.revoke(Revoke(epoch: self.epoch)))
+            (self.deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
+            self.state = .reclaimPending
+            // Dosing stays paused until records reconcile or the user re-enables
+            // Closed Loop in settings — that IS the explicit override (R7).
+            self.armPausedReminder()
+        }
+    }
+
+    /// Re-send a parked revoke on any sign of watch life (kept from v1).
+    func watchDidBecomeReachable() {
+        queue.async {
+            if self.pendingRevoke {
+                self.sendMessage(.revoke(Revoke(epoch: self.epoch)))
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func reclaimToOwner(alert: (title: String, body: String)) {
+        (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
+        state = .owner
+        deps.setAutomaticDosingPaused(false)
+        deps.issueNotice(alert.title, alert.body)
+    }
+
+    private func stage(events: [LoanEvent], tombstones: [UUID]) {
+        for event in events { staged[event.id] = event }
+        stagedTombstones.formUnion(tombstones)
+        persistStaged()
+    }
+
+    private func sendMessage(_ message: LoanMessage) {
+        guard let dictionary = try? message.transportDictionary() else { return }
+        deps.send(dictionary)
+    }
+
+    private static func loanRecord(from dose: DoseEntry) -> LoanDoseRecord? {
+        switch dose.type {
+        case .bolus:
+            return LoanDoseRecord(kind: .bolus, startDate: dose.startDate, endDate: dose.endDate, amount: dose.deliveredUnits ?? dose.programmedUnits)
+        case .tempBasal:
+            return LoanDoseRecord(kind: .tempBasal, startDate: dose.startDate, endDate: dose.endDate, unitsPerHour: dose.unitsPerHour)
+        case .suspend:
+            return LoanDoseRecord(kind: .suspend, startDate: dose.startDate, endDate: dose.endDate, unitsPerHour: 0)
+        case .basal, .resume:
+            return nil
+        }
+    }
+
+    // MARK: - R8 notifications (the COMPLETE alarm inventory)
+
+    private func scheduleNotification(id: String, title: String, body: String, delay: TimeInterval, repeats: Bool) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: repeats)
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
+    }
+
+    private func cancelNotification(id: String) {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id])
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])
+    }
+
+    private func armPausedReminder() {
+        scheduleNotification(id: NotificationID.paused, title: "Automatic Dosing Paused",
+                             body: "Dosing has been paused since the pod loan ended without complete records. Reconcile or re-enable Closed Loop to override.",
+                             delay: .hours(1), repeats: true)
+    }
+
+    // MARK: - Staging persistence (trap-cell defense survives phone relaunch)
+
+    private var stagedFileURL: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return base.appendingPathComponent("PodLoanStagedRecordsV2.json")
+    }
+
+    private struct StagedState: Codable {
+        let epoch: Int
+        let events: [LoanEvent]
+        let tombstones: [UUID]
+    }
+
+    private func persistStaged() {
+        let snapshot = StagedState(epoch: epoch, events: Array(staged.values), tombstones: Array(stagedTombstones))
+        if let data = try? LoanProtocol.encoder.encode(snapshot) {
+            try? data.write(to: stagedFileURL, options: .atomic)
+        }
+    }
+
+    private func loadStaged() {
+        guard let data = try? Data(contentsOf: stagedFileURL),
+              let snapshot = try? LoanProtocol.decoder.decode(StagedState.self, from: data),
+              snapshot.epoch == epoch else { return }
+        for event in snapshot.events { staged[event.id] = event }
+        stagedTombstones.formUnion(snapshot.tombstones)
+    }
+
+    private func persistCommittedIDs() {
+        UserDefaults.standard.set(committedIDs.map(\.uuidString), forKey: Keys.committedIDs)
+    }
+}
