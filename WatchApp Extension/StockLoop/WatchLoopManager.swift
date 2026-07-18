@@ -100,6 +100,13 @@ final class WatchLoopManager {
         set { doseEnactor.loanRecorder = newValue }
     }
 
+    /// Fix B: the radio-arbiter probe, forwarded to the enactor (StockLoopSession wires
+    /// it to G7Client.isHandshakeActive).
+    var isRadioBusy: (() -> Bool)? {
+        get { doseEnactor.isRadioBusy }
+        set { doseEnactor.isRadioBusy = newValue }
+    }
+
     // MARK: - Glance surface (R23; display only — no dosing paths read this)
 
     struct GlanceData {
@@ -709,8 +716,21 @@ final class WatchDoseEnactor {
     /// the enact calls themselves are unchanged stock PumpManager methods either way.
     weak var loanRecorder: WatchLoanDoseRecording?
 
+    /// Fix B (radio arbiter, c6c9e18f port): BG wins the single watch radio. When the
+    /// G7 is mid-handshake (the heavy ~8-10s burst), a LOOP enact yields instead of
+    /// colliding ("Empty Value") — the stock-shaped loop retries naturally on the next
+    /// reading, which is exactly the fresh BG landing. Only the automatic path runs
+    /// through this enactor today; a future manual path must NOT defer (user present —
+    /// the crude loudDrop==true analog).
+    var isRadioBusy: (() -> Bool)?
+
     func enact(recommendation: AutomaticDoseRecommendation, with pumpManager: PumpManager, completion: @escaping (PumpManagerError?) -> Void) {
         dosingQueue.async {
+            if self.isRadioBusy?() == true {
+                self.log.default("Enact DEFERRED — G7 handshake owns the radio (BG wins); the next reading retries")
+                completion(.communication(nil))
+                return
+            }
             let doseDispatchGroup = DispatchGroup()
 
             var tempBasalError: PumpManagerError? = nil

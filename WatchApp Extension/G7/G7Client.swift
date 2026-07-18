@@ -613,6 +613,24 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     /// superseded or torn down, so two handshakes can never interleave writes on one link —
     /// the generation gate protects the terminus, this protects the link itself.
     private var handshakeTask: Task<Void, Never>?
+
+    /// Fix B (radio arbiter, ported from g7-build-next c6c9e18f): true ONLY during the ACTIVE
+    /// handshake — set at didConnect (the ~8-10s heavy J-PAKE/cert burst that saturates the
+    /// single watch radio) and cleared at finishAttempt. Deliberately NOT set during the idle
+    /// scan / pending-connect wait (the lightweight "pounce"); blocking the pod through those
+    /// long idle waits would be wrong. Read cross-thread from the pod command paths so a LOOP
+    /// pod command yields to an in-flight handshake instead of colliding with it ("Empty
+    /// Value"); the pod retries next cycle. The G7 never yields to the pod, so a reading is
+    /// never at risk. Written on cbQueue / in finishAttempt; NSLock-guarded.
+    private let handshakeActiveLock = NSLock()
+    private var _handshakeActive = false
+    var isHandshakeActive: Bool {
+        handshakeActiveLock.lock(); defer { handshakeActiveLock.unlock() }
+        return _handshakeActive
+    }
+    private func setHandshakeActive(_ active: Bool) {
+        handshakeActiveLock.lock(); _handshakeActive = active; handshakeActiveLock.unlock()
+    }
     private var wantConnect = false
     private var autoRepeatWork: DispatchWorkItem?
 
@@ -662,6 +680,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             self.attemptActive = true
             self.attemptGeneration &+= 1   // new attempt identity (see attemptGeneration / runHandshake guard)
             self.finished = false
+            self.setHandshakeActive(false)   // Fix B: a fresh attempt begins in the lightweight pounce phase
             self.wantConnect = true
             self.pin4 = pinBytes
 
@@ -798,6 +817,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         if let p = peripheral { central?.cancelPeripheralConnection(p) }
         dataStream.close(); authStream.close(); ctrlStream.close()
         attemptActive = false
+        setHandshakeActive(false)   // Fix B: handshake window closed → the pod may use the radio again
         teardownPrewarm(bonded: success)   // no-op unless a pre-warm bond was in flight
         let useReconnect = reconnectMode && savedPeripheral != nil
         onMain {
@@ -1077,6 +1097,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             reconnectArmedAt = nil
         }
         log("*** CONNECTED — discovering services ***")
+        setHandshakeActive(true)   // Fix B: heavy handshake begins → a loop pod command yields the radio to this read
         onConnectionChange?(true, peripheral.name)   // M3 (watch-from-stock): stock-adapter hook
         setStatus("Connected — discovering…")
         peripheral.discoverServices([G7UUID.service])
@@ -1312,7 +1333,9 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                 try await setNotify(ctrl)
                 log("-> glucose [4E] (attempt \(attempt))")
                 try await writeResp(ctrl, [0x4E])
-                egv = try await ctrlStream.recv(timeout: recvTimeout)
+                // M6 (58c646df port): require the EGV echo opcode 0x4E; a stray control
+                // notification (e.g. a late 0xEA device-list) must not be parsed as glucose.
+                egv = try await ctrlStream.recv(op: 0x4E, timeout: recvTimeout)
                 gotEGV = true
                 break
             } catch {

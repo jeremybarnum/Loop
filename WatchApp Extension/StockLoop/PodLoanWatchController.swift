@@ -44,6 +44,10 @@ final class PodLoanWatchController {
     /// pod is released/revoked/failed (transport stops, loop input pauses).
     var onLoanActiveChanged: ((Bool) -> Void)?
 
+    /// Fix B (radio arbiter): the quiet verdict chase also yields to an active G7
+    /// handshake (the crude Verify chase was loudDrop==false). Wired by the session.
+    var isRadioBusy: (() -> Bool)?
+
     private(set) var phase: Phase {
         didSet { UserDefaults.standard.set(phase.rawValue, forKey: Keys.phase) }
     }
@@ -456,6 +460,12 @@ final class PodLoanWatchController {
             guard let self = self, self.phase == .active,
                   let manager = self.pumpManager,
                   let eventID = self.pendingUncertainEventID else { return }
+            if self.isRadioBusy?() == true {
+                // Fix B: BG wins the radio — re-arm the next chase attempt instead of
+                // colliding with the in-flight G7 handshake.
+                self.scheduleChase(attempt: attempt + 1)
+                return
+            }
             manager.podLoanResolveUncertainty { verdict in
                 self.queue.async {
                     guard self.pendingUncertainEventID == eventID else { return }

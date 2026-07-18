@@ -77,6 +77,12 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         if #available(watchOSApplicationExtension 5.0, *) {
             INRelevantShortcutStore.default.registerShortcuts()
         }
+        // M3 (58c646df port): force the lazy stockLoopSession to initialize HERE on
+        // the main thread. Otherwise its first touch races between the WCSession
+        // delegate queue (didReceiveUserInfo -> handleIncomingIfLoanMessage /
+        // SensorCodeUserInfo) and main-queue lifecycle hooks; a Swift lazy var is not
+        // thread-safe, so a concurrent first-init can double-construct the stack.
+        _ = stockLoopSession
     }
 
     func applicationDidBecomeActive() {

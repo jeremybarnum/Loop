@@ -31,6 +31,12 @@ final class StockLoopSession {
             WCSession.default.transferUserInfo(dictionary)
         }
 
+        // Fix B (radio arbiter, c6c9e18f port): BG wins the single watch radio — loop
+        // pod commands and the quiet verdict chase yield to an active G7 handshake.
+        let radioBusy: () -> Bool = { [weak self] in self?.stack.client.isHandshakeActive ?? false }
+        stack.loopManager.isRadioBusy = radioBusy
+        loanController.isRadioBusy = radioBusy
+
         loanController.onLoanActiveChanged = { [weak self] active in
             guard let self = self else { return }
             if active {
