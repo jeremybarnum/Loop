@@ -93,6 +93,13 @@ final class WatchLoopManager {
     /// is the protocol itself, never a direct assignment from app code.
     var pumpManager: PumpManager?
 
+    /// The loan controller's dose-recording hooks (spec §1.2); set alongside
+    /// `pumpManager` by PodLoanWatchController, cleared with it.
+    weak var loanDoseRecorder: WatchLoanDoseRecording? {
+        get { doseEnactor.loanRecorder }
+        set { doseEnactor.loanRecorder = newValue }
+    }
+
     // MARK: The CGM input (stock G7CGMManager over the proven transport — M3)
 
     /// Held so the stack has an owner; delegate wiring happens in StockLoopStack.assemble().
@@ -645,6 +652,10 @@ final class WatchDoseEnactor {
 
     private let log = OSLog(category: "WatchDoseEnactor")
 
+    /// M5: the loan controller's intent-minting hooks (spec §1.2). nil outside a loan;
+    /// the enact calls themselves are unchanged stock PumpManager methods either way.
+    weak var loanRecorder: WatchLoanDoseRecording?
+
     func enact(recommendation: AutomaticDoseRecommendation, with pumpManager: PumpManager, completion: @escaping (PumpManagerError?) -> Void) {
         dosingQueue.async {
             let doseDispatchGroup = DispatchGroup()
@@ -655,7 +666,9 @@ final class WatchDoseEnactor {
             if let basalAdjustment = recommendation.basalAdjustment {
                 self.log.default("Enacting recommended basal change")
                 doseDispatchGroup.enter()
+                let eventID = self.loanRecorder?.loanWillEnactTempBasal(unitsPerHour: basalAdjustment.unitsPerHour, duration: basalAdjustment.duration)
                 pumpManager.enactTempBasal(unitsPerHour: basalAdjustment.unitsPerHour, for: basalAdjustment.duration) { error in
+                    self.loanRecorder?.loanDidEnact(eventID: eventID, error: error)
                     if let error = error {
                         tempBasalError = error
                     }
@@ -673,7 +686,9 @@ final class WatchDoseEnactor {
             if let bolusUnits = recommendation.bolusUnits, bolusUnits > 0 {
                 self.log.default("Enacting recommended bolus dose")
                 doseDispatchGroup.enter()
+                let eventID = self.loanRecorder?.loanWillEnactBolus(units: bolusUnits)
                 pumpManager.enactBolus(units: bolusUnits, activationType: .automatic) { error in
+                    self.loanRecorder?.loanDidEnact(eventID: eventID, error: error)
                     if let error = error {
                         bolusError = error
                     }
