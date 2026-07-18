@@ -17,6 +17,11 @@ authorization (risk-register #8) — nothing here goes on a person._
 - **Logs:** phone via Console.app or `idevicesyslog` (subsystem com.loopkit.Loop,
   categories PodLoanPhoneController / LoanReconciler); watch via its screen + the
   bench page (log export rides the existing WatchLink path).
+- **G7 pre-warm (do BEFORE drill day):** when a sensor starts, the phone prompts for
+  its 4-digit code and relays it to the watch; tap the watch's "New sensor"
+  notification once so the pre-warm bonds it while slow is costless. With the bond
+  warm, loan-start readings land within one 5-min window and authenticate instantly;
+  without it, the first loan reading pays the full slow first-connection.
 - **Reset between drills:** hand back cleanly (D-baseline below) or delete/reinstall
   both apps; check the bench page shows `idle` and the phone has no loan
   notifications before starting the next drill.
