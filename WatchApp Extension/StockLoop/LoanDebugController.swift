@@ -60,8 +60,18 @@ struct LoanDebugView: View {
                 Button("Read Status") {
                     lastAction = "reading…"
                     session.loanController.debugReadStatus { ok in
-                        DispatchQueue.main.async { lastAction = ok ? "status OK" : "status FAIL" }
+                        DispatchQueue.main.async {
+                            switch ok {
+                            case .some(true): lastAction = "pod status OK"
+                            case .some(false): lastAction = "pod UNREACHABLE"
+                            case .none: lastAction = "no pod (not in a loan)"
+                            }
+                        }
                     }
+                }
+                Button("Reset (debug)") {
+                    session.loanController.debugReset()
+                    lastAction = "reset to idle"
                 }
 
                 Divider().padding(.vertical, 2)

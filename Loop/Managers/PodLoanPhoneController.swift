@@ -172,6 +172,10 @@ final class PodLoanPhoneController {
         }
         guard state == .owner else {
             os_log("Loan request while %{public}@ — ignored", log: log, type: .default, state.rawValue)
+            // Make the stuck-state case visible (it's otherwise silent): a prior
+            // attempt can leave the phone in GRANT_OFFERED (5-min T1) / RECONCILING /
+            // RECLAIM_PENDING, which silently drops new requests until it recovers.
+            deps.issueNotice("Sport Mode Not Started", "The phone is still finishing a previous loan (state: \(state.rawValue)). Try again shortly, or re-enable Closed Loop to reset.")
             return
         }
         beginGrant()

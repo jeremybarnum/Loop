@@ -136,24 +136,30 @@ final class PodLoanWatchController {
 
     func requestLoan(watchBuild: String) {
         queue.async {
-            guard self.phase == .idle else { return }
+            guard self.phase == .idle else {
+                SportLog.event("loan", "Start ignored — not idle (phase \(self.phase.rawValue))")
+                return
+            }
             self.phase = .requested
+            SportLog.event("loan", "REQUEST sent (build \(watchBuild)) — awaiting grant")
             self.sendMessage(.request(LoanRequest(watchBuild: watchBuild)))
         }
     }
 
     private func handleGrant(_ grant: LoanGrant) {
+        SportLog.event("loan", "GRANT received — epoch \(grant.epoch), \(grant.pumpManagerRawState.count)B pod state")
         guard phase == .idle || phase == .requested else {
-            os_log("Grant ignored in phase %{public}@", log: log, type: .default, phase.rawValue)
+            SportLog.event("loan", "grant ignored — wrong phase (\(phase.rawValue))")
             return
         }
         guard Date() < grant.expiresAt else {
             // Row 2: a late grant self-rejects; the phone's T1 already reclaimed.
+            SportLog.event("loan", "grant REJECTED — expired before takeover")
             sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "grant expired")))
             return
         }
         if let known = epoch, grant.epoch <= known {
-            os_log("Grant at stale epoch %d (known %d) ignored", log: log, type: .error, grant.epoch, known)
+            SportLog.event("loan", "grant REJECTED — stale epoch \(grant.epoch) (known \(known))")
             return
         }
 
@@ -161,6 +167,7 @@ final class PodLoanWatchController {
             try journal.begin(epoch: grant.epoch)
         } catch {
             // An undrained prior loan must drain first — refuse, never clobber.
+            SportLog.event("loan", "grant REJECTED — undrained prior loan must drain first")
             sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "undrained prior loan")))
             return
         }
@@ -182,6 +189,7 @@ final class PodLoanWatchController {
               let manager = OmniPumpManager(rawState: rawState) else {
             teardownPump()
             phase = .idle
+            SportLog.event("loan", "grant FAILED — could not rebuild the pump from the phone's snapshot")
             sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "pump state snapshot rejected")))
             return
         }
@@ -191,6 +199,7 @@ final class PodLoanWatchController {
         pumpManager = manager
         persistPumpRawValue()
         ingestGrantHistory(grant)
+        SportLog.event("loan", "pump rebuilt — connecting to pod for the takeover status read")
 
         // First pod status = the takeover proof (§2.3). Bounded UX rides above this
         // (the 2026-07-15 pod-side timeout ruling) at integration; protocol-level
@@ -418,10 +427,28 @@ final class PodLoanWatchController {
     }
 
     /// Bench helper: force a real pod status round-trip and report reachability.
-    func debugReadStatus(completion: @escaping (Bool) -> Void) {
+    /// Only meaningful during an ACTIVE loan (the watch holds the pod then); returns
+    /// nil when there's no pump to read (not in a loan).
+    func debugReadStatus(completion: @escaping (Bool?) -> Void) {
         queue.async {
-            guard let manager = self.pumpManager else { completion(false); return }
-            manager.podLoanReadStatus(completion: completion)
+            guard let manager = self.pumpManager else { completion(nil); return }
+            manager.podLoanReadStatus { ok in completion(ok) }
+        }
+    }
+
+    /// Bench-only: force the watch controller back to idle (clears a stuck phase after
+    /// a failed attempt). Does NOT touch the pod — just local state; the phone recovers
+    /// on its own T1 or via re-enabling Closed Loop.
+    func debugReset() {
+        queue.async {
+            self.chaseWorkItem?.cancel()
+            self.resendWorkItem?.cancel()
+            self.teardownPump()
+            self.loopManager.pumpManager = nil
+            self.phase = .idle
+            self.epoch = nil
+            self.pendingUncertainEventID = nil
+            SportLog.event("loan", "DEBUG RESET — watch controller forced to idle")
         }
     }
 
