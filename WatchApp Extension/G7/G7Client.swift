@@ -1303,17 +1303,20 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             self.trendState = state
             if let value {
                 self.recordReading()
-                // GATE the LOOP feed (not the display): only inject a real in-session EGV
-                // (state 0x06) within a physiologically plausible range. A warmup/ending/
-                // error reading with a numeric value must NOT enter the glucose store as a
-                // full-effect CGM sample and drive dosing (design §2.6 / topGap).
-                let inSession = (state == 0x06)
-                let plausible = (value >= 40 && value <= 400)
-                if inSession && plausible {
-                    self.onEGV?(value, readingDate, glucoseTimestamp)   // → Loop glucose store (measurement-time stamped)
+                // GATE the LOOP feed (not the display) on the SENSOR STATE only: state
+                // 0x06 = in-session, the sensor's own confidence flag. A warmup/ending/
+                // error reading must NOT enter the glucose store and drive dosing.
+                // H1: DO NOT drop out-of-range values here. A below-range reading is a
+                // real severe LOW that must drive a suspend — dropping it is the
+                // dangerous direction (fail to suspend into a hypo, and the feed then
+                // goes stale). The [40,400] clamp + below/above-range condition are
+                // applied downstream in G7GlucoseManager.inject (the LoopKit-aware
+                // layer), mirroring stock G7GlucoseMessage.condition.
+                if state == 0x06 {
+                    self.onEGV?(value, readingDate, glucoseTimestamp)   // raw value → clamped + conditioned downstream
                 } else {
-                    LogFile.append(String(format: "loop-bridge: EGV %d NOT injected (state=0x%02x inSession=%@ plausible=%@)",
-                                          value, Int(state ?? 0), inSession ? "y" : "n", plausible ? "y" : "n"))
+                    LogFile.append(String(format: "loop-bridge: EGV %d NOT injected (state=0x%02x not in-session)",
+                                          value, Int(state ?? 0)))
                 }
             }
         }

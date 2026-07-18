@@ -45,12 +45,26 @@ final class G7GlucoseManager {
             return
         }
         lastInjected = date
-        log("loop-bridge: injecting EGV \(mgdl) mg/dL → glucoseStore")
+
+        // H1: clamp to the G7's reportable range and carry the range condition,
+        // exactly as stock G7GlucoseMessage.condition does (below G7 minimum →
+        // .belowRange @ 40; above maximum → .aboveRange @ 400). A real severe LOW
+        // thus enters as 40/.belowRange and DRIVES A SUSPEND rather than being
+        // dropped. Asymmetry by design: a low always reaches the loop (safe
+        // direction); the state-0x06 gate upstream is what rejects non-confident
+        // (warmup/error) readings. In practice the sensor already clamps at 40,
+        // so this is correctness hardening more than an active hazard.
+        let condition: GlucoseCondition?
+        let clamped: Int
+        if mgdl < 40 { clamped = 40; condition = .belowRange }
+        else if mgdl > 400 { clamped = 400; condition = .aboveRange }
+        else { clamped = mgdl; condition = nil }
+        log("loop-bridge: injecting EGV \(mgdl) mg/dL\(condition != nil ? " (\(condition!.rawValue) → \(clamped))" : "") → glucoseStore")
 
         let sample = NewGlucoseSample(
             date: date,
-            quantity: HKQuantity(unit: .milligramsPerDeciliter, doubleValue: Double(mgdl)),
-            condition: nil,
+            quantity: HKQuantity(unit: .milligramsPerDeciliter, doubleValue: Double(clamped)),
+            condition: condition,
             trend: nil,
             trendRate: nil,
             isDisplayOnly: false,
