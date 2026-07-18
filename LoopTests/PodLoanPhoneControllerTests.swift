@@ -172,7 +172,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         let refused = expectation(description: "refused")
         DispatchQueue.global().async {
             while true {
-                self.lock.lock(); let done = self.notices.contains("Pod Loan Refused"); self.lock.unlock()
+                self.lock.lock(); let done = self.notices.contains("Sport Mode Not Started"); self.lock.unlock()
                 if done { refused.fulfill(); return }
                 usleep(20_000)
             }
@@ -180,7 +180,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         wait(for: [refused], timeout: 5)
         XCTAssertEqual(controller.state, .owner)
         XCTAssertTrue(pauseCalls.isEmpty, "denied grant must not touch dosing")
-        XCTAssertNil(lastSent(), "no grant may be sent")
+        // A denial is now reported to the watch (never a grant).
+        if case .denied? = lastSent() {} else { XCTFail("expected a .denied message, got \(String(describing: lastSent()))") }
+        if case .grant? = lastSent() { XCTFail("no grant may be sent on refusal") }
     }
 
     // MARK: - Hand-back ordering + idempotency

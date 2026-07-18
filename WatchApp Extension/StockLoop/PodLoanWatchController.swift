@@ -131,6 +131,14 @@ final class PodLoanWatchController {
             handleStatusQuery(query)
         case .nack:
             issueProtocolAlert(body: "The phone could not read this watch's messages. Update one of the builds.")
+        case .denied(let denied):
+            // The phone refused — show why instead of hanging on "requesting…".
+            requestTimeoutWork?.cancel()
+            if phase == .requested || phase == .idle {
+                phase = .idle
+                lastIdleNote = denied.reason
+            }
+            SportLog.event("loan", "DENIED by phone — \(denied.reason)")
         case .request, .takeoverComplete, .takeoverFailed, .doseRecordBatch, .handbackOffer, .statusReport:
             os_log("Ignoring phone-bound message kind on watch", log: log, type: .default)
         }

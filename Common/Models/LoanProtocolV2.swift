@@ -378,6 +378,14 @@ public struct ProtocolNack: Codable, Equatable {
     }
 }
 
+/// Phone→watch: the phone refused or could not fulfil a loan request, with a
+/// human-readable reason. No epoch (denial precedes the loan). Lets the watch show
+/// WHY on the glance screen instead of hanging silently on "requesting…".
+public struct LoanDenied: Codable, Equatable {
+    public let reason: String
+    public init(reason: String) { self.reason = reason }
+}
+
 // MARK: - Envelope
 
 /// The polymorphic carrier. Hand-rolled `kind` discriminator: unknown kinds throw
@@ -394,11 +402,12 @@ public enum LoanMessage: Equatable {
     case statusQuery(StatusQuery)
     case statusReport(StatusReport)
     case nack(ProtocolNack)
+    case denied(LoanDenied)
 
-    /// The message's epoch, nil only for request/nack (§1.1).
+    /// The message's epoch, nil only for request/nack/denied (§1.1).
     public var epoch: Int? {
         switch self {
-        case .request, .nack: return nil
+        case .request, .nack, .denied: return nil
         case .grant(let m): return m.epoch
         case .takeoverComplete(let m): return m.epoch
         case .takeoverFailed(let m): return m.epoch
@@ -425,7 +434,7 @@ public struct LoanEnvelope: Codable {
 
     private enum Kind: String, Codable {
         case request, grant, takeoverComplete, takeoverFailed, doseRecordBatch
-        case handbackOffer, handbackAck, revoke, statusQuery, statusReport, nack
+        case handbackOffer, handbackAck, revoke, statusQuery, statusReport, nack, denied
     }
 
     public init(from decoder: Decoder) throws {
@@ -451,6 +460,7 @@ public struct LoanEnvelope: Codable {
         case .statusQuery: self.message = .statusQuery(try c.decode(StatusQuery.self, forKey: .body))
         case .statusReport: self.message = .statusReport(try c.decode(StatusReport.self, forKey: .body))
         case .nack: self.message = .nack(try c.decode(ProtocolNack.self, forKey: .body))
+        case .denied: self.message = .denied(try c.decode(LoanDenied.self, forKey: .body))
         }
     }
 
@@ -469,6 +479,7 @@ public struct LoanEnvelope: Codable {
         case .statusQuery(let m): try c.encode(Kind.statusQuery, forKey: .kind); try c.encode(m, forKey: .body)
         case .statusReport(let m): try c.encode(Kind.statusReport, forKey: .kind); try c.encode(m, forKey: .body)
         case .nack(let m): try c.encode(Kind.nack, forKey: .kind); try c.encode(m, forKey: .body)
+        case .denied(let m): try c.encode(Kind.denied, forKey: .kind); try c.encode(m, forKey: .body)
         }
     }
 }

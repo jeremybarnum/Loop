@@ -158,7 +158,7 @@ final class PodLoanPhoneController {
             handleStatusReport(report)
         case .nack:
             deps.issueNotice("Loan Protocol Error", "The watch could not read this phone's messages. Update one of the builds.")
-        case .grant, .handbackAck, .revoke, .statusQuery:
+        case .grant, .handbackAck, .revoke, .statusQuery, .denied:
             break  // watch-bound kinds
         }
     }
@@ -175,19 +175,27 @@ final class PodLoanPhoneController {
             // Make the stuck-state case visible (it's otherwise silent): a prior
             // attempt can leave the phone in GRANT_OFFERED (5-min T1) / RECONCILING /
             // RECLAIM_PENDING, which silently drops new requests until it recovers.
-            deps.issueNotice("Sport Mode Not Started", "The phone is still finishing a previous loan (state: \(state.rawValue)). Try again shortly, or re-enable Closed Loop to reset.")
+            deny("Phone is still finishing a previous loan (\(state.rawValue)). Try again shortly, or re-enable Closed Loop on the phone.")
             return
         }
         beginGrant()
     }
 
+    /// Refuse the request AND tell the watch why (so it shows the reason instead of
+    /// hanging on "requesting…"), plus a local phone banner for good measure.
+    private func deny(_ reason: String) {
+        os_log("Loan denied: %{public}@", log: log, type: .default, reason)
+        sendMessage(.denied(LoanDenied(reason: reason)))
+        deps.issueNotice("Sport Mode Not Started", reason)
+    }
+
     private func beginGrant() {
         guard let pump = deps.pumpManager() else {
-            deps.issueNotice("Pod Loan Refused", "No pump is configured.")
+            deny("No pump is set up on the phone.")
             return
         }
         guard let lendable = pump as? PumpConnectionLendable else {
-            deps.issueNotice("Pod Loan Refused", "This pump cannot be loaned.")
+            deny("This pump can't be loaned to the watch (\(type(of: pump))).")
             return
         }
 
@@ -199,7 +207,7 @@ final class PodLoanPhoneController {
               settings.glucoseTargetRangeSchedule != nil,
               settings.maximumBasalRatePerHour != nil,
               settings.maximumBolus != nil else {
-            deps.issueNotice("Pod Loan Refused", "Therapy settings are incomplete; the watch cannot dose without them.")
+            deny("Therapy settings are incomplete; the watch can't dose without them.")
             return
         }
 
@@ -268,6 +276,7 @@ final class PodLoanPhoneController {
 
     private func abortGrant(reason: String) {
         os_log("Grant aborted: %{public}@", log: log, type: .error, reason)
+        sendMessage(.denied(LoanDenied(reason: "The loan could not start (\(reason)). The phone kept the pod.")))
         reclaimToOwner(alert: ("Pod Loan Failed", "The loan could not start (\(reason)). The phone kept the pod."))
     }
 

@@ -53,6 +53,7 @@ final class LoanProtocolV2Tests: XCTestCase {
             .statusQuery(StatusQuery(epoch: 5)),
             .statusReport(StatusReport(epoch: 5, mode: .closedDirect, lastDirectGlucoseAge: 120, lastEventSeq: 3, podFault: nil, holdsPod: true)),
             .nack(ProtocolNack(seenVersion: 1)),
+            .denied(LoanDenied(reason: "settings incomplete")),
         ]
         for message in messages {
             XCTAssertEqual(try roundTrip(message), message)
