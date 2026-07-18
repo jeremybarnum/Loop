@@ -58,6 +58,9 @@ final class PodLoanWatchController {
     private var pumpManager: OmniPumpManager?
     /// Odometer at takeover, for the hand-back snapshot pair (§1.4).
     private var deliveredAtTakeover: Double?
+    /// When the current Start attempt began (request sent) — drives the R24 glance
+    /// progress bar. Meaningful only while phase is requested/takingOver.
+    private var attemptStartedAt: Date?
     /// The single in-flight uncertainty being chased (mirrors the crude
     /// UncertainCommandRecord — one at a time; a NEW programming command destroys the
     /// verdict evidence and the conservative record stands, per d27a40c7 semantics).
@@ -153,6 +156,7 @@ final class PodLoanWatchController {
                 return
             }
             self.phase = .requested
+            self.attemptStartedAt = Date()
             self.lastIdleNote = nil
             SportLog.event("loan", "REQUEST sent (build \(watchBuild)) — awaiting grant")
             self.sendMessage(.request(LoanRequest(watchBuild: watchBuild)))
@@ -199,6 +203,12 @@ final class PodLoanWatchController {
         }
 
         epoch = grant.epoch
+        // A grant that did NOT follow a live request (late grant after the 25s timeout —
+        // transferUserInfo can queue) must not inherit the dead attempt's bar anchor,
+        // or the R24 progress bar renders pegged at 95% from its first frame.
+        if phase != .requested {
+            attemptStartedAt = Date()
+        }
         phase = .takingOver
 
         // Therapy settings snapshot: the ONLY dosing limits (R1/R16); missing -> the
@@ -457,6 +467,9 @@ final class PodLoanWatchController {
         let pendingUncertain: Bool
         let suspendEndsAt: Date?
         let lastIdleNote: String?
+        /// When the current Start attempt began (R24 progress bar); only meaningful
+        /// while phase is requested/takingOver.
+        let startedAt: Date?
     }
 
     func debugSnapshot() -> DebugSnapshot {
@@ -472,7 +485,8 @@ final class PodLoanWatchController {
                 unackedCount: journal.unackedEvents().count,
                 pendingUncertain: pendingUncertainEventID != nil,
                 suspendEndsAt: (manualSuspendEnd ?? .distantPast) > Date() ? manualSuspendEnd : nil,
-                lastIdleNote: lastIdleNote)
+                lastIdleNote: lastIdleNote,
+                startedAt: attemptStartedAt)
         }
     }
 

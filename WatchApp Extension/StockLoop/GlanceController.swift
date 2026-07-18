@@ -74,6 +74,17 @@ struct GlanceUIState {
 
     /// Idle-only: why the last Start attempt returned to idle (timeout / refusal).
     var idleNote: String? = nil
+
+    /// Starting-only (R24): when the Start attempt began — the view animates the
+    /// ~10s determinate pod bar from this anchor. nil = indeterminate fallback.
+    var startedAt: Date? = nil
+    /// Starting-only: which stage the bar is in ("reaching iPhone…" / "taking over pod…").
+    var startingStageText: String? = nil
+    /// R24 G7 prediction: countdown to the next expected G7 transmit ("G7 in ~2:40").
+    /// Shown under the bar while starting, and under the stale line while active
+    /// without a direct reading. Pod and G7 are deliberately decoupled — the pod bar
+    /// completes without waiting for this.
+    var g7EtaText: String? = nil
 }
 
 // MARK: - View model
@@ -132,14 +143,14 @@ final class GlanceViewModel: ObservableObject {
         let snap = session.loanController.debugSnapshot()
 
         switch snap.phase {
-        case .idle, .requested:
+        case .idle:
             state = Self.idleState(context: ExtensionDelegate.shared().loopManager.activeContext,
-                                   requested: snap.phase == .requested,
                                    note: snap.lastIdleNote)
-        case .takingOver:
-            var s = GlanceUIState(); s.phase = .starting
-            s.loopStatusText = NSLocalizedString("starting…", comment: "Glance status while taking over the pod")
-            state = s
+        case .requested, .takingOver:
+            state = Self.startingState(context: ExtensionDelegate.shared().loopManager.activeContext,
+                                       takingOver: snap.phase == .takingOver,
+                                       startedAt: snap.startedAt,
+                                       now: Date())
         case .handingBack:
             var s = GlanceUIState(); s.phase = .handingBack
             s.loopStatusText = NSLocalizedString("handing back…", comment: "Glance status during hand-back")
@@ -150,7 +161,8 @@ final class GlanceViewModel: ObservableObject {
             state = s
         case .active:
             let data = session.stack.loopManager.glanceData()
-            state = Self.activeState(data: data, suspendEndsAt: snap.suspendEndsAt, cob: latestCOB, now: Date())
+            state = Self.activeState(data: data, suspendEndsAt: snap.suspendEndsAt, cob: latestCOB, now: Date(),
+                                     phoneGlucoseDate: ExtensionDelegate.shared().loopManager.activeContext?.glucoseDate)
             session.stack.loopManager.glanceCarbsOnBoard { [weak self] cob in
                 DispatchQueue.main.async { self?.latestCOB = cob }
             }
@@ -159,7 +171,7 @@ final class GlanceViewModel: ObservableObject {
 
     // MARK: State builders (static + pure, so previews and tests can drive them)
 
-    static func idleState(context: WatchContext?, requested: Bool, note: String? = nil) -> GlanceUIState {
+    static func idleState(context: WatchContext?, note: String? = nil) -> GlanceUIState {
         var s = GlanceUIState()
         s.phase = .idle
         s.viaPhone = true
@@ -168,18 +180,51 @@ final class GlanceViewModel: ObservableObject {
             s.bgText = String(format: "%.0f", quantity.doubleValue(for: .milligramsPerDeciliter))
             s.trendSymbol = context?.glucoseTrend?.symbol
         }
-        if requested {
-            s.loopStatusText = NSLocalizedString("requesting…", comment: "Glance status after a loan request")
-        } else if let note = note {
-            s.loopStatusText = NSLocalizedString("phone loop active", comment: "Glance status when the phone runs the loop")
-            s.idleNote = note   // why the last start attempt returned to idle
-        } else {
-            s.loopStatusText = NSLocalizedString("phone loop active", comment: "Glance status when the phone runs the loop")
-        }
+        s.loopStatusText = NSLocalizedString("phone loop active", comment: "Glance status when the phone runs the loop")
+        s.idleNote = note   // why the last start attempt returned to idle (nil = none)
         return s
     }
 
-    static func activeState(data: WatchLoopManager.GlanceData, suspendEndsAt: Date?, cob: Double?, now: Date) -> GlanceUIState {
+    /// R24 connect state: phone-fed BG stays visible (dimmed, provenance-labeled), the
+    /// determinate ~10s pod bar runs below, and the G7 arrival prediction rides under
+    /// it. Covers both request (grant round-trip, usually <1s) and takeover.
+    static func startingState(context: WatchContext?, takingOver: Bool, startedAt: Date?, now: Date) -> GlanceUIState {
+        var s = GlanceUIState()
+        s.phase = .starting
+        s.viaPhone = true
+        s.bgColor = .dim
+        if let quantity = context?.glucose {
+            s.bgText = String(format: "%.0f", quantity.doubleValue(for: .milligramsPerDeciliter))
+            s.trendSymbol = context?.glucoseTrend?.symbol
+        }
+        s.loopStatusText = NSLocalizedString("starting…", comment: "Glance status while starting Sport Mode")
+        s.startingStageText = takingOver
+            ? NSLocalizedString("taking over pod…", comment: "Glance stage: pod takeover in progress")
+            : NSLocalizedString("reaching iPhone…", comment: "Glance stage: waiting for the loan grant")
+        s.startedAt = startedAt
+        s.g7EtaText = g7EtaText(lastReading: context?.glucoseDate, now: now)
+        return s
+    }
+
+    /// R24 G7 prediction: the transmitter sends on a fixed 5-minute grid anchored to
+    /// the sensor session, so the next transmit is predictable from ANY prior reading
+    /// (phone-fed or direct — the cadence belongs to the sensor, not the receiver).
+    static func g7EtaText(lastReading: Date?, now: Date) -> String? {
+        let cadence: TimeInterval = 5 * 60
+        guard let last = lastReading, last <= now else {
+            return NSLocalizedString("G7 within 5 min", comment: "Glance G7 prediction without a prior reading")
+        }
+        let untilNext = cadence - now.timeIntervalSince(last).truncatingRemainder(dividingBy: cadence)
+        let seconds = Int(untilNext.rounded())
+        guard seconds > 10 else {
+            // Imminent (or just past — BLE delivery adds seconds): no "~0:00" flicker.
+            return NSLocalizedString("G7 due about now", comment: "Glance G7 prediction when the next reading is imminent")
+        }
+        return String(format: NSLocalizedString("G7 in ~%d:%02d", comment: "Glance countdown to the next expected G7 reading (min, sec)"),
+                      seconds / 60, seconds % 60)
+    }
+
+    static func activeState(data: WatchLoopManager.GlanceData, suspendEndsAt: Date?, cob: Double?, now: Date, phoneGlucoseDate: Date? = nil) -> GlanceUIState {
         var s = GlanceUIState()
         s.phase = .active
 
@@ -212,6 +257,10 @@ final class GlanceViewModel: ObservableObject {
             } else {
                 s.staleAgeText = NSLocalizedString("no direct G7 reading yet", comment: "Glance line before the first direct reading")
             }
+            // R24: the wait is predictable — show when the next reading should land.
+            // The sport store only holds DIRECT readings, so on a first-ever session
+            // it's empty; the phone-fed timestamp anchors the same sensor grid.
+            s.g7EtaText = g7EtaText(lastReading: data.glucoseDate ?? phoneGlucoseDate, now: now)
         } else if let eventual = data.eventual {
             s.eventualText = String(format: "%.0f", eventual.doubleValue(for: .milligramsPerDeciliter))
         }
@@ -337,8 +386,13 @@ struct GlanceView: View {
             } else if let eventual = model.state.eventualText {
                 (Text("eventually ").foregroundColor(.glanceDim) + Text(eventual).bold())
                     .font(.system(size: 13))
-            } else if model.state.viaPhone, model.state.phase == .idle {
+            } else if model.state.viaPhone, model.state.phase == .idle || model.state.phase == .starting {
                 Text("via iPhone").font(.system(size: 12)).foregroundColor(.glanceDim)
+            }
+            // R24: predicted next G7 while active without a fresh direct reading.
+            // (While starting, the prediction rides under the pod bar instead.)
+            if model.state.phase == .active, let eta = model.state.g7EtaText {
+                Text(eta).font(.system(size: 11)).foregroundColor(.glanceDim)
             }
         }
     }
@@ -377,9 +431,58 @@ struct GlanceView: View {
                 }
             }
             .padding(.bottom, 2)
-        case .starting, .handingBack, .draining:
+        case .starting:
+            startingBlock
+                .padding(.horizontal, 10)
+                .padding(.bottom, 6)
+        case .handingBack, .draining:
             ProgressView()
                 .padding(.bottom, 8)
+        }
+    }
+
+    /// R24 connect UX: a determinate bar calibrated to the expected ~10s takeover.
+    /// It fills to 95% on schedule and holds there honestly (with a note) if the
+    /// takeover overruns; completion is the whole view flipping to the active glance.
+    /// The G7 prediction rides below — deliberately decoupled from the pod bar.
+    private static let podTakeoverExpected: TimeInterval = 10
+    private static let podTakeoverOverrun: TimeInterval = 14
+
+    private var startingBlock: some View {
+        VStack(spacing: 4) {
+            if let began = model.state.startedAt {
+                TimelineView(.animation(minimumInterval: 0.1)) { timeline in
+                    let elapsed = timeline.date.timeIntervalSince(began)
+                    let progress = min(max(elapsed, 0) / Self.podTakeoverExpected, 0.95)
+                    VStack(spacing: 4) {
+                        Text(model.state.startingStageText ?? NSLocalizedString("starting…", comment: "Glance stage fallback while starting"))
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(.glanceInk)
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(Color.glanceDim.opacity(0.25))
+                                Capsule().fill(Color.glanceAccent)
+                                    .frame(width: max(6, geo.size.width * progress))
+                            }
+                        }
+                        .frame(height: 6)
+                        if elapsed > Self.podTakeoverOverrun {
+                            Text(NSLocalizedString("taking longer than usual…", comment: "Glance note when the pod takeover overruns the expected ~10s"))
+                                .font(.system(size: 11))
+                                .foregroundColor(.glanceWarn)
+                        }
+                    }
+                }
+            } else {
+                // No timing anchor (e.g. relaunch mid-takeover) — honest indeterminate.
+                Text(model.state.startingStageText ?? NSLocalizedString("starting…", comment: "Glance stage fallback while starting"))
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.glanceInk)
+                ProgressView()
+            }
+            if let eta = model.state.g7EtaText {
+                Text(eta).font(.system(size: 11)).foregroundColor(.glanceDim)
+            }
         }
     }
 
@@ -460,6 +563,23 @@ struct GlanceDemoView: View {
         ("Idle · activation", previewState { s in
             s.phase = .idle; s.bgText = "138"; s.trendSymbol = "→"; s.bgColor = .dim
             s.viaPhone = true; s.loopStatusText = "phone loop active" }),
+        ("Starting · pod takeover (R24)", previewState { s in
+            s.phase = .starting; s.bgText = "138"; s.trendSymbol = "→"; s.bgColor = .dim
+            s.viaPhone = true; s.loopStatusText = "starting…"
+            s.startingStageText = "taking over pod…"
+            s.startedAt = Date().addingTimeInterval(-3)   // bar ~30% and filling live
+            s.g7EtaText = "G7 in ~2:40" }),
+        ("Starting · overrun", previewState { s in
+            s.phase = .starting; s.bgText = "138"; s.bgColor = .dim
+            s.viaPhone = true; s.loopStatusText = "starting…"
+            s.startingStageText = "taking over pod…"
+            s.startedAt = Date().addingTimeInterval(-20)   // held at 95% + honest note
+            s.g7EtaText = "G7 in ~1:10" }),
+        ("Active · awaiting first G7", previewState { s in
+            s.phase = .active; s.bgText = "148"; s.bgColor = .dim
+            s.staleAgeText = "no direct G7 reading yet"; s.g7EtaText = "G7 in ~1:20"
+            s.iobText = "1.8"; s.cobText = "24"
+            s.loopStatusText = "PAUSED"; s.loopDotColor = .glanceWarn }),
     ]
 
     var body: some View {
@@ -534,6 +654,25 @@ struct GlanceDemoView: View {
     GlanceView(model: GlanceViewModel(preview: previewState { s in
         s.phase = .idle; s.bgText = "138"; s.trendSymbol = "→"; s.bgColor = .dim
         s.viaPhone = true; s.loopStatusText = "phone loop active"
+    }))
+}
+
+#Preview("Starting · pod takeover") {
+    GlanceView(model: GlanceViewModel(preview: previewState { s in
+        s.phase = .starting; s.bgText = "138"; s.trendSymbol = "→"; s.bgColor = .dim
+        s.viaPhone = true; s.loopStatusText = "starting…"
+        s.startingStageText = "taking over pod…"
+        s.startedAt = Date().addingTimeInterval(-3)
+        s.g7EtaText = "G7 in ~2:40"
+    }))
+}
+
+#Preview("Active · awaiting first G7") {
+    GlanceView(model: GlanceViewModel(preview: previewState { s in
+        s.phase = .active; s.bgText = "148"; s.bgColor = .dim
+        s.staleAgeText = "no direct G7 reading yet"; s.g7EtaText = "G7 in ~1:20"
+        s.iobText = "1.8"; s.cobText = "24"
+        s.loopStatusText = "PAUSED"; s.loopDotColor = .glanceWarn
     }))
 }
 #endif
