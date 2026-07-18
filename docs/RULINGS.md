@@ -146,6 +146,18 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   effect at the next grant; the watch doses on the grant snapshot in its
   captured timezone).
 
+- **R23 — Sport Mode watch UI** (2026-07-17): stock FLOWS stay, Sport Mode
+  owns its SURFACES. Page map during a loan: Glance (new, landing) /
+  Actions (stock, untouched — no pre-meal hijack) / Chart (kept, demoted) /
+  Diagnostics (new, feature-flagged). Glance = layout "A number-first":
+  dominant BG+arrow, eventual-BG small line, three-cell rail (IOB/COB/temp),
+  R21 live ring-dot + saddle-brown SPORT tag, true-black OLED background.
+  BG color ONLY out of range (white in range, amber high, red low —
+  thresholds from therapy settings). Honest states: stale never looks fresh
+  (dim + age + arrow drops), suspended shows the R4 auto-resume countdown,
+  activation = idle glance page + crown ceremony, R20 picker lives there.
+  Full record: docs/DESIGN_SPORT_UI.md.
+
 ## Not yet ruled (do not decide without Jeremy)
 
 - Risk-register #8: any on-body session of any milestone build — per-build,
