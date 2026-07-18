@@ -78,6 +78,10 @@ struct LoanDebugView: View {
 
                 NavigationLink("Logs") { LogView() }
                     .font(.caption)
+                #if DEBUG
+                NavigationLink("Glance demo") { GlanceDemoView() }
+                    .font(.caption)
+                #endif
             }
         }
         }

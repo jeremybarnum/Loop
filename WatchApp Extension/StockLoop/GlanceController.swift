@@ -115,7 +115,13 @@ final class GlanceViewModel: ObservableObject {
     /// Open (disable dosing) is fail-safe — no confirm. Close (enable dosing) is gated
     /// by the confirm alert in the view.
     func setLoopClosed(_ closed: Bool) {
-        guard !isPreview else { return }
+        guard !isPreview else {
+            // Demo/preview mode: mutate local state so the pill is interactive on the sim.
+            state.loopClosed = closed
+            state.loopStatusText = closed ? "CLOSED · 0m" : "OPEN"
+            state.loopDotColor = closed ? .glanceGood : .clear
+            return
+        }
         ExtensionDelegate.shared().stockLoopSession.stack.loopManager.setClosedLoopEnabled(closed)
         refresh()
     }
@@ -417,6 +423,61 @@ extension Color {
 #if DEBUG
 private func previewState(_ build: (inout GlanceUIState) -> Void) -> GlanceUIState {
     var s = GlanceUIState(); build(&s); return s
+}
+
+/// Runtime glance-state gallery, reachable from the bench page (Diagnostics → Glance
+/// demo). Reliable on the simulator where the legacy WatchKit extension's *live*
+/// SwiftUI previews hang — this is a real running view, so it renders and interacts.
+/// Tap a state to show it; the loop pill toggles OPEN↔CLOSED live.
+struct GlanceDemoView: View {
+    @StateObject private var model = GlanceViewModel(preview: GlanceDemoView.states[0].state)
+
+    static let states: [(name: String, state: GlanceUIState)] = [
+        ("Active · in range · CLOSED", previewState { s in
+            s.phase = .active; s.bgText = "142"; s.trendSymbol = "↗"; s.bgColor = .inRange
+            s.eventualText = "128"; s.iobText = "1.8"; s.cobText = "24"; s.tempText = "+0.75"
+            s.loopStatusText = "CLOSED · 2m"; s.loopDotColor = .glanceGood; s.loopClosed = true; s.canToggleLoop = true }),
+        ("Active · OPEN (advisory)", previewState { s in
+            s.phase = .active; s.bgText = "142"; s.trendSymbol = "↗"; s.bgColor = .inRange
+            s.eventualText = "128"; s.iobText = "1.8"; s.cobText = "24"; s.tempText = "—"
+            s.loopStatusText = "OPEN"; s.loopClosed = false; s.canToggleLoop = true }),
+        ("Active · high", previewState { s in
+            s.phase = .active; s.bgText = "214"; s.trendSymbol = "→"; s.bgColor = .high
+            s.eventualText = "176"; s.iobText = "2.6"; s.cobText = "31"; s.tempText = "+1.20"
+            s.loopStatusText = "CLOSED · 1m"; s.loopDotColor = .glanceGood; s.loopClosed = true; s.canToggleLoop = true }),
+        ("Active · low", previewState { s in
+            s.phase = .active; s.bgText = "64"; s.trendSymbol = "↘"; s.bgColor = .low
+            s.eventualText = "58"; s.iobText = "0.4"; s.cobText = "0"; s.tempText = "0.00"
+            s.loopStatusText = "CLOSED · 3m"; s.loopDotColor = .glanceGood; s.loopClosed = true; s.canToggleLoop = true }),
+        ("Stale", previewState { s in
+            s.phase = .active; s.bgText = "148"; s.bgColor = .dim
+            s.staleAgeText = "9 min ago — no direct G7"; s.iobText = "1.8"; s.cobText = "24"
+            s.loopStatusText = "PAUSED"; s.loopDotColor = .glanceWarn }),
+        ("Suspended", previewState { s in
+            s.phase = .active; s.bgText = "121"; s.trendSymbol = "→"; s.bgColor = .inRange
+            s.suspendText = "insulin off · resumes 1:45"; s.iobText = "0.9"; s.cobText = "12"; s.tempText = "0.00"
+            s.loopStatusText = "SUSPENDED" }),
+        ("Idle · activation", previewState { s in
+            s.phase = .idle; s.bgText = "138"; s.trendSymbol = "→"; s.bgColor = .dim
+            s.viaPhone = true; s.loopStatusText = "phone loop active" }),
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 8) {
+                GlanceView(model: model)
+                    .frame(height: 200)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.gray.opacity(0.3)))
+                ForEach(Self.states.indices, id: \.self) { i in
+                    Button(Self.states[i].name) { model.state = Self.states[i].state }
+                        .font(.system(size: 12))
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+        .navigationTitle("Glance demo")
+    }
 }
 
 #Preview("Active · in range") {
