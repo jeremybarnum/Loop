@@ -504,12 +504,24 @@ extension WatchDataManager: WCSessionDelegate {
     func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
         switch message["name"] as? String {
         case LoopSettingsUserInfo.name?:
-            // The watch is asking for a settings refresh: a reinstalled watch app
-            // has none, and the push path (transferUserInfo) won't resend while
-            // the phone believes nothing changed (it's also unreliable on
-            // simulators). Idempotent full-settings reply.
-            log.default("Watch requested settings refresh")
-            replyHandler(LoopSettingsUserInfo(settings: deviceManager.loopManager.settings).rawValue)
+            // H7: ONE LoopSettingsUserInfo case (there were two — the second, the
+            // override-apply handler, was dead code shadowed by this one, so
+            // watch-set workout/pre-meal overrides were silently dropped).
+            // A message carrying settings = an override change to APPLY; a bare
+            // {name} message = a reinstalled watch asking for a full-settings
+            // refresh (the push path won't resend while nothing changed).
+            if let watchSettings = LoopSettingsUserInfo(rawValue: message)?.settings {
+                var loopSettings = deviceManager.loopManager.settings
+                loopSettings.preMealOverride = watchSettings.preMealOverride
+                loopSettings.scheduleOverride = watchSettings.scheduleOverride
+                lastSentSettings = loopSettings   // don't echo these back to the watch
+                deviceManager.loopManager.mutateSettings { settings in settings = loopSettings }
+                // Target range affects the recommendation — reply with a fresh context.
+                createWatchContext { context in replyHandler(context.rawValue) }
+            } else {
+                log.default("Watch requested settings refresh")
+                replyHandler(LoopSettingsUserInfo(settings: deviceManager.loopManager.settings).rawValue)
+            }
         case PodLoanDoseHistoryRequest.name?:
             // The watch wants pre-loan insulin history for its prediction (the
             // grant carries it normally; the sim demo's faked grant doesn't).
@@ -538,24 +550,6 @@ extension WatchDataManager: WCSessionDelegate {
 
             // Reply immediately
             replyHandler([:])
-        case LoopSettingsUserInfo.name?:
-            if let watchSettings = LoopSettingsUserInfo(rawValue: message)?.settings {
-                // So far we only support watch changes of temporary schedule overrides
-                var loopSettings = deviceManager.loopManager.settings
-                loopSettings.preMealOverride = watchSettings.preMealOverride
-                loopSettings.scheduleOverride = watchSettings.scheduleOverride
-
-                // Prevent re-sending these updated settings back to the watch
-                lastSentSettings = loopSettings
-                deviceManager.loopManager.mutateSettings { settings in
-                    settings = loopSettings
-                }
-            }
-
-            // Since target range affects recommended bolus, send back a new one
-            createWatchContext { (context) in
-                replyHandler(context.rawValue)
-            }
         case CarbBackfillRequestUserInfo.name?:
             if let userInfo = CarbBackfillRequestUserInfo(rawValue: message) {
                 deviceManager.carbStore.getSyncCarbObjects(start: userInfo.startDate) { (result) in

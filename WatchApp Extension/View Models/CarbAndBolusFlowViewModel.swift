@@ -36,7 +36,11 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
 
     // MARK: - Constants
     private static let defaultSupportedBolusVolumes = (0...600).map { 0.05 * Double($0) } // U
-    private static let defaultMaxBolus: Double = 10 // U
+    // H18: the dial's pre-sync fallback max MUST equal the Sport Mode delivery
+    // clamp (WatchPodLoanCoordinator.maxBolusUnits, same fallback), or the dial
+    // lets the user pick e.g. 5 U while the pod command silently clamps to 1 U
+    // with a success haptic — a silent under-bolus. One source of truth.
+    private static let defaultMaxBolus: Double = WatchPodLoanCoordinator.fallbackMaxBolusUnits // U
 
     // MARK: - Initialization
     let configuration: CarbAndBolusFlow.Configuration

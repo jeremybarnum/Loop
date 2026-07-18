@@ -805,7 +805,11 @@ final class WatchPodLoanCoordinator: ObservableObject {
         })
     }
     func bolus(units: Double) {
-        let capped = min(max(units, 0), Self.maxBolusUnits)
+        // M13: snap to the pod pulse grid HERE and guard > 0, so a sub-half-pulse
+        // request (<0.025 U) never reaches the pod as a 0.00 U bolus command
+        // (meaningless, and an unverified pod-fault risk). The facade snaps again
+        // (no-op) and the journaled amount equals what the pod delivers.
+        let capped = ((min(max(units, 0), Self.maxBolusUnits)) / 0.05).rounded() * 0.05
         guard capped > 0 else { return }
         if Self.isSimulatorDemo { demoBolus(units: capped); return }
         applyControllerPrefs(automatic: false)

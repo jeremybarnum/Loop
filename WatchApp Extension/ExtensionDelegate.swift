@@ -111,6 +111,12 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         // do nothing until a session is active.
         _ = predictionStore
         _ = autoLoop
+        // M3: force the lazy `g7` manager to initialize HERE on the main thread.
+        // Otherwise its first touch races between the WCSession delegate queue
+        // (didReceiveUserInfo → g7.client.applySensorCode) and the main-queue
+        // phase sink (g7.start()); a Swift lazy var is not thread-safe, so a
+        // concurrent first-init can double-construct the BLE stack or crash.
+        _ = g7
 
         // The G7 reader is GATED to Sport Mode: it runs ONLY while the loan is active
         // (phase == .active). Outside Sport Mode the watch gets glucose from the phone, so

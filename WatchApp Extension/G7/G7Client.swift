@@ -1129,8 +1129,11 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     private func setNotify(_ characteristic: CBCharacteristic) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             cbQueue.async {
+                // M2: peripheral is niled on a Bluetooth toggle; a stale retry
+                // must throw into the read/handshake catch, not force-unwrap nil.
+                guard let peripheral = self.peripheral else { cont.resume(throwing: G7Error.disconnected); return }
                 self.notifyConts[characteristic.uuid] = cont
-                self.peripheral.setNotifyValue(true, for: characteristic)
+                peripheral.setNotifyValue(true, for: characteristic)
             }
         }
     }
@@ -1139,8 +1142,9 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     private func writeResp(_ characteristic: CBCharacteristic, _ bytes: [UInt8]) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             cbQueue.async {
+                guard let peripheral = self.peripheral else { cont.resume(throwing: G7Error.disconnected); return }   // M2
                 self.writeCont = cont
-                self.peripheral.writeValue(Data(bytes), for: characteristic, type: .withResponse)
+                peripheral.writeValue(Data(bytes), for: characteristic, type: .withResponse)
             }
         }
     }
@@ -1154,7 +1158,11 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             let chunk = Array(payload[i..<end])
             await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
                 cbQueue.async {
-                    self.peripheral.writeValue(Data(chunk), for: self.dataChar!, type: .withoutResponse)
+                    // M2: skip the chunk if the peripheral/characteristic vanished
+                    // (BT toggle mid-write); the handshake fails downstream on recv.
+                    if let peripheral = self.peripheral, let dataChar = self.dataChar {
+                        peripheral.writeValue(Data(chunk), for: dataChar, type: .withoutResponse)
+                    }
                     cont.resume()
                 }
             }
@@ -1254,7 +1262,9 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                 try await setNotify(ctrl)
                 log("-> glucose [4E] (attempt \(attempt))")
                 try await writeResp(ctrl, [0x4E])
-                egv = try await ctrlStream.recv(timeout: recvTimeout)
+                // M6: require the EGV echo opcode 0x4E; a stray control notification
+                // (e.g. a late 0xEA device-list) must not be parsed as glucose.
+                egv = try await ctrlStream.recv(op: 0x4E, timeout: recvTimeout)
                 gotEGV = true
                 break
             } catch {
@@ -1357,6 +1367,9 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     private func doAesAuth(auth: CBCharacteristic) async throws -> (Int, Int) {
         try await writeResp(auth, [0x02] + G7Client.RAND8 + [self.authEndByte])
         let resp = try await authStream.recv(op: 0x03, timeout: recvTimeout)
+        // M1: a truncated 0x03 frame (dropped BLE chunk) must throw into the
+        // retry/catch path, not fatally index out of range and kill the app.
+        guard resp.count >= 17 else { throw G7Error.cryptoFailed("short 0x03 auth frame (\(resp.count) bytes)") }
         let x8 = Array(resp[1..<9])
         let y8 = Array(resp[9..<17])
         let expect = Crypto.aes8(G7Client.RAND8)
@@ -1366,6 +1379,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
 
         try await writeResp(auth, [0x04] + Crypto.aes8(y8))
         let st = try await authStream.recv(op: 0x05, timeout: recvTimeout)
+        guard st.count >= 3 else { throw G7Error.cryptoFailed("short 0x05 status frame (\(st.count) bytes)") }   // M1
         let a = Int(st[1]), bo = Int(st[2])
         log("*** statusReply auth=\(a) bond=\(bo) ***")
         onMain { self.lastAuthByte = a }
@@ -1386,6 +1400,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             try await writeResp(auth, [0x0B, UInt8(idx)] + lenLE)
 
             let cs = try await authStream.recv(op: 0x0B, timeout: recvTimeout)
+            guard cs.count >= 5 else { throw G7Error.cryptoFailed("short 0x0B cert frame (\(cs.count) bytes)") }   // M1
             // Sensor announces its cert size at payload bytes [3],[4] (little-endian).
             let size = Int(cs[3]) | (Int(cs[4]) << 8)
             _ = try await dataStream.recv(size, timeout: recvTimeout) // sensor cert (unused)
