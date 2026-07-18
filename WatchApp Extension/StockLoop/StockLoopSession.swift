@@ -28,7 +28,9 @@ final class StockLoopSession {
         loanController.send = { dictionary in
             // transferUserInfo: queued, survives reachability flaps and relaunches —
             // the delivery semantics the protocol's cursor/IDs are built around.
-            WCSession.default.transferUserInfo(dictionary)
+            let session = WCSession.default
+            SportLog.event("wc", "send \(dictionary.keys.joined(separator: ",")) — session \(session.activationState.rawValue), reachable \(session.isReachable)")
+            session.transferUserInfo(dictionary)
         }
 
         // Fix B (radio arbiter, c6c9e18f port): BG wins the single watch radio — loop
@@ -57,6 +59,9 @@ final class StockLoopSession {
                 LoopStallWatchdog.disarm()   // clean end — the loop stops on purpose
             }
         }
+
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        SportLog.event("session", "Sport Mode ready — build \(build); tap Start to request a loan")
     }
 
     /// Route a WC userInfo payload. Returns true when it was a v2 protocol message
