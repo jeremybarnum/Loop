@@ -2197,6 +2197,9 @@
         }
       }
     },
+    "New sensor" : {
+      "comment" : "Pre-warm prompt title"
+    },
     "Off" : {
       "comment" : "Label for off button",
       "localizations" : {
@@ -3853,6 +3856,9 @@
           }
         }
       }
+    },
+    "Tap to enable it for Sport Mode." : {
+      "comment" : "Pre-warm prompt body"
     },
     "Turn Digital Crown\nto bolus" : {
       "comment" : "Help text for bolus confirmation on Apple Watch",

@@ -3200,6 +3200,9 @@
         }
       }
     },
+    "4-digit code" : {
+      "comment" : "Placeholder for the sensor code field"
+    },
     "15 min glucose regression coefficient (b₁), continued with decay over 30 min" : {
       "comment" : "Description of the prediction input effect for glucose momentum",
       "localizations" : {
@@ -17683,6 +17686,9 @@
         }
       }
     },
+    "Enter the sensor code from the Dexcom applicator to enable Sport Mode on the watch." : {
+      "comment" : "Message of the new-sensor pairing-code prompt"
+    },
     "Error Canceling Bolus" : {
       "comment" : "The alert title for an error while canceling a bolus",
       "localizations" : {
@@ -27157,6 +27163,9 @@
         }
       }
     },
+    "New Sensor" : {
+      "comment" : "Title of the new-sensor pairing-code prompt"
+    },
     "Nightscout" : {
       "comment" : "The title of the Nightscout service",
       "extractionState" : "manual",
@@ -28238,6 +28247,9 @@
           }
         }
       }
+    },
+    "Not Now" : {
+      "comment" : "Dismiss the sensor code prompt"
     },
     "Notification Delivery" : {
       "comment" : "Notification Delivery Status text",
@@ -32141,6 +32153,9 @@
         }
       }
     },
+    "Reclaim Pod" : {
+      "comment" : "The title of the notification action to reclaim a pod on loan to the watch"
+    },
     "Recommendation expired: %1$@ old" : {
       "comment" : "The error message when a recommendation has expired. (1: age of recommendation in minutes)",
       "localizations" : {
@@ -33284,6 +33299,7 @@
       }
     },
     "Save" : {
+      "comment" : "Save the sensor code",
       "localizations" : {
         "da" : {
           "stringUnit" : {
