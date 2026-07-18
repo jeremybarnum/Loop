@@ -102,6 +102,7 @@ enum G7Error: Error, CustomStringConvertible {
     case aesVerifyFailed
     case unexpectedAuth(Int)
     case setup(String)
+    case shortFrame(String)
 
     var description: String {
         switch self {
@@ -111,6 +112,7 @@ enum G7Error: Error, CustomStringConvertible {
         case .aesVerifyFailed:      return "AES challenge verify BAD (dropped chunk?)"
         case .unexpectedAuth(let a):return "auth=\(a) unexpected (not authenticated)"
         case .setup(let s):         return "setup: \(s)"
+        case .shortFrame(let s):    return "short/malformed frame: \(s)"
         }
     }
 }
@@ -585,8 +587,10 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     private var authStream = MessageStream(label: "g7.auth", name: "auth")
     private var ctrlStream = MessageStream(label: "g7.ctrl", name: "ctrl")
 
-    // Discovery: collect candidates over a short window, then connect to the strongest.
-    private var candidates: [(p: CBPeripheral, rssi: Int)] = []
+    // Discovery: collect candidates over a short window, then connect to the strongest —
+    // during a pending sensor swap, preferring the candidate whose advertised name matches
+    // the phone-relayed sensor ID (suffix-2 rule, same as stock G7Sensor).
+    private var candidates: [(p: CBPeripheral, rssi: Int, name: String)] = []
     private var scanWindowStarted = false
     private var scanTimeoutWork: DispatchWorkItem?
 
@@ -605,6 +609,10 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     /// attempt. attemptActive alone can't tell them apart (it's true for BOTH), so the terminus is
     /// gated on this generation matching the one captured when the handshake began.
     private var attemptGeneration = 0
+    /// The in-flight handshake Task (touched on cbQueue). Cancelled whenever the attempt is
+    /// superseded or torn down, so two handshakes can never interleave writes on one link —
+    /// the generation gate protects the terminus, this protects the link itself.
+    private var handshakeTask: Task<Void, Never>?
     private var wantConnect = false
     private var autoRepeatWork: DispatchWorkItem?
 
@@ -685,6 +693,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         cbQueue.async {
             self.wantConnect = false
             self.scanTimeoutWork?.cancel(); self.scanTimeoutWork = nil
+            self.handshakeTask?.cancel(); self.handshakeTask = nil
             if self.central != nil, self.central.state == .poweredOn { self.central.stopScan() }
             if let p = self.peripheral { self.central?.cancelPeripheralConnection(p) }
             self.dataStream.close(); self.authStream.close(); self.ctrlStream.close()
@@ -719,6 +728,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                 self.prewarmActive = false
                 self.prewarmTimeoutWork?.cancel(); self.prewarmTimeoutWork = nil
                 self.scanTimeoutWork?.cancel(); self.scanTimeoutWork = nil
+                self.handshakeTask?.cancel(); self.handshakeTask = nil
                 if self.central != nil, self.central.state == .poweredOn { self.central.stopScan() }
                 if let p = self.peripheral { self.central?.cancelPeripheralConnection(p) }
                 self.dataStream.close(); self.authStream.close(); self.ctrlStream.close()
@@ -773,6 +783,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     /// Cleans up the link and, if auto-repeat is on, schedules the next read.
     private func finishAttempt(success: Bool, message: String) {   // on cbQueue
         scanTimeoutWork?.cancel(); scanTimeoutWork = nil
+        handshakeTask?.cancel(); handshakeTask = nil   // attempt over — a lingering task must not keep retrying
         if central != nil, central.state == .poweredOn { central.stopScan() }
         if success, let p = peripheral {
             savedPeripheral = p                        // hold the bonded G7 for pending reconnect
@@ -985,6 +996,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             scanWindowStarted = false
             attemptActive = true
             attemptGeneration &+= 1   // BT-toggle resume is a new attempt too — supersede any stale handshake
+            handshakeTask?.cancel(); handshakeTask = nil   // …and stop the stale task from touching the link
             beginAcquire()
         case .poweredOff:
             log("Bluetooth is powered OFF")
@@ -1014,7 +1026,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
 
         if !candidates.contains(where: { $0.p.identifier == peripheral.identifier }) {
             log("  discovered candidate '\(name.isEmpty ? "?" : name)' \(peripheral.identifier) RSSI=\(RSSI)")
-            candidates.append((peripheral, RSSI.intValue))
+            candidates.append((peripheral, RSSI.intValue, name))
         }
 
         // Collect for ~2s, then pick the strongest RSSI and connect.
@@ -1025,7 +1037,24 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                 guard let self, !self.candidates.isEmpty, self.attemptActive,
                       self.peripheral?.state != .connected else { return }
                 self.central.stopScan()
-                let best = self.candidates.max(by: { $0.rssi < $1.rssi })!
+                // SENSOR-SWAP guard: while a new sensor's bond is pending (overlap window — the
+                // old sensor may still be chirping), prefer candidates whose advertised name
+                // matches the phone-relayed sensor ID (suffix-2 rule, same as stock
+                // G7Sensor.shouldConnectPeripheral). Falls back to ALL candidates when nothing
+                // matches, so a name mismatch can never blind the scan.
+                var pool = self.candidates
+                if UserDefaults.standard.string(forKey: Self.pendingPrewarmKey) != nil,
+                   let expected = UserDefaults.standard.string(forKey: Self.lastKnownSensorIDKey),
+                   expected.count >= 2 {
+                    let matching = pool.filter { $0.name.count >= 2 && $0.name.suffix(2) == expected.suffix(2) }
+                    if !matching.isEmpty {
+                        if matching.count < pool.count {
+                            log("  sensor swap pending: preferring ID match …\(expected.suffix(2)) (\(matching.count)/\(pool.count) candidates)")
+                        }
+                        pool = matching
+                    }
+                }
+                let best = pool.max(by: { $0.rssi < $1.rssi })!
                 // Cold reacquire: if a targeted connect to a DIFFERENT (stale) handle is
                 // pending, drop it before connecting to the freshly discovered sensor.
                 if let cur = self.peripheral, cur.identifier != best.p.identifier {
@@ -1101,9 +1130,11 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         }
         log("characteristics found: auth(3535), data(3538), control(3534)")
         setStatus("Authenticating…")
-        // Kick off the linear async handshake.
+        // Kick off the linear async handshake. Cancel any superseded one first — its terminus is
+        // already generation-gated, but the task itself must stop touching the link.
+        handshakeTask?.cancel()
         let gen = attemptGeneration   // snapshot on cbQueue so a superseded handshake can't tear down a fresh attempt
-        Task { await self.runHandshake(generation: gen) }
+        handshakeTask = Task { await self.runHandshake(generation: gen) }
     }
 
     func peripheral(_ peripheral: CBPeripheral,
@@ -1142,8 +1173,12 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     private func setNotify(_ characteristic: CBCharacteristic) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             cbQueue.async {
+                guard let p = self.peripheral else {   // nil after a BT toggle / stale-handle fallback
+                    cont.resume(throwing: G7Error.disconnected)
+                    return
+                }
                 self.notifyConts[characteristic.uuid] = cont
-                self.peripheral.setNotifyValue(true, for: characteristic)
+                p.setNotifyValue(true, for: characteristic)
             }
         }
     }
@@ -1152,8 +1187,12 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     private func writeResp(_ characteristic: CBCharacteristic, _ bytes: [UInt8]) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             cbQueue.async {
+                guard let p = self.peripheral else {   // nil after a BT toggle / stale-handle fallback
+                    cont.resume(throwing: G7Error.disconnected)
+                    return
+                }
                 self.writeCont = cont
-                self.peripheral.writeValue(Data(bytes), for: characteristic, type: .withResponse)
+                p.writeValue(Data(bytes), for: characteristic, type: .withResponse)
             }
         }
     }
@@ -1163,11 +1202,14 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     private func writeDataChunks(_ payload: [UInt8]) async {
         var i = 0
         while i < payload.count {
+            if Task.isCancelled { return }   // superseded attempt: stop touching the link
             let end = min(i + 20, payload.count)
             let chunk = Array(payload[i..<end])
             await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
                 cbQueue.async {
-                    self.peripheral.writeValue(Data(chunk), for: self.dataChar!, type: .withoutResponse)
+                    if let p = self.peripheral, let dc = self.dataChar {
+                        p.writeValue(Data(chunk), for: dc, type: .withoutResponse)
+                    }   // else: link torn down mid-bulk-write — drop the chunk; the next recv fails cleanly
                     cont.resume()
                 }
             }
@@ -1193,6 +1235,8 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             // cooperative executor, NOT cbQueue — so hop back onto cbQueue to serialize teardown
             // (incl. teardownPrewarm) with startSoak's preempt block and every other reader mutation.
             cbQueue.async { if self.attemptActive, self.attemptGeneration == gen { self.finishAttempt(success: true, message: msg) } }
+        } catch is CancellationError {
+            log("handshake superseded — cancelled cleanly")
         } catch {
             log("*** FAILED: \(error) ***")
             // A WRONG CODE surfaces as aesVerifyFailed at the AES challenge step — but so can a
@@ -1263,6 +1307,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         var egv: [UInt8] = []
         var gotEGV = false
         for attempt in 1...8 {
+            try Task.checkCancellation()   // superseded/torn-down attempt: stop retrying, leave the link alone
             do {
                 try await setNotify(ctrl)
                 log("-> glucose [4E] (attempt \(attempt))")
@@ -1372,6 +1417,10 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     private func doAesAuth(auth: CBCharacteristic) async throws -> (Int, Int) {
         try await writeResp(auth, [0x02] + G7Client.RAND8 + [self.authEndByte])
         let resp = try await authStream.recv(op: 0x03, timeout: recvTimeout)
+        guard resp.count >= 17 else {
+            log("  short challengeReply (\(resp.count) bytes, need 17): \(hex(resp))")
+            throw G7Error.shortFrame("challengeReply \(resp.count)/17 bytes")
+        }
         let x8 = Array(resp[1..<9])
         let y8 = Array(resp[9..<17])
         let expect = Crypto.aes8(G7Client.RAND8)
@@ -1381,6 +1430,10 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
 
         try await writeResp(auth, [0x04] + Crypto.aes8(y8))
         let st = try await authStream.recv(op: 0x05, timeout: recvTimeout)
+        guard st.count >= 3 else {
+            log("  short statusReply (\(st.count) bytes, need 3): \(hex(st))")
+            throw G7Error.shortFrame("statusReply \(st.count)/3 bytes")
+        }
         let a = Int(st[1]), bo = Int(st[2])
         log("*** statusReply auth=\(a) bond=\(bo) ***")
         onMain { self.lastAuthByte = a }
@@ -1401,6 +1454,10 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             try await writeResp(auth, [0x0B, UInt8(idx)] + lenLE)
 
             let cs = try await authStream.recv(op: 0x0B, timeout: recvTimeout)
+            guard cs.count >= 5 else {
+                log("  short cert-size reply (\(cs.count) bytes, need 5): \(hex(cs))")
+                throw G7Error.shortFrame("cert-size reply \(cs.count)/5 bytes")
+            }
             // Sensor announces its cert size at payload bytes [3],[4] (little-endian).
             let size = Int(cs[3]) | (Int(cs[4]) << 8)
             _ = try await dataStream.recv(size, timeout: recvTimeout) // sensor cert (unused)
