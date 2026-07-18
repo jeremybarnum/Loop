@@ -71,6 +71,7 @@ final class PodLoanPhoneController {
         didSet { UserDefaults.standard.set(pendingRevoke, forKey: Keys.pendingRevoke) }
     }
     private var t1WorkItem: DispatchWorkItem?
+    private var reclaimTimeoutWork: DispatchWorkItem?
 
     private enum Keys {
         static let state = "PodLoanPhoneController.state"
@@ -117,11 +118,26 @@ final class PodLoanPhoneController {
         loadStaged()
 
         // Relaunch during a non-owner state: dosing stays paused (persisted-state
-        // derivation is the whole point) and the paused reminder is re-armed.
+        // derivation is the whole point). Re-post the recovery affordance so the user
+        // is never stranded with no way back to OWNER (bug E), and re-arm the reclaim
+        // escalation if we were mid-reclaim.
         if podIsOnLoan {
             deps.setAutomaticDosingPaused(true)
+            // Transient states (reconciling / reclaim-pending / grant-offered) should
+            // resolve quickly; a relaunch still sitting in one means it stranded, so
+            // give it a bounded self-heal to OWNER (records preserved). LOANED is NOT
+            // healed — a relaunch during a real multi-hour loan is normal (R8); its
+            // recovery is a new request or the escape hatch, never a timer.
             if state == .reconciling || state == .reclaimPending {
                 armPausedReminder()
+                let stranded = state
+                queue.asyncAfter(deadline: .now() + 120) { [weak self] in
+                    guard let self = self, self.state == stranded else { return }
+                    self.forceReclaimToOwner(reason: "relaunched into \(stranded.rawValue), no hand-back")
+                }
+            } else if state == .grantOffered {
+                // The T1 alarm doesn't survive relaunch; re-arm the auto-reclaim.
+                armT1(for: epoch)
             }
         }
     }
@@ -171,11 +187,24 @@ final class PodLoanPhoneController {
             return
         }
         guard state == .owner else {
-            os_log("Loan request while %{public}@ — ignored", log: log, type: .default, state.rawValue)
-            // Make the stuck-state case visible (it's otherwise silent): a prior
-            // attempt can leave the phone in GRANT_OFFERED (5-min T1) / RECONCILING /
-            // RECLAIM_PENDING, which silently drops new requests until it recovers.
-            deny("Phone is still finishing a previous loan (\(state.rawValue)). Try again shortly, or re-enable Closed Loop on the phone.")
+            // A NEW request means the watch is NOT in a loan — so a lingering
+            // non-owner state is stale. Recover instead of refusing forever (bug E).
+            switch state {
+            case .grantOffered, .reconciling, .reclaimPending:
+                // No live watch dosing in these states → safe to reset and grant now.
+                os_log("Loan request while %{public}@ — recovering stale state and granting", log: log, type: .default, state.rawValue)
+                forceReclaimToOwner(reason: "new request while \(state.rawValue)")
+                beginGrant()
+            case .loaned:
+                // Possibly a live loan → don't steal the pod silently. Revoke (single-
+                // writer preserved); the reclaim escalation forces to owner if the watch
+                // is gone. The user retries in a moment.
+                os_log("Loan request while LOANED — revoking the previous loan first", log: log, type: .default)
+                reclaimNow()
+                deny("Reclaiming the previous loan from the watch — try Start again in a few seconds.")
+            case .owner:
+                break
+            }
             return
         }
         beginGrant()
@@ -531,12 +560,56 @@ final class PodLoanPhoneController {
             self.sendMessage(.revoke(Revoke(epoch: self.epoch)))
             (self.deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
             self.state = .reclaimPending
-            // Dosing stays paused until records reconcile or the user re-enables
-            // Closed Loop in settings — that IS the explicit override (R7).
             self.armPausedReminder()
             // §5.3.3 dead-watch path: audit against the schedule, notice-only.
             self.schedulePostReclaimReAudit(recordsCommitted: false)
+            // R7 override, made real: if the watch never drains within 45 s (dead /
+            // gone / already handed off), force back to OWNER so we never strand.
+            self.reclaimTimeoutWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self = self, self.state == .reclaimPending else { return }
+                self.forceReclaimToOwner(reason: "reclaim timed out — watch did not drain")
+            }
+            self.reclaimTimeoutWork = work
+            self.queue.asyncAfter(deadline: .now() + 45, execute: work)
         }
+    }
+
+    /// The R7 explicit override, made real: abandon a stuck/stale loan and return to
+    /// OWNER unconditionally. Records are NOT dropped blindly — any staged events are
+    /// written to the store first (records are truth; never understate IOB), then the
+    /// pod is reclaimed and dosing restored. Used when a new request proves the old
+    /// loan is dead, when reclaim times out, or on a relaunch into a stranded state.
+    func forceReclaimToOwner(reason: String) {
+        os_log("Force reclaim to OWNER: %{public}@", log: log, type: .default, reason)
+        reclaimTimeoutWork?.cancel()
+        cancelNotification(id: NotificationID.onLoan)
+        cancelNotification(id: NotificationID.paused)
+        cancelNotification(id: NotificationID.duration)
+
+        // Preserve known insulin: reconcile staged events records-only (no odometer)
+        // and write them before we drop them.
+        let events = staged.values
+            .filter { !stagedTombstones.contains($0.id) && !committedIDs.contains($0.id) }
+            .sorted { $0.seq < $1.seq }
+        if !events.isEmpty {
+            let input = LoanReconciler.Input(
+                events: events, odometer: nil, schedule: deps.settings().basalRateSchedule,
+                loanStart: loanStartedAt ?? deps.now().addingTimeInterval(-.hours(2)),
+                loanEnd: deps.now())
+            let outcome = LoanReconciler.reconcile(input)
+            deps.addDoses(outcome.doses) { _ in }
+            for carb in outcome.carbs { deps.addCarb(carb) { _ in } }
+            deps.issueNotice("Sport Mode Reset", "A previous watch loan was ended without a clean hand-back; its records were saved. Check Event History and the pod.")
+        }
+
+        (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
+        pendingRevoke = false
+        state = .owner
+        deps.setAutomaticDosingPaused(false)
+        staged = [:]
+        stagedTombstones = []
+        persistStaged()
     }
 
     /// Re-send a parked revoke on any sign of watch life (kept from v1).

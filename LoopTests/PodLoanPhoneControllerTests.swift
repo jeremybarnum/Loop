@@ -185,6 +185,38 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         if case .grant? = lastSent() { XCTFail("no grant may be sent on refusal") }
     }
 
+    /// Bug E regression: a phone stranded in a transient non-owner state must recover
+    /// and grant on a fresh request, not refuse forever.
+    func testStrandedStateRecoversOnNewRequest() throws {
+        let controller = makeController()
+        // Strand it: escape-hatch reclaim with no watch to hand back → reclaimPending.
+        establishLoan(controller)
+        controller.reclaimNow()
+        waitForState(controller, .reclaimPending)
+
+        // A fresh request should force-recover to owner and grant (not deny).
+        let grantSent = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
+        wait(for: [grantSent], timeout: 5)
+        if case .grant? = lastSent() {} else {
+            XCTFail("expected a grant after recovering the stranded state, got \(String(describing: lastSent()))")
+        }
+        waitForState(controller, .grantOffered)
+    }
+
+    /// The R7 override: forceReclaimToOwner returns to owner and restores dosing.
+    func testForceReclaimReturnsToOwner() throws {
+        let controller = makeController()
+        establishLoan(controller)
+        controller.reclaimNow()
+        waitForState(controller, .reclaimPending)
+
+        controller.forceReclaimToOwner(reason: "test")
+        waitForState(controller, .owner)
+        XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed on force")
+        XCTAssertEqual(pauseCalls.last, false, "dosing restored on force reclaim")
+    }
+
     // MARK: - Hand-back ordering + idempotency
 
     func testHandbackCommitsThenAcksThenRestoresOwner() throws {
