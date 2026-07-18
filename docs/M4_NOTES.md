@@ -186,3 +186,26 @@ gives it an owner in the app lifecycle.
   the phone on the same glucose stream, no cancel+set churn (rateRounder in effect),
   IOB-clamp-effective synthetic scenario, oscillation-free cadence — all need hardware
   sessions (owner-gated, ruling #8).
+
+## Resolved-by-architecture: safety-branch review findings H2 + M12
+
+The g7-build-next safety branch carries two findings that this stock-shaped
+loop dissolves for free — recorded here so the rebuild reviewer treats them as
+closed, not re-opened:
+
+- **M12 (missing rateRounder)** — the crude `WatchPredictionEngine` calls
+  `generateRecommendation` with no `rateRounder`, so `DoseMath.ifNecessary`'s
+  `matchesRate` never equals the pod's rounded running temp → it would emit a
+  fresh temp command every cycle. `WatchLoopManager` passes the pump-grid
+  rateRounder into the recommendation call (M4_NOTES §"IOB clamp"/line ~95), so
+  `ifNecessary` works: an unchanged temp continues instead of re-commanding.
+- **H2 (anchor-latch strands a busy-dropped enact)** — the crude
+  `WatchAutoLoop` bolted a per-reading `lastEnactedAnchorDate` latch on as a
+  substitute for the broken `ifNecessary` dedup (see M12); because the latch was
+  claimed before the pod accepted the command, a busy-drop stranded the reading
+  for ~5 min. The stock-shaped loop has **no latch**: `ifNecessary` re-derives
+  against the actual running temp every cycle, which is self-healing — a
+  dropped enact simply doesn't match next cycle and is re-sent, and the pump
+  manager serializes commands rather than silently dropping on busy. Do NOT port
+  the anchor latch; deleting it IS the fix. (The safety branch has an interim
+  set-latch-on-accept patch; this tree supersedes it.)
