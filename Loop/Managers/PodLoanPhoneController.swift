@@ -79,6 +79,10 @@ final class PodLoanPhoneController {
         static let pendingRevoke = "PodLoanPhoneController.pendingRevoke"
         static let committedIDs = "PodLoanPhoneController.committedIDs"
         static let loanStartedAt = "PodLoanPhoneController.loanStartedAt"
+        // §5.3.3 post-reclaim re-audit state
+        static let deliveredAtGrant = "PodLoanPhoneController.deliveredAtGrant"
+        static let expectedUnits = "PodLoanPhoneController.expectedUnits"
+        static let watchAuditRan = "PodLoanPhoneController.watchAuditRan"
     }
 
     private enum NotificationID {
@@ -206,6 +210,17 @@ final class PodLoanPhoneController {
                 endDate: handedOverAt,
                 unitsPerHour: dose.unitsPerHour)
         }
+
+        // §5.3.3: capture the odometer NOW (the phone was polling until this moment)
+        // so the post-reclaim re-audit has a loan-start baseline even if the watch
+        // dies before ever sending one.
+        if let delivered = lendable.lentDeviceInsulinDelivered {
+            UserDefaults.standard.set(delivered, forKey: Keys.deliveredAtGrant)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
+        }
+        UserDefaults.standard.set(false, forKey: Keys.watchAuditRan)
+        UserDefaults.standard.removeObject(forKey: Keys.expectedUnits)
 
         // Pause dosing, then stop bidding for the pod (C5 truncation happens inside).
         deps.setAutomaticDosingPaused(true)
@@ -338,13 +353,24 @@ final class PodLoanPhoneController {
             .filter { !stagedTombstones.contains($0.id) && !committedIDs.contains($0.id) && $0.seq > committedCursor }
             .sorted { $0.seq < $1.seq }
 
+        let loanStart = loanStartedAt ?? offer.handedBackAt.addingTimeInterval(-.hours(2))
         let input = LoanReconciler.Input(
             events: events,
             odometer: offer.odometer,
             schedule: deps.settings().basalRateSchedule,
-            loanStart: loanStartedAt ?? offer.handedBackAt.addingTimeInterval(-.hours(2)),
+            loanStart: loanStart,
             loanEnd: offer.handedBackAt)
         let outcome = LoanReconciler.reconcile(input)
+
+        // §5.3.3 audit inputs: the expected total over the WHOLE loan (all staged
+        // events, not just this drain) and whether the watch's own audit ran.
+        if !isStale {
+            let allEvents = staged.values.filter { !stagedTombstones.contains($0.id) }.sorted { $0.seq < $1.seq }
+            let expected = LoanReconciler.expectedInsulin(events: allEvents, schedule: deps.settings().basalRateSchedule,
+                                                          from: loanStart, to: offer.handedBackAt)
+            UserDefaults.standard.set(expected, forKey: Keys.expectedUnits)
+            UserDefaults.standard.set(offer.odometer?.freshenSucceeded == true, forKey: Keys.watchAuditRan)
+        }
 
         var doses = outcome.doses
         if let positive = outcome.positiveRemainderUnits {
@@ -401,18 +427,84 @@ final class PodLoanPhoneController {
         staged = [:]
         stagedTombstones = []
         persistStaged()
-        schedulePostReclaimReAudit()
+        schedulePostReclaimReAudit(recordsCommitted: true)
     }
 
     /// §5.3.3: the phone asks the pod the same forensic questions after reclaim,
-    /// shrinking the dead-watch blind window. Integration supplies the concrete
-    /// pump read (podLoanReadStatus + odometer/seq comparison); the hook is here so
-    /// the ordering (after reclaim, after session re-establishes) is owned by the
-    /// state machine.
+    /// shrinking the dead-watch blind window. Override for tests; the default runs
+    /// the real audit 90 s after reclaim (BLE session re-establishment time).
     var postReclaimReAudit: (() -> Void)?
-    private func schedulePostReclaimReAudit() {
-        queue.asyncAfter(deadline: .now() + 60) { [weak self] in
-            self?.postReclaimReAudit?()
+    private func schedulePostReclaimReAudit(recordsCommitted: Bool) {
+        queue.asyncAfter(deadline: .now() + 90) { [weak self] in
+            guard let self = self else { return }
+            if let override = self.postReclaimReAudit {
+                override()
+            } else {
+                self.performReAudit(recordsCommitted: recordsCommitted)
+            }
+        }
+    }
+
+    /// The audit itself. Two modes:
+    /// - recordsCommitted (normal close): compare the pod's own delivered-delta to
+    ///   the committed record. If the watch's audit never ran (dead odometer), the
+    ///   R6 valve applies here: positive remainder enters IOB timed-late; negative
+    ///   surfaces the RULED notice (fingerprints closed at commit — R22's ambiguity
+    ///   route). If the watch's audit DID run, discrepancies are notice-only.
+    /// - !recordsCommitted (escape-hatch reclaim, records still owed): NOTICE-ONLY
+    ///   against the schedule expectation — entries here could double-count with a
+    ///   late-arriving drain, so the valve waits for reconcile.
+    private func performReAudit(recordsCommitted: Bool) {
+        guard let lendable = deps.pumpManager() as? PumpConnectionLendable,
+              let atGrant = UserDefaults.standard.object(forKey: Keys.deliveredAtGrant) as? Double else { return }
+        let watchAuditRan = UserDefaults.standard.bool(forKey: Keys.watchAuditRan)
+
+        lendable.refreshLentDeviceStatus { [weak self] success in
+            guard let self = self, success else { return }
+            self.queue.async {
+                guard let now = (self.deps.pumpManager() as? PumpConnectionLendable)?.lentDeviceInsulinDelivered else { return }
+                let delivered = now - atGrant
+
+                let expected: Double
+                if recordsCommitted, let e = UserDefaults.standard.object(forKey: Keys.expectedUnits) as? Double {
+                    expected = e
+                } else if let schedule = self.deps.settings().basalRateSchedule, let start = self.loanStartedAt {
+                    expected = LoanReconciler.expectedInsulin(events: [], schedule: schedule, from: start, to: self.deps.now())
+                } else {
+                    return
+                }
+
+                let remainder = delivered - expected
+                os_log("Post-reclaim re-audit: delivered %.2f, expected %.2f, remainder %.2f (recordsCommitted %d, watchAuditRan %d)",
+                       log: self.log, type: .default, delivered, expected, remainder, recordsCommitted ? 1 : 0, watchAuditRan ? 1 : 0)
+                guard abs(remainder) > LoanReconciler.pulseTolerance else {
+                    UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
+                    return
+                }
+
+                if !recordsCommitted {
+                    self.deps.issueNotice("Pod Audit (Records Pending)",
+                        String(format: "Since the loan began the pod delivered %.2f U versus %.2f U expected from the schedule. The watch's records have not arrived yet; nothing was changed.", delivered, expected))
+                } else if watchAuditRan {
+                    self.deps.issueNotice("Pod Audit Discrepancy",
+                        String(format: "A post-reclaim check found the pod delivered %.2f U versus %.2f U recorded. Records were not changed. Review the session in Event History.", delivered, expected))
+                } else if remainder > 0 {
+                    // R6 valve, phone-side: the watch never audited; unrecorded insulin
+                    // enters IOB timed at reclaim (zero decay - conservative).
+                    self.deps.addDoses([DoseEntry(type: .bolus, startDate: self.deps.now(), endDate: self.deps.now(),
+                                                  value: remainder, unit: .units,
+                                                  syncIdentifier: "loanv2-reaudit-\(self.epoch)")]) { _ in }
+                    self.deps.issueNotice("Pod Audit",
+                        String(format: "The pod delivered %.2f U more than the watch session recorded. The extra insulin was added to your records at reclaim time.", remainder))
+                } else {
+                    // The RULED layer-3 notice, verbatim (R22).
+                    self.deps.issueNotice("Pod Delivery Check",
+                        String(format: "The pod delivered %.2f U less than the watch session recorded. Records were not changed. Possible causes: pod fault, occlusion, or an interrupted command. Check the pod and review the session in Event History.", -remainder))
+                }
+                if recordsCommitted {
+                    UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
+                }
+            }
         }
     }
 
@@ -429,6 +521,8 @@ final class PodLoanPhoneController {
             // Dosing stays paused until records reconcile or the user re-enables
             // Closed Loop in settings — that IS the explicit override (R7).
             self.armPausedReminder()
+            // §5.3.3 dead-watch path: audit against the schedule, notice-only.
+            self.schedulePostReclaimReAudit(recordsCommitted: false)
         }
     }
 
