@@ -66,6 +66,11 @@ struct GlanceUIState {
     var loopStatusText: String = ""
     var loopDotColor: Color = .clear
     var viaPhone: Bool = false
+
+    /// Loop open/close control (active only). `canToggleLoop` is false when the phone
+    /// disallows dosing (the watch can't close what the phone opened) or when suspended.
+    var loopClosed: Bool = false
+    var canToggleLoop: Bool = false
 }
 
 // MARK: - View model
@@ -101,6 +106,14 @@ final class GlanceViewModel: ObservableObject {
         guard !isPreview else { return }
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         ExtensionDelegate.shared().stockLoopSession.loanController.requestLoan(watchBuild: build)
+        refresh()
+    }
+
+    /// Open (disable dosing) is fail-safe — no confirm. Close (enable dosing) is gated
+    /// by the confirm alert in the view.
+    func setLoopClosed(_ closed: Bool) {
+        guard !isPreview else { return }
+        ExtensionDelegate.shared().stockLoopSession.stack.loopManager.setClosedLoopEnabled(closed)
         refresh()
     }
 
@@ -188,22 +201,34 @@ final class GlanceViewModel: ObservableObject {
             s.eventualText = String(format: "%.0f", eventual.doubleValue(for: .milligramsPerDeciliter))
         }
 
-        // Status line + suspend.
+        // Status line + suspend + open/close.
+        s.loopClosed = data.closedLoopEnabled
         if let until = suspendEndsAt {
             let formatter = DateFormatter(); formatter.timeStyle = .short
             s.suspendText = String(format: NSLocalizedString("insulin off · resumes %@", comment: "Glance suspended line"), formatter.string(from: until))
             s.loopStatusText = NSLocalizedString("SUSPENDED", comment: "Glance loop status while suspended")
             s.loopDotColor = .clear
+            s.canToggleLoop = false   // resume from the suspend control, not the loop toggle
+        } else if !data.closedLoopEnabled {
+            // OPEN by choice (or the phone disallows dosing) — advisory.
+            s.loopStatusText = data.dosingAllowedByPhone
+                ? NSLocalizedString("OPEN", comment: "Glance loop status: advisory / open loop")
+                : NSLocalizedString("OPEN · phone", comment: "Glance loop status: open because the phone disallows dosing")
+            s.loopDotColor = .clear
+            s.canToggleLoop = data.dosingAllowedByPhone
         } else if isStale {
             s.loopStatusText = NSLocalizedString("PAUSED", comment: "Glance loop status while glucose is stale")
             s.loopDotColor = .glanceWarn
+            s.canToggleLoop = true
         } else if let completed = data.lastLoopCompleted {
             let minutes = max(0, Int(now.timeIntervalSince(completed) / 60))
             s.loopStatusText = String(format: NSLocalizedString("CLOSED · %dm", comment: "Glance loop status with age"), minutes)
             s.loopDotColor = minutes <= 10 ? .glanceGood : .glanceWarn
+            s.canToggleLoop = true
         } else {
             s.loopStatusText = NSLocalizedString("CLOSED · —", comment: "Glance loop status before the first loop")
             s.loopDotColor = .glanceWarn
+            s.canToggleLoop = true
         }
         return s
     }
@@ -214,6 +239,7 @@ final class GlanceViewModel: ObservableObject {
 struct GlanceView: View {
     @ObservedObject var model: GlanceViewModel
     @State private var confirmingStart = false
+    @State private var confirmingClose = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -229,13 +255,11 @@ struct GlanceView: View {
 
     private var statusLine: some View {
         HStack {
-            HStack(spacing: 4) {
-                if model.state.loopDotColor != .clear {
-                    Circle().fill(model.state.loopDotColor).frame(width: 8, height: 8)
-                }
-                Text(model.state.loopStatusText)
-                    .font(.system(size: 12))
-                    .foregroundColor(.glanceDim)
+            if model.state.canToggleLoop {
+                Button(action: onLoopTap) { loopPill }
+                    .buttonStyle(.plain)
+            } else {
+                loopPill
             }
             Spacer()
             Text("SPORT")
@@ -245,6 +269,34 @@ struct GlanceView: View {
         }
         .padding(.horizontal, 6)
         .padding(.top, 2)
+        .alert("Close the loop?", isPresented: $confirmingClose) {
+            Button("Close Loop") { model.setLoopClosed(true) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The watch will start adjusting your basal automatically from direct-G7 readings.")
+        }
+    }
+
+    private var loopPill: some View {
+        HStack(spacing: 4) {
+            if model.state.loopDotColor != .clear {
+                Circle().fill(model.state.loopDotColor).frame(width: 8, height: 8)
+            } else if model.state.canToggleLoop {
+                Circle().stroke(Color.glanceDim, lineWidth: 1.5).frame(width: 7, height: 7)   // hollow = OPEN
+            }
+            Text(model.state.loopStatusText)
+                .font(.system(size: 12))
+                .foregroundColor(.glanceDim)
+        }
+    }
+
+    /// Open (stop dosing) is fail-safe → immediate. Close (start dosing) → confirm.
+    private func onLoopTap() {
+        if model.state.loopClosed {
+            model.setLoopClosed(false)
+        } else {
+            confirmingClose = true
+        }
     }
 
     private var centerBlock: some View {
@@ -379,6 +431,14 @@ private func previewState(_ build: (inout GlanceUIState) -> Void) -> GlanceUISta
         s.staleAgeText = "9 min ago — no direct G7"
         s.iobText = "1.8"; s.cobText = "24"
         s.loopStatusText = "PAUSED"; s.loopDotColor = .glanceWarn
+    }))
+}
+
+#Preview("Active · OPEN (advisory)") {
+    GlanceView(model: GlanceViewModel(preview: previewState { s in
+        s.phase = .active; s.bgText = "142"; s.trendSymbol = "↗"; s.bgColor = .inRange
+        s.eventualText = "128"; s.iobText = "1.8"; s.cobText = "24"; s.tempText = "—"
+        s.loopStatusText = "OPEN"; s.loopDotColor = .clear; s.loopClosed = false; s.canToggleLoop = true
     }))
 }
 

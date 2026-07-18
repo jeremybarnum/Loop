@@ -107,6 +107,23 @@ final class WatchLoopManager {
         set { doseEnactor.isRadioBusy = newValue }
     }
 
+    /// Per-session watch-local closed-loop opt-in (R23 confidence model). Each loan
+    /// starts OPEN (advisory — the loop computes and drives the glance display but does
+    /// NOT enact); the user deliberately closes the loop from the glance screen.
+    /// AND-ed with the phone's `dosingEnabled` (the frozen grant snapshot), so the watch
+    /// can only ever be MORE conservative — closing here never expands dosing the phone
+    /// disallowed. Read/written on the dataAccessQueue.
+    private var _closedLoopEnabled = false
+    var closedLoopEnabled: Bool {
+        dataAccessQueue.sync { _closedLoopEnabled }
+    }
+    func setClosedLoopEnabled(_ enabled: Bool) {
+        dataAccessQueue.async {
+            self._closedLoopEnabled = enabled
+            SportLog.event("loop", enabled ? "CLOSED by user — the watch will adjust basal" : "OPENED by user — advisory only, no dosing")
+        }
+    }
+
     // MARK: - Glance surface (R23; display only — no dosing paths read this)
 
     struct GlanceData {
@@ -119,6 +136,10 @@ final class WatchLoopManager {
         let tempRate: Double?
         let lastLoopCompleted: Date?
         let suspendThreshold: HKQuantity?
+        let closedLoopEnabled: Bool
+        /// The phone-frozen dosing permission: when false the watch CANNOT close the
+        /// loop (the phone had Closed Loop off at grant).
+        let dosingAllowedByPhone: Bool
     }
 
     /// Synchronous snapshot of the cached loop state for the glance screen.
@@ -137,7 +158,9 @@ final class WatchLoopManager {
                 iob: insulinOnBoard?.value,
                 tempRate: tempRate,
                 lastLoopCompleted: lastLoopCompleted,
-                suspendThreshold: settings.suspendThreshold?.quantity)
+                suspendThreshold: settings.suspendThreshold?.quantity,
+                closedLoopEnabled: _closedLoopEnabled,
+                dosingAllowedByPhone: settings.dosingEnabled)
         }
     }
 
@@ -248,13 +271,14 @@ final class WatchLoopManager {
                 LoopStallWatchdog.refresh()
             }
 
-            // Mirrors loopInternal(): enact only when automatic dosing is enabled — the
-            // watch analogue is the phone-pushed `dosingEnabled` plus the per-session
-            // closed-loop opt-in (crown ceremony), which arrives with M5 integration.
-            if error == nil, self.settings.dosingEnabled {
+            // Enact only when the phone allows dosing (frozen snapshot) AND the user
+            // has closed the loop on the watch this session (R23). Either false = the
+            // loop runs advisory: it computed prediction + a recommendation above (the
+            // glance display is live) but nothing is sent to the pod.
+            if error == nil, self.settings.dosingEnabled, self._closedLoopEnabled {
                 error = self.enactRecommendedAutomaticDose()
             } else if error == nil {
-                self.log.default("Not adjusting dosing during open loop.")
+                self.log.default("Advisory (open loop) — computed but not enacting.")
             }
 
             self.lastLoopError = error

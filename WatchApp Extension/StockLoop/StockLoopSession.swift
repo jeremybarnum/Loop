@@ -41,6 +41,9 @@ final class StockLoopSession {
             guard let self = self else { return }
             if active {
                 os_log("Loan active: starting G7 transport", log: self.log, type: .default)
+                // R23 confidence model: every loan starts OPEN (advisory); the user
+                // closes the loop deliberately from the glance screen.
+                self.stack.loopManager.setClosedLoopEnabled(false)
                 self.stack.client.prewarmIfPending()
                 self.stack.client.startSoak()
                 // H19: arm the loop-stall dead-man for the session; every live loop

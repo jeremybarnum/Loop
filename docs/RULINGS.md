@@ -156,7 +156,11 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   thresholds from therapy settings). Honest states: stale never looks fresh
   (dim + age + arrow drops), suspended shows the R4 auto-resume countdown,
   activation = idle glance page + crown ceremony, R20 picker lives there.
-  Full record: docs/DESIGN_SPORT_UI.md.
+  Open/close the loop from the glance screen (2026-07-18): each loan starts
+  OPEN/advisory; the loop pill toggles — close is confirmed, open is
+  immediate (fail-safe); AND-ed with the phone's frozen dosingEnabled (watch
+  can only be more conservative); reset OPEN each loan. Full record:
+  docs/DESIGN_SPORT_UI.md.
 
 ## Not yet ruled (do not decide without Jeremy)
 

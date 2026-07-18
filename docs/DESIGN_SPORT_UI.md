@@ -52,6 +52,17 @@ its SURFACES. UI cannot dose; every dosing path remains the ruled, tested code._
   sovereignty checks → crown-confirm ceremony (the per-session closed-loop
   opt-in, kept). The R20 picker presents here on check failure; options are
   shown only when real (phone-fed only if the phone is reachable + pushing).
+- **Open/close the loop from the watch** (2026-07-18, Jeremy — "like we did
+  before, valuable as users gain confidence"): each loan starts OPEN
+  (advisory — the loop computes and drives the glance display but does NOT
+  enact). The loop-status pill on the glance screen is the toggle: tapping
+  OPEN→CLOSED gets a confirm ("The watch will start adjusting your basal…"),
+  CLOSED→OPEN is immediate (fail-safe, the stop-dosing direction — same
+  friction asymmetry as suspend/resume). The watch flag is AND-ed with the
+  phone's frozen `dosingEnabled`, so the watch can only ever be MORE
+  conservative; when the phone disallows dosing the pill reads "OPEN · phone"
+  and can't be closed. Reset to OPEN on every new loan (no silent carry-over
+  of a closed loop between sessions).
 
 ## Decision record
 
