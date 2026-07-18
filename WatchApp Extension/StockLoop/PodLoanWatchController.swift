@@ -228,26 +228,43 @@ final class PodLoanWatchController {
         ingestGrantHistory(grant)
         SportLog.event("loan", "pump rebuilt — connecting to pod for the takeover status read")
 
-        // First pod status = the takeover proof (§2.3). Bounded UX rides above this
-        // (the 2026-07-15 pod-side timeout ruling) at integration; protocol-level
-        // failure here is a full teardown, no zombie bidder (:1009).
+        // First pod status = the takeover proof (§2.3). The pod's BLE session takes
+        // SECONDS to establish after construction (scan → connect → EAP-AKA), but a
+        // status read fails INSTANTLY with .podNotConnected until it's up
+        // (BlePodComms.bleRunSession guard). So retry on a bounded schedule — the
+        // 2026-07-15 pod-side timeout ruling (~40s) — instead of failing on the first,
+        // pre-connection read.
+        attemptTakeoverRead(manager: manager, grant: grant, attempt: 0)
+    }
+
+    /// ~40s of retries (14 × 3s) while the pod's BLE session establishes.
+    private func attemptTakeoverRead(manager: OmniPumpManager, grant: LoanGrant, attempt: Int) {
+        let maxAttempts = 14
         manager.podLoanReadStatus { [weak self] success in
             guard let self = self else { return }
             self.queue.async {
-                guard self.phase == .takingOver else { return }
+                guard self.phase == .takingOver, self.epoch == grant.epoch else { return }
                 if success, let delivered = manager.podLoanInsulinDelivered {
                     self.deliveredAtTakeover = delivered
                     self.phase = .active
                     self.loopManager.pumpManager = manager
                     self.loopManager.loanDoseRecorder = self
                     self.onLoanActiveChanged?(true)
-                    SportLog.event("loan", "ACTIVE — epoch \(grant.epoch), pod taken, odometer \(String(format: "%.2f", delivered)) U")
+                    SportLog.event("loan", "ACTIVE — epoch \(grant.epoch), pod taken after \(attempt + 1) read(s), odometer \(String(format: "%.2f", delivered)) U")
                     self.sendMessage(.takeoverComplete(TakeoverComplete(epoch: grant.epoch, firstPodStatus: self.currentPodStatus())))
+                } else if attempt + 1 < maxAttempts {
+                    if attempt == 0 {
+                        SportLog.event("loan", "connecting to pod… (BLE session establishing, up to ~40s)")
+                    }
+                    self.queue.asyncAfter(deadline: .now() + 3) {
+                        guard self.phase == .takingOver, self.epoch == grant.epoch else { return }
+                        self.attemptTakeoverRead(manager: manager, grant: grant, attempt: attempt + 1)
+                    }
                 } else {
                     self.teardownPump()
                     self.phase = .idle
-                    self.lastIdleNote = NSLocalizedString("Pod didn't answer. Check the pod is nearby and try again.", comment: "Glance: pod unreachable at takeover")
-                    SportLog.event("loan", "TAKEOVER FAILED — pod unreachable, epoch \(grant.epoch)")
+                    self.lastIdleNote = NSLocalizedString("Pod didn't answer after 40s. Check the pod is nearby and awake, then try again.", comment: "Glance: pod unreachable at takeover")
+                    SportLog.event("loan", "TAKEOVER FAILED — pod unreachable after \(maxAttempts) reads (~40s), epoch \(grant.epoch)")
                     self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "pod unreachable at takeover")))
                 }
             }
