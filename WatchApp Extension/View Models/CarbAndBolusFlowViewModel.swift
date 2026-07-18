@@ -11,6 +11,7 @@ import Combine
 import HealthKit
 import WatchKit
 import WatchConnectivity
+import UserNotifications
 import LoopKit
 import LoopCore
 
@@ -202,6 +203,20 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
         sendSetBolusUserInfo(carbEntry: carbEntryUnderConsideration, bolus: bolusAmount)
     }
 
+    /// A durable local notification for a loan-time bolus failure — survives the
+    /// flow's auto-dismiss, the app backgrounding, and a lowered wrist.
+    private static func notifyBolusFailure(units: Double, error: Swift.Error) {
+        let content = UNMutableNotificationContent()
+        content.title = NSLocalizedString("Bolus Not Delivered", comment: "Watch notification title for a failed loan-time bolus")
+        content.body = String(
+            format: NSLocalizedString("%1$@ U did not deliver. %2$@", comment: "Watch notification body for a failed loan-time bolus (1: units, 2: reason)"),
+            NumberFormatter.localizedString(from: NSNumber(value: units), number: .decimal),
+            error.localizedDescription)
+        content.sound = .default
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "loan.bolus.failure", content: content, trigger: nil))
+    }
+
     private func sendSetBolusUserInfo(carbEntry: NewCarbEntry?, bolus: Double) {
         guard !hasSentConfirmationMessage else {
             return
@@ -217,15 +232,25 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
         if session.loanController.isLoanActive {
             let activationType: BolusActivationType = .activationTypeFor(recommendedAmount: recommendedBolusAmount, bolusAmount: bolus)
             if let carbEntry = carbEntry {
+                // Local store (this loop's COB sees it now) + a CONFIRMED journal
+                // record (rides the resend-until-ack channel to the phone's carb
+                // store — durable even with the phone unreachable, which is the
+                // whole point of Sport Mode).
                 session.stack.loopManager.addLoanCarbEntry(carbEntry)
-                let carbOnly = SetBolusUserInfo(value: 0, startDate: Date(), contextDate: self.contextDate, carbEntry: carbEntry, activationType: .manualNoRecommendation)
-                try? WCSession.default.sendBolusMessage(carbOnly) { _ in }   // best-effort; local store already has it
+                session.loanController.loanDidRecordCarbs(carbEntry)
             }
             if bolus > 0 {
-                session.stack.loopManager.enactManualBolus(units: bolus, activationType: activationType) { [weak self] error in
+                let units = bolus
+                session.stack.loopManager.enactManualBolus(units: units, activationType: activationType) { error in
                     if let error = error {
+                        // LOUD certain-failure surfacing: the enact completion can
+                        // land tens of seconds after the 1s auto-dismiss with the
+                        // wrist down — a transient alert alone reads as delivered.
+                        // (Do NOT re-open the send window: carbs are already
+                        // journaled; a re-tap would double-log them.)
+                        WKInterfaceDevice.current().play(.failure)
+                        Self.notifyBolusFailure(units: units, error: error)
                         ExtensionDelegate.shared().present(error)
-                        self?.hasSentConfirmationMessage = false
                     } else {
                         WKInterfaceDevice.current().play(.success)
                     }

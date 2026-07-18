@@ -62,6 +62,31 @@ enum WatchLoopError: Error {
     case pumpManagerUnconnected
 }
 
+// Intelligible refusals — 'WatchLoopError error 7' told the user nothing (verify
+// finding: they can't distinguish "dial a smaller bolus" from "no pump connected").
+extension WatchLoopError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .configurationError(let field):
+            return String(format: NSLocalizedString("Missing setting: %@", comment: "Watch loop error (1: setting name)"), field)
+        case .missingDataError(let what):
+            return String(format: NSLocalizedString("Missing data: %@", comment: "Watch loop error (1: data name)"), what)
+        case .glucoseTooOld:
+            return NSLocalizedString("Glucose is too old to dose from.", comment: "Watch loop error")
+        case .invalidFutureGlucose:
+            return NSLocalizedString("Glucose timestamp is in the future.", comment: "Watch loop error")
+        case .pumpDataTooOld:
+            return NSLocalizedString("Pump data is too old to dose from.", comment: "Watch loop error")
+        case .recommendationExpired:
+            return NSLocalizedString("The recommendation expired before enacting.", comment: "Watch loop error")
+        case .pumpSuspended:
+            return NSLocalizedString("Insulin delivery is suspended.", comment: "Watch loop error")
+        case .pumpManagerUnconnected:
+            return NSLocalizedString("No pod connected to the watch.", comment: "Watch loop error")
+        }
+    }
+}
+
 // MARK: - WatchLoopManager
 
 final class WatchLoopManager {

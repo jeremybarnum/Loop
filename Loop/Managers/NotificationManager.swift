@@ -106,9 +106,12 @@ extension NotificationManager {
             format: NSLocalizedString("%1$@ U was not delivered — the pod is on the watch. Bolus from the watch, or end Sport Mode first.", comment: "Notification body when a bolus is refused because the pod is on loan (1: units)"),
             NumberFormatter.localizedString(from: NSNumber(value: units), number: .decimal))
         notification.sound = .default
-        notification.categoryIdentifier = LoopNotificationCategory.bolusFailure.rawValue
+        // No bolusFailure CATEGORY: that attaches a "Retry Bolus" action which would
+        // be a silent no-op here (no userInfo payload) — and retrying phone-side
+        // while the pod is loaned would be wrong anyway. Distinct identifier so it
+        // doesn't replace a genuine stock bolus-failure notification.
         let request = UNNotificationRequest(
-            identifier: LoopNotificationCategory.bolusFailure.rawValue,
+            identifier: "podloan.bolusRefused",
             content: notification,
             trigger: nil)
         UNUserNotificationCenter.current().add(request)

@@ -470,13 +470,14 @@ final class WatchDataManager: NSObject {
 
         // PODLOAN: while the pod is loaned to the watch this phone CANNOT deliver —
         // its pod link is deliberately released. Current watch builds enact locally
-        // and never send a bolus here mid-loan; this guard catches stale/legacy
-        // requests LOUDLY instead of letting them die in a BLE timeout. Carbs still
-        // store (bolus.value == 0 path) — only delivery is refused.
-        if bolus.value > 0, podLoanController.isPodLoanedOut {
+        // and never send a bolus here mid-loan; this catches stale/legacy requests
+        // LOUDLY instead of letting them die in a BLE timeout. DELIVERY ONLY is
+        // refused — an attached carb entry still stores below (dropping it would
+        // lose the meal from the record entirely).
+        let deliveryRefusedForLoan = bolus.value > 0 && podLoanController.isPodLoanedOut
+        if deliveryRefusedForLoan {
             log.error("Refusing watch bolus while the pod is on loan: %{public}@", String(describing: message))
             NotificationManager.sendBolusFailureNotificationForPodLoan(units: bolus.value)
-            return
         }
 
         var dosingDecision: BolusDosingDecision
@@ -490,8 +491,9 @@ final class WatchDataManager: NSObject {
             dosingDecision.manualBolusRequested = bolus.value
             deviceManager.loopManager.storeManualBolusDosingDecision(dosingDecision, withDate: bolus.startDate)
 
-            guard bolus.value > 0 else {
+            guard bolus.value > 0, !deliveryRefusedForLoan else {
                 // Ensure active carbs is updated in the absence of a bolus
+                // (or when loan-time delivery was refused above — carbs stored).
                 sendWatchContextIfNeeded()
                 return
             }

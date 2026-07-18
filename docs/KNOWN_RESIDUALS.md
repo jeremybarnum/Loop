@@ -48,3 +48,30 @@ don't get lost; revisit opportunistically or when a symptom matches.
 7. **COSMETIC — no idleNote after crash-reset.** The relaunch reset to idle
    doesn't set `lastIdleNote`, so after a crash mid-takeover the glance shows
    unexplained idle. One-liner when convenient.
+
+## From the loan-bolus verify (2026-07-18, both lenses SOUND; deferred items)
+
+8. **MINOR — annul lost if hand-back drains mid-bolus.** A manual bolus's
+   `.assumed` journal event can be offered/acked and the journal ended before
+   the BLE completion classifies it; a certain FAILURE then can't annul (the
+   journal mutate guard no-ops) and the phone keeps an assumed bolus that never
+   delivered — over-counted IOB, conservative direction. Narrow (hand-back
+   started while a bolus command is in flight). Fix shape: gate hand-back on
+   in-flight enactments, or re-open classification for just-ended epochs.
+
+9. **MINOR — bolus dial max is stock-fed, enforcement is grant-fed.** The dial
+   caps from the stock watch settings (or 10U default) while `enactManualBolus`
+   enforces the granted frozen `maximumBolus`; a mismatch means dial-then-deny
+   (safe direction, poor UX). Align the dial to the granted snapshot in the UI
+   pass.
+
+10. **MINOR — hand-back window refusal is watch-silent.** Between the watch
+    leaving `.active` and the phone reaching `.owner`, a watch bolus takes the
+    stock relay path; the phone refuses loudly but replies success-shaped, so
+    the watch flow looks fine. The refusal notification mirrors to the watch
+    via the OS; still, the in-flow experience misleads for that window.
+
+11. **COSMETIC — WatchLoopManager.pumpManager/settings cross-queue writes.**
+    Written on the loan-controller queue, read on dataAccessQueue, no
+    synchronization; settings are written once pre-.active so exposure is
+    negligible, but the pattern is technically racy.

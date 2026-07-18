@@ -654,6 +654,25 @@ extension PodLoanWatchController: WatchLoanDoseRecording {
                           uncertainKind: .bolusUncertain)
     }
 
+    /// Record-only journal entry (no pod command): a loan-time CARB entry rides the
+    /// resend-until-ack record channel to the phone's carb store — durable with the
+    /// phone unreachable (the reachable-only WC relay it replaces dropped carbs
+    /// silently mid-sport, verify finding 2026-07-18). Confirmed at mint — nothing
+    /// about a carb record can be delivery-uncertain — and deliberately does NOT
+    /// disturb a pending verdict chase (it is not a programming command).
+    func loanDidRecordCarbs(_ entry: NewCarbEntry) {
+        queue.async {
+            guard self.phase == .active else { return }
+            _ = try? self.journal.mintEvent(
+                record: LoanDoseRecord(kind: .carb,
+                                       startDate: entry.startDate,
+                                       amount: entry.quantity.doubleValue(for: .gram()),
+                                       absorptionTime: entry.absorptionTime),
+                provenance: .confirmed)
+            self.streamRecords()
+        }
+    }
+
     private func mintIntent(record: LoanDoseRecord, uncertainKind: EventProvenance.UncertainKind) -> UUID? {
         var minted: UUID?
         queue.sync {

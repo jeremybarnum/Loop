@@ -205,7 +205,7 @@ final class GlanceViewModel: ObservableObject {
         // the grant round-trip is WCSession-variable, so the request stage renders
         // the honest indeterminate spinner instead of a bar that would lie.
         s.startedAt = takingOver ? startedAt : nil
-        s.g7EtaText = g7EtaText(lastReading: context?.glucoseDate, now: now)
+        s.g7EtaText = g7EtaText(lastReading: context?.glucoseDate, now: now, firstConnect: true)
         return s
     }
 
