@@ -162,6 +162,18 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   can only be more conservative); reset OPEN each loan. Full record:
   docs/DESIGN_SPORT_UI.md.
 
+- **R24 — Sport Mode connect/onboarding UX** (2026-07-18): return to the
+  crude build's proven pattern — it "was very good and working perfectly"
+  (Jeremy). Pod takeover: a DETERMINATE ~10-second progress bar (the pod
+  reliably connected within 10s on the proven branch; the bar sets and
+  meets that expectation). G7: a PREDICTED-connection countdown/ETA (the
+  G7 transmits on a known ~5-min cadence, so the wait is predictable —
+  show it). The current indeterminate "requesting…" spinner that either
+  resolves or fails silently is a regression from that pattern. Happy to
+  iterate the presentation, but the core concept is settled. Sequencing:
+  implement AFTER the takeover BLE fix restores the ~10s pod connect —
+  the progress bar depends on the connect actually being fast.
+
 ## Not yet ruled (do not decide without Jeremy)
 
 - Risk-register #8: any on-body session of any milestone build — per-build,

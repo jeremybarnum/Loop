@@ -64,6 +64,24 @@ its SURFACES. UI cannot dose; every dosing path remains the ruled, tested code._
   and can't be closed. Reset to OPEN on every new loan (no silent carry-over
   of a closed loop between sessions).
 
+## Connect / onboarding flow (R24, 2026-07-18)
+
+Return to the crude build's proven pattern — Jeremy: the old onboarding "was
+very good and working perfectly," happy to iterate presentation but the core
+concept is settled.
+
+- **Pod takeover: determinate ~10s progress bar.** On the proven branch the
+  pod connected within 10 seconds, every time. The bar states that
+  expectation and visibly meets it. Not a spinner; the user should see it
+  fill and finish.
+- **G7: predicted-connection ETA.** The transmitter wakes on a known ~5-min
+  cadence, so the wait is *predictable* — show a countdown to the expected
+  reading rather than an open-ended wait.
+- The current indeterminate "requesting…" state (resolves or fails with no
+  progress feedback) is a regression from that pattern and gets replaced.
+- **Sequencing:** built after the takeover BLE fix restores the ~10s pod
+  connect — the bar depends on the connect actually being that fast.
+
 ## Decision record
 
 | # | Decision | Outcome |
