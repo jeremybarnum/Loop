@@ -26,6 +26,7 @@ final class WatchDataManager: NSObject {
 
         NotificationCenter.default.addObserver(self, selector: #selector(updateWatch(_:)), name: .LoopDataUpdated, object: deviceManager.loopManager)
         NotificationCenter.default.addObserver(self, selector: #selector(sendSupportedBolusVolumesIfNeeded), name: .PumpManagerChanged, object: deviceManager)
+        NotificationCenter.default.addObserver(self, selector: #selector(sendSensorCodeToWatch(_:)), name: .SensorCodeCapturedForWatch, object: deviceManager)
 
         watchSession?.delegate = self
         watchSession?.activate()
@@ -33,6 +34,34 @@ final class WatchDataManager: NSObject {
         // M5: construct eagerly so a relaunch mid-loan restores the persisted state
         // machine (dosing stays paused, reminders re-arm) before any message arrives.
         _ = podLoanController
+    }
+
+    // MARK: - New-sensor code relay (Component A, ported from g7-build-next)
+
+    /// DeviceDataManager captured a new sensor's pairing code (or is re-relaying a
+    /// known one). Push it to the watch — queued, so it survives the watch being
+    /// asleep; parked if the WC session isn't activated yet.
+    @objc private func sendSensorCodeToWatch(_ note: Notification) {
+        guard let code = note.userInfo?["code"] as? String,
+              let sensorID = note.userInfo?["sid"] as? String else { return }
+        let activatedAt = note.userInfo?["act"] as? Date
+        let info = SensorCodeUserInfo(code: code, sensorID: sensorID, activatedAt: activatedAt)
+        guard let session = watchSession, session.activationState == .activated else {
+            UserDefaults.appGroup?.pendingSensorCodeRelay = info.rawValue
+            log.error("Sensor code relay parked: watch session not activated (will fire on activation)")
+            return
+        }
+        session.transferUserInfo(info.rawValue)
+        log.default("Relayed sensor code to watch for sensor %{public}@", sensorID)
+    }
+
+    /// Fire a parked sensor-code relay once the session activates.
+    private func sendPendingSensorCodeIfNeeded(_ session: WCSession) {
+        guard session.activationState == .activated,
+              let raw = UserDefaults.appGroup?.pendingSensorCodeRelay else { return }
+        UserDefaults.appGroup?.pendingSensorCodeRelay = nil
+        session.transferUserInfo(raw)
+        log.default("Parked sensor code relayed to watch (from activation)")
     }
 
     // MARK: - Loan protocol v2 (M5)
@@ -567,6 +596,7 @@ extension WatchDataManager: WCSessionDelegate {
                 sendSettingsIfNeeded()
                 sendWatchContextIfNeeded()
                 sendSupportedBolusVolumesIfNeeded()
+                sendPendingSensorCodeIfNeeded(session)
             }
         case .inactive, .notActivated:
             break

@@ -145,6 +145,8 @@
 		4372E491213D05F90068E043 /* LoopSettingsUserInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4372E48F213CFCE70068E043 /* LoopSettingsUserInfo.swift */; };
 		43D0E4A22F1A000100000002 /* LoanProtocolV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */; };
 		43D0E4A32F1A000100000003 /* LoanProtocolV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */; };
+		43D0E4AD2F1A00010000000D /* SensorCodeUserInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4AC2F1A00010000000C /* SensorCodeUserInfo.swift */; };
+		43D0E4AE2F1A00010000000E /* SensorCodeUserInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4AC2F1A00010000000C /* SensorCodeUserInfo.swift */; };
 		4372E492213D956C0068E043 /* GlucoseRangeSchedule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43C513181E864C4E001547C7 /* GlucoseRangeSchedule.swift */; };
 		4372E496213DCDD30068E043 /* GlucoseChartValueHashable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4372E495213DCDD30068E043 /* GlucoseChartValueHashable.swift */; };
 		4374B5EF209D84BF00D17AA8 /* OSLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4374B5EE209D84BE00D17AA8 /* OSLog.swift */; };
@@ -890,6 +892,7 @@
 		4372E48A213CB5F00068E043 /* Double.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Double.swift; sourceTree = "<group>"; };
 		4372E48F213CFCE70068E043 /* LoopSettingsUserInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopSettingsUserInfo.swift; sourceTree = "<group>"; };
 		43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanProtocolV2.swift; sourceTree = "<group>"; };
+		43D0E4AC2F1A00010000000C /* SensorCodeUserInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorCodeUserInfo.swift; sourceTree = "<group>"; };
 		4372E495213DCDD30068E043 /* GlucoseChartValueHashable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlucoseChartValueHashable.swift; sourceTree = "<group>"; };
 		4374B5EE209D84BE00D17AA8 /* OSLog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = OSLog.swift; sourceTree = "<group>"; };
 		4374B5F3209D89A900D17AA8 /* TextFieldTableViewCell.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = TextFieldTableViewCell.swift; sourceTree = "<group>"; };
@@ -2266,6 +2269,7 @@
 				4F11D3BF20DCBEEC006E072C /* GlucoseBackfillRequestUserInfo.swift */,
 				4372E48F213CFCE70068E043 /* LoopSettingsUserInfo.swift */,
 				43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */,
+				43D0E4AC2F1A00010000000C /* SensorCodeUserInfo.swift */,
 				43C3B6F620BBCAA30026CAFA /* PumpManager.swift */,
 				C1FB428E217921D600FAB378 /* PumpManagerUI.swift */,
 				435400331C9F878D00D5819C /* SetBolusUserInfo.swift */,
@@ -3626,6 +3630,7 @@
 				4F11D3C220DD80B3006E072C /* WatchHistoricalGlucose.swift in Sources */,
 				4372E490213CFCE70068E043 /* LoopSettingsUserInfo.swift in Sources */,
 				43D0E4A22F1A000100000002 /* LoanProtocolV2.swift in Sources */,
+				43D0E4AD2F1A00010000000D /* SensorCodeUserInfo.swift in Sources */,
 				C174233C259BEB0F00399C9D /* ManualEntryDoseViewModel.swift in Sources */,
 				89CA2B3D226E6B13004D9350 /* LocalTestingScenariosManager.swift in Sources */,
 				1D05219B2469E9DF000EBBDE /* StoredAlert.swift in Sources */,
@@ -3756,6 +3761,7 @@
 				43CB2B2B1D924D450079823D /* WCSession.swift in Sources */,
 				4372E491213D05F90068E043 /* LoopSettingsUserInfo.swift in Sources */,
 				43D0E4A32F1A000100000003 /* LoanProtocolV2.swift in Sources */,
+				43D0E4AE2F1A00010000000E /* SensorCodeUserInfo.swift in Sources */,
 				4345E40421F68AD9009E00E5 /* TextRowController.swift in Sources */,
 				43BFF0B51E45C1E700FF19A9 /* NumberFormatter.swift in Sources */,
 				C1201E2D23ECDF3D002DA84A /* WatchContextRequestUserInfo.swift in Sources */,

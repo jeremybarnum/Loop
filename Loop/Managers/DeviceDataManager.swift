@@ -1025,6 +1025,56 @@ extension DeviceDataManager: CGMManagerDelegate {
                 self.log.error("Error storing cgm events: %{public}@", error.localizedDescription)
             }
         }
+        // Component A (ported from g7-build-next): on a NEW sensor start, capture its
+        // pairing code (phone prompt) and relay it to the watch so the watch's direct
+        // G7 reader can authenticate the new sensor and pre-warm while it's costless.
+        for event in events where event.type == .sensorStart {
+            handleSensorStart(sensorID: event.deviceIdentifier, activatedAt: event.date)
+        }
+    }
+
+    // MARK: - New-sensor pairing code (Component A, phone-primary)
+
+    /// A new G7 sensor started. If we already hold its 4-digit code, re-relay it to
+    /// the watch (in case the first send was missed); otherwise prompt for it.
+    private func handleSensorStart(sensorID: String, activatedAt: Date) {
+        guard !sensorID.isEmpty else { return }
+        DispatchQueue.main.async {
+            UserDefaults.appGroup?.lastSeenSensorID = sensorID
+            if let existing = UserDefaults.appGroup?.sensorPairingCode(for: sensorID) {
+                self.relaySensorCode(existing, sensorID: sensorID, activatedAt: activatedAt)
+            } else {
+                self.presentSensorCodePrompt(sensorID: sensorID, activatedAt: activatedAt)
+            }
+        }
+    }
+
+    /// Prompt (numeric keypad) for the new sensor's code, store it, and relay it.
+    private func presentSensorCodePrompt(sensorID: String, activatedAt: Date) {
+        let alert = UIAlertController(
+            title: NSLocalizedString("New Sensor", comment: "Title of the new-sensor pairing-code prompt"),
+            message: NSLocalizedString("Enter the sensor code from the Dexcom applicator to enable Sport Mode on the watch.", comment: "Message of the new-sensor pairing-code prompt"),
+            preferredStyle: .alert)
+        alert.addTextField { textField in
+            textField.keyboardType = .numberPad
+            textField.placeholder = NSLocalizedString("4-digit code", comment: "Placeholder for the sensor code field")
+        }
+        alert.addAction(UIAlertAction(title: NSLocalizedString("Save", comment: "Save the sensor code"), style: .default) { [weak self, weak alert] _ in
+            let code = String((alert?.textFields?.first?.text ?? "").filter { $0.isNumber })
+            guard code.count == 4 else { return }
+            UserDefaults.appGroup?.setSensorPairingCode(code, for: sensorID)
+            self?.relaySensorCode(code, sensorID: sensorID, activatedAt: activatedAt)
+        })
+        alert.addAction(UIAlertAction(title: NSLocalizedString("Not Now", comment: "Dismiss the sensor code prompt"), style: .cancel))
+        alertPresenter.present(alert, animated: true, completion: nil)
+    }
+
+    /// Hand off to WatchDataManager (which owns the WC session + its activation
+    /// guard) to push the code to the watch.
+    private func relaySensorCode(_ code: String, sensorID: String, activatedAt: Date?) {
+        var userInfo: [String: Any] = ["code": code, "sid": sensorID]
+        if let activatedAt { userInfo["act"] = activatedAt }
+        NotificationCenter.default.post(name: .SensorCodeCapturedForWatch, object: self, userInfo: userInfo)
     }
 
     func startDateToFilterNewData(for manager: CGMManager) -> Date? {
@@ -1446,6 +1496,7 @@ extension DeviceDataManager: LoopDataManagerDelegate {
 }
 
 extension Notification.Name {
+    static let SensorCodeCapturedForWatch = Notification.Name(rawValue: "com.loopKit.notification.SensorCodeCapturedForWatch")
     static let PumpManagerChanged = Notification.Name(rawValue:  "com.loopKit.notification.PumpManagerChanged")
     static let CGMManagerChanged = Notification.Name(rawValue:  "com.loopKit.notification.CGMManagerChanged")
     static let PumpEventsAdded = Notification.Name(rawValue:  "com.loopKit.notification.PumpEventsAdded")

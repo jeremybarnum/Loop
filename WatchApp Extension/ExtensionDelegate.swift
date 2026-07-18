@@ -84,6 +84,10 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
             WCSession.default.activate()
         }
 
+        // Component A: a pending pre-warm (armed by the sensor-code relay) runs on
+        // foregrounding — bonding the new sensor while a slow connection is costless.
+        stockLoopSession.stack.client.prewarmIfPending()
+
         NotificationCenter.default.post(name: type(of: self).didBecomeActiveNotification, object: self)
     }
 
@@ -246,11 +250,40 @@ extension ExtensionDelegate: WCSessionDelegate {
             DispatchQueue.main.async {
                 self.loopManager.supportedBolusVolumes = volumes
             }
+        case SensorCodeUserInfo.name:
+            // Component A: the phone captured a new sensor's pairing code and relayed
+            // it. Hand it to the G7 reader so its next handshake authenticates the new
+            // sensor, and nudge the user to foreground once — the pre-warm (bond +
+            // first slow connection) runs while it's costless, so Sport Mode later
+            // starts with a warm bond and the fast 5-min grid.
+            guard let info = SensorCodeUserInfo(rawValue: userInfo) else {
+                log.error("Could not decode SensorCodeUserInfo: %{public}@", userInfo)
+                return
+            }
+            if stockLoopSession.stack.client.applySensorCode(info.code, sensorID: info.sensorID) {
+                scheduleNewSensorPrewarmNotification()
+            }
         case "WatchContext":
             // WatchContext is the only userInfo type without a "name" key. This isn't a great heuristic.
             updateContext(userInfo)
         default:
             break
+        }
+    }
+
+    private static let prewarmNotificationID = "com.loopkit.Loop.newSensorPrewarm"
+
+    /// Watch-local prompt: tap → foreground → the pending pre-warm runs.
+    private func scheduleNewSensorPrewarmNotification() {
+        let content = UNMutableNotificationContent()
+        content.title = NSLocalizedString("New sensor", comment: "Pre-warm prompt title")
+        content.body = NSLocalizedString("Tap to enable it for Sport Mode.", comment: "Pre-warm prompt body")
+        content.sound = .default
+        content.interruptionLevel = .timeSensitive
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        let request = UNNotificationRequest(identifier: Self.prewarmNotificationID, content: content, trigger: trigger)
+        UNUserNotificationCenter.current().add(request) { [weak self] error in
+            if let error { self?.log.error("failed to schedule pre-warm notification: %{public}@", String(describing: error)) }
         }
     }
 }
