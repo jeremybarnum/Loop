@@ -203,12 +203,12 @@ final class PodLoanWatchController {
         }
 
         epoch = grant.epoch
-        // A grant that did NOT follow a live request (late grant after the 25s timeout —
-        // transferUserInfo can queue) must not inherit the dead attempt's bar anchor,
-        // or the R24 progress bar renders pegged at 95% from its first frame.
-        if phase != .requested {
-            attemptStartedAt = Date()
-        }
+        // R24 bar anchor: ALWAYS re-anchor at grant. The grant round-trip is WCSession
+        // roulette (0.5s to 15s observed on hardware) while the takeover itself is the
+        // predictable part (~5s with the scan fix) — so the determinate bar measures
+        // the takeover only; the request stage renders indeterminate. This also keeps
+        // a late queued grant (after the 25s timeout) from inheriting a dead anchor.
+        attemptStartedAt = Date()
         phase = .takingOver
 
         // Therapy settings snapshot: the ONLY dosing limits (R1/R16); missing -> the

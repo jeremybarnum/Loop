@@ -201,7 +201,10 @@ final class GlanceViewModel: ObservableObject {
         s.startingStageText = takingOver
             ? NSLocalizedString("taking over pod…", comment: "Glance stage: pod takeover in progress")
             : NSLocalizedString("reaching iPhone…", comment: "Glance stage: waiting for the loan grant")
-        s.startedAt = startedAt
+        // The determinate bar measures the TAKEOVER only (anchor reset at grant) —
+        // the grant round-trip is WCSession-variable, so the request stage renders
+        // the honest indeterminate spinner instead of a bar that would lie.
+        s.startedAt = takingOver ? startedAt : nil
         s.g7EtaText = g7EtaText(lastReading: context?.glucoseDate, now: now)
         return s
     }
@@ -563,6 +566,11 @@ struct GlanceDemoView: View {
         ("Idle · activation", previewState { s in
             s.phase = .idle; s.bgText = "138"; s.trendSymbol = "→"; s.bgColor = .dim
             s.viaPhone = true; s.loopStatusText = "phone loop active" }),
+        ("Starting · reaching iPhone", previewState { s in
+            s.phase = .starting; s.bgText = "138"; s.trendSymbol = "→"; s.bgColor = .dim
+            s.viaPhone = true; s.loopStatusText = "starting…"
+            s.startingStageText = "reaching iPhone…"   // nil anchor → indeterminate spinner
+            s.g7EtaText = "G7 in ~3:10" }),
         ("Starting · pod takeover (R24)", previewState { s in
             s.phase = .starting; s.bgText = "138"; s.trendSymbol = "→"; s.bgColor = .dim
             s.viaPhone = true; s.loopStatusText = "starting…"

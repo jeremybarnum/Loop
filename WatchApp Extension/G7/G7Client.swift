@@ -1116,6 +1116,30 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                 log("connecting to strongest candidate \(best.p.identifier) RSSI=\(best.rssi)")
                 self.setStatus("Connecting…")
                 self.central.connect(best.p, options: nil)
+
+                // CONNECT WATCHDOG. CoreBluetooth pending connects never time out on
+                // their own, and the G7 only advertises briefly around its 5-min
+                // transmit — a connect issued as it goes quiet can hang FOREVER. The
+                // scan timeout can't catch this (its guard is peripheral == nil, and
+                // we just set peripheral), which stalled a live session for 21 min
+                // (2026-07-18 14:17, RSSI -82 connect that never completed). Cancel
+                // and fail the attempt so the 15s retry cycle resumes. Pre-warm keeps
+                // its own bounded backstop (prewarmTimeoutWork), same as the scan
+                // timeout above.
+                guard !self.prewarmActive else { return }
+                self.scanTimeoutWork?.cancel()
+                let gen = self.attemptGeneration   // a superseded attempt's watchdog must not fire into a fresh one
+                let connectWatchdog = DispatchWorkItem { [weak self] in
+                    guard let self, self.attemptActive, self.attemptGeneration == gen,
+                          self.peripheral?.state != .connected else { return }
+                    log("connect timed out — cancelling pending connect")
+                    if let p = self.peripheral {
+                        self.central.cancelPeripheralConnection(p)
+                    }
+                    self.finishAttempt(success: false, message: "Connect timed out")
+                }
+                self.scanTimeoutWork = connectWatchdog
+                self.cbQueue.asyncAfter(deadline: .now() + 15, execute: connectWatchdog)
             }
         }
     }
