@@ -91,7 +91,15 @@ enum StockLoopStack {
     /// live — it would open a second PersistenceController against the same local directory.
     /// M5 integration resolves this by unifying store ownership (one PersistenceController).
     static func makeStores() -> (doseStore: DoseStore, glucoseStore: GlucoseStore, carbStore: CarbStore) {
-        let cacheStore = PersistenceController.controllerInLocalDirectory()
+        // M5 integration: a DISTINCT directory from the stock watch LoopDataManager's
+        // controllerInLocalDirectory() store — resolves the M1/M4 caveat about two
+        // PersistenceControllers on one directory, so assemble() can safely run beside
+        // the stock manager. Full store unification remains a future cleanup.
+        let documents = try! FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        // Same isReadOnly determination as LoopCore's controllerInLocalDirectory()
+        // (its Bundle.isAppExtension helper is module-internal).
+        let isAppExtension = Bundle.main.bundleURL.pathExtension == "appex"
+        let cacheStore = PersistenceController(directoryURL: documents.appendingPathComponent("com.loopkit.LoopKit.StockLoop"), isReadOnly: isAppExtension)
         let provenanceIdentifier = HKSource.default().bundleIdentifier
 
         let doseStore = DoseStore(

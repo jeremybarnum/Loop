@@ -29,7 +29,65 @@ final class WatchDataManager: NSObject {
 
         watchSession?.delegate = self
         watchSession?.activate()
+
+        // M5: construct eagerly so a relaunch mid-loan restores the persisted state
+        // machine (dosing stays paused, reminders re-arm) before any message arrives.
+        _ = podLoanController
     }
+
+    // MARK: - Loan protocol v2 (M5)
+
+    private(set) lazy var podLoanController: PodLoanPhoneController = {
+        let dosingKey = "PodLoanPhoneController.dosingEnabledBeforeLoan"
+        return PodLoanPhoneController(dependencies: .init(
+            pumpManager: { [weak self] in self?.deviceManager.pumpManager },
+            settings: { [weak self] in self?.deviceManager.loopManager.settings ?? LoopSettings() },
+            setAutomaticDosingPaused: { [weak self] paused in
+                guard let self = self else { return }
+                if paused {
+                    // Capture-once (the 4880ef92 lesson), persisted so a relaunch
+                    // mid-loan still restores the right value at reconcile.
+                    if UserDefaults.standard.object(forKey: dosingKey) == nil {
+                        UserDefaults.standard.set(self.deviceManager.loopManager.settings.dosingEnabled, forKey: dosingKey)
+                    }
+                    self.deviceManager.loopManager.mutateSettings { $0.dosingEnabled = false }
+                } else {
+                    // Restore defaults to OPEN loop when the capture is missing —
+                    // never invent closed-loop-on (R7's override is the settings UI).
+                    let prior = UserDefaults.standard.object(forKey: dosingKey) as? Bool ?? false
+                    UserDefaults.standard.removeObject(forKey: dosingKey)
+                    self.deviceManager.loopManager.mutateSettings { $0.dosingEnabled = prior }
+                }
+            },
+            send: { [weak self] dictionary in
+                self?.watchSession?.transferUserInfo(dictionary)
+            },
+            addDoses: { [weak self] doses, completion in
+                guard let self = self else { completion(nil); return }
+                self.deviceManager.doseStore.addDoses(doses, from: nil, completion: completion)
+            },
+            addCarb: { [weak self] entry, completion in
+                guard let self = self else { completion(nil); return }
+                self.deviceManager.carbStore.addCarbEntry(entry) { result in
+                    if case .failure(let error) = result { completion(error) } else { completion(nil) }
+                }
+            },
+            doseHistory: { [weak self] start, completion in
+                guard let self = self else { completion([]); return }
+                self.deviceManager.doseStore.getNormalizedDoseEntries(start: start) { result in
+                    if case .success(let entries) = result { completion(entries) } else { completion([]) }
+                }
+            },
+            issueNotice: { [weak self] title, body in
+                self?.log.error("PodLoan notice: %{public}@ - %{public}@", title, body)
+                let content = UNMutableNotificationContent()
+                content.title = title
+                content.body = body
+                content.sound = .default
+                UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "podloan.notice.\(UUID().uuidString)", content: content, trigger: nil))
+            }
+        ))
+    }()
 
     private let log = DiagnosticLog(category: "WatchDataManager")
 
@@ -490,7 +548,14 @@ extension WatchDataManager: WCSessionDelegate {
     }
 
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
-        assertionFailure("We currently don't expect any userInfo messages transferred from the watch side")
+        // M5: loan protocol v2 rides its own single key. Unknown payloads are logged
+        // and ignored — never asserted on (failure-matrix row 17: WC redelivers
+        // queued userInfo across reinstalls).
+        if userInfo[LoanProtocol.userInfoKey] != nil {
+            podLoanController.handleIncoming(userInfo: userInfo)
+            return
+        }
+        log.default("Ignoring unexpected userInfo from watch: %{public}@", String(describing: userInfo.keys))
     }
 
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
@@ -547,6 +612,8 @@ extension WatchDataManager: WCSessionDelegate {
     func sessionReachabilityDidChange(_ session: WCSession) {
         sendSettingsIfNeeded()
         sendSupportedBolusVolumesIfNeeded()
+        // M5: any sign of watch life re-sends a parked revoke (kept from v1).
+        podLoanController.watchDidBecomeReachable()
     }
 }
 

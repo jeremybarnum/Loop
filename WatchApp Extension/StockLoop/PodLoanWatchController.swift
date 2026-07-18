@@ -39,6 +39,11 @@ final class PodLoanWatchController {
     /// Injected transport: dictionary -> WCSession.transferUserInfo (integration step).
     var send: (([String: Any]) -> Void)?
 
+    /// Fires on loan lifecycle edges: true when the loan becomes ACTIVE (the session
+    /// owner starts the G7 transport — closedDirect needs glucose), false when the
+    /// pod is released/revoked/failed (transport stops, loop input pauses).
+    var onLoanActiveChanged: ((Bool) -> Void)?
+
     private(set) var phase: Phase {
         didSet { UserDefaults.standard.set(phase.rawValue, forKey: Keys.phase) }
     }
@@ -195,6 +200,7 @@ final class PodLoanWatchController {
                     self.phase = .active
                     self.loopManager.pumpManager = manager
                     self.loopManager.loanDoseRecorder = self
+                    self.onLoanActiveChanged?(true)
                     self.sendMessage(.takeoverComplete(TakeoverComplete(epoch: grant.epoch, firstPodStatus: self.currentPodStatus())))
                 } else {
                     self.teardownPump()
@@ -317,6 +323,7 @@ final class PodLoanWatchController {
         epoch = nil
         deliveredAtTakeover = nil
         manualSuspendEnd = nil
+        onLoanActiveChanged?(false)
     }
 
     // MARK: - Revoke (§3.2)
@@ -329,6 +336,7 @@ final class PodLoanWatchController {
         chaseWorkItem?.cancel()
         teardownPump()
         phase = .revoked
+        onLoanActiveChanged?(false)
         sendHandbackOffer(freshened: false, recovered: true)
     }
 

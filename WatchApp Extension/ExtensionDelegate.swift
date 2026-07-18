@@ -19,6 +19,10 @@ import LoopKit
 final class ExtensionDelegate: NSObject, WKExtensionDelegate {
     private(set) lazy var loopManager = LoopDataManager()
 
+    /// M5: the stock-shaped loop + loan-protocol owner. Inert until a grant arrives
+    /// (its stores live in a distinct directory, so it coexists with `loopManager`).
+    private(set) lazy var stockLoopSession = StockLoopSession()
+
     private let log = OSLog(category: "ExtensionDelegate")
 
     private var observers: [NSKeyValueObservation] = []
@@ -203,6 +207,7 @@ extension ExtensionDelegate: WCSessionDelegate {
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
         if activationState == .activated {
             updateContext(session.receivedApplicationContext)
+            stockLoopSession.sessionDidActivate()
         }
     }
 
@@ -213,6 +218,12 @@ extension ExtensionDelegate: WCSessionDelegate {
 
     // This method is called on a background thread of your app
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any] = [:]) {
+        // M5: loan protocol v2 rides its own single key; consumed entirely by the
+        // loan controller (undecodable v2 payloads Nack there — never dropped).
+        if stockLoopSession.handleIncomingIfLoanMessage(userInfo) {
+            return
+        }
+
         let name = userInfo["name"] as? String ?? "WatchContext"
 
         log.default("didReceiveUserInfo: %{public}@", name)
