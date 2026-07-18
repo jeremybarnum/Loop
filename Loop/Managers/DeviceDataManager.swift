@@ -1077,6 +1077,16 @@ extension DeviceDataManager: CGMManagerDelegate {
         NotificationCenter.default.post(name: .SensorCodeCapturedForWatch, object: self, userInfo: userInfo)
     }
 
+    #if FAKE_NEW_SENSOR
+    /// TEST (Component E): fabricate a `.sensorStart` for a synthetic sensor ID, driving the
+    /// exact prompt → store → relay path the real event takes — so the phone flow is testable
+    /// without activating a real sensor. Behind FAKE_NEW_SENSOR.
+    func simulateNewSensor() {
+        UserDefaults.appGroup?.sensorPairingCodes = [:]   // clear so it prompts
+        handleSensorStart(sensorID: "FAKE-\(UUID().uuidString.prefix(4))", activatedAt: Date())
+    }
+    #endif
+
     func startDateToFilterNewData(for manager: CGMManager) -> Date? {
         dispatchPrecondition(condition: .onQueue(queue))
         return glucoseStore.latestGlucose?.startDate
