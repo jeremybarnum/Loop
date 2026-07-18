@@ -14,9 +14,16 @@ authorization (risk-register #8) — nothing here goes on a person._
   (phase/epoch/mode/pump/odometer/fault/seq/unacked/uncertain + Request Loan / Hand
   Back / Read Status). Phone → the silent **"Pod Is On the Watch"** notification
   (long-press → **Reclaim Pod** = the escape hatch), plus the R8 alarms.
-- **Logs:** phone via Console.app or `idevicesyslog` (subsystem com.loopkit.Loop,
-  categories PodLoanPhoneController / LoanReconciler); watch via its screen + the
-  bench page (log export rides the existing WatchLink path).
+- **Logs:**
+  - **Watch (on the wrist, no Mac needed):** Diagnostics page → **Logs** shows the
+    unified on-device log (G7 transport + M5 loan protocol/loop via SportLog, newest
+    first) with a **Share log** button (AirDrop / Messages / Mail to yourself). This
+    is the primary path for a TestFlight build — its container isn't reachable via
+    devicectl. Key event tags: `[loan]`, `[verdict]`, `[radio]`, `[loop]`.
+  - **Phone:** Console.app or `idevicesyslog`, subsystem `com.loopkit.Loop`,
+    categories PodLoanPhoneController / LoanReconciler.
+  - **Either device, live:** Console.app on the Mac, subsystem `com.loopkit.Loop`
+    (SportLog mirrors to the system log too).
 - **G7 pre-warm (do BEFORE drill day):** when a sensor starts, the phone prompts for
   its 4-digit code and relays it to the watch; tap the watch's "New sensor"
   notification once so the pre-warm bonds it while slow is costless. With the bond

@@ -30,6 +30,7 @@ struct LoanDebugView: View {
     }
 
     var body: some View {
+        NavigationStack {
         ScrollView {
             VStack(alignment: .leading, spacing: 4) {
                 Text("LOAN v2 BENCH").font(.footnote).foregroundColor(.secondary)
@@ -62,7 +63,13 @@ struct LoanDebugView: View {
                         DispatchQueue.main.async { lastAction = ok ? "status OK" : "status FAIL" }
                     }
                 }
+
+                Divider().padding(.vertical, 2)
+
+                NavigationLink("Logs") { LogView() }
+                    .font(.caption)
             }
+        }
         }
         .onReceive(refresh) { _ in
             snapshot = session.loanController.debugSnapshot()
@@ -78,5 +85,43 @@ struct LoanDebugView: View {
             Spacer()
             Text(value).font(.caption2)
         }
+    }
+}
+
+// MARK: - On-wrist log viewer + share (unified g7watch.log via SportLog)
+
+/// Reads the tail of the single on-device log (G7 transport + M5 protocol) and offers
+/// a share sheet — so a TestFlight build's logs can be read and sent from the wrist,
+/// no Mac / devicectl. Newest lines at the top.
+struct LogView: View {
+    @State private var text: String = ""
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                ShareLink(item: LogFile.tail(maxBytes: 64 * 1024)) {
+                    Label("Share log", systemImage: "square.and.arrow.up")
+                }
+                .font(.caption)
+
+                Button("Refresh") { load() }
+                    .font(.caption)
+
+                Text(text.isEmpty ? "no log yet" : text)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 2)
+        }
+        .navigationTitle("Logs")
+        .onAppear(perform: load)
+    }
+
+    private func load() {
+        // Newest first: reverse the tail's lines so the latest events are on top.
+        let tail = LogFile.tail()
+        text = tail.split(separator: "\n", omittingEmptySubsequences: false)
+            .reversed().joined(separator: "\n")
     }
 }

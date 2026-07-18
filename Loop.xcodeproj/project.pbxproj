@@ -15,6 +15,7 @@
 		FADE00040000000000000026 /* LoanDebugController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000016 /* LoanDebugController.swift */; };
 		FADE00040000000000000027 /* GlanceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000017 /* GlanceController.swift */; };
 		FADE00040000000000000028 /* LoopStallWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000018 /* LoopStallWatchdog.swift */; };
+		FADE00040000000000000029 /* SportLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000019 /* SportLog.swift */; };
 		FADE00040000000000000031 /* OmnipodKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000001 /* OmnipodKit.framework */; };
 		FADE00040000000000000032 /* RileyLinkKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000002 /* RileyLinkKit.framework */; };
 		FADE00040000000000000033 /* RileyLinkBLEKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000003 /* RileyLinkBLEKit.framework */; };
@@ -1370,6 +1371,7 @@
 		FADE00040000000000000016 /* LoanDebugController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LoanDebugController.swift; sourceTree = "<group>"; };
 		FADE00040000000000000017 /* GlanceController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = GlanceController.swift; sourceTree = "<group>"; };
 		FADE00040000000000000018 /* LoopStallWatchdog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LoopStallWatchdog.swift; sourceTree = "<group>"; };
+		FADE00040000000000000019 /* SportLog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SportLog.swift; sourceTree = "<group>"; };
 		FADE00030000000000000015 /* G7ClientTransportAdapter.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = G7ClientTransportAdapter.swift; sourceTree = "<group>"; };
 		C1F48FF62995821600C8BD69 /* pl */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = pl; path = pl.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		C1F7822527CC056900C0919A /* SettingsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsManager.swift; sourceTree = "<group>"; };
@@ -1854,6 +1856,7 @@
 				FADE00040000000000000016 /* LoanDebugController.swift */,
 				FADE00040000000000000017 /* GlanceController.swift */,
 				FADE00040000000000000018 /* LoopStallWatchdog.swift */,
+				FADE00040000000000000019 /* SportLog.swift */,
 			);
 			path = StockLoop;
 			sourceTree = "<group>";
@@ -3691,6 +3694,7 @@
 				FADE00040000000000000026 /* LoanDebugController.swift in Sources */,
 				FADE00040000000000000027 /* GlanceController.swift in Sources */,
 				FADE00040000000000000028 /* LoopStallWatchdog.swift in Sources */,
+				FADE00040000000000000029 /* SportLog.swift in Sources */,
 				FADE00030000000000000011 /* G7Client.swift in Sources */,
 				FADE00030000000000000016 /* G7ClientTransportAdapter.swift in Sources */,
 				FADE00030000000000000012 /* WorkoutKeepalive.swift in Sources */,

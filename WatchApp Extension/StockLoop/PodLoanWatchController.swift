@@ -205,10 +205,12 @@ final class PodLoanWatchController {
                     self.loopManager.pumpManager = manager
                     self.loopManager.loanDoseRecorder = self
                     self.onLoanActiveChanged?(true)
+                    SportLog.event("loan", "ACTIVE — epoch \(grant.epoch), pod taken, odometer \(String(format: "%.2f", delivered)) U")
                     self.sendMessage(.takeoverComplete(TakeoverComplete(epoch: grant.epoch, firstPodStatus: self.currentPodStatus())))
                 } else {
                     self.teardownPump()
                     self.phase = .idle
+                    SportLog.event("loan", "TAKEOVER FAILED — pod unreachable, epoch \(grant.epoch)")
                     self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "pod unreachable at takeover")))
                 }
             }
@@ -255,6 +257,7 @@ final class PodLoanWatchController {
         queue.async {
             guard self.phase == .active, let manager = self.pumpManager else { return }
             self.phase = .handingBack
+            SportLog.event("loan", "HAND-BACK started — draining \(self.journal.unackedEvents().count) events")
             self.loopManager.pumpManager = nil  // no dosing during hand-back
 
             // DESIGN-5: cancel the leftover LOOP temp — but a running bounded manual
@@ -328,6 +331,7 @@ final class PodLoanWatchController {
         deliveredAtTakeover = nil
         manualSuspendEnd = nil
         onLoanActiveChanged?(false)
+        SportLog.event("loan", "CLOSED — records drained, pod released, cursor \(ack.committedCursor)")
     }
 
     // MARK: - Revoke (§3.2)
@@ -341,6 +345,7 @@ final class PodLoanWatchController {
         teardownPump()
         phase = .revoked
         onLoanActiveChanged?(false)
+        SportLog.event("loan", "REVOKED — phone reclaimed the pod, draining records")
         sendHandbackOffer(freshened: false, recovered: true)
     }
 
@@ -479,10 +484,12 @@ final class PodLoanWatchController {
                         self.journal.confirm(id: eventID)
                         self.pendingUncertainEventID = nil
                         self.streamRecords()
+                        SportLog.event("verdict", "DELIVERED — pod confirmed the uncertain command")
                     case .refuted(let kind):
                         self.journal.annul(id: eventID)
                         self.pendingUncertainEventID = nil
                         self.streamRecords()
+                        SportLog.event("verdict", "REFUTED \(kind) — command never reached the pod, record annulled")
                         self.alertRefuted(kind: kind)
                     case .unreachable:
                         self.scheduleChase(attempt: attempt + 1)

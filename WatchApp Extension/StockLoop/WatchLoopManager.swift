@@ -260,9 +260,16 @@ final class WatchLoopManager {
             self.lastLoopError = error
             if let error {
                 self.log.error("Loop ended with error: %{public}@", String(describing: error))
+                // Radio defers are logged at the defer site; don't double-log those.
+                if case .missingDataError = error {} else {
+                    SportLog.event("loop", "cycle ended with error: \(error)")
+                }
             } else {
                 self.lastLoopCompleted = self.now()
                 self.log.default("Loop ended (duration %.1fs)", self.now().timeIntervalSince(startDate))
+                let bg = self.glucoseStore.latestGlucose.map { String(format: "%.0f", $0.quantity.doubleValue(for: .milligramsPerDeciliter)) } ?? "—"
+                let rec = self.recommendedAutomaticDose.map { String(describing: $0.recommendation.basalAdjustment?.unitsPerHour ?? 0) } ?? "none"
+                SportLog.event("loop", "cycle OK — BG \(bg), IOB \(self.insulinOnBoard.map { String(format: "%.2f", $0.value) } ?? "—"), temp \(rec)")
             }
         }
     }
@@ -728,6 +735,7 @@ final class WatchDoseEnactor {
         dosingQueue.async {
             if self.isRadioBusy?() == true {
                 self.log.default("Enact DEFERRED — G7 handshake owns the radio (BG wins); the next reading retries")
+                SportLog.event("radio", "enact DEFERRED — G7 handshake owns the radio (BG wins); retry next reading")
                 completion(.communication(nil))
                 return
             }

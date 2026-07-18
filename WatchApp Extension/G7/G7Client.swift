@@ -69,21 +69,52 @@ func batteryTag() -> String {
     #endif
 }
 
-/// Appends every log line to Documents/g7watch.log so it can be pulled off-device
-/// via `devicectl device copy from --domain-type appDataContainer` (autonomous testing).
+/// The single on-device log file (Documents/g7watch.log): G7 transport AND — via
+/// SportLog — the M5 loan protocol + loop. Read/shared from the diagnostics page
+/// (SportLog.tail), so a TestFlight build needs no Mac/devicectl. Size-capped so it
+/// can't grow unbounded (the review's unbounded-log finding).
 enum LogFile {
     static let url: URL? = FileManager.default
         .urls(for: .documentDirectory, in: .userDomainMask).first?
         .appendingPathComponent("g7watch.log")
+
+    private static let queue = DispatchQueue(label: "com.loopkit.Loop.LogFile")
+    private static let maxBytes: UInt64 = 512 * 1024   // rotate near half a MB
+    private static let trimToBytes = 256 * 1024        // keep the most recent quarter-MB
+
     static func append(_ line: String) {
         guard let url else { return }
         let data = Data((line + "\n").utf8)
-        if let h = try? FileHandle(forWritingTo: url) {
-            defer { try? h.close() }
-            h.seekToEndOfFile()
-            h.write(data)
-        } else {
-            try? data.write(to: url)
+        queue.async {
+            var size: UInt64 = 0
+            if let h = try? FileHandle(forWritingTo: url) {
+                size = (try? h.seekToEnd()) ?? 0
+                try? h.write(contentsOf: data)
+                try? h.close()
+            } else {
+                try? data.write(to: url)   // first line creates the file
+            }
+            if size > maxBytes { rotate(url) }
+        }
+    }
+
+    /// Keep only the most recent `trimToBytes`, cut at a clean line boundary.
+    private static func rotate(_ url: URL) {
+        guard let all = try? Data(contentsOf: url), all.count > trimToBytes else { return }
+        var slice = all.suffix(trimToBytes)
+        if let nl = slice.firstIndex(of: 0x0a) { slice = slice[slice.index(after: nl)...] }
+        try? Data(slice).write(to: url)
+    }
+
+    /// The tail of the log as text, for the on-wrist viewer / share sheet.
+    static func tail(maxBytes: Int = 24 * 1024) -> String {
+        return queue.sync {
+            guard let url, let all = try? Data(contentsOf: url) else { return "" }
+            var slice = all.suffix(maxBytes)
+            if all.count > maxBytes, let nl = slice.firstIndex(of: 0x0a) {
+                slice = slice[slice.index(after: nl)...]
+            }
+            return String(decoding: slice, as: UTF8.self)
         }
     }
 }
