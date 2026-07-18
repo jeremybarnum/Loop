@@ -29,20 +29,23 @@ final class LoanProtocolV2Tests: XCTestCase {
     }
 
     func testEveryMessageKindRoundTrips() throws {
-        let status = LoanPodStatus(timestamp: Date(), deliveredUnits: 12.3, reservoirLevel: nil, isSuspended: false, faultCode: nil)
+        // Dates on the wire's millisecond grid: the protocol encodes Int64 ms, so
+        // sub-millisecond fractions deliberately do not survive (determinism > ULPs).
+        let now = Date(timeIntervalSince1970: 1_784_338_000.125)
+        let status = LoanPodStatus(timestamp: now, deliveredUnits: 12.3, reservoirLevel: nil, isSuspended: false, faultCode: nil)
         let event = LoanEvent(id: UUID(), seq: 3, provenance: .assumed(.bolusUncertain),
-                              record: LoanDoseRecord(kind: .bolus, startDate: Date(), amount: 1.0), loggedAt: Date())
+                              record: LoanDoseRecord(kind: .bolus, startDate: now, amount: 1.0), loggedAt: now)
         let messages: [LoanMessage] = [
             .request(LoanRequest(watchBuild: "77")),
-            .grant(LoanGrant(epoch: 5, expiresAt: Date().addingTimeInterval(300),
+            .grant(LoanGrant(epoch: 5, expiresAt: now.addingTimeInterval(300),
                              pumpManagerRawState: Data([1, 2, 3]), podAddress: 0x1F0A2B3C,
                              therapySettingsRaw: Data([4, 5]), settingsTimeZoneID: "America/New_York",
-                             doseHistory: [LoanDoseRecord(kind: .tempBasal, startDate: Date(), endDate: Date().addingTimeInterval(1800), unitsPerHour: 0.8)],
-                             boundaryRecord: LoanDoseRecord(kind: .boundaryTruncation, startDate: Date(), endDate: Date(), unitsPerHour: 0))),
+                             doseHistory: [LoanDoseRecord(kind: .tempBasal, startDate: now, endDate: now.addingTimeInterval(1800), unitsPerHour: 0.8)],
+                             boundaryRecord: LoanDoseRecord(kind: .boundaryTruncation, startDate: now, endDate: now, unitsPerHour: 0))),
             .takeoverComplete(TakeoverComplete(epoch: 5, firstPodStatus: status)),
             .takeoverFailed(TakeoverFailed(epoch: 5, reason: "test")),
             .doseRecordBatch(DoseRecordBatch(epoch: 5, events: [event], tombstones: [UUID()])),
-            .handbackOffer(HandbackOffer(epoch: 5, handedBackAt: Date(), finalStatus: status,
+            .handbackOffer(HandbackOffer(epoch: 5, handedBackAt: now, finalStatus: status,
                                          odometer: LoanOdometerSnapshot(deliveredAtStart: 10, deliveredLatest: 12, freshenSucceeded: true),
                                          events: [event], tombstones: [], recovered: false)),
             .handbackAck(HandbackAck(epoch: 5, committedCursor: 3)),

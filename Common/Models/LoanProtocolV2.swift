@@ -24,17 +24,25 @@ public enum LoanProtocol {
     /// The single WC dictionary key the entire v2 protocol rides under.
     public static let userInfoKey = "podLoanV2"
 
-    /// Stable JSON coding: dates as secondsSince1970 (compact, timezone-free — wall-time
-    /// semantics travel separately, e.g. LoanGrant.settingsTimeZoneID per spec §8).
+    /// Stable JSON coding: dates as INTEGER milliseconds since 1970 — deterministic,
+    /// byte-stable round-trips (fractional-seconds Doubles drift at sub-millisecond
+    /// precision through JSON, which the round-trip test caught). Timezone-free —
+    /// wall-time semantics travel separately (LoanGrant.settingsTimeZoneID, spec §8).
     public static var encoder: JSONEncoder {
         let e = JSONEncoder()
-        e.dateEncodingStrategy = .secondsSince1970
+        e.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(Int64((date.timeIntervalSince1970 * 1000).rounded()))
+        }
         return e
     }
 
     public static var decoder: JSONDecoder {
         let d = JSONDecoder()
-        d.dateDecodingStrategy = .secondsSince1970
+        d.dateDecodingStrategy = .custom { decoder in
+            let milliseconds = try decoder.singleValueContainer().decode(Int64.self)
+            return Date(timeIntervalSince1970: Double(milliseconds) / 1000)
+        }
         return d
     }
 }
