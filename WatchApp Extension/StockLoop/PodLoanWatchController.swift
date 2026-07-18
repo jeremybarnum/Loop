@@ -226,7 +226,10 @@ final class PodLoanWatchController {
         pumpManager = manager
         persistPumpRawValue()
         ingestGrantHistory(grant)
-        SportLog.event("loan", "pump rebuilt — connecting to pod for the takeover status read")
+        // Cross-device adoption: the phone's bleIdentifier is useless here — scan for
+        // the pod by its address and adopt the peripheral THIS watch discovers.
+        let scanning = manager.podLoanBeginTakeover()
+        SportLog.event("loan", "pump rebuilt — \(scanning ? "scanning for the pod by address" : "no pod address!") for takeover")
 
         // First pod status = the takeover proof (§2.3). The pod's BLE session takes
         // SECONDS to establish after construction (scan → connect → EAP-AKA), but a
