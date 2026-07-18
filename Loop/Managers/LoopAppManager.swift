@@ -109,15 +109,17 @@ class LoopAppManager: NSObject {
 
         registerBackgroundTasks()
 
-        if FeatureFlags.remoteCommandsEnabled {
-            DispatchQueue.main.async {
-#if targetEnvironment(simulator)
-                self.remoteNotificationRegistrationDidFinish(.failure(SimulatorError.remoteNotificationsNotAvailable))
-#else
-                UIApplication.shared.registerForRemoteNotifications()
-#endif
-            }
-        }
+        // STOCK LAUNCH-CRASH FIX (upstream candidate; not part of the watch feature).
+        // registerForRemoteNotifications() was called HERE, in initialize(), which
+        // runs before checkProtectedDataAvailable(). On a pre-first-unlock launch the
+        // launch is deferred, so launchManagers() (which assigns `settingsManager`)
+        // never runs — yet the async push-token callback still fires and
+        // remoteNotificationRegistrationDidFinish force-unwraps the nil `settingsManager`
+        // → SIGTRAP. (Sibling of the resetLoopManager pre-unlock crash.) Reliably hit
+        // once the always-on watch app relaunches Loop pre-unlock. Moved to
+        // launchManagers() so registration only happens once settingsManager exists;
+        // remote commands can't be serviced pre-unlock anyway. If this is fixed
+        // upstream, revert to the original initialize()-time registration.
         self.state = state.next
     }
 
@@ -209,6 +211,18 @@ class LoopAppManager: NSObject {
         settingsManager.deviceStatusProvider = deviceDataManager
         settingsManager.displayGlucosePreference = deviceDataManager.displayGlucosePreference
 
+        // STOCK LAUNCH-CRASH FIX (moved here from initialize() — see the comment
+        // there). `settingsManager` now exists, so the async push-token callback
+        // (remoteNotificationRegistrationDidFinish → settingsManager.…) is safe.
+        if FeatureFlags.remoteCommandsEnabled {
+            DispatchQueue.main.async {
+#if targetEnvironment(simulator)
+                self.remoteNotificationRegistrationDidFinish(.failure(SimulatorError.remoteNotificationsNotAvailable))
+#else
+                UIApplication.shared.registerForRemoteNotifications()
+#endif
+            }
+        }
 
         overrideHistory.delegate = self
 
