@@ -903,7 +903,19 @@ extension WatchLoopManager: CGMManagerDelegate {
                 self.lastCGMLoopTrigger = now
                 self.loop()
             }
+            // WS4b: every direct reading re-defers the sensor-blackout dead-man —
+            // but only DURING a loan (pumpManager is loan-scoped): a reading that
+            // lands after loan-end must not resurrect a disarmed repeating alert.
+            if case .newData = readingResult, self.pumpManager != nil {
+                SensorBlackoutAlert.refresh()
+            }
         }
+    }
+
+    /// WS4c sovereignty signal: age of the newest stored glucose (direct-only during
+    /// a loan — R18/R19), nil before any reading.
+    var latestGlucoseAge: TimeInterval? {
+        return glucoseStore.latestGlucose.map { Date().timeIntervalSince($0.startDate) }
     }
 
     /// Mirrors processCGMReadingResult (:580): samples go to the LoopKit GlucoseStore —

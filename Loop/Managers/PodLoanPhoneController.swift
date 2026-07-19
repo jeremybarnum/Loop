@@ -322,7 +322,8 @@ final class PodLoanPhoneController {
                     therapySettingsRaw: settingsData,
                     settingsTimeZoneID: settings.basalRateSchedule?.timeZone.identifier ?? TimeZone.current.identifier,
                     doseHistory: history.compactMap(Self.loanRecord(from:)),
-                    boundaryRecord: boundary)
+                    boundaryRecord: boundary,
+                    supportsInterimHandback: true)   // WS1 capability gate (REAL-3)
                 self.sendMessage(.grant(grant))
                 self.armT1(for: grantEpoch)
             }
@@ -407,24 +408,49 @@ final class PodLoanPhoneController {
         let isStale = offer.epoch < epoch
         guard offer.epoch == epoch || isStale else { return }
 
-        if !isStale {
-            guard state == .loaned || state == .reclaimPending || state == .grantOffered else {
-                // Duplicate offer after commit: re-ack idempotently (row 10).
-                sendMessage(.handbackAck(HandbackAck(epoch: epoch, committedCursor: committedCursor)))
-                return
-            }
+        // WS1 (two-phase hand-back): an INTERIM offer (released == false) means the
+        // watch is still dosing and still owns the pod — commit + ack ONLY; no state
+        // change, no reclaim, tile stays "Pod on Watch". Legacy senders (released
+        // nil) only offered after stopping, so nil = final.
+        //
+        // NO early re-ack shortcut (verify finding REAL-4): the staging path below is
+        // idempotent by construction (committedIDs/cursor filters), and a blind re-ack
+        // permanently stranded any event minted after the final-offer snapshot — the
+        // watch could never drain it and held the pod forever. Every non-stale offer
+        // now stages + commits unseen events; only the STATE transitions are gated.
+        let isFinal = offer.released ?? true
+        let canTransition = state == .loaned || state == .reclaimPending || state == .grantOffered
+        if !isStale, isFinal, canTransition {
             state = .reconciling
         }
+        // Round-2 fix: the odometer audit runs ONLY on the transition-owning final
+        // offer. A duplicate final (routine: 15s resends vs ack latency) arrives
+        // after finishLoanAfterCommit cleared `staged` — its re-staged tail is a
+        // SUBSET of the loan, and auditing the whole-loan odometer against it mints
+        // phantom remainders (the R1 bug, reintroduced via this path). Interim
+        // offers carry freshened=false anyway; this makes the skip explicit.
+        let auditThisOffer = !isStale && isFinal && state == .reconciling
 
         stage(events: offer.events, tombstones: offer.tombstones)
+        // Round-4 fix: dedup by EVENT ID only. The seq>cursor condition assumed a
+        // gapless cursor; WS1 withholding creates gaps (an in-flight command's seq
+        // can arrive AFTER later events were acked), and it would silently discard
+        // the late-classified event. committedIDs is persisted — the ID filter is
+        // the true exactly-once invariant.
         let events = staged.values
-            .filter { !stagedTombstones.contains($0.id) && !committedIDs.contains($0.id) && $0.seq > committedCursor }
+            .filter { !stagedTombstones.contains($0.id) && !committedIDs.contains($0.id) }
+            .sorted { $0.seq < $1.seq }
+        // WS1: the odometer audit must see the WHOLE loan's journal, not the tail —
+        // interim-committed temps/suspends are real recorded insulin, not schedule.
+        let allStagedEvents = staged.values
+            .filter { !stagedTombstones.contains($0.id) }
             .sorted { $0.seq < $1.seq }
 
         let loanStart = loanStartedAt ?? offer.handedBackAt.addingTimeInterval(-.hours(2))
         let input = LoanReconciler.Input(
             events: events,
-            odometer: offer.odometer,
+            odometer: auditThisOffer ? offer.odometer : nil,
+            auditEvents: allStagedEvents,
             schedule: deps.settings().basalRateSchedule,
             loanStart: loanStart,
             loanEnd: offer.handedBackAt)
@@ -432,9 +458,8 @@ final class PodLoanPhoneController {
 
         // §5.3.3 audit inputs: the expected total over the WHOLE loan (all staged
         // events, not just this drain) and whether the watch's own audit ran.
-        if !isStale {
-            let allEvents = staged.values.filter { !stagedTombstones.contains($0.id) }.sorted { $0.seq < $1.seq }
-            let expected = LoanReconciler.expectedInsulin(events: allEvents, schedule: deps.settings().basalRateSchedule,
+        if auditThisOffer {
+            let expected = LoanReconciler.expectedInsulin(events: allStagedEvents, schedule: deps.settings().basalRateSchedule,
                                                           from: loanStart, to: offer.handedBackAt)
             UserDefaults.standard.set(expected, forKey: Keys.expectedUnits)
             UserDefaults.standard.set(offer.odometer?.freshenSucceeded == true, forKey: Keys.watchAuditRan)
@@ -476,7 +501,13 @@ final class PodLoanPhoneController {
                     self.committedIDs.formUnion(events.map(\.id))
                     self.persistCommittedIDs()
                     self.sendMessage(.handbackAck(HandbackAck(epoch: self.epoch, committedCursor: self.committedCursor)))
-                    self.finishLoanAfterCommit()
+                    if isFinal, self.state == .reconciling {
+                        // Only the transition-owning offer finishes; a duplicate final
+                        // offer post-.owner just committed any unseen tail + re-acked.
+                        self.finishLoanAfterCommit()
+                    } else if !isFinal {
+                        os_log("Interim drain committed to cursor %d — watch still dosing", log: self.log, type: .default, self.committedCursor)
+                    }
                 } else {
                     self.sendMessage(.handbackAck(HandbackAck(epoch: offer.epoch, committedCursor: newCursor, stale: true)))
                 }

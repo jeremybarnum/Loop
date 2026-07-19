@@ -184,6 +184,20 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   implement AFTER the takeover BLE fix restores the ~10s pod connect —
   the progress bar depends on the connect actually being fast.
 
+- **R25 — Hand-back, blackout alert, grant validation** (2026-07-19, Jeremy:
+  "do all your recommendations"): (a) hand-back is TWO-PHASE STAY-ACTIVE —
+  requesting it keeps the watch fully in control (dosing, boluses, G7 loop)
+  while the journal drains via interim offers; ownership transfers only when
+  the drain is acked; user can Cancel until finalize. Closed-loop dosing
+  CONTINUES during the drain ("end Sport Mode" = ownership transfer, not
+  therapy stop). (b) Sensor-blackout dead-man: no direct G7 for 20 min during
+  a loan → notification + haptic, repeating while it persists;
+  notification-only, no automatic actions. (c) Grant-time validation: an
+  incomplete therapy snapshot DENIES the loan with the missing field named —
+  never a silent per-cycle configurationError. Root-cause experiments E1/E2
+  SKIPPED by Jeremy (no time); E3 rides normal 117+ use. Branch succession
+  unchanged; R20 picker deferred until after WS1-WS3.
+
 ## Not yet ruled (do not decide without Jeremy)
 
 - Risk-register #8: any on-body session of any milestone build — per-build,

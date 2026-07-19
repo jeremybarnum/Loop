@@ -67,3 +67,36 @@ enum LoopStallWatchdog {
         center.removeDeliveredNotifications(withIdentifiers: [identifier])
     }
 }
+
+/// WS4b (ruled 2026-07-19): notification-only dead-man for DIRECT G7 readings
+/// during a loan. Same pre-scheduled pattern as LoopStallWatchdog — armed at loan
+/// start, re-deferred by every direct reading, fires from OUTSIDE a suspended app.
+/// Distinct from the loop watchdog: this fires in OPEN loop too (the loop watchdog
+/// is closed-cycle-keyed) — a 2.5-hour silent blackout must never happen again
+/// (party finding 2026-07-18). Repeats every 20 min while the blackout persists;
+/// no automatic actions (C8 pattern).
+enum SensorBlackoutAlert {
+
+    /// Two missed reading cycles beyond the display staleness gate (ruled: 20 min).
+    static let interval: TimeInterval = 20 * 60
+
+    private static let identifier = "sportmode.sensorBlackout"
+
+    /// Arm, or push forward after a fresh direct reading.
+    static func refresh() {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [identifier])
+        let content = UNMutableNotificationContent()
+        content.title = NSLocalizedString("No G7 Readings", comment: "Sensor-blackout alert title")
+        content.body = NSLocalizedString("No direct G7 reading for 20 minutes. Sport Mode won't dose without readings — check the watch's position relative to the sensor.", comment: "Sensor-blackout alert body")
+        content.sound = .default
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: true)
+        center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
+    }
+
+    static func disarm() {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [identifier])
+        center.removeDeliveredNotifications(withIdentifiers: [identifier])
+    }
+}

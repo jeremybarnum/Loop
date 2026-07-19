@@ -75,3 +75,24 @@ don't get lost; revisit opportunistically or when a symptom matches.
     Written on the loan-controller queue, read on dataAccessQueue, no
     synchronization; settings are written once pre-.active so exposure is
     negligible, but the pattern is technically racy.
+
+## From the WS1 verify rounds 4-5 (2026-07-19; all REAL findings fixed)
+
+12. **MINOR — finalize completion-loss stall.** If the pod-ops completion in
+    finalizeHandback is lost, finalOfferSent sticks false and the close waits;
+    bounded by the phone escape-hatch revoke and relaunch reset — same exposure
+    class as the pre-WS1 offer path.
+13. **MINOR — committedIDs cleared at grant vs late stale drains.** A stale-
+    epoch drain after an epoch bump could theoretically re-commit; unreachable
+    under transferUserInfo FIFO except via debugReset, and store-level
+    syncIdentifier dedup backstops it. Pre-existing semantics.
+14. **MINOR — legacy single-phase hand-back keeps the old in-flight window.**
+    Old-phone loans (capability flag absent) finalize without a drain gate;
+    conservative direction, settled by the R22 odometer audit — unchanged
+    pre-WS1 behavior.
+15. **COSMETIC — crash-relaunch into recoveredDrain keeps a delivered
+    repeating blackout notification firing until the drain completes.**
+16. **TEST DEBT — WS1 surface untested:** released-flag decode (absent key),
+    interim no-state-change commit, finalize-on-empty-drain, cancel mid-drain,
+    revoke-during-drain, seq-gap cursor cap. The five verify rounds stand in
+    for these until written.

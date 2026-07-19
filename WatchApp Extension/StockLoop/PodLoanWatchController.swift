@@ -64,6 +64,27 @@ final class PodLoanWatchController {
     /// Hand-back offer resend counter (reset when a drain begins) — makes an
     /// unreachable-phone wait self-documenting in the log.
     private var handbackResendCount = 0
+    /// WS1 (ruled 2026-07-19): a hand-back has been REQUESTED but the watch is still
+    /// in control — phase stays .active, dosing and boluses continue, the journal
+    /// drains via interim offers (released=false), and the user can cancel. Only when
+    /// the drain is fully acked does finalizeHandback() stop dosing and send the
+    /// final (released=true) offer. In-memory only: any relaunch ends the loan.
+    private var handbackRequested = false
+    /// WS1 capability gate (REAL-3): interim offers only when the granting phone
+    /// understands them; false/nil grant → legacy single-phase hand-back.
+    private var phoneSupportsInterimHandback = false
+    /// WS1 round-2 fix: finalizeHandback flips phase BEFORE its ~3-15s of pod work
+    /// (temp-cancel + status reads); a duplicate interim ack arriving in that window
+    /// must NOT close the loan (the final offer hasn't been sent — the phone would
+    /// strand in .loaned forever). The close path requires this flag in .handingBack.
+    private var finalOfferSent = false
+    /// WS1 round-3 fix: a pod COMMAND's journal event exists from MINT time, but its
+    /// delivery classification (confirmed / uncertain / annulled) only lands at the
+    /// enact COMPLETION seconds later — a resend or stream in that window would carry
+    /// it to the phone, whose interim commit has no unwind for a later annul.
+    /// Events in this set are withheld from streams and interim offers until their
+    /// loanDidEnact classifies them. (Carb records mint CONFIRMED — never in-flight.)
+    private var inFlightEventIDs: Set<UUID> = []
     /// The single in-flight uncertainty being chased (mirrors the crude
     /// UncertainCommandRecord — one at a time; a NEW programming command destroys the
     /// verdict evidence and the conservative record stands, per d27a40c7 semantics).
@@ -196,6 +217,35 @@ final class PodLoanWatchController {
             return
         }
 
+        // Therapy settings snapshot: the ONLY dosing limits (R1/R16); frozen for the
+        // loan (spec §8). WS4a (ruled 2026-07-19): validate COMPLETENESS at the loan
+        // boundary and refuse with a stated reason — an incomplete config must be a
+        // legible denial, not a per-cycle configurationError mid-session (the REG-3
+        // failure class: builds 113-116 lost the schedules in serialization and died
+        // silently every cycle at the party). Validated BEFORE journal.begin so a
+        // refusal leaves no journal/epoch residue.
+        var decodedSettings: LoopSettings?
+        if let raw = (try? PropertyListSerialization.propertyList(from: grant.therapySettingsRaw, options: [], format: nil)) as? LoopSettings.RawValue {
+            decodedSettings = LoopSettings(rawValue: raw)
+        }
+        let missing: String? = {
+            guard let s = decodedSettings else { return "settings snapshot" }
+            if s.basalRateSchedule == nil { return "basal schedule" }
+            if s.insulinSensitivitySchedule == nil { return "insulin sensitivity" }
+            if s.carbRatioSchedule == nil { return "carb ratio" }
+            if s.glucoseTargetRangeSchedule == nil { return "glucose target range" }
+            if s.maximumBasalRatePerHour == nil { return "max basal rate" }
+            if s.maximumBolus == nil { return "max bolus" }
+            return nil
+        }()
+        if let missing = missing {
+            phase = .idle
+            lastIdleNote = String(format: NSLocalizedString("Can't start: %@ didn't arrive from the phone. Check therapy settings and try again.", comment: "Glance: grant refused for incomplete settings (1: missing field)"), missing)
+            SportLog.event("loan", "grant REFUSED — therapy settings incomplete (\(missing))")
+            sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "therapy settings incomplete: \(missing)")))
+            return
+        }
+
         do {
             try journal.begin(epoch: grant.epoch)
         } catch {
@@ -206,6 +256,12 @@ final class PodLoanWatchController {
         }
 
         epoch = grant.epoch
+        phoneSupportsInterimHandback = grant.supportsInterimHandback ?? false   // WS1 REAL-3 gate
+        chaseWorkItem?.cancel()         // round-3 liveness: fresh loan, no chase residue
+        pendingUncertainEventID = nil
+        inFlightEventIDs = []
+        handbackRequested = false
+        finalOfferSent = false
         // R24 bar anchor: ALWAYS re-anchor at grant. The grant round-trip is WCSession
         // roulette (0.5s to 15s observed on hardware) while the takeover itself is the
         // predictable part (~5s with the scan fix) — so the determinate bar measures
@@ -213,13 +269,7 @@ final class PodLoanWatchController {
         // a late queued grant (after the 25s timeout) from inheriting a dead anchor.
         attemptStartedAt = Date()
         phase = .takingOver
-
-        // Therapy settings snapshot: the ONLY dosing limits (R1/R16); missing -> the
-        // loop's own configuration gates deny. Frozen for the loan (spec §8).
-        if let raw = (try? PropertyListSerialization.propertyList(from: grant.therapySettingsRaw, options: [], format: nil)) as? LoopSettings.RawValue,
-           let settings = LoopSettings(rawValue: raw) {
-            loopManager.settings = settings
-        }
+        loopManager.settings = decodedSettings!
 
         // Stock construction: exactly a phone relaunch. BlePodComms auto-connects from
         // podState.bleIdentifier at init (BlePodComms.swift:44) — no arming step.
@@ -323,37 +373,88 @@ final class PodLoanWatchController {
 
     // MARK: - Hand-back (§3.2 HANDING_BACK)
 
+    /// WS1: request a hand-back WITHOUT giving up control. Phase stays .active —
+    /// dosing, boluses, and the G7 loop all continue; the journal drains via interim
+    /// offers. When the drain is fully acked, finalizeHandback() stops dosing and
+    /// sends the final offer. Cancelable until then.
     func beginHandback() {
         queue.async {
-            guard self.phase == .active, let manager = self.pumpManager else { return }
-            self.phase = .handingBack
+            guard self.phase == .active, self.pumpManager != nil else { return }
+            guard !self.handbackRequested else { return }
+            self.handbackRequested = true
             self.handbackResendCount = 0
-            SportLog.event("loan", "HAND-BACK started — draining \(self.journal.unackedEvents().count) events")
-            self.loopManager.pumpManager = nil  // no dosing during hand-back
-
-            // DESIGN-5: cancel the leftover LOOP temp — but a running bounded manual
-            // suspend is preserved (46f16d01); the pod auto-resumes at its expiry (R3).
-            let suspendActive = (self.manualSuspendEnd ?? .distantPast) > Date()
-            let cancelIfNeeded: (@escaping () -> Void) -> Void = { proceed in
-                if case .tempBasal = manager.status.basalDeliveryState, !suspendActive {
-                    manager.enactTempBasal(unitsPerHour: 0, for: 0) { _ in proceed() }
-                } else {
-                    proceed()
-                }
+            guard self.phoneSupportsInterimHandback else {
+                // REAL-3 skew gate: an old phone treats ANY offer as final — go
+                // straight to the legacy single-phase hand-back (stop, then offer).
+                SportLog.event("loan", "HAND-BACK started (legacy single-phase — phone predates interim drains)")
+                self.finalizeHandback()
+                return
             }
+            SportLog.event("loan", "HAND-BACK requested — draining \(self.journal.unackedEvents().count) events; still in control (WS1)")
+            self.sendHandbackOffer(freshened: false, recovered: false)
+        }
+    }
 
-            cancelIfNeeded {
-                // Freshen the odometer (OQ-5: one retry on a zero delta), then offer.
-                manager.podLoanReadStatus { first in
-                    let finalize: (Bool) -> Void = { freshened in
-                        self.queue.async { self.sendHandbackOffer(freshened: freshened, recovered: false) }
+    /// WS1: abort a requested hand-back while still in the drain (phase .active).
+    /// After finalize the pod has stopped taking watch commands — too late to cancel.
+    func cancelHandback() {
+        queue.async {
+            guard self.phase == .active, self.handbackRequested else { return }
+            self.handbackRequested = false
+            self.resendWorkItem?.cancel()
+            SportLog.event("loan", "HAND-BACK cancelled — Sport Mode continues")
+        }
+    }
+
+    /// WS1: the drain is fully acked while still active — NOW stop dosing, close the
+    /// loop-temp record, freshen the odometer, and send the FINAL (released) offer.
+    /// The pod's BLE link is still held until the final ack (kept from v1: release
+    /// ONLY after the phone has committed everything).
+    private func finalizeHandback() {
+        // Verify finding REAL-2: a stale INTERIM resend timer (armed 0-15s ago) must
+        // not fire during the ~3-12s of temp-cancel + status reads below — once phase
+        // flips it would send released=true prematurely and the phone would reclaim
+        // while this device is still commanding the pod.
+        resendWorkItem?.cancel()
+        finalOfferSent = false   // round-2 fix: close path waits for the real final offer
+        guard let manager = pumpManager else {
+            handbackRequested = false
+            phase = .handingBack
+            finalOfferSent = true
+            sendHandbackOffer(freshened: false, recovered: false)
+            return
+        }
+        handbackRequested = false
+        phase = .handingBack
+        SportLog.event("loan", "drain complete — finalizing hand-back (loop dosing stops now)")
+        loopManager.pumpManager = nil  // no dosing from here
+        SensorBlackoutAlert.disarm()   // dosing stopped — a blackout alert would mislead
+
+        // DESIGN-5: cancel the leftover LOOP temp — but a running bounded manual
+        // suspend is preserved (46f16d01); the pod auto-resumes at its expiry (R3).
+        let suspendActive = (self.manualSuspendEnd ?? .distantPast) > Date()
+        let cancelIfNeeded: (@escaping () -> Void) -> Void = { proceed in
+            if case .tempBasal = manager.status.basalDeliveryState, !suspendActive {
+                manager.enactTempBasal(unitsPerHour: 0, for: 0) { _ in proceed() }
+            } else {
+                proceed()
+            }
+        }
+
+        cancelIfNeeded {
+            // Freshen the odometer (OQ-5: one retry on a zero delta), then offer.
+            manager.podLoanReadStatus { first in
+                let finalize: (Bool) -> Void = { freshened in
+                    self.queue.async {
+                        self.finalOfferSent = true
+                        self.sendHandbackOffer(freshened: freshened, recovered: false)
                     }
-                    let delivered = manager.podLoanInsulinDelivered
-                    if first, delivered != nil, delivered == self.deliveredAtTakeover {
-                        manager.podLoanReadStatus { second in finalize(second) }
-                    } else {
-                        finalize(first)
-                    }
+                }
+                let delivered = manager.podLoanInsulinDelivered
+                if first, delivered != nil, delivered == self.deliveredAtTakeover {
+                    manager.podLoanReadStatus { second in finalize(second) }
+                } else {
+                    finalize(first)
                 }
             }
         }
@@ -365,14 +466,27 @@ final class PodLoanWatchController {
         if let start = deliveredAtTakeover, let latest = pumpManager?.podLoanInsulinDelivered {
             odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest, freshenSucceeded: freshened)
         }
+        // Verify rounds 1-3: IN-FLIGHT (mint→classification) and chase-pending events
+        // stay OUT of interim offers — once the phone commits one, a later annul or
+        // REFUTED verdict can't unwind the store write (tombstones only filter staged
+        // events). They ride a later offer once classified; the final offer carries
+        // everything (chases resolve or stand conservative before finalize).
+        var offerEvents = journal.unackedEvents()
+        if phase == .active {
+            offerEvents.removeAll { inFlightEventIDs.contains($0.id) }
+            if let pending = pendingUncertainEventID {
+                offerEvents.removeAll { $0.id == pending }
+            }
+        }
         let offer = HandbackOffer(
             epoch: epoch,
             handedBackAt: Date(),
             finalStatus: pumpManager.map { _ in currentPodStatus() },
             odometer: odometer,
-            events: journal.unackedEvents(),
+            events: offerEvents,
             tombstones: journal.pendingTombstones(),
-            recovered: recovered)
+            recovered: recovered,
+            released: phase != .active)   // WS1: interim while still dosing; final after finalize
         handbackResendCount += 1
         // Self-documenting limbo (party finding: 97 silent minutes of 15s resends):
         // log the attempt count each minute so the wait is visible in the log.
@@ -385,7 +499,8 @@ final class PodLoanWatchController {
         resendWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
-            if self.phase == .handingBack || self.phase == .revoked || self.phase == .recoveredDrain {
+            if self.phase == .handingBack || self.phase == .revoked || self.phase == .recoveredDrain
+                || (self.phase == .active && self.handbackRequested) {   // WS1 interim drain
                 self.sendHandbackOffer(freshened: freshened, recovered: recovered)
             }
         }
@@ -395,12 +510,48 @@ final class PodLoanWatchController {
 
     private func handleAck(_ ack: HandbackAck) {
         guard let current = epoch ?? journal.activeEpoch, ack.epoch == current else { return }
-        journal.applyAck(committedCursor: ack.committedCursor)
+        // Round-4 fix: the phone acks MAX-seq, but withholding (in-flight /
+        // chase-pending events) creates seq GAPS a max-seq cursor can't represent —
+        // an ack covering a later carb would skip a withheld command forever. Cap
+        // the applied cursor below the lowest withheld seq so those events stay
+        // unacked and drain once classified (the phone dedups commits by event ID,
+        // so the later out-of-order stream still commits exactly once).
+        var withheld = inFlightEventIDs
+        if let pending = pendingUncertainEventID { withheld.insert(pending) }
+        var cursorToApply = ack.committedCursor
+        if !withheld.isEmpty,
+           let minWithheldSeq = journal.unackedEvents().filter({ withheld.contains($0.id) }).map(\.seq).min() {
+            cursorToApply = min(cursorToApply, minWithheldSeq - 1)
+        }
+        journal.applyAck(committedCursor: cursorToApply)
         guard journal.unackedEvents().isEmpty else { return }
+
+        // WS1: the drain completed while STILL DOSING — now stop the loop's pod,
+        // close records, and send the final (released) offer. The close below runs
+        // on that final offer's ack. Round-2 gate: never finalize while a verdict
+        // chase is live (its withheld event also keeps unackedEvents non-empty —
+        // this is the explicit belt to that suspender).
+        if phase == .active && handbackRequested {
+            // Round-4 belt: no finalize while ANY command is unclassified (in-flight
+            // OR chase-pending) — the withheld-seq cursor cap above is the suspender.
+            guard pendingUncertainEventID == nil, inFlightEventIDs.isEmpty else { return }
+            finalizeHandback()
+            return
+        }
+        guard phase == .handingBack || phase == .revoked || phase == .recoveredDrain else { return }
+        // Round-2 fix: during finalize's pod-ops window (phase flipped, journal
+        // empty, final offer NOT yet sent) a duplicate interim ack must not close
+        // the loan — the phone would never receive released=true and strand .loaned.
+        if phase == .handingBack && !finalOfferSent { return }
 
         // Fully drained: release the pod ONLY now (kept from v1).
         resendWorkItem?.cancel()
         chaseWorkItem?.cancel()
+        // Round-3 liveness fix: chase/in-flight residue must not cross loan
+        // boundaries — the finalize gate reads pendingUncertainEventID, and a stale
+        // flag from THIS loan would block the NEXT loan's drain indefinitely.
+        pendingUncertainEventID = nil
+        inFlightEventIDs = []
         teardownPump()
         journal.end()
         phase = .idle
@@ -417,8 +568,11 @@ final class PodLoanWatchController {
         guard let current = epoch ?? journal.activeEpoch, revoke.epoch == current else { return }
         guard phase != .idle else { return }
         // Stop dosing, zero post-revoke pod commands (DESIGN-6), drain what we have.
+        handbackRequested = false   // WS1: phone-initiated revoke supersedes a pending drain
         loopManager.pumpManager = nil
         chaseWorkItem?.cancel()
+        pendingUncertainEventID = nil   // round-3 liveness: no cross-loan chase residue
+        inFlightEventIDs = []           // (the conservative .assumed records ride the drain)
         teardownPump()
         phase = .revoked
         onLoanActiveChanged?(false)
@@ -441,7 +595,7 @@ final class PodLoanWatchController {
         let report = StatusReport(
             epoch: current,
             mode: currentMode(),
-            lastDirectGlucoseAge: nil,  // wired at UI/G7 integration (sovereignty signal)
+            lastDirectGlucoseAge: loopManager.latestGlucoseAge,  // WS4c sovereignty signal
             lastEventSeq: journal.lastEventSeq,
             podFault: pumpManager?.podLoanFaultDescription,
             holdsPod: phase == .active)
@@ -480,6 +634,9 @@ final class PodLoanWatchController {
         /// When the current Start attempt began (R24 progress bar); only meaningful
         /// while phase is requested/takingOver.
         let startedAt: Date?
+        /// WS1: a hand-back is requested and draining while the watch is still in
+        /// control (phase .active) — the glance shows "ending…" + Cancel.
+        let handbackPending: Bool
     }
 
     /// True while this watch owns the pod (phase .active) — the carb/bolus flow
@@ -502,7 +659,8 @@ final class PodLoanWatchController {
                 pendingUncertain: pendingUncertainEventID != nil,
                 suspendEndsAt: (manualSuspendEnd ?? .distantPast) > Date() ? manualSuspendEnd : nil,
                 lastIdleNote: lastIdleNote,
-                startedAt: attemptStartedAt)
+                startedAt: attemptStartedAt,
+                handbackPending: handbackRequested)
         }
     }
 
@@ -528,6 +686,9 @@ final class PodLoanWatchController {
             self.phase = .idle
             self.epoch = nil
             self.pendingUncertainEventID = nil
+            self.inFlightEventIDs = []
+            self.handbackRequested = false
+            self.finalOfferSent = false
             SportLog.event("loan", "DEBUG RESET — watch controller forced to idle")
         }
     }
@@ -566,7 +727,15 @@ final class PodLoanWatchController {
 
     private func scheduleChase(attempt: Int = 0) {
         let delays: [TimeInterval] = [5, 20, 60]
-        guard attempt < delays.count else { return }
+        guard attempt < delays.count else {
+            // Chase exhausted: the conservative .assumed record STANDS (R22 layers
+            // settle it at hand-back) — resolve the pending flag so the record can
+            // stream/commit and a WS1 drain isn't blocked behind a dead chase.
+            SportLog.event("verdict", "chase exhausted — assumed record stands (hand-back audit settles it)")
+            pendingUncertainEventID = nil
+            streamRecords()
+            return
+        }
         chaseWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self = self, self.phase == .active,
@@ -587,6 +756,7 @@ final class PodLoanWatchController {
                         // hasNewPumpEvents. The journal entry stays .assumed and the
                         // hand-back layers (R22) settle it — never guess here.
                         self.pendingUncertainEventID = nil
+                        self.streamRecords()   // the withheld .assumed record may flow now
                     case .delivered:
                         self.journal.confirm(id: eventID)
                         self.pendingUncertainEventID = nil
@@ -633,7 +803,16 @@ final class PodLoanWatchController {
     /// watch later dies. Loss is harmless — the cursor and IDs absorb redelivery.
     private func streamRecords() {
         guard phase == .active, let epoch = epoch else { return }
-        let events = journal.unackedEvents()
+        // R5 (verify rounds 2+3): events that are IN-FLIGHT (mint→classification) or
+        // whose verdict chase is LIVE stay out of the stream — the phone's commit set
+        // is drawn from its staged map, so streaming either would let an interim
+        // commit write a dose before an annul/refuted verdict can unwind it
+        // (tombstones only filter staged events). They flow on classification.
+        var events = journal.unackedEvents()
+        events.removeAll { inFlightEventIDs.contains($0.id) }
+        if let pending = pendingUncertainEventID {
+            events.removeAll { $0.id == pending }
+        }
         let tombstones = journal.pendingTombstones()
         guard !events.isEmpty || !tombstones.isEmpty else { return }
         sendMessage(.doseRecordBatch(DoseRecordBatch(epoch: epoch, events: events, tombstones: tombstones)))
@@ -694,6 +873,16 @@ extension PodLoanWatchController: WatchLoanDoseRecording {
                 pendingUncertainEventID = nil
             }
             minted = try? journal.mintEvent(record: record, provenance: .assumed(uncertainKind)).id
+            if let minted = minted {
+                inFlightEventIDs.insert(minted)   // withheld until loanDidEnact classifies
+            }
+            // Round-5 fix: the evidence-destruction branch above cleared a pending
+            // chase WITHOUT streaming its standing .assumed record — the only
+            // withheld-exit that didn't. A stale max-seq ack landing after this mint
+            // could then ack the never-transmitted record past recovery. Stream NOW
+            // (same serial-queue block, before any later ack can apply); the freshly
+            // minted event is in the in-flight set and stays excluded.
+            streamRecords()
         }
         return minted
     }
@@ -701,6 +890,7 @@ extension PodLoanWatchController: WatchLoanDoseRecording {
     func loanDidEnact(eventID: UUID?, error: PumpManagerError?) {
         guard let eventID = eventID else { return }
         queue.async {
+            self.inFlightEventIDs.remove(eventID)   // classified from here — may flow
             if error == nil {
                 // Certain success: the response carried the incremented odometer.
                 self.journal.confirm(id: eventID)

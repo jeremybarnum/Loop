@@ -1013,18 +1013,24 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         authStream = MessageStream(label: "g7.auth", name: "auth")
         ctrlStream = MessageStream(label: "g7.ctrl", name: "ctrl")
 
-        peripheral = p
+        // FIELD PATTERN (party 2026-07-18 + morning 2026-07-19): arms against the
+        // HELD object — which just disconnected from us and can still be mid-teardown
+        // (observed state=3/disconnecting in a later discovery) — consistently MISSED
+        // the next ad window, while the cold-reacquire path (fresh retrievePeripherals
+        // handle) fired reliably (23-304s). Materialize a fresh handle for the arm.
+        let target = central.retrievePeripherals(withIdentifiers: [p.identifier]).first ?? p
+        peripheral = target
         peripheral.delegate = self
         reconnectArmedAt = Date()
         setStatus("Reconnecting…")
-        log("pending connect armed → \(p.identifier) (no scan)")
-        central.connect(p, options: nil)
+        log("pending connect armed → \(target.identifier) (no scan, fresh handle=\(target !== p))")
+        central.connect(target, options: nil)
 
         scanTimeoutWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.attemptActive, self.peripheral?.state != .connected else { return }
             log("pending connect quiet \(Int(self.reconnectWatchdog))s — falling back to scan")
-            self.central.cancelPeripheralConnection(p)
+            self.central.cancelPeripheralConnection(target)   // the armed (fresh) handle
             self.savedPeripheral = nil
             self.peripheral = nil
             self.beginScan()

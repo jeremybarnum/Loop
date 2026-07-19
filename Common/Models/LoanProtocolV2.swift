@@ -233,10 +233,17 @@ public struct LoanGrant: Codable, Equatable {
     /// 16 h context for the watch's stores (v1 `dh`, kept).
     public let doseHistory: [LoanDoseRecord]
     public let boundaryRecord: LoanDoseRecord?
+    /// WS1 capability gate (verify finding REAL-3, deployment skew): the watch sends
+    /// INTERIM (released=false) hand-back offers only when the granting phone
+    /// understands them — an old phone's decoder drops the unknown `released` key and
+    /// would treat the first interim offer as a completed hand-back, reclaiming the
+    /// pod while the watch is still dosing. nil (old phone) → legacy single-phase.
+    public let supportsInterimHandback: Bool?
 
     public init(epoch: Int, expiresAt: Date, pumpManagerRawState: Data, podAddress: UInt32,
                 therapySettingsRaw: Data, settingsTimeZoneID: String,
-                doseHistory: [LoanDoseRecord], boundaryRecord: LoanDoseRecord?) {
+                doseHistory: [LoanDoseRecord], boundaryRecord: LoanDoseRecord?,
+                supportsInterimHandback: Bool? = nil) {
         self.epoch = epoch
         self.expiresAt = expiresAt
         self.pumpManagerRawState = pumpManagerRawState
@@ -245,6 +252,7 @@ public struct LoanGrant: Codable, Equatable {
         self.settingsTimeZoneID = settingsTimeZoneID
         self.doseHistory = doseHistory
         self.boundaryRecord = boundaryRecord
+        self.supportsInterimHandback = supportsInterimHandback
     }
 }
 
@@ -297,10 +305,15 @@ public struct HandbackOffer: Codable, Equatable {
     public let events: [LoanEvent]
     public let tombstones: [UUID]
     public let recovered: Bool
+    /// WS1 (two-phase hand-back, ruled 2026-07-19): `false` = INTERIM drain — the
+    /// watch is STILL DOSING and still owns the pod's connection; commit records +
+    /// ack the cursor but do NOT reclaim. `true` = the watch has released the pod.
+    /// nil (legacy senders, which only offered after stopping) = treat as released.
+    public let released: Bool?
 
     public init(epoch: Int, handedBackAt: Date, finalStatus: LoanPodStatus?,
                 odometer: LoanOdometerSnapshot?, events: [LoanEvent], tombstones: [UUID],
-                recovered: Bool) {
+                recovered: Bool, released: Bool? = nil) {
         self.epoch = epoch
         self.handedBackAt = handedBackAt
         self.finalStatus = finalStatus
@@ -308,6 +321,7 @@ public struct HandbackOffer: Codable, Equatable {
         self.events = events
         self.tombstones = tombstones
         self.recovered = recovered
+        self.released = released
     }
 }
 

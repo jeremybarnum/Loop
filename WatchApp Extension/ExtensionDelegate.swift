@@ -218,6 +218,13 @@ extension ExtensionDelegate: WCSessionDelegate {
         if activationState == .activated {
             updateContext(session.receivedApplicationContext)
             stockLoopSession.sessionDidActivate()
+            // PODLOAN diagnostics: queue the log to the phone once per launch — a
+            // deleted/reinstalled app can no longer eat an unsent log (2026-07-19).
+            if let url = LogFile.url,
+               let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int,
+               size > 2048 {
+                session.transferFile(url, metadata: ["kind": "g7watch.log"])
+            }
         }
     }
 

@@ -25,6 +25,13 @@ enum LoanReconciler {
         let events: [LoanEvent]
         /// The odometer audit pair; nil or !freshenSucceeded → audit is advisory-only.
         let odometer: LoanOdometerSnapshot?
+        /// WS1: the FULL loan's event set for the odometer audit. With interim drains,
+        /// `events` is only the uncommitted tail — auditing expected-insulin against
+        /// the tail treats committed temps/suspends as schedule and mints phantom
+        /// remainders (verify finding 2026-07-19, invariant-2 break). nil = use
+        /// `events` (pre-WS1 behavior; single-offer drains and tests unchanged).
+        /// Annulment candidates stay TAIL-only: committed records can't be unwritten.
+        var auditEvents: [LoanEvent]? = nil
         /// Grant-frozen basal schedule in its captured timezone (R10/§8).
         let schedule: BasalRateSchedule?
         /// Loan window: grant/handover stamp → handedBackAt.
@@ -56,7 +63,9 @@ enum LoanReconciler {
         // schedule over the loan window. Only meaningful with a fresh odometer.
         if let odometer = input.odometer, odometer.freshenSucceeded {
             let delivered = odometer.deliveredLatest - odometer.deliveredAtStart
-            let expected = expectedInsulin(events: events, schedule: input.schedule,
+            // WS1: expected-insulin integrates the WHOLE loan's journal (committed
+            // interim drains included), never just the uncommitted tail.
+            let expected = expectedInsulin(events: input.auditEvents ?? events, schedule: input.schedule,
                                            from: input.loanStart, to: input.loanEnd)
             let remainder = delivered - expected
 

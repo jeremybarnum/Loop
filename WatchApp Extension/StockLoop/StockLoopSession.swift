@@ -51,12 +51,22 @@ final class StockLoopSession {
                 // H19: arm the loop-stall dead-man for the session; every live loop
                 // cycle re-defers it (WatchLoopManager), so it fires only on a stall.
                 LoopStallWatchdog.refresh()
+                // WS4b: arm the sensor-blackout dead-man; every direct reading
+                // re-defers it (WatchLoopManager CGM ingestion).
+                SensorBlackoutAlert.refresh()
                 // R23: the glance page is the landing surface during a loan.
                 DispatchQueue.main.async { GlanceController.current?.becomeCurrentPage() }
             } else {
                 os_log("Loan ended: stopping G7 transport", log: self.log, type: .default)
                 self.stack.client.stopSoak()
                 LoopStallWatchdog.disarm()   // clean end — the loop stops on purpose
+                SensorBlackoutAlert.disarm()
+                // PODLOAN diagnostics: queue the session log to the phone at every
+                // loan end (queued transfer survives unreachability) — a deleted or
+                // reinstalled app can no longer eat an unsent log (2026-07-19).
+                if WCSession.default.activationState == .activated, let url = LogFile.url {
+                    WCSession.default.transferFile(url, metadata: ["kind": "g7watch.log"])
+                }
             }
         }
 

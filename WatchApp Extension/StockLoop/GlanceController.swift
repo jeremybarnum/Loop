@@ -85,6 +85,10 @@ struct GlanceUIState {
     /// without a direct reading. Pod and G7 are deliberately decoupled — the pod bar
     /// completes without waiting for this.
     var g7EtaText: String? = nil
+
+    /// WS1: hand-back requested but still draining — watch remains in control;
+    /// the glance shows "ending…" plus a Cancel affordance.
+    var handbackPending: Bool = false
 }
 
 // MARK: - View model
@@ -115,6 +119,14 @@ final class GlanceViewModel: ObservableObject {
     }
 
     deinit { timer?.invalidate() }
+
+    func cancelHandback() {
+        guard !isPreview else { return }
+        ExtensionDelegate.shared().stockLoopSession.loanController.cancelHandback()
+        // The cancel lands on the controller's queue — refresh after it drains so
+        // the "ending…" UI doesn't linger a full timer tick.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
+    }
 
     func startSportMode() {
         guard !isPreview else { return }
@@ -164,8 +176,13 @@ final class GlanceViewModel: ObservableObject {
             state = s
         case .active:
             let data = session.stack.loopManager.glanceData()
-            state = Self.activeState(data: data, suspendEndsAt: snap.suspendEndsAt, cob: latestCOB, now: Date(),
+            var s = Self.activeState(data: data, suspendEndsAt: snap.suspendEndsAt, cob: latestCOB, now: Date(),
                                      phoneGlucoseDate: ExtensionDelegate.shared().loopManager.activeContext?.glucoseDate)
+            if snap.handbackPending {
+                s.handbackPending = true
+                s.loopStatusText = NSLocalizedString("ending…", comment: "Glance status while a hand-back drains in the background")
+            }
+            state = s
             session.stack.loopManager.glanceCarbsOnBoard { [weak self] cob in
                 DispatchQueue.main.async { self?.latestCOB = cob }
             }
@@ -443,6 +460,19 @@ struct GlanceView: View {
                 } message: {
                     Text(model.state.suspendText
                          ?? NSLocalizedString("Resume insulin first, then close the loop.", comment: "Glance loop-control explanation fallback"))
+                }
+                // WS1: hand-back draining in the background — still in control.
+                if model.state.handbackPending {
+                    Text(NSLocalizedString("Records syncing to iPhone — still in control", comment: "Glance note while a hand-back drains"))
+                        .font(.system(size: 10))
+                        .foregroundColor(.glanceDim)
+                    Button {
+                        model.cancelHandback()
+                    } label: {
+                        Text(NSLocalizedString("Cancel Ending", comment: "Glance button to abort a pending hand-back"))
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .tint(.glanceWarn)
                 }
             }
             .padding(.bottom, 2)

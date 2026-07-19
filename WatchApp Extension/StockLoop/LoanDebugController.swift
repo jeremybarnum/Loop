@@ -24,6 +24,9 @@ struct LoanDebugView: View {
     @State private var snapshot: PodLoanWatchController.DebugSnapshot?
     @State private var g7: G7Client.IdentitySnapshot?
     @State private var lastAction: String = "—"
+    /// The loop's own IOB (Jeremy 2026-07-19: the dosing math is what matters —
+    /// surface it here until the UI pass wires the main screens).
+    @State private var iobText: String = "—"
 
     private let refresh = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
@@ -42,6 +45,7 @@ struct LoanDebugView: View {
                 row("mode", snapshot.map { $0.mode.rawValue } ?? "—")
                 row("pump", (snapshot?.hasPumpManager ?? false) ? "constructed" : "nil")
                 row("odometer", snapshot?.deliveredUnits.map { String(format: "%.2f U", $0) } ?? "—")
+                row("loop IOB", iobText)
                 row("fault", snapshot?.podFault ?? "none")
                 row("last seq", snapshot.map { String($0.lastEventSeq) } ?? "—")
                 row("unacked", snapshot.map { String($0.unackedCount) } ?? "—")
@@ -107,10 +111,12 @@ struct LoanDebugView: View {
         .onReceive(refresh) { _ in
             snapshot = session.loanController.debugSnapshot()
             g7 = session.stack.client.identitySnapshot()
+            iobText = session.stack.loopManager.glanceData().iob.map { String(format: "%.2f U", $0) } ?? "—"
         }
         .onAppear {
             snapshot = session.loanController.debugSnapshot()
             g7 = session.stack.client.identitySnapshot()
+            iobText = session.stack.loopManager.glanceData().iob.map { String(format: "%.2f U", $0) } ?? "—"
         }
     }
 
