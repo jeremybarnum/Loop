@@ -57,10 +57,11 @@ final class PodLoanPhoneController {
     private(set) var state: State {
         didSet {
             UserDefaults.standard.set(state.rawValue, forKey: Keys.state)
-            // Instant-tile port: only OWNERSHIP flips re-render (not every
-            // intermediate transition — reconciling/reclaimPending are still
-            // "not owner" and the tile already shows it).
-            if (oldValue == .owner) != (state == .owner) {
+            // Instant-tile: EVERY state change re-renders (the tile distinguishes
+            // "Pod on Watch" from "Reclaiming…", so intermediate transitions are
+            // user-visible — crude parity: it pushed every phase, and the 5s frozen
+            // tile during hand-back read as ambiguity).
+            if oldValue != state {
                 deps.ownershipDidChange()
             }
         }
@@ -71,6 +72,12 @@ final class PodLoanPhoneController {
     /// true would die in a BLE timeout; callers should refuse loudly instead.
     var isPodLoanedOut: Bool {
         return queue.sync { state != .owner }
+    }
+
+    /// True while the pod is actively coming home (hand-back reconcile / reclaim in
+    /// flight) — the pump tile shows "Reclaiming…" instead of "Pod on Watch".
+    var isReclaimInProgress: Bool {
+        return queue.sync { state == .reconciling || state == .reclaimPending }
     }
     private var epoch: Int {
         didSet { UserDefaults.standard.set(epoch, forKey: Keys.epoch) }

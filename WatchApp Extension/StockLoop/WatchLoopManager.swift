@@ -135,9 +135,11 @@ final class WatchLoopManager {
     /// Per-session watch-local closed-loop opt-in (R23 confidence model). Each loan
     /// starts OPEN (advisory — the loop computes and drives the glance display but does
     /// NOT enact); the user deliberately closes the loop from the glance screen.
-    /// AND-ed with the phone's `dosingEnabled` (the frozen grant snapshot), so the watch
-    /// can only ever be MORE conservative — closing here never expands dosing the phone
-    /// disallowed. Read/written on the dataAccessQueue.
+    /// RULED 2026-07-18 (Jeremy, amending R23): the watch is SOVEREIGN once a loan is
+    /// granted — the phone's own loop mode does NOT gate the wrist's per-session close.
+    /// Therapy settings (frozen in the grant) are the only dosing limits (R1/R16); the
+    /// old AND with the phone's dosingEnabled produced an untappable dead control when
+    /// the phone happened to run open loop. Read/written on the dataAccessQueue.
     private var _closedLoopEnabled = false
     var closedLoopEnabled: Bool {
         dataAccessQueue.sync { _closedLoopEnabled }
@@ -296,11 +298,11 @@ final class WatchLoopManager {
                 LoopStallWatchdog.refresh()
             }
 
-            // Enact only when the phone allows dosing (frozen snapshot) AND the user
-            // has closed the loop on the watch this session (R23). Either false = the
-            // loop runs advisory: it computed prediction + a recommendation above (the
-            // glance display is live) but nothing is sent to the pod.
-            if error == nil, self.settings.dosingEnabled, self._closedLoopEnabled {
+            // Enact only when the user has closed the loop on the watch THIS session
+            // (R23 as amended 2026-07-18: watch sovereign — the phone's own loop mode
+            // no longer gates the wrist). Open = advisory: prediction + recommendation
+            // computed above (glance display live), nothing sent to the pod.
+            if error == nil, self._closedLoopEnabled {
                 error = self.enactRecommendedAutomaticDose()
             } else if error == nil {
                 self.log.default("Advisory (open loop) — computed but not enacting.")

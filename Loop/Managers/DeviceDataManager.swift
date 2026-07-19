@@ -835,6 +835,16 @@ extension DeviceDataManager {
         watchManager.podLoanController.reclaimNow()
     }
 
+    /// PODLOAN: loan state for UI (watchManager is file-private; the status screen and
+    /// the pump tile need these). `isPodLoanedToWatch` = any non-owner state;
+    /// `isPodLoanReclaiming` = actively coming home (reconciling/reclaimPending).
+    var isPodLoanedToWatch: Bool {
+        return watchManager?.podLoanController.isPodLoanedOut ?? false
+    }
+    var isPodLoanReclaiming: Bool {
+        return watchManager?.podLoanController.isReclaimInProgress ?? false
+    }
+
     func enactBolus(units: Double, activationType: BolusActivationType, completion: @escaping (_ error: Error?) -> Void = { _ in }) {
         guard let pumpManager = pumpManager else {
             completion(LoopError.configurationError(.pumpManager))

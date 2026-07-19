@@ -12,6 +12,7 @@
 import Foundation
 import SwiftUI
 import WatchKit
+import WatchConnectivity
 
 final class LoanDebugController: WKHostingController<LoanDebugView> {
     override var body: LoanDebugView {
@@ -129,10 +130,28 @@ struct LoanDebugView: View {
 /// no Mac / devicectl. Newest lines at the top.
 struct LogView: View {
     @State private var text: String = ""
+    @State private var sendNote: String?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 6) {
+                // The full file rides WCSession's queued transfer (works even while the
+                // phone is unreachable — it delivers when contact resumes) and lands in
+                // the phone's Files app (On My iPhone → Loop), where the PHONE's share
+                // sheet has real AirDrop. watchOS has no AirDrop; texting logs was pain.
+                Button {
+                    if let url = LogFile.url {
+                        WCSession.default.transferFile(url, metadata: ["kind": "g7watch.log"])
+                        sendNote = "queued — appears in iPhone Files app (Loop folder)"
+                    }
+                } label: {
+                    Label("Send Log to iPhone", systemImage: "iphone.and.arrow.forward")
+                }
+                .font(.caption)
+                if let note = sendNote {
+                    Text(note).font(.system(size: 10)).foregroundColor(.secondary)
+                }
+
                 ShareLink(item: LogFile.tail(maxBytes: 64 * 1024)) {
                     Label("Share log", systemImage: "square.and.arrow.up")
                 }

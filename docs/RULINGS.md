@@ -162,6 +162,16 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   can only be more conservative); reset OPEN each loan. Full record:
   docs/DESIGN_SPORT_UI.md.
 
+- **R23 AMENDMENT — watch sovereignty over loop mode** (2026-07-18, Jeremy):
+  "The watch should be understood as autonomous once it's in sport mode."
+  The phone's OWN loop mode does NOT gate the wrist's per-session close —
+  the old AND with the grant's frozen `dosingEnabled` is removed. Therapy
+  settings (frozen in the grant) remain the only dosing limits (R1/R16).
+  Companion UX principle, general: **no dead controls** — a control that
+  can't act right now stays tappable and explains why ("no BG yet", "no
+  pod"), and closing without BG is not refused: it ARMS, and the stale
+  gate keeps it paused until readings flow.
+
 - **R24 — Sport Mode connect/onboarding UX** (2026-07-18): return to the
   crude build's proven pattern — it "was very good and working perfectly"
   (Jeremy). Pod takeover: a DETERMINATE ~10-second progress bar (the pod

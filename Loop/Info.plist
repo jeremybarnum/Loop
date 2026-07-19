@@ -4,6 +4,12 @@
 <dict>
 	<key>AppGroupIdentifier</key>
 	<string>$(APP_GROUP_IDENTIFIER)</string>
+	<!-- PODLOAN diagnostics: Documents visible in the Files app so relayed watch
+	     logs can be AirDropped from the phone. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>AppStoreURL</key>
 	<string>$(APP_STORE_URL)</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>

@@ -1113,7 +1113,12 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         guard matches else { return }
 
         if !candidates.contains(where: { $0.p.identifier == peripheral.identifier }) {
-            log("  discovered candidate '\(name.isEmpty ? "?" : name)' \(peripheral.identifier) RSSI=\(RSSI)")
+            // [radio] connectable flag matters: a NON-connectable advertisement looks
+            // identical in discovery but a connect against it hangs forever — the
+            // 2026-07-18 party signature (discovered at strong RSSI, connect timeout).
+            let connectable = (advertisementData[CBAdvertisementDataIsConnectable] as? NSNumber)?.boolValue
+            let connectableText = connectable.map { $0 ? "yes" : "NO" } ?? "?"
+            log("  discovered candidate '\(name.isEmpty ? "?" : name)' \(peripheral.identifier) RSSI=\(RSSI) connectable=\(connectableText) state=\(peripheral.state.rawValue)")
             candidates.append((peripheral, RSSI.intValue, name))
         }
 
@@ -1154,29 +1159,39 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                 self.setStatus("Connecting…")
                 self.central.connect(best.p, options: nil)
 
-                // CONNECT WATCHDOG. CoreBluetooth pending connects never time out on
-                // their own, and the G7 only advertises briefly around its 5-min
-                // transmit — a connect issued as it goes quiet can hang FOREVER. The
-                // scan timeout can't catch this (its guard is peripheral == nil, and
-                // we just set peripheral), which stalled a live session for 21 min
-                // (2026-07-18 14:17, RSSI -82 connect that never completed). Cancel
-                // and fail the attempt so the 15s retry cycle resumes. Pre-warm keeps
-                // its own bounded backstop (prewarmTimeoutWork), same as the scan
-                // timeout above.
+                // CONNECT WATCHDOG — bounded at reconnectWatchdog (400s), NOT shorter.
+                // AUDIT FINDING (2026-07-18 party): a 15s budget here killed 3/3
+                // scan-caught connects — the G7 advertises a ~6s connectable burst
+                // every ~5 min, so a connect that misses the burst tail CANNOT
+                // complete for ~5 min and must be allowed to ride to the next window
+                // (the warm pending-connect path's proven behavior: fires at
+                // 23-304s). 400s still bounds the original 21-min hang class
+                // (2026-07-18 14:17). [radio] heartbeat logs the wait so a quiet
+                // pend is visible, not silent. Pre-warm keeps its own backstop.
                 guard !self.prewarmActive else { return }
                 self.scanTimeoutWork?.cancel()
                 let gen = self.attemptGeneration   // a superseded attempt's watchdog must not fire into a fresh one
+                let connectIssuedAt = Date()
+                func heartbeat() {
+                    self.cbQueue.asyncAfter(deadline: .now() + 60) { [weak self] in
+                        guard let self, self.attemptActive, self.attemptGeneration == gen,
+                              self.peripheral?.state == .connecting else { return }
+                        log("[radio] connect still pending \(Int(Date().timeIntervalSince(connectIssuedAt)))s (state=\(self.peripheral?.state.rawValue ?? -1)) — riding to the next ad window")
+                        heartbeat()
+                    }
+                }
+                heartbeat()
                 let connectWatchdog = DispatchWorkItem { [weak self] in
                     guard let self, self.attemptActive, self.attemptGeneration == gen,
                           self.peripheral?.state != .connected else { return }
-                    log("connect timed out — cancelling pending connect")
+                    log("connect timed out after \(Int(Date().timeIntervalSince(connectIssuedAt)))s (state=\(self.peripheral?.state.rawValue ?? -1)) — cancelling pending connect")
                     if let p = self.peripheral {
                         self.central.cancelPeripheralConnection(p)
                     }
                     self.finishAttempt(success: false, message: "Connect timed out")
                 }
                 self.scanTimeoutWork = connectWatchdog
-                self.cbQueue.asyncAfter(deadline: .now() + 15, execute: connectWatchdog)
+                self.cbQueue.asyncAfter(deadline: .now() + self.reconnectWatchdog, execute: connectWatchdog)
             }
         }
     }

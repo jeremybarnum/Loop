@@ -153,7 +153,10 @@ final class GlanceViewModel: ObservableObject {
                                        now: Date())
         case .handingBack:
             var s = GlanceUIState(); s.phase = .handingBack
-            s.loopStatusText = NSLocalizedString("handing back…", comment: "Glance status during hand-back")
+            // Honest limbo (party finding 2026-07-18: 97 min of ambiguity): while the
+            // iPhone is unreachable this state can persist — say exactly what's true.
+            s.loopStatusText = NSLocalizedString("ending…", comment: "Glance status during hand-back")
+            s.idleNote = NSLocalizedString("Ending Sport Mode — waiting for iPhone. The pod is still on your watch; bolus is unavailable until the iPhone connects.", comment: "Glance note while a hand-back waits for the phone")
             state = s
         case .revoked, .recoveredDrain:
             var s = GlanceUIState(); s.phase = .draining
@@ -272,7 +275,11 @@ final class GlanceViewModel: ObservableObject {
             // R24: the wait is predictable — show when the next reading should land.
             // The sport store only holds DIRECT readings, so on a first-ever session
             // it's empty; the phone-fed timestamp anchors the same sensor grid.
-            s.g7EtaText = g7EtaText(lastReading: data.glucoseDate ?? phoneGlucoseDate, now: now)
+            // HONESTY (Jeremy 2026-07-18): a confident countdown ONLY while readings
+            // are actually flowing; once we've missed a window (or never connected),
+            // promise a clock time with slack instead — the ladder may need a cycle.
+            let missedAWindow = (age ?? .infinity) > 8 * 60
+            s.g7EtaText = g7EtaText(lastReading: data.glucoseDate ?? phoneGlucoseDate, now: now, firstConnect: missedAWindow)
         } else if let eventual = data.eventual {
             s.eventualText = String(format: "%.0f", eventual.doubleValue(for: .milligramsPerDeciliter))
         }
@@ -286,12 +293,11 @@ final class GlanceViewModel: ObservableObject {
             s.loopDotColor = .clear
             s.canToggleLoop = false   // resume from the suspend control, not the loop toggle
         } else if !data.closedLoopEnabled {
-            // OPEN by choice (or the phone disallows dosing) — advisory.
-            s.loopStatusText = data.dosingAllowedByPhone
-                ? NSLocalizedString("OPEN", comment: "Glance loop status: advisory / open loop")
-                : NSLocalizedString("OPEN · phone", comment: "Glance loop status: open because the phone disallows dosing")
+            // OPEN by choice — advisory. (R23 as amended 2026-07-18: the watch is
+            // sovereign in a loan; the phone's own loop mode no longer gates this.)
+            s.loopStatusText = NSLocalizedString("OPEN", comment: "Glance loop status: advisory / open loop")
             s.loopDotColor = .clear
-            s.canToggleLoop = data.dosingAllowedByPhone
+            s.canToggleLoop = true
         } else if isStale {
             s.loopStatusText = NSLocalizedString("PAUSED", comment: "Glance loop status while glucose is stale")
             s.loopDotColor = .glanceWarn
@@ -316,6 +322,7 @@ struct GlanceView: View {
     @ObservedObject var model: GlanceViewModel
     @State private var confirmingStart = false
     @State private var confirmingClose = false
+    @State private var explainingUnavailable = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -331,20 +338,9 @@ struct GlanceView: View {
 
     private var statusLine: some View {
         HStack {
-            if model.state.canToggleLoop {
-                // Tappable = LOOKS tappable (bordered capsule) — the bare pill read
-                // as a status label and the open/close control went undiscovered
-                // (Jeremy, 2026-07-18: "no handle for opening and closing the loop").
-                Button(action: onLoopTap) {
-                    loopPill
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .overlay(Capsule().stroke(Color.glanceDim.opacity(0.6), lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-            } else {
-                loopPill
-            }
+            // Status ONLY — the open/close control is the full-width button in the
+            // body (2026-07-18 ruling: no dead controls, no ambiguous tap targets).
+            loopPill
             Spacer()
             Text("SPORT")
                 .font(.system(size: 11, weight: .semibold))
@@ -421,10 +417,33 @@ struct GlanceView: View {
     private var bottomBlock: some View {
         switch model.state.phase {
         case .active:
-            HStack {
-                railCell(model.state.iobText, "IOB U")
-                railCell(model.state.cobText, "COB G")
-                railCell(model.state.tempText, "TEMP U/H")
+            VStack(spacing: 4) {
+                HStack {
+                    railCell(model.state.iobText, "IOB U")
+                    railCell(model.state.cobText, "COB G")
+                    railCell(model.state.tempText, "TEMP U/H")
+                }
+                // The loop control, first-class (2026-07-18 ruling: watch sovereign,
+                // always tappable — a control that can't act right now explains why).
+                Button {
+                    if model.state.canToggleLoop {
+                        onLoopTap()
+                    } else {
+                        explainingUnavailable = true
+                    }
+                } label: {
+                    Text(model.state.loopClosed
+                         ? NSLocalizedString("Open Loop", comment: "Glance loop control while closed")
+                         : NSLocalizedString("Close Loop", comment: "Glance loop control while open"))
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .tint(model.state.loopClosed ? .glanceDim : .glanceAccent)
+                .alert("Can't change the loop right now", isPresented: $explainingUnavailable) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text(model.state.suspendText
+                         ?? NSLocalizedString("Resume insulin first, then close the loop.", comment: "Glance loop-control explanation fallback"))
+                }
             }
             .padding(.bottom, 2)
         case .idle:
@@ -456,8 +475,17 @@ struct GlanceView: View {
                 .padding(.horizontal, 10)
                 .padding(.bottom, 6)
         case .handingBack, .draining:
-            ProgressView()
-                .padding(.bottom, 8)
+            VStack(spacing: 4) {
+                ProgressView()
+                if let note = model.state.idleNote {
+                    Text(note)
+                        .font(.system(size: 11))
+                        .foregroundColor(.glanceWarn)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.bottom, 6)
         }
     }
 

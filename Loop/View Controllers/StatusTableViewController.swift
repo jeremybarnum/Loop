@@ -1792,6 +1792,22 @@ final class StatusTableViewController: LoopChartsTableViewController {
     }
 
     @objc private func pumpStatusTapped(_ sender: UIGestureRecognizer) {
+        // PODLOAN: while the pod is on the watch, a TAP on the tile offers the
+        // reclaim (crude-branch parity — the notification long-press alone was
+        // undiscoverable, 2026-07-18). Opening pod settings is meaningless while
+        // the connection is released anyway.
+        if deviceManager.isPodLoanedToWatch {
+            let alert = UIAlertController(
+                title: NSLocalizedString("Pod Is on the Watch", comment: "Title of the reclaim prompt when tapping the pump tile during a loan"),
+                message: NSLocalizedString("Reclaim the pod to this phone? The watch's Sport Mode session will end and its records will be collected.", comment: "Message of the reclaim prompt"),
+                preferredStyle: .actionSheet)
+            alert.addAction(UIAlertAction(title: NSLocalizedString("Reclaim Now", comment: "Button to reclaim the pod from the watch"), style: .default) { [weak self] _ in
+                self?.deviceManager.reclaimPodLoanFromWatch()
+            })
+            alert.addAction(UIAlertAction(title: NSLocalizedString("Cancel", comment: "Cancel the reclaim prompt"), style: .cancel))
+            present(alert, animated: true)
+            return
+        }
         if let pumpStatusView = sender.view as? PumpStatusHUDView {
             executeHUDTapAction(deviceManager.didTapOnPumpStatus(pumpStatusView.pumpManagerProvidedHUD))
         }

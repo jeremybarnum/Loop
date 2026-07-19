@@ -61,6 +61,9 @@ final class PodLoanWatchController {
     /// When the current Start attempt began (request sent) — drives the R24 glance
     /// progress bar. Meaningful only while phase is requested/takingOver.
     private var attemptStartedAt: Date?
+    /// Hand-back offer resend counter (reset when a drain begins) — makes an
+    /// unreachable-phone wait self-documenting in the log.
+    private var handbackResendCount = 0
     /// The single in-flight uncertainty being chased (mirrors the crude
     /// UncertainCommandRecord — one at a time; a NEW programming command destroys the
     /// verdict evidence and the conservative record stands, per d27a40c7 semantics).
@@ -324,6 +327,7 @@ final class PodLoanWatchController {
         queue.async {
             guard self.phase == .active, let manager = self.pumpManager else { return }
             self.phase = .handingBack
+            self.handbackResendCount = 0
             SportLog.event("loan", "HAND-BACK started — draining \(self.journal.unackedEvents().count) events")
             self.loopManager.pumpManager = nil  // no dosing during hand-back
 
@@ -369,6 +373,12 @@ final class PodLoanWatchController {
             events: journal.unackedEvents(),
             tombstones: journal.pendingTombstones(),
             recovered: recovered)
+        handbackResendCount += 1
+        // Self-documenting limbo (party finding: 97 silent minutes of 15s resends):
+        // log the attempt count each minute so the wait is visible in the log.
+        if handbackResendCount == 1 || handbackResendCount % 4 == 0 {
+            SportLog.event("loan", "hand-back offer attempt \(handbackResendCount) — waiting for iPhone ack")
+        }
         sendMessage(.handbackOffer(offer))
 
         // Resend until ack (rows 9/10): same event IDs every retry by construction.

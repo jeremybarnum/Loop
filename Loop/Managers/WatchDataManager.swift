@@ -603,6 +603,23 @@ extension WatchDataManager: WCSessionDelegate {
         }
     }
 
+    func session(_ session: WCSession, didReceive file: WCSessionFile) {
+        // Watch diagnostics log → Documents, visible in the Files app (On My iPhone →
+        // Loop) so it can be AirDropped from the PHONE (watchOS has no AirDrop; logs
+        // were being texted). Copy immediately — the system deletes file.fileURL when
+        // this method returns.
+        guard file.metadata?["kind"] as? String == "g7watch.log" else { return }
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let stamped = docs.appendingPathComponent("g7watch-\(formatter.string(from: Date())).log")
+        try? FileManager.default.copyItem(at: file.fileURL, to: stamped)
+        let latest = docs.appendingPathComponent("g7watch-latest.log")
+        try? FileManager.default.removeItem(at: latest)
+        try? FileManager.default.copyItem(at: file.fileURL, to: latest)
+        log.default("Watch log received: %{public}@", stamped.lastPathComponent)
+    }
+
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
         // M5: loan protocol v2 rides its own single key. Unknown payloads are logged
         // and ignored — never asserted on (failure-matrix row 17: WC redelivers

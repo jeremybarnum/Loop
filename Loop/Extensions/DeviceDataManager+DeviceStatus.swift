@@ -40,7 +40,12 @@ extension DeviceDataManager {
             return DeviceDataManager.resumeOnboardingStatusHighlight
         } else if pumpManager == nil {
             return DeviceDataManager.addPumpStatusHighlight
-        } else if (pumpManager as? PumpConnectionLendable)?.isConnectionReleased == true {
+        } else if isPodLoanReclaiming {
+            // PODLOAN: hand-back in flight — records draining + radio re-arming takes
+            // a few seconds; show movement, not a frozen "on watch" (2026-07-18: the
+            // ~5s frozen tile during hand-back read as ownership ambiguity).
+            return DeviceDataManager.podReclaimingStatusHighlight
+        } else if (pumpManager as? PumpConnectionLendable)?.isConnectionReleased == true || isPodLoanedToWatch {
             // PODLOAN (ported from the crude branch's "instant status update"): while
             // the pod is loaned to the watch, keying on the persisted release flag
             // flips this tile the MOMENT of release/reclaim — instead of the stock
@@ -58,6 +63,16 @@ extension DeviceDataManager {
     struct PodOnWatchStatusHighlight: DeviceStatusHighlight {
         var localizedMessage: String = NSLocalizedString("Pod on Watch", comment: "Title text for the pump tile while the pod is loaned to the watch")
         var imageName: String = "applewatch"
+        var state: DeviceStatusHighlightState = .normalPump
+    }
+
+    static var podReclaimingStatusHighlight: PodReclaimingStatusHighlight {
+        return PodReclaimingStatusHighlight()
+    }
+
+    struct PodReclaimingStatusHighlight: DeviceStatusHighlight {
+        var localizedMessage: String = NSLocalizedString("Reclaiming…", comment: "Title text for the pump tile while the pod is coming back from the watch")
+        var imageName: String = "arrow.triangle.2.circlepath"
         var state: DeviceStatusHighlightState = .normalPump
     }
 
