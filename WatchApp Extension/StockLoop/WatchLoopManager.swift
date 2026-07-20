@@ -203,6 +203,48 @@ final class WatchLoopManager {
         }
     }
 
+    /// Feed the STOCK watch screens (ChartHUDController rows: IOB, COB, net temp
+    /// basal; loop-age via loopLastRunDate) during a loan. The phone stops sending
+    /// fresh WatchContext while the pod is on the wrist — it cannot know what the
+    /// watch has dosed — so those rows sat blank all sport session. The watch loop
+    /// is the ground truth here: synthesize a context from local state after each
+    /// cycle and push it through the same updateContext path a phone context uses.
+    /// No glucoseSyncIdentifier is set, so WatchContext.newGlucoseSample stays nil
+    /// and updateContext writes nothing to the HUD's glucose store (the sport
+    /// store's single-writer invariant is untouched; glucose fields here are
+    /// display-only). shouldReplace is glucoseDate recency — after hand-back the
+    /// phone's fresher contexts win the screens back naturally.
+    private func publishHUDContext() {   // dataAccessQueue
+        guard pumpManager != nil else { return }   // loan active only — otherwise the phone owns the HUD
+        let ctx = WatchContext()
+        let latest = glucoseStore.latestGlucose
+        ctx.glucose = latest?.quantity
+        ctx.glucoseDate = latest?.startDate
+        ctx.glucoseTrend = (latest as? StoredGlucoseSample)?.trend
+        ctx.iob = insulinOnBoard?.value
+        ctx.loopLastRunDate = lastLoopCompleted
+        ctx.isClosedLoop = _closedLoopEnabled
+        if case .some(.tempBasal(let dose)) = pumpManager?.status.basalDeliveryState {
+            let scheduled = settings.basalRateSchedule?.value(at: now()) ?? 0
+            ctx.lastNetTempBasalDose = dose.unitsPerHour - scheduled
+            ctx.lastNetTempBasalDate = dose.startDate
+        } else {
+            ctx.lastNetTempBasalDose = 0
+            ctx.lastNetTempBasalDate = now()
+        }
+        carbStore.carbsOnBoard(at: now()) { result in
+            if case .success(let value) = result {
+                ctx.cob = value.quantity.doubleValue(for: .gram())
+            }
+            DispatchQueue.main.async {
+                let loopDataManager = ExtensionDelegate.shared().loopManager
+                ctx.displayGlucoseUnit = loopDataManager.activeContext?.displayGlucoseUnit ?? ctx.displayGlucoseUnit
+                loopDataManager.updateContext(ctx)
+                NotificationCenter.default.post(name: LoopDataManager.didUpdateContextNotification, object: loopDataManager)
+            }
+        }
+    }
+
     // MARK: The CGM input (stock G7CGMManager over the proven transport — M3)
 
     /// Held so the stack has an owner; delegate wiring happens in StockLoopStack.assemble().
@@ -322,6 +364,7 @@ final class WatchLoopManager {
                 let bg = self.glucoseStore.latestGlucose.map { String(format: "%.0f", $0.quantity.doubleValue(for: .milligramsPerDeciliter)) } ?? "—"
                 let rec = self.recommendedAutomaticDose.map { String(describing: $0.recommendation.basalAdjustment?.unitsPerHour ?? 0) } ?? "none"
                 SportLog.event("loop", "cycle OK — BG \(bg), IOB \(self.insulinOnBoard.map { String(format: "%.2f", $0.value) } ?? "—"), temp \(rec)")
+                self.publishHUDContext()
             }
         }
     }
