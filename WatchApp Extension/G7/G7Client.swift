@@ -691,6 +691,16 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     // it instantly (07:26 prewarm connected on the first try). The cure, in-app:
     // destroy and recreate the central. Detector: consecutive connect-timeouts
     // while the sensor IS being discovered, or a peripheral stuck in teardown.
+    // MARK: 131 window observer — DIAGNOSTIC ONLY (cbQueue-confined)
+    // A passive scan around each predicted ad window that LOGS whether the sensor's
+    // advertisement was visible, never connects. Discriminates the two miss theories:
+    // "ad visible + armed connect slept" (OS arm failure) vs "no ad reached us"
+    // (competing listener holds the sensor / sensor skipped). Bounded 60s per window.
+    private var observerScanActive = false
+    private var observerSightings = 0
+    private var observerWork: DispatchWorkItem?
+    private var observerEndWork: DispatchWorkItem?
+
     private var consecutiveDeadConnects = 0
 
     /// On cbQueue. Counts a connect that pended out its full watchdog; two in a
@@ -711,6 +721,10 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         log("[radio] RECREATING Bluetooth central — \(reason)")
         consecutiveDeadConnects = 0
         scanTimeoutWork?.cancel(); scanTimeoutWork = nil
+        // 131 observer: the central is dying — drop observer state without touching it.
+        observerWork?.cancel(); observerWork = nil
+        observerEndWork?.cancel(); observerEndWork = nil
+        observerScanActive = false
         if central != nil {
             central.delegate = nil
             if central.state == .poweredOn { central.stopScan() }
@@ -876,6 +890,10 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             self.wantConnect = false
             self.scanTimeoutWork?.cancel(); self.scanTimeoutWork = nil
             self.handshakeTask?.cancel(); self.handshakeTask = nil
+            // 131 observer: session over — cancel the pending watch and its end-timer.
+            self.observerWork?.cancel(); self.observerWork = nil
+            self.observerEndWork?.cancel(); self.observerEndWork = nil
+            self.observerScanActive = false
             if self.central != nil, self.central.state == .poweredOn { self.central.stopScan() }
             if let p = self.peripheral { self.central?.cancelPeripheralConnection(p) }
             self.dataStream.close(); self.authStream.close(); self.ctrlStream.close()
@@ -1025,6 +1043,14 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         setHandshakeActive(false)   // Fix B: handshake window closed → the pod may use the radio again
         teardownPrewarm(bonded: success)   // no-op unless a pre-warm bond was in flight
         let useReconnect = reconnectMode && savedPeripheral != nil
+        // 131 observer: after a good read the next window is predictable (~+292s from
+        // now). Watch it passively from +280s so a miss is classified, not just felt.
+        if success, useReconnect, soakActive {
+            observerWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.beginObserverScan() }
+            observerWork = work
+            cbQueue.asyncAfter(deadline: .now() + 280, execute: work)
+        }
         onMain {
             self.isRunning = false
             self.statusText = message
@@ -1244,9 +1270,45 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         cbQueue.asyncAfter(deadline: .now() + reconnectWatchdog, execute: work)
     }
 
+    // MARK: 131 window observer (diagnostic)
+
+    private func beginObserverScan() {   // on cbQueue
+        // Never perturb real work: skip when a takeover holds the radio, a handshake
+        // is live, a real scan is running, or we're not in an armed-connect soak.
+        guard soakActive, attemptActive, !podTakeoverHold, !isHandshakeActive,
+              !prewarmActive, central != nil, central.state == .poweredOn,
+              !central.isScanning, peripheral?.state != .connected else { return }
+        observerScanActive = true
+        observerSightings = 0
+        log("[observer] window watch: passive scan 60s around the predicted ad window")
+        // allowDuplicates so every burst repetition logs — the data IS the point.
+        central.scanForPeripherals(withServices: nil,
+                                   options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+        observerEndWork?.cancel()
+        let end = DispatchWorkItem { [weak self] in self?.stopObserverScan("window elapsed") }
+        observerEndWork = end
+        cbQueue.asyncAfter(deadline: .now() + 60, execute: end)
+    }
+
+    private func stopObserverScan(_ reason: String) {   // on cbQueue
+        guard observerScanActive else { return }
+        observerScanActive = false
+        observerEndWork?.cancel(); observerEndWork = nil
+        if central != nil, central.state == .poweredOn, central.isScanning { central.stopScan() }
+        // The verdict line — the whole reason the observer exists:
+        if reason == "window caught — connect fired" {
+            log("[observer] window CAUGHT (\(observerSightings) ad sighting(s) during watch)")
+        } else if observerSightings > 0 {
+            log("[observer] window MISSED but AD WAS VISIBLE (\(observerSightings) sighting(s)) — armed connect slept through it (OS arm failure)")
+        } else {
+            log("[observer] window MISSED and NO AD SEEN — sensor silent to us (competing listener holding it, or skipped ad) [\(reason)]")
+        }
+    }
+
     // MARK: Scanning
 
     private func beginScan() {   // on cbQueue
+        stopObserverScan("superseded by acquisition scan")
         // Fresh per-attempt state + channels.
         candidates = []
         scanWindowStarted = false
@@ -1322,6 +1384,14 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         let services = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID]) ?? []
         let matches = services.contains(G7UUID.service) || name.uppercased().hasPrefix("DXCM")
         guard matches else { return }
+
+        // 131 observer: log-only sightings — NEVER enters the candidate/connect path.
+        if observerScanActive {
+            observerSightings += 1
+            let connectable = (advertisementData[CBAdvertisementDataIsConnectable] as? NSNumber)?.boolValue
+            log("[observer] ad sighted: '\(name.isEmpty ? "?" : name)' RSSI=\(RSSI) connectable=\(connectable.map { $0 ? "yes" : "NO" } ?? "?") state=\(peripheral.state.rawValue)")
+            return
+        }
 
         if !candidates.contains(where: { $0.p.identifier == peripheral.identifier }) {
             // BONDED-ONLY FILTER (2026-07-20, the Caitlin finding): in a two-Dexcom
@@ -1431,6 +1501,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         consecutiveDeadConnects = 0                               // the session is provably healthy
+        stopObserverScan("window caught — connect fired")         // observer verdict before the scan dies
         central.stopScan()                                        // cold reacquire ran a concurrent scan
         scanTimeoutWork?.cancel(); scanTimeoutWork = nil          // stop the reconnect/cold watchdog
         if let armed = reconnectArmedAt {
