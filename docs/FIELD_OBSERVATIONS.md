@@ -27,6 +27,16 @@ about explicitly. Never silently dropped.
 
 ## Resolved
 
+- **OBS-4 (2026-07-20, build 126): predictive/scan acquisition gives ZERO reads.**
+  A/B flip of reconnectMode → OFF (scan-then-connect) to fix the missed-window
+  cadence backfired completely — no G7 for a whole session. Log: scan discovers
+  'DXCMp5' connectable=yes every cycle, but the connect issued ~2s later (after the
+  candidate-collection window) lands AFTER the ~6s advertising burst closes, rides
+  401s at state=1, and wedges. The G7 is connectable ONLY during its burst → the
+  connect must be ARMED in advance (pending-connect). Reverted in build 127;
+  reconnectMode stays ON permanently. The real cadence fix is the 400s watchdog
+  re-arming a pending connect instead of falling to the wedge-prone scan (task #15).
+
 - **OBS-3 (2026-07-19 22:37 + 22:40): prewarm pending at loan request time on an
   already-bonded sensor.** Two prewarm 360s scans started during the loan-request
   sequence — exactly the G7 activity that starved takeover epochs 19/25 (→ R26).
