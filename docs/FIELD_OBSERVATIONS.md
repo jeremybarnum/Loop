@@ -25,6 +25,18 @@ about explicitly. Never silently dropped.
   clean self-recovery; watch for the pattern rate across future logs before
   treating as a defect.
 
+- **OBS-5 (2026-07-20 ~17:45): SECOND "Brief Sensor Issue" of the day, again after
+  heavy watch connect churn.** Morning event (~10:40–11:05) followed the poisoned-
+  session churn; this one follows 127's five-window miss spiral (16:42–17:03,
+  repeated connect/cancel cycles) and a slow 129 takeover. Hypothesis to WATCH, not
+  conclude: G7 firmware may enter a protective/quiet state after repeated
+  failed/aborted connection attempts. Counter-evidence: overnight 119 churned for
+  hours with no sensor issue, and the sensor also read low (51–59 mg/dL) today —
+  could equally be a struggling sensor day (compression, EOL drift). If the
+  churn→issue pattern repeats on a healthy sensor, consider gentler retry behavior.
+  Practical rule meanwhile: a sensor-issue window makes acquisition-cadence data
+  UNINTERPRETABLE — don't count such sessions for or against a build.
+
 ## Resolved
 
 - **OBS-4 (2026-07-20, build 126): predictive/scan acquisition gives ZERO reads.**
