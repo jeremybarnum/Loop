@@ -347,6 +347,10 @@ struct GlanceView: View {
     @State private var confirmingClose = false
     @State private var explainingUnavailable = false
 
+    /// Always-visible build tag so a TestFlight install is unambiguous on-wrist
+    /// (Jeremy 2026-07-20 — often installs mid-session and needs to know the build).
+    static let buildNumber = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+
     var body: some View {
         VStack(spacing: 0) {
             statusLine
@@ -365,10 +369,9 @@ struct GlanceView: View {
             // body (2026-07-18 ruling: no dead controls, no ambiguous tap targets).
             loopPill
             Spacer()
-            Text("SPORT")
+            (Text("SPORT").kerning(1.2).foregroundColor(.glanceAccent)
+             + Text(" b\(Self.buildNumber)").foregroundColor(.glanceDim))
                 .font(.system(size: 11, weight: .semibold))
-                .kerning(1.2)
-                .foregroundColor(.glanceAccent)
         }
         .padding(.horizontal, 6)
         .padding(.top, 2)
