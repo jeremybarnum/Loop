@@ -1216,15 +1216,23 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         scanTimeoutWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.attemptActive, self.peripheral?.state != .connected else { return }
-            log("pending connect quiet \(Int(self.reconnectWatchdog))s — falling back to scan")
+            // 128a (2026-07-20): a quiet armed connect is a STALE ARM, not proof the
+            // sensor is gone — RE-ARM a fresh pending connect instead of falling back
+            // to scan. The scan path is field-proven to WEDGE (OBS-4: discovery→connect
+            // lands after the ~6s burst closes, rides 401s), and 124's logs show a
+            // re-armed targeted connect catches the next window (fired 66s/151s after
+            // re-arm). The bonded handle is KEPT (the old path nuked it, forcing the
+            // slow cold reacquire). Second consecutive quiet window → noteDeadConnect
+            // triggers the central recreate (poisoned-session self-heal, unchanged);
+            // scan remains the genuine last resort via the post-recreate cold path.
             if self.noteDeadConnect("pending reconnect") {
                 self.finishAttempt(success: false, message: "BLE stack reset")
                 return
             }
+            log("pending connect quiet \(Int(self.reconnectWatchdog))s — re-arming fresh connect (bond kept)")
             self.central.cancelPeripheralConnection(p)
-            self.savedPeripheral = nil
             self.peripheral = nil
-            self.beginScan()
+            self.beginReconnect(p)   // settle-guard waits out the cancel's teardown before arming
         }
         scanTimeoutWork = work
         cbQueue.asyncAfter(deadline: .now() + reconnectWatchdog, execute: work)
