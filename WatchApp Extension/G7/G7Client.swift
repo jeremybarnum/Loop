@@ -700,6 +700,8 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     private var observerSightings = 0
     private var observerWork: DispatchWorkItem?
     private var observerEndWork: DispatchWorkItem?
+    /// 133: bounds the post-connect handshake (nothing else does — see didDiscoverCharacteristics).
+    private var handshakeWatchdogWork: DispatchWorkItem?
 
     private var consecutiveDeadConnects = 0
 
@@ -1025,6 +1027,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     /// Cleans up the link and, if auto-repeat is on, schedules the next read.
     private func finishAttempt(success: Bool, message: String) {   // on cbQueue
         scanTimeoutWork?.cancel(); scanTimeoutWork = nil
+        handshakeWatchdogWork?.cancel(); handshakeWatchdogWork = nil   // 133: handshake over, bound with it
         handshakeTask?.cancel(); handshakeTask = nil   // attempt over — a lingering task must not keep retrying
         if central != nil, central.state == .poweredOn { central.stopScan() }
         if success, let p = peripheral {
@@ -1568,6 +1571,22 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         handshakeTask?.cancel()
         let gen = attemptGeneration   // snapshot on cbQueue so a superseded handshake can't tear down a fresh attempt
         handshakeTask = Task { await self.runHandshake(generation: gen) }
+        // 133 HANDSHAKE WATCHDOG (field 2026-07-20 18:32): after didConnect nothing
+        // bounded the handshake — a hung inner await (writes have no timeout; the
+        // cert path retries silently) ran 317s until the SENSOR hung up, eating two
+        // windows. Task.cancel can't unstick a pending continuation, so the cut is
+        // physical: drop the link, and the existing didDisconnect path resumes every
+        // pending continuation → finishAttempt(failure) → 3s re-arm. 90s is generous
+        // for the legitimate slow path (first-pair SMP prompt retries) while turning
+        // a 5-minute stall into a one-window loss.
+        handshakeWatchdogWork?.cancel()
+        let hsWatchdog = DispatchWorkItem { [weak self] in
+            guard let self, self.attemptActive, self.attemptGeneration == gen, !self.finished else { return }
+            log("[radio] handshake exceeded 90s — cutting the link to recover")
+            if let p = self.peripheral { self.central?.cancelPeripheralConnection(p) }
+        }
+        handshakeWatchdogWork = hsWatchdog
+        cbQueue.asyncAfter(deadline: .now() + 90, execute: hsWatchdog)
     }
 
     func peripheral(_ peripheral: CBPeripheral,
