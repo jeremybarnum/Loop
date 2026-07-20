@@ -10,6 +10,21 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<!-- Log pipeline v3: relayed watch logs mirror into the app's iCloud Drive
+	     container (visible in Files → iCloud Drive → SportLoop; syncs to the Mac
+	     at ~/Library/Mobile Documents with no Shortcuts step). -->
+	<key>NSUbiquitousContainers</key>
+	<dict>
+		<key>iCloud.$(PRODUCT_BUNDLE_IDENTIFIER)</key>
+		<dict>
+			<key>NSUbiquitousContainerIsDocumentScopePublic</key>
+			<true/>
+			<key>NSUbiquitousContainerName</key>
+			<string>SportLoop</string>
+			<key>NSUbiquitousContainerSupportedFolderLevels</key>
+			<string>Any</string>
+		</dict>
+	</dict>
 	<key>AppStoreURL</key>
 	<string>$(APP_STORE_URL)</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>

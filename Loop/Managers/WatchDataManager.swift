@@ -628,7 +628,34 @@ extension WatchDataManager: WCSessionDelegate {
                 try? FileManager.default.removeItem(at: old)
             }
         }
+        // Log pipeline v3: mirror into the app's iCloud container so the file syncs
+        // to iCloud Drive → the Mac with no Shortcuts step (works on cellular too).
+        // url(forUbiquityContainerIdentifier:) can block, and file.fileURL dies when
+        // this delegate method returns — so mirror from the durable local copy on a
+        // background queue. Same latest+stamped+prune scheme as the local folder.
+        Self.mirrorLogToICloud(from: stamped)
         log.default("Watch log received: %{public}@", stamped.lastPathComponent)
+    }
+
+    private static func mirrorLogToICloud(from localStamped: URL) {
+        DispatchQueue.global(qos: .utility).async {
+            let fm = FileManager.default
+            guard let container = fm.url(forUbiquityContainerIdentifier: nil) else { return }   // iCloud off / not signed in
+            let dir = container.appendingPathComponent("Documents", isDirectory: true)
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            try? fm.copyItem(at: localStamped, to: dir.appendingPathComponent(localStamped.lastPathComponent))
+            let cloudLatest = dir.appendingPathComponent("g7watch-latest.log")
+            try? fm.removeItem(at: cloudLatest)
+            try? fm.copyItem(at: localStamped, to: cloudLatest)
+            if let entries = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+                let stampedLogs = entries
+                    .filter { $0.pathExtension == "log" && $0.lastPathComponent.hasPrefix("g7watch-") && $0.lastPathComponent != "g7watch-latest.log" }
+                    .sorted { $0.lastPathComponent > $1.lastPathComponent }
+                for old in stampedLogs.dropFirst(20) {
+                    try? fm.removeItem(at: old)
+                }
+            }
+        }
     }
 
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
