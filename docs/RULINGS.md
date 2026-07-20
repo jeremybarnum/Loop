@@ -198,6 +198,21 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   SKIPPED by Jeremy (no time); E3 rides normal 117+ use. Branch succession
   unchanged; R20 picker deferred until after WS1-WS3.
 
+- **R26 — Takeover radio priority; pod-first flow** (2026-07-20, Jeremy: "the
+  right flow is pod connects, which should be reliable, and gives the feedback
+  on when the BG is expected. Then the BG connects when it connects, and at
+  that point closing loop becomes an option"): the pod TAKEOVER outranks the
+  G7 on the single watch radio. During the bounded ~40s takeover ladder the
+  G7 client stands down (active scans stop, new attempts/pre-warms defer; a
+  mid-flight handshake finishes; armed pending connects stay armed). Evidence
+  2026-07-20 logs: takeover epochs 19 and 25 failed entirely inside G7
+  scan/handshake windows ("couldn't reach pod" with the pod adjacent); epoch
+  26's pod reads succeeded the moment the G7 handshake ended. The rest of the
+  flow was already ruled and stands: loan starts OPEN (R23), G7 ETA feedback
+  (R24), closing the loop unlocks when direct BG flows. Complement of Fix B
+  (BG wins over routine loop pod commands) — priority is contextual: the
+  user-initiated takeover is the one pod operation that outranks BG.
+
 ## Not yet ruled (do not decide without Jeremy)
 
 - Risk-register #8: any on-body session of any milestone build — per-build,

@@ -39,6 +39,14 @@ final class StockLoopSession {
         stack.loopManager.isRadioBusy = radioBusy
         loanController.isRadioBusy = radioBusy
 
+        // R26 (reverse arbiter): the pod TAKEOVER outranks the G7 — during its
+        // bounded ~40s ladder, G7 scans stop and new attempts defer. Field
+        // 2026-07-20: takeovers failed inside G7 scan/handshake windows and
+        // succeeded the moment the radio freed.
+        loanController.onTakeoverRadioHold = { [weak self] holding in
+            self?.stack.client.setPodTakeoverHold(holding)
+        }
+
         loanController.onLoanActiveChanged = { [weak self] active in
             guard let self = self else { return }
             if active {

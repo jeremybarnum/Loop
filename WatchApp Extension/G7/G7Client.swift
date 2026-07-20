@@ -459,6 +459,11 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         guard pin.filter({ $0.isNumber }).count == 4 else { return }   // need a valid code first
         cbQueue.async {
             guard !self.attemptActive, !self.prewarmActive else { return }   // already working
+            guard !self.podTakeoverHold else {
+                // R26: pending flag stays set — the hold release re-invokes this.
+                log("pre-warm deferred — pod takeover holds the radio")
+                return
+            }
             self.prewarmActive = true
             log("=== PRE-WARM: bonding new sensor (bounded \(Int(self.prewarmWindow))s scan, workout-backed) · \(batteryTag()) ===")
             // Bounded backstop: if we never bond within the window (BT off, sensor out of range,
@@ -727,6 +732,10 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     private var pin4: [UInt8] = Array("3102".utf8)
     private var finished = false
     private var attemptActive = false
+    /// R26 radio priority (touched on cbQueue): true while the loan controller's pod
+    /// takeover ladder runs (~40s bounded). New G7 attempts and pre-warms defer.
+    private var podTakeoverHold = false
+    private var podHoldRetryScheduled = false
     /// Monotonic identity for the current connect→handshake→read attempt (bumped every time an
     /// attempt starts). runHandshake runs on a Task executor and its finishAttempt hops back onto
     /// cbQueue several hops later; if the attempt was SUPERSEDED in between (Sport Mode preempting
@@ -802,6 +811,23 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         onMain { self.isRunning = true; self.statusText = "Starting…" }
         cbQueue.async {
             guard !self.attemptActive else { return }
+            // R26 radio priority: the pod takeover's bounded ~40s ladder owns the
+            // radio — G7 scans/handshakes starve pod BLE session establishment
+            // (field 2026-07-20: epochs 19/25 failed inside G7 activity; epoch 26's
+            // reads succeeded the moment the handshake ended). Defer, don't fight.
+            if self.podTakeoverHold {
+                if !self.podHoldRetryScheduled {
+                    self.podHoldRetryScheduled = true
+                    log("[radio] G7 attempt deferred — pod takeover holds the radio (retry in 15s)")
+                    self.cbQueue.asyncAfter(deadline: .now() + 15) {
+                        self.podHoldRetryScheduled = false
+                        guard !self.podTakeoverHold else { return }   // still held — the release kick resumes us
+                        self.onMain { self.connect() }
+                    }
+                }
+                self.onMain { self.isRunning = false; self.statusText = "Waiting for pod…" }
+                return
+            }
             self.attemptActive = true
             self.attemptGeneration &+= 1   // new attempt identity (see attemptGeneration / runHandshake guard)
             self.finished = false
@@ -855,6 +881,48 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     }
 
     // MARK: Soak test — HKWorkoutSession keepalive + periodic poll, with continuity stats.
+
+    /// R26 radio priority: while the loan controller's pod takeover ladder runs
+    /// (bounded ~40s), the G7 stands down. Only an ACTIVE SCAN is torn down —
+    /// continuous scanning is what starves pod BLE establishment. A mid-flight
+    /// handshake finishes (seconds; the pod reads retry through it — epoch 26), and
+    /// an armed pending connect stays armed (radio-passive, and cancelling it risks
+    /// the poisoned-session failure the self-heal exists for). On release the client
+    /// resumes whatever mode wants the radio.
+    func setPodTakeoverHold(_ holding: Bool) {
+        cbQueue.async {
+            guard self.podTakeoverHold != holding else { return }
+            self.podTakeoverHold = holding
+            if holding {
+                log("[radio] pod takeover holds the radio — G7 standing down")
+                if self.isHandshakeActive {
+                    log("[radio] handshake mid-flight — letting it finish; pod reads retry through it")
+                    return
+                }
+                guard self.central != nil, self.central.state == .poweredOn, self.central.isScanning else { return }
+                // Same recipe as startSoak's pre-warm preemption: pre-clear
+                // prewarmActive so finishAttempt's teardownPrewarm no-ops — no
+                // fail-counter bump, and the pending flag stays set for the
+                // post-takeover retry.
+                if self.prewarmActive {
+                    self.prewarmActive = false
+                    self.prewarmTimeoutWork?.cancel(); self.prewarmTimeoutWork = nil
+                    self.workout.release("prewarm")
+                }
+                if self.attemptActive {
+                    self.finishAttempt(success: false, message: "Yielded to pod takeover")
+                } else {
+                    self.central.stopScan()
+                }
+            } else {
+                log("[radio] pod takeover done — G7 radio released")
+                self.onMain {
+                    self.prewarmIfPending()
+                    if self.soakActive { self.connect() }
+                }
+            }
+        }
+    }
 
     /// Begin a background soak: start the workout-session keepalive, then poll every
     /// `autoRepeatInterval` (5 min). Each successful read updates the freshness stats so a

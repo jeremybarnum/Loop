@@ -48,8 +48,19 @@ final class PodLoanWatchController {
     /// handshake (the crude Verify chase was loudDrop==false). Wired by the session.
     var isRadioBusy: (() -> Bool)?
 
+    /// R26 (reverse arbiter): the pod TAKEOVER outranks the G7 — during the bounded
+    /// ~40s ladder the G7 client stands down, because G7 scans/handshakes starve pod
+    /// BLE session establishment on the single watch radio. Wired by the session;
+    /// fired with true on entering .takingOver and false on leaving it (any exit).
+    var onTakeoverRadioHold: ((Bool) -> Void)?
+
     private(set) var phase: Phase {
-        didSet { UserDefaults.standard.set(phase.rawValue, forKey: Keys.phase) }
+        didSet {
+            UserDefaults.standard.set(phase.rawValue, forKey: Keys.phase)
+            if (oldValue == .takingOver) != (phase == .takingOver) {
+                onTakeoverRadioHold?(phase == .takingOver)
+            }
+        }
     }
     private var epoch: Int? {
         didSet { UserDefaults.standard.set(epoch, forKey: Keys.epoch) }

@@ -617,6 +617,17 @@ extension WatchDataManager: WCSessionDelegate {
         let latest = docs.appendingPathComponent("g7watch-latest.log")
         try? FileManager.default.removeItem(at: latest)
         try? FileManager.default.copyItem(at: file.fileURL, to: latest)
+        // Retention: transfers now arrive every reading (~5 min), so stamped copies
+        // accumulate fast. Keep the newest 20; the stamp is lexicographically
+        // sortable. g7watch-latest.log is exempt (it's the rolling current copy).
+        if let entries = try? FileManager.default.contentsOfDirectory(at: docs, includingPropertiesForKeys: nil) {
+            let stampedLogs = entries
+                .filter { $0.pathExtension == "log" && $0.lastPathComponent.hasPrefix("g7watch-") && $0.lastPathComponent != "g7watch-latest.log" }
+                .sorted { $0.lastPathComponent > $1.lastPathComponent }
+            for old in stampedLogs.dropFirst(20) {
+                try? FileManager.default.removeItem(at: old)
+            }
+        }
         log.default("Watch log received: %{public}@", stamped.lastPathComponent)
     }
 
