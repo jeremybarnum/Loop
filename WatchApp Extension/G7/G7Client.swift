@@ -609,17 +609,22 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
 
     // Pending-connect experiment (A/B vs scan): after the first scan+bond, reacquire the G7 via a
     // re-armed connect() on the Bluetooth controller's targeted path (theory: dodges the background
-    // scan throttle that caps us at ~20% capture at rest) instead of scanForPeripherals. A scan
-    // fallback fires if a pending connect goes quiet — so a stale bonded identifier (address
-    // rotation) degrades to today's behavior instead of a silent false-negative.
-    // Default ON when the key has never been written: the A/B on the proven branch
-    // settled this — targeted reconnect IS the fast path, and the fromstock install's
-    // fresh UserDefaults (bundle-ID change) silently reverted it to the throttled
-    // cold-scan path, which presented as "G7 never found" (2026-07-18 sessions).
-    @Published var reconnectMode: Bool = (UserDefaults.standard.object(forKey: "reconnectModeV1") == nil)
-        ? true
-        : UserDefaults.standard.bool(forKey: "reconnectModeV1") {
-        didSet { UserDefaults.standard.set(reconnectMode, forKey: "reconnectModeV1") }
+    // Acquisition mode. reconnectMode ON = passive pending-connect (arm connect(),
+    // wait for the OS to catch the ad); OFF = PREDICTIVE ACTIVE SCAN (sleep to
+    // scanLeadTime before the predicted 5-min window, then scan in 20s bursts,
+    // retrying every retryInterval, until the sensor's ~6s burst is caught).
+    //
+    // FIELD 2026-07-20 (build 124, 41-min bonded soak, workout keepalive up): the
+    // pending-connect path MISSED ~HALF the windows — the OS connect sat "quiet 400s"
+    // straight through the advertisement — giving 8–15 min read gaps. The proven
+    // standalone reader DEFAULTED THIS OFF (predictive scan) with identical constants
+    // and held the 5-min grid. The earlier "scan = never found" note was the
+    // *throttled cold-start* scan (no bond, background-throttled) — a different case
+    // from steady-state predictive scan under the keepalive. Revert to the proven
+    // default. Key bumped to V2 so a stale on-wrist V1 A/B toggle can't pin the old
+    // behavior; the diagnostic panel can still flip it back for a live comparison.
+    @Published var reconnectMode: Bool = UserDefaults.standard.bool(forKey: "reconnectModeV2") {
+        didSet { UserDefaults.standard.set(reconnectMode, forKey: "reconnectModeV2") }
     }
     private var savedPeripheral: CBPeripheral?         // bonded G7 held for pending reconnect
     /// Persisted identifier of the bonded G7 so a COLD start (fresh app launch, which
