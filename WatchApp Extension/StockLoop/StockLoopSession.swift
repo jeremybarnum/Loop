@@ -106,7 +106,16 @@ final class StockLoopSession {
         stopLogPulse()
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 300, repeating: 300, leeway: .seconds(20))
-        timer.setEventHandler { [weak self] in self?.sendLogSnapshot("loan pulse") }
+        timer.setEventHandler { [weak self] in
+            self?.sendLogSnapshot("loan pulse")
+            // Keepalive self-heal (132, field 2026-07-20 evening): a dead
+            // HKWorkoutSession previously waited for a FOREGROUND activation to be
+            // re-asserted — a background session went reading-dead until the next
+            // wrist raise. ensureRunning is refcount-aware and a no-op when healthy;
+            // in background the restart attempt can fail (HK error 14) but logs the
+            // evidence and heals at the first live moment instead of the next launch.
+            self?.stack.client.ensureKeepalive()
+        }
         timer.resume()
         logPulse = timer
     }
