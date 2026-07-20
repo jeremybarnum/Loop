@@ -302,7 +302,18 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
     #if FAKE_NEW_SENSOR
     @objc private func debugSimulateNewSensor() {
-        deviceManager.simulateNewSensor()
+        // Confirmation gate (2026-07-20): an accidental ladybug tap fired the whole
+        // fake-sensor flow mid-session (prompts + relay). The watch also firewalls
+        // FAKE- ids from touching real identity, but don't even start by accident.
+        let alert = UIAlertController(
+            title: "Simulate New Sensor?",
+            message: "Test tool: fires the new-sensor prompt → relay → prewarm path with a fake sensor ID. Cancel if this was an accidental tap.",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Simulate", style: .default) { [weak self] _ in
+            self?.deviceManager.simulateNewSensor()
+        })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(alert, animated: true)
     }
     #endif
         

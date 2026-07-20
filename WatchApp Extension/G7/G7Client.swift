@@ -385,6 +385,14 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
 
         guard let sensorID, !sensorID.isEmpty,
               sensorID != UserDefaults.standard.string(forKey: Self.lastKnownSensorIDKey) else { return false }
+        // FIREWALL (2026-07-20): the phone's FAKE_NEW_SENSOR test tool fabricates
+        // "FAKE-XXXX" ids; an accidental ladybug tap must never nuke the REAL bond
+        // (it wiped a freshly-rebuilt bond mid-session at 07:30). The prompt/relay
+        // path still exercises end-to-end; only the identity mutation is barred.
+        guard !sensorID.hasPrefix("FAKE-") else {
+            log("FAKE sensor id \(sensorID) — relay path exercised; real bond and identity untouched")
+            return false
+        }
         let hadBond = UserDefaults.standard.string(forKey: Self.savedPeripheralKey) != nil
         UserDefaults.standard.set(sensorID, forKey: Self.lastKnownSensorIDKey)
         UserDefaults.standard.set(sensorID, forKey: Self.pendingPrewarmKey)
@@ -645,6 +653,43 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     // BLE plumbing (touched on cbQueue).
     private let cbQueue = DispatchQueue(label: "g7.cb")
     private var central: CBCentralManager!
+
+    // ─── BLE-STACK SELF-HEAL (overnight log 2026-07-19/20) ───────────────────
+    // Once the watch's Bluetooth session is poisoned, discovered-but-dead connects
+    // repeat FOREVER: both sensors advertised connectable at good RSSI all night,
+    // every connect (including clean state=0 issues) pended 400s dead, cancelled
+    // connects stuck in .disconnecting permanently — and the morning REBOOT cured
+    // it instantly (07:26 prewarm connected on the first try). The cure, in-app:
+    // destroy and recreate the central. Detector: consecutive connect-timeouts
+    // while the sensor IS being discovered, or a peripheral stuck in teardown.
+    private var consecutiveDeadConnects = 0
+
+    /// On cbQueue. Counts a connect that pended out its full watchdog; two in a
+    /// row (with advertisements provably flowing) = poisoned session → reset.
+    /// Returns true if the stack was recreated (callers must NOT touch `central`).
+    private func noteDeadConnect(_ context: String) -> Bool {
+        consecutiveDeadConnects += 1
+        guard consecutiveDeadConnects >= 2 else { return false }
+        recreateCentral(reason: "\(consecutiveDeadConnects) consecutive dead connects (\(context))")
+        return true
+    }
+
+    /// On cbQueue. The in-app equivalent of the reboot that cured the overnight
+    /// blackout: drop every object tied to the old session and let the next
+    /// attempt build a fresh central (the persisted bond UUID survives — the new
+    /// central re-materializes it via retrievePeripherals).
+    private func recreateCentral(reason: String) {
+        log("[radio] RECREATING Bluetooth central — \(reason)")
+        consecutiveDeadConnects = 0
+        scanTimeoutWork?.cancel(); scanTimeoutWork = nil
+        if central != nil {
+            central.delegate = nil
+            if central.state == .poweredOn { central.stopScan() }
+        }
+        central = nil
+        peripheral = nil
+        savedPeripheral = nil   // object belongs to the dead session; UserDefaults UUID survives
+    }
     private var peripheral: CBPeripheral!
     private var authChar: CBCharacteristic?
     private var dataChar: CBCharacteristic?
@@ -992,6 +1037,10 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         let fallback = DispatchWorkItem { [weak self] in
             guard let self, self.attemptActive, self.peripheral?.state != .connected else { return }
             log("cold reacquire: targeted connect quiet \(Int(self.coldScanFallbackDelay))s — handle likely stale, falling back to scan")
+            if self.noteDeadConnect("cold reacquire") {
+                self.finishAttempt(success: false, message: "BLE stack reset")
+                return
+            }
             self.central.cancelPeripheralConnection(p)
             self.savedPeripheral = nil
             self.peripheral = nil
@@ -1008,7 +1057,15 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     /// Issue connect() only against a fully-disconnected peripheral object — a
     /// connect during teardown is silently wedged by CoreBluetooth (never fires).
     private func connectWhenSettled(_ p: CBPeripheral, settleAttempt: Int) {   // on cbQueue
-        if p.state != .disconnected, settleAttempt < 10 {
+        if p.state != .disconnected {
+            if settleAttempt >= 10 {
+                // Stuck in teardown >5s = the poisoned-session signature (overnight
+                // 2026-07-20: objects sat in .disconnecting forever; issuing anyway
+                // is a guaranteed-dead connect). Reset the stack instead.
+                recreateCentral(reason: "peripheral stuck in state \(p.state.rawValue) >5s")
+                finishAttempt(success: false, message: "BLE stack reset")
+                return
+            }
             if settleAttempt == 0 {
                 log("[radio] connect deferred — peripheral state=\(p.state.rawValue), waiting for teardown")
             }
@@ -1033,7 +1090,13 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         // So: NEVER arm against a non-disconnected object — wait for teardown,
         // bounded, logging the state so the log proves the mechanism either way.
         let state = p.state
-        if state != .disconnected, settleAttempt < 10 {
+        if state != .disconnected {
+            if settleAttempt >= 10 {
+                // Stuck teardown = poisoned session — reset instead of arming dead.
+                recreateCentral(reason: "arm target stuck in state \(state.rawValue) >5s")
+                finishAttempt(success: false, message: "BLE stack reset")
+                return
+            }
             if settleAttempt == 0 {
                 log("[radio] arm deferred — peripheral state=\(state.rawValue), waiting for teardown")
             }
@@ -1062,6 +1125,10 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.attemptActive, self.peripheral?.state != .connected else { return }
             log("pending connect quiet \(Int(self.reconnectWatchdog))s — falling back to scan")
+            if self.noteDeadConnect("pending reconnect") {
+                self.finishAttempt(success: false, message: "BLE stack reset")
+                return
+            }
             self.central.cancelPeripheralConnection(p)
             self.savedPeripheral = nil
             self.peripheral = nil
@@ -1185,7 +1252,11 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                         pool = matching
                     }
                 }
-                let best = pool.max(by: { $0.rssi < $1.rssi })!
+                // The BONDED sensor beats raw RSSI (overnight 2026-07-20: cycles were
+                // wasted chasing a second G7, DXCM1d, that happened to be louder).
+                let savedID = UserDefaults.standard.string(forKey: Self.savedPeripheralKey)
+                let best = pool.first(where: { $0.p.identifier.uuidString == savedID })
+                    ?? pool.max(by: { $0.rssi < $1.rssi })!
                 // Cold reacquire: if a targeted connect to a DIFFERENT (stale) handle is
                 // pending, drop it before connecting to the freshly discovered sensor.
                 if let cur = self.peripheral, cur.identifier != best.p.identifier {
@@ -1225,6 +1296,10 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                     guard let self, self.attemptActive, self.attemptGeneration == gen,
                           self.peripheral?.state != .connected else { return }
                     log("connect timed out after \(Int(Date().timeIntervalSince(connectIssuedAt)))s (state=\(self.peripheral?.state.rawValue ?? -1)) — cancelling pending connect")
+                    if self.noteDeadConnect("scan-path connect") {
+                        self.finishAttempt(success: false, message: "BLE stack reset")
+                        return
+                    }
                     if let p = self.peripheral {
                         self.central.cancelPeripheralConnection(p)
                     }
@@ -1237,6 +1312,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        consecutiveDeadConnects = 0                               // the session is provably healthy
         central.stopScan()                                        // cold reacquire ran a concurrent scan
         scanTimeoutWork?.cancel(); scanTimeoutWork = nil          // stop the reconnect/cold watchdog
         if let armed = reconnectArmedAt {
