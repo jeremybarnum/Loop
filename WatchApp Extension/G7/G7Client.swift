@@ -1034,11 +1034,17 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                 // GOOD read, sleep until scanLeadTime before the next window (no continuous scan
                 // = big battery saving); after a FAILURE, hunt fast (retryInterval) to catch a
                 // window we're early/late/missed for. Disconnect-after-read is expected, not a fault.
-                // RECONNECT MODE (A/B): skip sleep+scan — re-arm a pending connect() after a brief
-                // settle and let the OS's targeted path wait out the ~5-min gap (theory: no throttle).
-                let next = useReconnect ? 3.0
-                         : (success ? max(self.retryInterval, self.autoRepeatInterval - self.scanLeadTime)
-                                    : self.retryInterval)
+                // RECONNECT MODE: arm the pending connect LATE — at lead-time before the
+                // predicted window — NOT 3s after the read. 129 (Jeremy's call,
+                // 2026-07-20): an arm that sits ~295s gets decayed by the watchOS BLE
+                // duty-cycler and sleeps through the burst (124: 3s-arms missed ~half
+                // their windows; freshly re-armed connects fired in 66s/151s). A fresh
+                // arm ~40s before the window is honored aggressively — the same
+                // 300−45 geometry the proven crude-branch scan scheduler used. After a
+                // FAILURE the phase is unknown → re-arm fast (3s) and let the 400s
+                // watchdog (which now spans TWO window chances per late arm) recover.
+                let next = success ? max(self.retryInterval, self.autoRepeatInterval - self.scanLeadTime)
+                         : (useReconnect ? 3.0 : self.retryInterval)
                 self.scheduleAutoRepeat(after: next)
             }
         }
