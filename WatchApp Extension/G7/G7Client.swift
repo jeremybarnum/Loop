@@ -609,22 +609,29 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
 
     // Pending-connect experiment (A/B vs scan): after the first scan+bond, reacquire the G7 via a
     // re-armed connect() on the Bluetooth controller's targeted path (theory: dodges the background
-    // Acquisition mode. reconnectMode ON = passive pending-connect (arm connect(),
-    // wait for the OS to catch the ad); OFF = PREDICTIVE ACTIVE SCAN (sleep to
-    // scanLeadTime before the predicted 5-min window, then scan in 20s bursts,
-    // retrying every retryInterval, until the sensor's ~6s burst is caught).
+    // Acquisition mode. reconnectMode ON = PENDING-CONNECT (arm connect() in advance;
+    // the OS honors it the instant the sensor's ~6s burst starts → connects in ~1s).
+    // OFF = scan-then-connect (scan, discover the ad, THEN issue connect).
     //
-    // FIELD 2026-07-20 (build 124, 41-min bonded soak, workout keepalive up): the
-    // pending-connect path MISSED ~HALF the windows — the OS connect sat "quiet 400s"
-    // straight through the advertisement — giving 8–15 min read gaps. The proven
-    // standalone reader DEFAULTED THIS OFF (predictive scan) with identical constants
-    // and held the 5-min grid. The earlier "scan = never found" note was the
-    // *throttled cold-start* scan (no bond, background-throttled) — a different case
-    // from steady-state predictive scan under the keepalive. Revert to the proven
-    // default. Key bumped to V2 so a stale on-wrist V1 A/B toggle can't pin the old
-    // behavior; the diagnostic panel can still flip it back for a live comparison.
-    @Published var reconnectMode: Bool = UserDefaults.standard.bool(forKey: "reconnectModeV2") {
-        didSet { UserDefaults.standard.set(reconnectMode, forKey: "reconnectModeV2") }
+    // Default ON, and this is now DOUBLY FIELD-PROVEN — do NOT flip it again:
+    //   • Build 124 (reconnectMode ON): connected in ~1s whenever the pending connect
+    //     FIRED; got readings (though it missed ~half the windows — see below).
+    //   • Build 126 (reconnectMode OFF, the 2026-07-20 A/B): scan-then-connect NEVER
+    //     acquired — scan found 'DXCMp5' connectable=yes every time, but the connect
+    //     issued ~2s later (candidate-collection window) landed AFTER the 6s burst had
+    //     closed, so it rode 401s at state=1 and WEDGED. Zero reads for a whole
+    //     session. This is the "scan = never found" the note warned about, confirmed.
+    // The G7 is connectable ONLY during its ~6s burst, so you must have the connect
+    // ARMED before the burst — a scan can't discover-then-connect fast enough.
+    //
+    // The residual cadence problem (missed windows on 124) is NOT solved by scanning;
+    // it's the 400s watchdog falling back to that broken scan instead of just re-arming
+    // a fresh pending connect. That fix lives in the watchdog, not this flag (task #15).
+    // Key stays V1: the fromstock fresh-UserDefaults default of ON is correct.
+    @Published var reconnectMode: Bool = (UserDefaults.standard.object(forKey: "reconnectModeV1") == nil)
+        ? true
+        : UserDefaults.standard.bool(forKey: "reconnectModeV1") {
+        didSet { UserDefaults.standard.set(reconnectMode, forKey: "reconnectModeV1") }
     }
     private var savedPeripheral: CBPeripheral?         // bonded G7 held for pending reconnect
     /// Persisted identifier of the bonded G7 so a COLD start (fresh app launch, which
