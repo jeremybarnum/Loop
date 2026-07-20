@@ -235,7 +235,10 @@ final class GlanceViewModel: ObservableObject {
     static func g7EtaText(lastReading: Date?, now: Date, firstConnect: Bool = false) -> String? {
         let cadence: TimeInterval = 5 * 60
         guard let last = lastReading, last <= now else {
-            return NSLocalizedString("G7 within 5 min", comment: "Glance G7 prediction without a prior reading")
+            // No prior reading = no grid anchor: expected wait is one full window on
+            // AVERAGE, and field cold-catches routinely need two (Jeremy 2026-07-20:
+            // "within 5 min" was too optimistic). Promise what we can keep.
+            return NSLocalizedString("G7 typically within 10 min", comment: "Glance G7 prediction without a prior reading")
         }
         let untilNext = cadence - now.timeIntervalSince(last).truncatingRemainder(dividingBy: cadence)
         if firstConnect {
