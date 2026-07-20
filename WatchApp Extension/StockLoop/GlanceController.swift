@@ -300,6 +300,12 @@ final class GlanceViewModel: ObservableObject {
         } else if let eventual = data.eventual {
             s.eventualText = String(format: "%.0f", eventual.doubleValue(for: .milligramsPerDeciliter))
         }
+        // PROVENANCE (Jeremy 2026-07-20: "the UI doesn't make it clear if it's
+        // dexcom direct or not"): the sport store is direct-only by construction,
+        // so a fresh number here is ALWAYS the watch's own radio — say so.
+        if !isStale, let age = age {
+            s.g7EtaText = String(format: NSLocalizedString("G7 direct · %dm", comment: "Glance provenance line for a fresh direct reading (1: minutes ago)"), Int(age / 60))
+        }
 
         // Status line + suspend + open/close.
         s.loopClosed = data.closedLoopEnabled

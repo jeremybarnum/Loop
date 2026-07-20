@@ -423,6 +423,18 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         let sensorCode: String
     }
 
+    /// FAKE-identity repair (2026-07-20): an accidental ladybug tap before the
+    /// firewall landed left "FAKE-XXXX" persisted as the sensor identity — purge it
+    /// (the bond itself is untouched; a real relay restores the true id).
+    static func repairFakeIdentityIfNeeded() {
+        for key in [lastKnownSensorIDKey, pendingPrewarmKey] {
+            if let value = UserDefaults.standard.string(forKey: key), value.hasPrefix("FAKE-") {
+                UserDefaults.standard.removeObject(forKey: key)
+                log("FAKE identity '\(value)' purged from \(key)")
+            }
+        }
+    }
+
     func identitySnapshot() -> IdentitySnapshot {
         IdentitySnapshot(
             reconnectMode: reconnectMode,
@@ -1218,6 +1230,18 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         guard matches else { return }
 
         if !candidates.contains(where: { $0.p.identifier == peripheral.identifier }) {
+            // BONDED-ONLY FILTER (2026-07-20, the Caitlin finding): in a two-Dexcom
+            // household the scanner courts the LOUDEST sensor — overnight it burned
+            // most of its recovery cycles (one pended 56 min) handshaking a foreign
+            // G7 whose PIN can never verify. When we hold a bond and no sensor swap
+            // is pending, every other Dexcom is invisible. Swap flows (pendingPrewarm
+            // set) still see everything — a new sensor must be discoverable.
+            let savedID = UserDefaults.standard.string(forKey: Self.savedPeripheralKey)
+            let swapPending = UserDefaults.standard.string(forKey: Self.pendingPrewarmKey) != nil
+            if let savedID, !swapPending, peripheral.identifier.uuidString != savedID {
+                log("  ignoring foreign Dexcom '\(name.isEmpty ? "?" : name)' \(peripheral.identifier) (bonded to \(savedID.prefix(8)))")
+                return
+            }
             // [radio] connectable flag matters: a NON-connectable advertisement looks
             // identical in discovery but a connect against it hangs forever — the
             // 2026-07-18 party signature (discovered at strong RSSI, connect timeout).

@@ -218,6 +218,7 @@ extension ExtensionDelegate: WCSessionDelegate {
         if activationState == .activated {
             updateContext(session.receivedApplicationContext)
             stockLoopSession.sessionDidActivate()
+            G7Client.repairFakeIdentityIfNeeded()   // purge FAKE- ids from before the firewall
             // PODLOAN diagnostics: queue the log to the phone once per launch — a
             // deleted/reinstalled app can no longer eat an unsent log (2026-07-19).
             if let url = LogFile.url,

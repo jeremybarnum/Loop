@@ -1050,7 +1050,14 @@ extension DeviceDataManager: CGMManagerDelegate {
     private func handleSensorStart(sensorID: String, activatedAt: Date) {
         guard !sensorID.isEmpty else { return }
         DispatchQueue.main.async {
-            UserDefaults.appGroup?.lastSeenSensorID = sensorID
+            // FAKE firewall (2026-07-20): the simulator's FAKE- ids exercise the
+            // prompt→relay path but must never become the persisted "current
+            // sensor" — one accidental ladybug tap poisoned re-relays for days.
+            if !sensorID.hasPrefix("FAKE-") {
+                UserDefaults.appGroup?.lastSeenSensorID = sensorID
+            } else if UserDefaults.appGroup?.lastSeenSensorID?.hasPrefix("FAKE-") == true {
+                UserDefaults.appGroup?.lastSeenSensorID = nil   // repair prior poisoning
+            }
             if let existing = UserDefaults.appGroup?.sensorPairingCode(for: sensorID) {
                 self.relaySensorCode(existing, sensorID: sensorID, activatedAt: activatedAt)
             } else {
@@ -1067,7 +1074,12 @@ extension DeviceDataManager: CGMManagerDelegate {
     /// default code and no bond → throttled cold-scan acquisition).
     func ensureSensorCodeRelayed() {
         DispatchQueue.main.async {
-            let sensorID = UserDefaults.appGroup?.lastSeenSensorID ?? "MANUAL"
+            var lastSeen = UserDefaults.appGroup?.lastSeenSensorID
+            if lastSeen?.hasPrefix("FAKE-") == true {
+                UserDefaults.appGroup?.lastSeenSensorID = nil   // FAKE repair (2026-07-20)
+                lastSeen = nil
+            }
+            let sensorID = lastSeen ?? "MANUAL"
             if let existing = UserDefaults.appGroup?.sensorPairingCode(for: sensorID) {
                 self.relaySensorCode(existing, sensorID: sensorID, activatedAt: nil)
             } else {

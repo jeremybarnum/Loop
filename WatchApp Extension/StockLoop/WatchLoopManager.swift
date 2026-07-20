@@ -35,6 +35,7 @@ import HealthKit
 import LoopKit
 import LoopCore
 import G7SensorKit
+import WatchConnectivity
 import os.log
 
 // MARK: - Errors (miniature of Loop/Models/LoopError.swift, which is phone-target-only)
@@ -909,6 +910,12 @@ extension WatchLoopManager: CGMManagerDelegate {
             if case .newData = readingResult, self.pumpManager != nil {
                 SensorBlackoutAlert.refresh()
             }
+            // Autonomous-iteration pipeline (Jeremy 2026-07-20): every reading
+            // queues the log to the phone (throttled; queued transfers survive
+            // unreachability), where a Shortcuts automation syncs it to iCloud.
+            if case .newData = readingResult {
+                Self.queueLogTransferThrottled()
+            }
         }
     }
 
@@ -916,6 +923,16 @@ extension WatchLoopManager: CGMManagerDelegate {
     /// a loan — R18/R19), nil before any reading.
     var latestGlucoseAge: TimeInterval? {
         return glucoseStore.latestGlucose.map { Date().timeIntervalSince($0.startDate) }
+    }
+
+    /// Queue the on-device log to the phone, at most once per 5 minutes — the
+    /// autonomous-iteration pipeline's first hop (phone → iCloud via Shortcuts).
+    private static var lastLogTransfer = Date.distantPast
+    static func queueLogTransferThrottled() {
+        guard Date().timeIntervalSince(lastLogTransfer) > 5 * 60 else { return }
+        guard WCSession.default.activationState == .activated, let url = LogFile.url else { return }
+        lastLogTransfer = Date()
+        WCSession.default.transferFile(url, metadata: ["kind": "g7watch.log"])
     }
 
     /// Mirrors processCGMReadingResult (:580): samples go to the LoopKit GlucoseStore —
