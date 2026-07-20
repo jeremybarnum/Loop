@@ -1005,7 +1005,45 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     /// Bluetooth controller's targeted path catches the G7's next advertisement — the theory being
     /// this path is NOT duty-cycle-throttled like a background scan. Falls back to a fresh scan if
     /// the pending connect stays quiet (out of range, or the bonded identifier went stale).
-    private func beginReconnect(_ p: CBPeripheral) {   // on cbQueue
+    /// Issue connect() only against a fully-disconnected peripheral object — a
+    /// connect during teardown is silently wedged by CoreBluetooth (never fires).
+    private func connectWhenSettled(_ p: CBPeripheral, settleAttempt: Int) {   // on cbQueue
+        if p.state != .disconnected, settleAttempt < 10 {
+            if settleAttempt == 0 {
+                log("[radio] connect deferred — peripheral state=\(p.state.rawValue), waiting for teardown")
+            }
+            cbQueue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self, self.attemptActive else { return }
+                self.connectWhenSettled(p, settleAttempt: settleAttempt + 1)
+            }
+            return
+        }
+        log("[radio] connect issued (state=\(p.state.rawValue), settled after \(settleAttempt))")
+        central.connect(p, options: nil)
+    }
+
+    private func beginReconnect(_ p: CBPeripheral, settleAttempt: Int = 0) {   // on cbQueue
+        // FIELD FINDING (2026-07-19 full-day log): a connect() issued while the
+        // peripheral object is still .disconnecting is SILENTLY WEDGED by
+        // CoreBluetooth — it never completes, riding dead through live ad windows
+        // (13:22: discovered at -86/state=3, connect rode 401s through an EGV
+        // moment; fresh connects fired in seconds). The intermittent rhythm breaks
+        // are teardown-time variance racing the 3s re-arm. (retrievePeripherals is
+        // NO fix — it returns the same cached object, "fresh handle=false" always.)
+        // So: NEVER arm against a non-disconnected object — wait for teardown,
+        // bounded, logging the state so the log proves the mechanism either way.
+        let state = p.state
+        if state != .disconnected, settleAttempt < 10 {
+            if settleAttempt == 0 {
+                log("[radio] arm deferred — peripheral state=\(state.rawValue), waiting for teardown")
+            }
+            cbQueue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self, self.attemptActive else { return }
+                self.beginReconnect(p, settleAttempt: settleAttempt + 1)
+            }
+            return
+        }
+
         candidates = []
         scanWindowStarted = false
         finished = false
@@ -1013,24 +1051,18 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         authStream = MessageStream(label: "g7.auth", name: "auth")
         ctrlStream = MessageStream(label: "g7.ctrl", name: "ctrl")
 
-        // FIELD PATTERN (party 2026-07-18 + morning 2026-07-19): arms against the
-        // HELD object — which just disconnected from us and can still be mid-teardown
-        // (observed state=3/disconnecting in a later discovery) — consistently MISSED
-        // the next ad window, while the cold-reacquire path (fresh retrievePeripherals
-        // handle) fired reliably (23-304s). Materialize a fresh handle for the arm.
-        let target = central.retrievePeripherals(withIdentifiers: [p.identifier]).first ?? p
-        peripheral = target
+        peripheral = p
         peripheral.delegate = self
         reconnectArmedAt = Date()
         setStatus("Reconnecting…")
-        log("pending connect armed → \(target.identifier) (no scan, fresh handle=\(target !== p))")
-        central.connect(target, options: nil)
+        log("pending connect armed → \(p.identifier) (no scan, state=\(p.state.rawValue), settled after \(settleAttempt))")
+        central.connect(p, options: nil)
 
         scanTimeoutWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.attemptActive, self.peripheral?.state != .connected else { return }
             log("pending connect quiet \(Int(self.reconnectWatchdog))s — falling back to scan")
-            self.central.cancelPeripheralConnection(target)   // the armed (fresh) handle
+            self.central.cancelPeripheralConnection(p)
             self.savedPeripheral = nil
             self.peripheral = nil
             self.beginScan()
@@ -1161,9 +1193,11 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                 }
                 self.peripheral = best.p
                 self.peripheral.delegate = self
-                log("connecting to strongest candidate \(best.p.identifier) RSSI=\(best.rssi)")
+                log("connecting to strongest candidate \(best.p.identifier) RSSI=\(best.rssi) state=\(best.p.state.rawValue)")
                 self.setStatus("Connecting…")
-                self.central.connect(best.p, options: nil)
+                // Same wedge guard as beginReconnect (13:22 field case: connect
+                // issued at state=3 rode 401s dead): wait for teardown first.
+                self.connectWhenSettled(best.p, settleAttempt: 0)
 
                 // CONNECT WATCHDOG — bounded at reconnectWatchdog (400s), NOT shorter.
                 // AUDIT FINDING (2026-07-18 party): a 15s budget here killed 3/3
