@@ -45,6 +45,9 @@ final class StockLoopSession {
         // succeeded the moment the radio freed.
         loanController.onTakeoverRadioHold = { [weak self] holding in
             self?.stack.client.setPodTakeoverHold(holding)
+            // Log pipeline v4: snapshot at takeover start (grant picture) and at the
+            // verdict — the ~40s window that decides a session, captured either way.
+            self?.sendLogSnapshot(holding ? "takeover start" : "takeover verdict")
         }
 
         loanController.onLoanActiveChanged = { [weak self] active in
@@ -64,22 +67,53 @@ final class StockLoopSession {
                 SensorBlackoutAlert.refresh()
                 // R23: the glance page is the landing surface during a loan.
                 DispatchQueue.main.async { GlanceController.current?.becomeCurrentPage() }
+                // Log pipeline v4: a 5-min PULSE independent of readings. The
+                // per-reading transfer goes silent exactly when the session is dry —
+                // twice (126, 127) a dead-G7 session was invisible until a manual
+                // send. A dry session must still report itself.
+                self.startLogPulse()
             } else {
                 os_log("Loan ended: stopping G7 transport", log: self.log, type: .default)
                 self.stack.client.stopSoak()
                 LoopStallWatchdog.disarm()   // clean end — the loop stops on purpose
                 SensorBlackoutAlert.disarm()
+                self.stopLogPulse()
                 // PODLOAN diagnostics: queue the session log to the phone at every
                 // loan end (queued transfer survives unreachability) — a deleted or
                 // reinstalled app can no longer eat an unsent log (2026-07-19).
-                if WCSession.default.activationState == .activated, let url = LogFile.url {
-                    WCSession.default.transferFile(url, metadata: ["kind": "g7watch.log"])
-                }
+                self.sendLogSnapshot("loan end")
             }
         }
 
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         SportLog.event("session", "Sport Mode ready — build \(build); tap Start to request a loan")
+    }
+
+    // MARK: Log pipeline v4 — event snapshots + loan pulse (2026-07-20)
+
+    /// Queue the on-watch log to the phone NOW (WCSession queues transfers across
+    /// unreachability). Event-driven — the reading-triggered transfer cannot be the
+    /// only channel, because a dry session produces no readings and goes invisible.
+    func sendLogSnapshot(_ reason: String) {
+        guard WCSession.default.activationState == .activated, let url = LogFile.url else { return }
+        SportLog.event("log", "snapshot → iPhone (\(reason))")
+        WCSession.default.transferFile(url, metadata: ["kind": "g7watch.log"])
+    }
+
+    private var logPulse: DispatchSourceTimer?
+
+    private func startLogPulse() {
+        stopLogPulse()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 300, repeating: 300, leeway: .seconds(20))
+        timer.setEventHandler { [weak self] in self?.sendLogSnapshot("loan pulse") }
+        timer.resume()
+        logPulse = timer
+    }
+
+    private func stopLogPulse() {
+        logPulse?.cancel()
+        logPulse = nil
     }
 
     /// Route a WC userInfo payload. Returns true when it was a v2 protocol message

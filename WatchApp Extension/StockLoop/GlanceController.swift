@@ -131,7 +131,15 @@ final class GlanceViewModel: ObservableObject {
     func startSportMode() {
         guard !isPreview else { return }
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
-        ExtensionDelegate.shared().stockLoopSession.loanController.requestLoan(watchBuild: build)
+        let session = ExtensionDelegate.shared().stockLoopSession
+        session.loanController.requestLoan(watchBuild: build)
+        // Log pipeline v4: the Start tap itself ships a snapshot, and a +35s
+        // follow-up captures the request's fate (grant/timeout) even when the
+        // session then goes completely dry — no more invisible dead sessions.
+        session.sendLogSnapshot("sport start")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 35) {
+            session.sendLogSnapshot("start +35s")
+        }
         refresh()
     }
 
