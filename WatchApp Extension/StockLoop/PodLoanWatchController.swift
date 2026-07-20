@@ -106,6 +106,11 @@ final class PodLoanWatchController {
     /// Surfaced on the glance idle screen after a failed/timed-out start, so the user
     /// sees WHY instead of a silent return to idle.
     private(set) var lastIdleNote: String?
+    /// OBS-1 (audit 2026-07-20): a start (requested/takingOver) was in flight when the
+    /// app was killed or replaced. init() can't send — `send` is wired afterward — so
+    /// it stashes the epoch here and drainRecoveredIfNeeded() (post-wiring) fails the
+    /// takeover to the phone, which would otherwise strand in .grantOffered.
+    private var pendingInterruptedTakeoverEpoch: Int?
     /// Manual bounded suspend end (R3/R4); a running bounded suspend survives
     /// hand-back (46f16d01) and reports mode .suspended.
     private var manualSuspendEnd: Date?
@@ -127,16 +132,39 @@ final class PodLoanWatchController {
         // (stock recovery semantics live phone-side after reclaim, spec §5.3.3).
         if journal.hasUndrainedEvents {
             phase = .recoveredDrain
-            loopManager.issueAlert(Alert(
-                identifier: Alert.Identifier(managerIdentifier: "PodLoan", alertIdentifier: "sessionEnded"),
-                foregroundContent: Alert.Content(title: "Session Ended", body: "The watch loop session ended. Records are being returned to the phone.", acknowledgeActionButtonLabel: "OK"),
-                backgroundContent: Alert.Content(title: "Session Ended", body: "The watch loop session ended. Records are being returned to the phone.", acknowledgeActionButtonLabel: "OK"),
-                trigger: .immediate))
-        } else if phase != .idle {
-            // No records to drain but a stale phase: reset cleanly.
-            phase = .idle
-            epoch = nil
+            issueSessionEndedAlert()
+        } else {
+            switch phase {
+            case .idle:
+                break
+            case .requested, .takingOver:
+                // OBS-1 (field epochs 21 & 27): a start was in flight at kill/replace.
+                // The phone may have granted and be waiting on a verdict; without one
+                // it strands in .grantOffered and the user stares at a dead progress
+                // bar. Stash the epoch — drainRecoveredIfNeeded fails it to the phone
+                // once `send` is wired — and reset to a legible idle.
+                pendingInterruptedTakeoverEpoch = epoch
+                lastIdleNote = NSLocalizedString("Sport Mode start was interrupted. Tap Start to try again.", comment: "Glance: start interrupted by relaunch")
+                phase = .idle
+                epoch = nil
+            case .active, .handingBack, .revoked, .recoveredDrain:
+                // A live loan (or an in-flight drain) with no records left to send.
+                // Never silently abandon it — the phone would stay .loaned ("Pod on
+                // Watch") with nobody running the loop. Route to a recovered drain so
+                // the phone gets a released hand-back and reclaims (offer is idempotent
+                // by epoch; an empty event list still transitions the phone to owner).
+                phase = .recoveredDrain
+                issueSessionEndedAlert()
+            }
         }
+    }
+
+    private func issueSessionEndedAlert() {
+        loopManager.issueAlert(Alert(
+            identifier: Alert.Identifier(managerIdentifier: "PodLoan", alertIdentifier: "sessionEnded"),
+            foregroundContent: Alert.Content(title: "Session Ended", body: "The watch loop session ended. Records are being returned to the phone.", acknowledgeActionButtonLabel: "OK"),
+            backgroundContent: Alert.Content(title: "Session Ended", body: "The watch loop session ended. Records are being returned to the phone.", acknowledgeActionButtonLabel: "OK"),
+            trigger: .immediate))
     }
 
     // MARK: - Incoming (wired from the WCSession delegate at integration)
@@ -321,6 +349,22 @@ final class PodLoanWatchController {
             guard let self = self else { return }
             self.queue.async {
                 guard self.phase == .takingOver, self.epoch == grant.epoch else { return }
+                // CRITICAL (audit 2026-07-20): the grant's ~5-min lease is validated
+                // once at intake, but this ladder can run FAR past its nominal ~40s
+                // when the app is suspended mid-ladder — field epoch 27 ran 23 min
+                // because a TestFlight update froze the queue timers, which then
+                // drained late on wake. Past the lease, the phone is entitled to have
+                // T1-reclaimed the pod; flipping .active here would put TWO controllers
+                // on one pod. Re-check the lease every iteration and abort BEFORE
+                // honoring a successful read — expiry outranks a good status.
+                guard Date() < grant.expiresAt else {
+                    self.teardownPump()
+                    self.phase = .idle
+                    self.lastIdleNote = NSLocalizedString("Sport Mode start expired before the pod answered. Tap Start to try again.", comment: "Glance: grant lease expired mid-takeover")
+                    SportLog.event("loan", "TAKEOVER ABORTED — grant lease expired mid-takeover after \(attempt + 1) read(s), epoch \(grant.epoch)")
+                    self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "grant expired mid-takeover")))
+                    return
+                }
                 if success, let delivered = manager.podLoanInsulinDelivered {
                     self.deliveredAtTakeover = delivered
                     self.phase = .active
@@ -594,6 +638,11 @@ final class PodLoanWatchController {
     /// Drains a relaunch-recovered journal once the transport is available.
     func drainRecoveredIfNeeded() {
         queue.async {
+            if let epoch = self.pendingInterruptedTakeoverEpoch {
+                self.pendingInterruptedTakeoverEpoch = nil
+                SportLog.event("loan", "START INTERRUPTED — takeover was in flight at relaunch; failing it to the phone, epoch \(epoch)")
+                self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: epoch, reason: "watch relaunched during takeover")))
+            }
             guard self.phase == .recoveredDrain else { return }
             self.sendHandbackOffer(freshened: false, recovered: true)
         }
