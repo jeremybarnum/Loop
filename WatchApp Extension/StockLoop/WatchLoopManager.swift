@@ -972,7 +972,11 @@ extension WatchLoopManager: CGMManagerDelegate {
     /// autonomous-iteration pipeline's first hop (phone → iCloud via Shortcuts).
     private static var lastLogTransfer = Date.distantPast
     static func queueLogTransferThrottled() {
-        guard Date().timeIntervalSince(lastLogTransfer) > 5 * 60 else { return }
+        // 4.5 min, NOT 5.0: readings arrive every ~4.98-5.0 min, so a 5.0-min gate
+        // races the cadence and skips alternate transfers on boundary timing
+        // (field 2026-07-20: the 17:47:33 reading, 299s after the 17:42 transfer,
+        // shipped nothing — halving my Mac-side visibility).
+        guard Date().timeIntervalSince(lastLogTransfer) > 4.5 * 60 else { return }
         guard WCSession.default.activationState == .activated, let url = LogFile.url else { return }
         lastLogTransfer = Date()
         WCSession.default.transferFile(url, metadata: ["kind": "g7watch.log"])

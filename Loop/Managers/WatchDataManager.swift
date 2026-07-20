@@ -637,16 +637,28 @@ extension WatchDataManager: WCSessionDelegate {
         log.default("Watch log received: %{public}@", stamped.lastPathComponent)
     }
 
+    /// SERIAL queue (audit 2026-07-20, field-confirmed same day): concurrent
+    /// global-queue mirrors raced each other — a queued-transfer flush delivers
+    /// several files back-to-back, and interleaved remove/copy/prune left
+    /// g7watch-latest.log stale or missing in iCloud (the Mac view froze at 17:42
+    /// while newer sends existed). One mirror at a time, in arrival order.
+    private static let mirrorQueue = DispatchQueue(label: "com.loopkit.Loop.logMirror", qos: .utility)
+
     private static func mirrorLogToICloud(from localStamped: URL) {
-        DispatchQueue.global(qos: .utility).async {
+        mirrorQueue.async {
             let fm = FileManager.default
             guard let container = fm.url(forUbiquityContainerIdentifier: nil) else { return }   // iCloud off / not signed in
             let dir = container.appendingPathComponent("Documents", isDirectory: true)
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
             try? fm.copyItem(at: localStamped, to: dir.appendingPathComponent(localStamped.lastPathComponent))
             let cloudLatest = dir.appendingPathComponent("g7watch-latest.log")
-            try? fm.removeItem(at: cloudLatest)
-            try? fm.copyItem(at: localStamped, to: cloudLatest)
+            // Atomic replace (never remove-then-copy): a crash or race between the
+            // two steps is exactly how latest.log goes MISSING instead of stale.
+            let tmp = dir.appendingPathComponent(".g7watch-latest.tmp")
+            try? fm.removeItem(at: tmp)
+            if (try? fm.copyItem(at: localStamped, to: tmp)) != nil {
+                _ = try? fm.replaceItemAt(cloudLatest, withItemAt: tmp)
+            }
             if let entries = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
                 let stampedLogs = entries
                     .filter { $0.pathExtension == "log" && $0.lastPathComponent.hasPrefix("g7watch-") && $0.lastPathComponent != "g7watch-latest.log" }
