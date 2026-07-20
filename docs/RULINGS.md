@@ -213,6 +213,17 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   (BG wins over routine loop pod commands) — priority is contextual: the
   user-initiated takeover is the one pod operation that outranks BG.
 
+- **R27 — Deferred UI rulings, parked at LOW priority** (2026-07-20, Jeremy:
+  "keep these in low priority todo list", tasks #21/#22 — ruled, not yet
+  scheduled): (a) While the pod is on the watch, the PHONE must not display
+  anything that "cannot be right unless you know whether insulin or carbs
+  have been delivered on the watch": prediction, IOB, COB. Historical carbs,
+  insulin-delivered history, and live BG history stay. (b) Confirmation
+  inversion on the watch: starting Sport Mode needs NO confirmation
+  ("pointless"); CLOSING THE LOOP gets one, ideally the Digital Crown
+  confirm pattern — the friction belongs on the dosing decision (R23
+  confidence model), not on the low-stakes start.
+
 ## Not yet ruled (do not decide without Jeremy)
 
 - Risk-register #8: any on-body session of any milestone build — per-build,
