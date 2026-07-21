@@ -86,6 +86,10 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
     }
 
     func applicationDidBecomeActive() {
+        // 135 instrumentation (Jeremy 2026-07-20: "does the log know foreground vs
+        // background?"): every radio event between these markers is attributable to
+        // an app state — turns the background-degrades-the-pounce anecdote into data.
+        SportLog.event("app", "FOREGROUND (active)")
         if WCSession.default.activationState != .activated {
             WCSession.default.activate()
         }
@@ -98,6 +102,7 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
     }
 
     func applicationWillResignActive() {
+        SportLog.event("app", "BACKGROUND (resigned active)")
         UserDefaults.standard.startOnChartPage = (WKExtension.shared().visibleInterfaceController as? ChartHUDController) != nil
 
         NotificationCenter.default.post(name: type(of: self).willResignActiveNotification, object: self)
