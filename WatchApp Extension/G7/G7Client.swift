@@ -1303,6 +1303,19 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             log("[observer] window CAUGHT (\(observerSightings) ad sighting(s) during watch)")
         } else if observerSightings > 0 {
             log("[observer] window MISSED but AD WAS VISIBLE (\(observerSightings) sighting(s)) — armed connect slept through it (OS arm failure)")
+            // 136 (field 2026-07-20 22:22, phone BT OFF): sightings + no latch is
+            // PROOF the connect path is dead while the scan path lives — the
+            // half-poisoned session. The central recreate is the field-proven cure
+            // (every occurrence today); apply it NOW instead of waiting for the
+            // 400s watchdog plus a second dead cycle. Same recreate+finish order as
+            // the settle-guard exhaustion path. Converts 10-16 min miss clusters
+            // into ~one window.
+            if reason == "window elapsed", attemptActive, peripheral?.state != .connected,
+               !isHandshakeActive, !podTakeoverHold {
+                recreateCentral(reason: "observer: ad visible but armed connect never latched")
+                finishAttempt(success: false, message: "BLE connect path dead — reset")
+                return
+            }
         } else {
             log("[observer] window MISSED and NO AD SEEN — sensor silent to us (competing listener holding it, or skipped ad) [\(reason)]")
         }
