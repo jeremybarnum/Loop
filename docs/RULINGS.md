@@ -224,6 +224,32 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   confirm pattern — the friction belongs on the dosing decision (R23
   confidence model), not on the low-stakes start.
 
+- **R28 — Phased hardening roadmap; prediction freeze** (2026-07-20, Jeremy:
+  "definitely don't make any changes to the prediction flows at this point —
+  we're just gathering data"): the path to a locked-down system is strictly
+  ordered, and prediction/dosing internals are FROZEN except as each step
+  explicitly requires:
+  STEP 1 — lock down the Dexcom BG read to the greatest possible certainty,
+  probably including coexistence with Dexcom direct-to-watch (tasks #15/#32).
+  STEP 2 — close the loop; confirm a REASONABLE prediction is generated and
+  triggers temp basals, and that nothing crashes. Reasonableness, not
+  correctness, is the bar here.
+  STEP 3 — verify the prediction is CORRECT given its inputs, using the
+  logged internals ([predict] per-cycle decomposition, build 134).
+  THEN — complete lockdown of the functioning internals, and only then
+  iterate the UI, with certainty that no key building block is touched.
+  Instrumentation (logging) is always allowed; behavior changes to
+  prediction/dosing flows require naming which STEP demands them.
+
+- **R29 — Dosing-limit validation needs simulation; Jeremy is not diabetic**
+  (2026-07-20): Jeremy's on-body BG range is narrow (~50–100 mg/dL all day) —
+  euglycemia never exercises the high-BG dosing paths. Max temp basal,
+  suspend threshold, high-BG corrections, and clamp behavior (R1/R16 frozen
+  settings) MUST be validated by SIMULATION with a Caitlin-like glucose
+  profile (T1D ranges, e.g. 180–300 mg/dL excursions) driving the watch loop
+  against a bench pod — never inferred from Jeremy's field sessions. Field
+  sessions validate acquisition/plumbing; simulation validates dosing limits.
+
 ## Not yet ruled (do not decide without Jeremy)
 
 - Risk-register #8: any on-body session of any milestone build — per-build,
