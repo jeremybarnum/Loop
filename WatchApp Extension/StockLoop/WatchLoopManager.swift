@@ -133,6 +133,19 @@ final class WatchLoopManager {
         set { doseEnactor.isRadioBusy = newValue }
     }
 
+    /// E4 Stage 2 (task #40): reclaim the orphaned pod before a dose, release after.
+    /// Forwarded to the enactor (automatic path); enactManualBolus uses them directly.
+    /// Wired by StockLoopSession to the loan controller (which owns the OmniPumpManager);
+    /// no-op / immediate-connected when E4 is off.
+    var e4ReclaimPodForDose: ((@escaping (Bool) -> Void) -> Void)? {
+        get { doseEnactor.e4ReclaimPodForDose }
+        set { doseEnactor.e4ReclaimPodForDose = newValue }
+    }
+    var e4ReleasePodAfterDose: (() -> Void)? {
+        get { doseEnactor.e4ReleasePodAfterDose }
+        set { doseEnactor.e4ReleasePodAfterDose = newValue }
+    }
+
     /// Per-session watch-local closed-loop opt-in (R23 confidence model). Each loan
     /// starts OPEN (advisory — the loop computes and drives the glance display but does
     /// NOT enact); the user deliberately closes the loop from the glance screen.
@@ -802,23 +815,43 @@ final class WatchLoopManager {
                 return
             }
             let rounded = pumpManager.roundToSupportedBolusVolume(units: units)
-            SportLog.event("loan", String(format: "MANUAL BOLUS %.2f U — enacting on the watch pump", rounded))
-            let eventID = self.doseEnactor.loanRecorder?.loanWillEnactBolus(units: rounded)
-            pumpManager.enactBolus(units: rounded, activationType: activationType) { error in
-                self.doseEnactor.loanRecorder?.loanDidEnact(eventID: eventID, error: error)
-                if let error = error {
-                    SportLog.event("loan", "MANUAL BOLUS FAILED — \(String(describing: error))")
-                } else {
-                    SportLog.event("loan", "MANUAL BOLUS delivering")
-                    // 134: fold the bolus into IOB/prediction/HUD NOW, not at the next
-                    // reading (field: 0.75 U showed no immediate IOB update anywhere).
-                    self.dataAccessQueue.async {
-                        self.insulinEffect = nil
-                        self.insulinEffectIncludingPendingInsulin = nil
+            // The delivery itself, factored so it can run after an E4 pod reclaim.
+            let deliverBolus = {
+                SportLog.event("loan", String(format: "MANUAL BOLUS %.2f U — enacting on the watch pump", rounded))
+                let eventID = self.doseEnactor.loanRecorder?.loanWillEnactBolus(units: rounded)
+                pumpManager.enactBolus(units: rounded, activationType: activationType) { error in
+                    self.doseEnactor.loanRecorder?.loanDidEnact(eventID: eventID, error: error)
+                    self.e4ReleasePodAfterDose?()   // E4 Stage 2: re-release the pod after the bolus
+                    if let error = error {
+                        SportLog.event("loan", "MANUAL BOLUS FAILED — \(String(describing: error))")
+                    } else {
+                        SportLog.event("loan", "MANUAL BOLUS delivering")
+                        // 134: fold the bolus into IOB/prediction/HUD NOW, not at the next
+                        // reading (field: 0.75 U showed no immediate IOB update anywhere).
+                        self.dataAccessQueue.async {
+                            self.insulinEffect = nil
+                            self.insulinEffectIncludingPendingInsulin = nil
+                        }
+                        self.loop()
                     }
-                    self.loop()
+                    DispatchQueue.main.async { completion(error) }
                 }
-                DispatchQueue.main.async { completion(error) }
+            }
+            // E4 Stage 2: the pod is orphaned for G7 — reclaim it before the bolus.
+            // User is PRESENT, so a few seconds' reconnect is fine; on failure FAIL
+            // LOUDLY (never a silent no-bolus). No-op immediate when E4 is off.
+            if let reclaim = self.e4ReclaimPodForDose {
+                reclaim { ok in
+                    if ok {
+                        deliverBolus()
+                    } else {
+                        self.e4ReleasePodAfterDose?()
+                        SportLog.event("loan", "MANUAL BOLUS FAILED — E4 pod reconnect timed out (pod unreachable)")
+                        DispatchQueue.main.async { completion(WatchLoopError.pumpManagerUnconnected) }
+                    }
+                }
+            } else {
+                deliverBolus()
             }
         }
     }
@@ -917,6 +950,14 @@ final class WatchDoseEnactor {
     /// the crude loudDrop==true analog).
     var isRadioBusy: (() -> Bool)?
 
+    /// E4 Stage 2 (task #40): while E4 time-separation is active the pod BLE is
+    /// orphaned for G7's sake. reclaim it just before dosing; release it just after.
+    /// reclaim's completion(true) = pod connected & ready; (false) = couldn't
+    /// reconnect in the bounded window → SKIP this automatic dose (pod keeps running
+    /// its baseline, loop retries next cycle). Both nil / no-op when E4 is off.
+    var e4ReclaimPodForDose: ((@escaping (Bool) -> Void) -> Void)?
+    var e4ReleasePodAfterDose: (() -> Void)?
+
     func enact(recommendation: AutomaticDoseRecommendation, with pumpManager: PumpManager, completion: @escaping (PumpManagerError?) -> Void) {
         dosingQueue.async {
             if self.isRadioBusy?() == true {
@@ -925,6 +966,29 @@ final class WatchDoseEnactor {
                 completion(.communication(nil))
                 return
             }
+
+            // E4: reclaim the orphaned pod before dosing (bounded). Safe-fallback on
+            // failure: skip the dose — never block, never dose against a pod that
+            // isn't confirmed connected. Runs on dosingQueue (not the loop's
+            // dataAccessQueue), so the bounded wait can't stall the loop cycle.
+            if let reclaim = self.e4ReclaimPodForDose {
+                let group = DispatchGroup()
+                group.enter()
+                var connected = false
+                reclaim { ok in connected = ok; group.leave() }
+                if group.wait(timeout: .now() + 25) == .timedOut || !connected {
+                    SportLog.event("radio", "E4: pod not reconnected — automatic dose SKIPPED (pod runs baseline; loop retries next cycle)")
+                    self.e4ReleasePodAfterDose?()
+                    completion(.communication(nil))   // benign: the loop re-enacts next reading
+                    return
+                }
+            }
+            // Always re-release the pod on the way out, whatever the dose result.
+            let finish: (PumpManagerError?) -> Void = { err in
+                self.e4ReleasePodAfterDose?()
+                completion(err)
+            }
+
             let doseDispatchGroup = DispatchGroup()
 
             var tempBasalError: PumpManagerError? = nil
@@ -946,7 +1010,7 @@ final class WatchDoseEnactor {
             doseDispatchGroup.wait()
 
             guard tempBasalError == nil else {
-                completion(tempBasalError)
+                finish(tempBasalError)
                 return
             }
 
@@ -963,7 +1027,7 @@ final class WatchDoseEnactor {
                 }
             }
             doseDispatchGroup.wait()
-            completion(bolusError)
+            finish(bolusError)
         }
     }
 }

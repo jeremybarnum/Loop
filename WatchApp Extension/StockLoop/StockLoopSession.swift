@@ -50,6 +50,20 @@ final class StockLoopSession {
             self?.sendLogSnapshot(holding ? "takeover start" : "takeover verdict")
         }
 
+        // E4 Stage 2 (task #40): the loop reclaims the E4-orphaned pod to dose, then
+        // re-releases it for G7. Gated on the e4ReleasePod flag — when OFF, reclaim
+        // returns connected=true immediately so the dosing path is byte-for-byte the
+        // tagged baseline. When ON, the loan controller (which owns the OmniPumpManager)
+        // does the bounded reconnect + settled re-release.
+        stack.loopManager.e4ReclaimPodForDose = { [weak self] completion in
+            guard UserDefaults.standard.bool(forKey: "g7.e4ReleasePod"), let self = self else { completion(true); return }
+            self.loanController.reclaimPodForDose(completion)
+        }
+        stack.loopManager.e4ReleasePodAfterDose = { [weak self] in
+            guard UserDefaults.standard.bool(forKey: "g7.e4ReleasePod"), let self = self else { return }
+            self.loanController.releasePodAfterDose()
+        }
+
         loanController.onLoanActiveChanged = { [weak self] active in
             guard let self = self else { return }
             if active {

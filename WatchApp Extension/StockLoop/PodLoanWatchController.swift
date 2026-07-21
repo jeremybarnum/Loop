@@ -417,6 +417,59 @@ final class PodLoanWatchController {
         }
     }
 
+    // MARK: - E4 Stage 2 (task #40): reconnect the orphaned pod to dose, then re-release
+
+    /// Wired to WatchLoopManager via StockLoopSession. Called just before a dose while
+    /// E4 time-separation has the pod orphaned. completion(true) = pod connected & ready;
+    /// (false) = couldn't reconnect in the bounded window → caller SKIPS the dose (pod
+    /// keeps running its baseline). Uses podLoanReadStatus as the connection probe —
+    /// idempotent and exactly what the takeover ladder uses, so no double-dose risk.
+    func reclaimPodForDose(_ completion: @escaping (Bool) -> Void) {
+        queue.async {
+            guard self.phase == .active, let manager = self.pumpManager else { completion(false); return }
+            guard manager.isConnectionReleased else { completion(true); return }   // still connected — nothing to do
+            SportLog.event("loan", "E4: reclaiming pod to dose")
+            manager.reclaimConnection()
+            self.attemptReclaimRead(manager: manager, attempt: 0, completion: completion)
+        }
+    }
+
+    private func attemptReclaimRead(manager: OmniPumpManager, attempt: Int, completion: @escaping (Bool) -> Void) {
+        let maxAttempts = 8   // ~16s (8 × 2s) — a bonded pod reconnect is seconds
+        manager.podLoanReadStatus { [weak self] success in
+            guard let self = self else { completion(false); return }
+            self.queue.async {
+                guard self.phase == .active else { completion(false); return }
+                if success {
+                    SportLog.event("loan", "E4: pod reconnected for dose (after \(attempt + 1) read(s))")
+                    completion(true)
+                } else if attempt + 1 < maxAttempts {
+                    self.queue.asyncAfter(deadline: .now() + 2) {
+                        guard self.phase == .active else { completion(false); return }
+                        self.attemptReclaimRead(manager: manager, attempt: attempt + 1, completion: completion)
+                    }
+                } else {
+                    SportLog.event("loan", "E4: pod didn't reconnect in ~16s — dose skipped, pod runs baseline")
+                    completion(false)
+                }
+            }
+        }
+    }
+
+    /// Re-release the pod after a dose — but only after a SETTLE delay. The v1 lesson
+    /// (build 139): cancelling a freshly-established connection poisons the BLE stack;
+    /// the connection has only been up for the dose (~seconds), so give it a moment to
+    /// settle before releasing (mirrors the +90s deferred release at takeover).
+    func releasePodAfterDose() {
+        queue.asyncAfter(deadline: .now() + 12) { [weak self] in
+            guard let self = self, self.phase == .active, let manager = self.pumpManager,
+                  manager.isConnectionReleased == false,
+                  UserDefaults.standard.bool(forKey: "g7.e4ReleasePod") else { return }
+            manager.releaseConnection()
+            SportLog.event("loan", "E4: pod re-released after dose (+12s settle) — radio back to G7")
+        }
+    }
+
     /// 16 h insulin history + the R2 boundary record enter the watch DoseStore with
     /// deterministic sync identifiers (idempotent under grant redelivery).
     private func ingestGrantHistory(_ grant: LoanGrant) {
