@@ -633,6 +633,15 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         : UserDefaults.standard.bool(forKey: "reconnectModeV1") {
         didSet { UserDefaults.standard.set(reconnectMode, forKey: "reconnectModeV1") }
     }
+    /// E2 (task #37, 2026-07-21): when ON, SKIP the post-read self-cancel and let the
+    /// G7's own transmitter-shutoff disconnect tear the link down — the G7SensorKit
+    /// discipline (G7BluetoothManager: no self-cancel on the success path, scanAfterDelay).
+    /// Our self-cancel races the sensor's teardown and is the suspected source of the
+    /// ".disconnecting-stuck" half-open link / watchOS slot leak that starves G7 while
+    /// the pod is also connected. Toggle-gated A/B; default OFF = tagged b136 behavior.
+    @Published var e2CleanTeardown: Bool = UserDefaults.standard.bool(forKey: "e2CleanTeardownV1") {
+        didSet { UserDefaults.standard.set(e2CleanTeardown, forKey: "e2CleanTeardownV1") }
+    }
     private var savedPeripheral: CBPeripheral?         // bonded G7 held for pending reconnect
     /// Persisted identifier of the bonded G7 so a COLD start (fresh app launch, which
     /// loses `savedPeripheral`) can go straight to the non-throttled targeted-connect
@@ -988,7 +997,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             self.readCount = 0
             self.soakActive = true
         }
-        log("=== SOAK START: role 0x\(String(format: "%02X", authEndByte)) · predictive \(Int(autoRepeatInterval))s grid (lead \(Int(scanLeadTime))s) · \(batteryTag()) ===")
+        log("=== SOAK START: role 0x\(String(format: "%02X", authEndByte)) · predictive \(Int(autoRepeatInterval))s grid (lead \(Int(scanLeadTime))s) · E2-clean-teardown \(e2CleanTeardown ? "ON" : "off") · \(batteryTag()) ===")
         autoRepeat = true
         connect()
     }
@@ -1040,7 +1049,11 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         // pre-warm. The flag is cleared only by a genuine pre-warm resolution in teardownPrewarm.
         // Cost: a Sport-Mode-preempted pre-warm triggers one redundant, self-correcting pre-warm
         // later — cheap, and strictly safer than a wrong-clear.
-        if let p = peripheral { central?.cancelPeripheralConnection(p) }
+        // E2: on SUCCESS with the clean-teardown toggle, do NOT self-cancel — let the
+        // G7's own transmitter shutoff disconnect us (matches G7SensorKit). On FAILURE
+        // we still cancel to clean up a broken attempt. This is the whole E2 variable.
+        let e2SkipCancel = success && e2CleanTeardown
+        if let p = peripheral, !e2SkipCancel { central?.cancelPeripheralConnection(p) }
         dataStream.close(); authStream.close(); ctrlStream.close()
         attemptActive = false
         setHandshakeActive(false)   // Fix B: handshake window closed → the pod may use the radio again

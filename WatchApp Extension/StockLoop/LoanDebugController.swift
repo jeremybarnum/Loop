@@ -115,6 +115,17 @@ struct LoanDebugView: View {
 
                 Divider().padding(.vertical, 2)
 
+                // E2 (task #37): clean-teardown A/B — skip the post-read self-cancel,
+                // let the sensor drop us (G7SensorKit discipline). Takes effect on the
+                // NEXT read; run a with-pod loan and compare catch/recreates to b136.
+                Text("E2: CLEAN TEARDOWN (no self-cancel)").font(.footnote).foregroundColor(.secondary)
+                Button((session.stack.client.e2CleanTeardown ? "E2 ON — tap to disable" : "E2 off — tap to enable")) {
+                    session.stack.client.e2CleanTeardown.toggle()
+                    lastAction = session.stack.client.e2CleanTeardown ? "E2 clean-teardown ON" : "E2 off (b136 behavior)"
+                }
+
+                Divider().padding(.vertical, 2)
+
                 NavigationLink("Logs") { LogView() }
                     .font(.caption)
                 #if DEBUG
