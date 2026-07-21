@@ -382,8 +382,21 @@ final class PodLoanWatchController {
                     // keep the loop OPEN. If G7 catch recovers toward the standalone
                     // 94% (E1), Stage 2 adds the per-dose reclaim→enact→release.
                     if UserDefaults.standard.bool(forKey: "g7.e4ReleasePod") {
-                        manager.releaseConnection()
-                        SportLog.event("loan", "E4: pod BLE released after takeover — radio freed for G7 (Stage 1, keep loop OPEN)")
+                        // E4 v2 (field 2026-07-21): releasing AT takeover broke G7
+                        // entirely — a "connects-but-can't-read" loop, the pod cancel
+                        // left it stuck .disconnecting and poisoned the shared BLE
+                        // budget (the same watchOS teardown demon that causes the
+                        // missed windows). DEFER the release: take the free first read
+                        // with the pod connected (Jeremy's "first connection is always
+                        // good"), then cancel a SETTLED, idle connection ~90s later,
+                        // which should tear down cleaner than a fresh one.
+                        SportLog.event("loan", "E4: pod release DEFERRED +90s (v2 — release a settled connection after first reads)")
+                        self.queue.asyncAfter(deadline: .now() + 90) { [weak self] in
+                            guard let self = self, self.phase == .active, self.epoch == grant.epoch,
+                                  UserDefaults.standard.bool(forKey: "g7.e4ReleasePod") else { return }
+                            manager.releaseConnection()
+                            SportLog.event("loan", "E4: pod BLE released now (+90s deferred) — radio freed for G7")
+                        }
                     }
                 } else if attempt + 1 < maxAttempts {
                     if attempt == 0 {
