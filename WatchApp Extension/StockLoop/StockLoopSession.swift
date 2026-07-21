@@ -125,6 +125,34 @@ final class StockLoopSession {
         logPulse = nil
     }
 
+    // MARK: E1 — standalone-G7 diagnostic mode (task #36, 2026-07-21)
+    // Runs the G7 soak with NO pod loan and NO dosing: the ONLY BLE connection the
+    // watch holds is the G7. Isolates whether holding the Omnipod link concurrently
+    // starves G7 connects under watchOS's per-app BLE budget. Bench-only, firewalled:
+    // takes no pod, enacts nothing, arms no dosing dead-mans — pure acquisition
+    // telemetry (the same SportLog VALUE/observer/recreate lines) so the catch rate
+    // is directly comparable to the b136 with-pod baseline (77%).
+    private(set) var standaloneG7TestActive = false
+
+    func startStandaloneG7Test() {
+        guard !standaloneG7TestActive, !loanController.isLoanActive else { return }
+        standaloneG7TestActive = true
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        SportLog.event("standalone", "=== STANDALONE G7 TEST START (E1, build \(build)) — no pod loan, no dosing — bench diagnostic ===")
+        stack.client.prewarmIfPending()
+        stack.client.startSoak()
+        startLogPulse()   // flush every 5 min for an unattended multi-hour run
+    }
+
+    func stopStandaloneG7Test() {
+        guard standaloneG7TestActive else { return }
+        standaloneG7TestActive = false
+        SportLog.event("standalone", "=== STANDALONE G7 TEST STOP ===")
+        stack.client.stopSoak()
+        stopLogPulse()
+        sendLogSnapshot("standalone test end")
+    }
+
     /// Route a WC userInfo payload. Returns true when it was a v2 protocol message
     /// (consumed here); false lets the stock dispatch continue.
     func handleIncomingIfLoanMessage(_ userInfo: [String: Any]) -> Bool {

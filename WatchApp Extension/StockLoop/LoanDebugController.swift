@@ -99,6 +99,22 @@ struct LoanDebugView: View {
 
                 Divider().padding(.vertical, 2)
 
+                // E1 experiment (task #36): G7 acquisition with NO pod connection —
+                // isolates the watchOS 2-BLE-connection-budget hypothesis. Compare
+                // the catch rate to the b136 with-pod baseline (77%).
+                Text("E1: STANDALONE G7 (no pod)").font(.footnote).foregroundColor(.secondary)
+                Button(session.standaloneG7TestActive ? "Stop Standalone Test" : "Start Standalone G7 (no pod)") {
+                    if session.standaloneG7TestActive {
+                        session.stopStandaloneG7Test()
+                        lastAction = "standalone stopped"
+                    } else {
+                        session.startStandaloneG7Test()
+                        lastAction = session.standaloneG7TestActive ? "standalone G7 running (no pod)" : "blocked — end the loan first"
+                    }
+                }
+
+                Divider().padding(.vertical, 2)
+
                 NavigationLink("Logs") { LogView() }
                     .font(.caption)
                 #if DEBUG
