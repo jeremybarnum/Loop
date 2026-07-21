@@ -126,6 +126,17 @@ struct LoanDebugView: View {
 
                 Divider().padding(.vertical, 2)
 
+                // E4 STAGE 1 (task #40): release the pod BLE after takeover so G7 has
+                // the radio uncontested. Set BEFORE starting a session; keep loop OPEN.
+                Text("E4: RELEASE POD (Stage 1, open loop)").font(.footnote).foregroundColor(.secondary)
+                Button((UserDefaults.standard.bool(forKey: "g7.e4ReleasePod") ? "E4 ON — pod released, keep loop OPEN" : "E4 off — tap to enable")) {
+                    let on = !UserDefaults.standard.bool(forKey: "g7.e4ReleasePod")
+                    UserDefaults.standard.set(on, forKey: "g7.e4ReleasePod")
+                    lastAction = on ? "E4 ON (applies at next takeover)" : "E4 off"
+                }
+
+                Divider().padding(.vertical, 2)
+
                 NavigationLink("Logs") { LogView() }
                     .font(.caption)
                 #if DEBUG

@@ -373,6 +373,18 @@ final class PodLoanWatchController {
                     self.onLoanActiveChanged?(true)
                     SportLog.event("loan", "ACTIVE — epoch \(grant.epoch), pod taken after \(attempt + 1) read(s), odometer \(String(format: "%.2f", delivered)) U")
                     self.sendMessage(.takeoverComplete(TakeoverComplete(epoch: grant.epoch, firstPodStatus: self.currentPodStatus())))
+                    // E4 STAGE 1 (task #40, 2026-07-21): time-separate the radios. The
+                    // takeover is done and the initial status is read, so the pod BLE
+                    // connection isn't needed until the next dose. Release it (orphan
+                    // the pod — it runs its last basal natively; keys/state untouched)
+                    // so G7 acquisition has the watch's radio uncontested. STAGE 1 is
+                    // OPEN-LOOP validation: no reconnect-to-dose choreography yet, so
+                    // keep the loop OPEN. If G7 catch recovers toward the standalone
+                    // 94% (E1), Stage 2 adds the per-dose reclaim→enact→release.
+                    if UserDefaults.standard.bool(forKey: "g7.e4ReleasePod") {
+                        manager.releaseConnection()
+                        SportLog.event("loan", "E4: pod BLE released after takeover — radio freed for G7 (Stage 1, keep loop OPEN)")
+                    }
                 } else if attempt + 1 < maxAttempts {
                     if attempt == 0 {
                         SportLog.event("loan", "connecting to pod… (BLE session establishing, up to ~40s)")
