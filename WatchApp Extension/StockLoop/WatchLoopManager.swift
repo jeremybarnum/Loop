@@ -364,9 +364,36 @@ final class WatchLoopManager {
                 let bg = self.glucoseStore.latestGlucose.map { String(format: "%.0f", $0.quantity.doubleValue(for: .milligramsPerDeciliter)) } ?? "—"
                 let rec = self.recommendedAutomaticDose.map { String(describing: $0.recommendation.basalAdjustment?.unitsPerHour ?? 0) } ?? "none"
                 SportLog.event("loop", "cycle OK — BG \(bg), IOB \(self.insulinOnBoard.map { String(format: "%.2f", $0.value) } ?? "—"), temp \(rec)")
+                self.logPredictionBreakdown()
                 self.publishHUDContext()
             }
         }
+    }
+
+    /// 134 dosing-audit instrumentation (Jeremy 2026-07-20: "make sure prediction is
+    /// well instrumented in the logs so we can iterate to the answer as efficiently
+    /// as possible"). One line per cycle decomposing WHAT the dose math saw: each
+    /// cached effect's net mg/dL contribution over its horizon, the eventual BG, and
+    /// the recommendation. A missing input reads "—" — absence is a finding, not a
+    /// blank (the 20:31 carb-invalidation bug would have been one glance: COB present
+    /// on screen, "carbs —" here).
+    private func logPredictionBreakdown() {   // dataAccessQueue
+        func net(_ effects: [GlucoseEffect]?) -> String {
+            guard let effects, let first = effects.first, let last = effects.last else { return "—" }
+            let delta = last.quantity.doubleValue(for: .milligramsPerDeciliter) - first.quantity.doubleValue(for: .milligramsPerDeciliter)
+            return String(format: "%+.0f", delta)
+        }
+        let eventual = predictedGlucose?.last.map { String(format: "%.0f", $0.quantity.doubleValue(for: .milligramsPerDeciliter)) } ?? "—"
+        let rc = retrospectiveGlucoseEffect.isEmpty ? "—" : net(retrospectiveGlucoseEffect)
+        let rec: String
+        if let r = recommendedAutomaticDose {
+            let basal = r.recommendation.basalAdjustment.map { String(format: "%.2f U/h", $0.unitsPerHour) } ?? "no basal change"
+            let bolus = r.recommendation.bolusUnits.map { String(format: " + auto-bolus %.2f U", $0) } ?? ""
+            rec = basal + bolus
+        } else {
+            rec = "none"
+        }
+        SportLog.event("predict", "eventual \(eventual) · net effects: carbs \(net(carbEffect)), insulin \(net(insulinEffect)), momentum \(net(glucoseMomentumEffect)), RC \(rc) · rec \(rec)")
     }
 
     // MARK: - Effect refresh (mirrors update(for:) — LoopDataManager.swift:963)
@@ -783,6 +810,13 @@ final class WatchLoopManager {
                     SportLog.event("loan", "MANUAL BOLUS FAILED — \(String(describing: error))")
                 } else {
                     SportLog.event("loan", "MANUAL BOLUS delivering")
+                    // 134: fold the bolus into IOB/prediction/HUD NOW, not at the next
+                    // reading (field: 0.75 U showed no immediate IOB update anywhere).
+                    self.dataAccessQueue.async {
+                        self.insulinEffect = nil
+                        self.insulinEffectIncludingPendingInsulin = nil
+                    }
+                    self.loop()
                 }
                 DispatchQueue.main.async { completion(error) }
             }
@@ -797,6 +831,16 @@ final class WatchLoopManager {
             switch result {
             case .success(let stored):
                 SportLog.event("loan", String(format: "carbs logged locally: %.0f g", stored.quantity.doubleValue(for: .gram())))
+                // 134 (field 2026-07-20 20:31): carbEffect is invalidated ONLY by new
+                // CGM data (insulinCounteractionEffects.didSet) — the stock phone loop
+                // observes carb-store changes for this, and the port dropped that
+                // observer. A carb entry therefore sat OUTSIDE the prediction until
+                // the next reading-triggered cycle (eventual BG lower than current
+                // with 20 g COB on board). Invalidate + re-run the loop NOW: the
+                // prediction, recommendation, and HUD update within seconds of the
+                // entry, independent of CGM timing — stock parity restored.
+                self.dataAccessQueue.async { self.carbEffect = nil }
+                self.loop()
             case .failure(let error):
                 SportLog.event("loan", "carb store add FAILED — \(String(describing: error))")
             }
