@@ -102,6 +102,16 @@ enum StockLoopStack {
         let cacheStore = PersistenceController(directoryURL: documents.appendingPathComponent("com.loopkit.LoopKit.StockLoop"), isReadOnly: isAppExtension)
         let provenanceIdentifier = HKSource.default().bundleIdentifier
 
+        // #41 wall #2 (2026-07-21, sim-proven in WatchStoreEffectsTests): BOTH stores
+        // need a TemporaryScheduleOverrideHistory at CONSTRUCTION (it's init-only).
+        // DoseStore.getGlucoseEffects guards insulinSensitivityScheduleApplying-
+        // OverrideHistory, which is nil whenever overrideHistory is nil — even with
+        // the ISF schedule set — so insulinEffect failed every cycle after the
+        // schedule fix. Shared instance across stores, mirroring the phone's
+        // DeviceDataManager wiring. (No overrides are ever ACTIVE on the watch —
+        // an empty history resolves schedules verbatim.)
+        let overrideHistory = TemporaryScheduleOverrideHistory()
+
         let doseStore = DoseStore(
             healthKitSampleStore: nil,
             cacheStore: cacheStore,
@@ -109,6 +119,7 @@ enum StockLoopStack {
             longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration,
             basalProfile: nil,
             insulinSensitivitySchedule: nil,
+            overrideHistory: overrideHistory,
             provenanceIdentifier: provenanceIdentifier
         )
 
@@ -125,6 +136,7 @@ enum StockLoopStack {
             cacheStore: cacheStore,
             cacheLength: .hours(24),
             defaultAbsorptionTimes: LoopCoreConstants.defaultCarbAbsorptionTimes,
+            overrideHistory: overrideHistory,
             provenanceIdentifier: provenanceIdentifier
         )
 

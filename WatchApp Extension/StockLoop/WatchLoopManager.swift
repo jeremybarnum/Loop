@@ -116,10 +116,31 @@ final class WatchLoopManager {
     /// keeps the stores consistent. All four store setters are Locked<> (any-queue safe).
     var settings: LoopSettings {
         didSet {
+            // Mirrors the phone LoopDataManager.settings didSet (:294-339) — same four
+            // store syncs, same FeatureFlags-gated model provider, same cache
+            // invalidation. Deviations: no mealDetectionManager/analytics (absent on
+            // the watch), and syncs run unconditionally instead of diffed against
+            // oldValue — a grant applies once per loan, so the extra invalidation is
+            // free and a mid-session re-push behaves identically to stock.
             carbStore.carbRatioSchedule = settings.carbRatioSchedule
             carbStore.insulinSensitivitySchedule = settings.insulinSensitivitySchedule
             doseStore.insulinSensitivitySchedule = settings.insulinSensitivitySchedule
             doseStore.basalProfile = settings.basalRateSchedule
+            // :317-321 verbatim, including the flag (compiled OFF in this build →
+            // nil default model, exactly what the phone's doseStore runs with; pod
+            // doses carry their own insulinType so the default is typeless-only).
+            if FeatureFlags.adultChildInsulinModelSelectionEnabled {
+                doseStore.insulinModelProvider = PresetInsulinModelProvider(defaultRapidActingModel: settings.defaultRapidActingModel)
+            } else {
+                doseStore.insulinModelProvider = PresetInsulinModelProvider(defaultRapidActingModel: nil)
+            }
+            // :330-336: schedule changes invalidate cached effects so the next cycle
+            // recomputes under the new schedules instead of serving stale ones.
+            dataAccessQueue.async {
+                self.carbEffect = nil
+                self.insulinEffect = nil
+                self.insulinEffectIncludingPendingInsulin = nil
+            }
         }
     }
 
