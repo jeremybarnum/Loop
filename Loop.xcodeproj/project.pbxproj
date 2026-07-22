@@ -612,6 +612,7 @@
 		FADE00040000000000000027 /* GlanceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000017 /* GlanceController.swift */; };
 		FADE00040000000000000028 /* LoopStallWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000018 /* LoopStallWatchdog.swift */; };
 		FADE00040000000000000029 /* SportLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000019 /* SportLog.swift */; };
+		E3A9C09E7EC24D86B569C037 /* RuntimeStateLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37FF6C54889048F09D4F63E7 /* RuntimeStateLog.swift */; };
 		FADE00040000000000000031 /* OmnipodKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000001 /* OmnipodKit.framework */; };
 		FADE00040000000000000032 /* RileyLinkKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000002 /* RileyLinkKit.framework */; };
 		FADE00040000000000000033 /* RileyLinkBLEKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000003 /* RileyLinkBLEKit.framework */; };
@@ -1470,6 +1471,7 @@
 		FADE00040000000000000017 /* GlanceController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = GlanceController.swift; sourceTree = "<group>"; };
 		FADE00040000000000000018 /* LoopStallWatchdog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LoopStallWatchdog.swift; sourceTree = "<group>"; };
 		FADE00040000000000000019 /* SportLog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SportLog.swift; sourceTree = "<group>"; };
+		37FF6C54889048F09D4F63E7 /* RuntimeStateLog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = RuntimeStateLog.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -2770,6 +2772,7 @@
 				FADE00040000000000000017 /* GlanceController.swift */,
 				FADE00040000000000000018 /* LoopStallWatchdog.swift */,
 				FADE00040000000000000019 /* SportLog.swift */,
+				37FF6C54889048F09D4F63E7 /* RuntimeStateLog.swift */,
 			);
 			path = StockLoop;
 			sourceTree = "<group>";
@@ -3710,6 +3713,7 @@
 				FADE00040000000000000027 /* GlanceController.swift in Sources */,
 				FADE00040000000000000028 /* LoopStallWatchdog.swift in Sources */,
 				FADE00040000000000000029 /* SportLog.swift in Sources */,
+				E3A9C09E7EC24D86B569C037 /* RuntimeStateLog.swift in Sources */,
 				FADE00030000000000000011 /* G7Client.swift in Sources */,
 				FADE00030000000000000016 /* G7ClientTransportAdapter.swift in Sources */,
 				FADE00030000000000000012 /* WorkoutKeepalive.swift in Sources */,

@@ -86,12 +86,17 @@ final class StockLoopSession {
                 // twice (126, 127) a dead-G7 session was invisible until a manual
                 // send. A dry session must still report itself.
                 self.startLogPulse()
+                // Suspension detector (2026-07-22). The +90s pod release firing 3m36s
+                // late is what poisoned the BLE stack; that lateness had to be inferred
+                // from clustered timestamps. Now it is measured.
+                RuntimeStateLog.startHeartbeat()
             } else {
                 os_log("Loan ended: stopping G7 transport", log: self.log, type: .default)
                 self.stack.client.stopSoak()
                 LoopStallWatchdog.disarm()   // clean end — the loop stops on purpose
                 SensorBlackoutAlert.disarm()
                 self.stopLogPulse()
+                RuntimeStateLog.stopHeartbeat()
                 // PODLOAN diagnostics: queue the session log to the phone at every
                 // loan end (queued transfer survives unreachability) — a deleted or
                 // reinstalled app can no longer eat an unsent log (2026-07-19).

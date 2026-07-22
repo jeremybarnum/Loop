@@ -89,7 +89,7 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         // 135 instrumentation (Jeremy 2026-07-20: "does the log know foreground vs
         // background?"): every radio event between these markers is attributable to
         // an app state — turns the background-degrades-the-pounce anecdote into data.
-        SportLog.event("app", "FOREGROUND (active)")
+        SportLog.event("app", "ACTIVE (wrist up, frontmost) · \(RuntimeStateLog.snapshot())")
         if WCSession.default.activationState != .activated {
             WCSession.default.activate()
         }
@@ -102,10 +102,24 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
     }
 
     func applicationWillResignActive() {
-        SportLog.event("app", "BACKGROUND (resigned active)")
+        // NOT the same as backgrounding. This fires for the wrist-down/dimmed case where
+        // we are still frontmost (state .inactive) AND on the way to a true background —
+        // the old line said "BACKGROUND" for both, erasing exactly the distinction we
+        // needed (Jeremy 2026-07-22). The state tag disambiguates.
+        SportLog.event("app", "RESIGN ACTIVE · \(RuntimeStateLog.snapshot())")
         UserDefaults.standard.startOnChartPage = (WKExtension.shared().visibleInterfaceController as? ChartHUDController) != nil
 
         NotificationCenter.default.post(name: type(of: self).willResignActiveNotification, object: self)
+    }
+
+    /// The two hooks the port never implemented — without them a wrist-down dim and a
+    /// genuine background were indistinguishable in the log.
+    func applicationDidEnterBackground() {
+        SportLog.event("app", "BACKGROUND (another app / screen off) · \(RuntimeStateLog.snapshot())")
+    }
+
+    func applicationWillEnterForeground() {
+        SportLog.event("app", "WILL FOREGROUND · \(RuntimeStateLog.snapshot())")
     }
 
     // Presumably the main thread?
