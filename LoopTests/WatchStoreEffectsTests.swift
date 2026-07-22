@@ -211,6 +211,36 @@ final class WatchStoreEffectsTests: XCTestCase {
         waitForExpectations(timeout: 10)
     }
 
+    // MARK: - The linchpin of the pump-data-recency fix (2026-07-22)
+
+    /// `lastAddedPumpData` is `max(lastReservoirValue?.startDate, lastPumpEventsReconciliation)`,
+    /// and `addPumpEvents` assigns `lastPumpEventsReconciliation` BEFORE its
+    /// `guard events.count > 0` early return. So a pod status read that yields no new
+    /// doses STILL advances the loop's `pumpDataTooOld` gate.
+    ///
+    /// The entire `checkPumpDataAndLoop` fix depends on this: under E4 the pod is
+    /// orphaned, an idle pod produces no dose events, and if a status-only read could
+    /// not refresh recency the loop would stay deadlocked forever. If LoopKit ever
+    /// moves that assignment below the guard, this test fails loudly instead of the
+    /// watch silently refusing to dose again.
+    func testEmptyPumpEventsStillRefreshesLastAddedPumpData() {
+        let (doseStore, _) = makeStoresFixed()
+        XCTAssertEqual(doseStore.lastAddedPumpData, .distantPast, "a fresh store has no pump data")
+
+        let reconciliation = Date()
+        let exp = expectation(description: "add empty pump events")
+        doseStore.addPumpEvents([], lastReconciliation: reconciliation) { error in
+            XCTAssertNil(error)
+            exp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+
+        XCTAssertEqual(doseStore.lastAddedPumpData.timeIntervalSince1970,
+                       reconciliation.timeIntervalSince1970,
+                       accuracy: 0.001,
+                       "an empty event batch must still advance lastAddedPumpData — otherwise a status-only pod read can never clear pumpDataTooOld under E4")
+    }
+
     // MARK: - momentum (guard :671) — glucose-store-only, no schedules involved
 
     func testMomentumEffectResolvesFromGlucoseSamples() {

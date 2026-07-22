@@ -380,6 +380,59 @@ final class WatchLoopManager {
     /// One loop cycle: refresh effects, gate, predict, recommend, enact (via the seam).
     /// Triggered by new CGM data exactly as the phone's DeviceDataManager does; safe to call
     /// from any queue.
+    /// Mirrors the phone's `DeviceDataManager.checkPumpDataAndLoop()` (:563): assert
+    /// current pump data BEFORE looping, so the cycle's `pumpDataTooOld` gate (:655;
+    /// phone LoopDataManager:1257) sees fresh state. **The port dropped this call
+    /// entirely** — the watch never called `ensureCurrentPumpData`, so nothing kept
+    /// `doseStore.lastAddedPumpData` current. On the phone that call is exactly what
+    /// does: the DRIVER decides staleness (`OmniPumpManager.ensureCurrentPumpData`
+    /// :2468 checks `state.isPumpDataStale`) and fetches pod status only when needed,
+    /// so we inherit stock's threshold rather than inventing one.
+    ///
+    /// Field 2026-07-22 07:16-07:42: every closed-loop cycle died on
+    /// `pumpDataTooOld(06:57:51)` — the last E5 dose, i.e. the last pod contact. Under
+    /// E4 the pod is orphaned, so status only refreshed when we dosed, and the loop
+    /// wouldn't dose without fresh status: a permanent deadlock after 15 minutes.
+    ///
+    /// E4 deviation (necessary, and the only one): a status fetch needs the BLE link
+    /// back, so reclaim → assert → loop → release. Skipped while our own view of the
+    /// data is still fresh, because under E4 a reclaim costs pod contact that stock
+    /// never pays. With E4 off the reclaim closure returns immediately and this
+    /// collapses to the stock call.
+    func checkPumpDataAndLoop() {
+        guard let pumpManager = pumpManager else {
+            loop()   // stock (:571): loop even without a pump so the cycle still runs
+            return
+        }
+
+        let assertThenLoop: (@escaping () -> Void) -> Void = { done in
+            pumpManager.ensureCurrentPumpData { _ in
+                self.loop()
+                done()
+            }
+        }
+
+        let age = now().timeIntervalSince(doseStore.lastAddedPumpData)
+        guard age > LoopCoreConstants.inputDataRecencyInterval / 2,
+              let reclaim = e4ReclaimPodForDose else {
+            assertThenLoop({})
+            return
+        }
+
+        SportLog.event("loan", String(format: "pump data %.0f min old — reclaiming pod to refresh status before the cycle", age / 60))
+        reclaim { ok in
+            if !ok {
+                SportLog.event("loan", "pump-data refresh: pod didn't reconnect — cycle will still gate on stale pump data")
+            }
+            assertThenLoop {
+                // Radio back to the G7. The +12s settle comfortably outlasts a
+                // same-cycle enact, whose own reclaim is a no-op because the link
+                // is already up.
+                self.e4ReleasePodAfterDose?()
+            }
+        }
+    }
+
     func loop() {
         dataAccessQueue.async {
             self.log.default("Loop running")
@@ -1156,7 +1209,10 @@ extension WatchLoopManager: CGMManagerDelegate {
             if case .newData = readingResult, now.timeIntervalSince(self.lastCGMLoopTrigger) > .minutes(4.2) {
                 self.log.default("Triggering loop from new CGM data at %{public}@", String(describing: now))
                 self.lastCGMLoopTrigger = now
-                self.loop()
+                // Stock parity: the phone's CGM path also asserts pump data before
+                // looping (DeviceDataManager.checkPumpDataAndLoop) — the port called
+                // loop() bare, which is what stranded the cycle on pumpDataTooOld.
+                self.checkPumpDataAndLoop()
                 // E5 (task #43): same post-catch trigger geometry as a real dose —
                 // the command lands in the gap after this reading and contends with
                 // the NEXT window, exactly like production timing. No-op unless the
