@@ -226,6 +226,13 @@ final class WatchLoopManager {
         let lastLoopErrorText: String?
     }
 
+    /// True when a cycle has completed recently enough that the cached prediction still
+    /// describes the present. Read on dataAccessQueue.
+    private var predictionIsFresh: Bool {
+        guard let last = lastLoopCompleted else { return false }
+        return now().timeIntervalSince(last) <= .minutes(11)   // ~2 cycles + margin
+    }
+
     /// Synchronous snapshot of the cached loop state for the glance screen.
     func glanceData() -> GlanceData {
         return dataAccessQueue.sync {
@@ -238,7 +245,16 @@ final class WatchLoopManager {
                 glucose: latest?.quantity,
                 glucoseDate: latest?.startDate,
                 trend: (latest as? StoredGlucoseSample)?.trend,
-                eventual: predictedGlucose?.last?.quantity,
+                // STALENESS GATE (Jeremy 2026-07-22): `predictedGlucose` is only recomputed
+                // by a SUCCESSFUL cycle, so when cycles fail it keeps returning the last
+                // good prediction forever, with nothing marking it stale. Field: eventual
+                // sat at 120 for 25 minutes across five failed cycles, INCLUDING after 25 g
+                // of carbs went in — a number that should have jumped to ~270 instead read
+                // as current and authoritative. A prediction the loop could not compute is
+                // worse than no prediction, because the user acts on it. `lastLoopCompleted`
+                // advances only on success, so its age measures prediction freshness
+                // directly. Two cycles of grace absorbs one ordinary miss.
+                eventual: predictionIsFresh ? predictedGlucose?.last?.quantity : nil,
                 iob: insulinOnBoard?.value,
                 tempRate: tempRate,
                 lastLoopCompleted: lastLoopCompleted,
@@ -1150,11 +1166,32 @@ final class WatchDoseEnactor {
 
     func enact(recommendation: AutomaticDoseRecommendation, with pumpManager: PumpManager, completion: @escaping (PumpManagerError?) -> Void) {
         dosingQueue.async {
+            // BG still wins the radio — but WAIT for the handshake instead of throwing the
+            // dose cycle away on a millisecond-scale collision.
+            //
+            // Field 2026-07-22 15:42: the enact check landed 53ms after the VALUE, while
+            // the G7 link was still up, and the whole cycle was abandoned. The two cycles
+            // that DID dose (15:32, 15:37) differed only in that G7 logged
+            // "!! disconnected (clean)" ~30ms BEFORE the enact ran. Pure race, and losing
+            // it silently costs a full 5-minute dose cycle. E5 hit the identical race and
+            // was fixed with a delay; the production dose path never got that treatment.
+            //
+            // The handshake completes in seconds and the next G7 window is ~5 minutes out,
+            // so waiting is free. Poll rather than block so the dosing queue stays
+            // responsive; give up only if the radio is genuinely stuck.
+            var radioWaited: TimeInterval = 0
+            while self.isRadioBusy?() == true, radioWaited < 15 {
+                Thread.sleep(forTimeInterval: 0.5)
+                radioWaited += 0.5
+            }
             if self.isRadioBusy?() == true {
                 self.log.default("Enact DEFERRED — G7 handshake owns the radio (BG wins); the next reading retries")
-                SportLog.event("radio", "enact DEFERRED — G7 handshake owns the radio (BG wins); retry next reading")
+                SportLog.event("radio", "enact DEFERRED — G7 still owns the radio after 15s; retry next reading")
                 completion(.communication(nil))
                 return
+            }
+            if radioWaited > 0 {
+                SportLog.event("radio", String(format: "enact waited %.1fs for the G7 handshake, then proceeded", radioWaited))
             }
 
             // E4: reclaim the orphaned pod before dosing (bounded). Safe-fallback on

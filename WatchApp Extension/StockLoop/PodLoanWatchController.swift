@@ -314,6 +314,35 @@ final class PodLoanWatchController {
         // Standard, the pre-existing behavior.
         loopManager.setIntegralRetrospectiveCorrection(grant.integralRetrospectiveCorrectionEnabled ?? false)
 
+        // Log what the watch ACTUALLY received. The grant validates completeness but has
+        // never recorded the VALUES, so verifying any prediction against real settings
+        // meant asking Jeremy or back-solving them from observed effects — and on
+        // 2026-07-22 that inference was wrong (derived ISF 90 / CR 19 against actual
+        // 70 / 15, because the insulin-effect window includes pre-loan dose history, not
+        // just the loan odometer). Two settings-transfer bugs have already hidden here
+        // (schedules never reaching the stores; missing overrideHistory), so this also
+        // turns "did the settings arrive intact?" into a glance.
+        if let s = decodedSettings {
+            let now = self.loopManager.now()
+            let isf = s.insulinSensitivitySchedule?.quantity(at: now).doubleValue(for: .milligramsPerDeciliter)
+            let cr = s.carbRatioSchedule?.value(at: now)
+            let basal = s.basalRateSchedule?.value(at: now)
+            let target = s.glucoseTargetRangeSchedule?.quantityRange(at: now)
+            let lo = target?.lowerBound.doubleValue(for: .milligramsPerDeciliter)
+            let hi = target?.upperBound.doubleValue(for: .milligramsPerDeciliter)
+            let csf = (isf != nil && cr != nil && cr! > 0) ? isf! / cr! : nil
+            SportLog.event("settings", String(
+                format: "granted @now — ISF %@ mg/dL/U · CR %@ g/U · CSF %@ mg/dL/g · basal %@ U/hr · target %@-%@ · maxBasal %@ U/hr · maxBolus %@ U",
+                isf.map { String(format: "%.0f", $0) } ?? "nil",
+                cr.map { String(format: "%.1f", $0) } ?? "nil",
+                csf.map { String(format: "%.2f", $0) } ?? "nil",
+                basal.map { String(format: "%.2f", $0) } ?? "nil",
+                lo.map { String(format: "%.0f", $0) } ?? "nil",
+                hi.map { String(format: "%.0f", $0) } ?? "nil",
+                s.maximumBasalRatePerHour.map { String(format: "%.2f", $0) } ?? "nil",
+                s.maximumBolus.map { String(format: "%.2f", $0) } ?? "nil"))
+        }
+
         // Stock construction: exactly a phone relaunch. BlePodComms auto-connects from
         // podState.bleIdentifier at init (BlePodComms.swift:44) — no arming step.
         guard let rawValue = (try? PropertyListSerialization.propertyList(from: grant.pumpManagerRawState, options: [], format: nil)) as? [String: Any],
@@ -466,6 +495,14 @@ final class PodLoanWatchController {
                     SportLog.event("loan", "E4: pod reconnected for dose (after \(attempt + 1) read(s))")
                     completion(true)
                 } else if attempt + 1 < maxAttempts {
+                    // Per-attempt visibility. `podLoanReadStatus` returns a bare Bool, so
+                    // 14 failed reads said only "it didn't work" — three separate theories
+                    // (cold pod, suspension, spurious release) were raised and falsified
+                    // against that silence on 2026-07-22. Report what the BLE layer
+                    // actually sees each attempt: a peripheral stuck .disconnecting (2),
+                    // one never reaching .connected (0/1), and a connected pod failing its
+                    // status read are three different bugs that looked identical.
+                    SportLog.event("loan", "E4: reclaim read \(attempt + 1)/\(maxAttempts) failed — pod BLE state \(manager.podLoanConnectionStateDescription), released=\(manager.isConnectionReleased)")
                     self.queue.asyncAfter(deadline: .now() + 2) {
                         guard self.phase == .active else { completion(false); return }
                         self.attemptReclaimRead(manager: manager, attempt: attempt + 1, completion: completion)
