@@ -995,7 +995,13 @@ final class WatchLoopManager {
     /// loanRecorder hooks as real ones — they ARE real pod deliveries.
     func e5FireRandomTempIfEnabled() {
         guard UserDefaults.standard.bool(forKey: "g7.e5RandomTemp") else { return }
-        dataAccessQueue.async {
+        // +8s: field 2026-07-21 23:32 (144, first firing) — E5 fired 25ms after the
+        // VALUE, while the G7 link was still up (disconnect lands ~60ms post-value),
+        // so the radio arbiter deferred it EVERY cycle and E5 never dosed. The real
+        // loop's prediction pipeline adds enough latency to miss this race; E5 has
+        // no pipeline, so it must wait out the teardown explicitly. +8s also matches
+        // real-dose geometry (a temp lands seconds after the reading, not ms).
+        dataAccessQueue.asyncAfter(deadline: .now() + 8) {
             guard !self._closedLoopEnabled else {
                 SportLog.event("e5", "E5 skipped — loop is CLOSED (generator never runs beside the real enactor)")
                 return
