@@ -438,8 +438,26 @@ final class PodLoanWatchController {
         }
     }
 
+    /// Budget MATCHES the takeover ladder (14 reads / ~40s), and for the same reason.
+    ///
+    /// This was 8 reads / ~16s on the premise that "a bonded pod reconnect is seconds".
+    /// That premise only holds for a WARM pod: the overnight E5 run reclaimed every
+    /// 5 minutes and succeeded 84/84 — but in 2-4 reads, always well inside 16s. It
+    /// silently validated the warm case only.
+    ///
+    /// Field 2026-07-22 11:17-11:53 (build 149) showed the cold case: with the pod
+    /// E4-released and then idle 8+ minutes it self-disconnects (~3 min after last
+    /// contact), and every reclaim failed — 8/8 — while the TAKEOVER of the very same
+    /// pod minutes earlier succeeded in 4 reads on its 40s budget. So the pod was
+    /// reachable throughout; the reclaim was simply giving up first. Each failure left
+    /// pump data unrefreshed, so pumpDataTooOld re-deadlocked the loop with the age
+    /// climbing 15 -> 45 min.
+    ///
+    /// Radio cost is acceptable: the reclaim starts immediately after a reading, and
+    /// the next G7 window is ~5 min out, so even a full 40s leaves ~4 min of margin —
+    /// and E5 already proved a pod exchange every single cycle costs 0% catch rate.
     private func attemptReclaimRead(manager: OmniPumpManager, attempt: Int, completion: @escaping (Bool) -> Void) {
-        let maxAttempts = 8   // ~16s (8 × 2s) — a bonded pod reconnect is seconds
+        let maxAttempts = 14   // ~40s (14 × ~2s), same as the takeover ladder
         manager.podLoanReadStatus { [weak self] success in
             guard let self = self else { completion(false); return }
             self.queue.async {
@@ -453,7 +471,7 @@ final class PodLoanWatchController {
                         self.attemptReclaimRead(manager: manager, attempt: attempt + 1, completion: completion)
                     }
                 } else {
-                    SportLog.event("loan", "E4: pod didn't reconnect in ~16s — dose skipped, pod runs baseline")
+                    SportLog.event("loan", "E4: pod didn't reconnect after \(maxAttempts) reads (~40s) — dose skipped, pod runs baseline")
                     completion(false)
                 }
             }
