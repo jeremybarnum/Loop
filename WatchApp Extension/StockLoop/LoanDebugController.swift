@@ -161,6 +161,18 @@ struct LoanDebugView: View {
 
                 Divider().padding(.vertical, 2)
 
+                // #33/R29: scripted glucose. Jeremy's euglycemia (~75-135) means the loop's
+                // high-temp range has never been exercised on hardware; this sweeps the
+                // whole decision space so high-temp / no-change / zero-temp transitions can
+                // actually be observed. Real read, synthetic value, real dosing.
+                Text("FAKE BG (bench — REAL insulin, FAKE glucose)").font(.footnote).foregroundColor(.secondary)
+                Button((FakeGlucose.isEnabled ? "FAKE BG ON — \(FakeGlucose.phaseDescription)" : "Fake BG off — tap to enable sweep")) {
+                    FakeGlucose.setEnabled(!FakeGlucose.isEnabled)
+                    lastAction = FakeGlucose.isEnabled ? "FAKE BG ON — 70-240 sweep over 2h" : "fake BG off"
+                }
+
+                Divider().padding(.vertical, 2)
+
                 // E5 (task #43): random temp generator — pure BT-contention driver.
                 // Fires a fresh clamped random temp after EVERY reading via the full
                 // E4 reclaim→enact→re-release choreography. Loop must stay OPEN

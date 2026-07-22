@@ -1386,6 +1386,12 @@ extension WatchLoopManager: CGMManagerDelegate {
     private func processCGMReadingResult(_ manager: CGMManager, readingResult: CGMReadingResult, completion: @escaping () -> Void) {
         switch readingResult {
         case .newData(let values):
+            // BENCH-ONLY (#33/R29): substitute scripted values AFTER a successful real read.
+            // Deliberately here and not upstream — the G7 connect/handshake already happened,
+            // so radio contention and E4 timing stay genuine and a MISSED window stays
+            // missed. Everything downstream (store, momentum, prediction, DoseMath, the pod
+            // command) is real. No-op unless the bench flag is on.
+            let values = FakeGlucose.isEnabled ? FakeGlucose.substitute(values) : values
             glucoseStore.addGlucoseSamples(values) { result in
                 if case .failure(let error) = result {
                     self.log.error("Failure adding glucose samples: %{public}@", String(describing: error))
