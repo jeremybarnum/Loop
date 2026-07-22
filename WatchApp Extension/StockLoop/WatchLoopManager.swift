@@ -1062,6 +1062,15 @@ final class WatchLoopManager {
     /// Loan-time carb entry: lands in the WATCH's carb store so THIS loop's COB and
     /// dosing see it immediately (stores are isolated — R19 HK-off; the phone still
     /// receives the stock relay as the durable record).
+    /// Force the next cycle to recompute carbEffect. Used after seeding the phone's carbs
+    /// at grant (#49): carbEffect is cached and updateCachedEffects only recomputes it when
+    /// nil, so without this the seeded COB would be ignored until the next CGM-triggered
+    /// invalidation. Deliberately does NOT force a loop() — takeover has no glucose yet; the
+    /// first reading-triggered cycle (within ~5 min) recomputes and doses.
+    func invalidateCarbEffect() {
+        dataAccessQueue.async { self.carbEffect = nil }
+    }
+
     func addLoanCarbEntry(_ entry: NewCarbEntry) {
         carbStore.addCarbEntry(entry) { result in
             switch result {

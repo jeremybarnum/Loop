@@ -41,6 +41,8 @@ final class PodLoanPhoneController {
         var addCarb: (NewCarbEntry, @escaping (Error?) -> Void) -> Void
         /// 16 h insulin history for the grant.
         var doseHistory: (_ start: Date, _ completion: @escaping ([DoseEntry]) -> Void) -> Void
+        /// Active carb entries for the grant (#49) — seeded so the watch predicts with COB.
+        var carbHistory: (_ start: Date, _ completion: @escaping ([LoanCarbRecord]) -> Void) -> Void = { _, done in done([]) }
         /// Loud surfacing (banner + Event History line at integration).
         var issueNotice: (_ title: String, _ body: String) -> Void
         /// PODLOAN instant-tile port (crude f3784d49/674e1b13): fired when pod
@@ -305,31 +307,38 @@ final class PodLoanPhoneController {
         UserDefaults.standard.set(handedOverAt, forKey: Keys.loanStartedAt)
 
         let grantEpoch = epoch
-        deps.doseHistory(handedOverAt.addingTimeInterval(-.hours(16))) { [weak self] history in
+        let historyStart = handedOverAt.addingTimeInterval(-.hours(16))
+        // Fetch insulin AND carb history before building the grant (#49). Nested so both
+        // are in hand at construction; the same 16h window that seeds IOB now seeds COB.
+        deps.doseHistory(historyStart) { [weak self] history in
             guard let self = self else { return }
-            self.queue.async {
-                guard self.state == .grantOffered, self.epoch == grantEpoch else { return }
-                guard let stateData = try? PropertyListSerialization.data(fromPropertyList: pump.rawValue, format: .binary, options: 0),
-                      let settingsData = try? PropertyListSerialization.data(fromPropertyList: settings.rawValue, format: .binary, options: 0) else {
-                    self.abortGrant(reason: "snapshot encoding failed")
-                    return
+            self.deps.carbHistory(historyStart) { [weak self] carbs in
+                guard let self = self else { return }
+                self.queue.async {
+                    guard self.state == .grantOffered, self.epoch == grantEpoch else { return }
+                    guard let stateData = try? PropertyListSerialization.data(fromPropertyList: pump.rawValue, format: .binary, options: 0),
+                          let settingsData = try? PropertyListSerialization.data(fromPropertyList: settings.rawValue, format: .binary, options: 0) else {
+                        self.abortGrant(reason: "snapshot encoding failed")
+                        return
+                    }
+                    let grant = LoanGrant(
+                        epoch: grantEpoch,
+                        expiresAt: handedOverAt.addingTimeInterval(.minutes(5)),
+                        pumpManagerRawState: stateData,
+                        podAddress: 0,
+                        therapySettingsRaw: settingsData,
+                        settingsTimeZoneID: settings.basalRateSchedule?.timeZone.identifier ?? TimeZone.current.identifier,
+                        doseHistory: history.compactMap(Self.loanRecord(from:)),
+                        boundaryRecord: boundary,
+                        supportsInterimHandback: true,   // WS1 capability gate (REAL-3)
+                        // Same source LoopDataManager:458 reads. Without this the watch runs
+                        // Standard RC while this phone may be running Integral — different
+                        // predictions from identical inputs, silently (audit 2026-07-22).
+                        integralRetrospectiveCorrectionEnabled: UserDefaults.standard.integralRetrospectiveCorrectionEnabled,
+                        carbHistory: carbs)
+                    self.sendMessage(.grant(grant))
+                    self.armT1(for: grantEpoch)
                 }
-                let grant = LoanGrant(
-                    epoch: grantEpoch,
-                    expiresAt: handedOverAt.addingTimeInterval(.minutes(5)),
-                    pumpManagerRawState: stateData,
-                    podAddress: 0,
-                    therapySettingsRaw: settingsData,
-                    settingsTimeZoneID: settings.basalRateSchedule?.timeZone.identifier ?? TimeZone.current.identifier,
-                    doseHistory: history.compactMap(Self.loanRecord(from:)),
-                    boundaryRecord: boundary,
-                    supportsInterimHandback: true,   // WS1 capability gate (REAL-3)
-                    // Same source LoopDataManager:458 reads. Without this the watch runs
-                    // Standard RC while this phone may be running Integral — different
-                    // predictions from identical inputs, silently (audit 2026-07-22).
-                    integralRetrospectiveCorrectionEnabled: UserDefaults.standard.integralRetrospectiveCorrectionEnabled)
-                self.sendMessage(.grant(grant))
-                self.armT1(for: grantEpoch)
             }
         }
     }

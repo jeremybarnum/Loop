@@ -271,4 +271,44 @@ final class WatchStoreEffectsTests: XCTestCase {
         }
         waitForExpectations(timeout: 10)
     }
+
+    // MARK: - #49 phone→watch carb seeding: idempotent across re-takeovers
+
+    /// The load-bearing correctness property. The watch re-ingests the grant on EVERY
+    /// re-takeover (~12 epochs occurred in a single 2026-07-22 session), so seeding carbs
+    /// with addCarbEntry — which mints a fresh syncIdentifier each call — would multiply COB.
+    /// syncCarbObjects upserts on (syncIdentifier, provenanceIdentifier); this proves a
+    /// second seed of the same carb leaves COB unchanged.
+    func testSeededCarbsAreIdempotentAcrossRetakeovers() {
+        let (_, carbStore) = makeStoresFixed()
+        let now = Date()
+        let obj = SyncCarbObject(
+            absorptionTime: .hours(3), createdByCurrentApp: false, foodType: nil,
+            grams: 25, startDate: now.addingTimeInterval(-.minutes(5)), uuid: nil,
+            provenanceIdentifier: "com.loopkit.Loop.phone", syncIdentifier: "carb-idem-1",
+            syncVersion: 1, userCreatedDate: now, userUpdatedDate: nil, userDeletedDate: nil,
+            operation: .create, addedDate: nil, supercededDate: nil)
+
+        func seed() {
+            let exp = expectation(description: "sync")
+            carbStore.syncCarbObjects([obj]) { error in XCTAssertNil(error); exp.fulfill() }
+            waitForExpectations(timeout: 10)
+        }
+        func cob() -> Double {
+            var grams = -1.0
+            let exp = expectation(description: "cob")
+            carbStore.carbsOnBoard(at: now) { result in
+                if case .success(let v) = result { grams = v.quantity.doubleValue(for: .gram()) }
+                exp.fulfill()
+            }
+            waitForExpectations(timeout: 10)
+            return grams
+        }
+
+        seed(); let first = cob()
+        seed(); let second = cob()   // the re-takeover
+
+        XCTAssertGreaterThan(first, 0, "a seeded carb must produce COB (the reported bug: it did not)")
+        XCTAssertEqual(first, second, accuracy: 0.01, "re-seeding the SAME carb must NOT double COB")
+    }
 }

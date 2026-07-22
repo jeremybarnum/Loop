@@ -60,6 +60,27 @@ final class LoanProtocolV2Tests: XCTestCase {
         }
     }
 
+    func testGrantCarbHistoryRoundTrips() throws {
+        let now = Date(timeIntervalSince1970: 1_784_338_000.125)
+        let carb = LoanCarbRecord(syncIdentifier: "carb-abc", provenanceIdentifier: "com.loopkit.Loop",
+                                  syncVersion: 1, startDate: now, grams: 25, absorptionTime: .hours(3),
+                                  foodType: "🍕", userCreatedDate: now, userUpdatedDate: nil)
+        let grant = LoanGrant(epoch: 7, expiresAt: now.addingTimeInterval(300),
+                              pumpManagerRawState: Data([1]), podAddress: 0,
+                              therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
+                              doseHistory: [], boundaryRecord: nil, carbHistory: [carb])
+        guard case .grant(let g) = try roundTrip(.grant(grant)) else { return XCTFail("not a grant") }
+        XCTAssertEqual(g.carbHistory, [carb], "carb history must survive the wire")
+
+        // Backward compat: an older phone sends no carbHistory; it must decode as nil, not [].
+        let old = LoanGrant(epoch: 7, expiresAt: now.addingTimeInterval(300),
+                            pumpManagerRawState: Data([1]), podAddress: 0,
+                            therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
+                            doseHistory: [], boundaryRecord: nil)
+        guard case .grant(let g2) = try roundTrip(.grant(old)) else { return XCTFail("not a grant") }
+        XCTAssertNil(g2.carbHistory)
+    }
+
     func testEpochAccessorCoversEveryKind() {
         XCTAssertNil(LoanMessage.request(LoanRequest(watchBuild: "77")).epoch)
         XCTAssertNil(LoanMessage.nack(ProtocolNack(seenVersion: nil)).epoch)

@@ -585,12 +585,52 @@ final class PodLoanWatchController {
             guard let entry = Self.doseEntry(from: record, syncIdentifier: "loanv2-grant-\(grant.epoch)-\(index)") else { continue }
             entries.append(entry)
         }
-        guard !entries.isEmpty else { return }
-        loopManager.doseStore.addDoses(entries, from: nil) { error in
-            if let error = error {
-                os_log("Grant history ingest failed: %{public}@", log: OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController"), type: .error, String(describing: error))
+        if !entries.isEmpty {
+            loopManager.doseStore.addDoses(entries, from: nil) { error in
+                if let error = error {
+                    os_log("Grant history ingest failed: %{public}@", log: OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController"), type: .error, String(describing: error))
+                }
             }
         }
+        ingestGrantCarbs(grant)
+    }
+
+    /// Seed the phone's active carbs so the watch loop predicts with COB (#49). Uses
+    /// syncCarbObjects — which upserts on (syncIdentifier, provenanceIdentifier) — so a
+    /// re-takeover re-sending the same carbs updates in place instead of double-counting,
+    /// and the phone's provenance is preserved (createdByCurrentApp = false: these are the
+    /// phone's entries, not the watch's, which also keeps them from colliding with carbs
+    /// entered on the wrist).
+    private func ingestGrantCarbs(_ grant: LoanGrant) {
+        guard let carbs = grant.carbHistory, !carbs.isEmpty else { return }
+        let objects: [SyncCarbObject] = carbs.map { c in
+            SyncCarbObject(
+                absorptionTime: c.absorptionTime,
+                createdByCurrentApp: false,
+                foodType: c.foodType,
+                grams: c.grams,
+                startDate: c.startDate,
+                uuid: nil,
+                provenanceIdentifier: c.provenanceIdentifier,
+                syncIdentifier: c.syncIdentifier,
+                syncVersion: c.syncVersion,
+                userCreatedDate: c.userCreatedDate,
+                userUpdatedDate: c.userUpdatedDate,
+                userDeletedDate: nil,
+                operation: .create,
+                addedDate: nil,
+                supercededDate: nil)
+        }
+        loopManager.carbStore.syncCarbObjects(objects) { error in
+            if let error = error {
+                os_log("Grant carb ingest failed: %{public}@", log: OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController"), type: .error, String(describing: error))
+            } else {
+                SportLog.event("loan", "seeded \(objects.count) carb entr\(objects.count == 1 ? "y" : "ies") from the phone (COB carry-over)")
+            }
+        }
+        // Carb effect is cached; force a recompute so the seeded COB reaches the first
+        // prediction instead of waiting for a CGM-triggered invalidation (build 134 lesson).
+        loopManager.invalidateCarbEffect()
     }
 
     private static func doseEntry(from record: LoanDoseRecord, syncIdentifier: String) -> DoseEntry? {

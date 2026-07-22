@@ -246,12 +246,22 @@ public struct LoanGrant: Codable, Equatable {
     /// identical inputs with no error (audit 2026-07-22). Frozen for the loan exactly like
     /// the therapy settings. nil (older phone) → Standard, the pre-existing behavior.
     public let integralRetrospectiveCorrectionEnabled: Bool?
+    /// Active carbs the phone holds, seeded so the WATCH's own loop predicts with COB —
+    /// not just IOB. The grant carried 16h of INSULIN (doseHistory) but no carbs, so the
+    /// watch predicted LOWER than reality and under-delivered into a rising meal (field
+    /// 2026-07-22: phone eventual 293 with 44 g aboard, watch showed 0). Each record
+    /// carries the phone's stable syncIdentifier + provenanceIdentifier so re-seeding on
+    /// every re-takeover is idempotent (CarbStore.syncCarbObjects dedups on that pair) —
+    /// otherwise a dozen epochs would multiply COB. nil (older phone) → no seeding, the
+    /// pre-existing behavior.
+    public let carbHistory: [LoanCarbRecord]?
 
     public init(epoch: Int, expiresAt: Date, pumpManagerRawState: Data, podAddress: UInt32,
                 therapySettingsRaw: Data, settingsTimeZoneID: String,
                 doseHistory: [LoanDoseRecord], boundaryRecord: LoanDoseRecord?,
                 supportsInterimHandback: Bool? = nil,
-                integralRetrospectiveCorrectionEnabled: Bool? = nil) {
+                integralRetrospectiveCorrectionEnabled: Bool? = nil,
+                carbHistory: [LoanCarbRecord]? = nil) {
         self.epoch = epoch
         self.expiresAt = expiresAt
         self.pumpManagerRawState = pumpManagerRawState
@@ -262,6 +272,38 @@ public struct LoanGrant: Codable, Equatable {
         self.boundaryRecord = boundaryRecord
         self.supportsInterimHandback = supportsInterimHandback
         self.integralRetrospectiveCorrectionEnabled = integralRetrospectiveCorrectionEnabled
+        self.carbHistory = carbHistory
+    }
+}
+
+/// One carb entry seeded phone→watch at grant time (#49). Distinct from LoanDoseRecord —
+/// carbs need the full sync identity (syncIdentifier + provenanceIdentifier + syncVersion)
+/// that LoopKit's CarbStore.syncCarbObjects dedups on, which the dose record does not carry.
+/// The watch reconstructs a SyncCarbObject from this and calls syncCarbObjects, so re-grants
+/// are idempotent by construction.
+public struct LoanCarbRecord: Codable, Equatable {
+    public let syncIdentifier: String?
+    public let provenanceIdentifier: String
+    public let syncVersion: Int?
+    public let startDate: Date
+    public let grams: Double
+    public let absorptionTime: TimeInterval?
+    public let foodType: String?
+    public let userCreatedDate: Date?
+    public let userUpdatedDate: Date?
+
+    public init(syncIdentifier: String?, provenanceIdentifier: String, syncVersion: Int?,
+                startDate: Date, grams: Double, absorptionTime: TimeInterval?, foodType: String?,
+                userCreatedDate: Date?, userUpdatedDate: Date?) {
+        self.syncIdentifier = syncIdentifier
+        self.provenanceIdentifier = provenanceIdentifier
+        self.syncVersion = syncVersion
+        self.startDate = startDate
+        self.grams = grams
+        self.absorptionTime = absorptionTime
+        self.foodType = foodType
+        self.userCreatedDate = userCreatedDate
+        self.userUpdatedDate = userUpdatedDate
     }
 }
 

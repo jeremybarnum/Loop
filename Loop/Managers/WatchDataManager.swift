@@ -111,6 +111,26 @@ final class WatchDataManager: NSObject {
                     if case .success(let entries) = result { completion(entries) } else { completion([]) }
                 }
             },
+            carbHistory: { [weak self] start, completion in
+                guard let self = self else { completion([]); return }
+                // #49: the phone's active carbs, carrying the identity CarbStore.syncCarbObjects
+                // dedups on so re-seeding is idempotent. Absorbed carbs older than the window
+                // fall off naturally; only entries with future absorption matter for COB.
+                self.deviceManager.carbStore.getCarbEntries(start: start) { result in
+                    guard case .success(let entries) = result else { completion([]); return }
+                    completion(entries.map { e in
+                        LoanCarbRecord(syncIdentifier: e.syncIdentifier,
+                                       provenanceIdentifier: e.provenanceIdentifier,
+                                       syncVersion: e.syncVersion,
+                                       startDate: e.startDate,
+                                       grams: e.quantity.doubleValue(for: .gram()),
+                                       absorptionTime: e.absorptionTime,
+                                       foodType: e.foodType,
+                                       userCreatedDate: e.userCreatedDate,
+                                       userUpdatedDate: e.userUpdatedDate)
+                    })
+                }
+            },
             issueNotice: { [weak self] title, body in
                 self?.log.error("PodLoan notice: %{public}@ - %{public}@", title, body)
                 let content = UNMutableNotificationContent()
