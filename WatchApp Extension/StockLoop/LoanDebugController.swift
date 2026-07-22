@@ -54,6 +54,9 @@ struct LoanDebugView: View {
                 row("COB / IOB", "\(cobText) / \(dosing?.iob.map { String(format: "%.2f U", $0) } ?? "—")")
                 row("recommend", dosing?.recommendedTempRate.map { String(format: "%+.2f U/hr", $0) } ?? "—")
                 row("running", dosing?.tempRate.map { String(format: "%+.2f U/hr", $0) } ?? "0.00 U/hr")
+                // E5: what the generator COMMANDED and when — vs `running` (what the
+                // pod is executing). Match = enacted; mismatch = enact failed (log says why).
+                row("E5 last cmd", UserDefaults.standard.string(forKey: "g7.e5LastCmd") ?? "—")
                 row("last loop", dosing?.lastLoopCompleted.map { String(format: "%.0fs ago", Date().timeIntervalSince($0)) } ?? "—")
                 if let err = dosing?.lastLoopErrorText { row("loop err", err) }
 
@@ -154,6 +157,19 @@ struct LoanDebugView: View {
                     let on = !UserDefaults.standard.bool(forKey: "g7.e4ReleasePod")
                     UserDefaults.standard.set(on, forKey: "g7.e4ReleasePod")
                     lastAction = on ? "E4 ON (applies at next takeover)" : "E4 off"
+                }
+
+                Divider().padding(.vertical, 2)
+
+                // E5 (task #43): random temp generator — pure BT-contention driver.
+                // Fires a fresh clamped random temp after EVERY reading via the full
+                // E4 reclaim→enact→re-release choreography. Loop must stay OPEN
+                // (the generator refuses to run beside the real enactor).
+                Text("E5: RANDOM TEMP (bench — keep loop OPEN)").font(.footnote).foregroundColor(.secondary)
+                Button((UserDefaults.standard.bool(forKey: "g7.e5RandomTemp") ? "E5 ON — random temp each reading" : "E5 off — tap to enable")) {
+                    let on = !UserDefaults.standard.bool(forKey: "g7.e5RandomTemp")
+                    UserDefaults.standard.set(on, forKey: "g7.e5RandomTemp")
+                    lastAction = on ? "E5 ON — random temp each reading (keep loop OPEN)" : "E5 off"
                 }
 
                 Divider().padding(.vertical, 2)

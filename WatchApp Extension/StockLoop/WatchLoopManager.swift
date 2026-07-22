@@ -959,6 +959,47 @@ final class WatchLoopManager {
 
         return enactError
     }
+
+    // MARK: - E5 bench concurrency driver (task #43, 2026-07-21)
+
+    /// A random temp-basal generator: drives the full E4 reclaim→enact→re-release
+    /// choreography with a genuine pod command on EVERY reading — pure BT-contention
+    /// testing, zero dependence on the prediction pipeline (debugged separately in
+    /// the sim, Track B). Gates: bench flag; loan pump present; loop OPEN — the
+    /// generator REPLACES the enactor path, never runs beside it. Rate: scheduled
+    /// basal + 0.05–0.50 U/hr random (a fresh value each cycle so the pod always
+    /// gets a real program command — identical-temp suppression lives in DoseMath,
+    /// which this bypasses), clamped to the granted max, 30-min duration so a
+    /// stalled session decays back to schedule. Doses journal through the same
+    /// loanRecorder hooks as real ones — they ARE real pod deliveries.
+    func e5FireRandomTempIfEnabled() {
+        guard UserDefaults.standard.bool(forKey: "g7.e5RandomTemp") else { return }
+        dataAccessQueue.async {
+            guard !self._closedLoopEnabled else {
+                SportLog.event("e5", "E5 skipped — loop is CLOSED (generator never runs beside the real enactor)")
+                return
+            }
+            guard let pumpManager = self.pumpManager else { return }
+            guard let scheduled = self.settings.basalRateSchedule?.value(at: self.now()) else {
+                SportLog.event("e5", "E5 skipped — no basal schedule in granted settings (no-fabricated-defaults)")
+                return
+            }
+            var rate = scheduled + Double.random(in: 0.05...0.50)
+            if let cap = self.settings.maximumBasalRatePerHour { rate = min(rate, cap) }
+            rate = pumpManager.roundToSupportedBasalRate(unitsPerHour: rate)
+            let clock = DateFormatter(); clock.dateFormat = "HH:mm"
+            UserDefaults.standard.set(String(format: "%+.2f @ %@", rate, clock.string(from: self.now())), forKey: "g7.e5LastCmd")
+            SportLog.event("e5", String(format: "E5 random temp %.2f U/hr × 30 min (sched %.2f) — enacting", rate, scheduled))
+            let recommendation = AutomaticDoseRecommendation(basalAdjustment: TempBasalRecommendation(unitsPerHour: rate, duration: .minutes(30)))
+            self.doseEnactor.enact(recommendation: recommendation, with: pumpManager) { error in
+                if let error = error {
+                    SportLog.event("e5", "E5 enact FAILED — \(String(describing: error))")
+                } else {
+                    SportLog.event("e5", "E5 temp enacted OK — pod exchange complete")
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Dose enactor (mirrors Loop/Managers/DoseEnactor.swift)
@@ -1089,6 +1130,11 @@ extension WatchLoopManager: CGMManagerDelegate {
                 self.log.default("Triggering loop from new CGM data at %{public}@", String(describing: now))
                 self.lastCGMLoopTrigger = now
                 self.loop()
+                // E5 (task #43): same post-catch trigger geometry as a real dose —
+                // the command lands in the gap after this reading and contends with
+                // the NEXT window, exactly like production timing. No-op unless the
+                // bench flag is on.
+                self.e5FireRandomTempIfEnabled()
             }
             // WS4b: every direct reading re-defers the sensor-blackout dead-man —
             // but only DURING a loan (pumpManager is loan-scoped): a reading that
