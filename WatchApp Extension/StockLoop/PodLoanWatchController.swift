@@ -424,11 +424,29 @@ final class PodLoanWatchController {
                         // good"), then cancel a SETTLED, idle connection ~90s later,
                         // which should tear down cleaner than a fresh one.
                         SportLog.event("loan", "E4: pod release DEFERRED +90s (v2 — release a settled connection after first reads)")
+                        let scheduledReleaseAt = Date().addingTimeInterval(90)
                         self.queue.asyncAfter(deadline: .now() + 90) { [weak self] in
                             guard let self = self, self.phase == .active, self.epoch == grant.epoch,
                                   UserDefaults.standard.bool(forKey: "g7.e4ReleasePod") else { return }
+                            // Same before/after capture as the post-dose release. This is
+                            // the one that fired 3m36s LATE on 2026-07-22 (app suspended),
+                            // by which point the pod had self-disconnected — so we cancelled
+                            // nothing and wedged the peripheral. `before` says outright
+                            // whether the link was still alive when we pulled it, and the
+                            // scheduled-vs-actual delay says whether runtime was stolen.
+                            let before = manager.podLoanConnectionStateDescription
+                            let lateBy = Date().timeIntervalSince(scheduledReleaseAt)
                             manager.releaseConnection()
-                            SportLog.event("loan", "E4: pod BLE released now (+90s deferred) — radio freed for G7")
+                            self.lastPodLinkContact = Date()
+                            SportLog.event("loan", String(format: "E4: pod BLE released (+90s deferred, %.0fs late) — state was %@ at cancel%@",
+                                                          lateBy,
+                                                          before,
+                                                          before == "connected" ? "" : " ** cancelled a link that was ALREADY GONE **"))
+                            self.queue.asyncAfter(deadline: .now() + 3) { [weak self] in
+                                guard let self = self, let manager = self.pumpManager else { return }
+                                let after = manager.podLoanConnectionStateDescription
+                                SportLog.event("loan", "E4: post-release pod state \(after)\(after.hasPrefix("DISCONNECTING") ? " ** WEDGED — poisoning signature **" : "")")
+                            }
                         }
                     }
                 } else if attempt + 1 < maxAttempts {
@@ -457,10 +475,25 @@ final class PodLoanWatchController {
     /// (false) = couldn't reconnect in the bounded window → caller SKIPS the dose (pod
     /// keeps running its baseline). Uses podLoanReadStatus as the connection probe —
     /// idempotent and exactly what the takeover ladder uses, so no double-dose risk.
+    /// When the pod link was last confirmed alive (successful reclaim read or release).
+    /// The reclaim succeeded twice and then failed five times on 2026-07-22 with no visible
+    /// difference; idle duration is one of the few candidate discriminators left, so it is
+    /// measured rather than eyeballed from timestamps.
+    private var lastPodLinkContact: Date?
+
     func reclaimPodForDose(_ completion: @escaping (Bool) -> Void) {
         queue.async {
             guard self.phase == .active, let manager = self.pumpManager else { completion(false); return }
-            guard manager.isConnectionReleased else { completion(true); return }   // still connected — nothing to do
+            let idle = self.lastPodLinkContact.map { Date().timeIntervalSince($0) }
+            SportLog.event("loan", String(format: "E4: reclaim starting — pod BLE state %@, released=%@, idle %@",
+                                          manager.podLoanConnectionStateDescription,
+                                          manager.isConnectionReleased ? "yes" : "no",
+                                          idle.map { String(format: "%.0fs", $0) } ?? "unknown"))
+            guard manager.isConnectionReleased else {
+                self.lastPodLinkContact = Date()
+                completion(true)
+                return
+            }   // still connected — nothing to do
             SportLog.event("loan", "E4: reclaiming pod to dose")
             manager.reclaimConnection()
             self.attemptReclaimRead(manager: manager, attempt: 0, completion: completion)
@@ -492,7 +525,8 @@ final class PodLoanWatchController {
             self.queue.async {
                 guard self.phase == .active else { completion(false); return }
                 if success {
-                    SportLog.event("loan", "E4: pod reconnected for dose (after \(attempt + 1) read(s))")
+                    self.lastPodLinkContact = Date()
+                    SportLog.event("loan", "E4: pod reconnected for dose (after \(attempt + 1) read(s)) — state \(manager.podLoanConnectionStateDescription)")
                     completion(true)
                 } else if attempt + 1 < maxAttempts {
                     // Per-attempt visibility. `podLoanReadStatus` returns a bare Bool, so
@@ -524,8 +558,20 @@ final class PodLoanWatchController {
             guard let self = self, self.phase == .active, let manager = self.pumpManager,
                   manager.isConnectionReleased == false,
                   UserDefaults.standard.bool(forKey: "g7.e4ReleasePod") else { return }
+            // Capture the peripheral BEFORE and AFTER the cancel. The E4-v1 poisoning
+            // signature is a peripheral left in .disconnecting, and on 2026-07-22 we could
+            // only infer it minutes later from a central recreate. Cancelling a link the pod
+            // has ALREADY dropped is the suspected trigger, so "what state were we in when
+            // we cancelled" is the load-bearing fact — and a state that is not .connected
+            // going in means there was nothing to cancel.
+            let before = manager.podLoanConnectionStateDescription
             manager.releaseConnection()
-            SportLog.event("loan", "E4: pod re-released after dose (+12s settle) — radio back to G7")
+            self.lastPodLinkContact = Date()
+            self.queue.asyncAfter(deadline: .now() + 3) { [weak self] in
+                guard let self = self, let manager = self.pumpManager else { return }
+                let after = manager.podLoanConnectionStateDescription
+                SportLog.event("loan", "E4: pod re-released after dose (+12s settle) — state \(before) -> \(after) (+3s)\(after.hasPrefix("DISCONNECTING") ? " ** WEDGED — this is the poisoning signature **" : "")")
+            }
         }
     }
 

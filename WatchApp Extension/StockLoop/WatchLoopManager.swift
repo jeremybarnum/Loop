@@ -261,14 +261,28 @@ final class WatchLoopManager {
                 suspendThreshold: settings.suspendThreshold?.quantity,
                 closedLoopEnabled: _closedLoopEnabled,
                 dosingAllowedByPhone: settings.dosingEnabled,
-                recommendedTempRate: recommendedAutomaticDose?.recommendation.basalAdjustment?.unitsPerHour,
+                // Read the SNAPSHOT, not the live property: a successful enact nils
+                // `recommendedAutomaticDose` (:889/:1081), so in closed loop the panel's
+                // recommend row was blank essentially always — it showed "no recommendation"
+                // when the truth was "erased before you could see it". Same defect 148 fixed
+                // for the log line; the panel was still reading the live value (field
+                // 2026-07-22: eventual ~200 with a blank recommend).
+                recommendedTempRate: lastRecommendation?.basalAdjustment?.unitsPerHour,
                 lastLoopErrorText: lastLoopError.map { String(describing: $0) })
         }
     }
 
     /// COB for the glance rail (async — the store computes it).
+    ///
+    /// Passes `effectVelocities` exactly as the phone does (LoopDataManager:1110). The port
+    /// omitted them, so COB was computed with STATIC absorption while `carbEffect` — the
+    /// thing actually feeding the prediction — uses dynamic/ICE-informed absorption. Flagged
+    /// in the 2026-07-22 stock-call audit as a minor display divergence; it is not minor.
+    /// Field: 15 g entered on the wrist moved `eventual` correctly while COB read a hard 0,
+    /// which reads as "the loop lost my carbs" next to a prediction that plainly did not.
     func glanceCarbsOnBoard(_ completion: @escaping (Double?) -> Void) {
-        carbStore.carbsOnBoard(at: now()) { result in
+        let velocities = dataAccessQueue.sync { insulinCounteractionEffects }
+        carbStore.carbsOnBoard(at: now(), effectVelocities: velocities) { result in
             if case .success(let value) = result {
                 completion(value.quantity.doubleValue(for: .gram()))
             } else {
@@ -306,7 +320,9 @@ final class WatchLoopManager {
             ctx.lastNetTempBasalDose = 0
             ctx.lastNetTempBasalDate = now()
         }
-        carbStore.carbsOnBoard(at: now()) { result in
+        // Same dynamic-absorption argument as the phone (:1110) — already on dataAccessQueue
+        // here, so read the velocities directly.
+        carbStore.carbsOnBoard(at: now(), effectVelocities: insulinCounteractionEffects) { result in
             if case .success(let value) = result {
                 ctx.cob = value.quantity.doubleValue(for: .gram())
             }
@@ -396,6 +412,10 @@ final class WatchLoopManager {
     private var predictedGlucoseIncludingPendingInsulin: [PredictedGlucoseValue]?
 
     private var recommendedAutomaticDose: (recommendation: AutomaticDoseRecommendation, date: Date)?
+
+    /// What the LAST cycle decided, retained after `recommendedAutomaticDose` is cleared by
+    /// a successful enact — so display surfaces can show the decision instead of a blank.
+    private var lastRecommendation: AutomaticDoseRecommendation?
 
     private(set) var lastLoopCompleted: Date?
     private(set) var lastLoopError: Error?
@@ -503,6 +523,7 @@ final class WatchLoopManager {
             // what was decided (field 2026-07-22 08:48). The decision has to be captured
             // while it still exists.
             let decided = self.recommendedAutomaticDose?.recommendation
+            self.lastRecommendation = decided   // survives the enact's clear, for the DOSING panel
             if error == nil, self._closedLoopEnabled {
                 error = self.enactRecommendedAutomaticDose()
             } else if error == nil {
@@ -879,6 +900,29 @@ final class WatchLoopManager {
                     isBasalRateScheduleOverrideActive: settings.scheduleOverride?.isBasalRateScheduleOverriden(at: startDate) == true
                 )
                 dosingRecommendation = AutomaticDoseRecommendation(basalAdjustment: temp)
+
+                // THE DECISION, with every input DoseMath actually saw. Until now the log
+                // recorded the verdict but none of the evidence, so "no basal change" at a
+                // high eventual was unexplainable from a log — the exact question left open
+                // on 2026-07-22 (eventual ~200, nothing recommended). Any one of these can
+                // legitimately produce nil: eventual already inside target, a running temp
+                // that already matches, maxBasal reached, or the IOB clamp at zero headroom.
+                // Naming which one turns a mystery into a fact.
+                let tRange = glucoseTargetRange.quantityRange(at: startDate)
+                let mgdl = HKUnit.milligramsPerDeciliter
+                SportLog.event("dosemath", String(
+                    format: "eventual %@ vs target %.0f-%.0f · running %@ · scheduled %.2f · maxBasal %.2f · ISF %.0f · IOB %.2f (clamp headroom %.2f) · suspendThr %@ => %@",
+                    predictedGlucose.last.map { String(format: "%.0f", $0.quantity.doubleValue(for: mgdl)) } ?? "—",
+                    tRange.lowerBound.doubleValue(for: mgdl),
+                    tRange.upperBound.doubleValue(for: mgdl),
+                    lastTempBasal.map { String(format: "%.2f U/hr", $0.unitsPerHour) } ?? "none(scheduled)",
+                    basalRateSchedule.value(at: startDate),
+                    maxBasal,
+                    insulinSensitivity.quantity(at: startDate).doubleValue(for: mgdl),
+                    insulinOnBoard.value,
+                    iobHeadroom,
+                    settings.suspendThreshold?.quantity.doubleValue(for: mgdl).description ?? "none",
+                    temp.map { String(format: "temp %.2f U/hr x %.0f min", $0.unitsPerHour, $0.duration / 60) } ?? "NO CHANGE"))
             }
 
             if let dosingRecommendation = dosingRecommendation {
