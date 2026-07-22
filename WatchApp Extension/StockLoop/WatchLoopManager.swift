@@ -181,6 +181,12 @@ final class WatchLoopManager {
         /// The phone-frozen dosing permission: when false the watch CANNOT close the
         /// loop (the phone had Closed Loop off at grant).
         let dosingAllowedByPhone: Bool
+        /// #29 dosing observability (display-only): the temp DoseMath recommends THIS
+        /// cycle (nil = none), vs `tempRate` (what the pod is actually running) — the
+        /// gap between them is the "is it enacting?" tell. `lastLoopErrorText` is the
+        /// last cycle's error (nil = clean), so a stalled/erroring loop is visible.
+        let recommendedTempRate: Double?
+        let lastLoopErrorText: String?
     }
 
     /// Synchronous snapshot of the cached loop state for the glance screen.
@@ -201,7 +207,9 @@ final class WatchLoopManager {
                 lastLoopCompleted: lastLoopCompleted,
                 suspendThreshold: settings.suspendThreshold?.quantity,
                 closedLoopEnabled: _closedLoopEnabled,
-                dosingAllowedByPhone: settings.dosingEnabled)
+                dosingAllowedByPhone: settings.dosingEnabled,
+                recommendedTempRate: recommendedAutomaticDose?.recommendation.basalAdjustment?.unitsPerHour,
+                lastLoopErrorText: lastLoopError.map { String(describing: $0) })
         }
     }
 
@@ -344,6 +352,17 @@ final class WatchLoopManager {
             var error = self.updateCachedEffects()
             if error == nil {
                 error = self.updatePredictedGlucoseAndRecommendedDose()
+            }
+
+            // #41 observability: a PREDICTION-stage missingDataError is otherwise
+            // swallowed — the cycle-end handler suppresses missingDataError to avoid
+            // double-logging enact radio-defers (which reach the loop as a wrapped
+            // missingDataError too). Logging HERE, before enact, surfaces which of the
+            // five inputs is nil (glucose / momentumEffect / carbEffect / insulinEffect
+            // / activeInsulin) without touching the radio-defer path. This is exactly
+            // the failure that made a silently non-dosing loop invisible on 2026-07-21.
+            if case .missingDataError(let what)? = error {
+                SportLog.event("loop", "NOT DOSING — prediction missing \(what)")
             }
 
             // H19 port: the loop proved ALIVE (fresh data -> effects -> prediction).

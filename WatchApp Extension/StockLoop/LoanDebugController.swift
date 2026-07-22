@@ -13,6 +13,8 @@ import Foundation
 import SwiftUI
 import WatchKit
 import WatchConnectivity
+import HealthKit   // #29 DOSING readout: HKQuantity glucose/eventual
+import LoopKit     // #29: the .milligramsPerDeciliter HKUnit convenience
 
 final class LoanDebugController: WKHostingController<LoanDebugView> {
     override var body: LoanDebugView {
@@ -27,6 +29,10 @@ struct LoanDebugView: View {
     /// The loop's own IOB (Jeremy 2026-07-19: the dosing math is what matters —
     /// surface it here until the UI pass wires the main screens).
     @State private var iobText: String = "—"
+    /// #29 live dosing readout — "is it trying to dose?" made visible on-wrist.
+    /// Refreshes on the same 2s timer as everything else.
+    @State private var dosing: WatchLoopManager.GlanceData?
+    @State private var cobText: String = "—"
 
     private let refresh = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
@@ -38,6 +44,21 @@ struct LoanDebugView: View {
         NavigationStack {
         ScrollView {
             VStack(alignment: .leading, spacing: 4) {
+                // #29: the dosing decision, on-wrist. `recommend` vs `running` is the
+                // tell — high recommend + baseline running + closed = it wants to dose
+                // but isn't enacting; matching = it dosed; loop OPEN = not dosing at all.
+                Text("DOSING").font(.footnote).foregroundColor(.secondary)
+                row("closed?", (dosing?.closedLoopEnabled ?? false) ? "YES" : "no")
+                row("BG now", dosing?.glucose.map { String(format: "%.0f", $0.doubleValue(for: .milligramsPerDeciliter)) } ?? "—")
+                row("eventual", dosing?.eventual.map { String(format: "%.0f", $0.doubleValue(for: .milligramsPerDeciliter)) } ?? "—")
+                row("COB / IOB", "\(cobText) / \(dosing?.iob.map { String(format: "%.2f U", $0) } ?? "—")")
+                row("recommend", dosing?.recommendedTempRate.map { String(format: "%+.2f U/hr", $0) } ?? "—")
+                row("running", dosing?.tempRate.map { String(format: "%+.2f U/hr", $0) } ?? "0.00 U/hr")
+                row("last loop", dosing?.lastLoopCompleted.map { String(format: "%.0fs ago", Date().timeIntervalSince($0)) } ?? "—")
+                if let err = dosing?.lastLoopErrorText { row("loop err", err) }
+
+                Divider().padding(.vertical, 2)
+
                 Text("LOAN v2 BENCH").font(.footnote).foregroundColor(.secondary)
 
                 row("phase", snapshot.map { String(describing: $0.phase) } ?? "—")
@@ -149,12 +170,22 @@ struct LoanDebugView: View {
         .onReceive(refresh) { _ in
             snapshot = session.loanController.debugSnapshot()
             g7 = session.stack.client.identitySnapshot()
-            iobText = session.stack.loopManager.glanceData().iob.map { String(format: "%.2f U", $0) } ?? "—"
+            let gd = session.stack.loopManager.glanceData()
+            dosing = gd
+            iobText = gd.iob.map { String(format: "%.2f U", $0) } ?? "—"
+            session.stack.loopManager.glanceCarbsOnBoard { v in
+                DispatchQueue.main.async { cobText = v.map { String(format: "%.0f g", $0) } ?? "—" }
+            }
         }
         .onAppear {
             snapshot = session.loanController.debugSnapshot()
             g7 = session.stack.client.identitySnapshot()
-            iobText = session.stack.loopManager.glanceData().iob.map { String(format: "%.2f U", $0) } ?? "—"
+            let gd = session.stack.loopManager.glanceData()
+            dosing = gd
+            iobText = gd.iob.map { String(format: "%.2f U", $0) } ?? "—"
+            session.stack.loopManager.glanceCarbsOnBoard { v in
+                DispatchQueue.main.async { cobText = v.map { String(format: "%.0f g", $0) } ?? "—" }
+            }
         }
     }
 

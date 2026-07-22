@@ -250,12 +250,19 @@ final class GlanceViewModel: ObservableObject {
         }
         let untilNext = cadence - now.timeIntervalSince(last).truncatingRemainder(dividingBy: cadence)
         if firstConnect {
-            // Field data (2026-07-18): a session's FIRST connection can miss its
-            // window and need the fallback ladder — one extra cycle. Promise a
-            // clock time with that slack instead of a countdown that can lie.
-            let by = now.addingTimeInterval(untilNext + cadence)
+            // Used at session start and after a missed window — both cases where
+            // the next catch isn't yet locked. The grid PHASE is predicted
+            // accurately from the last reading (2026-07-21: predicted :37:35,
+            // caught :37:39 — dead on), and E4 (build 140+) catches the FIRST
+            // window ~94-100% of the time — so estimate the next slot itself,
+            // softened to "likely" (users read it as an estimate, not a promise).
+            // The old +1-cycle pad (calibrated 2026-07-18, pre-E4) was
+            // systematically a full window pessimistic. The ladder ceiling
+            // (untilNext + cadence) stays one line away for an explicit
+            // "no later than …" if the estimate ever proves shakier than it looks.
+            let by = now.addingTimeInterval(untilNext)
             let formatter = DateFormatter(); formatter.timeStyle = .short
-            return String(format: NSLocalizedString("G7 by ~%@", comment: "Glance G7 first-connection promise (1: clock time)"),
+            return String(format: NSLocalizedString("G7 likely by ~%@", comment: "Glance G7 first-catch estimate (1: clock time)"),
                           formatter.string(from: by))
         }
         let seconds = Int(untilNext.rounded())
