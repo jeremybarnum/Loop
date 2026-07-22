@@ -105,7 +105,23 @@ final class WatchLoopManager {
     /// `LoopSettings` whose nil schedules/limits DENY dosing via the configuration gates in
     /// `updatePredictedGlucoseAndRecommendedDose` — the no-fallback rule. Settings plumbing
     /// from the stock watch session arrives with M5 integration.
-    var settings: LoopSettings
+    ///
+    /// #41 ROOT CAUSE (found via build 142's "NOT DOSING — prediction missing carbEffect",
+    /// 2026-07-21 22:17): the stores were built schedule-less (StockLoopStack.makeStores)
+    /// and NOTHING propagated the grant's schedules to them — so CarbStore.getGlucoseEffects
+    /// and DoseStore.getGlucoseEffects failed .notConfigured EVERY cycle, carbEffect/
+    /// insulinEffect stayed nil, and the automatic loop never once recommended a dose
+    /// (the phone's LoopDataManager does this same store sync in its settings didSet).
+    /// Propagate here so EVERY settings application — grant, future mid-session pushes —
+    /// keeps the stores consistent. All four store setters are Locked<> (any-queue safe).
+    var settings: LoopSettings {
+        didSet {
+            carbStore.carbRatioSchedule = settings.carbRatioSchedule
+            carbStore.insulinSensitivitySchedule = settings.insulinSensitivitySchedule
+            doseStore.insulinSensitivitySchedule = settings.insulinSensitivitySchedule
+            doseStore.basalProfile = settings.basalRateSchedule
+        }
+    }
 
     // MARK: The enact seam (M4: UNCONNECTED)
 
