@@ -467,6 +467,12 @@ final class WatchLoopManager {
             // (R23 as amended 2026-07-18: watch sovereign — the phone's own loop mode
             // no longer gates the wrist). Open = advisory: prediction + recommendation
             // computed above (glance display live), nothing sent to the pod.
+            // Snapshot the recommendation BEFORE enacting. enactRecommendedAutomaticDose
+            // clears `recommendedAutomaticDose` on success, and the cycle logging below
+            // runs after it — so in CLOSED loop the log always read "rec none" no matter
+            // what was decided (field 2026-07-22 08:48). The decision has to be captured
+            // while it still exists.
+            let decided = self.recommendedAutomaticDose?.recommendation
             if error == nil, self._closedLoopEnabled {
                 error = self.enactRecommendedAutomaticDose()
             } else if error == nil {
@@ -484,9 +490,12 @@ final class WatchLoopManager {
                 self.lastLoopCompleted = self.now()
                 self.log.default("Loop ended (duration %.1fs)", self.now().timeIntervalSince(startDate))
                 let bg = self.glucoseStore.latestGlucose.map { String(format: "%.0f", $0.quantity.doubleValue(for: .milligramsPerDeciliter)) } ?? "—"
-                let rec = self.recommendedAutomaticDose.map { String(describing: $0.recommendation.basalAdjustment?.unitsPerHour ?? 0) } ?? "none"
+                // "no change" is a DECISION (DoseMath declined to alter the running
+                // basal), distinct from "nothing was decided" — conflating them is what
+                // made 08:48 unreadable.
+                let rec = decided.map { $0.basalAdjustment.map { String(format: "%.2f U/h", $0.unitsPerHour) } ?? "no change" } ?? "none"
                 SportLog.event("loop", "cycle OK — BG \(bg), IOB \(self.insulinOnBoard.map { String(format: "%.2f", $0.value) } ?? "—"), temp \(rec)")
-                self.logPredictionBreakdown()
+                self.logPredictionBreakdown(decided: decided)
                 self.publishHUDContext()
             }
         }
@@ -499,18 +508,29 @@ final class WatchLoopManager {
     /// the recommendation. A missing input reads "—" — absence is a finding, not a
     /// blank (the 20:31 carb-invalidation bug would have been one glance: COB present
     /// on screen, "carbs —" here).
-    private func logPredictionBreakdown() {   // dataAccessQueue
+    private func logPredictionBreakdown(decided: AutomaticDoseRecommendation? = nil) {   // dataAccessQueue
+        // FORWARD-LOOKING from `now`, not across the whole stored array (Jeremy
+        // 2026-07-22): effect already realized is baked into the CURRENT BG and cannot
+        // move `eventual` — only effect still to come can. Anchoring at the array start
+        // reached hours back and reported the whole night's insulin (-783 mg/dL against
+        // 1.32 U IOB), which explained nothing and matched nothing. Anchored at now,
+        // the four contributions decompose `eventual − current`, so a line that doesn't
+        // add up is itself the bug signal.
         func net(_ effects: [GlucoseEffect]?) -> String {
-            guard let effects, let first = effects.first, let last = effects.last else { return "—" }
-            let delta = last.quantity.doubleValue(for: .milligramsPerDeciliter) - first.quantity.doubleValue(for: .milligramsPerDeciliter)
+            guard let effects, let last = effects.last else { return "—" }
+            let t = now()
+            guard let anchor = effects.last(where: { $0.startDate <= t }) ?? effects.first else { return "—" }
+            let delta = last.quantity.doubleValue(for: .milligramsPerDeciliter) - anchor.quantity.doubleValue(for: .milligramsPerDeciliter)
             return String(format: "%+.0f", delta)
         }
         let eventual = predictedGlucose?.last.map { String(format: "%.0f", $0.quantity.doubleValue(for: .milligramsPerDeciliter)) } ?? "—"
         let rc = retrospectiveGlucoseEffect.isEmpty ? "—" : net(retrospectiveGlucoseEffect)
         let rec: String
-        if let r = recommendedAutomaticDose {
-            let basal = r.recommendation.basalAdjustment.map { String(format: "%.2f U/h", $0.unitsPerHour) } ?? "no basal change"
-            let bolus = r.recommendation.bolusUnits.map { String(format: " + auto-bolus %.2f U", $0) } ?? ""
+        // Prefer the caller's pre-enact snapshot; `recommendedAutomaticDose` is already
+        // cleared by a successful enact in closed loop.
+        if let r = decided ?? recommendedAutomaticDose?.recommendation {
+            let basal = r.basalAdjustment.map { String(format: "%.2f U/h", $0.unitsPerHour) } ?? "no basal change"
+            let bolus = r.bolusUnits.map { String(format: " + auto-bolus %.2f U", $0) } ?? ""
             rec = basal + bolus
         } else {
             rec = "none"
@@ -1152,15 +1172,27 @@ final class WatchDoseEnactor {
 
             if let basalAdjustment = recommendation.basalAdjustment {
                 self.log.default("Enacting recommended basal change")
+                // What the pod is ACTUALLY being told, and whether it took it. Without
+                // this the field log showed a reclaim and a released pod with no way to
+                // tell whether a command went out at all (2026-07-22 08:48) — E5 had
+                // this line, the real dosing path did not.
+                SportLog.event("dose", String(format: "enacting temp %.2f U/hr × %.0f min", basalAdjustment.unitsPerHour, basalAdjustment.duration / 60))
                 doseDispatchGroup.enter()
                 let eventID = self.loanRecorder?.loanWillEnactTempBasal(unitsPerHour: basalAdjustment.unitsPerHour, duration: basalAdjustment.duration)
                 pumpManager.enactTempBasal(unitsPerHour: basalAdjustment.unitsPerHour, for: basalAdjustment.duration) { error in
                     self.loanRecorder?.loanDidEnact(eventID: eventID, error: error)
                     if let error = error {
                         tempBasalError = error
+                        SportLog.event("dose", "temp enact FAILED — \(String(describing: error))")
+                    } else {
+                        SportLog.event("dose", String(format: "temp %.2f U/hr ACCEPTED by pod", basalAdjustment.unitsPerHour))
                     }
                     doseDispatchGroup.leave()
                 }
+            } else {
+                // The silent case that made 08:48 unreadable: DoseMath ran and chose to
+                // leave the running basal alone. That is a decision, and it gets a line.
+                SportLog.event("dose", "no temp change recommended — leaving the running basal as-is")
             }
 
             doseDispatchGroup.wait()
