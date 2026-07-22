@@ -309,6 +309,10 @@ final class PodLoanWatchController {
         attemptStartedAt = Date()
         phase = .takingOver
         loopManager.settings = decodedSettings!
+        // Frozen-at-grant like the therapy settings above: run the RC implementation the
+        // GRANTING phone runs, instead of silently assuming Standard. nil (older phone) →
+        // Standard, the pre-existing behavior.
+        loopManager.setIntegralRetrospectiveCorrection(grant.integralRetrospectiveCorrectionEnabled ?? false)
 
         // Stock construction: exactly a phone relaunch. BlePodComms auto-connects from
         // podState.bleIdentifier at init (BlePodComms.swift:44) — no arming step.

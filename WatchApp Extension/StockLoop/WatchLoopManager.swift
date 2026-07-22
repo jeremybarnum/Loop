@@ -356,11 +356,25 @@ final class WatchLoopManager {
     }
     private var retrospectiveGlucoseDiscrepanciesSummed: [GlucoseChange]?
 
-    /// The phone switches Standard/Integral RC on a phone-local UserDefaults toggle
-    /// (`LoopDataManager.retrospectiveCorrection:457`); that toggle is not pushed to the
-    /// watch, so the watch mirrors the default. Both implementations compile here (LoopKit
-    /// watchOS target, M4).
-    private let retrospectiveCorrection: RetrospectiveCorrection = StandardRetrospectiveCorrection(effectDuration: LoopMath.retrospectiveCorrectionEffectDuration)
+    /// Selected from the loan grant so the watch runs the SAME implementation the phone
+    /// would (`LoopDataManager.retrospectiveCorrection:457`). Frozen for the loan like the
+    /// therapy settings — the phone's re-selection-on-toggle-change has no analog here
+    /// because the flag cannot change mid-loan. Defaults to Standard, which is both the
+    /// pre-existing behavior and what a grant from a phone that doesn't send the flag
+    /// implies. Both implementations compile here (LoopKit watchOS target, M4).
+    private var retrospectiveCorrection: RetrospectiveCorrection = StandardRetrospectiveCorrection(effectDuration: LoopMath.retrospectiveCorrectionEffectDuration)
+
+    /// Apply the granted RC mode. Hops to dataAccessQueue because
+    /// `retrospectiveCorrection` is read there (updateRetrospectiveGlucoseEffect,
+    /// predictGlucose) — the grant lands on the loan controller's queue.
+    func setIntegralRetrospectiveCorrection(_ enabled: Bool) {
+        dataAccessQueue.async {
+            self.retrospectiveCorrection = enabled
+                ? IntegralRetrospectiveCorrection(effectDuration: LoopMath.retrospectiveCorrectionEffectDuration)
+                : StandardRetrospectiveCorrection(effectDuration: LoopMath.retrospectiveCorrectionEffectDuration)
+            SportLog.event("loan", "retrospective correction: \(enabled ? "INTEGRAL" : "standard") (from grant)")
+        }
+    }
 
     private var predictedGlucose: [PredictedGlucoseValue]?
     private var predictedGlucoseIncludingPendingInsulin: [PredictedGlucoseValue]?

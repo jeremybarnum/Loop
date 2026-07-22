@@ -323,7 +323,11 @@ final class PodLoanPhoneController {
                     settingsTimeZoneID: settings.basalRateSchedule?.timeZone.identifier ?? TimeZone.current.identifier,
                     doseHistory: history.compactMap(Self.loanRecord(from:)),
                     boundaryRecord: boundary,
-                    supportsInterimHandback: true)   // WS1 capability gate (REAL-3)
+                    supportsInterimHandback: true,   // WS1 capability gate (REAL-3)
+                    // Same source LoopDataManager:458 reads. Without this the watch runs
+                    // Standard RC while this phone may be running Integral — different
+                    // predictions from identical inputs, silently (audit 2026-07-22).
+                    integralRetrospectiveCorrectionEnabled: UserDefaults.standard.integralRetrospectiveCorrectionEnabled)
                 self.sendMessage(.grant(grant))
                 self.armT1(for: grantEpoch)
             }

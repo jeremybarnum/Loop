@@ -239,11 +239,19 @@ public struct LoanGrant: Codable, Equatable {
     /// would treat the first interim offer as a completed hand-back, reclaiming the
     /// pod while the watch is still dosing. nil (old phone) → legacy single-phase.
     public let supportsInterimHandback: Bool?
+    /// Phone-local algorithm-experiment toggle (`UserDefaults.integralRetrospectiveCorrectionEnabled`,
+    /// read at LoopDataManager:457 to pick Integral vs Standard RC). It is NOT part of
+    /// LoopSettings, so it has to ride separately — otherwise the watch silently runs
+    /// Standard while the phone runs Integral, producing different predictions from
+    /// identical inputs with no error (audit 2026-07-22). Frozen for the loan exactly like
+    /// the therapy settings. nil (older phone) → Standard, the pre-existing behavior.
+    public let integralRetrospectiveCorrectionEnabled: Bool?
 
     public init(epoch: Int, expiresAt: Date, pumpManagerRawState: Data, podAddress: UInt32,
                 therapySettingsRaw: Data, settingsTimeZoneID: String,
                 doseHistory: [LoanDoseRecord], boundaryRecord: LoanDoseRecord?,
-                supportsInterimHandback: Bool? = nil) {
+                supportsInterimHandback: Bool? = nil,
+                integralRetrospectiveCorrectionEnabled: Bool? = nil) {
         self.epoch = epoch
         self.expiresAt = expiresAt
         self.pumpManagerRawState = pumpManagerRawState
@@ -253,6 +261,7 @@ public struct LoanGrant: Codable, Equatable {
         self.doseHistory = doseHistory
         self.boundaryRecord = boundaryRecord
         self.supportsInterimHandback = supportsInterimHandback
+        self.integralRetrospectiveCorrectionEnabled = integralRetrospectiveCorrectionEnabled
     }
 }
 
