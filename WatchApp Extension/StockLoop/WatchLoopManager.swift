@@ -1097,6 +1097,16 @@ final class WatchLoopManager {
         dataAccessQueue.async { self.carbEffect = nil }
     }
 
+    /// IOB dedup (2026-07-22): after the grant wipe-then-seed rebuilds the insulin books,
+    /// drop the cached insulin effects so the next cycle recomputes from the clean store
+    /// instead of riding the pre-wipe curve (IOB itself refetches every cycle already).
+    func invalidateInsulinEffect() {
+        dataAccessQueue.async {
+            self.insulinEffect = nil
+            self.insulinEffectIncludingPendingInsulin = nil
+        }
+    }
+
     func addLoanCarbEntry(_ entry: NewCarbEntry) {
         carbStore.addCarbEntry(entry) { result in
             switch result {

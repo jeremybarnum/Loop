@@ -585,10 +585,40 @@ final class PodLoanWatchController {
             guard let entry = Self.doseEntry(from: record, syncIdentifier: "loanv2-grant-\(grant.epoch)-\(index)") else { continue }
             entries.append(entry)
         }
-        if !entries.isEmpty {
-            loopManager.doseStore.addDoses(entries, from: nil) { error in
+        // WIPE-THEN-SEED (IOB dedup, 2026-07-22). The seed syncIds are epoch-keyed
+        // ("loanv2-grant-<epoch>-<index>"), so every takeover re-inserted the same 16 h of
+        // phone history under fresh identifiers — three epochs in one day tripled IOB
+        // (field: 7.40 U on the books vs ≤ ~2.5 U physically deliverable; clamp headroom
+        // -1.40 blocked every high temp at eventual 256). A watch-enacted dose also lands
+        // twice across epochs: once via its own pump event, again via the next grant's
+        // reconciled history. The grant IS ground truth at takeover — it already contains
+        // this watch's journal-reconciled doses — so wipe both tables and seed from it:
+        // pump events first (its final sync pushes them into the delivery store), then the
+        // delivery-store cache (where addDoses lands and IOB/effects read from —
+        // DoseStore.getDoses:1274). Recency (lastPumpEventsReconciliation) nils on wipe and
+        // is restored seconds later by the takeover's own status read via
+        // checkPumpDataAndLoop. Idempotent under grant redelivery by construction.
+        let doseStore = loopManager.doseStore
+        let seamLog = OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController")
+        doseStore.deleteAllPumpEvents { error in
+            if let error = error {
+                os_log("Grant ingest: pump-event wipe failed: %{public}@", log: seamLog, type: .error, String(describing: error))
+            }
+            doseStore.insulinDeliveryStore.purgeCachedInsulinDeliveryObjects(before: nil) { error in
                 if let error = error {
-                    os_log("Grant history ingest failed: %{public}@", log: OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController"), type: .error, String(describing: error))
+                    os_log("Grant ingest: delivery-store purge failed: %{public}@", log: seamLog, type: .error, String(describing: error))
+                }
+                guard !entries.isEmpty else {
+                    self.loopManager.invalidateInsulinEffect()
+                    return
+                }
+                doseStore.addDoses(entries, from: nil) { error in
+                    if let error = error {
+                        os_log("Grant history ingest failed: %{public}@", log: seamLog, type: .error, String(describing: error))
+                    } else {
+                        SportLog.event("loan", "insulin books rebuilt from grant — \(entries.count) records (wipe-then-seed)")
+                    }
+                    self.loopManager.invalidateInsulinEffect()
                 }
             }
         }
