@@ -537,6 +537,16 @@ final class PodLoanWatchController {
                     // one never reaching .connected (0/1), and a connected pod failing its
                     // status read are three different bugs that looked identical.
                     SportLog.event("loan", "E4: reclaim read \(attempt + 1)/\(maxAttempts) failed — pod BLE state \(manager.podLoanConnectionStateDescription), released=\(manager.isConnectionReleased)")
+                    // ESCALATION (157): the bare pending-connect is probabilistic — field
+                    // 2026-07-22 caught a 578s-idle pod in 6s and then missed 518s- AND
+                    // 259s-idle pods entirely, while every scan-adopt takeover landed in
+                    // 2-4 reads. If the gentle connect hasn't settled by read 6 (~15s),
+                    // rebuild the central and arm the takeover-grade address scan; the
+                    // remaining ~25s of ladder budget rides the stronger path.
+                    if attempt + 1 == 6 {
+                        SportLog.event("loan", "E4: reclaim ESCALATED at read 6/\(maxAttempts) — fresh central + scan-adopt (takeover-grade)")
+                        manager.podLoanEscalateReclaim()
+                    }
                     self.queue.asyncAfter(deadline: .now() + 2) {
                         guard self.phase == .active else { completion(false); return }
                         self.attemptReclaimRead(manager: manager, attempt: attempt + 1, completion: completion)
