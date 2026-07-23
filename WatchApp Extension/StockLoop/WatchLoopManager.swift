@@ -233,12 +233,26 @@ final class WatchLoopManager {
         return now().timeIntervalSince(last) <= .minutes(11)   // ~2 cycles + margin
     }
 
+    /// #50: the temp basal the pod is running, as best the watch can know it — the live
+    /// `basalDeliveryState` while the pod is connected, otherwise the temp we last enacted
+    /// until its programmed end. E4 orphans the pod, so `basalDeliveryState` goes nil within
+    /// seconds even though the pod keeps delivering. Read on `dataAccessQueue`.
+    private func runningTempBasal() -> DoseEntry? {
+        if case .some(.tempBasal(let dose)) = pumpManager?.status.basalDeliveryState {
+            return dose
+        }
+        if let cached = cachedEnactedTempBasal, cached.endDate > now() {
+            return cached
+        }
+        return nil
+    }
+
     /// Synchronous snapshot of the cached loop state for the glance screen.
     func glanceData() -> GlanceData {
         return dataAccessQueue.sync {
             let latest = glucoseStore.latestGlucose
             var tempRate: Double?
-            if case .some(.tempBasal(let dose)) = pumpManager?.status.basalDeliveryState {
+            if let dose = runningTempBasal() {
                 tempRate = dose.unitsPerHour
             }
             return GlanceData(
@@ -312,7 +326,7 @@ final class WatchLoopManager {
         ctx.iob = insulinOnBoard?.value
         ctx.loopLastRunDate = lastLoopCompleted
         ctx.isClosedLoop = _closedLoopEnabled
-        if case .some(.tempBasal(let dose)) = pumpManager?.status.basalDeliveryState {
+        if let dose = runningTempBasal() {
             let scheduled = settings.basalRateSchedule?.value(at: now()) ?? 0
             ctx.lastNetTempBasalDose = dose.unitsPerHour - scheduled
             ctx.lastNetTempBasalDate = dose.startDate
@@ -358,6 +372,15 @@ final class WatchLoopManager {
         self.glucoseStore = glucoseStore
         self.carbStore = carbStore
         self.settings = settings
+        // #50: cache each accepted temp so runningTempBasal() can report what the pod is
+        // running while E4 has it orphaned (basalDeliveryState is nil then). Built here so the
+        // DoseEntry uses this manager's testable clock; the cache is dataAccessQueue-isolated.
+        doseEnactor.onTempBasalEnacted = { [weak self] unitsPerHour, duration in
+            guard let self = self else { return }
+            let start = self.now()
+            let enacted = DoseEntry(type: .tempBasal, startDate: start, endDate: start.addingTimeInterval(duration), value: unitsPerHour, unit: .unitsPerHour)
+            self.dataAccessQueue.async { self.cachedEnactedTempBasal = enacted }
+        }
     }
 
     func attach(cgmStack: G7ClientTransportAdapter) {
@@ -376,6 +399,11 @@ final class WatchLoopManager {
     }
     private var carbEffect: [GlucoseEffect]?
     private var insulinOnBoard: InsulinValue?
+    /// #50: the temp basal we last successfully enacted, cached so the watch knows what the
+    /// pod is running without querying it. E4 orphans the pod after each dose, so
+    /// `pumpManager.status.basalDeliveryState` reverts to nil within seconds even though the
+    /// pod keeps delivering the accepted temp for its full programmed duration. dataAccessQueue.
+    private var cachedEnactedTempBasal: DoseEntry?
     private var retrospectiveGlucoseEffect: [GlucoseEffect] = []
 
     /// Mirrors LoopDataManager's buffer multiplier for combining retrospective discrepancies.
@@ -857,12 +885,10 @@ final class WatchLoopManager {
                 return self.pumpManager?.roundToSupportedBasalRate(unitsPerHour: rate) ?? rate
             }
 
-            let lastTempBasal: DoseEntry?
-            if case .some(.tempBasal(let dose)) = pumpManager?.status.basalDeliveryState {
-                lastTempBasal = dose
-            } else {
-                lastTempBasal = nil
-            }
+            // #50: prefer the cached enacted temp when the pod is orphaned, so DoseMath's
+            // continuation logic sees the running temp and does not re-issue an identical one
+            // every cycle (and the [dosemath] `running` field reads true instead of "none").
+            let lastTempBasal: DoseEntry? = runningTempBasal()
 
             let dosingRecommendation: AutomaticDoseRecommendation?
 
@@ -1217,6 +1243,10 @@ final class WatchDoseEnactor {
     var e4ReclaimPodForDose: ((@escaping (Bool) -> Void) -> Void)?
     var e4ReleasePodAfterDose: (() -> Void)?
 
+    /// #50: fired with the (rate, duration) the pod just accepted for a temp basal, so the
+    /// owner can cache what is running without querying the pod — E4 orphans it seconds later.
+    var onTempBasalEnacted: ((_ unitsPerHour: Double, _ duration: TimeInterval) -> Void)?
+
     func enact(recommendation: AutomaticDoseRecommendation, with pumpManager: PumpManager, completion: @escaping (PumpManagerError?) -> Void) {
         dosingQueue.async {
             // BG still wins the radio — but WAIT for the handshake instead of throwing the
@@ -1290,6 +1320,10 @@ final class WatchDoseEnactor {
                         SportLog.event("dose", "temp enact FAILED — \(String(describing: error))")
                     } else {
                         SportLog.event("dose", String(format: "temp %.2f U/hr ACCEPTED by pod", basalAdjustment.unitsPerHour))
+                        // #50: hand the accepted temp to the owner so it can cache what the pod
+                        // is running once E4 orphans it (basalDeliveryState goes nil seconds
+                        // after release).
+                        self.onTempBasalEnacted?(basalAdjustment.unitsPerHour, basalAdjustment.duration)
                     }
                     doseDispatchGroup.leave()
                 }
@@ -1405,6 +1439,13 @@ extension WatchLoopManager: CGMManagerDelegate {
                 if case .failure(let error) = result {
                     self.log.error("Failure adding glucose samples: %{public}@", String(describing: error))
                 }
+                // #51: new glucose invalidates the momentum effect (it is glucose-derived).
+                // Stock LoopDataManager nils momentum on every glucose update; this port only
+                // reset it on a fetch-FAILURE (updateCachedEffects), so it was computed once at
+                // init — when the store was still empty — and then frozen, because the
+                // `if glucoseMomentumEffect == nil` guard never fired again. Every [predict]
+                // read `momentum —` while BG swung ±20/cycle, leaving the prediction trend-blind.
+                self.dataAccessQueue.async { self.glucoseMomentumEffect = nil }
                 completion()
             }
         case .unreliableData:
