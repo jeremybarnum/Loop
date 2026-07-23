@@ -491,7 +491,16 @@ final class WatchLoopManager {
         }
 
         let age = now().timeIntervalSince(doseStore.lastAddedPumpData)
-        guard age > LoopCoreConstants.inputDataRecencyInterval / 2,
+        // WARM CADENCE (157, E5 parity). E5's overnight proof — 84/84 reclaims, 2-4 reads
+        // each — touched the pod EVERY cycle (an enact every reading). This threshold was
+        // inputDataRecencyInterval/2 (7.5 min), so any quiet cycle (NO CHANGE verdict, data
+        // ~5 min old) skipped pod contact entirely and the next reclaim faced a 10-min-cold
+        // pod — the regime where the bare re-connect goes coin-flip (field 2026-07-22:
+        // every reclaim failure followed a contact gap ≥ ~8 min; every ≤5-min-cadence run
+        // was clean). Refresh whenever data is older than ~4 min = one status read per
+        // cycle = exactly the cadence E5 proved all night. Recovery from a genuinely
+        // missed cycle is the scan escalation's job; this keeps the miss from happening.
+        guard age > .minutes(4),
               let reclaim = e4ReclaimPodForDose else {
             assertThenLoop({})
             return
@@ -804,8 +813,22 @@ final class WatchLoopManager {
             throw WatchLoopError.invalidFutureGlucose(date: lastGlucoseDate)
         }
 
-        guard now().timeIntervalSince(pumpStatusDate) <= LoopCoreConstants.inputDataRecencyInterval else {
-            throw WatchLoopError.pumpDataTooOld(date: pumpStatusDate)
+        // LOAN AUTHORITY (157, Jeremy 2026-07-22, explicit go). Stock's stale-pump-data
+        // gate exists for pumps that can act unilaterally (user button presses, unknown
+        // boluses) — stale data there means IOB may be wrong, so don't compute a dose from
+        // it. A loaned pod has exactly ONE commander: this watch. It runs the last program
+        // we gave it and nothing else, so the books remain authoritative through a comms
+        // blackout and a fresh CGM should always yield a prediction and a recommendation.
+        // The one loan case where the books genuinely can diverge is a command sent but
+        // unacked — stock's own deliveryIsUncertain flag — so THAT still gates. The enact
+        // itself still requires a live link (physics, not policy); this only stops a comms
+        // hiccup from blacking out the math. Field: 22:58-23:08 cycles threw here with
+        // fresh CGM, sane IOB, and a blank eventual on the wrist.
+        if now().timeIntervalSince(pumpStatusDate) > LoopCoreConstants.inputDataRecencyInterval {
+            guard pumpManager != nil, pumpManager?.status.deliveryIsUncertain == false else {
+                throw WatchLoopError.pumpDataTooOld(date: pumpStatusDate)
+            }
+            SportLog.event("loop", String(format: "pump data %.0f min old — proceeding under loan authority (no uncertain command)", now().timeIntervalSince(pumpStatusDate) / 60))
         }
 
         var momentum: [GlucoseEffect] = []
