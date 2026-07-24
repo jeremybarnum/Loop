@@ -624,6 +624,30 @@ final class WatchLoopManager {
             rec = "none"
         }
         SportLog.event("predict", "eventual \(eventual) · net effects: carbs \(net(carbEffect)), insulin \(net(insulinEffect)), momentum \(net(glucoseMomentumEffect)), RC \(rc) · rec \(rec)")
+        SportLog.event("curve", curveSummary(predictedGlucose))
+    }
+
+    /// A4 (Jeremy 2026-07-24): the piece that makes a field run replayable through
+    /// DoseMath. `[predict]` logs only `eventual`, but the dose decision keys on the
+    /// predicted MINIMUM (suspend guard + the high-basal-threshold cap) and on the curve
+    /// SHAPE. Log the min (value @ minutes-from-now) and a 30-min-sampled trajectory of
+    /// the first two hours — enough to reconstruct which branch DoseMath took and to
+    /// re-derive the verdict offline, without dumping all ~72 points every cycle.
+    private func curveSummary(_ predicted: [PredictedGlucoseValue]?) -> String {
+        guard let predicted, !predicted.isEmpty else { return "—" }
+        let mgdl = HKUnit.milligramsPerDeciliter
+        let t0 = now()
+        let fwd = predicted.filter { $0.startDate >= t0 }
+        guard let minPoint = (fwd.isEmpty ? predicted : fwd)
+            .min(by: { $0.quantity.doubleValue(for: mgdl) < $1.quantity.doubleValue(for: mgdl) }) else { return "—" }
+        let minV = Int(minPoint.quantity.doubleValue(for: mgdl).rounded())
+        let minOff = Int((minPoint.startDate.timeIntervalSince(t0) / 60).rounded())
+        let samples = [0, 30, 60, 90, 120].map { m -> String in
+            let mark = t0.addingTimeInterval(.minutes(Double(m)))
+            guard let p = predicted.last(where: { $0.startDate <= mark }) ?? predicted.first else { return "—" }
+            return "\(Int(p.quantity.doubleValue(for: mgdl).rounded()))"
+        }.joined(separator: "→")
+        return "min \(minV)@\(minOff)m · t0–120: \(samples)"
     }
 
     // MARK: - Effect refresh (mirrors update(for:) — LoopDataManager.swift:963)
