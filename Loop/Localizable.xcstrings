@@ -2547,6 +2547,9 @@
         }
       }
     },
+    "%1$@ U was not delivered — the pod is on the watch. Bolus from the watch, or end Sport Mode first." : {
+      "comment" : "Notification body when a bolus is refused because the pod is on loan (1: units)"
+    },
     "%1$@ U/hour @ %2$@" : {
       "comment" : "The format for recommended temp basal rate and time. (1: localized rate number)(2: localized time)",
       "extractionState" : "manual",
@@ -9418,6 +9421,9 @@
         }
       }
     },
+    "Bolus Not Delivered" : {
+      "comment" : "Notification title when a bolus is refused because the pod is on loan"
+    },
     "Bolus Recommendation Updated" : {
       "comment" : "Alert title for an updated bolus recommendation",
       "localizations" : {
@@ -10002,7 +10008,7 @@
       }
     },
     "Cancel" : {
-      "comment" : "Button label for cancel\nButton text to cancel\nCancel button for reset loop alert\nCancel export button title\nThe title of the cancel action in an action sheet",
+      "comment" : "Button label for cancel\nButton text to cancel\nCancel button for reset loop alert\nCancel export button title\nCancel the reclaim prompt\nThe title of the cancel action in an action sheet",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -29303,6 +29309,12 @@
         }
       }
     },
+    "Pod Is on the Watch" : {
+      "comment" : "Title of the reclaim prompt when tapping the pump tile during a loan"
+    },
+    "Pod on Watch" : {
+      "comment" : "Title text for the pump tile while the pod is loaned to the watch"
+    },
     "Possible Missed Meal" : {
       "comment" : "The notification title for a meal that was possibly not logged in Loop.",
       "localizations" : {
@@ -32153,8 +32165,17 @@
         }
       }
     },
+    "Reclaim Now" : {
+      "comment" : "Button to reclaim the pod from the watch"
+    },
     "Reclaim Pod" : {
       "comment" : "The title of the notification action to reclaim a pod on loan to the watch"
+    },
+    "Reclaim the pod to this phone? The watch's Sport Mode session will end and its records will be collected." : {
+      "comment" : "Message of the reclaim prompt"
+    },
+    "Reclaiming…" : {
+      "comment" : "Title text for the pump tile while the pod is coming back from the watch"
     },
     "Recommendation expired: %1$@ old" : {
       "comment" : "The error message when a recommendation has expired. (1: age of recommendation in minutes)",

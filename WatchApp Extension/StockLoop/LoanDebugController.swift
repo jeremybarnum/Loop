@@ -54,9 +54,6 @@ struct LoanDebugView: View {
                 row("COB / IOB", "\(cobText) / \(dosing?.iob.map { String(format: "%.2f U", $0) } ?? "—")")
                 row("recommend", dosing?.recommendedTempRate.map { String(format: "%+.2f U/hr", $0) } ?? "—")
                 row("running", dosing?.tempRate.map { String(format: "%+.2f U/hr", $0) } ?? "0.00 U/hr")
-                // E5: what the generator COMMANDED and when — vs `running` (what the
-                // pod is executing). Match = enacted; mismatch = enact failed (log says why).
-                row("E5 last cmd", UserDefaults.standard.string(forKey: "g7.e5LastCmd") ?? "—")
                 row("last loop", dosing?.lastLoopCompleted.map { String(format: "%.0fs ago", Date().timeIntervalSince($0)) } ?? "—")
                 if let err = dosing?.lastLoopErrorText { row("loop err", err) }
 
@@ -78,15 +75,10 @@ struct LoanDebugView: View {
 
                 Divider().padding(.vertical, 2)
 
-                Button("Request Loan") {
-                    let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
-                    session.loanController.requestLoan(watchBuild: build)
-                    lastAction = "requested"
-                }
-                Button("Hand Back") {
-                    session.loanController.beginHandback()
-                    lastAction = "handback"
-                }
+                // Request Loan / Hand Back removed 2026-07-24 — both are redundant with
+                // the glance's "Start Sport Mode" and hand-back flow (requestLoan /
+                // beginHandback still live on those paths). Read Status + Reset stay:
+                // a live pod-reachability probe and the un-wedge-the-controller valve.
                 Button("Read Status") {
                     lastAction = "reading…"
                     session.loanController.debugReadStatus { ok in
@@ -123,68 +115,12 @@ struct LoanDebugView: View {
 
                 Divider().padding(.vertical, 2)
 
-                // E1 experiment (task #36): G7 acquisition with NO pod connection —
-                // isolates the watchOS 2-BLE-connection-budget hypothesis. Compare
-                // the catch rate to the b136 with-pod baseline (77%).
-                Text("E1: STANDALONE G7 (no pod)").font(.footnote).foregroundColor(.secondary)
-                Button(session.standaloneG7TestActive ? "Stop Standalone Test" : "Start Standalone G7 (no pod)") {
-                    if session.standaloneG7TestActive {
-                        session.stopStandaloneG7Test()
-                        lastAction = "standalone stopped"
-                    } else {
-                        session.startStandaloneG7Test()
-                        lastAction = session.standaloneG7TestActive ? "standalone G7 running (no pod)" : "blocked — end the loan first"
-                    }
-                }
-
-                Divider().padding(.vertical, 2)
-
-                // E2 (task #37): clean-teardown A/B — skip the post-read self-cancel,
-                // let the sensor drop us (G7SensorKit discipline). Takes effect on the
-                // NEXT read; run a with-pod loan and compare catch/recreates to b136.
-                Text("E2: CLEAN TEARDOWN (no self-cancel)").font(.footnote).foregroundColor(.secondary)
-                Button((session.stack.client.e2CleanTeardown ? "E2 ON — tap to disable" : "E2 off — tap to enable")) {
-                    session.stack.client.e2CleanTeardown.toggle()
-                    lastAction = session.stack.client.e2CleanTeardown ? "E2 clean-teardown ON" : "E2 off (b136 behavior)"
-                }
-
-                Divider().padding(.vertical, 2)
-
-                // E4 STAGE 1 (task #40): release the pod BLE after takeover so G7 has
-                // the radio uncontested. Set BEFORE starting a session; keep loop OPEN.
-                Text("E4: RELEASE POD (Stage 1, open loop)").font(.footnote).foregroundColor(.secondary)
-                Button((UserDefaults.standard.bool(forKey: "g7.e4ReleasePod") ? "E4 ON — pod released, keep loop OPEN" : "E4 off — tap to enable")) {
-                    let on = !UserDefaults.standard.bool(forKey: "g7.e4ReleasePod")
-                    UserDefaults.standard.set(on, forKey: "g7.e4ReleasePod")
-                    lastAction = on ? "E4 ON (applies at next takeover)" : "E4 off"
-                }
-
-                Divider().padding(.vertical, 2)
-
-                // #33/R29: scripted glucose. Jeremy's euglycemia (~75-135) means the loop's
-                // high-temp range has never been exercised on hardware; this sweeps the
-                // whole decision space so high-temp / no-change / zero-temp transitions can
-                // actually be observed. Real read, synthetic value, real dosing.
-                Text("FAKE BG (bench — REAL insulin, FAKE glucose)").font(.footnote).foregroundColor(.secondary)
-                Button((FakeGlucose.isEnabled ? "FAKE BG ON — \(FakeGlucose.phaseDescription)" : "Fake BG off — tap to enable sweep")) {
-                    FakeGlucose.setEnabled(!FakeGlucose.isEnabled)
-                    lastAction = FakeGlucose.isEnabled ? "FAKE BG ON — 70-240 sweep over 2h" : "fake BG off"
-                }
-
-                Divider().padding(.vertical, 2)
-
-                // E5 (task #43): random temp generator — pure BT-contention driver.
-                // Fires a fresh clamped random temp after EVERY reading via the full
-                // E4 reclaim→enact→re-release choreography. Loop must stay OPEN
-                // (the generator refuses to run beside the real enactor).
-                Text("E5: RANDOM TEMP (bench — keep loop OPEN)").font(.footnote).foregroundColor(.secondary)
-                Button((UserDefaults.standard.bool(forKey: "g7.e5RandomTemp") ? "E5 ON — random temp each reading" : "E5 off — tap to enable")) {
-                    let on = !UserDefaults.standard.bool(forKey: "g7.e5RandomTemp")
-                    UserDefaults.standard.set(on, forKey: "g7.e5RandomTemp")
-                    lastAction = on ? "E5 ON — random temp each reading (keep loop OPEN)" : "E5 off"
-                }
-
-                Divider().padding(.vertical, 2)
+                // Retired bench experiments (E1 standalone-G7, E2 clean-teardown, E4
+                // release-pod, Fake BG sweep, E5 random-temp) lived here through the
+                // 2026-07-24 diagnostics declutter. E4 is now the production default
+                // (StockLoopSession.init); the rest are one git revert away if a bench
+                // drill needs them again. Their plumbing (session methods, FakeGlucose,
+                // the flag reads) is intact — only the on-wrist toggles were removed.
 
                 NavigationLink("Logs") { LogView() }
                     .font(.caption)

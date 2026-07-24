@@ -50,6 +50,9 @@ final class GlanceController: WKHostingController<GlanceView> {
 struct GlanceUIState {
     enum Phase { case idle, starting, active, handingBack, draining }
     enum BGColor { case inRange, high, low, dim }
+    /// Loop-ring freshness = BG recency (Jeremy 2026-07-24): meaningful OPEN or CLOSED,
+    /// and stale G7 is the likely failure. Drives the stock ring color; open is NOT gray.
+    enum LoopFreshness { case fresh, aging, stale, unknown }
 
     var phase: Phase = .idle
     var bgText: String = "—"
@@ -58,13 +61,12 @@ struct GlanceUIState {
     /// non-nil = stale: shown INSTEAD of the eventual line, number dims (R9/§6a).
     var staleAgeText: String? = nil
     var eventualText: String? = nil
-    /// non-nil = suspended: "insulin off · resumes H:MM" (R3/R4).
-    var suspendText: String? = nil
     var iobText: String = "—"
     var cobText: String = "—"
     var tempText: String = "—"
     var loopStatusText: String = ""
     var loopDotColor: Color = .clear
+    var loopFreshness: LoopFreshness = .unknown
     var viaPhone: Bool = false
 
     /// Loop open/close control (active only). `canToggleLoop` is false when the phone
@@ -143,6 +145,15 @@ final class GlanceViewModel: ObservableObject {
         refresh()
     }
 
+    /// End Sport Mode = R25 two-phase stay-active hand-back: request the return, keep
+    /// dosing/bolus/G7 running while the journal drains, transfer ownership only when
+    /// acked. Cancelable until finalize (the glance shows "ending… / Cancel Ending").
+    func endSportMode() {
+        guard !isPreview else { state.handbackPending = true; return }
+        ExtensionDelegate.shared().stockLoopSession.loanController.beginHandback()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
+    }
+
     /// Open (disable dosing) is fail-safe — no confirm. Close (enable dosing) is gated
     /// by the confirm alert in the view.
     func setLoopClosed(_ closed: Bool) {
@@ -184,7 +195,7 @@ final class GlanceViewModel: ObservableObject {
             state = s
         case .active:
             let data = session.stack.loopManager.glanceData()
-            var s = Self.activeState(data: data, suspendEndsAt: snap.suspendEndsAt, cob: latestCOB, now: Date(),
+            var s = Self.activeState(data: data, cob: latestCOB, now: Date(),
                                      phoneGlucoseDate: ExtensionDelegate.shared().loopManager.activeContext?.glucoseDate)
             if snap.handbackPending {
                 s.handbackPending = true
@@ -274,22 +285,28 @@ final class GlanceViewModel: ObservableObject {
                       seconds / 60, seconds % 60)
     }
 
-    static func activeState(data: WatchLoopManager.GlanceData, suspendEndsAt: Date?, cob: Double?, now: Date, phoneGlucoseDate: Date? = nil) -> GlanceUIState {
+    static func activeState(data: WatchLoopManager.GlanceData, cob: Double?, now: Date, phoneGlucoseDate: Date? = nil) -> GlanceUIState {
         var s = GlanceUIState()
         s.phase = .active
 
         // Rail.
         if let iob = data.iob { s.iobText = String(format: "%.1f", iob) }
         if let cob = cob { s.cobText = String(format: "%.0f", cob) }
-        if suspendEndsAt != nil {
-            s.tempText = "0.00"
-        } else if let rate = data.tempRate {
+        if let rate = data.tempRate {
             s.tempText = String(format: "%+.2f", rate)
         }
 
         // Number + honesty.
         let age = data.glucoseDate.map { now.timeIntervalSince($0) }
         let isStale = age.map { $0 > displayStaleAge } ?? true
+        // Ring freshness = BG recency (Jeremy 2026-07-24). One G7 grid (~5m) + grace is
+        // fresh, a missed window is aging, well past is stale; nil = no reading yet
+        // (unknown/gray). Meaningful whether the loop is open or closed.
+        if let age = age {
+            s.loopFreshness = age < .minutes(7) ? .fresh : (age < .minutes(15) ? .aging : .stale)
+        } else {
+            s.loopFreshness = .unknown
+        }
         if let quantity = data.glucose {
             let mgdl = quantity.doubleValue(for: .milligramsPerDeciliter)
             s.bgText = String(format: "%.0f", mgdl)
@@ -327,13 +344,7 @@ final class GlanceViewModel: ObservableObject {
 
         // Status line + suspend + open/close.
         s.loopClosed = data.closedLoopEnabled
-        if let until = suspendEndsAt {
-            let formatter = DateFormatter(); formatter.timeStyle = .short
-            s.suspendText = String(format: NSLocalizedString("insulin off · resumes %@", comment: "Glance suspended line"), formatter.string(from: until))
-            s.loopStatusText = NSLocalizedString("SUSPENDED", comment: "Glance loop status while suspended")
-            s.loopDotColor = .clear
-            s.canToggleLoop = false   // resume from the suspend control, not the loop toggle
-        } else if !data.closedLoopEnabled {
+        if !data.closedLoopEnabled {
             // OPEN by choice — advisory. (R23 as amended 2026-07-18: the watch is
             // sovereign in a loan; the phone's own loop mode no longer gates this.)
             s.loopStatusText = NSLocalizedString("OPEN", comment: "Glance loop status: advisory / open loop")
@@ -368,13 +379,22 @@ final class GlanceViewModel: ObservableObject {
 
 struct GlanceView: View {
     @ObservedObject var model: GlanceViewModel
-    @State private var confirmingStart = false
     @State private var confirmingClose = false
-    @State private var explainingUnavailable = false
 
     /// Always-visible build tag so a TestFlight install is unambiguous on-wrist
     /// (Jeremy 2026-07-20 — often installs mid-session and needs to know the build).
     static let buildNumber = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+
+    /// The stock loop-ring assets (loop_<freshness>_<closed|open>) live in the WatchApp
+    /// bundle's DefaultAssets catalog — the parent .app of this extension's .appex. Point
+    /// SwiftUI at it explicitly; the extension's own Bundle.main can't see them.
+    static let watchAppBundle: Bundle = {
+        var url = Bundle.main.bundleURL
+        while url.pathExtension != "app" && url.pathComponents.count > 1 {
+            url.deleteLastPathComponent()
+        }
+        return Bundle(url: url) ?? .main
+    }()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -390,13 +410,14 @@ struct GlanceView: View {
 
     private var statusLine: some View {
         HStack {
-            // Status ONLY — the open/close control is the full-width button in the
-            // body (2026-07-18 ruling: no dead controls, no ambiguous tap targets).
-            loopPill
+            // R21→ring (2026-07-24): the loop indicator IS the control now. Tap toggles —
+            // open is immediate (fail-safe), close runs the crown ceremony (#22). Uses the
+            // stock watch loop ring (solid=closed, gapped=open), pre-tinted by freshness.
+            Button(action: onLoopTap) { loopIndicator }
+                .buttonStyle(.plain)
+                .disabled(model.state.phase != .active)
             Spacer()
-            (Text("SPORT").kerning(1.2).foregroundColor(.glanceAccent)
-             + Text(" b\(Self.buildNumber)").foregroundColor(.glanceDim))
-                .font(.system(size: 11, weight: .semibold))
+            statusRight
         }
         .padding(.horizontal, 6)
         .padding(.top, 2)
@@ -408,17 +429,71 @@ struct GlanceView: View {
         }
     }
 
-    private var loopPill: some View {
-        HStack(spacing: 4) {
-            if model.state.loopDotColor != .clear {
-                Circle().fill(model.state.loopDotColor).frame(width: 8, height: 8)
-            } else if model.state.canToggleLoop {
-                Circle().stroke(Color.glanceDim, lineWidth: 1.5).frame(width: 7, height: 7)   // hollow = OPEN
+    /// Top-right (option C, 2026-07-24): the SESSION control during an active loan —
+    /// End, or Cancel while a hand-back drains. Otherwise the SPORT build tag. Start
+    /// lives in the idle body; End rides up here so the active body is pure number + rail.
+    @ViewBuilder
+    private var statusRight: some View {
+        if model.state.phase == .active {
+            // A quiet capsule chip = "tappable" without shouting (End is cancelable, so
+            // no alarming color). Full label, per Jeremy 2026-07-24.
+            if model.state.handbackPending {
+                Button { model.cancelHandback() } label: {
+                    Text(NSLocalizedString("Cancel Ending", comment: "Glance top-right: abort a pending hand-back"))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.glanceWarn)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.glanceWarn.opacity(0.18)))
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button { model.endSportMode() } label: {
+                    Text(NSLocalizedString("End Sport Mode", comment: "Glance top-right: end Sport Mode / hand the pod back"))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.glanceInk)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.glanceDim.opacity(0.22)))
+                }
+                .buttonStyle(.plain)
             }
+        } else {
+            (Text("SPORT").kerning(1.2).foregroundColor(.glanceAccent)
+             + Text(" b\(Self.buildNumber)").foregroundColor(.glanceDim))
+                .font(.system(size: 11, weight: .semibold))
+        }
+    }
+
+    /// The loop ring + status text. In an active loan the ring is the tappable loop
+    /// control; other phases show just the phase text (no loop to control yet). The ring
+    /// uses the stock watch assets (loop_<freshness>_<closed|open>) so it matches the main
+    /// screen exactly; freshness comes from the #48 loop-recency grade.
+    @ViewBuilder
+    private var loopIndicator: some View {
+        if model.state.phase == .active {
+            // Ring only (like the stock screen): shape carries closed/open, color carries
+            // BG-recency freshness. No text — the ring says it all.
+            Image(loopAssetName, bundle: Self.watchAppBundle)
+                .resizable()
+                .frame(width: 26, height: 26)
+        } else {
             Text(model.state.loopStatusText)
-                .font(.system(size: 12))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundColor(.glanceDim)
         }
+    }
+
+    /// (closed/open × BG-recency freshness) → the stock loop-ring asset name.
+    private var loopAssetName: String {
+        let freshness: String
+        switch model.state.loopFreshness {
+        case .fresh:   freshness = "fresh"
+        case .aging:   freshness = "aging"
+        case .stale:   freshness = "stale"
+        case .unknown: freshness = "unknown"
+        }
+        return "loop_\(freshness)_\(model.state.loopClosed ? "closed" : "open")"
     }
 
     /// Open (stop dosing) is fail-safe → immediate. Close (start dosing) → confirm.
@@ -430,7 +505,69 @@ struct GlanceView: View {
         }
     }
 
+    @ViewBuilder
     private var centerBlock: some View {
+        switch model.state.phase {
+        case .idle:     idleCenter
+        case .starting: startingCenter
+        default:        standardCenter
+        }
+    }
+
+    /// Idle/activation (redesigned 2026-07-24): the screen's job is to START, so the Start
+    /// button is the centered hero. Phone-fed BG is a small dimmed labeled line (the phone
+    /// is the source; the watch isn't looping yet). Softer than the number-first active
+    /// screen — no 64pt number, calm-blue button instead of burnt-orange.
+    private var idleCenter: some View {
+        VStack(spacing: 12) {
+            if model.state.bgText != "—" {
+                HStack(spacing: 5) {
+                    Text("iPhone").font(.system(size: 11, weight: .medium)).foregroundColor(.glanceDim)
+                    Text(model.state.bgText).font(.system(size: 22, weight: .semibold)).foregroundColor(.glanceDim)
+                    if let arrow = model.state.trendSymbol {
+                        Text(arrow).font(.system(size: 16)).foregroundColor(.glanceDim)
+                    }
+                }
+            }
+            Button { model.startSportMode() } label: {
+                Text("Start Sport Mode")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.glanceAccent)
+            if let note = model.state.idleNote {
+                Text(note)
+                    .font(.system(size: 11))
+                    .foregroundColor(.glanceWarn)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 10)
+    }
+
+    /// Starting/connect (2026-07-24): same calm activation aesthetic as idle — small
+    /// phone-BG line, no 64pt number — with the R24 connect progress (stage + determinate
+    /// pod bar + G7 ETA) centered as the hero. The pod bar is glanceAccent (now calm blue).
+    private var startingCenter: some View {
+        VStack(spacing: 10) {
+            if model.state.bgText != "—" {
+                HStack(spacing: 5) {
+                    Text("iPhone").font(.system(size: 11, weight: .medium)).foregroundColor(.glanceDim)
+                    Text(model.state.bgText).font(.system(size: 22, weight: .semibold)).foregroundColor(.glanceDim)
+                    if let arrow = model.state.trendSymbol {
+                        Text(arrow).font(.system(size: 16)).foregroundColor(.glanceDim)
+                    }
+                }
+            }
+            startingBlock
+        }
+        .padding(.horizontal, 10)
+    }
+
+    private var standardCenter: some View {
         VStack(spacing: 1) {
             HStack(alignment: .top, spacing: 3) {
                 Text(model.state.bgText)
@@ -448,8 +585,6 @@ struct GlanceView: View {
             }
             if let stale = model.state.staleAgeText {
                 Text(stale).font(.system(size: 12)).foregroundColor(.glanceWarn)
-            } else if let suspend = model.state.suspendText {
-                Text(suspend).font(.system(size: 13)).foregroundColor(.glanceWarn)
             } else if let eventual = model.state.eventualText {
                 (Text("eventually ").foregroundColor(.glanceDim) + Text(eventual).bold())
                     .font(.system(size: 13))
@@ -474,70 +609,21 @@ struct GlanceView: View {
                     railCell(model.state.cobText, "COB G")
                     railCell(model.state.tempText, "TEMP U/H")
                 }
-                // The loop control, first-class (2026-07-18 ruling: watch sovereign,
-                // always tappable — a control that can't act right now explains why).
-                Button {
-                    if model.state.canToggleLoop {
-                        onLoopTap()
-                    } else {
-                        explainingUnavailable = true
-                    }
-                } label: {
-                    Text(model.state.loopClosed
-                         ? NSLocalizedString("Open Loop", comment: "Glance loop control while closed")
-                         : NSLocalizedString("Close Loop", comment: "Glance loop control while open"))
-                        .font(.system(size: 14, weight: .semibold))
-                }
-                .tint(model.state.loopClosed ? .glanceDim : .glanceAccent)
-                .alert("Can't change the loop right now", isPresented: $explainingUnavailable) {
-                    Button("OK", role: .cancel) {}
-                } message: {
-                    Text(model.state.suspendText
-                         ?? NSLocalizedString("Resume insulin first, then close the loop.", comment: "Glance loop-control explanation fallback"))
-                }
-                // WS1: hand-back draining in the background — still in control.
+                // Option C (2026-07-24): the session control (End / Cancel) lives top-right,
+                // so the active body is pure number + rail. While a hand-back drains, keep
+                // the honest "still in control" note here (Cancel is top-right).
                 if model.state.handbackPending {
                     Text(NSLocalizedString("Records syncing to iPhone — still in control", comment: "Glance note while a hand-back drains"))
                         .font(.system(size: 10))
                         .foregroundColor(.glanceDim)
-                    Button {
-                        model.cancelHandback()
-                    } label: {
-                        Text(NSLocalizedString("Cancel Ending", comment: "Glance button to abort a pending hand-back"))
-                            .font(.system(size: 13, weight: .semibold))
-                    }
-                    .tint(.glanceWarn)
-                }
-            }
-            .padding(.bottom, 2)
-        case .idle:
-            VStack(spacing: 4) {
-                Button {
-                    confirmingStart = true
-                } label: {
-                    Text("Start Sport Mode").font(.system(size: 15, weight: .semibold))
-                }
-                .tint(.glanceAccent)
-                .alert(isPresented: $confirmingStart) {
-                    Alert(
-                        title: Text("Start Sport Mode?"),
-                        message: Text("Borrows the pod from the phone and runs the loop here, on direct G7."),
-                        primaryButton: .default(Text("Start")) { model.startSportMode() },
-                        secondaryButton: .cancel())
-                }
-                if let note = model.state.idleNote {
-                    Text(note)
-                        .font(.system(size: 11))
-                        .foregroundColor(.glanceWarn)
                         .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding(.bottom, 2)
-        case .starting:
-            startingBlock
-                .padding(.horizontal, 10)
-                .padding(.bottom, 6)
+        case .idle, .starting:
+            // Idle & starting content is centered (idleCenter / startingCenter); nothing
+            // at the bottom for those phases (#22 one-tap start lives in idleCenter).
+            EmptyView()
         case .handingBack, .draining:
             VStack(spacing: 4) {
                 ProgressView()
@@ -622,12 +708,12 @@ struct GlanceView: View {
     }
 }
 
-// MARK: - Palette (R23: true black, saddle-brown identity, semantic state colors)
+// MARK: - Palette (R23: true black; calm-blue identity as of 2026-07-24 — was saddle-brown; semantic state colors)
 
 extension Color {
     static let glanceInk = Color(white: 0.95)
     static let glanceDim = Color(white: 0.55)
-    static let glanceAccent = Color(red: 0.749, green: 0.400, blue: 0.227)   // #BF663A
+    static let glanceAccent = Color(red: 0.36, green: 0.56, blue: 0.82)   // #5C8FD1 calm blue — retired the burnt-orange identity 2026-07-24 (distinct from the green loop ring)
     static let glanceGood = Color(red: 0.31, green: 0.82, blue: 0.48)
     static let glanceWarn = Color(red: 0.91, green: 0.70, blue: 0.25)
     static let glanceCrit = Color(red: 0.88, green: 0.36, blue: 0.31)
@@ -651,37 +737,32 @@ struct GlanceDemoView: View {
         ("Active · in range · CLOSED", previewState { s in
             s.phase = .active; s.bgText = "142"; s.trendSymbol = "↗"; s.bgColor = .inRange
             s.eventualText = "128"; s.iobText = "1.8"; s.cobText = "24"; s.tempText = "+0.75"
-            s.loopStatusText = "CLOSED · 2m"; s.loopDotColor = .glanceGood; s.loopClosed = true; s.canToggleLoop = true }),
+            s.loopFreshness = .fresh; s.loopClosed = true; s.canToggleLoop = true }),
         ("Active · OPEN (advisory)", previewState { s in
             s.phase = .active; s.bgText = "142"; s.trendSymbol = "↗"; s.bgColor = .inRange
             s.eventualText = "128"; s.iobText = "1.8"; s.cobText = "24"; s.tempText = "—"
-            s.loopStatusText = "OPEN"; s.loopClosed = false; s.canToggleLoop = true }),
+            s.loopFreshness = .fresh; s.loopClosed = false; s.canToggleLoop = true }),
         ("Active · high", previewState { s in
             s.phase = .active; s.bgText = "214"; s.trendSymbol = "→"; s.bgColor = .high
             s.eventualText = "176"; s.iobText = "2.6"; s.cobText = "31"; s.tempText = "+1.20"
-            s.loopStatusText = "CLOSED · 1m"; s.loopDotColor = .glanceGood; s.loopClosed = true; s.canToggleLoop = true }),
+            s.loopFreshness = .fresh; s.loopClosed = true; s.canToggleLoop = true }),
         ("Active · low", previewState { s in
             s.phase = .active; s.bgText = "64"; s.trendSymbol = "↘"; s.bgColor = .low
             s.eventualText = "58"; s.iobText = "0.4"; s.cobText = "0"; s.tempText = "0.00"
-            s.loopStatusText = "CLOSED · 3m"; s.loopDotColor = .glanceGood; s.loopClosed = true; s.canToggleLoop = true }),
-        ("Stale glucose", previewState { s in
+            s.loopFreshness = .fresh; s.loopClosed = true; s.canToggleLoop = true }),
+        // BG recency drives the ring, open OR closed (2026-07-24) — open is NOT gray.
+        ("Active · aging BG · CLOSED", previewState { s in
+            s.phase = .active; s.bgText = "142"; s.trendSymbol = "→"; s.bgColor = .inRange
+            s.eventualText = "158"; s.iobText = "1.6"; s.cobText = "18"; s.tempText = "+0.90"
+            s.loopFreshness = .aging; s.loopClosed = true; s.canToggleLoop = true }),
+        ("Active · aging BG · OPEN", previewState { s in
+            s.phase = .active; s.bgText = "142"; s.trendSymbol = "→"; s.bgColor = .inRange
+            s.eventualText = "158"; s.iobText = "1.6"; s.cobText = "18"; s.tempText = "—"
+            s.loopFreshness = .aging; s.loopClosed = false; s.canToggleLoop = true }),
+        ("Stale glucose · CLOSED", previewState { s in
             s.phase = .active; s.bgText = "148"; s.bgColor = .dim
-            s.staleAgeText = "9 min ago — no direct G7"; s.iobText = "1.8"; s.cobText = "24"
-            s.loopStatusText = "PAUSED"; s.loopDotColor = .glanceWarn }),
-        // #48: glucose FRESH but the loop is aging/stale (cycles failing). Eventual stays
-        // visible; the dot grades it amber→red rather than blanking the number.
-        ("Active · loop aging 12m", previewState { s in
-            s.phase = .active; s.bgText = "142"; s.trendSymbol = "→"; s.bgColor = .inRange
-            s.eventualText = "158"; s.iobText = "1.6"; s.cobText = "18"; s.tempText = "+0.90"
-            s.loopStatusText = "CLOSED · 12m"; s.loopDotColor = .glanceWarn; s.loopClosed = true; s.canToggleLoop = true }),
-        ("Active · loop stale 25m", previewState { s in
-            s.phase = .active; s.bgText = "142"; s.trendSymbol = "→"; s.bgColor = .inRange
-            s.eventualText = "158"; s.iobText = "1.6"; s.cobText = "18"; s.tempText = "+0.90"
-            s.loopStatusText = "CLOSED · 25m"; s.loopDotColor = .glanceCrit; s.loopClosed = true; s.canToggleLoop = true }),
-        ("Suspended", previewState { s in
-            s.phase = .active; s.bgText = "121"; s.trendSymbol = "→"; s.bgColor = .inRange
-            s.suspendText = "insulin off · resumes 1:45"; s.iobText = "0.9"; s.cobText = "12"; s.tempText = "0.00"
-            s.loopStatusText = "SUSPENDED" }),
+            s.staleAgeText = "16 min ago — no direct G7"; s.iobText = "1.8"; s.cobText = "24"
+            s.loopFreshness = .stale; s.loopClosed = true }),
         ("Idle · activation", previewState { s in
             s.phase = .idle; s.bgText = "138"; s.trendSymbol = "→"; s.bgColor = .dim
             s.viaPhone = true; s.loopStatusText = "phone loop active" }),
@@ -765,15 +846,6 @@ struct GlanceDemoView: View {
         s.phase = .active; s.bgText = "142"; s.trendSymbol = "↗"; s.bgColor = .inRange
         s.eventualText = "128"; s.iobText = "1.8"; s.cobText = "24"; s.tempText = "—"
         s.loopStatusText = "OPEN"; s.loopDotColor = .clear; s.loopClosed = false; s.canToggleLoop = true
-    }))
-}
-
-#Preview("Suspended") {
-    GlanceView(model: GlanceViewModel(preview: previewState { s in
-        s.phase = .active; s.bgText = "121"; s.trendSymbol = "→"; s.bgColor = .inRange
-        s.suspendText = "insulin off · resumes 1:45"
-        s.iobText = "0.9"; s.cobText = "12"; s.tempText = "0.00"
-        s.loopStatusText = "SUSPENDED"
     }))
 }
 

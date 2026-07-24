@@ -22,6 +22,19 @@ final class StockLoopSession {
     private let log = OSLog(subsystem: "com.loopkit.Loop", category: "StockLoopSession")
 
     init() {
+        // Bench-experiment lifecycle (diagnostics-page declutter, 2026-07-24). E4
+        // (orphan-the-pod time-separation) graduated from experiment to THE production
+        // reclaim path — build 157 ran a clean overnight on it (44/44). Its flag still
+        // code-defaults to false, though, so register a true default: a fresh TestFlight
+        // install now gets the validated behavior instead of the wedge-prone
+        // always-connected baseline. An explicit setting (e.g. this watch) still wins.
+        UserDefaults.standard.register(defaults: ["g7.e4ReleasePod": true])
+        // FakeGlucose and E5 both substitute into the LIVE dosing/enact path; with their
+        // toggles gone they must never linger enabled in a real session. Clear any
+        // persisted test state at launch (both are trivially restored from git).
+        FakeGlucose.setEnabled(false)
+        UserDefaults.standard.set(false, forKey: "g7.e5RandomTemp")
+
         stack = StockLoopStack.assemble()
         loanController = PodLoanWatchController(loopManager: stack.loopManager)
 
