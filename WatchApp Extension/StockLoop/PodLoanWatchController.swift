@@ -267,6 +267,7 @@ final class PodLoanWatchController {
                 self.epoch = (self.epoch ?? 0) + 1
                 self.phase = .active
                 self.loopManager.setClosedLoopEnabled(false)   // R23: loans start OPEN
+                self.simStartGlucoseFeed()                     // stage 2: feed phone-sim BG → real loop
             }
         }
     }
@@ -278,11 +279,31 @@ final class PodLoanWatchController {
             self.handbackRequested = true
             self.queue.asyncAfter(deadline: .now() + 2.5) { [weak self] in
                 guard let self, self.handbackRequested else { return }   // a cancel aborts the drain
+                self.simStopGlucoseFeed()
                 self.handbackRequested = false
                 self.attemptStartedAt = nil
                 self.phase = .idle
             }
         }
+    }
+
+    // Stage 2: feed the phone's stock CGM-simulator BG (via WatchContext) into the REAL
+    // glucose store on a timer, so the REAL loop/prediction runs. simIngestPhoneGlucose
+    // dedups on date; the loop's own 4.2-min gate keeps it to one cycle per new phone reading.
+    private var simGlucoseTimer: DispatchSourceTimer?
+
+    private func simStartGlucoseFeed() {
+        simStopGlucoseFeed()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 1, repeating: 30)
+        timer.setEventHandler { [weak self] in self?.loopManager.simIngestPhoneGlucose() }
+        timer.resume()
+        simGlucoseTimer = timer
+    }
+
+    private func simStopGlucoseFeed() {
+        simGlucoseTimer?.cancel()
+        simGlucoseTimer = nil
     }
     #endif
 

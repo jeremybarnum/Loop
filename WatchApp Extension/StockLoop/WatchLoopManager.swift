@@ -1516,6 +1516,44 @@ extension WatchLoopManager: CGMManagerDelegate {
         log.default("CGM event(s): %{public}d", events.count)
     }
 
+    #if targetEnvironment(simulator)
+    /// SIMULATOR-ONLY (task #61 stage 2): inject the phone's stock CGM-simulator BG (relayed
+    /// in WatchContext) into the REAL glucose store + trigger the REAL loop, so
+    /// prediction/DoseMath run for real without a G7. Compiled OUT of device builds. The watch
+    /// accumulates its own history from these, so the prediction sharpens over a few readings —
+    /// exactly as it does from a real G7. Mirrors processCGMReadingResult(.newData) + the loop
+    /// trigger, minus the CGMManager plumbing. In OPEN loop the recommendation is computed but
+    /// not enacted (advisory); a nil pump means checkPumpDataAndLoop just loops — no pod touched.
+    func simIngestPhoneGlucose() {
+        let ctx = ExtensionDelegate.shared().loopManager.activeContext
+        guard let quantity = ctx?.glucose, let date = ctx?.glucoseDate else { return }
+        deviceQueue.async {
+            if let latest = self.glucoseStore.latestGlucose?.startDate, latest >= date { return }   // dedup on date
+            let sample = NewGlucoseSample(
+                date: date,
+                quantity: quantity,
+                condition: nil,
+                trend: ctx?.glucoseTrend,
+                trendRate: ctx?.glucoseTrendRate,
+                isDisplayOnly: false,
+                wasUserEntered: false,
+                syncIdentifier: "sim-\(Int(date.timeIntervalSince1970))")
+            self.glucoseStore.addGlucoseSamples([sample]) { result in
+                if case .failure(let error) = result {
+                    self.log.error("SIM glucose add failed: %{public}@", String(describing: error))
+                }
+                self.dataAccessQueue.async { self.glucoseMomentumEffect = nil }   // #51 parity
+                let now = Date()
+                if now.timeIntervalSince(self.lastCGMLoopTrigger) > .minutes(4.2) {
+                    self.lastCGMLoopTrigger = now
+                    SportLog.event("sim", "SIM CGM \(Int(quantity.doubleValue(for: .milligramsPerDeciliter))) mg/dL (phone sim) — triggering real loop")
+                    self.checkPumpDataAndLoop()
+                }
+            }
+        }
+    }
+    #endif
+
     func cgmManagerWantsDeletion(_ manager: CGMManager) {
         log.default("CGM manager requested deletion (ignored on watch)")
     }
