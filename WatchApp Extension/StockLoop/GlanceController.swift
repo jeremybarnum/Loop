@@ -499,9 +499,11 @@ struct GlanceView: View {
                 .buttonStyle(.plain)
             }
         } else {
-            (Text("SPORT").kerning(1.2).foregroundColor(.glanceAccent)
-             + Text(" b\(Self.buildNumber)").foregroundColor(.glanceDim))
+            // Just the build tag — "SPORT" misreads when sport isn't active (Jeremy
+            // 2026-07-24). Temporary; the build tag goes away for production (#58).
+            Text("b\(Self.buildNumber)")
                 .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.glanceDim)
         }
     }
 
@@ -517,7 +519,9 @@ struct GlanceView: View {
             Image(loopAssetName, bundle: Self.watchAppBundle)
                 .resizable()
                 .frame(width: 26, height: 26)
-        } else {
+        } else if model.state.phase != .idle {
+            // starting / handing back / draining: the phase text. IDLE shows nothing —
+            // the "Start Sport Mode" button is the whole message (Jeremy 2026-07-24).
             Text(model.state.loopStatusText)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundColor(.glanceDim)

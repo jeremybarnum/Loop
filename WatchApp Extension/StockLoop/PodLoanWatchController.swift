@@ -214,8 +214,11 @@ final class PodLoanWatchController {
 
     func requestLoan(watchBuild: String) {
         #if targetEnvironment(simulator)
-        simDriveStart()
-        #else
+        // Default in the sim: run the REAL loan protocol against the phone's simulated
+        // Omnipod (OmniPumpManager fakes pod comms in-sim). The watch-only fake-flow driver
+        // stays available behind a flag for when no paired phone is running.
+        if UserDefaults.standard.bool(forKey: "sim.fakeLoanFlow") { simDriveStart(); return }
+        #endif
         queue.async {
             guard self.phase == .idle else {
                 SportLog.event("loan", "Start ignored — not idle (phase \(self.phase.rawValue))")
@@ -239,7 +242,6 @@ final class PodLoanWatchController {
             self.requestTimeoutWork = work
             self.queue.asyncAfter(deadline: .now() + 25, execute: work)
         }
-        #endif
     }
 
     #if targetEnvironment(simulator)
@@ -766,8 +768,8 @@ final class PodLoanWatchController {
     /// sends the final offer. Cancelable until then.
     func beginHandback() {
         #if targetEnvironment(simulator)
-        simDriveHandback()
-        #else
+        if UserDefaults.standard.bool(forKey: "sim.fakeLoanFlow") { simDriveHandback(); return }
+        #endif
         queue.async {
             guard self.phase == .active, self.pumpManager != nil else { return }
             guard !self.handbackRequested else { return }
@@ -783,7 +785,6 @@ final class PodLoanWatchController {
             SportLog.event("loan", "HAND-BACK requested — draining \(self.journal.unackedEvents().count) events; still in control (WS1)")
             self.sendHandbackOffer(freshened: false, recovered: false)
         }
-        #endif
     }
 
     /// WS1: abort a requested hand-back while still in the drain (phase .active).
