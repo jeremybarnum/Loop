@@ -213,6 +213,9 @@ final class PodLoanWatchController {
     // MARK: - Request / Grant / Takeover (§2.1-2.3)
 
     func requestLoan(watchBuild: String) {
+        #if targetEnvironment(simulator)
+        simDriveStart()
+        #else
         queue.async {
             guard self.phase == .idle else {
                 SportLog.event("loan", "Start ignored — not idle (phase \(self.phase.rawValue))")
@@ -236,7 +239,52 @@ final class PodLoanWatchController {
             self.requestTimeoutWork = work
             self.queue.asyncAfter(deadline: .now() + 25, execute: work)
         }
+        #endif
     }
+
+    #if targetEnvironment(simulator)
+    // MARK: - Simulator flow driver (task #61) — NEVER compiled into a device build.
+    // Drives the loan `phase` on timers so the watch UI FLOWS run without a pod/phone/BLE.
+    // Touches NO pod, NO BLE, NO WCSession, NO dosing — only the observable `phase` the glance
+    // polls. Gated by targetEnvironment(simulator): it cannot reach a device, where this
+    // controller drives the real Omnipod enact seam. (Stage 2 will feed the phone's stock CGM
+    // simulator into the real glucose store so prediction/DoseMath run for real; the pod enact
+    // is faked. This stage is the flow skeleton.)
+    private func simDriveStart() {
+        queue.async {
+            guard self.phase == .idle else { return }
+            SportLog.event("sim", "SIM start — driving idle→active on timers (no pod/BLE)")
+            self.lastIdleNote = nil
+            self.attemptStartedAt = Date()
+            self.phase = .requested
+            self.queue.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                guard let self, self.phase == .requested else { return }
+                self.attemptStartedAt = Date()          // reset anchor for the ~10s takeover bar
+                self.phase = .takingOver
+            }
+            self.queue.asyncAfter(deadline: .now() + 2.4) { [weak self] in
+                guard let self, self.phase == .takingOver else { return }
+                self.epoch = (self.epoch ?? 0) + 1
+                self.phase = .active
+                self.loopManager.setClosedLoopEnabled(false)   // R23: loans start OPEN
+            }
+        }
+    }
+
+    private func simDriveHandback() {
+        queue.async {
+            guard self.phase == .active else { return }
+            SportLog.event("sim", "SIM hand-back — draining to idle")
+            self.handbackRequested = true
+            self.queue.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                guard let self, self.handbackRequested else { return }   // a cancel aborts the drain
+                self.handbackRequested = false
+                self.attemptStartedAt = nil
+                self.phase = .idle
+            }
+        }
+    }
+    #endif
 
     private func handleGrant(_ grant: LoanGrant) {
         requestTimeoutWork?.cancel()
@@ -696,6 +744,9 @@ final class PodLoanWatchController {
     /// offers. When the drain is fully acked, finalizeHandback() stops dosing and
     /// sends the final offer. Cancelable until then.
     func beginHandback() {
+        #if targetEnvironment(simulator)
+        simDriveHandback()
+        #else
         queue.async {
             guard self.phase == .active, self.pumpManager != nil else { return }
             guard !self.handbackRequested else { return }
@@ -711,6 +762,7 @@ final class PodLoanWatchController {
             SportLog.event("loan", "HAND-BACK requested — draining \(self.journal.unackedEvents().count) events; still in control (WS1)")
             self.sendHandbackOffer(freshened: false, recovered: false)
         }
+        #endif
     }
 
     /// WS1: abort a requested hand-back while still in the drain (phase .active).
