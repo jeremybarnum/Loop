@@ -311,4 +311,100 @@ final class WatchStoreEffectsTests: XCTestCase {
         XCTAssertGreaterThan(first, 0, "a seeded carb must produce COB (the reported bug: it did not)")
         XCTAssertEqual(first, second, accuracy: 0.01, "re-seeding the SAME carb must NOT double COB")
     }
+
+    // MARK: - Grant insulin seeding across epochs (#53)
+
+    // The insulin analog of the carb test above, and the regression guard for the
+    // worst bug of 2026-07-22. Carb seeding is idempotent because it reuses the
+    // phone's own syncIdentifiers; the insulin seed mints EPOCH-KEYED ones
+    // ("loanv2-grant-<epoch>-<index>"), so a new epoch re-inserted the same 16 h of
+    // history as brand-new entries. Three takeovers in one day put IOB at 7.40 U
+    // against <= ~2.5 U physically deliverable, and the automatic-dosing clamp
+    // (2 x maxBolus) then refused every high temp at eventual 256 — the loop looked
+    // broken when the books were.
+    //
+    // The fix is wipe-then-seed in ingestGrantHistory: the grant IS ground truth at
+    // takeover, so rebuild from it rather than accumulate onto it. These two tests
+    // pin both halves — that the naive re-seed really does double (so nobody
+    // "simplifies" the wipe away), and that wipe-then-seed holds steady.
+
+    /// One 30-min temp basal above schedule, keyed to an epoch exactly as
+    /// PodLoanWatchController.ingestGrantHistory mints them.
+    private func grantDoses(epoch: Int, now: Date) -> [DoseEntry] {
+        [DoseEntry(type: .tempBasal,
+                   startDate: now.addingTimeInterval(-.minutes(25)),
+                   endDate: now.addingTimeInterval(-.minutes(5)),
+                   value: 3.45,
+                   unit: .unitsPerHour,
+                   syncIdentifier: "loanv2-grant-\(epoch)-0")]
+    }
+
+    private func addDoses(_ doses: [DoseEntry], to doseStore: DoseStore) {
+        let exp = expectation(description: "addDoses")
+        // Stock DoseStore.addDoses invokes its completion TWICE on success: once when
+        // addDoseEntries lands, again after syncPumpEventsToInsulinDeliveryStore. Not our
+        // bug and not worth deviating over — just don't let XCTest treat it as a violation.
+        exp.assertForOverFulfill = false
+        doseStore.addDoses(doses, from: nil) { error in
+            XCTAssertNil(error)
+            exp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+    }
+
+    private func iob(_ doseStore: DoseStore, at date: Date) -> Double {
+        var value = -1.0
+        let exp = expectation(description: "iob")
+        doseStore.insulinOnBoard(at: date) { result in
+            if case .success(let v) = result { value = v.value }
+            exp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+        return value
+    }
+
+    /// THE BUG: epoch-keyed identifiers mean a re-takeover is NOT deduped, so the
+    /// same delivered insulin lands twice and IOB inflates.
+    func testEpochKeyedInsulinReSeedDoublesIOB_theBugBehindTheClamp() {
+        let (doseStore, _) = makeStoresFixed()
+        let now = Date()
+
+        addDoses(grantDoses(epoch: 57, now: now), to: doseStore)
+        let afterFirstGrant = iob(doseStore, at: now)
+
+        addDoses(grantDoses(epoch: 58, now: now), to: doseStore)   // the re-takeover
+        let afterSecondGrant = iob(doseStore, at: now)
+
+        XCTAssertGreaterThan(afterFirstGrant, 0, "a seeded temp basal must produce IOB")
+        XCTAssertGreaterThan(afterSecondGrant, afterFirstGrant * 1.5,
+                             "epoch-keyed re-seed double-counts — this is why the wipe exists")
+    }
+
+    /// THE FIX: wipe both tables, then seed from the grant. Idempotent by
+    /// construction, whatever the epoch.
+    func testWipeThenSeedKeepsIOBStableAcrossEpochs() {
+        let (doseStore, _) = makeStoresFixed()
+        let now = Date()
+
+        func wipeThenSeed(epoch: Int) {
+            let wiped = expectation(description: "wipe")
+            doseStore.deleteAllPumpEvents { _ in
+                doseStore.insulinDeliveryStore.purgeCachedInsulinDeliveryObjects(before: nil) { _ in
+                    wiped.fulfill()
+                }
+            }
+            waitForExpectations(timeout: 10)
+            addDoses(grantDoses(epoch: epoch, now: now), to: doseStore)
+        }
+
+        wipeThenSeed(epoch: 57); let firstTakeover = iob(doseStore, at: now)
+        wipeThenSeed(epoch: 58); let secondTakeover = iob(doseStore, at: now)
+        wipeThenSeed(epoch: 59); let thirdTakeover = iob(doseStore, at: now)
+
+        XCTAssertGreaterThan(firstTakeover, 0, "the rebuilt books must still carry the grant's insulin")
+        XCTAssertEqual(firstTakeover, secondTakeover, accuracy: 0.01,
+                       "wipe-then-seed must be idempotent across a re-takeover")
+        XCTAssertEqual(firstTakeover, thirdTakeover, accuracy: 0.01,
+                       "...and across three, the count that produced 7.40 U in the field")
+    }
 }
