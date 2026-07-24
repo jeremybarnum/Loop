@@ -344,9 +344,16 @@ final class GlanceViewModel: ObservableObject {
             s.loopDotColor = .glanceWarn
             s.canToggleLoop = true
         } else if let completed = data.lastLoopCompleted {
-            let minutes = max(0, Int(now.timeIntervalSince(completed) / 60))
+            let interval = now.timeIntervalSince(completed)
+            let minutes = max(0, Int(interval / 60))
             s.loopStatusText = String(format: NSLocalizedString("CLOSED · %dm", comment: "Glance loop status with age"), minutes)
-            s.loopDotColor = minutes <= 10 ? .glanceGood : .glanceWarn
+            // #48: stock's fresh/aging/stale grading (HUDInterfaceController, 6/20 min),
+            // replacing the old binary blank. The eventual stays visible; the dot conveys
+            // how current the prediction is — green fresh · amber aging · red stale — so a
+            // stale loop MARKS its last eventual rather than hiding it (which read as "none").
+            let fresh: TimeInterval = .minutes(6)
+            let aging: TimeInterval = .minutes(20)
+            s.loopDotColor = interval < fresh ? .glanceGood : (interval < aging ? .glanceWarn : .glanceCrit)
             s.canToggleLoop = true
         } else {
             s.loopStatusText = NSLocalizedString("CLOSED · —", comment: "Glance loop status before the first loop")
@@ -657,10 +664,20 @@ struct GlanceDemoView: View {
             s.phase = .active; s.bgText = "64"; s.trendSymbol = "↘"; s.bgColor = .low
             s.eventualText = "58"; s.iobText = "0.4"; s.cobText = "0"; s.tempText = "0.00"
             s.loopStatusText = "CLOSED · 3m"; s.loopDotColor = .glanceGood; s.loopClosed = true; s.canToggleLoop = true }),
-        ("Stale", previewState { s in
+        ("Stale glucose", previewState { s in
             s.phase = .active; s.bgText = "148"; s.bgColor = .dim
             s.staleAgeText = "9 min ago — no direct G7"; s.iobText = "1.8"; s.cobText = "24"
             s.loopStatusText = "PAUSED"; s.loopDotColor = .glanceWarn }),
+        // #48: glucose FRESH but the loop is aging/stale (cycles failing). Eventual stays
+        // visible; the dot grades it amber→red rather than blanking the number.
+        ("Active · loop aging 12m", previewState { s in
+            s.phase = .active; s.bgText = "142"; s.trendSymbol = "→"; s.bgColor = .inRange
+            s.eventualText = "158"; s.iobText = "1.6"; s.cobText = "18"; s.tempText = "+0.90"
+            s.loopStatusText = "CLOSED · 12m"; s.loopDotColor = .glanceWarn; s.loopClosed = true; s.canToggleLoop = true }),
+        ("Active · loop stale 25m", previewState { s in
+            s.phase = .active; s.bgText = "142"; s.trendSymbol = "→"; s.bgColor = .inRange
+            s.eventualText = "158"; s.iobText = "1.6"; s.cobText = "18"; s.tempText = "+0.90"
+            s.loopStatusText = "CLOSED · 25m"; s.loopDotColor = .glanceCrit; s.loopClosed = true; s.canToggleLoop = true }),
         ("Suspended", previewState { s in
             s.phase = .active; s.bgText = "121"; s.trendSymbol = "→"; s.bgColor = .inRange
             s.suspendText = "insulin off · resumes 1:45"; s.iobText = "0.9"; s.cobText = "12"; s.tempText = "0.00"

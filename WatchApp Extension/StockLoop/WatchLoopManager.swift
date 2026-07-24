@@ -226,12 +226,6 @@ final class WatchLoopManager {
         let lastLoopErrorText: String?
     }
 
-    /// True when a cycle has completed recently enough that the cached prediction still
-    /// describes the present. Read on dataAccessQueue.
-    private var predictionIsFresh: Bool {
-        guard let last = lastLoopCompleted else { return false }
-        return now().timeIntervalSince(last) <= .minutes(11)   // ~2 cycles + margin
-    }
 
     /// #50: the temp basal the pod is running, as best the watch can know it — the live
     /// `basalDeliveryState` while the pod is connected, otherwise the temp we last enacted
@@ -259,16 +253,15 @@ final class WatchLoopManager {
                 glucose: latest?.quantity,
                 glucoseDate: latest?.startDate,
                 trend: (latest as? StoredGlucoseSample)?.trend,
-                // STALENESS GATE (Jeremy 2026-07-22): `predictedGlucose` is only recomputed
-                // by a SUCCESSFUL cycle, so when cycles fail it keeps returning the last
-                // good prediction forever, with nothing marking it stale. Field: eventual
-                // sat at 120 for 25 minutes across five failed cycles, INCLUDING after 25 g
-                // of carbs went in — a number that should have jumped to ~270 instead read
-                // as current and authoritative. A prediction the loop could not compute is
-                // worse than no prediction, because the user acts on it. `lastLoopCompleted`
-                // advances only on success, so its age measures prediction freshness
-                // directly. Two cycles of grace absorbs one ordinary miss.
-                eventual: predictionIsFresh ? predictedGlucose?.last?.quantity : nil,
+                // #48 (Jeremy 2026-07-24): keep the eventual VISIBLE; the glance grades its
+                // freshness (fresh/aging/stale on the loop dot — stock's HUDInterfaceController
+                // convention) rather than BLANKING it. The old binary gate hid the number when
+                // cycles failed, but a blank reads as "no prediction," which is its own lie.
+                // `lastLoopCompleted` is already in GlanceData, so activeState MARKS a stale
+                // prediction instead of dropping it (field 2026-07-22: eventual sat at 120 for
+                // 25 min across failed cycles — it now stays shown while the dot goes
+                // amber→red, so it never looks authoritative once old).
+                eventual: predictedGlucose?.last?.quantity,
                 iob: insulinOnBoard?.value,
                 tempRate: tempRate,
                 lastLoopCompleted: lastLoopCompleted,
