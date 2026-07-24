@@ -100,3 +100,33 @@ enum SensorBlackoutAlert {
         center.removeDeliveredNotifications(withIdentifiers: [identifier])
     }
 }
+
+/// Wrong-code alert (2026-07-24): the G7 handshake failed AES-verify repeatedly, which —
+/// once a transient dropped-chunk is ruled out by the ≥2 threshold — almost always means
+/// the sensor pairing code is wrong. Unlike the watchdogs above, this fires IMMEDIATELY on
+/// detection: the user needs to know NOW, on the wrist, that the code is the problem and can
+/// be re-entered (they may be mid-workout with no iPhone). Fired/cleared from
+/// G7Client.needsSensorCode's didSet; the glance also shows a re-enter banner.
+enum SensorCodeAlert {
+    private static let identifier = "sportmode.sensorCode"
+
+    static func fire() {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [identifier])
+        let content = UNMutableNotificationContent()
+        content.title = NSLocalizedString("Check Sensor Code", comment: "Wrong-code alert title")
+        content.body = NSLocalizedString("The new G7 wouldn't authenticate — its 4-digit code may be wrong. Re-enter it on the watch (or iPhone).", comment: "Wrong-code alert body")
+        content.interruptionLevel = .timeSensitive
+        content.sound = .default
+        content.threadIdentifier = identifier
+        // Immediate (1s) rather than a future deadline — this is a "here and now" problem.
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
+    }
+
+    static func clear() {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [identifier])
+        center.removeDeliveredNotifications(withIdentifiers: [identifier])
+    }
+}

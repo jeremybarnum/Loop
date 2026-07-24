@@ -513,10 +513,17 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     }
 
     /// FALLBACK trigger (Component A): set when a connect reaches the sensor but the code is
-    /// WRONG (aesVerifyFailed) — the watch UI shows a just-in-time code prompt. Cleared by
-    /// applySensorCode. The phone-primary relay normally sets the code before we ever get
-    /// here, so this is the safety net (older phone / race / mistyped).
-    @Published var needsSensorCode: Bool = false
+    /// WRONG (aesVerifyFailed). Wired 2026-07-24: on the false→true transition it fires a
+    /// SensorCodeAlert notification, and the glance shows a re-enter banner + on-wrist 4-digit
+    /// entry (watch-primary — a wrong code may only bite mid-workout with no iPhone). Cleared
+    /// by applySensorCode. The phone-primary relay normally sets the code first — this is the
+    /// safety net (older phone / race / mistyped).
+    @Published var needsSensorCode: Bool = false {
+        didSet {
+            guard needsSensorCode != oldValue else { return }
+            if needsSensorCode { SensorCodeAlert.fire() } else { SensorCodeAlert.clear() }
+        }
+    }
 
     /// Consecutive aesVerifyFailed count — the JIT prompt fires only after this REPEATS, so a
     /// rare transient decrypt glitch (a dropped BLE chunk also surfaces as aesVerifyFailed)
