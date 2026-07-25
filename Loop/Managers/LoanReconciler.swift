@@ -37,6 +37,13 @@ enum LoanReconciler {
         /// Loan window: grant/handover stamp → handedBackAt.
         let loanStart: Date
         let loanEnd: Date
+        /// False for a WS1 interim drain (`released == false`: watch still dosing). On an
+        /// interim drain the pod keeps running, so a still-open temp must NOT be clamped
+        /// to the drain instant (`loanEnd`) — doing so orphans its post-drain delivery
+        /// (that event is committed and filtered from later drains), UNDER-counting IOB,
+        /// which is the dangerous direction. Only the final hand-back / forced reclaim,
+        /// where delivery truly stops, clamps windows to `loanEnd`.
+        var isFinalHandback: Bool = true
     }
 
     struct Outcome: Equatable {
@@ -141,8 +148,11 @@ enum LoanReconciler {
         }
 
         // The pod runs ONE program at a time, so overlapping journal windows must be
-        // collapsed BEFORE they reach the store — see collapsingOverlappingBasals.
-        outcome.doses = collapsingOverlappingBasals(outcome.doses, loanEnd: input.loanEnd)
+        // collapsed BEFORE they reach the store — see collapsingOverlappingBasals. The
+        // loanEnd clamp applies only when delivery truly stopped (final hand-back /
+        // forced reclaim); an interim WS1 drain leaves a still-open temp uncapped.
+        outcome.doses = collapsingOverlappingBasals(outcome.doses,
+                                                    loanEnd: input.isFinalHandback ? input.loanEnd : nil)
 
         return outcome
     }
@@ -155,9 +165,10 @@ enum LoanReconciler {
     /// 30-min windows would integrate ~6-7× (the observed ~10.6U-for-~1.3U over-count,
     /// #69). Collapse them here with the SAME segment resolution `expectedInsulin` already
     /// applies (walk in start order, clamp each window's end to the next window's start),
-    /// plus a clamp to `loanEnd` because delivery stopped when the pod was handed back.
-    /// Boluses are point deliveries and pass through untouched.
-    static func collapsingOverlappingBasals(_ doses: [DoseEntry], loanEnd: Date) -> [DoseEntry] {
+    /// plus a clamp to `loanEnd` ONLY when delivery truly stopped (final hand-back /
+    /// forced reclaim; `loanEnd == nil` on an interim WS1 drain leaves a still-open temp
+    /// uncapped, since the pod keeps running). Boluses pass through untouched.
+    static func collapsingOverlappingBasals(_ doses: [DoseEntry], loanEnd: Date?) -> [DoseEntry] {
         func isBasalLike(_ dose: DoseEntry) -> Bool {
             switch dose.type {
             case .basal, .tempBasal, .suspend: return true
@@ -167,8 +178,19 @@ enum LoanReconciler {
         let windows = doses.filter(isBasalLike).sorted { $0.startDate < $1.startDate }
         var result = doses.filter { !isBasalLike($0) }
         for (i, dose) in windows.enumerated() {
-            let nextStart = i + 1 < windows.count ? windows[i + 1].startDate : Date.distantFuture
-            let clampedEnd = Swift.min(dose.endDate, nextStart, loanEnd)
+            // Clamp to the next window that starts STRICTLY LATER. A same-instant sibling
+            // (rate-0 suspend + temp minted in the same millisecond) did not supersede
+            // this one; clamping to its equal start would zero a real delivery (they
+            // instead both keep their window — an over-count, the safe direction).
+            var nextStart = Date.distantFuture
+            for j in (i + 1)..<windows.count where windows[j].startDate > dose.startDate {
+                nextStart = windows[j].startDate
+                break
+            }
+            var clampedEnd = Swift.min(dose.endDate, nextStart)
+            if let loanEnd = loanEnd {   // nil on an interim drain: leave a still-open temp uncapped
+                clampedEnd = Swift.min(clampedEnd, loanEnd)
+            }
             guard clampedEnd > dose.startDate else { continue }  // fully superseded → dropped
             result.append(dose.trimmed(from: nil, to: clampedEnd, syncIdentifier: dose.syncIdentifier))
         }

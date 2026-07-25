@@ -283,4 +283,48 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertEqual(outcome.doses.count, 1)
         XCTAssertEqual(outcome.doses[0].programmedUnits, 1.0, accuracy: 0.01)  // 2.0 × 0.5h
     }
+
+    /// #69 interim-drain safety: on a WS1 interim drain (isFinalHandback == false) the
+    /// watch keeps dosing, so a still-open last temp must NOT be clamped to the drain
+    /// instant — that would orphan its tail and UNDER-count IOB (the dangerous direction).
+    func testInterimDrainLeavesOpenTempUncapped() {
+        let temps = (0..<2).map { i -> LoanEvent in
+            let start = loanStart.addingTimeInterval(Double(i) * 300)
+            return LoanEvent(id: UUID(), seq: i + 1, provenance: .confirmed,
+                             record: LoanDoseRecord(kind: .tempBasal, startDate: start,
+                                                    endDate: start.addingTimeInterval(1800), unitsPerHour: 2.0),
+                             loggedAt: start)
+        }
+        // Interim drain 6 min in — long before the last temp's 30-min window ends.
+        let outcome = LoanReconciler.reconcile(LoanReconciler.Input(
+            events: temps, odometer: nil, schedule: flatSchedule,
+            loanStart: loanStart, loanEnd: loanStart.addingTimeInterval(360),
+            isFinalHandback: false))
+        XCTAssertEqual(outcome.doses.count, 2)
+        // temp0 was superseded by temp1 → clamped to temp1's start.
+        XCTAssertEqual(outcome.doses[0].endDate, outcome.doses[1].startDate)
+        // temp1 is still running → keeps its FULL window, NOT clamped to the 6-min drain.
+        XCTAssertEqual(outcome.doses[1].endDate, loanStart.addingTimeInterval(300 + 1800))
+        XCTAssertEqual(outcome.doses[1].programmedUnits, 1.0, accuracy: 0.01)
+    }
+
+    /// #69 finding-3: two basal-like doses at the same instant must not zero each other
+    /// out. An unstable sort + clamp-to-next-start could otherwise drop one entirely
+    /// (under-count); instead both keep their window (over-count, the safe direction).
+    func testIdenticalStartTempsAreNotDropped() {
+        let t = loanStart.addingTimeInterval(300)
+        let suspend = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
+                                record: LoanDoseRecord(kind: .suspend, startDate: t,
+                                                       endDate: t.addingTimeInterval(1800), unitsPerHour: 0),
+                                loggedAt: t)
+        let temp = LoanEvent(id: UUID(), seq: 2, provenance: .confirmed,
+                             record: LoanDoseRecord(kind: .tempBasal, startDate: t,
+                                                    endDate: t.addingTimeInterval(1800), unitsPerHour: 2.0),
+                             loggedAt: t)
+        let outcome = LoanReconciler.reconcile(LoanReconciler.Input(
+            events: [suspend, temp], odometer: nil, schedule: flatSchedule,
+            loanStart: loanStart, loanEnd: t.addingTimeInterval(1800)))
+        XCTAssertEqual(outcome.doses.count, 2)                                   // neither dropped
+        XCTAssertTrue(outcome.doses.contains { $0.programmedUnits >= 0.99 })     // the 2.0 U/hr temp survives
+    }
 }

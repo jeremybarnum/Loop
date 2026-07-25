@@ -466,7 +466,10 @@ final class PodLoanPhoneController {
             auditEvents: allStagedEvents,
             schedule: deps.settings().basalRateSchedule,
             loanStart: loanStart,
-            loanEnd: offer.handedBackAt)
+            loanEnd: offer.handedBackAt,
+            // Interim WS1 drain (watch still dosing): don't clamp a still-open temp to
+            // this drain instant — that would orphan its post-drain delivery (#69).
+            isFinalHandback: isFinal)
         let outcome = LoanReconciler.reconcile(input)
 
         // §5.3.3 audit inputs: the expected total over the WHOLE loan (all staged
