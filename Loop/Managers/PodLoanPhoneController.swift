@@ -666,13 +666,14 @@ final class PodLoanPhoneController {
         var total = 0.0
         for (i, d) in sorted.enumerated() {
             let mins = d.endDate.timeIntervalSince(d.startDate) / 60
-            let implied = d.unit == .unitsPerHour ? d.value * mins / 60 : d.value
+            let implied = d.programmedUnits   // public: rate×duration for temps, units for bolus
             total += implied
             let overlap = i + 1 < sorted.count && sorted[i + 1].startDate < d.endDate
+            let magnitude = d.unit == .unitsPerHour ? d.unitsPerHour : d.programmedUnits
             let line = String(format: "HANDBACK[%@] %d/%d %@ %@→%@ %.0fm %.2f%@ ≈%.3fU%@",
                               context, i + 1, sorted.count, String(describing: d.type),
                               iso.string(from: d.startDate), iso.string(from: d.endDate),
-                              mins, d.value, d.unit == .unitsPerHour ? "U/hr" : "U", implied,
+                              mins, magnitude, d.unit == .unitsPerHour ? "U/hr" : "U", implied,
                               overlap ? " OVERLAP-NEXT" : "")
             os_log("%{public}@", log: log, type: .default, line)
         }
