@@ -53,7 +53,7 @@ struct LoanDebugView: View {
                 row("eventual", dosing?.eventual.map { String(format: "%.0f", $0.doubleValue(for: .milligramsPerDeciliter)) } ?? "—")
                 row("COB / IOB", "\(cobText) / \(dosing?.iob.map { String(format: "%.2f U", $0) } ?? "—")")
                 row("recommend", dosing?.recommendedTempRate.map { String(format: "%+.2f U/hr", $0) } ?? "—")
-                row("running", dosing?.tempRate.map { String(format: "%+.2f U/hr", $0) } ?? "0.00 U/hr")
+                row("running", dosing?.tempRate.map { String(format: "%+.2f U/hr net", $0) } ?? "none (scheduled)")
                 row("last loop", dosing?.lastLoopCompleted.map { String(format: "%.0fs ago", Date().timeIntervalSince($0)) } ?? "—")
                 if let err = dosing?.lastLoopErrorText { row("loop err", err) }
 

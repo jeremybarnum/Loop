@@ -666,6 +666,12 @@ final class PodLoanWatchController {
             guard let entry = Self.doseEntry(from: record, syncIdentifier: "loanv2-grant-\(grant.epoch)-\(index)") else { continue }
             entries.append(entry)
         }
+        // #1 handover-IOB diagnostic (2026-07-25): the seed magnitude, and whether the
+        // running temp is present BOTH inside doseHistory and as the separate boundaryRecord
+        // — the double-seed signature behind the ~0.3U IOB bump at takeover. grossImpliedΣ
+        // is a raw rate×duration proxy (not net IOB), useful only to compare seed size.
+        let grossImpliedSum = entries.reduce(0.0) { $0 + $1.programmedUnits }
+        let boundaryDup = Self.boundaryDuplicatesHistory(grant)
         // WIPE-THEN-SEED (IOB dedup, 2026-07-22). The seed syncIds are epoch-keyed
         // ("loanv2-grant-<epoch>-<index>"), so every takeover re-inserted the same 16 h of
         // phone history under fresh identifiers — three epochs in one day tripled IOB
@@ -697,7 +703,10 @@ final class PodLoanWatchController {
                     if let error = error {
                         os_log("Grant history ingest failed: %{public}@", log: seamLog, type: .error, String(describing: error))
                     } else {
-                        SportLog.event("loan", "insulin books rebuilt from grant — \(entries.count) records (wipe-then-seed)")
+                        SportLog.event("loan", String(format: "insulin books rebuilt from grant — %d records (wipe-then-seed) · grossImpliedΣ=%.2fU · boundaryDup=%@%@",
+                                                       entries.count, grossImpliedSum,
+                                                       boundaryDup ? "YES" : "no",
+                                                       boundaryDup ? " (#1 double-seed: running temp is in BOTH doseHistory and boundaryRecord → seeded twice)" : ""))
                     }
                     self.loopManager.invalidateInsulinEffect()
                 }
@@ -742,6 +751,22 @@ final class PodLoanWatchController {
         // Carb effect is cached; force a recompute so the seeded COB reaches the first
         // prediction instead of waiting for a CGM-triggered invalidation (build 134 lesson).
         loopManager.invalidateCarbEffect()
+    }
+
+    /// #1 double-seed detector: is the grant's running-temp `boundaryRecord` ALSO present
+    /// inside `doseHistory` (same rate, overlapping window)? If so, the running temp is
+    /// seeded twice at takeover → its insulin is double-counted in watch IOB (~0.3U bump).
+    private static func boundaryDuplicatesHistory(_ grant: LoanGrant) -> Bool {
+        guard let b = grant.boundaryRecord, let bRate = b.unitsPerHour, let bEnd = b.endDate else { return false }
+        return grant.doseHistory.contains { r in
+            switch r.kind {
+            case .tempBasal, .suspend, .boundaryTruncation:
+                guard let rRate = r.unitsPerHour, let rEnd = r.endDate else { return false }
+                return abs(rRate - bRate) < 0.0001 && r.startDate < bEnd && rEnd > b.startDate
+            default:
+                return false
+            }
+        }
     }
 
     private static func doseEntry(from record: LoanDoseRecord, syncIdentifier: String) -> DoseEntry? {

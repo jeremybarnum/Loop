@@ -247,7 +247,13 @@ final class WatchLoopManager {
             let latest = glucoseStore.latestGlucose
             var tempRate: Double?
             if let dose = runningTempBasal() {
-                tempRate = dose.unitsPerHour
+                // Show NET (temp − scheduled), matching stock's net-basal convention and
+                // publishHUDContext (:324). The glance renders this with a forced sign
+                // ("%+.2f"), so net makes it meaningful: + above schedule, − a reduction,
+                // 0 at schedule. (Was the ABSOLUTE rate, so a low-temp rendered as a
+                // meaningless "+0.00" that read as "no action" — 2026-07-25.)
+                let scheduled = settings.basalRateSchedule?.value(at: now()) ?? 0
+                tempRate = dose.unitsPerHour - scheduled
             }
             return GlanceData(
                 glucose: latest?.quantity,
@@ -616,7 +622,18 @@ final class WatchLoopManager {
         } else {
             rec = "none"
         }
-        SportLog.event("predict", "eventual \(eventual) · net effects: carbs \(net(carbEffect)), insulin \(net(insulinEffect)), momentum \(net(glucoseMomentumEffect)), RC \(rc) · rec \(rec)")
+        // #3 (2026-07-25): the dose keys on EVENTUAL, with the predicted MIN + suspend
+        // threshold as the safety brake. Put all three on the decision line so "eventual <
+        // target ⇒ reduce" (and "why temp 0") reads without cross-referencing [curve].
+        let mgdlU = HKUnit.milligramsPerDeciliter
+        let minPredicted: String = {
+            guard let fwd = predictedGlucose?.filter({ $0.startDate >= now() }), !fwd.isEmpty,
+                  let m = fwd.min(by: { $0.quantity.doubleValue(for: mgdlU) < $1.quantity.doubleValue(for: mgdlU) })
+            else { return "—" }
+            return String(format: "%.0f@%dm", m.quantity.doubleValue(for: mgdlU), Int(m.startDate.timeIntervalSince(now()) / 60))
+        }()
+        let suspendThr = settings.suspendThreshold.map { String(format: "%.0f", $0.quantity.doubleValue(for: mgdlU)) } ?? "—"
+        SportLog.event("predict", "eventual \(eventual) · min \(minPredicted) · suspendThr \(suspendThr) · net effects: carbs \(net(carbEffect)), insulin \(net(insulinEffect)), momentum \(net(glucoseMomentumEffect)), RC \(rc) · rec \(rec)")
         SportLog.event("curve", curveSummary(predictedGlucose))
     }
 
