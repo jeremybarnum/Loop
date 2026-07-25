@@ -28,7 +28,7 @@ import WatchKit
 
 private let logFmt: DateFormatter = {
     let f = DateFormatter()
-    f.dateFormat = "HH:mm:ss.SSS"
+    f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"   // date + time: a log spanning midnight/days must be unambiguous (2026-07-25)
     return f
 }()
 

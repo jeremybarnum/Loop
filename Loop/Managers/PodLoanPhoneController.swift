@@ -486,6 +486,8 @@ final class PodLoanPhoneController {
                                    syncIdentifier: "loanv2-audit-\(offer.epoch)"))
         }
 
+        logReconciledDoses(doses, context: "drain-e\(offer.epoch)")
+
         // Write-doses-first; ack ONLY after commit (a897d22c). Failure: no ack, stay
         // reconciling, 1 h reminder repeats (row 11) — never dose on incomplete records.
         deps.addDoses(doses) { [weak self] error in
@@ -650,6 +652,34 @@ final class PodLoanPhoneController {
     /// written to the store first (records are truth; never understate IOB), then the
     /// pod is reclaimed and dosing restored. Used when a new request proves the old
     /// loan is dead, when reclaim times out, or on a relaunch into a stranded state.
+    /// Instrumentation (#69, 2026-07-25): itemize reconciled hand-back/reclaim doses so the
+    /// loaded-IOB inflation is auditable without a forensic issue-report sum. Logs each dose's
+    /// window (start→end→minutes), rate/value, IMPLIED delivery (rate×minutes for temps), an
+    /// OVERLAP-NEXT flag when a temp's full window overruns the next dose's start (the
+    /// over-count signal — LoanReconciler enters oversized records in full with no truncation,
+    /// :107-109), plus the batch total. Compare this Σ against the watch's "stream implied Σ"
+    /// and the post-reclaim IOB to localize where the ~5 U comes from.
+    private func logReconciledDoses(_ doses: [DoseEntry], context: String) {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        let sorted = doses.sorted { $0.startDate < $1.startDate }
+        var total = 0.0
+        for (i, d) in sorted.enumerated() {
+            let mins = d.endDate.timeIntervalSince(d.startDate) / 60
+            let implied = d.unit == .unitsPerHour ? d.value * mins / 60 : d.value
+            total += implied
+            let overlap = i + 1 < sorted.count && sorted[i + 1].startDate < d.endDate
+            let line = String(format: "HANDBACK[%@] %d/%d %@ %@→%@ %.0fm %.2f%@ ≈%.3fU%@",
+                              context, i + 1, sorted.count, String(describing: d.type),
+                              iso.string(from: d.startDate), iso.string(from: d.endDate),
+                              mins, d.value, d.unit == .unitsPerHour ? "U/hr" : "U", implied,
+                              overlap ? " OVERLAP-NEXT" : "")
+            os_log("%{public}@", log: log, type: .default, line)
+        }
+        os_log("%{public}@", log: log, type: .default,
+               String(format: "HANDBACK[%@] SUMMARY: %d dose(s), implied Σ=%.2fU", context, sorted.count, total))
+    }
+
     func forceReclaimToOwner(reason: String) {
         os_log("Force reclaim to OWNER: %{public}@", log: log, type: .default, reason)
         reclaimTimeoutWork?.cancel()
@@ -668,6 +698,7 @@ final class PodLoanPhoneController {
                 loanStart: loanStartedAt ?? deps.now().addingTimeInterval(-.hours(2)),
                 loanEnd: deps.now())
             let outcome = LoanReconciler.reconcile(input)
+            logReconciledDoses(outcome.doses, context: "reclaim")
             deps.addDoses(outcome.doses) { _ in }
             for carb in outcome.carbs { deps.addCarb(carb) { _ in } }
             deps.issueNotice("Sport Mode Reset", "A previous watch loan was ended without a clean hand-back; its records were saved. Check Event History and the pod.")

@@ -733,6 +733,8 @@ struct GlanceView: View {
             Text(value)
                 .font(.system(size: 23, weight: .semibold))
                 .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)   // TEMP ("+1.20") is wider than IOB/COB — shrink to fit its cell
                 .foregroundColor(.glanceInk)
             Text(label)
                 .font(.system(size: 10, weight: .medium))
