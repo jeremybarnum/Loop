@@ -36,8 +36,11 @@ final class PodLoanPhoneController {
         var setAutomaticDosingPaused: (Bool) -> Void
         /// Transport out (WCSession.transferUserInfo at integration).
         var send: ([String: Any]) -> Void
-        /// Store writes.
-        var addDoses: ([DoseEntry], @escaping (Error?) -> Void) -> Void
+        /// Store writes. Loan insulin goes through the pump-event path (not addDoses) so
+        /// it lands in the PumpEvent table (Event History), is run through stock
+        /// InsulinMath.reconciled() at the store (overlap truncation), and mirrors into
+        /// InsulinDeliveryStore/HealthKit — behaving exactly like real pump insulin (#69/#52).
+        var addPumpEvents: ([NewPumpEvent], _ lastReconciliation: Date?, @escaping (Error?) -> Void) -> Void
         var addCarb: (NewCarbEntry, @escaping (Error?) -> Void) -> Void
         /// 16 h insulin history for the grant.
         var doseHistory: (_ start: Date, _ completion: @escaping ([DoseEntry]) -> Void) -> Void
@@ -55,6 +58,32 @@ final class PodLoanPhoneController {
     private let log = OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanPhoneController")
     private let queue = DispatchQueue(label: "com.loopkit.Loop.PodLoanPhoneController", qos: .utility)
     private var deps: Dependencies
+
+    // MARK: - Loan → pump-event conversion (#69/#52)
+
+    /// Wrap reconciled loan DoseEntries as NewPumpEvents for DoseStore.addPumpEvents.
+    /// The identity must live in `raw` — NewPumpEvent.init overwrites dose.syncIdentifier
+    /// with raw.hexadecimalString, so we encode the deterministic loan syncIdentifier
+    /// (loanv2-<uuid> / loanv2-audit-<epoch>) there for idempotent, dedup-safe upserts.
+    private func newPumpEvents(from doses: [DoseEntry]) -> [NewPumpEvent] {
+        doses.compactMap { dose in
+            guard let syncID = dose.syncIdentifier else { return nil }
+            return NewPumpEvent(date: dose.startDate,
+                                dose: dose,
+                                raw: Data(syncID.utf8),
+                                title: Self.pumpEventTitle(for: dose.type))
+        }
+    }
+
+    private static func pumpEventTitle(for type: DoseType) -> String {
+        switch type {
+        case .bolus:     return "Bolus"
+        case .tempBasal: return "Temp Basal"
+        case .basal:     return "Basal"
+        case .suspend:   return "Suspend"
+        case .resume:    return "Resume"
+        }
+    }
 
     private(set) var state: State {
         didSet {
@@ -491,9 +520,18 @@ final class PodLoanPhoneController {
 
         logReconciledDoses(doses, context: "drain-e\(offer.epoch)")
 
-        // Write-doses-first; ack ONLY after commit (a897d22c). Failure: no ack, stay
+        // WS1: the still-open temp (outcome.openEventID) is skipped by the reconciler and
+        // kept out of committedIDs, so it re-drains and is written (clamped, immutable) on
+        // the final drain. But we STILL ack its seq (newCursor below uses `events`, not
+        // `committable`) so the watch's finalize gate (unackedEvents empty) can clear —
+        // decoupling the ack cursor from committedIDs is what avoids the finalize deadlock.
+        let committable = events.filter { $0.id != outcome.openEventID }
+
+        // Write-events-first; ack ONLY after commit (a897d22c). Failure: no ack, stay
         // reconciling, 1 h reminder repeats (row 11) — never dose on incomplete records.
-        deps.addDoses(doses) { [weak self] error in
+        // Loan insulin goes through addPumpEvents (PumpEvent table + stock reconciled() +
+        // HealthKit); lastReconciliation = handedBackAt (the finalized-through watermark).
+        deps.addPumpEvents(newPumpEvents(from: doses), offer.handedBackAt) { [weak self] error in
             guard let self = self else { return }
             self.queue.async {
                 if let error = error {
@@ -516,7 +554,7 @@ final class PodLoanPhoneController {
                 let newCursor = events.map(\.seq).max() ?? self.committedCursor
                 if !isStale {
                     self.committedCursor = max(self.committedCursor, newCursor)
-                    self.committedIDs.formUnion(events.map(\.id))
+                    self.committedIDs.formUnion(committable.map(\.id))
                     self.persistCommittedIDs()
                     self.sendMessage(.handbackAck(HandbackAck(epoch: self.epoch, committedCursor: self.committedCursor)))
                     if isFinal, self.state == .reconciling {
@@ -608,9 +646,10 @@ final class PodLoanPhoneController {
                 } else if remainder > 0 {
                     // R6 valve, phone-side: the watch never audited; unrecorded insulin
                     // enters IOB timed at reclaim (zero decay - conservative).
-                    self.deps.addDoses([DoseEntry(type: .bolus, startDate: self.deps.now(), endDate: self.deps.now(),
-                                                  value: remainder, unit: .units,
-                                                  syncIdentifier: "loanv2-reaudit-\(self.epoch)")]) { _ in }
+                    let bolus = DoseEntry(type: .bolus, startDate: self.deps.now(), endDate: self.deps.now(),
+                                          value: remainder, unit: .units,
+                                          syncIdentifier: "loanv2-reaudit-\(self.epoch)")
+                    self.deps.addPumpEvents(self.newPumpEvents(from: [bolus]), self.deps.now()) { _ in }
                     self.deps.issueNotice("Pod Audit",
                         String(format: "The pod delivered %.2f U more than the watch session recorded. The extra insulin was added to your records at reclaim time.", remainder))
                 } else {
@@ -701,9 +740,9 @@ final class PodLoanPhoneController {
                 events: events, odometer: nil, schedule: deps.settings().basalRateSchedule,
                 loanStart: loanStartedAt ?? deps.now().addingTimeInterval(-.hours(2)),
                 loanEnd: deps.now())
-            let outcome = LoanReconciler.reconcile(input)
+            let outcome = LoanReconciler.reconcile(input)  // isFinalHandback defaults true → all finalized
             logReconciledDoses(outcome.doses, context: "reclaim")
-            deps.addDoses(outcome.doses) { _ in }
+            deps.addPumpEvents(newPumpEvents(from: outcome.doses), deps.now()) { _ in }
             for carb in outcome.carbs { deps.addCarb(carb) { _ in } }
             deps.issueNotice("Sport Mode Reset", "A previous watch loan was ended without a clean hand-back; its records were saved. Check Event History and the pod.")
         }

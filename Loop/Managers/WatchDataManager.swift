@@ -95,9 +95,17 @@ final class WatchDataManager: NSObject {
             send: { [weak self] dictionary in
                 self?.watchSession?.transferUserInfo(dictionary)
             },
-            addDoses: { [weak self] doses, completion in
+            addPumpEvents: { [weak self] events, lastReconciliation, completion in
                 guard let self = self else { completion(nil); return }
-                self.deviceManager.doseStore.addDoses(doses, from: nil, completion: completion)
+                // #69/#52: loan insulin behaves like real pump insulin — PumpEvent rows
+                // (Event History) + stock reconciled() truncation + HealthKit. All loan
+                // doses are IMMUTABLE (the interim open temp is deferred to the final drain),
+                // so replacePendingEvents:false — there is no loan mutable dose to replace,
+                // and it must NOT purge the phone's OWN resumed-pod in-flight temp when a
+                // post-reclaim write (re-audit / forced reclaim) lands.
+                self.deviceManager.doseStore.addPumpEvents(events, lastReconciliation: lastReconciliation, replacePendingEvents: false) { error in
+                    completion(error.map { $0 as Error })
+                }
             },
             addCarb: { [weak self] entry, completion in
                 guard let self = self else { completion(nil); return }

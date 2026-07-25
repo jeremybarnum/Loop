@@ -37,18 +37,23 @@ enum LoanReconciler {
         /// Loan window: grant/handover stamp → handedBackAt.
         let loanStart: Date
         let loanEnd: Date
-        /// False for a WS1 interim drain (`released == false`: watch still dosing). On an
-        /// interim drain the pod keeps running, so a still-open temp must NOT be clamped
-        /// to the drain instant (`loanEnd`) — doing so orphans its post-drain delivery
-        /// (that event is committed and filtered from later drains), UNDER-counting IOB,
-        /// which is the dangerous direction. Only the final hand-back / forced reclaim,
-        /// where delivery truly stops, clamps windows to `loanEnd`.
+        /// False for a WS1 interim drain (`released == false`: watch still dosing). On a
+        /// final hand-back / forced reclaim (true) delivery has stopped, so every dose is
+        /// finalized: immutable and clamped to `loanEnd`. On an interim drain the pod keeps
+        /// running, so the still-open temp (`outcome.openEventID`) is SKIPPED here — it
+        /// re-drains and is written on the final drain. Finalizing it early would orphan
+        /// its post-drain delivery and UNDER-count IOB, the dangerous direction (#69).
+        /// See docs/DESIGN_LOAN_ADDPUMPEVENTS.md.
         var isFinalHandback: Bool = true
     }
 
     struct Outcome: Equatable {
         /// Insulin records to write (per-event deterministic syncIdentifiers).
         var doses: [DoseEntry] = []
+        /// The interim-drain still-open temp's event ID: ACKed (so the watch's finalize
+        /// gate clears) but NOT written or committed here — it re-drains and is written on
+        /// the final drain (nil on a final hand-back). See below / the design doc.
+        var openEventID: UUID? = nil
         /// Carb records to write (merge-not-replace happens at the store call).
         var carbs: [NewCarbEntry] = []
         /// Event IDs annulled by the R22 exact-size fingerprint.
@@ -111,9 +116,33 @@ enum LoanReconciler {
             }
         }
 
+        // The still-open temp at an INTERIM drain: the latest-starting temp/suspend whose
+        // programmed window extends past the loan end (i.e. still running at the drain
+        // instant). It is NOT written here — it re-drains and is written correctly
+        // (clamped, immutable) on the FINAL drain. The phone is paused during the loan, so
+        // its store need only be right at hand-back; writing the open temp now would either
+        // defer it (the save filter) or freeze it at the interim state. The controller
+        // still ACKS it (so the watch's finalize gate clears) but keeps it out of
+        // committedIDs (so it re-drains). On a FINAL hand-back nothing is open.
+        let openEventID: UUID? = input.isFinalHandback ? nil : events
+            .filter { e in
+                switch e.record.kind {
+                case .tempBasal, .suspend, .boundaryTruncation:
+                    return (e.record.endDate ?? e.record.startDate) > input.loanEnd
+                default:
+                    return false
+                }
+            }
+            .max(by: { $0.record.startDate < $1.record.startDate })?.id
+        outcome.openEventID = openEventID
+
         // Store writes for what remains: records are the truth (R12); confirmed and
-        // surviving-assumed alike enter the record — an oversized record is entered in
-        // FULL (max-exposure: understating IOB is the dangerous direction).
+        // surviving-assumed alike enter the record. Overlap truncation is NOT done here —
+        // routing through DoseStore.addPumpEvents runs stock InsulinMath.reconciled() at
+        // the store, which collapses overlaps and trims the last loan temp against the
+        // phone's resumed dose. We only (a) clamp to loanEnd on a final hand-back so a
+        // full-window trailing temp isn't deferred by the save filter, and (b) skip the
+        // interim open temp (written on the final drain). See docs/DESIGN_LOAN_ADDPUMPEVENTS.md.
         for event in events {
             switch event.record.kind {
             case .bolus:
@@ -126,11 +155,14 @@ enum LoanReconciler {
                         syncIdentifier: syncIdentifier(for: event)))
                 }
             case .tempBasal, .suspend, .boundaryTruncation:
+                // Skip the interim open temp — it re-drains and is written on the final drain.
+                if event.id == openEventID { continue }
                 if let rate = event.record.unitsPerHour, let end = event.record.endDate {
+                    let clampedEnd = input.isFinalHandback ? Swift.min(end, input.loanEnd) : end
                     outcome.doses.append(DoseEntry(
                         type: .tempBasal,
                         startDate: event.record.startDate,
-                        endDate: end,
+                        endDate: clampedEnd,
                         value: rate, unit: .unitsPerHour,
                         syncIdentifier: syncIdentifier(for: event)))
                 }
@@ -147,54 +179,7 @@ enum LoanReconciler {
             }
         }
 
-        // The pod runs ONE program at a time, so overlapping journal windows must be
-        // collapsed BEFORE they reach the store — see collapsingOverlappingBasals. The
-        // loanEnd clamp applies only when delivery truly stopped (final hand-back /
-        // forced reclaim); an interim WS1 drain leaves a still-open temp uncapped.
-        outcome.doses = collapsingOverlappingBasals(outcome.doses,
-                                                    loanEnd: input.isFinalHandback ? input.loanEnd : nil)
-
         return outcome
-    }
-
-    /// The watch mints every temp/suspend with its FULL programmed window (Loop programs
-    /// 30-min temps) and streams predecessors untrimmed — see
-    /// `PodLoanWatchController.loanWillEnactTempBasal`. Stock collapses such overlaps at
-    /// *read* time in `InsulinMath.reconciled()` (InsulinMath.swift:409), but the loan
-    /// write path (`DoseStore.addDoses`) bypasses that reconciliation, so nine overlapping
-    /// 30-min windows would integrate ~6-7× (the observed ~10.6U-for-~1.3U over-count,
-    /// #69). Collapse them here with the SAME segment resolution `expectedInsulin` already
-    /// applies (walk in start order, clamp each window's end to the next window's start),
-    /// plus a clamp to `loanEnd` ONLY when delivery truly stopped (final hand-back /
-    /// forced reclaim; `loanEnd == nil` on an interim WS1 drain leaves a still-open temp
-    /// uncapped, since the pod keeps running). Boluses pass through untouched.
-    static func collapsingOverlappingBasals(_ doses: [DoseEntry], loanEnd: Date?) -> [DoseEntry] {
-        func isBasalLike(_ dose: DoseEntry) -> Bool {
-            switch dose.type {
-            case .basal, .tempBasal, .suspend: return true
-            case .bolus, .resume: return false
-            }
-        }
-        let windows = doses.filter(isBasalLike).sorted { $0.startDate < $1.startDate }
-        var result = doses.filter { !isBasalLike($0) }
-        for (i, dose) in windows.enumerated() {
-            // Clamp to the next window that starts STRICTLY LATER. A same-instant sibling
-            // (rate-0 suspend + temp minted in the same millisecond) did not supersede
-            // this one; clamping to its equal start would zero a real delivery (they
-            // instead both keep their window — an over-count, the safe direction).
-            var nextStart = Date.distantFuture
-            for j in (i + 1)..<windows.count where windows[j].startDate > dose.startDate {
-                nextStart = windows[j].startDate
-                break
-            }
-            var clampedEnd = Swift.min(dose.endDate, nextStart)
-            if let loanEnd = loanEnd {   // nil on an interim drain: leave a still-open temp uncapped
-                clampedEnd = Swift.min(clampedEnd, loanEnd)
-            }
-            guard clampedEnd > dose.startDate else { continue }  // fully superseded → dropped
-            result.append(dose.trimmed(from: nil, to: clampedEnd, syncIdentifier: dose.syncIdentifier))
-        }
-        return result.sorted { $0.startDate < $1.startDate }
     }
 
     static func syncIdentifier(for event: LoanEvent) -> String {

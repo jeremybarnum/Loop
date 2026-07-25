@@ -86,9 +86,10 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 self.lock.unlock()
                 pending.forEach { $0.fulfill() }
             },
-            addDoses: { [weak self] doses, completion in
+            addPumpEvents: { [weak self] events, _, completion in
                 guard let self = self else { completion(nil); return }
-                self.lock.lock(); self.addedDoses.append(doses); self.lock.unlock()
+                // Capture the doses inside the pump events so existing count assertions hold.
+                self.lock.lock(); self.addedDoses.append(events.compactMap { $0.dose }); self.lock.unlock()
                 completion(nil)
             },
             addCarb: { _, completion in completion(nil) },
@@ -126,6 +127,13 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     private func makeEvent(seq: Int, units: Double, at date: Date) -> LoanEvent {
         LoanEvent(id: UUID(), seq: seq, provenance: .confirmed,
                   record: LoanDoseRecord(kind: .bolus, startDate: date, amount: units), loggedAt: date)
+    }
+
+    private func tempEvent(seq: Int, rate: Double, start: Date, durationMinutes: Double) -> LoanEvent {
+        LoanEvent(id: UUID(), seq: seq, provenance: .confirmed,
+                  record: LoanDoseRecord(kind: .tempBasal, startDate: start,
+                                         endDate: start.addingTimeInterval(durationMinutes * 60), unitsPerHour: rate),
+                  loggedAt: start)
     }
 
     /// Drives a controller into LOANED at epoch 1, returning the grant it sent.
@@ -296,5 +304,42 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertEqual(controller.state, .loaned, "the ACTIVE loan is untouched")
         let lastBatch = addedDoses.last ?? []
         XCTAssertEqual(lastBatch.count, 1, "the stale offer's record still drained")
+    }
+
+    /// #69/#52 regression guard for the finalize-deadlock fix. A WS1 INTERIM offer
+    /// (released:false) carrying a still-running temp must ACK the open temp's cursor
+    /// (so the watch's `unackedEvents` can empty and it sends the final offer — otherwise
+    /// the pod is never handed back) while WITHHOLDING it from the store write; the
+    /// subsequent FINAL offer writes it (re-drained from staging). This exercises the
+    /// ack-cursor / committedIDs decoupling that the earlier reroute got wrong.
+    func testInterimDrainAcksOpenTempButDefersWriteToFinal() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        let now = Date()
+        // A temp still running: its 30-min window extends well past handedBackAt (now).
+        let openTemp = tempEvent(seq: 1, rate: 1.5, start: now.addingTimeInterval(-60), durationMinutes: 30)
+
+        // Phase 1 — INTERIM offer (released:false): watch still dosing.
+        let interimAck = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(HandbackOffer(
+            epoch: grant.epoch, handedBackAt: now, finalStatus: nil, odometer: nil,
+            events: [openTemp], tombstones: [], recovered: false, released: false)).transportDictionary())
+        wait(for: [interimAck], timeout: 5)
+
+        guard case .handbackAck(let ack1)? = lastSent() else { return XCTFail("expected interim ack") }
+        XCTAssertEqual(ack1.committedCursor, openTemp.seq, "open temp's seq IS acked so the watch can finalize (deadlock fix)")
+        XCTAssertEqual(addedDoses.flatMap { $0 }.count, 0, "but the open temp is withheld from the store write")
+        XCTAssertEqual(controller.state, .loaned, "an interim drain does not reclaim")
+
+        // Phase 2 — FINAL offer (released:true): the watch acked everything, so it carries
+        // no events; the phone re-drains the still-staged open temp and writes it.
+        let finalAck = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(HandbackOffer(
+            epoch: grant.epoch, handedBackAt: now.addingTimeInterval(5), finalStatus: nil, odometer: nil,
+            events: [], tombstones: [], recovered: false, released: true)).transportDictionary())
+        wait(for: [finalAck], timeout: 5)
+
+        XCTAssertEqual(addedDoses.flatMap { $0 }.count, 1, "the withheld open temp is written on the final drain")
+        waitForState(controller, .owner)
     }
 }

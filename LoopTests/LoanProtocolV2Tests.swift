@@ -240,91 +240,72 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertEqual(expected, 1.0, accuracy: 0.01)
     }
 
-    // MARK: - #69: overlapping full-window temps collapse to real durations
+    // MARK: - #69/#52: pump-event reroute
+    // The reconciler no longer truncates overlaps — routing through DoseStore.addPumpEvents
+    // runs stock InsulinMath.reconciled() at the store, which collapses them. The reconciler
+    // now only finalizes/clamps for a final hand-back and WITHHOLDS the interim open temp
+    // (written on the final drain). See docs/DESIGN_LOAN_ADDPUMPEVENTS.md.
 
-    /// The watch mints each temp with a full 30-min window and never trims its
-    /// predecessor; the loan write path (`addDoses`) skips stock's read-time
-    /// `reconciled()`. Overlapping windows must collapse to their real (replaced)
-    /// durations, or IOB integrates them 6-7× (the observed ~10.6U-for-~1.3U over-count).
-    func testOverlappingTempsCollapseToRealDurations() {
-        // Three 30-min temps at 2.0 U/hr, minted 5 min apart — as the watch does.
-        let temps = (0..<3).map { i -> LoanEvent in
-            let start = loanStart.addingTimeInterval(Double(i) * 300)
+    private func temps(count: Int, spacingSeconds: Double = 300, windowSeconds: Double = 1800,
+                       rate: Double = 2.0) -> [LoanEvent] {
+        (0..<count).map { i in
+            let start = loanStart.addingTimeInterval(Double(i) * spacingSeconds)
             return LoanEvent(id: UUID(), seq: i + 1, provenance: .confirmed,
                              record: LoanDoseRecord(kind: .tempBasal, startDate: start,
-                                                    endDate: start.addingTimeInterval(1800), unitsPerHour: 2.0),
+                                                    endDate: start.addingTimeInterval(windowSeconds), unitsPerHour: rate),
                              loggedAt: start)
         }
-        // loanEnd = 40 min in: temp2 (starts at 10 min) runs its full 30-min window to hand-back.
-        let outcome = LoanReconciler.reconcile(LoanReconciler.Input(
-            events: temps, odometer: nil, schedule: flatSchedule,
-            loanStart: loanStart, loanEnd: loanStart.addingTimeInterval(2400)))
+    }
 
-        // Full-window sum would be 3 × (2.0 × 0.5h) = 3.0U. Collapsed: temp0 and temp1
-        // each run 5 min (0.1667U); temp2 runs its full 30 min to loanEnd (1.0U) → 1.333U.
-        let total = outcome.doses.reduce(0) { $0 + $1.programmedUnits }
-        XCTAssertEqual(total, 1.333, accuracy: 0.01)
+    /// Final hand-back: every dose is finalized — immutable and clamped to loanEnd, so a
+    /// full-window trailing temp isn't deferred by addPumpEvents' save filter. Overlap
+    /// truncation is intentionally NOT done here (stock reconciled() collapses them at the
+    /// store), so the doses may still overlap.
+    func testFinalHandbackFinalizesAndClampsToLoanEnd() {
+        let events = temps(count: 3)  // 30-min windows, 5 min apart
+        let loanEnd = loanStart.addingTimeInterval(1500)  // 25 min: every window overruns it
+        let outcome = LoanReconciler.reconcile(LoanReconciler.Input(
+            events: events, odometer: nil, schedule: flatSchedule,
+            loanStart: loanStart, loanEnd: loanEnd))
+
+        XCTAssertNil(outcome.openEventID, "nothing is open on a final hand-back")
         XCTAssertEqual(outcome.doses.count, 3)
-        // Predecessors clamped to their successors' starts.
-        XCTAssertEqual(outcome.doses[0].endDate, outcome.doses[1].startDate)
-        XCTAssertEqual(outcome.doses[1].endDate, outcome.doses[2].startDate)
-    }
-
-    /// A single non-overlapping temp keeps its full window — truncation must not shrink
-    /// deliveries that had no successor to be replaced by.
-    func testSingleTempKeepsFullWindow() {
-        let temp = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
-                             record: LoanDoseRecord(kind: .tempBasal, startDate: loanStart,
-                                                    endDate: loanStart.addingTimeInterval(1800), unitsPerHour: 2.0),
-                             loggedAt: loanStart)
-        let outcome = LoanReconciler.reconcile(LoanReconciler.Input(
-            events: [temp], odometer: nil, schedule: flatSchedule,
-            loanStart: loanStart, loanEnd: loanStart.addingTimeInterval(1800)))
-        XCTAssertEqual(outcome.doses.count, 1)
-        XCTAssertEqual(outcome.doses[0].programmedUnits, 1.0, accuracy: 0.01)  // 2.0 × 0.5h
-    }
-
-    /// #69 interim-drain safety: on a WS1 interim drain (isFinalHandback == false) the
-    /// watch keeps dosing, so a still-open last temp must NOT be clamped to the drain
-    /// instant — that would orphan its tail and UNDER-count IOB (the dangerous direction).
-    func testInterimDrainLeavesOpenTempUncapped() {
-        let temps = (0..<2).map { i -> LoanEvent in
-            let start = loanStart.addingTimeInterval(Double(i) * 300)
-            return LoanEvent(id: UUID(), seq: i + 1, provenance: .confirmed,
-                             record: LoanDoseRecord(kind: .tempBasal, startDate: start,
-                                                    endDate: start.addingTimeInterval(1800), unitsPerHour: 2.0),
-                             loggedAt: start)
+        for dose in outcome.doses {
+            XCTAssertFalse(dose.isMutable, "final-hand-back doses are finalized")
+            XCTAssertEqual(dose.endDate, loanEnd, "each 30-min window overruns loanEnd, so all clamp to it (not deferred)")
         }
-        // Interim drain 6 min in — long before the last temp's 30-min window ends.
-        let outcome = LoanReconciler.reconcile(LoanReconciler.Input(
-            events: temps, odometer: nil, schedule: flatSchedule,
-            loanStart: loanStart, loanEnd: loanStart.addingTimeInterval(360),
-            isFinalHandback: false))
-        XCTAssertEqual(outcome.doses.count, 2)
-        // temp0 was superseded by temp1 → clamped to temp1's start.
-        XCTAssertEqual(outcome.doses[0].endDate, outcome.doses[1].startDate)
-        // temp1 is still running → keeps its FULL window, NOT clamped to the 6-min drain.
-        XCTAssertEqual(outcome.doses[1].endDate, loanStart.addingTimeInterval(300 + 1800))
-        XCTAssertEqual(outcome.doses[1].programmedUnits, 1.0, accuracy: 0.01)
     }
 
-    /// #69 finding-3: two basal-like doses at the same instant must not zero each other
-    /// out. An unstable sort + clamp-to-next-start could otherwise drop one entirely
-    /// (under-count); instead both keep their window (over-count, the safe direction).
-    func testIdenticalStartTempsAreNotDropped() {
-        let t = loanStart.addingTimeInterval(300)
-        let suspend = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
-                                record: LoanDoseRecord(kind: .suspend, startDate: t,
-                                                       endDate: t.addingTimeInterval(1800), unitsPerHour: 0),
-                                loggedAt: t)
-        let temp = LoanEvent(id: UUID(), seq: 2, provenance: .confirmed,
-                             record: LoanDoseRecord(kind: .tempBasal, startDate: t,
-                                                    endDate: t.addingTimeInterval(1800), unitsPerHour: 2.0),
-                             loggedAt: t)
+    /// Interim WS1 drain: the still-open trailing temp is reported via openEventID and
+    /// WITHHELD from the write (it re-drains and is written on the final drain). The
+    /// controller still acks its seq so the watch can finalize; keeping it out of the write
+    /// and committedIDs is what lets it re-drain. The superseded temps are written immutable
+    /// for stock reconciled() to collapse.
+    func testInterimDrainWithholdsOpenTempFromWrite() {
+        let events = temps(count: 3)
+        // Drain 12 min in — all three 30-min windows still extend past it; temp[2] is open.
         let outcome = LoanReconciler.reconcile(LoanReconciler.Input(
-            events: [suspend, temp], odometer: nil, schedule: flatSchedule,
-            loanStart: loanStart, loanEnd: t.addingTimeInterval(1800)))
-        XCTAssertEqual(outcome.doses.count, 2)                                   // neither dropped
-        XCTAssertTrue(outcome.doses.contains { $0.programmedUnits >= 0.99 })     // the 2.0 U/hr temp survives
+            events: events, odometer: nil, schedule: flatSchedule,
+            loanStart: loanStart, loanEnd: loanStart.addingTimeInterval(720),
+            isFinalHandback: false))
+
+        XCTAssertEqual(outcome.openEventID, events[2].id, "the latest-starting still-running temp is open")
+        // The open temp is NOT written; the two superseded temps are, immutable & uncapped.
+        XCTAssertEqual(outcome.doses.count, 2)
+        XCTAssertFalse(outcome.doses.contains { $0.isMutable }, "no mutable loan doses")
+        let openSyncID = LoanReconciler.syncIdentifier(for: events[2])
+        XCTAssertFalse(outcome.doses.contains { $0.syncIdentifier == openSyncID }, "open temp withheld from write")
+        XCTAssertTrue(outcome.doses.contains { $0.syncIdentifier == LoanReconciler.syncIdentifier(for: events[0]) })
+    }
+
+    /// A single completed temp on a final hand-back keeps its (sub-loanEnd) window intact.
+    func testSingleCompletedTempKeepsWindow() {
+        let event = temps(count: 1)[0]  // [0, 1800]
+        let outcome = LoanReconciler.reconcile(LoanReconciler.Input(
+            events: [event], odometer: nil, schedule: flatSchedule,
+            loanStart: loanStart, loanEnd: loanStart.addingTimeInterval(3600)))  // loanEnd well past the window
+        XCTAssertEqual(outcome.doses.count, 1)
+        XCTAssertFalse(outcome.doses[0].isMutable)
+        XCTAssertEqual(outcome.doses[0].programmedUnits, 1.0, accuracy: 0.01)  // 2.0 × 0.5h, unclamped
     }
 }
