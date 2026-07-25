@@ -239,4 +239,48 @@ final class LoanProtocolV2Tests: XCTestCase {
         let expected = LoanReconciler.expectedInsulin(events: [suspend], schedule: flatSchedule, from: loanStart, to: loanEnd)
         XCTAssertEqual(expected, 1.0, accuracy: 0.01)
     }
+
+    // MARK: - #69: overlapping full-window temps collapse to real durations
+
+    /// The watch mints each temp with a full 30-min window and never trims its
+    /// predecessor; the loan write path (`addDoses`) skips stock's read-time
+    /// `reconciled()`. Overlapping windows must collapse to their real (replaced)
+    /// durations, or IOB integrates them 6-7× (the observed ~10.6U-for-~1.3U over-count).
+    func testOverlappingTempsCollapseToRealDurations() {
+        // Three 30-min temps at 2.0 U/hr, minted 5 min apart — as the watch does.
+        let temps = (0..<3).map { i -> LoanEvent in
+            let start = loanStart.addingTimeInterval(Double(i) * 300)
+            return LoanEvent(id: UUID(), seq: i + 1, provenance: .confirmed,
+                             record: LoanDoseRecord(kind: .tempBasal, startDate: start,
+                                                    endDate: start.addingTimeInterval(1800), unitsPerHour: 2.0),
+                             loggedAt: start)
+        }
+        // loanEnd = 40 min in: temp2 (starts at 10 min) runs its full 30-min window to hand-back.
+        let outcome = LoanReconciler.reconcile(LoanReconciler.Input(
+            events: temps, odometer: nil, schedule: flatSchedule,
+            loanStart: loanStart, loanEnd: loanStart.addingTimeInterval(2400)))
+
+        // Full-window sum would be 3 × (2.0 × 0.5h) = 3.0U. Collapsed: temp0 and temp1
+        // each run 5 min (0.1667U); temp2 runs its full 30 min to loanEnd (1.0U) → 1.333U.
+        let total = outcome.doses.reduce(0) { $0 + $1.programmedUnits }
+        XCTAssertEqual(total, 1.333, accuracy: 0.01)
+        XCTAssertEqual(outcome.doses.count, 3)
+        // Predecessors clamped to their successors' starts.
+        XCTAssertEqual(outcome.doses[0].endDate, outcome.doses[1].startDate)
+        XCTAssertEqual(outcome.doses[1].endDate, outcome.doses[2].startDate)
+    }
+
+    /// A single non-overlapping temp keeps its full window — truncation must not shrink
+    /// deliveries that had no successor to be replaced by.
+    func testSingleTempKeepsFullWindow() {
+        let temp = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
+                             record: LoanDoseRecord(kind: .tempBasal, startDate: loanStart,
+                                                    endDate: loanStart.addingTimeInterval(1800), unitsPerHour: 2.0),
+                             loggedAt: loanStart)
+        let outcome = LoanReconciler.reconcile(LoanReconciler.Input(
+            events: [temp], odometer: nil, schedule: flatSchedule,
+            loanStart: loanStart, loanEnd: loanStart.addingTimeInterval(1800)))
+        XCTAssertEqual(outcome.doses.count, 1)
+        XCTAssertEqual(outcome.doses[0].programmedUnits, 1.0, accuracy: 0.01)  // 2.0 × 0.5h
+    }
 }

@@ -140,7 +140,39 @@ enum LoanReconciler {
             }
         }
 
+        // The pod runs ONE program at a time, so overlapping journal windows must be
+        // collapsed BEFORE they reach the store — see collapsingOverlappingBasals.
+        outcome.doses = collapsingOverlappingBasals(outcome.doses, loanEnd: input.loanEnd)
+
         return outcome
+    }
+
+    /// The watch mints every temp/suspend with its FULL programmed window (Loop programs
+    /// 30-min temps) and streams predecessors untrimmed — see
+    /// `PodLoanWatchController.loanWillEnactTempBasal`. Stock collapses such overlaps at
+    /// *read* time in `InsulinMath.reconciled()` (InsulinMath.swift:409), but the loan
+    /// write path (`DoseStore.addDoses`) bypasses that reconciliation, so nine overlapping
+    /// 30-min windows would integrate ~6-7× (the observed ~10.6U-for-~1.3U over-count,
+    /// #69). Collapse them here with the SAME segment resolution `expectedInsulin` already
+    /// applies (walk in start order, clamp each window's end to the next window's start),
+    /// plus a clamp to `loanEnd` because delivery stopped when the pod was handed back.
+    /// Boluses are point deliveries and pass through untouched.
+    static func collapsingOverlappingBasals(_ doses: [DoseEntry], loanEnd: Date) -> [DoseEntry] {
+        func isBasalLike(_ dose: DoseEntry) -> Bool {
+            switch dose.type {
+            case .basal, .tempBasal, .suspend: return true
+            case .bolus, .resume: return false
+            }
+        }
+        let windows = doses.filter(isBasalLike).sorted { $0.startDate < $1.startDate }
+        var result = doses.filter { !isBasalLike($0) }
+        for (i, dose) in windows.enumerated() {
+            let nextStart = i + 1 < windows.count ? windows[i + 1].startDate : Date.distantFuture
+            let clampedEnd = Swift.min(dose.endDate, nextStart, loanEnd)
+            guard clampedEnd > dose.startDate else { continue }  // fully superseded → dropped
+            result.append(dose.trimmed(from: nil, to: clampedEnd, syncIdentifier: dose.syncIdentifier))
+        }
+        return result.sorted { $0.startDate < $1.startDate }
     }
 
     static func syncIdentifier(for event: LoanEvent) -> String {
