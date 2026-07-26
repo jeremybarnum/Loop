@@ -84,6 +84,11 @@ final class WatchDataManager: NSObject {
                         UserDefaults.standard.set(self.deviceManager.loopManager.settings.dosingEnabled, forKey: dosingKey)
                     }
                     self.deviceManager.loopManager.mutateSettings { $0.dosingEnabled = false }
+                    // SPORT MODE (#2): loan just started — cancel the "Loop Failure" batch the last
+                    // pre-loan loop already queued (the podOnLoanProvider gate stops FUTURE re-arms,
+                    // but the queued 20/40/60/120-min ladder must be killed now so it never fires
+                    // mid-loan). Also covers relaunch-into-loan (this closure runs at reconcile).
+                    self.deviceManager.alertManager?.clearLoopNotRunningNotifications()
                 } else {
                     // Restore defaults to OPEN loop when the capture is missing —
                     // never invent closed-loop-on (R7's override is the settings UI).

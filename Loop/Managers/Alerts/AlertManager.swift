@@ -56,7 +56,14 @@ public final class AlertManager {
 
     // For testing
     var getCurrentDate = { return Date() }
-    
+
+    /// True while the phone has LOANED its pod to the watch (Sport Mode). During a loan the phone's
+    /// own automatic dosing is paused ON PURPOSE — the WATCH runs the closed loop and issues its own
+    /// on-wrist not-looping alerts (LoopStallWatchdog / SensorBlackoutAlert) — so the phone must NOT
+    /// fire its "Loop Failure" notifications (they'd be false alarms). Injected by LoopAppManager;
+    /// default `{ false }` keeps stock behavior for tests and the non-loan build.
+    var podOnLoanProvider: () -> Bool = { false }
+
     init(alertPresenter: AlertPresenter,
                 modalAlertScheduler: InAppModalAlertScheduler? = nil,
                 userNotificationAlertScheduler: UserNotificationAlertScheduler,
@@ -174,6 +181,17 @@ public final class AlertManager {
     }
 
     func scheduleLoopNotRunningNotifications(_ lastLoopDate: Date) {
+        // SPORT MODE (#2, Jeremy 2026-07-26): while the pod is loaned to the watch the phone stops
+        // looping on purpose, and the WATCH owns not-looping alerting (it fires its own pre-scheduled
+        // on-wrist LoopStallWatchdog / SensorBlackoutAlert). So do NOT re-arm the phone's "Loop
+        // Failure" ladder — it would be a false alarm. Every scheduling path funnels here (incl.
+        // rescheduleLoopNotRunningNotifications and the muter-change path), so this one guard covers
+        // them all. On hand-back the predicate returns false and the next .LoopCompleted re-arms.
+        guard !podOnLoanProvider() else {
+            log.default("Pod on loan to watch — suppressing loop-not-running notifications (watch owns loop alerting).")
+            return
+        }
+
         // Give a little extra time for a loop-in-progress to complete
         let gracePeriod = TimeInterval(minutes: 0.5)
 

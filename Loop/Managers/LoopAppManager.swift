@@ -209,6 +209,11 @@ class LoopAppManager: NSObject {
         settingsManager.deviceStatusProvider = deviceDataManager
         settingsManager.displayGlucosePreference = deviceDataManager.displayGlucosePreference
 
+        // SPORT MODE (#2, Jeremy 2026-07-26): suppress the phone's "Loop Failure" notifications while
+        // the pod is loaned to the watch — the watch owns not-looping alerting on the wrist. alertManager
+        // is built above and deviceDataManager just now, so wire the loan predicate here.
+        alertManager.podOnLoanProvider = { [weak deviceDataManager] in deviceDataManager?.isPodLoanedToWatch ?? false }
+
         // STOCK LAUNCH-CRASH FIX #2 (moved here from initialize() — see the comment
         // there). settingsManager now exists, so the async push-token callback is safe.
         if FeatureFlags.remoteCommandsEnabled {
