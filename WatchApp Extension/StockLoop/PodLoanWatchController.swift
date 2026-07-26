@@ -824,9 +824,15 @@ final class PodLoanWatchController {
                 self?.loopManager.glanceCarbsOnBoard { cob in
                     let postV = cob ?? 0
                     let excess = postV - seededGrams
+                    // Flag ONLY a POSITIVE excess: watch COB above the grams just seeded means a
+                    // prior-epoch residual survived alongside this seed (phantom-COB signature) or a
+                    // double-count. A NEGATIVE Δ is normal absorption of a carry-over carb (seeded at a
+                    // past startDate, already partly digested) — never a defect, so don't alarm on it.
+                    // (Deeper residual sensitivity — comparing post to the phone's SETTLED COB rather
+                    // than to total grams — is a reserved refinement; this read is pre-settle.)
                     SportLog.event("cob-diff", String(format: "phoneCOB=%@ g · watch COB(post)=%.2f g · seeded %d entr%@ (%.0f g) · Δ(post−seeded)=%+.2f g%@ · [%@]",
                                                        phoneCOBStr, postV, objects.count, objects.count == 1 ? "y" : "ies",
-                                                       seededGrams, excess, abs(excess) > 0.5 ? " ⚠ residual/dup" : "", manifest))
+                                                       seededGrams, excess, excess > 0.5 ? " ⚠ watch COB > seeded (residual/dup)" : "", manifest))
                 }
             }
         }
