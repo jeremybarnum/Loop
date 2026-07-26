@@ -837,12 +837,17 @@ extension DeviceDataManager {
 
     /// PODLOAN: loan state for UI (watchManager is file-private; the status screen and
     /// the pump tile need these). `isPodLoanedToWatch` = any non-owner state;
-    /// `isPodLoanReclaiming` = actively coming home (reconciling/reclaimPending).
+    /// `isPodLoanReclaiming` = actively coming home — reconciling/reclaimPending OR the
+    /// post-hand-back settle window, i.e. state is .owner but the pod's BLE link is not yet
+    /// re-established (reclaimConnection only re-armed the bid). Extending it through the settle
+    /// window keeps the "Reclaiming…" tile up until the pod is truly reachable (~2 min), instead
+    /// of clearing the instant state flips to .owner.
     var isPodLoanedToWatch: Bool {
         return watchManager?.podLoanController.isPodLoanedOut ?? false
     }
     var isPodLoanReclaiming: Bool {
-        return watchManager?.podLoanController.isReclaimInProgress ?? false
+        guard let controller = watchManager?.podLoanController else { return false }
+        return controller.isReclaimInProgress || controller.isReclaimSettling
     }
 
     func enactBolus(units: Double, activationType: BolusActivationType, completion: @escaping (_ error: Error?) -> Void = { _ in }) {

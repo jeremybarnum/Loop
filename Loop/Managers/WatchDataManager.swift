@@ -173,6 +173,12 @@ final class WatchDataManager: NSObject {
                     guard let deviceManager = self?.deviceManager else { return }
                     NotificationCenter.default.post(name: .PumpManagerChanged, object: deviceManager)
                 }
+            },
+            isConnectionReady: { [weak self] in
+                // Post-hand-back settle: reclaimConnection() only re-arms the BLE bid, so the pod
+                // peripheral is not actually back for ~2 min. Report the real link state so the
+                // "Reclaiming…" tile persists (and the bolus gate refuses honestly) until then.
+                (self?.deviceManager.pumpManager as? PumpConnectionLendable)?.isConnectionReady ?? true
             }
         ))
     }()

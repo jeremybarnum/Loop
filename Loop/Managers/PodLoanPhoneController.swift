@@ -55,6 +55,9 @@ final class PodLoanPhoneController {
         /// OWNERSHIP flips (owner <-> not-owner) so the phone HUD re-renders the
         /// pump tile immediately instead of aging into signal-loss.
         var ownershipDidChange: () -> Void = {}
+        /// True when the loaned pump's connection is truly back after a reclaim (post-hand-back).
+        /// Default true so a pump lacking the capability never gets stuck in the settling tile.
+        var isConnectionReady: () -> Bool = { true }
         var now: () -> Date = { Date() }
     }
 
@@ -97,8 +100,40 @@ final class PodLoanPhoneController {
             // tile during hand-back read as ambiguity).
             if oldValue != state {
                 deps.ownershipDidChange()
+                // A reclaim just landed us in .owner, but reclaimConnection() only re-armed
+                // the BLE bid — the pod isn't actually back for ~2 min. Open the settle window
+                // so "Reclaiming…" (and the bolus gate) persist until the pod is truly reachable.
+                if oldValue != .owner, state == .owner {
+                    beginReclaimSettleWindow()
+                }
             }
         }
+    }
+
+    // MARK: Reclaim settle window (post-hand-back "Reclaiming…" until the pod is truly back)
+
+    /// Set when state enters .owner (a reclaim re-armed the BLE bid, but the pod isn't back
+    /// yet). Drives `isReclaimSettling` so the tile persists until the pod is truly connected
+    /// (deps.isConnectionReady) or the ceiling elapses. nil = not settling.
+    private var reclaimStartedAt: Date?
+    private var reclaimSettleWork: DispatchWorkItem?
+    private static let reclaimSettleTimeout: TimeInterval = .minutes(5)
+
+    /// reclaimConnection() only re-arms the BLE bid; the actual reconnect lands
+    /// seconds-to-minutes later. Open a bounded window so the tile keeps showing "Reclaiming…"
+    /// until the pod is genuinely reachable, without ever sticking (the ceiling clears it).
+    /// Runs on `queue` (state is queue-confined, as the sync accessors below assume).
+    private func beginReclaimSettleWindow() {
+        let started = deps.now()
+        reclaimStartedAt = started
+        reclaimSettleWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, self.reclaimStartedAt == started else { return }
+            self.reclaimStartedAt = nil            // ceiling reached — stop settling
+            self.deps.ownershipDidChange()         // final re-render that clears the tile
+        }
+        reclaimSettleWork = work
+        queue.asyncAfter(deadline: .now() + Self.reclaimSettleTimeout, execute: work)
     }
 
     /// True whenever this phone does NOT own the pod's connection (any non-owner
@@ -112,6 +147,19 @@ final class PodLoanPhoneController {
     /// flight) — the pump tile shows "Reclaiming…" instead of "Pod on Watch".
     var isReclaimInProgress: Bool {
         return queue.sync { state == .reconciling || state == .reclaimPending }
+    }
+
+    /// True after state flips to .owner until the pod is truly back on the link
+    /// (deps.isConnectionReady) or the settle ceiling elapses — bridging the ~2 min BLE
+    /// re-establishment window after reclaimConnection() (which only re-arms the bid). Keeps
+    /// "Reclaiming…" up until the pod is actually reachable, without sticking (ceiling) or
+    /// misfiring on a later ordinary signal-loss (gated on a recent reclaimStartedAt).
+    var isReclaimSettling: Bool {
+        return queue.sync {
+            guard state == .owner, let started = reclaimStartedAt else { return false }
+            if deps.now().timeIntervalSince(started) >= Self.reclaimSettleTimeout { return false }
+            return !deps.isConnectionReady()
+        }
     }
     private var epoch: Int {
         didSet { UserDefaults.standard.set(epoch, forKey: Keys.epoch) }
