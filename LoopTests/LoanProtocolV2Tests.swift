@@ -54,6 +54,7 @@ final class LoanProtocolV2Tests: XCTestCase {
             .statusReport(StatusReport(epoch: 5, mode: .closedDirect, lastDirectGlucoseAge: 120, lastEventSeq: 3, podFault: nil, holdsPod: true)),
             .nack(ProtocolNack(seenVersion: 1)),
             .denied(LoanDenied(reason: "settings incomplete")),
+            .diag(LoanDiag(epoch: 5, text: "offer RX ev=3")),
         ]
         for message in messages {
             XCTAssertEqual(try roundTrip(message), message)
@@ -85,6 +86,7 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertNil(LoanMessage.request(LoanRequest(watchBuild: "77")).epoch)
         XCTAssertNil(LoanMessage.nack(ProtocolNack(seenVersion: nil)).epoch)
         XCTAssertEqual(LoanMessage.revoke(Revoke(epoch: 9)).epoch, 9)
+        XCTAssertEqual(LoanMessage.diag(LoanDiag(epoch: 7, text: "x")).epoch, 7)
     }
 
     func testForeignPayloadIsNotOurs() throws {

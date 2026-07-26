@@ -77,6 +77,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             },
             send: { [weak self] dictionary in
                 guard let self = self else { return }
+                // #35 diagnostic breadcrumbs (.diag) aren't protocol messages the tests
+                // assert on — drop them so they don't pollute `sent` or fulfill expectations.
+                if let message = try? LoanMessage.decode(fromTransport: dictionary), case .diag = message { return }
                 self.lock.lock()
                 if let message = try? LoanMessage.decode(fromTransport: dictionary) {
                     self.sent.append(message)

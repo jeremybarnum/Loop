@@ -231,8 +231,8 @@ final class PodLoanPhoneController {
             handleStatusReport(report)
         case .nack:
             deps.issueNotice("Loan Protocol Error", "The watch could not read this phone's messages. Update one of the builds.")
-        case .grant, .handbackAck, .revoke, .statusQuery, .denied:
-            break  // watch-bound kinds
+        case .grant, .handbackAck, .revoke, .statusQuery, .denied, .diag:
+            break  // watch-bound kinds (diag is phone→watch only)
         }
     }
 
@@ -443,12 +443,21 @@ final class PodLoanPhoneController {
         stage(events: batch.events, tombstones: batch.tombstones)
     }
 
+    /// #35: relay a phone-side hand-back breadcrumb to the watch (which mirrors to iCloud)
+    /// AND os_log it, so the phone's offer→write→ack path is visible when the phone
+    /// silently fails to ack. Purely diagnostic.
+    private func handbackDiag(_ epoch: Int, _ text: String) {
+        os_log("HANDBACK-DIAG e%d: %{public}@", log: log, type: .default, epoch, text)
+        sendMessage(.diag(LoanDiag(epoch: epoch, text: text)))
+    }
+
     private func handleHandbackOffer(_ offer: HandbackOffer) {
         // Stale epoch (rows 13/14): the records still drain — they are historical
         // truth, idempotent by ID — but loan STATE is untouched and the ack says
         // stale so the sender stops retrying. Dead loans cannot speak.
         let isStale = offer.epoch < epoch
         guard offer.epoch == epoch || isStale else { return }
+        handbackDiag(offer.epoch, "offer RX ev=\(offer.events.count) released=\(offer.released.map { $0 ? "final" : "interim" } ?? "nil") stale=\(isStale) state=\(state.rawValue)")
 
         // WS1 (two-phase hand-back): an INTERIM offer (released == false) means the
         // watch is still dosing and still owns the pod — commit + ack ONLY; no state
@@ -531,10 +540,13 @@ final class PodLoanPhoneController {
         // reconciling, 1 h reminder repeats (row 11) — never dose on incomplete records.
         // Loan insulin goes through addPumpEvents (PumpEvent table + stock reconciled() +
         // HealthKit); lastReconciliation = handedBackAt (the finalized-through watermark).
+        let writeStart = deps.now()
+        handbackDiag(offer.epoch, "write START \(doses.count) dose(s) (final=\(isFinal))")
         deps.addPumpEvents(newPumpEvents(from: doses), offer.handedBackAt) { [weak self] error in
             guard let self = self else { return }
             self.queue.async {
                 if let error = error {
+                    self.handbackDiag(offer.epoch, "write FAILED: \(String(describing: error))")
                     os_log("Reconcile write failed: %{public}@", log: self.log, type: .fault, String(describing: error))
                     self.deps.issueNotice("Watch Records Not Saved", "The watch session's records could not be saved. Dosing stays paused; will retry on the next hand-back attempt.")
                     self.armPausedReminder()
@@ -557,6 +569,7 @@ final class PodLoanPhoneController {
                     self.committedIDs.formUnion(committable.map(\.id))
                     self.persistCommittedIDs()
                     self.sendMessage(.handbackAck(HandbackAck(epoch: self.epoch, committedCursor: self.committedCursor)))
+                    self.handbackDiag(self.epoch, String(format: "write DONE %.0fms → ACK cursor %d", self.deps.now().timeIntervalSince(writeStart) * 1000, self.committedCursor))
                     if isFinal, self.state == .reconciling {
                         // Only the transition-owning offer finishes; a duplicate final
                         // offer post-.owner just committed any unseen tail + re-acked.

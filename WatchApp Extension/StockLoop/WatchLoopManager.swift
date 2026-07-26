@@ -690,6 +690,15 @@ final class WatchLoopManager {
                     self.glucoseMomentumEffect = nil
                 case .success(let effects):
                     self.glucoseMomentumEffect = effects
+                    // #3 momentum input (2026-07-25): the net is in [predict]; this exposes
+                    // whether it's built from FRESH, sufficient glucose. Sparse/stale input
+                    // (gappy G7, #15) makes momentum lag or overshoot — invisible in the net.
+                    let mgdlM = HKUnit.milligramsPerDeciliter
+                    let mDelta = (effects.first != nil && effects.last != nil)
+                        ? String(format: "%+.0f", effects.last!.quantity.doubleValue(for: mgdlM) - effects.first!.quantity.doubleValue(for: mgdlM))
+                        : "—"
+                    let mAge = self.glucoseStore.latestGlucose.map { String(format: "%.0fs", self.now().timeIntervalSince($0.startDate)) } ?? "—"
+                    SportLog.event("momentum", "effect Δ=\(mDelta) over \(effects.count) pts · latest glucose age \(mAge)")
                 }
                 updateGroup.leave()
             }
@@ -820,6 +829,15 @@ final class WatchLoopManager {
             correctionRange: correctionRange,
             retrospectiveCorrectionGroupingInterval: LoopMath.retrospectiveCorrectionGroupingInterval
         )
+        // #46/#3 RC input (2026-07-25): surfaces the active RC TYPE (the watch defaults to
+        // Standard and, per #46, may not track the phone's Integral toggle — a real
+        // prediction divergence) plus how much RC is contributing.
+        let rcType = retrospectiveCorrection is IntegralRetrospectiveCorrection ? "Integral" : "Standard"
+        let mgdlRC = HKUnit.milligramsPerDeciliter
+        let rcNet = (retrospectiveGlucoseEffect.first != nil && retrospectiveGlucoseEffect.last != nil)
+            ? String(format: "%+.0f", retrospectiveGlucoseEffect.last!.quantity.doubleValue(for: mgdlRC) - retrospectiveGlucoseEffect.first!.quantity.doubleValue(for: mgdlRC))
+            : "0"
+        SportLog.event("rc", "type=\(rcType) · discrepancies=\(retrospectiveGlucoseDiscrepancies?.count ?? 0) · effect net \(rcNet)")
     }
 
     // MARK: - Prediction (mirrors predictGlucose(using:) — :1228)

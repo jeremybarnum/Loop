@@ -205,6 +205,8 @@ final class PodLoanWatchController {
                 lastIdleNote = denied.reason
             }
             SportLog.event("loan", "DENIED by phone — \(denied.reason)")
+        case .diag(let d):
+            SportLog.event("phone", d.text)   // #35: phone hand-back breadcrumb → iCloud mirror
         case .request, .takeoverComplete, .takeoverFailed, .doseRecordBatch, .handbackOffer, .statusReport:
             os_log("Ignoring phone-bound message kind on watch", log: log, type: .default)
         }

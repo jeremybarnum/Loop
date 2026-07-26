@@ -455,6 +455,21 @@ public struct LoanDenied: Codable, Equatable {
 
 /// The polymorphic carrier. Hand-rolled `kind` discriminator: unknown kinds throw
 /// (→ ProtocolNack), and the encoding is stable against enum reordering.
+/// A phone→watch diagnostic breadcrumb (#35, 2026-07-25). The phone doesn't mirror to
+/// iCloud like the watch does, so its hand-back-offer handling is invisible in the logs —
+/// when the phone silently fails to ack, we can't see whether it received the offer, or
+/// stalled on the store write. The phone relays compact breadcrumbs (offer received / write
+/// start / write done / ack sent) that the watch logs into the iCloud mirror, making the
+/// phone-side hand-back path debuggable. Purely diagnostic; touches no dosing state.
+public struct LoanDiag: Codable, Equatable {
+    public let epoch: Int
+    public let text: String
+    public init(epoch: Int, text: String) {
+        self.epoch = epoch
+        self.text = text
+    }
+}
+
 public enum LoanMessage: Equatable {
     case request(LoanRequest)
     case grant(LoanGrant)
@@ -468,6 +483,7 @@ public enum LoanMessage: Equatable {
     case statusReport(StatusReport)
     case nack(ProtocolNack)
     case denied(LoanDenied)
+    case diag(LoanDiag)
 
     /// The message's epoch, nil only for request/nack/denied (§1.1).
     public var epoch: Int? {
@@ -482,6 +498,7 @@ public enum LoanMessage: Equatable {
         case .revoke(let m): return m.epoch
         case .statusQuery(let m): return m.epoch
         case .statusReport(let m): return m.epoch
+        case .diag(let m): return m.epoch
         }
     }
 }
@@ -500,6 +517,7 @@ public struct LoanEnvelope: Codable {
     private enum Kind: String, Codable {
         case request, grant, takeoverComplete, takeoverFailed, doseRecordBatch
         case handbackOffer, handbackAck, revoke, statusQuery, statusReport, nack, denied
+        case diag
     }
 
     public init(from decoder: Decoder) throws {
@@ -526,6 +544,7 @@ public struct LoanEnvelope: Codable {
         case .statusReport: self.message = .statusReport(try c.decode(StatusReport.self, forKey: .body))
         case .nack: self.message = .nack(try c.decode(ProtocolNack.self, forKey: .body))
         case .denied: self.message = .denied(try c.decode(LoanDenied.self, forKey: .body))
+        case .diag: self.message = .diag(try c.decode(LoanDiag.self, forKey: .body))
         }
     }
 
@@ -545,6 +564,7 @@ public struct LoanEnvelope: Codable {
         case .statusReport(let m): try c.encode(Kind.statusReport, forKey: .kind); try c.encode(m, forKey: .body)
         case .nack(let m): try c.encode(Kind.nack, forKey: .kind); try c.encode(m, forKey: .body)
         case .denied(let m): try c.encode(Kind.denied, forKey: .kind); try c.encode(m, forKey: .body)
+        case .diag(let m): try c.encode(Kind.diag, forKey: .kind); try c.encode(m, forKey: .body)
         }
     }
 }
