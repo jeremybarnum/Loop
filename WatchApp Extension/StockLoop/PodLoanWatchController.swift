@@ -526,6 +526,10 @@ final class PodLoanWatchController {
                     if attempt == 0 {
                         SportLog.event("loan", "connecting to pod… (BLE session establishing, up to ~40s)")
                     }
+                    // #42 diagnosis: log the pod BLE state each failed read so "unreachable"
+                    // shows WHY — stuck disconnected (pod not advertising / still held by the
+                    // phone) vs connecting-but-no-response.
+                    SportLog.event("loan", "takeover read \(attempt + 1)/\(maxAttempts) — pod BLE state \(manager.podLoanConnectionStateDescription)")
                     self.queue.asyncAfter(deadline: .now() + 3) {
                         guard self.phase == .takingOver, self.epoch == grant.epoch else { return }
                         self.attemptTakeoverRead(manager: manager, grant: grant, attempt: attempt + 1)
@@ -534,7 +538,7 @@ final class PodLoanWatchController {
                     self.teardownPump()
                     self.phase = .idle
                     self.lastIdleNote = NSLocalizedString("Pod didn't answer after 40s. Check the pod is nearby and awake, then try again.", comment: "Glance: pod unreachable at takeover")
-                    SportLog.event("loan", "TAKEOVER FAILED — pod unreachable after \(maxAttempts) reads (~40s), epoch \(grant.epoch)")
+                    SportLog.event("loan", "TAKEOVER FAILED — pod unreachable after \(maxAttempts) reads (~40s), final BLE state \(manager.podLoanConnectionStateDescription), epoch \(grant.epoch)")
                     self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "pod unreachable at takeover")))
                 }
             }

@@ -322,7 +322,16 @@ final class PodLoanPhoneController {
 
         // Pause dosing, then stop bidding for the pod (C5 truncation happens inside).
         deps.setAutomaticDosingPaused(true)
+        // #42 diagnosis: if the phone doesn't actually drop the pod BLE here, the watch's
+        // takeover reads "pod unreachable" (a pod is a single-central peripheral). Relay the
+        // release state to the watch's iCloud log — before, and a +3s confirm (release is async).
+        let releaseEpoch = epoch + 1
+        handbackDiag(releaseEpoch, "GRANT — releasing pod BLE (wasReleased=\(lendable.isConnectionReleased))")
         lendable.releaseConnection()
+        queue.asyncAfter(deadline: .now() + 3) { [weak self, weak lendable] in
+            guard let self = self, let lendable = lendable else { return }
+            self.handbackDiag(releaseEpoch, "GRANT +3s — pod BLE released=\(lendable.isConnectionReleased)")
+        }
 
         epoch += 1
         state = .grantOffered
