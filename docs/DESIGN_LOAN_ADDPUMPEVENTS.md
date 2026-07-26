@@ -55,3 +55,61 @@ Write loan insulin the way a real pump does: **`DoseStore.addPumpEvents`**. It i
 - `replacePendingEvents: false` — no loan mutable dose exists to replace, and it must not purge the phone's own resumed-pod in-flight temp on a post-reclaim write (re-audit / forced reclaim). Idempotency across resends / interim+final drains rests entirely on the deterministic `raw`.
 - The brief gap `[handedBackAt → phone's first resumed dose]`: the last loan temp is clamped to `handedBackAt` and the gap is backfilled by scheduled basal — bounded (seconds) since the phone resumes immediately.
 - Confirm loan temps now appear in Insulin Delivery → History, with correct sizes, and IOB matches delivered.
+
+---
+
+## Addendum — 2026-07-25 (late): the takeover SEED, and prediction fidelity (#69/#46/#45)
+
+The section above routed the **hand-back** (watch→phone) through `addPumpEvents`. The **takeover
+seed** (phone grant → watch, `ingestGrantHistory`) was still on the `addDoses` side door. Field
+logs (build 163, `boundaryDup=YES` on four re-takeovers) plus new headless tests drove these:
+
+**Fix 1 — drop the boundaryRecord (phone).** The phone had sent the running temp TWICE: once as
+the open temp in `doseHistory` (from `getNormalizedDoseEntries`, fetched after `releaseConnection`,
+which only truncates in-memory pod state — never the store) and again as a same-start, same-rate
+`boundaryRecord`. Seeding both double-counted the `[start→handover]` slice. The phone now passes
+`boundaryRecord: nil`. The `.boundaryTruncation` Kind + `LoanReconciler` handling are LEFT as
+vestigial defensive/back-compat tolerance (the watch journal never mints that kind).
+
+**Fix 2 — seed via `addPumpEvents`, not `addDoses`.** Same rationale as the hand-back: stock
+`reconciled()` at the store collapses any same-start overlap AND puts the seed in one
+reconciliation world with the watch's own enacted temps (the first watch temp truncates the
+seeded open temp instead of overlapping its tail). `replacePendingEvents: true` is safe here
+(the wipe already emptied the table); `lastReconciliation = takeover instant`.
+
+**Fix 3 — REJECTED by test.** We tried freezing each seeded temp's `scheduledBasalRate` (from the
+grant schedule) so net-basal IOB wouldn't re-net against a changed profile. The headless test
+proved this does NOT work on the pump-event path: `addPumpEvents`/`PumpEvent` does not persist
+`scheduledBasalRate` — LoopKit re-derives it from the reader's `basalProfile` at read
+(`InsulinMath.annotated(with:)`). It is unnecessary anyway: the watch's `basalProfile` is frozen
+to the grant schedule for the loan, so seeded temps net against the delivery-time schedule
+correctly. (The PHONE-side retroactive-netting bug — the profile CAN change mid-loan there, and
+the phone also writes via `addPumpEvents` — is therefore still open and needs a different
+approach; parked.)
+
+**RC-freeze fix (#46).** Separately, the watch printed `RC —` on EVERY `[predict]` line all loan.
+Root cause: the port dropped the phone's `LoopDataManager.carbEffect.didSet`. On the watch,
+`retrospectiveGlucoseDiscrepancies` was set to `[]` at cold-start takeover and, with no didSet to
+re-nil it, `updateRetrospectiveGlucoseEffect()` (guarded on `== nil`) never re-ran → RC frozen
+empty. Restored a `carbEffect.didSet { retrospectiveGlucoseDiscrepancies = nil }`. We
+deliberately do NOT also nil `predictedGlucose` (phone parity) — on the watch it is display-only
+(DoseMath uses the local prediction) and #48 intentionally keeps the last eventual visible.
+
+**Glucose in the grant (#45).** The watch's `GlucoseStore` was empty at takeover, so momentum was
+blind ~15 min and RC never warmed. `LoanGrant` now carries ~3 h of glucose (`LoanGlucoseRecord`,
+optional/backward-compatible); the watch seeds its `GlucoseStore` at takeover
+(`ingestGrantGlucose`) so momentum + RC warm from the first cycle. Idempotent via the phone's
+syncIds; at most a single boundary sample can duplicate (phone/watch derive different G7 syncIds),
+which the algorithm tolerates.
+
+**Extraction.** `record→DoseEntry` seeding moved to shared `LoanProtocolV2` (`seedDoseEntry` /
+`seedDoseEntries`) so the watch seed and the tests (LoopTests, headless) exercise identical logic.
+
+**Tests (LoopTests, no BLE):** `testHandoverBoundaryDoesNotDoubleSeedIOB`,
+`testHandoverIOBConservationAcrossTakeover`, `testSeededTempNetsAgainstFrozenGrantSchedule`,
+`testGrantGlucoseHistoryRoundTrips`. Reviewed by four independent adversarial passes — no blocker.
+
+**Deferred (low-risk, noted):** `ingestGrantHistory` continues seeding on a failed wipe (could
+stack epochs on a rare Core Data wipe failure — aborting the takeover would be safer); the
+reservoir read branch could exclude the immutable open temp in a rare window; Event History may
+show the running temp as two unreconciled rows (IOB unaffected).
