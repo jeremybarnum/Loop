@@ -765,28 +765,20 @@ final class PodLoanWatchController {
         ingestGrantGlucose(grant)
     }
 
-    /// Seed the phone's active carbs so the watch loop predicts with COB (#49). Uses
-    /// syncCarbObjects — which upserts on (syncIdentifier, provenanceIdentifier) — so a
-    /// re-takeover re-sending the same carbs updates in place instead of double-counting,
-    /// and the phone's provenance is preserved (createdByCurrentApp = false: these are the
-    /// phone's entries, not the watch's, which also keeps them from colliding with carbs
-    /// entered on the wrist).
+    /// Make the watch carb store an authoritative MIRROR of the phone's at takeover (Jeremy
+    /// 2026-07-26): WIPE it, then replace with the grant's carbs via `setSyncCarbObjects` (which
+    /// `purgeCachedCarbObjectsUnconditionally` before inserting). This is the phantom-COB fix (#65).
+    /// The previous `syncCarbObjects` UPSERTED on (syncIdentifier, provenanceIdentifier) and never
+    /// deleted absent entries, so a prior-epoch residual — or a carb the user DELETED on the phone
+    /// (→ empty grant, which used to early-return and wipe nothing) — survived on the watch,
+    /// absorbing and pushing dosing until it aged past the 24 h cache. With a true replace, an empty
+    /// grant wipes to zero, so phone-side deletions propagate. Safe because carbs are ONE-WAY
+    /// phone→watch in v1: watch-entered carbs are not returned (see `loanDidRecordCarbs`), so the
+    /// watch never legitimately holds a carb the phone doesn't. Full bidirectional sync is #49/#66.
     private func ingestGrantCarbs(_ grant: LoanGrant) {
-        // INSTRUMENTATION ONLY (#65): phone COB rides in the prediction snapshot, so [cob-diff] needs
-        // no extra grant field.
-        let phoneCOBStr = (grant.predictionSnapshot?.cobGrams).map { String(format: "%.1f", $0) } ?? "n/a"
-        guard let carbs = grant.carbHistory, !carbs.isEmpty else {
-            // INSTRUMENTATION ONLY (#65): the empty-grant path is today SILENT — the exact fingerprint
-            // of a deleted-carbs handover. syncCarbObjects upserts only, so any prior-epoch residual is
-            // NOT wiped here; it persists (absorbing) until it ages past the 24h cache. Behavior is
-            // unchanged (still an early return); we just leave a trace.
-            let why = (grant.carbHistory == nil) ? "absent (old phone)" : "empty (deleted on phone)"
-            loopManager.glanceCarbsOnBoard { residual in
-                SportLog.event("cob-diff", String(format: "carb seed SKIPPED — carbHistory %@ · phoneCOB=%@ g · watch residual=%@ g — residual NOT wiped (upsert-only); persists until 24h cache age",
-                                                   why, phoneCOBStr, residual.map { String(format: "%.2f", $0) } ?? "—"))
-            }
-            return
-        }
+        let phoneCOB = grant.predictionSnapshot?.cobGrams
+        let phoneCOBStr = phoneCOB.map { String(format: "%.1f", $0) } ?? "n/a"
+        let carbs = grant.carbHistory ?? []
         let objects: [SyncCarbObject] = carbs.map { c in
             SyncCarbObject(
                 absorptionTime: c.absorptionTime,
@@ -806,37 +798,35 @@ final class PodLoanWatchController {
                 supercededDate: nil)
         }
         let seededGrams = carbs.reduce(0.0) { $0 + $1.grams }
-        loopManager.carbStore.syncCarbObjects(objects) { [weak self] error in
+        let source = (grant.carbHistory == nil) ? "absent(old phone)"
+                   : (carbs.isEmpty ? "empty(deleted on phone)→wipe" : "\(objects.count) entr\(objects.count == 1 ? "y" : "ies")")
+        let tf = DateFormatter()
+        tf.dateFormat = "HH:mm"
+        let manifest = carbs.isEmpty ? "—" : carbs.map { c in
+            String(format: "%.1fg@%@ sync=%@ prov=%@", c.grams, tf.string(from: c.startDate),
+                   c.syncIdentifier ?? "nil", String(c.provenanceIdentifier.prefix(12)))
+        }.joined(separator: " | ")
+        // WIPE-then-replace: setSyncCarbObjects purges unconditionally first, so an EMPTY set is a
+        // clean wipe (deletions propagate) and a non-empty set fully replaces (no residual/dup).
+        loopManager.carbStore.setSyncCarbObjects(objects) { [weak self] error in
             if let error = error {
-                os_log("Grant carb ingest failed: %{public}@", log: OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController"), type: .error, String(describing: error))
-            } else {
-                SportLog.event("loan", "seeded \(objects.count) carb entr\(objects.count == 1 ? "y" : "ies") from the phone (COB carry-over)")
-                // INSTRUMENTATION ONLY (#65): three-way [cob-diff] — phone COB (from the grant
-                // prediction snapshot) vs watch COB after seeding vs grams seeded. Δ(post−seeded) > 0
-                // means a prior-epoch residual survived alongside this seed (the phantom-COB signature);
-                // >> seededGrams means a double-count. Per-entry manifest catches duplication across epochs.
-                let tf = DateFormatter()
-                tf.dateFormat = "HH:mm"
-                let manifest = carbs.map { c in
-                    String(format: "%.1fg@%@ sync=%@ prov=%@", c.grams, tf.string(from: c.startDate),
-                           c.syncIdentifier ?? "nil", String(c.provenanceIdentifier.prefix(12)))
-                }.joined(separator: " | ")
-                self?.loopManager.glanceCarbsOnBoard { cob in
-                    let postV = cob ?? 0
-                    let excess = postV - seededGrams
-                    // Flag ONLY a POSITIVE excess: watch COB above the grams just seeded means a
-                    // prior-epoch residual survived alongside this seed (phantom-COB signature) or a
-                    // double-count. A NEGATIVE Δ is normal absorption of a carry-over carb (seeded at a
-                    // past startDate, already partly digested) — never a defect, so don't alarm on it.
-                    // (Deeper residual sensitivity — comparing post to the phone's SETTLED COB rather
-                    // than to total grams — is a reserved refinement; this read is pre-settle.)
-                    SportLog.event("cob-diff", String(format: "phoneCOB=%@ g · watch COB(post)=%.2f g · seeded %d entr%@ (%.0f g) · Δ(post−seeded)=%+.2f g%@ · [%@]",
-                                                       phoneCOBStr, postV, objects.count, objects.count == 1 ? "y" : "ies",
-                                                       seededGrams, excess, excess > 0.5 ? " ⚠ watch COB > seeded (residual/dup)" : "", manifest))
-                }
+                os_log("Grant carb replace failed: %{public}@", log: OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController"), type: .error, String(describing: error))
+                return
+            }
+            // [cob-diff] (#65): after a true wipe-then-replace the watch holds EXACTLY the phone's
+            // carbs, so watch COB(post) should ≈ phoneCOB and Δ(post−phone) ≈ 0. A residual now would
+            // mean the wipe itself failed (not an upsert leak). `post` is a pre-settle read (static
+            // absorption) so a small +Δ vs the phone's dynamic COB is expected, not a defect.
+            self?.loopManager.glanceCarbsOnBoard { cob in
+                let postV = cob ?? 0
+                let vsPhone = phoneCOB.map { postV - $0 }
+                SportLog.event("cob-diff", String(format: "REPLACE %@ · phoneCOB=%@ g · watch COB(post)=%.2f g · replaced %.0f g · Δ(post−phone)=%@ g%@ · [%@]",
+                                                   source, phoneCOBStr, postV, seededGrams,
+                                                   vsPhone.map { String(format: "%+.2f", $0) } ?? "—",
+                                                   (vsPhone ?? 0) > 2.0 ? " ⚠ residual (wipe failed?)" : "", manifest))
             }
         }
-        // Carb effect is cached; force a recompute so the seeded COB reaches the first
+        // Carb effect is cached; force a recompute so the replaced COB reaches the first
         // prediction instead of waiting for a CGM-triggered invalidation (build 134 lesson).
         loopManager.invalidateCarbEffect()
     }
@@ -1413,23 +1403,23 @@ extension PodLoanWatchController: WatchLoanDoseRecording {
                           uncertainKind: .bolusUncertain)
     }
 
-    /// Record-only journal entry (no pod command): a loan-time CARB entry rides the
-    /// resend-until-ack record channel to the phone's carb store — durable with the
-    /// phone unreachable (the reachable-only WC relay it replaces dropped carbs
-    /// silently mid-sport, verify finding 2026-07-18). Confirmed at mint — nothing
-    /// about a carb record can be delivery-uncertain — and deliberately does NOT
-    /// disturb a pending verdict chase (it is not a programming command).
+    /// SUPPRESSED in v1 (Jeremy 2026-07-26): carbs are ONE-WAY phone→watch. A watch-entered carb is
+    /// NOT returned to the phone — the takeover wipe-then-replace (`ingestGrantCarbs`) is the single
+    /// source of truth, and returning a watch carb would need the idempotent phone-side ingest that
+    /// isn't built yet (#49/#66); without it a returned carb could double-count on the phone. Carb
+    /// entry during a loan isn't part of v1, so this is a guard: we do NOT mint a `.carb` journal
+    /// event or stream it. Re-enable the round-trip (restore the mint + streamRecords below) when the
+    /// phone-side idempotent carb ingest lands. The carb-entry UI still calls this; it just no-ops.
     func loanDidRecordCarbs(_ entry: NewCarbEntry) {
-        queue.async {
-            guard self.phase == .active else { return }
-            _ = try? self.journal.mintEvent(
-                record: LoanDoseRecord(kind: .carb,
-                                       startDate: entry.startDate,
-                                       amount: entry.quantity.doubleValue(for: .gram()),
-                                       absorptionTime: entry.absorptionTime),
-                provenance: .confirmed)
-            self.streamRecords()
-        }
+        SportLog.event("loan", String(format: "carb entry during loan (%.0f g) — NOT returned to phone (one-way carbs in v1)", entry.quantity.doubleValue(for: .gram())))
+        // Deferred round-trip (do not remove — the re-enable path):
+        //   queue.async {
+        //       guard self.phase == .active else { return }
+        //       _ = try? self.journal.mintEvent(record: LoanDoseRecord(kind: .carb, startDate: entry.startDate,
+        //           amount: entry.quantity.doubleValue(for: .gram()), absorptionTime: entry.absorptionTime),
+        //           provenance: .confirmed)
+        //       self.streamRecords()
+        //   }
     }
 
     private func mintIntent(record: LoanDoseRecord, uncertainKind: EventProvenance.UncertainKind) -> UUID? {

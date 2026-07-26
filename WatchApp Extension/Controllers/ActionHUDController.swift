@@ -93,6 +93,13 @@ final class ActionHUDController: HUDInterfaceController {
             }
         }
 
+        // v1 Sport Mode build (Jeremy 2026-07-26): carb entry on the watch is suppressed — carbs are
+        // one-way phone→watch (seeded + wiped-then-replaced at takeover) and watch-entered carbs are
+        // NOT returned (loanDidRecordCarbs is a no-op). Rather than offer an action that won't
+        // round-trip and confuse the user, grey the carb button unconditionally (overrides the state
+        // set above). Revert this one line when bidirectional carb sync (#49/#66) lands.
+        carbsButtonGroup.state = .disabled
+
         glucoseFormatter.updateUnit(to: loopManager.displayGlucoseUnit)
     }
     
