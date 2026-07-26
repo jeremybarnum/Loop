@@ -398,15 +398,19 @@ final class WatchLoopManager {
     }
     private var carbEffect: [GlucoseEffect]? {
         didSet {
-            predictedGlucose = nil
-
-            // Carb data may be back-dated, so re-calculate the retrospective glucose. PARITY
-            // with LoopDataManager.carbEffect.didSet (:352-358) — the port DROPPED this didSet.
-            // Consequence (#69/#46): retrospectiveGlucoseDiscrepancies is set to [] at cold-start
-            // takeover (empty glucose store), and updateRetrospectiveGlucoseEffect() only runs
-            // when it's nil (:780) — so RC froze at the empty cold-start value for the WHOLE
-            // loan, printing "RC —" on every [predict] line. Nil-ing it here restores per-cycle
-            // RC recomputation, exactly as the phone does.
+            // RC-freeze fix (#69/#46): re-calculate retrospective correction when carb effects
+            // change (carb data may be back-dated). The port DROPPED the phone's
+            // LoopDataManager.carbEffect.didSet (:352-358); without it,
+            // retrospectiveGlucoseDiscrepancies — set to [] at cold-start takeover (empty glucose
+            // store) — was never nil'd again, and updateRetrospectiveGlucoseEffect() only runs
+            // when it's nil (:780), so RC froze at the empty value for the WHOLE loan ("RC —" on
+            // every [predict] line). Nil-ing it here restores per-cycle RC recomputation.
+            //
+            // We deliberately do NOT also nil predictedGlucose (the phone does). On the watch
+            // predictedGlucose is read only for DISPLAY (glance eventual), never for dosing
+            // (DoseMath uses the locally-computed prediction), and #48 (2026-07-24) intentionally
+            // KEEPS the last eventual visible + grades its freshness rather than blanking it on a
+            // failed cycle. Nil-ing it here would re-blank the glance on failed post-reading cycles.
             retrospectiveGlucoseDiscrepancies = nil
         }
     }

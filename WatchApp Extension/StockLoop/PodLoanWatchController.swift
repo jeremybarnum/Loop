@@ -776,10 +776,12 @@ final class PodLoanWatchController {
     /// compute from the FIRST post-takeover cycle. The watch GlucoseStore is otherwise empty
     /// until live G7 reads accumulate — momentum was blind for ~15 min and RC never warmed, so
     /// the watch dosed on a prediction that ignored glucose history. Reuses the phone's
-    /// syncIdentifier so re-grants dedup (GlucoseStore keys on provenance + syncIdentifier);
-    /// seeded samples are strictly pre-takeover, so they never collide with the watch's own
-    /// later G7 reads. Pairs with the RC-freeze fix in WatchLoopManager (both are required for
-    /// RC to actually produce an effect during a loan).
+    /// syncIdentifier so re-grants dedup (GlucoseStore keys on provenance + syncIdentifier).
+    /// Seeded samples are pre-takeover, and the watch's G7 path reads one current EGV per
+    /// connection (no backfill), so at most a SINGLE boundary sample can duplicate — phone and
+    /// watch derive different G7 syncIds for the same reading, so dedup can't match it — which is
+    /// harmless (momentum is duplicate-insensitive; counteraction skips sub-4-min pairs). Pairs
+    /// with the RC-freeze fix in WatchLoopManager (both required for RC to produce an effect).
     private func ingestGrantGlucose(_ grant: LoanGrant) {
         guard let records = grant.glucoseHistory, !records.isEmpty else { return }
         let mgdl = HKUnit.milligramsPerDeciliter

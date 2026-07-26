@@ -377,8 +377,10 @@ public struct LoanCarbRecord: Codable, Equatable {
 /// correction warm from the first post-takeover cycle (the GlucoseStore is otherwise empty until
 /// live G7 reads accumulate). The watch reconstructs a NewGlucoseSample and calls
 /// GlucoseStore.addGlucoseSamples; reusing the phone's stable syncIdentifier makes re-grants
-/// idempotent (GlucoseStore dedups on provenance + syncIdentifier). Seeded samples are strictly
-/// pre-takeover, so they never collide in time with the watch's own later G7 reads.
+/// idempotent (GlucoseStore dedups on provenance + syncIdentifier). Seeded samples are
+/// pre-takeover; because the watch's G7 path reads one current EGV per connection (no backfill),
+/// at most a single boundary sample can duplicate (phone/watch derive different G7 syncIds), and
+/// the algorithm tolerates it (momentum is duplicate-insensitive; counteraction skips <4-min pairs).
 public struct LoanGlucoseRecord: Codable, Equatable {
     public let syncIdentifier: String?
     public let startDate: Date

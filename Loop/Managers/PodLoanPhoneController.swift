@@ -301,14 +301,17 @@ final class PodLoanPhoneController {
         }
 
         // Fix 1 (#69, field-confirmed boundaryDup=YES): DO NOT emit a boundaryRecord.
-        // The running temp is already in `doseHistory` — getNormalizedDoseEntries returns the
-        // open mutable temp, and it is fetched below AFTER releaseConnection (which only
+        // The running temp is (near-always) already in `doseHistory` — getNormalizedDoseEntries
+        // returns the open mutable temp, fetched below AFTER releaseConnection (which only
         // truncates the in-memory pod state via cancel(at:), never the dose store). A separate
-        // same-start, same-rate boundaryRecord is therefore a pure duplicate of that temp, and
-        // seeding both double-counts the [start→handover] slice (the ~0.3 U IOB bump at
-        // takeover). The watch's stock reconciled() truncates the seeded open temp when it
-        // enacts its first command. The .boundaryTruncation kind + reconciler handling stay —
-        // those serve the hand-back journal path, a different mechanism.
+        // same-start, same-rate boundaryRecord is therefore a duplicate of that temp, and seeding
+        // both double-counts the [start→handover] slice (the ~0.3 U IOB bump at takeover). The
+        // watch's stock reconciled() truncates the seeded open temp when it enacts its first
+        // command. (Narrow caveat: if a just-set temp has not yet reached the dose store, the seed
+        // could miss it for a few seconds — acceptably rarer than the double-seed it replaces.)
+        // The .boundaryTruncation Kind + LoanReconciler's handling of it are LEFT in place as
+        // defensive/back-compat tolerance ONLY: the watch hand-back journal never mints that kind,
+        // so those arms are now vestigial in production (an older phone may still send one).
         let handedOverAt = deps.now()
 
         // §5.3.3: capture the odometer NOW (the phone was polling until this moment)
