@@ -767,15 +767,22 @@ final class WatchLoopManager {
             verdict, momPts, ageS(glucoseDate), recency / 60, rcDisc))
     }
 
-    /// INSTRUMENTATION ONLY (#45/#51): probe EXACTLY which of stock `linearMomentumEffect`'s gates
-    /// (count>2, isContinuous, hasSingleProvenance, !containsCalibrations) the watch's glucose window
-    /// passes right now — so "momentum over 0 pts" is explained, not guessed. Mirrors
-    /// `getRecentMomentumEffect`'s window using the store INSTANCE `momentumDataInterval`
-    /// (GlucoseStore.swift:86). `isContinuous`/`hasSingleProvenance` are internal in LoopKit and the
-    /// watch has no @testable import, so they're recomputed locally (read-only, no LoopKit change);
+    /// Sport Mode's momentum look-back window. Wider than stock's 15 min (`GlucoseMath`) so the
+    /// seeded post-takeover history plus live reads clear the ≥3-sample floor; paired with
+    /// `requireContinuous: false` at the call site so a single missed G7 read (radio shared with the
+    /// pod) doesn't zero momentum for ~10 min — worst exactly during exercise. The 4 mg/dL/min
+    /// velocity cap + provenance + calibration guards still bound it.
+    static let sportMomentumWindow: TimeInterval = .minutes(25)
+
+    /// INSTRUMENTATION ONLY (#45/#51): probe which of stock `linearMomentumEffect`'s gates the
+    /// watch's glucose window passes right now — so "momentum over 0 pts" is explained, not guessed.
+    /// Uses the SAME window + relaxed-continuity rule the live call uses (`sportMomentumWindow`,
+    /// `requireContinuous: false`), so `avail`/`stockPts` match the real momentum. `cont(info)` is
+    /// reported for INSIGHT only — Sport Mode no longer requires continuity. `isContinuous`/
+    /// `hasSingleProvenance` are internal in LoopKit so they're recomputed locally (read-only);
     /// `containsCalibrations()`/`linearMomentumEffect()` are public and reused as the cross-check.
     private func emitMomentumGateDiagnostic(asOf date: Date, completion: @escaping () -> Void) {
-        let start = date.addingTimeInterval(-glucoseStore.momentumDataInterval)
+        let start = date.addingTimeInterval(-Self.sportMomentumWindow)
         glucoseStore.getGlucoseSamples(start: start, end: nil) { result in
             defer { completion() }
             guard case .success(let samples) = result else {
@@ -797,12 +804,12 @@ final class WatchLoopManager {
             let provs = Set(samples.map { $0.provenanceIdentifier })
             let provPass = provs.count <= 1
             let calibPass = !samples.containsCalibrations()
-            let stockPts = samples.linearMomentumEffect().count   // ground-truth cross-check
+            let stockPts = samples.linearMomentumEffect(requireContinuous: false).count   // matches the live Sport Mode call
             let avail = stockPts > 0
             let latestAge = samples.last.map { date.timeIntervalSince($0.startDate) }
             let ids = provs.map { String($0.prefix(8)) }.joined(separator: ",")
             SportLog.event("momentum-gate", String(format:
-                "avail=%@ (stockPts=%d) · count=%d %@ · continuous=%@ (span=%.1fmin thr=%.1fmin maxGap=%.1fmin) · provenance=%@ (%d distinct: [%@]) · calib=%@ · latest age %@s",
+                "avail=%@ (stockPts=%d) · count=%d %@ · cont(info)=%@ (span=%.1fmin thr=%.1fmin maxGap=%.1fmin) · provenance=%@ (%d distinct: [%@]) · calib=%@ · latest age %@s",
                 avail ? "YES" : "NO", stockPts,
                 n, countPass ? "PASS" : "FAIL",
                 contPass ? "PASS" : "FAIL", span / 60, contThr / 60, maxGap / 60,
@@ -908,12 +915,20 @@ final class WatchLoopManager {
 
         if glucoseMomentumEffect == nil {
             updateGroup.enter()
-            glucoseStore.getRecentMomentumEffect(for: now()) { result in
+            // SPORT MODE momentum deviation (Jeremy 2026-07-26). This inlines stock
+            // `getRecentMomentumEffect` (fetch the look-back window → `linearMomentumEffect`) so both
+            // deviations are visible right here: a 25-min window (vs stock 15) and
+            // `requireContinuous: false`. Together they stop a single missed G7 read (radio shared
+            // with the pod) from zeroing momentum for ~10 min — worst exactly during exercise. Stock's
+            // other guards hold: ≥3 samples, single provenance, no calibrations, 4 mg/dL/min velocity
+            // cap. The phone/stock path is untouched (`getRecentMomentumEffect` and its defaults).
+            glucoseStore.getGlucoseSamples(start: now().addingTimeInterval(-Self.sportMomentumWindow), end: nil) { result in
                 switch result {
                 case .failure(let error):
                     self.log.error("Failure getting recent momentum effect: %{public}@", String(describing: error))
                     self.glucoseMomentumEffect = nil
-                case .success(let effects):
+                case .success(let samples):
+                    let effects = samples.linearMomentumEffect(requireContinuous: false)
                     self.glucoseMomentumEffect = effects
                     // #3 momentum input (2026-07-25): the net is in [predict]; this exposes
                     // whether it's built from FRESH, sufficient glucose. Sparse/stale input
