@@ -480,6 +480,11 @@ final class PodLoanWatchController {
                     self.onLoanActiveChanged?(true)
                     SportLog.event("loan", "ACTIVE — epoch \(grant.epoch), pod taken after \(attempt + 1) read(s), odometer \(String(format: "%.2f", delivered)) U")
                     self.sendMessage(.takeoverComplete(TakeoverComplete(epoch: grant.epoch, firstPodStatus: self.currentPodStatus())))
+                    // #69: refresh the glance eventual + IOB from the just-seeded insulin/carbs/
+                    // glucose NOW (display-only, no enact) so the prediction reflects the seeded
+                    // carbs at takeover instead of the stale pre-loan value until the first G7
+                    // reading drives a full cycle. The seeds completed well before this point.
+                    self.loopManager.refreshPredictionForGlance()
                     // E4 STAGE 1 (task #40, 2026-07-21): time-separate the radios. The
                     // takeover is done and the initial status is read, so the pod BLE
                     // connection isn't needed until the next dose. Release it (orphan

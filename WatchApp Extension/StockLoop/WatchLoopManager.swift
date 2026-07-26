@@ -609,6 +609,32 @@ final class WatchLoopManager {
         }
     }
 
+    /// Recompute the cached effects + the prediction WITHOUT enacting — called right after a
+    /// takeover so the glance shows a fresh eventual (WITH the seeded carbs) and IOB immediately,
+    /// instead of the stale pre-loan cached values until the next G7 reading drives a full cycle.
+    /// #69 field: carbs seeded at takeover weren't in the glance eventual (it stayed the last
+    /// pre-loan insulin-only prediction because no cycle had run), and IOB read ~0 while the seed
+    /// store held the real value — both because the glance reads CACHED IOB/eventual that only a
+    /// completed cycle refreshes. This is DISPLAY-ONLY: it never enacts (enact-only-on-fresh-reading
+    /// is enforced by loop()'s CGM-triggered callers), so dosing timing is unchanged.
+    func refreshPredictionForGlance() {
+        dataAccessQueue.async {
+            var error = self.updateCachedEffects()
+            if error == nil {
+                error = self.updatePredictedGlucoseAndRecommendedDose()
+            }
+            if case .missingDataError(let what)? = error {
+                SportLog.event("loop", "takeover prediction refresh — not yet (missing \(what))")
+            } else if error == nil {
+                // Cache the recommendation for the DOSING panel (as loop() does), but do NOT enact.
+                self.lastRecommendation = self.recommendedAutomaticDose?.recommendation
+                SportLog.event("loop", "takeover prediction refresh — IOB \(self.insulinOnBoard.map { String(format: "%.2f U", $0.value) } ?? "—"), eventual + carbs refreshed (no enact)")
+                self.logPredictionBreakdown(decided: self.recommendedAutomaticDose?.recommendation)
+            }
+            self.publishHUDContext()
+        }
+    }
+
     /// 134 dosing-audit instrumentation (Jeremy 2026-07-20: "make sure prediction is
     /// well instrumented in the logs so we can iterate to the answer as efficiently
     /// as possible"). One line per cycle decomposing WHAT the dose math saw: each
