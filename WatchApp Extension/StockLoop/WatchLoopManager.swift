@@ -337,7 +337,11 @@ final class WatchLoopManager {
         // here, so read the velocities directly.
         carbStore.carbsOnBoard(at: now(), effectVelocities: insulinCounteractionEffects) { result in
             if case .success(let value) = result {
-                ctx.cob = value.quantity.doubleValue(for: .gram())
+                let cob = value.quantity.doubleValue(for: .gram())
+                ctx.cob = cob
+                // Per-cycle COB trace (grams on board) — complements the [predict] carbEffect line
+                // so seeded/loan COB is verifiable through the loan. Non-trivial values only.
+                if cob > 0.05 { SportLog.event("loop", String(format: "COB %.1f g on board", cob)) }
             }
             DispatchQueue.main.async {
                 let loopDataManager = ExtensionDelegate.shared().loopManager
@@ -1211,6 +1215,17 @@ final class WatchLoopManager {
             self.insulinCounteractionEffects = []
             self.retrospectiveGlucoseDiscrepancies = nil
         }
+    }
+
+    /// Prime the cached IOB AT takeover, from the seed's own IOB read, so the glance shows the
+    /// correct value immediately instead of stale/blank until the first loop cycle (~1 min later)
+    /// refreshes it. The seed populates the dose store but not this cache. `insulinOnBoard` feeds
+    /// the glance (glanceData), the stock HUD (publishHUDContext), and dosing — priming it fixes
+    /// all three consistently and single-sourced; the glance COB already reads its store live, so
+    /// this brings IOB to parity (#69 glance consistency). The next cycle overwrites it with the
+    /// fully-reconciled value (e.g. after the first pod-status read trims the seeded open temp).
+    func primeInsulinOnBoard(_ value: InsulinValue?) {
+        dataAccessQueue.async { self.insulinOnBoard = value }
     }
 
     func addLoanCarbEntry(_ entry: NewCarbEntry) {

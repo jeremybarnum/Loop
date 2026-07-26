@@ -690,6 +690,14 @@ final class PodLoanWatchController {
         let doseStore = loopManager.doseStore
         let seamLog = OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController")
         let seedReconciliation = Date()
+        // Diagnostic (review note): does the seed include an open, future-ending temp? Its
+        // [now→end] tail inflates SEED-IN IOB slightly until the watch's first temp trims it
+        // (Fix 2), which explains the small SEED-IN → first-cycle IOB drop. If IOB drops with NO
+        // open temp present, suspect the reservoir read-branch instead.
+        let openTemps = entries.filter { $0.type == .tempBasal && $0.endDate > seedReconciliation }
+        let openTempNote = openTemps.isEmpty ? "" :
+            String(format: "; %d open temp(s), latest ends +%.0fm (tail trims on first watch temp)",
+                   openTemps.count, (openTemps.map { $0.endDate }.max()!.timeIntervalSince(seedReconciliation)) / 60)
         doseStore.deleteAllPumpEvents { error in
             if let error = error {
                 os_log("Grant ingest: pump-event wipe failed: %{public}@", log: seamLog, type: .error, String(describing: error))
@@ -724,7 +732,11 @@ final class PodLoanWatchController {
                     // against the phone's IOB at grant time — closes the takeover-fidelity loop.
                     doseStore.insulinOnBoard(at: seedReconciliation) { result in
                         if case .success(let iob) = result {
-                            SportLog.event("loan", String(format: "SEED-IN IOB=%.2fU @ takeover (%d seeded doses)", iob.value, events.count))
+                            // Prime the cached IOB so the glance + stock HUD show it AT takeover
+                            // instead of blank until the first loop cycle (#69 glance consistency;
+                            // the glance COB already reads its store live).
+                            self.loopManager.primeInsulinOnBoard(iob)
+                            SportLog.event("loan", String(format: "SEED-IN IOB=%.2fU @ takeover (%d seeded doses%@)", iob.value, events.count, openTempNote))
                         }
                     }
                 }
@@ -760,11 +772,18 @@ final class PodLoanWatchController {
                 addedDate: nil,
                 supercededDate: nil)
         }
-        loopManager.carbStore.syncCarbObjects(objects) { error in
+        let seededGrams = carbs.reduce(0.0) { $0 + $1.grams }
+        loopManager.carbStore.syncCarbObjects(objects) { [weak self] error in
             if let error = error {
                 os_log("Grant carb ingest failed: %{public}@", log: OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController"), type: .error, String(describing: error))
             } else {
                 SportLog.event("loan", "seeded \(objects.count) carb entr\(objects.count == 1 ? "y" : "ies") from the phone (COB carry-over)")
+                // SEED-IN COB anchor (mirrors SEED-IN IOB): the resulting grams-on-board right after
+                // seeding, to verify takeover-with-COB. Reading ~0 with grams seeded ⇒ the carb seed
+                // is broken; a value >> seededGrams ⇒ double-count. The counterpart of #65's guard.
+                self?.loopManager.glanceCarbsOnBoard { cob in
+                    SportLog.event("loan", String(format: "SEED-IN COB=%.1f g @ takeover (%d carbs, %.0f g seeded)", cob ?? -1, objects.count, seededGrams))
+                }
             }
         }
         // Carb effect is cached; force a recompute so the seeded COB reaches the first
