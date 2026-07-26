@@ -387,6 +387,11 @@ final class PodLoanWatchController {
         // GRANTING phone runs, instead of silently assuming Standard. nil (older phone) →
         // Standard, the pre-existing behavior.
         loopManager.setIntegralRetrospectiveCorrection(grant.integralRetrospectiveCorrectionEnabled ?? false)
+        // INSTRUMENTATION ONLY (#45): stash the phone's prediction decomposition + echo it into the
+        // log, BEFORE the takeover read / first prediction refresh, so [predict-diff] and [iob-diff]
+        // Leg 1 have the phone baseline in hand. The serial dataAccessQueue guarantees the stash
+        // lands before the first diff.
+        ingestPredictionSnapshot(grant)
 
         // Log what the watch ACTUALLY received. The grant validates completeness but has
         // never recorded the VALUES, so verifying any prediction against real settings
@@ -742,6 +747,15 @@ final class PodLoanWatchController {
                             // the glance COB already reads its store live).
                             self.loopManager.primeInsulinOnBoard(iob)
                             SportLog.event("loan", String(format: "SEED-IN IOB=%.2fU @ takeover (%d seeded doses%@)", iob.value, events.count, openTempNote))
+                            // INSTRUMENTATION ONLY (#69): record the phone/seed IOB anchors and dump
+                            // the per-dose decomposition, so the first post-takeover cycle can emit
+                            // [iob-diff] (phone vs seed vs cycle1) and localize the ~0.3U leak.
+                            self.loopManager.recordTakeoverIOBAnchors(
+                                phone: grant.predictionSnapshot?.iobUnits,
+                                phoneDate: grant.predictionSnapshot?.iobDate,
+                                seed: iob.value,
+                                at: seedReconciliation)
+                            self.loopManager.dumpIOBDecomp("SEED-IN", at: seedReconciliation)
                         }
                     }
                 }
@@ -758,7 +772,21 @@ final class PodLoanWatchController {
     /// phone's entries, not the watch's, which also keeps them from colliding with carbs
     /// entered on the wrist).
     private func ingestGrantCarbs(_ grant: LoanGrant) {
-        guard let carbs = grant.carbHistory, !carbs.isEmpty else { return }
+        // INSTRUMENTATION ONLY (#65): phone COB rides in the prediction snapshot, so [cob-diff] needs
+        // no extra grant field.
+        let phoneCOBStr = (grant.predictionSnapshot?.cobGrams).map { String(format: "%.1f", $0) } ?? "n/a"
+        guard let carbs = grant.carbHistory, !carbs.isEmpty else {
+            // INSTRUMENTATION ONLY (#65): the empty-grant path is today SILENT — the exact fingerprint
+            // of a deleted-carbs handover. syncCarbObjects upserts only, so any prior-epoch residual is
+            // NOT wiped here; it persists (absorbing) until it ages past the 24h cache. Behavior is
+            // unchanged (still an early return); we just leave a trace.
+            let why = (grant.carbHistory == nil) ? "absent (old phone)" : "empty (deleted on phone)"
+            loopManager.glanceCarbsOnBoard { residual in
+                SportLog.event("cob-diff", String(format: "carb seed SKIPPED — carbHistory %@ · phoneCOB=%@ g · watch residual=%@ g — residual NOT wiped (upsert-only); persists until 24h cache age",
+                                                   why, phoneCOBStr, residual.map { String(format: "%.2f", $0) } ?? "—"))
+            }
+            return
+        }
         let objects: [SyncCarbObject] = carbs.map { c in
             SyncCarbObject(
                 absorptionTime: c.absorptionTime,
@@ -783,11 +811,22 @@ final class PodLoanWatchController {
                 os_log("Grant carb ingest failed: %{public}@", log: OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController"), type: .error, String(describing: error))
             } else {
                 SportLog.event("loan", "seeded \(objects.count) carb entr\(objects.count == 1 ? "y" : "ies") from the phone (COB carry-over)")
-                // SEED-IN COB anchor (mirrors SEED-IN IOB): the resulting grams-on-board right after
-                // seeding, to verify takeover-with-COB. Reading ~0 with grams seeded ⇒ the carb seed
-                // is broken; a value >> seededGrams ⇒ double-count. The counterpart of #65's guard.
+                // INSTRUMENTATION ONLY (#65): three-way [cob-diff] — phone COB (from the grant
+                // prediction snapshot) vs watch COB after seeding vs grams seeded. Δ(post−seeded) > 0
+                // means a prior-epoch residual survived alongside this seed (the phantom-COB signature);
+                // >> seededGrams means a double-count. Per-entry manifest catches duplication across epochs.
+                let tf = DateFormatter()
+                tf.dateFormat = "HH:mm"
+                let manifest = carbs.map { c in
+                    String(format: "%.1fg@%@ sync=%@ prov=%@", c.grams, tf.string(from: c.startDate),
+                           c.syncIdentifier ?? "nil", String(c.provenanceIdentifier.prefix(12)))
+                }.joined(separator: " | ")
                 self?.loopManager.glanceCarbsOnBoard { cob in
-                    SportLog.event("loan", String(format: "SEED-IN COB=%.1f g @ takeover (%d carbs, %.0f g seeded)", cob ?? -1, objects.count, seededGrams))
+                    let postV = cob ?? 0
+                    let excess = postV - seededGrams
+                    SportLog.event("cob-diff", String(format: "phoneCOB=%@ g · watch COB(post)=%.2f g · seeded %d entr%@ (%.0f g) · Δ(post−seeded)=%+.2f g%@ · [%@]",
+                                                       phoneCOBStr, postV, objects.count, objects.count == 1 ? "y" : "ies",
+                                                       seededGrams, excess, abs(excess) > 0.5 ? " ⚠ residual/dup" : "", manifest))
                 }
             }
         }
@@ -830,6 +869,21 @@ final class PodLoanWatchController {
                 os_log("Grant glucose ingest failed: %{public}@", log: OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController"), type: .error, String(describing: error))
             }
         }
+    }
+
+    /// INSTRUMENTATION ONLY (#45): stash the phone's grant prediction snapshot on the watch loop
+    /// manager (so `[predict-diff]` can subtract it) and echo it to the log at takeover, next to the
+    /// SEED-IN IOB/COB lines. No-op when the grant carries no snapshot (older phone / stale caches).
+    private func ingestPredictionSnapshot(_ grant: LoanGrant) {
+        loopManager.stashPhonePredictionSnapshot(grant.predictionSnapshot)
+        guard let s = grant.predictionSnapshot else { return }
+        let now = Date()
+        SportLog.event("snapshot", String(format:
+            "RX phone@grant — eventual %.0f start %.0f@%.0fs IOB %.2f@%.0fs COB %.0f · impact mom %+.0f ins %+.0f carb %+.0f RC %+.0f · momPts %d rcDisc %d · snapAge %.0fs",
+            s.eventualMgdl, s.startGlucoseMgdl, now.timeIntervalSince(s.startGlucoseDate),
+            s.iobUnits, now.timeIntervalSince(s.iobDate), s.cobGrams,
+            s.impactMomentumMgdl, s.impactInsulinMgdl, s.impactCarbMgdl, s.impactRCMgdl,
+            s.momentumPointCount, s.rcDiscrepancyCount, now.timeIntervalSince(s.snapshotAt)))
     }
 
     /// #1 double-seed detector: is the grant's running-temp `boundaryRecord` ALSO present

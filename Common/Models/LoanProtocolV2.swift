@@ -319,6 +319,14 @@ public struct LoanGrant: Codable, Equatable {
     /// retrospectionInterval); it comfortably covers Standard RC (30 min) and momentum (15 min).
     /// nil (older phone) → no seeding, pre-existing behavior.
     public let glucoseHistory: [LoanGlucoseRecord]?
+    /// The phone's LAST-COMPUTED prediction decomposition at grant time (INSTRUMENTATION ONLY,
+    /// no dosing effect). Carried so the watch can diff its first post-takeover prediction
+    /// term-by-term against the phone ([predict-diff]) and reconcile phone-IOB vs SEED-IN-IOB
+    /// ([iob-diff] Leg 1) — localizing the ~58 mg/dL takeover divergence to a specific effect
+    /// term rather than eyeballing. Read from LoopDataManager's already-cached effect arrays
+    /// (leave-one-out via stock predictGlucose, no recompute). nil (older phone / stale caches)
+    /// → the watch simply skips the diff lines.
+    public let predictionSnapshot: LoanPredictionSnapshot?
 
     public init(epoch: Int, expiresAt: Date, pumpManagerRawState: Data, podAddress: UInt32,
                 therapySettingsRaw: Data, settingsTimeZoneID: String,
@@ -326,7 +334,8 @@ public struct LoanGrant: Codable, Equatable {
                 supportsInterimHandback: Bool? = nil,
                 integralRetrospectiveCorrectionEnabled: Bool? = nil,
                 carbHistory: [LoanCarbRecord]? = nil,
-                glucoseHistory: [LoanGlucoseRecord]? = nil) {
+                glucoseHistory: [LoanGlucoseRecord]? = nil,
+                predictionSnapshot: LoanPredictionSnapshot? = nil) {
         self.epoch = epoch
         self.expiresAt = expiresAt
         self.pumpManagerRawState = pumpManagerRawState
@@ -339,6 +348,65 @@ public struct LoanGrant: Codable, Equatable {
         self.integralRetrospectiveCorrectionEnabled = integralRetrospectiveCorrectionEnabled
         self.carbHistory = carbHistory
         self.glucoseHistory = glucoseHistory
+        self.predictionSnapshot = predictionSnapshot
+    }
+}
+
+/// The phone's last-computed prediction, decomposed, carried in the grant for INSTRUMENTATION.
+/// The scalar shape is mirrored on both devices so [predict-diff] is a pure subtraction and the
+/// IOB Leg-1 reconciliation is measurable. All impacts are leave-one-out counterfactuals on the
+/// EVENTUAL — impact(X) = eventual(all effects) − eventual(all except X) — computed the SAME way
+/// on both sides (both include positive velocity/RC), so a nonzero diff isolates the divergence to
+/// the INPUT arrays, not to suppression policy. Purely additive/optional on the wire; an older
+/// phone omits it and an older watch ignores it (no protocol-version bump). Dates round-trip via
+/// LoanProtocol's custom Int64-millisecond coder.
+public struct LoanPredictionSnapshot: Codable, Equatable {
+    /// Capture instant — the watch ages every value below against this.
+    public let snapshotAt: Date
+    public let startGlucoseMgdl: Double
+    /// Timestamp of the starting glucose, so the watch can isolate the stale-start term.
+    public let startGlucoseDate: Date
+    /// The phone eventual the loop actually dosed on.
+    public let eventualMgdl: Double
+    /// Display-parity eventual (includingPendingInsulin); optional because it is a recency add-on.
+    public let eventualIncludingPendingMgdl: Double?
+    public let impactMomentumMgdl: Double
+    public let impactInsulinMgdl: Double
+    public let impactCarbMgdl: Double
+    public let impactRCMgdl: Double
+    /// Phone IOB + its timestamp (folds in the phone-IOB-at-grant need — the watch ages this for
+    /// [iob-diff] Leg 1 rather than the phone recomputing at the handover instant).
+    public let iobUnits: Double
+    public let iobDate: Date
+    public let cobGrams: Double
+    /// glucoseMomentumEffect.count on the phone — proves the phone HAD momentum where the watch had 0.
+    public let momentumPointCount: Int
+    /// retrospectiveGlucoseDiscrepancies.count on the phone — RC warmth.
+    public let rcDiscrepancyCount: Int
+    /// PredictionInputEffect mask used, so the diff is like-for-like.
+    public let enabledEffectsRaw: Int
+
+    public init(snapshotAt: Date, startGlucoseMgdl: Double, startGlucoseDate: Date,
+                eventualMgdl: Double, eventualIncludingPendingMgdl: Double?,
+                impactMomentumMgdl: Double, impactInsulinMgdl: Double,
+                impactCarbMgdl: Double, impactRCMgdl: Double,
+                iobUnits: Double, iobDate: Date, cobGrams: Double,
+                momentumPointCount: Int, rcDiscrepancyCount: Int, enabledEffectsRaw: Int) {
+        self.snapshotAt = snapshotAt
+        self.startGlucoseMgdl = startGlucoseMgdl
+        self.startGlucoseDate = startGlucoseDate
+        self.eventualMgdl = eventualMgdl
+        self.eventualIncludingPendingMgdl = eventualIncludingPendingMgdl
+        self.impactMomentumMgdl = impactMomentumMgdl
+        self.impactInsulinMgdl = impactInsulinMgdl
+        self.impactCarbMgdl = impactCarbMgdl
+        self.impactRCMgdl = impactRCMgdl
+        self.iobUnits = iobUnits
+        self.iobDate = iobDate
+        self.cobGrams = cobGrams
+        self.momentumPointCount = momentumPointCount
+        self.rcDiscrepancyCount = rcDiscrepancyCount
+        self.enabledEffectsRaw = enabledEffectsRaw
     }
 }
 

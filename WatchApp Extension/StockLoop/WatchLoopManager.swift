@@ -461,6 +461,23 @@ final class WatchLoopManager {
 
     private var recommendedAutomaticDose: (recommendation: AutomaticDoseRecommendation, date: Date)?
 
+    /// INSTRUMENTATION ONLY (#45): the phone's prediction decomposition carried in the grant,
+    /// stashed at takeover so `[predict-diff]` can subtract the watch's first post-takeover prediction
+    /// against it, term by term. Self-expires after 20 min (checked at the diff) so a stale grant
+    /// snapshot never keeps diffing against a moved-on watch.
+    private var phonePredictionSnapshotAtGrant: LoanPredictionSnapshot?
+    func stashPhonePredictionSnapshot(_ snapshot: LoanPredictionSnapshot?) {
+        dataAccessQueue.async { self.phonePredictionSnapshotAtGrant = snapshot }
+    }
+
+    /// INSTRUMENTATION ONLY (#69): the three IOB values that should agree at takeover — phone-at-grant,
+    /// watch SEED-IN anchor, watch first-cycle computed — captured so `[iob-diff]` can localize the
+    /// ~0.3U leak. Set at SEED-IN, consumed (and cleared) at the first post-takeover cycle.
+    private var takeoverIOBAnchors: (phone: Double?, phoneDate: Date?, seed: Double, at: Date)?
+    func recordTakeoverIOBAnchors(phone: Double?, phoneDate: Date?, seed: Double, at: Date) {
+        dataAccessQueue.async { self.takeoverIOBAnchors = (phone, phoneDate, seed, at) }
+    }
+
     /// What the LAST cycle decided, retained after `recommendedAutomaticDose` is cleared by
     /// a successful enact — so display surfaces can show the decision instead of a blank.
     private var lastRecommendation: AutomaticDoseRecommendation?
@@ -682,6 +699,167 @@ final class WatchLoopManager {
         let suspendThr = settings.suspendThreshold.map { String(format: "%.0f", $0.quantity.doubleValue(for: mgdlU)) } ?? "—"
         SportLog.event("predict", "eventual \(eventual) · min \(minPredicted) · suspendThr \(suspendThr) · net effects: carbs \(net(carbEffect)), insulin \(net(insulinEffect)), momentum \(net(glucoseMomentumEffect)), RC \(rc) · rec \(rec)")
         SportLog.event("curve", curveSummary(predictedGlucose))
+        emitPredictionSnapshotAndDiff()
+    }
+
+    /// INSTRUMENTATION ONLY (#45): three lines appended each cycle after `[predict]`/`[curve]` —
+    /// `[predict-snapshot]` (leave-one-out per-effect impact on the eventual), `[predict-diff]` (that
+    /// same decomposition minus the phone's grant snapshot, term by term — the ~58 mg/dL takeover gap
+    /// localized with zero manual arithmetic), and `[freshness]` (a diagnostic verdict that gates
+    /// NOTHING). Impacts are MARGINAL (momentum blends non-linearly), so they need not sum to
+    /// `eventual − start`; the residual is expected and itself informative.
+    private func emitPredictionSnapshotAndDiff() {   // dataAccessQueue
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+        let mgdl = HKUnit.milligramsPerDeciliter
+        func signed(_ v: Double?) -> String { v.map { String(format: "%+.0f", $0) } ?? "—" }
+        func plain(_ v: Double?) -> String { v.map { String(format: "%.0f", $0) } ?? "—" }
+        func ageS(_ d: Date?) -> String { d.map { String(format: "%.0f", now().timeIntervalSince($0)) } ?? "—" }
+
+        let base = counterfactualEventualMgdl(.none)
+        func impact(_ drop: CFDrop) -> Double? {
+            guard let base, let dropped = counterfactualEventualMgdl(drop) else { return nil }
+            return base - dropped
+        }
+        let impMom = impact(.momentum), impIns = impact(.insulin)
+        let impCarb = impact(.carb), impRC = impact(.rc)
+        let iob = insulinOnBoard?.value
+        let momPts = glucoseMomentumEffect?.count ?? 0
+        let rcDisc = retrospectiveGlucoseDiscrepancies?.count ?? 0
+        let startV = glucoseStore.latestGlucose?.quantity.doubleValue(for: mgdl)
+        let glucoseDate = glucoseStore.latestGlucose?.startDate
+        let glucoseAge = glucoseDate.map { now().timeIntervalSince($0) }
+        let pumpAge = now().timeIntervalSince(doseStore.lastAddedPumpData)
+
+        SportLog.event("predict-snapshot", String(format:
+            "start=%@@%@s eventual=%@ | impact[loo]: mom %@ ins %@ carb %@ RC %@ | IOB=%@ | momPts=%d rcDisc=%d | pumpAge=%.0fs",
+            plain(startV), ageS(glucoseDate), plain(base),
+            signed(impMom), signed(impIns), signed(impCarb), signed(impRC),
+            iob.map { String(format: "%.2f", $0) } ?? "—", momPts, rcDisc, pumpAge))
+
+        // [predict-diff] — only while a fresh (<20 min) phone snapshot is stashed; else self-expire.
+        if let p = phonePredictionSnapshotAtGrant {
+            let snapAge = now().timeIntervalSince(p.snapshotAt)
+            if snapAge > 20 * 60 {
+                phonePredictionSnapshotAtGrant = nil
+            } else {
+                func diff(_ w: Double?, _ pv: Double) -> String { w.map { String(format: "%+.0f", $0 - pv) } ?? "—" }
+                SportLog.event("predict-diff", String(format:
+                    "vs phone@grant (snapAge %.0fm): dStart=%@ dEventual=%@ | dImpact: mom %@ ins %@ carb %@ RC %@ | dIOB=%@ | momPts w%d/p%d rcDisc w%d/p%d",
+                    snapAge / 60,
+                    diff(startV, p.startGlucoseMgdl), diff(base, p.eventualMgdl),
+                    diff(impMom, p.impactMomentumMgdl), diff(impIns, p.impactInsulinMgdl),
+                    diff(impCarb, p.impactCarbMgdl), diff(impRC, p.impactRCMgdl),
+                    iob.map { String(format: "%+.2f", $0 - p.iobUnits) } ?? "—",
+                    momPts, p.momentumPointCount, rcDisc, p.rcDiscrepancyCount))
+            }
+        }
+
+        // [freshness] — DIAGNOSTIC ONLY; gates neither display nor dosing.
+        let recency = LoopCoreConstants.inputDataRecencyInterval
+        let verdict: String
+        if let age = glucoseAge, age <= recency {
+            verdict = (momPts > 0 && rcDisc > 0) ? "fresh" : "warming"
+        } else {
+            verdict = "stale"
+        }
+        SportLog.event("freshness", String(format:
+            "%@ · momentum %d pts · latest glucose age %@s (recency %.0fm) · RC discrepancies %d",
+            verdict, momPts, ageS(glucoseDate), recency / 60, rcDisc))
+    }
+
+    /// INSTRUMENTATION ONLY (#45/#51): probe EXACTLY which of stock `linearMomentumEffect`'s gates
+    /// (count>2, isContinuous, hasSingleProvenance, !containsCalibrations) the watch's glucose window
+    /// passes right now — so "momentum over 0 pts" is explained, not guessed. Mirrors
+    /// `getRecentMomentumEffect`'s window using the store INSTANCE `momentumDataInterval`
+    /// (GlucoseStore.swift:86). `isContinuous`/`hasSingleProvenance` are internal in LoopKit and the
+    /// watch has no @testable import, so they're recomputed locally (read-only, no LoopKit change);
+    /// `containsCalibrations()`/`linearMomentumEffect()` are public and reused as the cross-check.
+    private func emitMomentumGateDiagnostic(asOf date: Date, completion: @escaping () -> Void) {
+        let start = date.addingTimeInterval(-glucoseStore.momentumDataInterval)
+        glucoseStore.getGlucoseSamples(start: start, end: nil) { result in
+            defer { completion() }
+            guard case .success(let samples) = result else {
+                SportLog.event("momentum-gate", "avail=NO (sample fetch failed)")
+                return
+            }
+            let n = samples.count
+            let countPass = n > 2
+            let span: TimeInterval = (samples.first != nil && samples.last != nil)
+                ? abs(samples.first!.startDate.timeIntervalSince(samples.last!.startDate)) : 0
+            let contThr = TimeInterval(minutes: 5) * Double(n)   // mirrors GlucoseMath.isContinuous(within: 5min)
+            let contPass = n > 0 && span < contThr
+            var maxGap: TimeInterval = 0
+            if samples.count > 1 {
+                for i in 1..<samples.count {
+                    maxGap = Swift.max(maxGap, samples[i].startDate.timeIntervalSince(samples[i-1].startDate))
+                }
+            }
+            let provs = Set(samples.map { $0.provenanceIdentifier })
+            let provPass = provs.count <= 1
+            let calibPass = !samples.containsCalibrations()
+            let stockPts = samples.linearMomentumEffect().count   // ground-truth cross-check
+            let avail = stockPts > 0
+            let latestAge = samples.last.map { date.timeIntervalSince($0.startDate) }
+            let ids = provs.map { String($0.prefix(8)) }.joined(separator: ",")
+            SportLog.event("momentum-gate", String(format:
+                "avail=%@ (stockPts=%d) · count=%d %@ · continuous=%@ (span=%.1fmin thr=%.1fmin maxGap=%.1fmin) · provenance=%@ (%d distinct: [%@]) · calib=%@ · latest age %@s",
+                avail ? "YES" : "NO", stockPts,
+                n, countPass ? "PASS" : "FAIL",
+                contPass ? "PASS" : "FAIL", span / 60, contThr / 60, maxGap / 60,
+                provPass ? "PASS" : "FAIL", provs.count, ids,
+                calibPass ? "PASS" : "FAIL",
+                latestAge.map { String(format: "%.0f", $0) } ?? "—"))
+        }
+    }
+
+    /// INSTRUMENTATION ONLY (#69): the three-way IOB reconciliation at the first post-takeover cycle.
+    /// Leg 1 (seed − phone) isolates wire/seed fidelity (only measurable now that the grant carries
+    /// phone IOB); Leg 2 (cycle1 − seed) isolates the post-status-read reconciliation. `dt` and
+    /// `phoneIOBAge` contextualize the aging so a stale phone stamp can be decay-corrected offline.
+    private func emitIOBDiff(anchors: (phone: Double?, phoneDate: Date?, seed: Double, at: Date), cycle1: Double?) {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+        let leg1 = anchors.phone.map { String(format: "%+.2f", anchors.seed - $0) } ?? "—"
+        let leg2 = cycle1.map { String(format: "%+.2f", $0 - anchors.seed) } ?? "—"
+        let dt = now().timeIntervalSince(anchors.at)
+        let phoneAge = anchors.phoneDate.map { String(format: "%.0f", now().timeIntervalSince($0)) } ?? "—"
+        let lastReconAge = doseStore.lastPumpEventsReconciliation.map { String(format: "%.0fs", now().timeIntervalSince($0)) } ?? "nil"
+        let lastPumpAge = String(format: "%.0fs", now().timeIntervalSince(doseStore.lastAddedPumpData))
+        SportLog.event("iob-diff", String(format:
+            "phoneIOB=%@ seedIOB=%.2f cycle1=%@ · Δ(seed−phone)=%@[wire] · Δ(cycle1−seed)=%@[reconcile] · dt(seed→cycle1)=%.0fs · phoneIOBAge=%@s · lastReconAge=%@ lastPumpAge=%@",
+            anchors.phone.map { String(format: "%.2f", $0) } ?? "—", anchors.seed,
+            cycle1.map { String(format: "%.2f", $0) } ?? "—",
+            leg1, leg2, dt, phoneAge, lastReconAge, lastPumpAge))
+    }
+
+    /// INSTRUMENTATION ONLY (#69): per-dose IOB decomposition at a labeled instant (SEED-IN vs
+    /// CYCLE1), so a re-timed / superseded / added dose between the seed and the first pod-status read
+    /// is visible — the mechanism behind the ~0.3U SEED-IN→first-cycle drop. One-shot; never per-cycle.
+    /// `netBasalUnits` already folds in `scheduledBasalRate`, so the SAME window showing a different
+    /// net between labels is the scheduled-basal-netting signature (H2); a re-timed/added row is H1.
+    func dumpIOBDecomp(_ label: String, at t: Date) {
+        dataAccessQueue.async {
+            let start = t.addingTimeInterval(-Swift.min(self.doseStore.longestEffectDuration, .hours(8)))
+            self.doseStore.getNormalizedDoseEntries(start: start, end: t) { result in
+                guard case .success(let doses) = result else {
+                    SportLog.event("iob-decomp", "@\(label) — dose fetch failed")
+                    return
+                }
+                let uhr = HKUnit.internationalUnit().unitDivided(by: .hour())
+                let tf = DateFormatter()
+                tf.dateFormat = "HH:mm:ss"
+                var netSum = 0.0
+                var rows: [String] = []
+                for d in doses where abs(d.netBasalUnits) > 0.0001 || d.type == .bolus {
+                    netSum += d.netBasalUnits
+                    let sched = d.scheduledBasalRate.map { String(format: "%.2f", $0.doubleValue(for: uhr)) } ?? "nil"
+                    let id = d.syncIdentifier.map { String($0.suffix(6)) } ?? "—"
+                    rows.append(String(format: "%@ %@..%@ net=%+.3f sched=%@ mut=%@ id=%@",
+                                       "\(d.type)", tf.string(from: d.startDate), tf.string(from: d.endDate),
+                                       d.netBasalUnits, sched, d.isMutable ? "Y" : "n", id))
+                }
+                SportLog.event("iob-decomp", "@\(label) Σnet=\(String(format: "%.3f", netSum))U n=\(rows.count) · " + rows.joined(separator: " | "))
+            }
+        }
     }
 
     /// A4 (Jeremy 2026-07-24): the piece that makes a field run replayable through
@@ -749,6 +927,13 @@ final class WatchLoopManager {
                 }
                 updateGroup.leave()
             }
+            // INSTRUMENTATION ONLY (#45/#51): whenever momentum is (re)computed — every takeover and
+            // every glucose invalidation — probe EXACTLY which stock gate the window passes/fails, so
+            // "over 0 pts" stops being a mystery. FIRE-AND-FORGET: a pure diagnostic must NOT sit inside
+            // the dosing cycle's DispatchGroup wait (it reads nothing from the cycle), so it can never
+            // add latency to, or share the unbounded blocking wait of, the dosing critical path. Its
+            // [momentum-gate] line may therefore land just after [predict] — cosmetic ordering only.
+            emitMomentumGateDiagnostic(asOf: now()) { }
         }
 
         if insulinEffect == nil || insulinEffect?.first?.startDate ?? .distantFuture > insulinEffectStartDate {
@@ -823,6 +1008,15 @@ final class WatchLoopManager {
         }
 
         _ = updateGroup.wait(timeout: .distantFuture)
+
+        // INSTRUMENTATION ONLY (#69): the FIRST post-takeover cycle — now that this cycle's IOB is
+        // computed, reconcile phone-IOB (grant snapshot) vs SEED-IN anchor vs cycle-1 computed, and
+        // dump the per-dose decomposition once. One-shot: consuming the anchors clears them.
+        if let anchors = takeoverIOBAnchors {
+            takeoverIOBAnchors = nil
+            emitIOBDiff(anchors: anchors, cycle1: insulinOnBoard?.value)
+            dumpIOBDecomp("CYCLE1", at: now())
+        }
 
         if retrospectiveGlucoseDiscrepancies == nil {
             do {
@@ -956,6 +1150,32 @@ final class WatchLoopManager {
         }
 
         return prediction
+    }
+
+    /// INSTRUMENTATION ONLY (#45). Which effect to leave out of a counterfactual eventual.
+    private enum CFDrop { case none, momentum, insulin, carb, rc }
+
+    /// INSTRUMENTATION ONLY (#45): a literal read-only mirror of `predictGlucose(:896)` that omits
+    /// exactly ONE effect input, so per-effect impact on the eventual is measurable as a leave-one-out
+    /// counterfactual — impact(X) = eventual(.none) − eventual(dropX). It deliberately skips the
+    /// recency guards and the pump-authority log (those belong to the real dosing path) and is NEVER
+    /// fed to DoseMath. `counterfactualEventualMgdl(.none)` reproduces `predictedGlucose?.last`
+    /// (same inputs, same order, non-pending). Momentum blends non-linearly inside
+    /// `LoopMath.predictGlucose`, so these impacts are MARGINAL and need NOT sum to `eventual − start`.
+    private func counterfactualEventualMgdl(_ drop: CFDrop) -> Double? {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+        guard let glucose = glucoseStore.latestGlucose else { return nil }
+        let momentum: [GlucoseEffect] = (drop == .momentum) ? [] : (glucoseMomentumEffect ?? [])
+        var effects: [[GlucoseEffect]] = []
+        if drop != .carb,    let c = carbEffect    { effects.append(c) }
+        if drop != .insulin, let i = insulinEffect { effects.append(i) }   // non-pending, matches dosing path
+        if drop != .rc { effects.append(retrospectiveGlucoseEffect) }
+        var prediction = LoopMath.predictGlucose(startingAt: glucose, momentum: momentum, effects: effects)
+        let finalDate = glucose.startDate.addingTimeInterval(doseStore.longestEffectDuration)
+        if let last = prediction.last, last.startDate < finalDate {
+            prediction.append(PredictedGlucoseValue(startDate: finalDate, quantity: last.quantity))
+        }
+        return prediction.last?.quantity.doubleValue(for: .milligramsPerDeciliter)
     }
 
     // MARK: - Recommendation (mirrors updatePredictedGlucoseAndRecommendedDose(with:) — :1695)

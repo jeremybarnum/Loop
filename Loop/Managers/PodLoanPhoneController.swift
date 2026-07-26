@@ -49,6 +49,11 @@ final class PodLoanPhoneController {
         /// ~3 h of recent glucose for the grant — seeded so the watch's momentum + retrospective
         /// correction warm from the first post-takeover cycle instead of a cold empty store.
         var glucoseHistory: (_ start: Date, _ completion: @escaping ([LoanGlucoseRecord]) -> Void) -> Void = { _, done in done([]) }
+        /// INSTRUMENTATION ONLY (#45): the phone's last-computed prediction, decomposed, carried in
+        /// the grant so the watch can diff its first post-takeover prediction against the phone.
+        /// Reads already-cached effect arrays only (no recompute, no dosing). Default nil keeps the
+        /// state machine + existing tests green with no live LoopDataManager.
+        var predictionSnapshot: (_ completion: @escaping (LoanPredictionSnapshot?) -> Void) -> Void = { done in done(nil) }
         /// Loud surfacing (banner + Event History line at integration).
         var issueNotice: (_ title: String, _ body: String) -> Void
         /// PODLOAN instant-tile port (crude f3784d49/674e1b13): fired when pod
@@ -410,6 +415,11 @@ final class PodLoanPhoneController {
                 guard let self = self else { return }
                 self.deps.glucoseHistory(glucoseStart) { [weak self] glucose in
                     guard let self = self else { return }
+                    // INSTRUMENTATION ONLY (#45): capture the phone's last-computed prediction
+                    // decomposition (cached read, no recompute) as a fourth nested fetch, so it
+                    // rides in the grant. Default nil closure ⇒ this is a no-op for tests / old builds.
+                    self.deps.predictionSnapshot { [weak self] snapshot in
+                    guard let self = self else { return }
                     self.queue.async {
                         guard self.state == .grantOffered, self.epoch == grantEpoch else { return }
                         guard let stateData = try? PropertyListSerialization.data(fromPropertyList: pump.rawValue, format: .binary, options: 0),
@@ -432,9 +442,11 @@ final class PodLoanPhoneController {
                             // predictions from identical inputs, silently (audit 2026-07-22).
                             integralRetrospectiveCorrectionEnabled: UserDefaults.standard.integralRetrospectiveCorrectionEnabled,
                             carbHistory: carbs,
-                            glucoseHistory: glucose)
+                            glucoseHistory: glucose,
+                            predictionSnapshot: snapshot)
                         self.sendMessage(.grant(grant))
                         self.armT1(for: grantEpoch)
+                    }
                     }
                 }
             }

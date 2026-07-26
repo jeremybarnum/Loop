@@ -156,6 +156,12 @@ final class WatchDataManager: NSObject {
                     })
                 }
             },
+            predictionSnapshot: { [weak self] completion in
+                // INSTRUMENTATION ONLY (#45): the phone's last-computed prediction, decomposed,
+                // for the grant. Pure cached read (no recompute, no dosing).
+                guard let self = self else { completion(nil); return }
+                self.deviceManager.loopManager.capturePredictionSnapshot(completion)
+            },
             issueNotice: { [weak self] title, body in
                 self?.log.error("PodLoan notice: %{public}@ - %{public}@", title, body)
                 let content = UNMutableNotificationContent()

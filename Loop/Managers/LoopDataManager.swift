@@ -2041,6 +2041,57 @@ extension LoopState {
 
 
 extension LoopDataManager {
+    /// INSTRUMENTATION ONLY (#45): capture the phone's LAST-COMPUTED prediction, decomposed by a
+    /// leave-one-out counterfactual on the eventual — impact(X) = eventual(all) − eventual(all−X) —
+    /// into a `LoanPredictionSnapshot` carried in the grant so the watch can diff its first
+    /// post-takeover prediction term-by-term against the phone. Reads ONLY already-cached effect
+    /// arrays and re-runs the stock `predictGlucose(using:…)` over them; it never calls
+    /// `update()`/`loop()`, never doses, and never mutates any cached property. Returns nil when the
+    /// base eventual can't be computed (stale caches) — the grant then omits the snapshot and the
+    /// watch skips its diff lines. `includingPositiveVelocityAndRC: true` matches the watch, which
+    /// appends momentum+RC unconditionally — so a nonzero diff isolates the divergence to the INPUT
+    /// arrays, not to suppression policy. In `extension LoopDataManager` (same file) so it reaches the
+    /// private caches; uses the full `predictGlucose` (the 2-arg convenience is a `LoopState` method).
+    func capturePredictionSnapshot(_ completion: @escaping (LoanPredictionSnapshot?) -> Void) {
+        dataAccessQueue.async {
+            let mgdl = HKUnit.milligramsPerDeciliter
+            let enabled = self.settings.enabledEffects
+            guard let start = self.glucoseStore.latestGlucose else { completion(nil); return }
+            func ev(_ inputs: PredictionInputEffect, pending: Bool = false) -> Double? {
+                (try? self.predictGlucose(using: inputs, potentialBolus: nil, potentialCarbEntry: nil,
+                                          replacingCarbEntry: nil, includingPendingInsulin: pending,
+                                          includingPositiveVelocityAndRC: true).last)?
+                    .quantity.doubleValue(for: mgdl)
+            }
+            guard let base = ev(enabled) else { completion(nil); return }
+            func impact(_ e: PredictionInputEffect) -> Double { ev(enabled.subtracting(e)).map { base - $0 } ?? 0 }
+            let snap = LoanPredictionSnapshot(
+                snapshotAt: self.now(),
+                startGlucoseMgdl: start.quantity.doubleValue(for: mgdl),
+                startGlucoseDate: start.startDate,
+                eventualMgdl: base,
+                eventualIncludingPendingMgdl: ev(enabled, pending: true),
+                impactMomentumMgdl: impact(.momentum),
+                impactInsulinMgdl: impact(.insulin),
+                impactCarbMgdl: impact(.carbs),
+                impactRCMgdl: impact(.retrospection),
+                iobUnits: self.insulinOnBoard?.value ?? 0,
+                iobDate: self.insulinOnBoard?.startDate ?? self.now(),
+                cobGrams: self.carbsOnBoard?.quantity.doubleValue(for: .gram()) ?? 0,
+                momentumPointCount: self.glucoseMomentumEffect?.count ?? 0,
+                rcDiscrepancyCount: self.retrospectiveGlucoseDiscrepancies?.count ?? 0,
+                enabledEffectsRaw: enabled.rawValue)
+            let msg = String(format: "PODLOAN snapshot: eventual %.0f start %.0f IOB %.2f COB %.0f · impact M %+.0f I %+.0f C %+.0f RC %+.0f · momPts %d disc %d",
+                             base, snap.startGlucoseMgdl, snap.iobUnits, snap.cobGrams,
+                             snap.impactMomentumMgdl, snap.impactInsulinMgdl, snap.impactCarbMgdl, snap.impactRCMgdl,
+                             snap.momentumPointCount, snap.rcDiscrepancyCount)
+            self.logger.default("%{public}@", msg)
+            completion(snap)
+        }
+    }
+}
+
+extension LoopDataManager {
     private struct LoopStateView: LoopState {
 
         private let loopDataManager: LoopDataManager
