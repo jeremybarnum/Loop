@@ -14,6 +14,8 @@
 //
 
 import Foundation
+import HealthKit
+import LoopKit
 
 // MARK: - Protocol constants
 
@@ -137,6 +139,60 @@ public struct LoanDoseRecord: Codable, Equatable {
     }
 }
 
+// MARK: - Seed conversion (shared: watch takeover seed + handover-fidelity tests)
+//
+// Extracted from PodLoanWatchController so the watch seed AND the unit tests exercise
+// IDENTICAL record→DoseEntry logic (the watch extension target is not reachable from
+// LoopTests; this file is compiled into BOTH targets). See docs/DESIGN_LOAN_ADDPUMPEVENTS.md.
+
+extension LoanDoseRecord {
+    /// Convert a wire record to a DoseEntry for seeding the watch's dose store at takeover.
+    ///
+    /// Net-basal netting is deliberately NOT frozen here: the seed is written via
+    /// `DoseStore.addPumpEvents`, and the pump-event table does not persist a dose's
+    /// `scheduledBasalRate` — LoopKit re-derives it from the reader's `basalProfile` at read
+    /// (`InsulinMath.annotated(with:)`). On the watch that profile is frozen to the grant
+    /// schedule for the whole loan (WatchLoopManager.settings), so seeded temps net against
+    /// the delivery-time schedule correctly, with no stamped rate needed. (The phone-side
+    /// retroactive-netting fix, where the profile CAN change mid-loan, is a separate task.)
+    func seedDoseEntry(syncIdentifier: String) -> DoseEntry? {
+        switch kind {
+        case .bolus:
+            guard let units = amount else { return nil }
+            return DoseEntry(type: .bolus, startDate: startDate, endDate: endDate ?? startDate,
+                             value: units, unit: .units, syncIdentifier: syncIdentifier)
+        case .tempBasal, .boundaryTruncation:
+            guard let rate = unitsPerHour, let end = endDate else { return nil }
+            return DoseEntry(type: .tempBasal, startDate: startDate, endDate: end,
+                             value: rate, unit: .unitsPerHour, syncIdentifier: syncIdentifier)
+        case .suspend:
+            guard let end = endDate else { return nil }
+            return DoseEntry(type: .tempBasal, startDate: startDate, endDate: end,
+                             value: 0, unit: .unitsPerHour, syncIdentifier: syncIdentifier)
+        case .resume, .carb, .plumbingCancel, .modeChange:
+            return nil
+        }
+    }
+}
+
+extension LoanGrant {
+    /// The seeded insulin history as DoseEntries with deterministic, epoch-keyed sync
+    /// identifiers ("loanv2-grant-<epoch>-<index>") — idempotent under grant redelivery.
+    ///
+    /// The `boundaryRecord`, when present, is appended (kept for backward-compat with older
+    /// phones); current phones send it nil because it is a same-start duplicate of the running
+    /// temp already in `doseHistory` (the #1 double-seed). Routing the seed through
+    /// `addPumpEvents` runs stock `reconciled()`, which collapses any residual same-start
+    /// overlap to a single dose regardless.
+    func seedDoseEntries() -> [DoseEntry] {
+        var records = doseHistory
+        if let boundary = boundaryRecord { records.append(boundary) }
+        return records.enumerated().compactMap { index, record in
+            record.seedDoseEntry(syncIdentifier: "loanv2-grant-\(epoch)-\(index)")
+        }
+    }
+}
+
 /// Event = record + identity + provenance. IDs are minted at INTENT time, before
 /// transmission to the pod (§1.2); retries reuse them, dedup is by ID, acks are
 /// cursor-style over `seq` (af742c7a / C7 carried to both sides).
@@ -255,13 +311,22 @@ public struct LoanGrant: Codable, Equatable {
     /// otherwise a dozen epochs would multiply COB. nil (older phone) → no seeding, the
     /// pre-existing behavior.
     public let carbHistory: [LoanCarbRecord]?
+    /// ~3 h of recent glucose seeded phone→watch so momentum AND retrospective correction
+    /// compute from the FIRST post-takeover cycle. The watch's GlucoseStore is otherwise empty
+    /// at takeover (fed only by live G7 reads that accumulate over ~15 min), so momentum was
+    /// blind for ~15 min and RC never warmed — the watch dosed on a prediction that ignored
+    /// glucose history. 3 h is the Integral RC look-back (IntegralRetrospectiveCorrection
+    /// retrospectionInterval); it comfortably covers Standard RC (30 min) and momentum (15 min).
+    /// nil (older phone) → no seeding, pre-existing behavior.
+    public let glucoseHistory: [LoanGlucoseRecord]?
 
     public init(epoch: Int, expiresAt: Date, pumpManagerRawState: Data, podAddress: UInt32,
                 therapySettingsRaw: Data, settingsTimeZoneID: String,
                 doseHistory: [LoanDoseRecord], boundaryRecord: LoanDoseRecord?,
                 supportsInterimHandback: Bool? = nil,
                 integralRetrospectiveCorrectionEnabled: Bool? = nil,
-                carbHistory: [LoanCarbRecord]? = nil) {
+                carbHistory: [LoanCarbRecord]? = nil,
+                glucoseHistory: [LoanGlucoseRecord]? = nil) {
         self.epoch = epoch
         self.expiresAt = expiresAt
         self.pumpManagerRawState = pumpManagerRawState
@@ -273,6 +338,7 @@ public struct LoanGrant: Codable, Equatable {
         self.supportsInterimHandback = supportsInterimHandback
         self.integralRetrospectiveCorrectionEnabled = integralRetrospectiveCorrectionEnabled
         self.carbHistory = carbHistory
+        self.glucoseHistory = glucoseHistory
     }
 }
 
@@ -304,6 +370,33 @@ public struct LoanCarbRecord: Codable, Equatable {
         self.foodType = foodType
         self.userCreatedDate = userCreatedDate
         self.userUpdatedDate = userUpdatedDate
+    }
+}
+
+/// One glucose sample seeded phone→watch at grant time so the watch's momentum + retrospective
+/// correction warm from the first post-takeover cycle (the GlucoseStore is otherwise empty until
+/// live G7 reads accumulate). The watch reconstructs a NewGlucoseSample and calls
+/// GlucoseStore.addGlucoseSamples; reusing the phone's stable syncIdentifier makes re-grants
+/// idempotent (GlucoseStore dedups on provenance + syncIdentifier). Seeded samples are strictly
+/// pre-takeover, so they never collide in time with the watch's own later G7 reads.
+public struct LoanGlucoseRecord: Codable, Equatable {
+    public let syncIdentifier: String?
+    public let startDate: Date
+    /// mg/dL — the wire carries a plain value; the watch rebuilds an HKQuantity.
+    public let valueMgdl: Double
+    /// mg/dL per minute, if the phone had a trend (display/only; momentum is computed from values).
+    public let trendRateMgdlPerMin: Double?
+    public let isDisplayOnly: Bool
+    public let wasUserEntered: Bool
+
+    public init(syncIdentifier: String?, startDate: Date, valueMgdl: Double,
+                trendRateMgdlPerMin: Double?, isDisplayOnly: Bool, wasUserEntered: Bool) {
+        self.syncIdentifier = syncIdentifier
+        self.startDate = startDate
+        self.valueMgdl = valueMgdl
+        self.trendRateMgdlPerMin = trendRateMgdlPerMin
+        self.isDisplayOnly = isDisplayOnly
+        self.wasUserEntered = wasUserEntered
     }
 }
 

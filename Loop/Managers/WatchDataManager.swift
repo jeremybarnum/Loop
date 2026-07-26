@@ -139,6 +139,23 @@ final class WatchDataManager: NSObject {
                     })
                 }
             },
+            glucoseHistory: { [weak self] start, completion in
+                guard let self = self else { completion([]); return }
+                // ~3 h of the phone's glucose so the watch's momentum + RC warm at takeover.
+                self.deviceManager.glucoseStore.getGlucoseSamples(start: start, end: nil) { result in
+                    guard case .success(let samples) = result else { completion([]); return }
+                    let mgdl = HKUnit.milligramsPerDeciliter
+                    let mgdlPerMin = mgdl.unitDivided(by: .minute())
+                    completion(samples.map { s in
+                        LoanGlucoseRecord(syncIdentifier: s.syncIdentifier,
+                                          startDate: s.startDate,
+                                          valueMgdl: s.quantity.doubleValue(for: mgdl),
+                                          trendRateMgdlPerMin: s.trendRate?.doubleValue(for: mgdlPerMin),
+                                          isDisplayOnly: s.isDisplayOnly,
+                                          wasUserEntered: s.wasUserEntered)
+                    })
+                }
+            },
             issueNotice: { [weak self] title, body in
                 self?.log.error("PodLoan notice: %{public}@ - %{public}@", title, body)
                 let content = UNMutableNotificationContent()

@@ -46,6 +46,9 @@ final class PodLoanPhoneController {
         var doseHistory: (_ start: Date, _ completion: @escaping ([DoseEntry]) -> Void) -> Void
         /// Active carb entries for the grant (#49) — seeded so the watch predicts with COB.
         var carbHistory: (_ start: Date, _ completion: @escaping ([LoanCarbRecord]) -> Void) -> Void = { _, done in done([]) }
+        /// ~3 h of recent glucose for the grant — seeded so the watch's momentum + retrospective
+        /// correction warm from the first post-takeover cycle instead of a cold empty store.
+        var glucoseHistory: (_ start: Date, _ completion: @escaping ([LoanGlucoseRecord]) -> Void) -> Void = { _, done in done([]) }
         /// Loud surfacing (banner + Event History line at integration).
         var issueNotice: (_ title: String, _ body: String) -> Void
         /// PODLOAN instant-tile port (crude f3784d49/674e1b13): fired when pod
@@ -297,17 +300,16 @@ final class PodLoanPhoneController {
             return
         }
 
-        // Boundary record (R2/C5): capture the running temp BEFORE release closes its
-        // record; the pod keeps executing it — this is bookkeeping, not a command.
-        var boundary: LoanDoseRecord?
+        // Fix 1 (#69, field-confirmed boundaryDup=YES): DO NOT emit a boundaryRecord.
+        // The running temp is already in `doseHistory` — getNormalizedDoseEntries returns the
+        // open mutable temp, and it is fetched below AFTER releaseConnection (which only
+        // truncates the in-memory pod state via cancel(at:), never the dose store). A separate
+        // same-start, same-rate boundaryRecord is therefore a pure duplicate of that temp, and
+        // seeding both double-counts the [start→handover] slice (the ~0.3 U IOB bump at
+        // takeover). The watch's stock reconciled() truncates the seeded open temp when it
+        // enacts its first command. The .boundaryTruncation kind + reconciler handling stay —
+        // those serve the hand-back journal path, a different mechanism.
         let handedOverAt = deps.now()
-        if case .tempBasal(let dose) = pump.status.basalDeliveryState {
-            boundary = LoanDoseRecord(
-                kind: .boundaryTruncation,
-                startDate: dose.startDate,
-                endDate: handedOverAt,
-                unitsPerHour: dose.unitsPerHour)
-        }
 
         // §5.3.3: capture the odometer NOW (the phone was polling until this moment)
         // so the post-reclaim re-audit has a loan-start baseline even if the watch
@@ -348,34 +350,41 @@ final class PodLoanPhoneController {
         let historyStart = handedOverAt.addingTimeInterval(-.hours(16))
         // Fetch insulin AND carb history before building the grant (#49). Nested so both
         // are in hand at construction; the same 16h window that seeds IOB now seeds COB.
+        // 3 h of glucose (the Integral RC look-back) seeds momentum + RC; the 16 h window seeds
+        // IOB and COB. Nested so all three are in hand at construction.
+        let glucoseStart = handedOverAt.addingTimeInterval(-.hours(3))
         deps.doseHistory(historyStart) { [weak self] history in
             guard let self = self else { return }
             self.deps.carbHistory(historyStart) { [weak self] carbs in
                 guard let self = self else { return }
-                self.queue.async {
-                    guard self.state == .grantOffered, self.epoch == grantEpoch else { return }
-                    guard let stateData = try? PropertyListSerialization.data(fromPropertyList: pump.rawValue, format: .binary, options: 0),
-                          let settingsData = try? PropertyListSerialization.data(fromPropertyList: settings.rawValue, format: .binary, options: 0) else {
-                        self.abortGrant(reason: "snapshot encoding failed")
-                        return
+                self.deps.glucoseHistory(glucoseStart) { [weak self] glucose in
+                    guard let self = self else { return }
+                    self.queue.async {
+                        guard self.state == .grantOffered, self.epoch == grantEpoch else { return }
+                        guard let stateData = try? PropertyListSerialization.data(fromPropertyList: pump.rawValue, format: .binary, options: 0),
+                              let settingsData = try? PropertyListSerialization.data(fromPropertyList: settings.rawValue, format: .binary, options: 0) else {
+                            self.abortGrant(reason: "snapshot encoding failed")
+                            return
+                        }
+                        let grant = LoanGrant(
+                            epoch: grantEpoch,
+                            expiresAt: handedOverAt.addingTimeInterval(.minutes(5)),
+                            pumpManagerRawState: stateData,
+                            podAddress: 0,
+                            therapySettingsRaw: settingsData,
+                            settingsTimeZoneID: settings.basalRateSchedule?.timeZone.identifier ?? TimeZone.current.identifier,
+                            doseHistory: history.compactMap(Self.loanRecord(from:)),
+                            boundaryRecord: nil,   // Fix 1: running temp already lives in doseHistory (see above)
+                            supportsInterimHandback: true,   // WS1 capability gate (REAL-3)
+                            // Same source LoopDataManager:458 reads. Without this the watch runs
+                            // Standard RC while this phone may be running Integral — different
+                            // predictions from identical inputs, silently (audit 2026-07-22).
+                            integralRetrospectiveCorrectionEnabled: UserDefaults.standard.integralRetrospectiveCorrectionEnabled,
+                            carbHistory: carbs,
+                            glucoseHistory: glucose)
+                        self.sendMessage(.grant(grant))
+                        self.armT1(for: grantEpoch)
                     }
-                    let grant = LoanGrant(
-                        epoch: grantEpoch,
-                        expiresAt: handedOverAt.addingTimeInterval(.minutes(5)),
-                        pumpManagerRawState: stateData,
-                        podAddress: 0,
-                        therapySettingsRaw: settingsData,
-                        settingsTimeZoneID: settings.basalRateSchedule?.timeZone.identifier ?? TimeZone.current.identifier,
-                        doseHistory: history.compactMap(Self.loanRecord(from:)),
-                        boundaryRecord: boundary,
-                        supportsInterimHandback: true,   // WS1 capability gate (REAL-3)
-                        // Same source LoopDataManager:458 reads. Without this the watch runs
-                        // Standard RC while this phone may be running Integral — different
-                        // predictions from identical inputs, silently (audit 2026-07-22).
-                        integralRetrospectiveCorrectionEnabled: UserDefaults.standard.integralRetrospectiveCorrectionEnabled,
-                        carbHistory: carbs)
-                    self.sendMessage(.grant(grant))
-                    self.armT1(for: grantEpoch)
                 }
             }
         }

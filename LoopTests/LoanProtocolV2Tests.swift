@@ -82,6 +82,26 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertNil(g2.carbHistory)
     }
 
+    func testGrantGlucoseHistoryRoundTrips() throws {
+        let now = Date(timeIntervalSince1970: 1_784_338_000.125)
+        let sample = LoanGlucoseRecord(syncIdentifier: "g-1", startDate: now, valueMgdl: 120,
+                                       trendRateMgdlPerMin: 1.5, isDisplayOnly: false, wasUserEntered: false)
+        let grant = LoanGrant(epoch: 8, expiresAt: now.addingTimeInterval(300),
+                              pumpManagerRawState: Data([1]), podAddress: 0,
+                              therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
+                              doseHistory: [], boundaryRecord: nil, glucoseHistory: [sample])
+        guard case .grant(let g) = try roundTrip(.grant(grant)) else { return XCTFail("not a grant") }
+        XCTAssertEqual(g.glucoseHistory, [sample], "glucose history must survive the wire")
+
+        // Backward compat: an older phone sends no glucoseHistory; it must decode as nil, not [].
+        let old = LoanGrant(epoch: 8, expiresAt: now.addingTimeInterval(300),
+                            pumpManagerRawState: Data([1]), podAddress: 0,
+                            therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
+                            doseHistory: [], boundaryRecord: nil)
+        guard case .grant(let g2) = try roundTrip(.grant(old)) else { return XCTFail("not a grant") }
+        XCTAssertNil(g2.glucoseHistory)
+    }
+
     func testEpochAccessorCoversEveryKind() {
         XCTAssertNil(LoanMessage.request(LoanRequest(watchBuild: "77")).epoch)
         XCTAssertNil(LoanMessage.nack(ProtocolNack(seenVersion: nil)).epoch)

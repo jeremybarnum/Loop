@@ -396,7 +396,20 @@ final class WatchLoopManager {
             carbEffect = nil
         }
     }
-    private var carbEffect: [GlucoseEffect]?
+    private var carbEffect: [GlucoseEffect]? {
+        didSet {
+            predictedGlucose = nil
+
+            // Carb data may be back-dated, so re-calculate the retrospective glucose. PARITY
+            // with LoopDataManager.carbEffect.didSet (:352-358) — the port DROPPED this didSet.
+            // Consequence (#69/#46): retrospectiveGlucoseDiscrepancies is set to [] at cold-start
+            // takeover (empty glucose store), and updateRetrospectiveGlucoseEffect() only runs
+            // when it's nil (:780) — so RC froze at the empty cold-start value for the WHOLE
+            // loan, printing "RC —" on every [predict] line. Nil-ing it here restores per-cycle
+            // RC recomputation, exactly as the phone does.
+            retrospectiveGlucoseDiscrepancies = nil
+        }
+    }
     private var insulinOnBoard: InsulinValue?
     /// #50: the temp basal we last successfully enacted, cached so the watch knows what the
     /// pod is running without querying it. E4 orphans the pod after each dose, so
@@ -1179,6 +1192,20 @@ final class WatchLoopManager {
         dataAccessQueue.async {
             self.insulinEffect = nil
             self.insulinEffectIncludingPendingInsulin = nil
+        }
+    }
+
+    /// After the grant seeds ~3 h of glucose, drop the glucose-derived caches so the next cycle
+    /// recomputes momentum AND retrospective correction from the seeded history. Setting
+    /// insulinCounteractionEffects = [] cascades through its didSet (carbEffect = nil) and — via
+    /// the Fix-C carbEffect.didSet — nils retrospectiveGlucoseDiscrepancies too; we also clear
+    /// momentum and discrepancies directly so nothing rides a stale cold-start value. No forced
+    /// loop(): the first live glucose reading drives the first cycle (mirrors invalidateCarbEffect).
+    func invalidateGlucoseDerivedEffects() {
+        dataAccessQueue.async {
+            self.glucoseMomentumEffect = nil
+            self.insulinCounteractionEffects = []
+            self.retrospectiveGlucoseDiscrepancies = nil
         }
     }
 

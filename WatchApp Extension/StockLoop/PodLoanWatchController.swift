@@ -16,6 +16,7 @@
 //
 
 import Foundation
+import HealthKit
 import LoopKit
 import LoopCore
 import OmnipodKit
@@ -662,37 +663,33 @@ final class PodLoanWatchController {
         }
     }
 
-    /// 16 h insulin history + the R2 boundary record enter the watch DoseStore with
-    /// deterministic sync identifiers (idempotent under grant redelivery).
+    /// 16 h insulin history enters the watch DoseStore as PUMP EVENTS (idempotent under
+    /// grant redelivery). Seeded via `addPumpEvents` — NOT the `addDoses` side door — so
+    /// stock `InsulinMath.reconciled()` runs at the store: it collapses any same-start
+    /// overlap to a single dose AND puts the seed in the same reconciliation world as the
+    /// watch's own enacted temps, so the watch's first temp truncates the seeded (open)
+    /// running temp instead of overlapping its tail (Fix 2). Net-basal netting rides the
+    /// watch's basalProfile, which is frozen to the grant schedule for the loan, so seeded
+    /// temps net against the delivery-time schedule with no stamped rate (the pump-event
+    /// table does not persist scheduledBasalRate anyway — it is re-derived at read). The
+    /// redundant running-temp `boundaryRecord` is no longer emitted by the phone (Fix 1);
+    /// `seedDoseEntries` still tolerates it for older phones and `reconciled()` would collapse
+    /// it regardless. See docs/DESIGN_LOAN_ADDPUMPEVENTS.md.
     private func ingestGrantHistory(_ grant: LoanGrant) {
-        var entries: [DoseEntry] = []
-        var records = grant.doseHistory
-        if let boundary = grant.boundaryRecord { records.append(boundary) }
-        for (index, record) in records.enumerated() {
-            guard let entry = Self.doseEntry(from: record, syncIdentifier: "loanv2-grant-\(grant.epoch)-\(index)") else { continue }
-            entries.append(entry)
-        }
-        // #1 handover-IOB diagnostic (2026-07-25): the seed magnitude, and whether the
-        // running temp is present BOTH inside doseHistory and as the separate boundaryRecord
-        // — the double-seed signature behind the ~0.3U IOB bump at takeover. grossImpliedΣ
-        // is a raw rate×duration proxy (not net IOB), useful only to compare seed size.
+        let entries = grant.seedDoseEntries()
+        // #1 handover-IOB diagnostic: seed magnitude + the double-seed detector (should now
+        // always read "no" — the phone stopped sending the boundaryRecord in Fix 1).
         let grossImpliedSum = entries.reduce(0.0) { $0 + $1.programmedUnits }
         let boundaryDup = Self.boundaryDuplicatesHistory(grant)
-        // WIPE-THEN-SEED (IOB dedup, 2026-07-22). The seed syncIds are epoch-keyed
-        // ("loanv2-grant-<epoch>-<index>"), so every takeover re-inserted the same 16 h of
-        // phone history under fresh identifiers — three epochs in one day tripled IOB
-        // (field: 7.40 U on the books vs ≤ ~2.5 U physically deliverable; clamp headroom
-        // -1.40 blocked every high temp at eventual 256). A watch-enacted dose also lands
-        // twice across epochs: once via its own pump event, again via the next grant's
-        // reconciled history. The grant IS ground truth at takeover — it already contains
-        // this watch's journal-reconciled doses — so wipe both tables and seed from it:
-        // pump events first (its final sync pushes them into the delivery store), then the
-        // delivery-store cache (where addDoses lands and IOB/effects read from —
-        // DoseStore.getDoses:1274). Recency (lastPumpEventsReconciliation) nils on wipe and
-        // is restored seconds later by the takeover's own status read via
-        // checkPumpDataAndLoop. Idempotent under grant redelivery by construction.
+        // WIPE-THEN-SEED (IOB dedup, 2026-07-22). Epoch-keyed syncIds mean each takeover would
+        // otherwise re-insert the same 16 h under fresh identifiers, compounding IOB across
+        // epochs. The grant IS ground truth at takeover (it already contains this watch's
+        // journal-reconciled doses), so wipe both tables, then seed. lastPumpEventsReconciliation
+        // is set to the takeover instant so the reconciled seed persists into the delivery
+        // store; the takeover's own status read refreshes it via checkPumpDataAndLoop.
         let doseStore = loopManager.doseStore
         let seamLog = OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController")
+        let seedReconciliation = Date()
         doseStore.deleteAllPumpEvents { error in
             if let error = error {
                 os_log("Grant ingest: pump-event wipe failed: %{public}@", log: seamLog, type: .error, String(describing: error))
@@ -705,20 +702,36 @@ final class PodLoanWatchController {
                     self.loopManager.invalidateInsulinEffect()
                     return
                 }
-                doseStore.addDoses(entries, from: nil) { error in
+                // NewPumpEvent identity lives in `raw` (its hex becomes the dose syncIdentifier);
+                // the epoch-keyed seed syncId gives each dose a distinct raw → upsert-dedup on
+                // re-delivery, distinct rows otherwise (DoseStore uniqueness constraint on raw).
+                let events = entries.map { dose in
+                    NewPumpEvent(date: dose.startDate, dose: dose,
+                                 raw: Data((dose.syncIdentifier ?? UUID().uuidString).utf8),
+                                 title: Self.pumpEventTitle(for: dose.type))
+                }
+                doseStore.addPumpEvents(events, lastReconciliation: seedReconciliation, replacePendingEvents: true) { error in
                     if let error = error {
                         os_log("Grant history ingest failed: %{public}@", log: seamLog, type: .error, String(describing: error))
                     } else {
-                        SportLog.event("loan", String(format: "insulin books rebuilt from grant — %d records (wipe-then-seed) · grossImpliedΣ=%.2fU · boundaryDup=%@%@",
-                                                       entries.count, grossImpliedSum,
+                        SportLog.event("loan", String(format: "insulin books rebuilt from grant — %d records (wipe-then-seed, addPumpEvents) · grossImpliedΣ=%.2fU · boundaryDup=%@%@",
+                                                       events.count, grossImpliedSum,
                                                        boundaryDup ? "YES" : "no",
-                                                       boundaryDup ? " (#1 double-seed: running temp is in BOTH doseHistory and boundaryRecord → seeded twice)" : ""))
+                                                       boundaryDup ? " (#1 double-seed — expected gone post-Fix1)" : ""))
                     }
                     self.loopManager.invalidateInsulinEffect()
+                    // SEED-IN IOB anchor (#1): the watch's IOB right after seeding, to compare
+                    // against the phone's IOB at grant time — closes the takeover-fidelity loop.
+                    doseStore.insulinOnBoard(at: seedReconciliation) { result in
+                        if case .success(let iob) = result {
+                            SportLog.event("loan", String(format: "SEED-IN IOB=%.2fU @ takeover (%d seeded doses)", iob.value, events.count))
+                        }
+                    }
                 }
             }
         }
         ingestGrantCarbs(grant)
+        ingestGrantGlucose(grant)
     }
 
     /// Seed the phone's active carbs so the watch loop predicts with COB (#49). Uses
@@ -759,6 +772,40 @@ final class PodLoanWatchController {
         loopManager.invalidateCarbEffect()
     }
 
+    /// Seed ~3 h of the phone's glucose so the watch's momentum + retrospective correction
+    /// compute from the FIRST post-takeover cycle. The watch GlucoseStore is otherwise empty
+    /// until live G7 reads accumulate — momentum was blind for ~15 min and RC never warmed, so
+    /// the watch dosed on a prediction that ignored glucose history. Reuses the phone's
+    /// syncIdentifier so re-grants dedup (GlucoseStore keys on provenance + syncIdentifier);
+    /// seeded samples are strictly pre-takeover, so they never collide with the watch's own
+    /// later G7 reads. Pairs with the RC-freeze fix in WatchLoopManager (both are required for
+    /// RC to actually produce an effect during a loan).
+    private func ingestGrantGlucose(_ grant: LoanGrant) {
+        guard let records = grant.glucoseHistory, !records.isEmpty else { return }
+        let mgdl = HKUnit.milligramsPerDeciliter
+        let mgdlPerMin = mgdl.unitDivided(by: .minute())
+        let samples: [NewGlucoseSample] = records.map { r in
+            NewGlucoseSample(
+                date: r.startDate,
+                quantity: HKQuantity(unit: mgdl, doubleValue: r.valueMgdl),
+                condition: nil,
+                trend: nil,
+                trendRate: r.trendRateMgdlPerMin.map { HKQuantity(unit: mgdlPerMin, doubleValue: $0) },
+                isDisplayOnly: r.isDisplayOnly,
+                wasUserEntered: r.wasUserEntered,
+                syncIdentifier: r.syncIdentifier ?? "loanv2-glucose-\(Int(r.startDate.timeIntervalSince1970 * 1000))")
+        }
+        loopManager.glucoseStore.addGlucoseSamples(samples) { result in
+            switch result {
+            case .success(let stored):
+                SportLog.event("loan", "seeded \(stored.count) glucose sample\(stored.count == 1 ? "" : "s") from the phone (momentum/RC warm-up)")
+                self.loopManager.invalidateGlucoseDerivedEffects()
+            case .failure(let error):
+                os_log("Grant glucose ingest failed: %{public}@", log: OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController"), type: .error, String(describing: error))
+            }
+        }
+    }
+
     /// #1 double-seed detector: is the grant's running-temp `boundaryRecord` ALSO present
     /// inside `doseHistory` (same rate, overlapping window)? If so, the running temp is
     /// seeded twice at takeover → its insulin is double-counted in watch IOB (~0.3U bump).
@@ -775,19 +822,15 @@ final class PodLoanWatchController {
         }
     }
 
-    private static func doseEntry(from record: LoanDoseRecord, syncIdentifier: String) -> DoseEntry? {
-        switch record.kind {
-        case .bolus:
-            guard let units = record.amount else { return nil }
-            return DoseEntry(type: .bolus, startDate: record.startDate, endDate: record.endDate ?? record.startDate, value: units, unit: .units, syncIdentifier: syncIdentifier)
-        case .tempBasal, .boundaryTruncation:
-            guard let rate = record.unitsPerHour, let end = record.endDate else { return nil }
-            return DoseEntry(type: .tempBasal, startDate: record.startDate, endDate: end, value: rate, unit: .unitsPerHour, syncIdentifier: syncIdentifier)
-        case .suspend:
-            guard let end = record.endDate else { return nil }
-            return DoseEntry(type: .tempBasal, startDate: record.startDate, endDate: end, value: 0, unit: .unitsPerHour, syncIdentifier: syncIdentifier)
-        case .resume, .carb, .plumbingCancel, .modeChange:
-            return nil
+    /// Titles for seeded pump events (record→DoseEntry lives in the shared
+    /// LoanProtocolV2 `seedDoseEntry`/`seedDoseEntries` so the watch and the tests agree).
+    private static func pumpEventTitle(for type: DoseType) -> String {
+        switch type {
+        case .bolus:     return "Bolus"
+        case .tempBasal: return "Temp Basal"
+        case .basal:     return "Basal"
+        case .suspend:   return "Suspend"
+        case .resume:    return "Resume"
         }
     }
 

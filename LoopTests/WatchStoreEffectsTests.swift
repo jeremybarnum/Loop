@@ -38,6 +38,7 @@ import XCTest
 import HealthKit
 import LoopKit
 import LoopCore
+@testable import Loop
 
 final class WatchStoreEffectsTests: XCTestCase {
 
@@ -406,5 +407,139 @@ final class WatchStoreEffectsTests: XCTestCase {
                        "wipe-then-seed must be idempotent across a re-takeover")
         XCTAssertEqual(firstTakeover, thirdTakeover, accuracy: 0.01,
                        "...and across three, the count that produced 7.40 U in the field")
+    }
+
+    // MARK: - Handover fidelity (#69): the real seed path via the shared seedDoseEntries
+
+    /// A minimal grant carrying the given records (the fields seedDoseEntries reads).
+    private func makeGrant(epoch: Int, doseHistory: [LoanDoseRecord], boundary: LoanDoseRecord?) -> LoanGrant {
+        LoanGrant(epoch: epoch, expiresAt: Date().addingTimeInterval(.minutes(5)),
+                  pumpManagerRawState: Data(), podAddress: 0,
+                  therapySettingsRaw: Data(), settingsTimeZoneID: TimeZone.current.identifier,
+                  doseHistory: doseHistory, boundaryRecord: boundary)
+    }
+
+    /// Seed exactly as production `ingestGrantHistory` now does: shared `seedDoseEntries`
+    /// (record→DoseEntry, freezing scheduledBasalRate from the grant schedule) →
+    /// NewPumpEvents → `addPumpEvents` (so stock reconciled() collapses overlaps).
+    private func seedViaAddPumpEvents(_ grant: LoanGrant, into doseStore: DoseStore) {
+        let entries = grant.seedDoseEntries()
+        let events = entries.map { dose in
+            NewPumpEvent(date: dose.startDate, dose: dose,
+                         raw: Data((dose.syncIdentifier ?? UUID().uuidString).utf8),
+                         title: "Temp Basal")
+        }
+        let exp = expectation(description: "seed addPumpEvents")
+        exp.assertForOverFulfill = false
+        doseStore.addPumpEvents(events, lastReconciliation: Date(), replacePendingEvents: true) { error in
+            XCTAssertNil(error)
+            exp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+    }
+
+    private func wipe(_ doseStore: DoseStore) {
+        let exp = expectation(description: "wipe")
+        doseStore.deleteAllPumpEvents { _ in
+            doseStore.insulinDeliveryStore.purgeCachedInsulinDeliveryObjects(before: nil) { _ in exp.fulfill() }
+        }
+        waitForExpectations(timeout: 10)
+    }
+
+    /// #69, field-confirmed `boundaryDup=YES`: a running temp arrives in doseHistory as the
+    /// open temp AND (older phones) as a same-start boundaryRecord. Seeding via addPumpEvents
+    /// runs stock reconciled(), which collapses the same-start overlap to ONE dose, so the
+    /// boundary does not inflate IOB — the pre-fix `addDoses` side door summed them (the
+    /// ~0.3 U takeover bump). Guards Fix 1 (phone stops sending it) + Fix 2 (seed reconciles).
+    func testHandoverBoundaryDoesNotDoubleSeedIOB() {
+        let (doseStore, _) = makeStoresFixed()   // basal 1.0 U/hr
+        let now = Date()
+        let runningTemp = LoanDoseRecord(kind: .tempBasal,
+                                         startDate: now.addingTimeInterval(-.minutes(25)),
+                                         endDate: now.addingTimeInterval(.minutes(5)),   // open past takeover
+                                         unitsPerHour: 3.0)
+        let boundary = LoanDoseRecord(kind: .boundaryTruncation,
+                                      startDate: now.addingTimeInterval(-.minutes(25)),   // SAME start & rate
+                                      endDate: now,
+                                      unitsPerHour: 3.0)
+
+        seedViaAddPumpEvents(makeGrant(epoch: 1, doseHistory: [runningTemp], boundary: nil),
+                             into: doseStore)
+        let iobNoBoundary = iob(doseStore, at: now)
+
+        wipe(doseStore)
+        seedViaAddPumpEvents(makeGrant(epoch: 2, doseHistory: [runningTemp], boundary: boundary),
+                             into: doseStore)
+        let iobWithBoundary = iob(doseStore, at: now)
+
+        XCTAssertGreaterThan(iobNoBoundary, 0, "the seeded running temp must produce IOB")
+        // reconciled() collapses the same-start pair to ONE dose; which endDate survives is
+        // nondeterministic (the boundary's truncated window or the open temp's), so IOB lands
+        // near — not exactly at — the single-temp value. The point is it is NOT ~2x (the field
+        // double-seed). A naive double would be ≈1.8x; bound it well under that, and above zero.
+        XCTAssertLessThan(iobWithBoundary, iobNoBoundary * 1.4,
+                          "boundaryRecord must NOT double-seed — addPumpEvents+reconciled() collapses the same-start duplicate (#69)")
+        XCTAssertGreaterThan(iobWithBoundary, iobNoBoundary * 0.5,
+                             "...and the temp must still count once, not vanish")
+    }
+
+    /// The takeover-fidelity invariant Jeremy asked for: IOB is conserved across takeover.
+    /// The same insulin, expressed as the phone's DoseEntries vs the grant's wire records
+    /// seeded on the watch, must yield the same IOB.
+    func testHandoverIOBConservationAcrossTakeover() {
+        let (doseStore, _) = makeStoresFixed()   // basal 1.0 U/hr
+        let now = Date()
+        let scheduled = HKQuantity(unit: DoseEntry.unitsPerHour, doubleValue: 1.0)
+        let phoneDoses: [DoseEntry] = [
+            DoseEntry(type: .bolus, startDate: now.addingTimeInterval(-.minutes(30)),
+                      endDate: now.addingTimeInterval(-.minutes(30)), value: 2.0, unit: .units,
+                      syncIdentifier: "phone-bolus"),
+            DoseEntry(type: .tempBasal, startDate: now.addingTimeInterval(-.minutes(20)),
+                      endDate: now.addingTimeInterval(-.minutes(5)), value: 2.5, unit: .unitsPerHour,
+                      syncIdentifier: "phone-temp", scheduledBasalRate: scheduled),
+        ]
+        addDoses(phoneDoses, to: doseStore)
+        let phoneIOB = iob(doseStore, at: now)
+
+        wipe(doseStore)
+        let grant = makeGrant(epoch: 1, doseHistory: [
+            LoanDoseRecord(kind: .bolus, startDate: now.addingTimeInterval(-.minutes(30)), amount: 2.0),
+            LoanDoseRecord(kind: .tempBasal, startDate: now.addingTimeInterval(-.minutes(20)),
+                           endDate: now.addingTimeInterval(-.minutes(5)), unitsPerHour: 2.5),
+        ], boundary: nil)
+        seedViaAddPumpEvents(grant, into: doseStore)
+        let watchIOB = iob(doseStore, at: now)
+
+        XCTAssertGreaterThan(phoneIOB, 0, "sanity: the phone books carry IOB")
+        XCTAssertEqual(watchIOB, phoneIOB, accuracy: 0.05,
+                       "IOB must be conserved across takeover — the watch seed reproduces the phone's IOB")
+    }
+
+    /// The watch nets seeded temps against its `basalProfile`, which is FROZEN to the grant
+    /// schedule for the loan — that (not a per-dose stamped rate) is what yields correct
+    /// delivery-time netting. Established empirically here: the addPumpEvents/pump-event path
+    /// does NOT persist a dose's scheduledBasalRate; LoopKit re-derives it from the profile at
+    /// read. So this pins net (delivery-time) IOB, and documents that a profile change re-nets —
+    /// which is exactly why the watch freezes the profile, and why the phone-side
+    /// retroactive-netting fix (profile CAN change mid-loan there) is a separate open task.
+    func testSeededTempNetsAgainstFrozenGrantSchedule() {
+        let (doseStore, _) = makeStoresFixed()   // basalProfile = 1.0 U/hr (the frozen grant schedule)
+        let now = Date()
+        // 3.0 U/hr for 15 min, ending 5 min ago. Net above the 1.0 schedule = 2.0 U/hr → 0.5 U.
+        let temp = LoanDoseRecord(kind: .tempBasal, startDate: now.addingTimeInterval(-.minutes(20)),
+                                  endDate: now.addingTimeInterval(-.minutes(5)), unitsPerHour: 3.0)
+        seedViaAddPumpEvents(makeGrant(epoch: 1, doseHistory: [temp], boundary: nil), into: doseStore)
+
+        let iobNet = iob(doseStore, at: now)
+        // GROSS would be 3.0*0.25 = 0.75 U; asserting ~0.5 proves it netted against the schedule.
+        XCTAssertEqual(iobNet, 0.5, accuracy: 0.06,
+                       "seeded temp must net against the frozen grant schedule (delivery-time netting), not count gross")
+
+        // Mechanism: netting rides the (re-derived) profile on the pump-event path, so changing
+        // it re-nets — which is precisely why the watch freezes the profile for the whole loan.
+        doseStore.basalProfile = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: 2.5)])!
+        let iobAfterProfileChange = iob(doseStore, at: now)
+        XCTAssertNotEqual(iobNet, iobAfterProfileChange, accuracy: 0.1,
+                          "netting rides the current profile on the pump-event path — the watch's frozen profile keeps it stable")
     }
 }
