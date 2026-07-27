@@ -1362,19 +1362,12 @@ final class PodLoanWatchController {
         }
         let tombstones = journal.pendingTombstones()
         guard !events.isEmpty || !tombstones.isEmpty else { return }
-        // Instrumentation (#69, 2026-07-25): summarize what the WATCH streams so the phone-side
-        // reconcile can be compared against the source — localizes the hand-back insulin
-        // over-count (records carry full temp windows; overlaps are not truncated). "implied Σ"
-        // is the sum of rate×window (temps) + bolus amounts, i.e. what the phone will ingest.
-        var streamImpliedU = 0.0
-        for e in events {
-            if let rate = e.record.unitsPerHour, let end = e.record.endDate {
-                streamImpliedU += rate * end.timeIntervalSince(e.record.startDate) / 3600
-            } else if e.record.kind == .bolus, let amt = e.record.amount {
-                streamImpliedU += amt
-            }
-        }
-        SportLog.event("handback", String(format: "stream: %d event(s), implied Σ=%.2fU, %d tombstone(s)", events.count, streamImpliedU, tombstones.count))
+        // What the watch streams to the phone. (Removed the old "implied Σ" — a sum of temp
+        // rate×FULL-window with overlaps untruncated. It was a diagnostic-only over-count that fed
+        // no logic and consistently mislead: it exceeds physically-possible delivery, so it is NOT a
+        // meaningful commanded total. The trustworthy commanded number is the watch's own floored
+        // reconciled dose total; the hand-back reconciliation delta will be captured separately.)
+        SportLog.event("handback", String(format: "stream: %d event(s), %d tombstone(s)", events.count, tombstones.count))
         sendMessage(.doseRecordBatch(DoseRecordBatch(epoch: epoch, events: events, tombstones: tombstones)))
     }
 }

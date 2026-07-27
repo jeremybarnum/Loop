@@ -608,8 +608,6 @@ final class PodLoanPhoneController {
                                    syncIdentifier: "loanv2-audit-\(offer.epoch)"))
         }
 
-        logReconciledDoses(doses, context: "drain-e\(offer.epoch)")
-
         // WS1: the still-open temp (outcome.openEventID) is skipped by the reconciler and
         // kept out of committedIDs, so it re-drains and is written (clamped, immutable) on
         // the final drain. But we STILL ack its seq (newCursor below uses `events`, not
@@ -788,34 +786,11 @@ final class PodLoanPhoneController {
     /// written to the store first (records are truth; never understate IOB), then the
     /// pod is reclaimed and dosing restored. Used when a new request proves the old
     /// loan is dead, when reclaim times out, or on a relaunch into a stranded state.
-    /// Instrumentation (#69, 2026-07-25): itemize reconciled hand-back/reclaim doses so the
-    /// loaded-IOB inflation is auditable without a forensic issue-report sum. Logs each dose's
-    /// window (start→end→minutes), rate/value, IMPLIED delivery (rate×minutes for temps), an
-    /// OVERLAP-NEXT flag when a temp's full window overruns the next dose's start (the
-    /// over-count signal — LoanReconciler enters oversized records in full with no truncation,
-    /// :107-109), plus the batch total. Compare this Σ against the watch's "stream implied Σ"
-    /// and the post-reclaim IOB to localize where the ~5 U comes from.
-    private func logReconciledDoses(_ doses: [DoseEntry], context: String) {
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime]
-        let sorted = doses.sorted { $0.startDate < $1.startDate }
-        var total = 0.0
-        for (i, d) in sorted.enumerated() {
-            let mins = d.endDate.timeIntervalSince(d.startDate) / 60
-            let implied = d.programmedUnits   // public: rate×duration for temps, units for bolus
-            total += implied
-            let overlap = i + 1 < sorted.count && sorted[i + 1].startDate < d.endDate
-            let magnitude = d.unit == .unitsPerHour ? d.unitsPerHour : d.programmedUnits
-            let line = String(format: "HANDBACK[%@] %d/%d %@ %@→%@ %.0fm %.2f%@ ≈%.3fU%@",
-                              context, i + 1, sorted.count, String(describing: d.type),
-                              iso.string(from: d.startDate), iso.string(from: d.endDate),
-                              mins, magnitude, d.unit == .unitsPerHour ? "U/hr" : "U", implied,
-                              overlap ? " OVERLAP-NEXT" : "")
-            os_log("%{public}@", log: log, type: .default, line)
-        }
-        os_log("%{public}@", log: log, type: .default,
-               String(format: "HANDBACK[%@] SUMMARY: %d dose(s), implied Σ=%.2fU", context, sorted.count, total))
-    }
+    // (Removed logReconciledDoses — the #69 forensic dump built on `programmedUnits` = rate×FULL
+    // temp window, the untruncated "implied Σ" over-count. It was os_log-only, fed no logic, and its
+    // sum was physically impossible as delivery (exceeded max basal), so it consistently misled.
+    // The trustworthy commanded number is the floored reconciled dose total; the real hand-back
+    // reconciliation delta will be captured explicitly instead.)
 
     func forceReclaimToOwner(reason: String) {
         os_log("Force reclaim to OWNER: %{public}@", log: log, type: .default, reason)
@@ -835,7 +810,6 @@ final class PodLoanPhoneController {
                 loanStart: loanStartedAt ?? deps.now().addingTimeInterval(-.hours(2)),
                 loanEnd: deps.now())
             let outcome = LoanReconciler.reconcile(input)  // isFinalHandback defaults true → all finalized
-            logReconciledDoses(outcome.doses, context: "reclaim")
             deps.addPumpEvents(newPumpEvents(from: outcome.doses), deps.now()) { _ in }
             for carb in outcome.carbs { deps.addCarb(carb) { _ in } }
             deps.issueNotice("Sport Mode Reset", "A previous watch loan was ended without a clean hand-back; its records were saved. Check Event History and the pod.")
