@@ -75,7 +75,8 @@ final class PodLoanPhoneController {
     /// Wrap reconciled loan DoseEntries as NewPumpEvents for DoseStore.addPumpEvents.
     /// The identity must live in `raw` — NewPumpEvent.init overwrites dose.syncIdentifier
     /// with raw.hexadecimalString, so we encode the deterministic loan syncIdentifier
-    /// (loanv2-<uuid> / loanv2-audit-<epoch>) there for idempotent, dedup-safe upserts.
+    /// (loanv2-<uuid>) there for idempotent, dedup-safe upserts. (The loanv2-audit-<epoch>
+    /// odometer-IOB sync ID is gone as of 2026-07-27 — no odometer insulin is injected.)
     private func newPumpEvents(from doses: [DoseEntry]) -> [NewPumpEvent] {
         doses.compactMap { dose in
             guard let syncID = dose.syncIdentifier else { return nil }
@@ -598,15 +599,32 @@ final class PodLoanPhoneController {
                                                           from: loanStart, to: offer.handedBackAt)
             UserDefaults.standard.set(expected, forKey: Keys.expectedUnits)
             UserDefaults.standard.set(offer.odometer?.freshenSucceeded == true, forKey: Keys.watchAuditRan)
+
+            // CAPTURE (Jeremy 2026-07-27, Step 2): the hand-back reconciliation numbers, relayed to the
+            // WATCH log via handbackDiag ([phone] …) AND os_log'd, normalized by loan length + cycles —
+            // so field loans record the real delta. `delivered` = odometer delta (floored ground truth).
+            // `cmdCont` = Σ rate×time (continuous — the biased estimate the old audit compared against).
+            // `cmdFloor` = Σ floor(rate×time to 0.05 U pulse) (UNBIASED — matches the pod's pulse model).
+            // `remFloor` is the number a future warning would key on: it should stay ~0 and NOT grow with
+            // loan length. NO user-facing action is taken on any of it (warnings + IOB valve deferred).
+            let delivered = offer.odometer.map { $0.deliveredLatest - $0.deliveredAtStart }
+            let cmdCont = outcome.doses.reduce(0.0) { $0 + $1.programmedUnits }
+            let cmdFloor = outcome.doses.reduce(0.0) { $0 + (($1.programmedUnits * 20).rounded(.down) / 20) }
+            let loanMin = offer.handedBackAt.timeIntervalSince(loanStart) / 60
+            handbackDiag(offer.epoch, String(format:
+                "reconcile: delivered=%@ cmdCont=%.3f cmdFloor=%.3f remCont=%@ remFloor=%@ loanMin=%.0f cycles=%d fresh=%@",
+                delivered.map { String(format: "%.3f", $0) } ?? "n/a", cmdCont, cmdFloor,
+                delivered.map { String(format: "%+.3f", $0 - cmdCont) } ?? "n/a",
+                delivered.map { String(format: "%+.3f", $0 - cmdFloor) } ?? "n/a",
+                loanMin, allStagedEvents.count, offer.odometer?.freshenSucceeded == true ? "Y" : "N"))
         }
 
-        var doses = outcome.doses
-        if let positive = outcome.positiveRemainderUnits {
-            // R6 valve: timed at hand-back, zero decay elapsed — conservative.
-            doses.append(DoseEntry(type: .bolus, startDate: offer.handedBackAt, endDate: offer.handedBackAt,
-                                   value: positive, unit: .units,
-                                   syncIdentifier: "loanv2-audit-\(offer.epoch)"))
-        }
+        // No additional insulin is added at hand-back (Jeremy 2026-07-27): the R6 positive-remainder
+        // IOB valve is disabled for now. IOB comes purely from the streamed reconciled records — stock-
+        // like trust; stock never injects odometer-derived IOB. outcome.positiveRemainderUnits is still
+        // computed (and captured above) but no longer consumed. Re-enable if/when the reconciliation
+        // warning is redesigned with a proper threshold.
+        let doses = outcome.doses
 
         // WS1: the still-open temp (outcome.openEventID) is skipped by the reconciler and
         // kept out of committedIDs, so it re-drains and is written (clamped, immutable) on
@@ -636,11 +654,10 @@ final class PodLoanPhoneController {
                     self.deps.addCarb(carb) { _ in }  // merge-not-replace at integration
                 }
 
-                if let shortfall = outcome.residualShortfallUnits {
-                    // The RULED layer-3 notice, verbatim (R22).
-                    self.deps.issueNotice("Pod Delivery Check",
-                        String(format: "The pod delivered %.2f U less than the watch session recorded. Records were not changed. Possible causes: pod fault, occlusion, or an interrupted command. Check the pod and review the session in Event History.", shortfall))
-                }
+                // Over/under delivery warning removed for now (Jeremy 2026-07-27): the hand-back is
+                // silent — records committed, delta captured in the [phone] reconcile line above, no
+                // user notice. outcome.residualShortfallUnits is still computed but no longer surfaced;
+                // the warning returns once a threshold is chosen from the captured field data.
 
                 let newCursor = events.map(\.seq).max() ?? self.committedCursor
                 if !isStale {
@@ -692,15 +709,13 @@ final class PodLoanPhoneController {
         }
     }
 
-    /// The audit itself. Two modes:
-    /// - recordsCommitted (normal close): compare the pod's own delivered-delta to
-    ///   the committed record. If the watch's audit never ran (dead odometer), the
-    ///   R6 valve applies here: positive remainder enters IOB timed-late; negative
-    ///   surfaces the RULED notice (fingerprints closed at commit — R22's ambiguity
-    ///   route). If the watch's audit DID run, discrepancies are notice-only.
-    /// - !recordsCommitted (escape-hatch reclaim, records still owed): NOTICE-ONLY
-    ///   against the schedule expectation — entries here could double-count with a
-    ///   late-arriving drain, so the valve waits for reconcile.
+    /// The post-reclaim re-audit. DIAGNOSTIC-ONLY as of 2026-07-27 (Jeremy): it re-reads
+    /// the pod's odometer ~90 s after reclaim and os_log's delivered-vs-expected, but takes
+    /// NO user-facing action — the R6 IOB valve and the over/under notices are both disabled
+    /// (deferred until a proper warning threshold is chosen). The dose-integrity commit path
+    /// and the [phone] reconcile capture at the drain audit are the trustworthy signals; this
+    /// is a rough breadcrumb only (its `expected` is the biased continuous estimate and its
+    /// late window can fold in post-loan phone delivery).
     private func performReAudit(recordsCommitted: Bool) {
         guard let lendable = deps.pumpManager() as? PumpConnectionLendable,
               let atGrant = UserDefaults.standard.object(forKey: Keys.deliveredAtGrant) as? Double else { return }
@@ -722,33 +737,13 @@ final class PodLoanPhoneController {
                 }
 
                 let remainder = delivered - expected
-                os_log("Post-reclaim re-audit: delivered %.2f, expected %.2f, remainder %.2f (recordsCommitted %d, watchAuditRan %d)",
+                // Re-audit is diagnostic-only (Jeremy 2026-07-27): log the number, take NO user-facing
+                // action — no IOB injection ("not adding insulin at hand-back") and no over/under
+                // warning (deferred). NOTE this `expected` is the biased continuous estimate and this
+                // 90 s-late window can fold in post-loan phone delivery, so it is a rough breadcrumb
+                // only — the trustworthy capture is the [phone] reconcile line at the drain audit.
+                os_log("Post-reclaim re-audit (diagnostic-only): delivered %.2f, expected %.2f, remainder %.2f (recordsCommitted %d, watchAuditRan %d)",
                        log: self.log, type: .default, delivered, expected, remainder, recordsCommitted ? 1 : 0, watchAuditRan ? 1 : 0)
-                guard abs(remainder) > LoanReconciler.pulseTolerance else {
-                    UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
-                    return
-                }
-
-                if !recordsCommitted {
-                    self.deps.issueNotice("Pod Audit (Records Pending)",
-                        String(format: "Since the loan began the pod delivered %.2f U versus %.2f U expected from the schedule. The watch's records have not arrived yet; nothing was changed.", delivered, expected))
-                } else if watchAuditRan {
-                    self.deps.issueNotice("Pod Audit Discrepancy",
-                        String(format: "A post-reclaim check found the pod delivered %.2f U versus %.2f U recorded. Records were not changed. Review the session in Event History.", delivered, expected))
-                } else if remainder > 0 {
-                    // R6 valve, phone-side: the watch never audited; unrecorded insulin
-                    // enters IOB timed at reclaim (zero decay - conservative).
-                    let bolus = DoseEntry(type: .bolus, startDate: self.deps.now(), endDate: self.deps.now(),
-                                          value: remainder, unit: .units,
-                                          syncIdentifier: "loanv2-reaudit-\(self.epoch)")
-                    self.deps.addPumpEvents(self.newPumpEvents(from: [bolus]), self.deps.now()) { _ in }
-                    self.deps.issueNotice("Pod Audit",
-                        String(format: "The pod delivered %.2f U more than the watch session recorded. The extra insulin was added to your records at reclaim time.", remainder))
-                } else {
-                    // The RULED layer-3 notice, verbatim (R22).
-                    self.deps.issueNotice("Pod Delivery Check",
-                        String(format: "The pod delivered %.2f U less than the watch session recorded. Records were not changed. Possible causes: pod fault, occlusion, or an interrupted command. Check the pod and review the session in Event History.", -remainder))
-                }
                 if recordsCommitted {
                     UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
                 }
