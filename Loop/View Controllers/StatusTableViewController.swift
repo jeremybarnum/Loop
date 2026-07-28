@@ -1398,6 +1398,8 @@ final class StatusTableViewController: LoopChartsTableViewController {
     @IBAction func unwindFromSettings(_ segue: UIStoryboardSegue) {}
 
     @IBAction func userTappedAddCarbs() {
+        // PODLOAN (#71): pod on the watch → reclaim first, don't mutate loop state from the phone.
+        guard !deviceManager.isPodLoanedToWatch else { return presentPodLoanReclaimPrompt() }
         presentCarbEntryScreen(nil)
     }
 
@@ -1427,6 +1429,8 @@ final class StatusTableViewController: LoopChartsTableViewController {
     }
 
     @IBAction func presentBolusScreen() {
+        // PODLOAN (#71): pod on the watch → reclaim first, don't mutate loop state from the phone.
+        guard !deviceManager.isPodLoanedToWatch else { return presentPodLoanReclaimPrompt() }
         presentBolusEntryView()
     }
     
@@ -1510,6 +1514,8 @@ final class StatusTableViewController: LoopChartsTableViewController {
     }
 
     @IBAction func premealButtonTapped(_ sender: UIBarButtonItem) {
+        // PODLOAN (#71): pod on the watch → reclaim first, don't mutate loop state from the phone.
+        guard !deviceManager.isPodLoanedToWatch else { return presentPodLoanReclaimPrompt() }
         togglePreMealMode(confirm: false)
     }
     
@@ -1610,10 +1616,14 @@ final class StatusTableViewController: LoopChartsTableViewController {
     }
 
     @IBAction func toggleWorkoutMode(_ sender: UIBarButtonItem) {
+        // PODLOAN (#71): pod on the watch → reclaim first, don't mutate loop state from the phone.
+        guard !deviceManager.isPodLoanedToWatch else { return presentPodLoanReclaimPrompt() }
         presentCustomPresets(confirm: false)
     }
     
     @IBAction func onSettingsTapped(_ sender: UIBarButtonItem) {
+        // PODLOAN (#71): pod on the watch → reclaim first, don't mutate loop state from the phone.
+        guard !deviceManager.isPodLoanedToWatch else { return presentPodLoanReclaimPrompt() }
         presentSettings()
     }
 
@@ -1818,20 +1828,27 @@ final class StatusTableViewController: LoopChartsTableViewController {
         // undiscoverable, 2026-07-18). Opening pod settings is meaningless while
         // the connection is released anyway.
         if deviceManager.isPodLoanedToWatch {
-            let alert = UIAlertController(
-                title: NSLocalizedString("Pod Is on the Watch", comment: "Title of the reclaim prompt when tapping the pump tile during a loan"),
-                message: NSLocalizedString("Reclaim the pod to this phone? The watch's Sport Mode session will end and its records will be collected.", comment: "Message of the reclaim prompt"),
-                preferredStyle: .actionSheet)
-            alert.addAction(UIAlertAction(title: NSLocalizedString("Reclaim Now", comment: "Button to reclaim the pod from the watch"), style: .default) { [weak self] _ in
-                self?.deviceManager.reclaimPodLoanFromWatch()
-            })
-            alert.addAction(UIAlertAction(title: NSLocalizedString("Cancel", comment: "Cancel the reclaim prompt"), style: .cancel))
-            present(alert, animated: true)
+            presentPodLoanReclaimPrompt()
             return
         }
         if let pumpStatusView = sender.view as? PumpStatusHUDView {
             executeHUDTapAction(deviceManager.didTapOnPumpStatus(pumpStatusView.pumpManagerProvidedHUD))
         }
+    }
+
+    /// PODLOAN (#71): the pod is on the watch, so front-page mutations (carb / bolus / pre-meal /
+    /// override / settings) AND a pump-tile tap all funnel to ONE affordance — reclaim the pod
+    /// first. Single prompt, no per-button copy; "Reclaim Now" runs the same path the pod tile does.
+    private func presentPodLoanReclaimPrompt() {
+        let alert = UIAlertController(
+            title: NSLocalizedString("Pod Is on the Watch", comment: "Title of the reclaim prompt when tapping the pump tile during a loan"),
+            message: NSLocalizedString("Reclaim the pod to this phone? The watch's Sport Mode session will end and its records will be collected.", comment: "Message of the reclaim prompt"),
+            preferredStyle: .actionSheet)
+        alert.addAction(UIAlertAction(title: NSLocalizedString("Reclaim Now", comment: "Button to reclaim the pod from the watch"), style: .default) { [weak self] _ in
+            self?.deviceManager.reclaimPodLoanFromWatch()
+        })
+        alert.addAction(UIAlertAction(title: NSLocalizedString("Cancel", comment: "Cancel the reclaim prompt"), style: .cancel))
+        present(alert, animated: true)
     }
 
     @objc private func cgmStatusTapped( _ sender: UIGestureRecognizer) {
