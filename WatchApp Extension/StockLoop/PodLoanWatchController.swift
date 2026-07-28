@@ -697,6 +697,21 @@ final class PodLoanWatchController {
         }
     }
 
+    /// INSTRUMENTATION (#69 wipe-audit): how many doses the sport DoseStore holds in the IOB window,
+    /// logged at a labeled point in the wipe-then-seed. The seed writes on top, so a nonzero count
+    /// AFTER the wipe is a prior-epoch survivor (the takeover-IOB-inflation bug). Passes the count to
+    /// `then` so the caller can gate a force-repurge on it.
+    private func auditDoseCount(_ label: String, at t: Date, _ then: @escaping (Int) -> Void) {
+        let ds = loopManager.doseStore
+        let start = t.addingTimeInterval(-Swift.min(ds.longestEffectDuration, .hours(8)))
+        ds.getNormalizedDoseEntries(start: start, end: t) { result in
+            let n: Int
+            if case .success(let doses) = result { n = doses.count } else { n = -1 }
+            SportLog.event("wipe-audit", "\(label): DoseStore holds \(n) dose(s)")
+            then(n)
+        }
+    }
+
     /// 16 h insulin history enters the watch DoseStore as PUMP EVENTS (idempotent under
     /// grant redelivery). Seeded via `addPumpEvents` — NOT the `addDoses` side door — so
     /// stock `InsulinMath.reconciled()` runs at the store: it collapses any same-start
@@ -741,54 +756,80 @@ final class PodLoanWatchController {
                 if let error = error {
                     os_log("Grant ingest: delivery-store purge failed: %{public}@", log: seamLog, type: .error, String(describing: error))
                 }
-                guard !entries.isEmpty else {
-                    self.loopManager.invalidateInsulinEffect()
-                    return
-                }
-                // NewPumpEvent identity lives in `raw` (its hex becomes the dose syncIdentifier);
-                // the epoch-keyed seed syncId gives each dose a distinct raw → upsert-dedup on
-                // re-delivery, distinct rows otherwise (DoseStore uniqueness constraint on raw).
-                let events = entries.map { dose -> NewPumpEvent in
-                    // Fix 2 (#69): trim a still-open temp to the takeover instant so the seed is
-                    // delivered-only (matches the phone). Rate/scheduledBasalRate/syncId preserved;
-                    // deliveredUnits stays nil so IOB integrates only [start→now]. The first cycle
-                    // reconciles against the pod odometer regardless. raw uses the ORIGINAL syncId
-                    // (unchanged) so upsert-dedup on re-delivery is preserved.
-                    let seedDose = (dose.type == .tempBasal && dose.endDate > seedReconciliation)
-                        ? dose.trimmed(to: seedReconciliation, syncIdentifier: dose.syncIdentifier)
-                        : dose
-                    return NewPumpEvent(date: seedDose.startDate, dose: seedDose,
-                                        raw: Data((dose.syncIdentifier ?? UUID().uuidString).utf8),
-                                        title: Self.pumpEventTitle(for: seedDose.type))
-                }
-                doseStore.addPumpEvents(events, lastReconciliation: seedReconciliation, replacePendingEvents: true) { error in
-                    if let error = error {
-                        os_log("Grant history ingest failed: %{public}@", log: seamLog, type: .error, String(describing: error))
-                    } else {
-                        SportLog.event("loan", String(format: "insulin books rebuilt from grant — %d records (wipe-then-seed, addPumpEvents) · grossImpliedΣ=%.2fU · boundaryDup=%@%@",
-                                                       events.count, grossImpliedSum,
-                                                       boundaryDup ? "YES" : "no",
-                                                       boundaryDup ? " (#1 double-seed — expected gone post-Fix1)" : ""))
+                // The seed writes ON TOP of the store, so after the wipe it MUST be empty — any dose
+                // still present is a prior-epoch survivor (the takeover-IOB-inflation bug: build 177
+                // seeded a lone 2 U bolus on top of 10 stale temps → SEED-IN 3.38 vs phone 2.00).
+                // seedNow() carries the seed; it's gated below on a verified-empty audit that
+                // force-repurges a dirty store first, and logs the leak either way (#69 wipe-audit).
+                func seedNow() {
+                    guard !entries.isEmpty else {
+                        self.loopManager.invalidateInsulinEffect()
+                        return
                     }
-                    self.loopManager.invalidateInsulinEffect()
-                    // SEED-IN IOB anchor (#1): the watch's IOB right after seeding, to compare
-                    // against the phone's IOB at grant time — closes the takeover-fidelity loop.
-                    doseStore.insulinOnBoard(at: seedReconciliation) { result in
-                        if case .success(let iob) = result {
-                            // Prime the cached IOB so the glance + stock HUD show it AT takeover
-                            // instead of blank until the first loop cycle (#69 glance consistency;
-                            // the glance COB already reads its store live).
-                            self.loopManager.primeInsulinOnBoard(iob)
-                            SportLog.event("loan", String(format: "SEED-IN IOB=%.2fU @ takeover (%d seeded doses%@)", iob.value, events.count, openTempNote))
-                            // INSTRUMENTATION ONLY (#69): record the phone/seed IOB anchors and dump
-                            // the per-dose decomposition, so the first post-takeover cycle can emit
-                            // [iob-diff] (phone vs seed vs cycle1) and localize the ~0.3U leak.
-                            self.loopManager.recordTakeoverIOBAnchors(
-                                phone: grant.predictionSnapshot?.iobUnits,
-                                phoneDate: grant.predictionSnapshot?.iobDate,
-                                seed: iob.value,
-                                at: seedReconciliation)
-                            self.loopManager.dumpIOBDecomp("SEED-IN", at: seedReconciliation)
+                    // NewPumpEvent identity lives in `raw` (its hex becomes the dose syncIdentifier).
+                    // With the phone's STABLE syncId (#69) the same physical dose keeps ONE identity
+                    // across epochs → upsert-dedup on re-seed instead of a fresh row every takeover
+                    // (DoseStore uniqueness constraint on raw); epoch-keyed fallback for older phones.
+                    let events = entries.map { dose -> NewPumpEvent in
+                        // Fix 2 (#69): trim a still-open temp to the takeover instant so the seed is
+                        // delivered-only (matches the phone). Rate/scheduledBasalRate/syncId preserved;
+                        // deliveredUnits stays nil so IOB integrates only [start→now]. The first cycle
+                        // reconciles against the pod odometer regardless. raw uses the dose syncId
+                        // (unchanged) so upsert-dedup on re-delivery is preserved.
+                        let seedDose = (dose.type == .tempBasal && dose.endDate > seedReconciliation)
+                            ? dose.trimmed(to: seedReconciliation, syncIdentifier: dose.syncIdentifier)
+                            : dose
+                        return NewPumpEvent(date: seedDose.startDate, dose: seedDose,
+                                            raw: Data((dose.syncIdentifier ?? UUID().uuidString).utf8),
+                                            title: Self.pumpEventTitle(for: seedDose.type))
+                    }
+                    doseStore.addPumpEvents(events, lastReconciliation: seedReconciliation, replacePendingEvents: true) { error in
+                        if let error = error {
+                            os_log("Grant history ingest failed: %{public}@", log: seamLog, type: .error, String(describing: error))
+                        } else {
+                            SportLog.event("loan", String(format: "insulin books rebuilt from grant — %d records (wipe-then-seed, addPumpEvents) · grossImpliedΣ=%.2fU · boundaryDup=%@%@",
+                                                           events.count, grossImpliedSum,
+                                                           boundaryDup ? "YES" : "no",
+                                                           boundaryDup ? " (#1 double-seed — expected gone post-Fix1)" : ""))
+                        }
+                        self.loopManager.invalidateInsulinEffect()
+                        // SEED-IN IOB anchor (#1): the watch's IOB right after seeding, to compare
+                        // against the phone's IOB at grant time — closes the takeover-fidelity loop.
+                        doseStore.insulinOnBoard(at: seedReconciliation) { result in
+                            if case .success(let iob) = result {
+                                // Prime the cached IOB so the glance + stock HUD show it AT takeover
+                                // instead of blank until the first loop cycle (#69 glance consistency;
+                                // the glance COB already reads its store live).
+                                self.loopManager.primeInsulinOnBoard(iob)
+                                SportLog.event("loan", String(format: "SEED-IN IOB=%.2fU @ takeover (%d seeded doses%@)", iob.value, events.count, openTempNote))
+                                // INSTRUMENTATION ONLY (#69): record the phone/seed IOB anchors and dump
+                                // the per-dose decomposition, so the first post-takeover cycle can emit
+                                // [iob-diff] (phone vs seed vs cycle1) and localize the ~0.3U leak.
+                                self.loopManager.recordTakeoverIOBAnchors(
+                                    phone: grant.predictionSnapshot?.iobUnits,
+                                    phoneDate: grant.predictionSnapshot?.iobDate,
+                                    seed: iob.value,
+                                    at: seedReconciliation)
+                                self.loopManager.dumpIOBDecomp("SEED-IN", at: seedReconciliation)
+                            }
+                        }
+                    }
+                }
+                // Verified-empty gate (#69 wipe-audit): count what survived delete+purge. Clean → seed.
+                // Dirty → the wipe leaked; log loudly, dump the survivors, force a second delete+purge,
+                // re-count (so we learn whether the leak is even delete+purge-clearable), then seed.
+                self.auditDoseCount("after wipe (pre-seed)", at: seedReconciliation) { survivors in
+                    guard survivors > 0 else { seedNow(); return }
+                    SportLog.event("wipe-audit", "** WIPE LEAK: \(survivors) prior-epoch dose(s) survived delete+purge — force-repurging before seed **")
+                    self.loopManager.dumpIOBDecomp("WIPE-LEAK-SURVIVORS", at: seedReconciliation)
+                    doseStore.deleteAllPumpEvents { _ in
+                        doseStore.insulinDeliveryStore.purgeCachedInsulinDeliveryObjects(before: nil) { _ in
+                            self.auditDoseCount("after forced repurge", at: seedReconciliation) { residual in
+                                if residual > 0 {
+                                    SportLog.event("wipe-audit", "** REPURGE INEFFECTIVE: \(residual) dose(s) STILL present — seeding on top (leak is not delete+purge-clearable) **")
+                                }
+                                seedNow()
+                            }
                         }
                     }
                 }
