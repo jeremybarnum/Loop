@@ -447,6 +447,14 @@ final class WatchLoopManager {
     /// Apply the granted RC mode. Hops to dataAccessQueue because
     /// `retrospectiveCorrection` is read there (updateRetrospectiveGlucoseEffect,
     /// predictGlucose) — the grant lands on the loan controller's queue.
+    ///
+    /// Ordering guarantee (UX: the first loan prediction must NOT use Standard and then jump
+    /// to Integral once IRC lands): this async runs on the SAME serial dataAccessQueue as
+    /// every prediction, and it is enqueued at grant intake (PodLoanWatchController:389) —
+    /// before the takeover-complete refreshPredictionForGlance (:499) and before any loop
+    /// cycle. Nothing runs a loan prediction in between (the takeover read-loop only reads pod
+    /// status). FIFO on the serial queue therefore guarantees the RC type is set before the
+    /// first prediction reads it. See docs/PREDICTION_FIDELITY.md.
     func setIntegralRetrospectiveCorrection(_ enabled: Bool) {
         dataAccessQueue.async {
             self.retrospectiveCorrection = enabled
@@ -1085,9 +1093,11 @@ final class WatchLoopManager {
             correctionRange: correctionRange,
             retrospectiveCorrectionGroupingInterval: LoopMath.retrospectiveCorrectionGroupingInterval
         )
-        // #46/#3 RC input (2026-07-25): surfaces the active RC TYPE (the watch defaults to
-        // Standard and, per #46, may not track the phone's Integral toggle — a real
-        // prediction divergence) plus how much RC is contributing.
+        // #46/#3 RC input (2026-07-25): surfaces the active RC TYPE plus how much RC is
+        // contributing. (#46 CLOSED 2026-07-28: the watch DOES track the phone's Integral
+        // toggle — set at takeover from the grant; the setter shares this serial queue and is
+        // enqueued before the first prediction, so no first-cycle Standard→Integral jump.
+        // See setIntegralRetrospectiveCorrection + docs/PREDICTION_FIDELITY.md.)
         let rcType = retrospectiveCorrection is IntegralRetrospectiveCorrection ? "Integral" : "Standard"
         let mgdlRC = HKUnit.milligramsPerDeciliter
         let rcNet = (retrospectiveGlucoseEffect.first != nil && retrospectiveGlucoseEffect.last != nil)
