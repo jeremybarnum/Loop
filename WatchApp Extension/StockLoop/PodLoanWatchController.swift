@@ -460,7 +460,14 @@ final class PodLoanWatchController {
         manager.podLoanReadStatus { [weak self] success in
             guard let self = self else { return }
             self.queue.async {
-                guard self.phase == .takingOver, self.epoch == grant.epoch else { return }
+                guard self.phase == .takingOver, self.epoch == grant.epoch else {
+                    // OBS-1 (verdict completeness): a takeover must never vanish without a verdict.
+                    // This fires when the in-flight ladder for grant.epoch was superseded — the user
+                    // re-tapped Start (phase left .takingOver) or a newer grant bumped the epoch.
+                    // Log-only (AUDIT_SYNTHESIS sanctions a "superseded" line, not a behavior change).
+                    SportLog.event("loan", "TAKEOVER SUPERSEDED — epoch \(grant.epoch) abandoned mid-ladder (now phase \(self.phase.rawValue), epoch \(self.epoch.map(String.init) ?? "nil"))")
+                    return
+                }
                 // CRITICAL (audit 2026-07-20): the grant's ~5-min lease is validated
                 // once at intake, but this ladder can run FAR past its nominal ~40s
                 // when the app is suspended mid-ladder — field epoch 27 ran 23 min
@@ -542,7 +549,12 @@ final class PodLoanWatchController {
                     // phone) vs connecting-but-no-response.
                     SportLog.event("loan", "takeover read \(attempt + 1)/\(maxAttempts) — pod BLE state \(manager.podLoanConnectionStateDescription)")
                     self.queue.asyncAfter(deadline: .now() + 3) {
-                        guard self.phase == .takingOver, self.epoch == grant.epoch else { return }
+                        guard self.phase == .takingOver, self.epoch == grant.epoch else {
+                            // OBS-1: the ladder was superseded during the 3s inter-attempt wait
+                            // (re-Start or a newer epoch). Emit the verdict instead of vanishing.
+                            SportLog.event("loan", "TAKEOVER SUPERSEDED — epoch \(grant.epoch) abandoned between reads (now phase \(self.phase.rawValue), epoch \(self.epoch.map(String.init) ?? "nil"))")
+                            return
+                        }
                         self.attemptTakeoverRead(manager: manager, grant: grant, attempt: attempt + 1)
                     }
                 } else {
