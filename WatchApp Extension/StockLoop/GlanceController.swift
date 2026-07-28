@@ -24,6 +24,7 @@
 
 import Foundation
 import SwiftUI
+import Combine
 import WatchKit
 import HealthKit
 import LoopKit
@@ -393,6 +394,7 @@ final class GlanceViewModel: ObservableObject {
 struct GlanceView: View {
     @ObservedObject var model: GlanceViewModel
     @State private var confirmingClose = false
+    @State private var closeProgress: Double = 0   // #22: crown-to-fill loop-close ceremony
     @State private var enteringCode = false
 
     /// Always-visible build tag so a TestFlight install is unambiguous on-wrist
@@ -461,11 +463,15 @@ struct GlanceView: View {
         }
         .padding(.horizontal, 6)
         .padding(.top, 2)
-        .alert("Close the loop?", isPresented: $confirmingClose) {
-            Button("Close Loop") { model.setLoopClosed(true) }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The watch will start adjusting your basal automatically from direct-G7 readings.")
+        .sheet(isPresented: $confirmingClose) {
+            // #22: closing the loop = enabling autonomous dosing → a deliberate crown-to-fill
+            // ceremony (same interaction as bolus delivery), replacing the tap-alert. Opening the
+            // loop stays immediate (fail-safe). Not reachable if the loop is already closed.
+            LoopCloseCrownConfirmation(progress: $closeProgress) {
+                model.setLoopClosed(true)
+                confirmingClose = false
+            }
+            .onDisappear { closeProgress = 0 }
         }
     }
 
@@ -819,6 +825,61 @@ private struct GlanceActionChip: ViewModifier {
                                                  startPoint: .top, endPoint: .bottom), lineWidth: 0.75)
             )
             .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+    }
+}
+
+/// #22: crown-to-fill confirmation for closing the loop (enabling autonomous dosing), matching
+/// the bolus-delivery ceremony (BolusConfirmationView). Rotate the Digital Crown to sweep the ring
+/// to 100%; a `.success` haptic fires and the loop closes. Releasing mid-sweep auto-resets
+/// (PeriodicPublisher), so it's cancelable. MUST live outside the `#if DEBUG` preview block — it's
+/// presented from statusLine, which is always compiled.
+private struct LoopCloseCrownConfirmation: View {
+    @Binding private var progressStorage: Double
+    private let completion: () -> Void
+    private let resetProgress = PeriodicPublisher(interval: 0.25)
+
+    private var progress: Binding<Double> {
+        Binding(
+            get: { self.progressStorage.clamped(to: -1...1) },
+            set: { newValue in
+                guard abs(self.progressStorage) < 1.0 else { return }   // no changes after completion
+                withAnimation { self.progressStorage = newValue }
+                self.resetProgress.acknowledge()
+                if abs(newValue) >= 1.0 {
+                    WKInterfaceDevice.current().play(.success)
+                    self.completion()
+                }
+            }
+        )
+    }
+
+    init(progress: Binding<Double>, onConfirmation completion: @escaping () -> Void) {
+        self._progressStorage = progress
+        self.completion = completion
+    }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            ZStack {
+                Circle().stroke(Color.glanceDim.opacity(0.25), lineWidth: 6)
+                Circle()
+                    .trim(from: 0, to: CGFloat(abs(progress.wrappedValue)))
+                    .stroke(Color.glanceGood, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundColor(.glanceGood)
+            }
+            .frame(width: 96, height: 96)
+            Text("Turn Digital Crown\nto close the loop", comment: "Loop-close crown-confirmation help text")
+                .font(.footnote)
+                .multilineTextAlignment(.center)
+                .foregroundColor(Color(.lightGray))
+                .opacity(abs(progress.wrappedValue) >= 1.0 ? 0 : 1)
+        }
+        .focusable()
+        .digitalCrownRotation(progress, over: -1...1, sensitivity: .low, scalingRotationBy: 4)
+        .onReceive(resetProgress) { self.progress.wrappedValue = 0 }
     }
 }
 
