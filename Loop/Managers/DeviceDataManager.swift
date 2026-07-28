@@ -50,7 +50,9 @@ final class DeviceDataManager {
     private let automaticDosingStatus: AutomaticDosingStatus
 
     var closedLoopDisallowedLocalizedDescription: String? {
-        if !cgmHasValidSensorSession {
+        if isPodLoanedToWatch {
+            return NSLocalizedString("Sport Mode is active — the pod is on your Apple Watch, which is looping. Reclaim the pod to loop on this phone.", comment: "Closed-loop-disallowed reason: the pod is loaned to the watch (Sport Mode)")
+        } else if !cgmHasValidSensorSession {
             return NSLocalizedString("Closed Loop requires an active CGM Sensor Session", comment: "The description text for the looping enabled switch cell when closed loop is not allowed because the sensor is inactive")
         } else if !pumpIsAllowingAutomation {
             return NSLocalizedString("Your pump is delivering a manual temporary basal rate.", comment: "The description text for the looping enabled switch cell when closed loop is not allowed because the pump is delivering a manual temp basal.")
@@ -456,7 +458,14 @@ final class DeviceDataManager {
             .map { $0 == false || $1 }
             .combineLatest($pumpIsAllowingAutomation)
             .map { $0 && $1 }
+            // PODLOAN (#21 batch, 2026-07-28): closed loop is DISALLOWED while the pod is on the
+            // watch — the watch is the dosing controller, so the phone must not close its loop.
+            // The extra term is inert off-loan (allowed && !false == allowed); it only forces the
+            // toggle off during a loan. Re-evaluated on .PumpManagerChanged, which loan transitions
+            // post; .prepend(()) seeds the initial value so combineLatest emits before the first post.
+            .combineLatest(NotificationCenter.default.publisher(for: .PumpManagerChanged).map { _ in () }.prepend(()))
             .receive(on: RunLoop.main)
+            .map { [weak self] allowed, _ in allowed && !(self?.isPodLoanedToWatch ?? false) }
             .removeDuplicates()
             .assign(to: \.automaticDosingStatus.isAutomaticDosingAllowed, on: self)
             .store(in: &cancellables)
