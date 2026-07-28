@@ -719,13 +719,14 @@ final class PodLoanWatchController {
         let doseStore = loopManager.doseStore
         let seamLog = OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController")
         let seedReconciliation = Date()
-        // Diagnostic (review note): does the seed include an open, future-ending temp? Its
-        // [now→end] tail inflates SEED-IN IOB slightly until the watch's first temp trims it
-        // (Fix 2), which explains the small SEED-IN → first-cycle IOB drop. If IOB drops with NO
-        // open temp present, suspect the reservoir read-branch instead.
+        // Fix 2 (2026-07-28): a still-open, future-ending temp is seeded TRIMMED to the takeover
+        // instant (in the entries→events map below), so its undelivered [now→end] tail no longer
+        // inflates SEED-IN IOB — the seed reads delivered-only, matching the phone. (Before Fix 2 the
+        // tail counted until the first watch temp trimmed it, causing the SEED-IN→first-cycle IOB
+        // drop and the phone-vs-watch IOB gap Jeremy saw, e.g. phone 1.23 vs watch 1.39.)
         let openTemps = entries.filter { $0.type == .tempBasal && $0.endDate > seedReconciliation }
         let openTempNote = openTemps.isEmpty ? "" :
-            String(format: "; %d open temp(s), latest ends +%.0fm (tail trims on first watch temp)",
+            String(format: "; %d open temp(s) trimmed at seed (Fix 2), latest programmed +%.0fm",
                    openTemps.count, (openTemps.map { $0.endDate }.max()!.timeIntervalSince(seedReconciliation)) / 60)
         doseStore.deleteAllPumpEvents { error in
             if let error = error {
@@ -742,10 +743,18 @@ final class PodLoanWatchController {
                 // NewPumpEvent identity lives in `raw` (its hex becomes the dose syncIdentifier);
                 // the epoch-keyed seed syncId gives each dose a distinct raw → upsert-dedup on
                 // re-delivery, distinct rows otherwise (DoseStore uniqueness constraint on raw).
-                let events = entries.map { dose in
-                    NewPumpEvent(date: dose.startDate, dose: dose,
-                                 raw: Data((dose.syncIdentifier ?? UUID().uuidString).utf8),
-                                 title: Self.pumpEventTitle(for: dose.type))
+                let events = entries.map { dose -> NewPumpEvent in
+                    // Fix 2 (#69): trim a still-open temp to the takeover instant so the seed is
+                    // delivered-only (matches the phone). Rate/scheduledBasalRate/syncId preserved;
+                    // deliveredUnits stays nil so IOB integrates only [start→now]. The first cycle
+                    // reconciles against the pod odometer regardless. raw uses the ORIGINAL syncId
+                    // (unchanged) so upsert-dedup on re-delivery is preserved.
+                    let seedDose = (dose.type == .tempBasal && dose.endDate > seedReconciliation)
+                        ? dose.trimmed(to: seedReconciliation, syncIdentifier: dose.syncIdentifier)
+                        : dose
+                    return NewPumpEvent(date: seedDose.startDate, dose: seedDose,
+                                        raw: Data((dose.syncIdentifier ?? UUID().uuidString).utf8),
+                                        title: Self.pumpEventTitle(for: seedDose.type))
                 }
                 doseStore.addPumpEvents(events, lastReconciliation: seedReconciliation, replacePendingEvents: true) { error in
                     if let error = error {
