@@ -601,8 +601,18 @@ final class PodLoanWatchController {
                 completion(true)
                 return
             }   // still connected — nothing to do
-            SportLog.event("loan", "E4: reclaiming pod to dose")
+            SportLog.event("loan", "E4: reclaiming pod to dose (scan-adopt primary, #54)")
             manager.reclaimConnection()
+            // #54 (build ~178): scan-adopt is the PRIMARY reclaim, not a mid-ladder fallback.
+            // Field data (build 157, overnight 44/44): the bare pending-connect "won" a reclaim
+            // only ~2% of the time — an E4-orphaned pod self-disconnects ~3 min after last contact,
+            // and the gentle bid is a coin-flip against a self-disconnected pod (caught a 578s-idle
+            // pod once, missed 518s- and 259s-idle pods entirely). The scan-adopt escalation carried
+            // ~98% of reclaims anyway, just 15s later — that 15s IS the 30-40s takeover Jeremy saw.
+            // Arm the fresh-central address scan up front; recreateCentral's poweredOn handler
+            // re-connects the bare bid too, so both paths race from t=0. The read ladder below is
+            // the success probe; the release path cancels an unfinished scan (cancelLoanScan).
+            manager.podLoanEscalateReclaim()
             self.attemptReclaimRead(manager: manager, attempt: 0, completion: completion)
         }
     }
@@ -644,16 +654,11 @@ final class PodLoanWatchController {
                     // one never reaching .connected (0/1), and a connected pod failing its
                     // status read are three different bugs that looked identical.
                     SportLog.event("loan", "E4: reclaim read \(attempt + 1)/\(maxAttempts) failed — pod BLE state \(manager.podLoanConnectionStateDescription), released=\(manager.isConnectionReleased)")
-                    // ESCALATION (157): the bare pending-connect is probabilistic — field
-                    // 2026-07-22 caught a 578s-idle pod in 6s and then missed 518s- AND
-                    // 259s-idle pods entirely, while every scan-adopt takeover landed in
-                    // 2-4 reads. If the gentle connect hasn't settled by read 6 (~15s),
-                    // rebuild the central and arm the takeover-grade address scan; the
-                    // remaining ~25s of ladder budget rides the stronger path.
-                    if attempt + 1 == 6 {
-                        SportLog.event("loan", "E4: reclaim ESCALATED at read 6/\(maxAttempts) — fresh central + scan-adopt (takeover-grade)")
-                        manager.podLoanEscalateReclaim()
-                    }
+                    // #54 (build ~178): scan-adopt is now armed UP FRONT in reclaimPodForDose, so the
+                    // whole ladder rides the takeover-grade path from read 0 — no mid-ladder escalation.
+                    // The fresh central's poweredOn handler races the bare bid and the address scan;
+                    // these reads just poll for the winner. (Was: bare-connect first, escalate at read 6,
+                    // which burned ~15s on the ~98% of reclaims the bare bid never won.)
                     self.queue.asyncAfter(deadline: .now() + 2) {
                         guard self.phase == .active else { completion(false); return }
                         self.attemptReclaimRead(manager: manager, attempt: attempt + 1, completion: completion)

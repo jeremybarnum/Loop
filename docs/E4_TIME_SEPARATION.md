@@ -55,9 +55,23 @@ tagged baseline). When on:
 - **Each dose** (`WatchDoseEnactor.enact` automatic; `enactManualBolus` manual):
   1. `reclaimPodForDose` — `reclaimConnection()` + bounded `podLoanReadStatus`
      probe (idempotent — the takeover ladder's own mechanism, so no double-dose),
-     ≤ ~16s.
+     14 reads / ~40s.
   2. on connect → enact.
   3. `releasePodAfterDose` — re-release after a **+12s settle** (v1 lesson).
+
+### #54 (build ~178) — scan-adopt is the PRIMARY reclaim
+
+Build 157 tried a bare pending-connect first and only escalated to the
+takeover-grade **fresh-central + address scan-adopt** at read 6 (~15s in). The
+overnight 44/44 run showed the bare bid "won" a reclaim only **~2%** of the time:
+an E4-orphaned pod self-disconnects ~3 min after last contact, so the gentle bid
+coin-flips against a self-disconnected pod (caught a 578s-idle pod once, missed
+518s- and 259s-idle pods entirely) while scan-adopt carried ~98% anyway — just
+15s later. That 15s **was** the 30-40s takeover Jeremy reported. So `reclaimPod-
+ForDose` now arms scan-adopt up front (`podLoanEscalateReclaim`); the recreated
+central races the bare bid and the address scan from t=0, and the 40s read ladder
+is only the success probe. Recreating the central ~every cycle is what 157 already
+did on 98% of cycles (0-cost to catch rate overnight), so no new G7 contention.
 - **Safety:** bounded wait runs on `dosingQueue` (never blocks the loop cycle);
   an automatic dose that can't reconnect is SKIPPED (pod runs baseline, retry
   next cycle); a MANUAL bolus that can't reconnect FAILS LOUDLY. Timing puts the
