@@ -475,26 +475,20 @@ struct GlanceView: View {
     @ViewBuilder
     private var statusRight: some View {
         if model.state.phase == .active {
-            // A quiet capsule chip = "tappable" without shouting (End is cancelable, so
-            // no alarming color). Full label, per Jeremy 2026-07-24.
+            // The SESSION control: a subtly raised, tappable chip — a gentle top-lit gradient +
+            // a soft bevel rim, no gloss (Jeremy 2026-07-28). Neutral (no alarming color) since
+            // End is cancelable. "End" reads unambiguously on the Sport Mode glance; text color
+            // carries the state (neutral End vs warn Cancel) over the shared chip chrome.
             if model.state.handbackPending {
                 Button { model.cancelHandback() } label: {
-                    Text(NSLocalizedString("Cancel Ending", comment: "Glance top-right: abort a pending hand-back"))
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.glanceWarn)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.glanceWarn.opacity(0.18)))
+                    Text(NSLocalizedString("Cancel", comment: "Glance top-right: abort a pending hand-back"))
+                        .modifier(GlanceActionChip(tint: .glanceWarn))
                 }
                 .buttonStyle(.plain)
             } else {
                 Button { model.endSportMode() } label: {
-                    Text(NSLocalizedString("End Sport Mode", comment: "Glance top-right: end Sport Mode / hand the pod back"))
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.glanceInk)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.glanceDim.opacity(0.22)))
+                    Text(NSLocalizedString("End", comment: "Glance top-right: end Sport Mode / hand the pod back"))
+                        .modifier(GlanceActionChip(tint: .glanceInk))
                 }
                 .buttonStyle(.plain)
             }
@@ -800,6 +794,33 @@ extension Color {
 }
 
 // MARK: - Previews (every state, no runtime demo branches)
+
+/// The glance's top-right session-pill chrome (R25): a subtly raised, tappable chip — a
+/// gentle top-lit gradient + a soft bevel rim, no gloss (Jeremy 2026-07-28). Shared by the
+/// End and Cancel states via `.modifier()`; `tint` is the label color that carries the state.
+/// MUST live outside the `#if DEBUG` preview block below — statusRight (always compiled)
+/// applies it, so a DEBUG-only definition fails the Release archive ("cannot find in scope").
+private struct GlanceActionChip: ViewModifier {
+    let tint: Color
+    func body(content: Content) -> some View {
+        content
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundColor(tint)
+            .padding(.horizontal, 17)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .fill(LinearGradient(colors: [Color.white.opacity(0.16), Color.white.opacity(0.05)],
+                                         startPoint: .top, endPoint: .bottom))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .strokeBorder(LinearGradient(colors: [Color.white.opacity(0.35), Color.white.opacity(0.08)],
+                                                 startPoint: .top, endPoint: .bottom), lineWidth: 0.75)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+    }
+}
 
 #if DEBUG
 private func previewState(_ build: (inout GlanceUIState) -> Void) -> GlanceUIState {
