@@ -538,7 +538,20 @@ final class PodLoanPhoneController {
         // truth, idempotent by ID — but loan STATE is untouched and the ack says
         // stale so the sender stops retrying. Dead loans cannot speak.
         let isStale = offer.epoch < epoch
-        guard offer.epoch == epoch || isStale else { return }
+        guard offer.epoch == epoch || isStale else {
+            // #35 liveness: the offer is AHEAD of this phone's epoch (the watch is on a
+            // higher epoch than this phone ever minted — e.g. a phone reinstall reset the
+            // persisted epoch while WC redelivered a queued offer, failure-matrix row 17).
+            // This USED TO return silently, which strands the loan: the phone never acks,
+            // the watch resends every 15s forever (the "28 ignored offers" signature).
+            // Never silent now — logged on both sides. Recovery behavior (adopt vs reclaim)
+            // is a separate decision; for now the escape-hatch reclaim / new REQUEST path
+            // is the way out.
+            os_log("Hand-back offer DROPPED: offer.epoch %d > phone.epoch %d — watch ahead of phone; loan may be stranded (needs reclaim or new request)",
+                   log: log, type: .error, offer.epoch, epoch)
+            handbackDiag(offer.epoch, "offer DROPPED epoch \(offer.epoch) > phone \(epoch) — phone behind, loan stranded")
+            return
+        }
         handbackDiag(offer.epoch, "offer RX ev=\(offer.events.count) released=\(offer.released.map { $0 ? "final" : "interim" } ?? "nil") stale=\(isStale) state=\(state.rawValue)")
 
         // WS1 (two-phase hand-back): an INTERIM offer (released == false) means the

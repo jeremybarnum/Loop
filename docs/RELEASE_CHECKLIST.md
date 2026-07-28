@@ -55,10 +55,24 @@ supervised session *if* that session is short and watched. Jeremy sets the final
   #21: suppress the phone's stale prediction/IOB/COB while the pod is on the watch.
   #26: replace the false "Loop not looping" alerts (don't just mute them). She *will*
   glance at the phone — it must not lie or cry wolf.
-- **B4. (Resilience, optional-but-strong) Phone-present BG fallback.** (#39)
-  Read Dexcom glucose from HealthKit as a complement so that if the watch can't read
-  the G7, the loop falls back to the phone's BG instead of going dark. Direct mitigation
-  for exactly the 2026-07-24 failure.
+- **B4. Phone-present BG fallback — IN the first-test cut line (Jeremy 2026-07-27).** (#39)
+  The watch loop consumes BOTH phone-relayed BG and its own direct-G7 BG, so a
+  watch-can't-read loop falls back to the phone instead of going dark (direct mitigation
+  for the 2026-07-24 failure). Agreed design 2026-07-27:
+  - Relay the phone's EGVs over the existing WCSession loan channel — fresher + more
+    deterministic than reading phone BG from HealthKit on the watch (HK watch-sync lag
+    would undercut the point). Supersedes the original "read from HealthKit" framing.
+  - Both sources write the watch glucose store; SELECTION is stock's most-recent-fresh-
+    wins via the ported fresh/aging/stale gate (#48) — NOT source-stateful. A stale phone
+    sample automatically loses to a fresh direct sample, so once the phone is out of range
+    nothing "waits" for it (Jeremy's key constraint).
+  - Phone-preferred DEDUP: before writing a direct sample, suppress it ONLY if a *fresh*
+    phone sample already covers that ~5-min EGV window; never suppress a direct read when
+    the phone sample is absent or stale. Keeps ~one sample/window → single provenance for
+    the momentum gate (`hasSingleProvenance` is still stock; only the failover transition
+    briefly mixes → momentum 0 for ~1-2 cycles, conservative, accepted).
+  - Build-time prereq to verify: the phone keeps reading its G7 during a loan so it has
+    fresh EGVs to relay (coexistence, #32/B2).
 
 ## Tier C — The everyday flows she'll actually use
 

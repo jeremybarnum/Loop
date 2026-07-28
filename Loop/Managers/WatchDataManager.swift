@@ -737,14 +737,19 @@ extension WatchDataManager: WCSessionDelegate {
         // and ignored — never asserted on (failure-matrix row 17: WC redelivers
         // queued userInfo across reinstalls).
         if userInfo[LoanProtocol.userInfoKey] != nil {
+            // #35 liveness: log EVERY loan userInfo the OS delivers to this phone, before
+            // routing. If a future field log shows the watch resending offers but NO
+            // "Loan userInfo delivered" line here, the OS never handed them over (app
+            // suspended/killed/unreachable) — a delivery problem, not a controller drop.
+            let peekedKind: String? = (userInfo[LoanProtocol.userInfoKey] as? Data)
+                .flatMap { try? JSONDecoder().decode(LoanKindPeek.self, from: $0) }?.kind
+            log.default("Loan userInfo delivered: kind=%{public}@", peekedKind ?? "unknown")
             // Component A re-arm: a loan REQUEST is the moment the watch needs the
             // current sensor's pairing code (its direct-G7 bond/prewarm path). The
             // automatic .sensorStart capture only fires for sensors started after
             // install — for the sensor already on-body, re-relay the held code or
             // prompt for it now.
-            if let data = userInfo[LoanProtocol.userInfoKey] as? Data,
-               let peek = try? JSONDecoder().decode(LoanKindPeek.self, from: data),
-               peek.kind == "request" {
+            if peekedKind == "request" {
                 deviceManager.ensureSensorCodeRelayed()
             }
             podLoanController.handleIncoming(userInfo: userInfo)
