@@ -766,21 +766,25 @@ final class PodLoanWatchController {
                         self.loopManager.invalidateInsulinEffect()
                         return
                     }
-                    // NewPumpEvent identity lives in `raw` (its hex becomes the dose syncIdentifier).
-                    // With the phone's STABLE syncId (#69) the same physical dose keeps ONE identity
-                    // across epochs → upsert-dedup on re-seed instead of a fresh row every takeover
-                    // (DoseStore uniqueness constraint on raw); epoch-keyed fallback for older phones.
+                    // NewPumpEvent identity lives in `raw` (its hex becomes the dose syncIdentifier —
+                    // PumpEvent DISCARDS DoseEntry.syncIdentifier). The phone's syncId IS hex(raw) of
+                    // what its pump manager reported, so LoanSeedIdentity.raw() hex-DECODES it back to
+                    // the original bytes (#69 double-hex fix): the rebuilt pump manager's inevitable
+                    // re-reports of inherited podState doses (just-finished bolus, running temp) then
+                    // land on the SAME row via the raw uniqueness constraint instead of a second copy
+                    // (the +1.15U cycle-1 bolus echo), and re-seeds across epochs upsert-dedup even if
+                    // the wipe misfires. Non-hex ids (epoch-keyed fallback) keep utf8, as before.
                     let events = entries.map { dose -> NewPumpEvent in
                         // Fix 2 (#69): trim a still-open temp to the takeover instant so the seed is
                         // delivered-only (matches the phone). Rate/scheduledBasalRate/syncId preserved;
                         // deliveredUnits stays nil so IOB integrates only [start→now]. The first cycle
-                        // reconciles against the pod odometer regardless. raw uses the dose syncId
-                        // (unchanged) so upsert-dedup on re-delivery is preserved.
+                        // reconciles against the pod odometer regardless. raw uses the ORIGINAL dose
+                        // syncId (trim does not change identity — uniqueKey is keyed on start, not end).
                         let seedDose = (dose.type == .tempBasal && dose.endDate > seedReconciliation)
                             ? dose.trimmed(to: seedReconciliation, syncIdentifier: dose.syncIdentifier)
                             : dose
                         return NewPumpEvent(date: seedDose.startDate, dose: seedDose,
-                                            raw: Data((dose.syncIdentifier ?? UUID().uuidString).utf8),
+                                            raw: LoanSeedIdentity.raw(forSyncIdentifier: dose.syncIdentifier ?? UUID().uuidString),
                                             title: Self.pumpEventTitle(for: seedDose.type))
                     }
                     doseStore.addPumpEvents(events, lastReconciliation: seedReconciliation, replacePendingEvents: true) { error in

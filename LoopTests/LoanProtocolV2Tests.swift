@@ -354,4 +354,27 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertFalse(outcome.doses[0].isMutable)
         XCTAssertEqual(outcome.doses[0].programmedUnits, 1.0, accuracy: 0.01)  // 2.0 × 0.5h, unclamped
     }
+
+    // MARK: - LoanSeedIdentity (#69 double-hex fix)
+
+    /// The seed's raw must round-trip the phone's hex syncIdentifier back to the ORIGINAL bytes,
+    /// so the watch row's derived syncIdentifier (hex of raw) equals the phone's — one identity
+    /// end-to-end, and the pod's deterministic re-reports collide instead of duplicating.
+    func testLoanSeedIdentityRawRoundTripAndFallbacks() {
+        let podRaw = Data("tempBasal 2.35 2026-07-28T21:38:02Z".utf8)   // OmniBLE uniqueKey shape
+        let phoneSyncId = podRaw.map { String(format: "%02hhx", $0) }.joined()
+
+        XCTAssertEqual(LoanSeedIdentity.raw(forSyncIdentifier: phoneSyncId), podRaw, "hex decodes to original bytes")
+        XCTAssertEqual(LoanSeedIdentity.raw(forSyncIdentifier: phoneSyncId.uppercased()), podRaw, "case-insensitive")
+
+        // Identity stability: hex(decoded) == the phone's syncId → the watch stores the SAME syncIdentifier.
+        let watchSyncId = LoanSeedIdentity.raw(forSyncIdentifier: phoneSyncId).map { String(format: "%02hhx", $0) }.joined()
+        XCTAssertEqual(watchSyncId, phoneSyncId)
+
+        // Non-hex identifiers keep the utf8 encoding (old-phone epoch-keyed fallback, UUID-style ids).
+        let epochKeyed = "loanv2-grant-47-0"
+        XCTAssertEqual(LoanSeedIdentity.raw(forSyncIdentifier: epochKeyed), Data(epochKeyed.utf8))
+        XCTAssertEqual(LoanSeedIdentity.raw(forSyncIdentifier: "abc"), Data("abc".utf8), "odd length is not hex")
+        XCTAssertEqual(LoanSeedIdentity.raw(forSyncIdentifier: ""), Data(), "empty stays empty via fallback")
+    }
 }

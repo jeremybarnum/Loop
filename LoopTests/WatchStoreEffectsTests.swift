@@ -426,7 +426,7 @@ final class WatchStoreEffectsTests: XCTestCase {
         let entries = grant.seedDoseEntries()
         let events = entries.map { dose in
             NewPumpEvent(date: dose.startDate, dose: dose,
-                         raw: Data((dose.syncIdentifier ?? UUID().uuidString).utf8),
+                         raw: LoanSeedIdentity.raw(forSyncIdentifier: dose.syncIdentifier ?? UUID().uuidString),
                          title: "Temp Basal")
         }
         let exp = expectation(description: "seed addPumpEvents")
@@ -541,5 +541,147 @@ final class WatchStoreEffectsTests: XCTestCase {
         let iobAfterProfileChange = iob(doseStore, at: now)
         XCTAssertNotEqual(iobNet, iobAfterProfileChange, accuracy: 0.1,
                           "netting rides the current profile on the pump-event path — the watch's frozen profile keeps it stable")
+    }
+
+    // MARK: - #69 double-hex fix (build ~180): seed identity must round-trip to the pod-native raw
+
+    /// Counts distinct bolus doses visible to IOB (the same delivery-store ∪ pump-event dedup
+    /// union `insulinOnBoard` reads, over a fixed 6 h window).
+    private func bolusCount(_ doseStore: DoseStore, around now: Date) -> Int {
+        var count = -1
+        let exp = expectation(description: "normalized dose read")
+        doseStore.getNormalizedDoseEntries(start: now.addingTimeInterval(-.hours(6)), end: now) { result in
+            if case .success(let doses) = result { count = doses.filter { $0.type == .bolus }.count }
+            exp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+        return count
+    }
+
+    /// The field bug (epoch 47, build 179): a bolus finishing seconds before takeover rides the
+    /// grant's podState un-pruned; the watch's rebuilt pump manager re-reports it at the first
+    /// status read under its deterministic pod-native raw (OmniBLE `UnfinalizedDose.uniqueKey`).
+    /// The phone's syncIdentifier IS hex(raw) of that same key, so a seed that hex-DECODES the
+    /// syncId collides with the re-report on the PumpEvent raw uniqueness constraint → ONE dose.
+    func testSeedIdentityDedupsPodNativeReReport() {
+        let (doseStore, _) = makeStoresFixed()
+        let now = Date()
+        let start = now.addingTimeInterval(-.minutes(30))
+        // Identity exactly as OmniBLE builds it: raw = utf8("bolus <units> <ISO8601 start>").
+        let podRaw = Data("bolus 1.15 2026-07-28T21:41:30Z".utf8)
+        let phoneSyncId = podRaw.map { String(format: "%02hhx", $0) }.joined()   // == raw.hexadecimalString
+
+        XCTAssertEqual(LoanSeedIdentity.raw(forSyncIdentifier: phoneSyncId), podRaw,
+                       "seed raw must hex-decode the phone syncId back to the pod-native bytes")
+
+        // 1) The grant seed, as production encodes it.
+        let seededDose = DoseEntry(type: .bolus, startDate: start, endDate: start.addingTimeInterval(46),
+                                   value: 1.15, unit: .units, syncIdentifier: phoneSyncId)
+        let seedEvent = NewPumpEvent(date: start, dose: seededDose,
+                                     raw: LoanSeedIdentity.raw(forSyncIdentifier: phoneSyncId), title: "Bolus")
+        let seedExp = expectation(description: "seed")
+        doseStore.addPumpEvents([seedEvent], lastReconciliation: now.addingTimeInterval(-60), replacePendingEvents: true) { error in
+            XCTAssertNil(error); seedExp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+        XCTAssertEqual(bolusCount(doseStore, around: now), 1)
+
+        // 2) The pod re-report: same physical dose, pod-native raw (no syncIdentifier on the dose —
+        //    PumpEvent derives it from raw, exactly as OmniBLE's NewPumpEvent(UnfinalizedDose) does).
+        let reReported = DoseEntry(type: .bolus, startDate: start, endDate: start.addingTimeInterval(46),
+                                   value: 1.15, unit: .units)
+        let podEvent = NewPumpEvent(date: start, dose: reReported, raw: podRaw, title: "Bolus")
+        let reportExp = expectation(description: "pod re-report")
+        doseStore.addPumpEvents([podEvent], lastReconciliation: now, replacePendingEvents: true) { error in
+            XCTAssertNil(error); reportExp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+
+        XCTAssertEqual(bolusCount(doseStore, around: now), 1,
+                       "the pod's re-report of a seeded dose must land on the SAME row — two rows is the +1.15U cycle-1 IOB echo (epoch 47)")
+    }
+
+    /// Sensitivity control — the PRE-fix shape: seeding raw = utf8(hexString) (hex-of-hex identity)
+    /// lets the pod-native re-report create a second row. If LoopKit's dedup semantics ever change
+    /// so the main test would pass vacuously, this control fails and flags the assumption.
+    func testDoubleHexSeedIdentityDuplicates_preFixRegressionShape() {
+        let (doseStore, _) = makeStoresFixed()
+        let now = Date()
+        let start = now.addingTimeInterval(-.minutes(30))
+        let podRaw = Data("bolus 1.15 2026-07-28T21:41:30Z".utf8)
+        let phoneSyncId = podRaw.map { String(format: "%02hhx", $0) }.joined()
+
+        let seededDose = DoseEntry(type: .bolus, startDate: start, endDate: start.addingTimeInterval(46),
+                                   value: 1.15, unit: .units, syncIdentifier: phoneSyncId)
+        // The bug: utf8 bytes OF THE HEX STRING (identity becomes hex-of-hex).
+        let buggySeedEvent = NewPumpEvent(date: start, dose: seededDose, raw: Data(phoneSyncId.utf8), title: "Bolus")
+        let seedExp = expectation(description: "buggy seed")
+        doseStore.addPumpEvents([buggySeedEvent], lastReconciliation: now.addingTimeInterval(-60), replacePendingEvents: true) { error in
+            XCTAssertNil(error); seedExp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+
+        let reReported = DoseEntry(type: .bolus, startDate: start, endDate: start.addingTimeInterval(46),
+                                   value: 1.15, unit: .units)
+        let podEvent = NewPumpEvent(date: start, dose: reReported, raw: podRaw, title: "Bolus")
+        let reportExp = expectation(description: "pod re-report")
+        doseStore.addPumpEvents([podEvent], lastReconciliation: now, replacePendingEvents: true) { error in
+            XCTAssertNil(error); reportExp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+
+        XCTAssertEqual(bolusCount(doseStore, around: now), 2,
+                       "hex-of-hex seeding must double-count — this control proves the main test is sensitive to the bug it guards")
+    }
+
+    /// The SECOND guaranteed field shape (adversarial-review finding): the inherited RUNNING temp
+    /// re-reports as a MUTABLE full-span dose under the same raw on every status read. The seeded
+    /// row is the immutable Fix-2-trimmed version and must win: replacePendingEvents' mutable-only
+    /// purge must not delete it, and the mutable re-report must lose on the raw uniqueness
+    /// constraint (store-trump merge). The full-span future tail must NOT resurrect into IOB.
+    func testMutableTempReReportLosesToSeededTrimmedRow() {
+        let (doseStore, _) = makeStoresFixed()   // basal 1.0 U/hr
+        let now = Date()
+        let start = now.addingTimeInterval(-.minutes(20))
+        let trimEnd = now.addingTimeInterval(-.minutes(10))
+        let podRaw = Data("tempBasal 3.0 2026-07-28T21:38:02Z".utf8)   // uniqueKey shape; cancel-stable
+        let phoneSyncId = podRaw.map { String(format: "%02hhx", $0) }.joined()
+
+        // Seed: the Fix-2-trimmed immutable temp [start, trimEnd] @ 3.0 U/hr.
+        let trimmed = DoseEntry(type: .tempBasal, startDate: start, endDate: trimEnd,
+                                value: 3.0, unit: .unitsPerHour, syncIdentifier: phoneSyncId)
+        let seedExp = expectation(description: "seed trimmed temp")
+        doseStore.addPumpEvents([NewPumpEvent(date: start, dose: trimmed,
+                                              raw: LoanSeedIdentity.raw(forSyncIdentifier: phoneSyncId),
+                                              title: "Temp Basal")],
+                                lastReconciliation: trimEnd, replacePendingEvents: true) { error in
+            XCTAssertNil(error); seedExp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+
+        // Pod re-report: the same temp as the pod still sees it — MUTABLE, full programmed span
+        // (ends 10 min in the FUTURE), same raw.
+        let mutableFullSpan = DoseEntry(type: .tempBasal, startDate: start,
+                                        endDate: start.addingTimeInterval(.minutes(30)),
+                                        value: 3.0, unit: .unitsPerHour, isMutable: true)
+        let reportExp = expectation(description: "mutable re-report")
+        doseStore.addPumpEvents([NewPumpEvent(date: start, dose: mutableFullSpan, raw: podRaw, title: "Temp Basal")],
+                                lastReconciliation: now, replacePendingEvents: true) { error in
+            XCTAssertNil(error); reportExp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+
+        var temps: [DoseEntry] = []
+        let readExp = expectation(description: "normalized read")
+        doseStore.getNormalizedDoseEntries(start: now.addingTimeInterval(-.hours(6)), end: now.addingTimeInterval(.hours(1))) { result in
+            if case .success(let doses) = result { temps = doses.filter { $0.type == .tempBasal } }
+            readExp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+
+        XCTAssertEqual(temps.count, 1, "one identity → one temp; the mutable re-report must collapse onto the seeded row")
+        XCTAssertEqual(temps.first?.endDate.timeIntervalSince1970 ?? 0, trimEnd.timeIntervalSince1970, accuracy: 1.0,
+                       "the seeded trimmed endDate must survive — a full-span resurrection re-inflates IOB with the undelivered tail")
+        XCTAssertEqual(temps.first?.isMutable, false, "the surviving row is the immutable seeded version")
     }
 }

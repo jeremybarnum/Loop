@@ -113,3 +113,63 @@ which the algorithm tolerates.
 stack epochs on a rare Core Data wipe failure — aborting the takeover would be safer); the
 reservoir read branch could exclude the immutable open temp in a rare window; Event History may
 show the running temp as two unreconciled rows (IOB unaffected).
+
+---
+
+## Addendum (2026-07-28, build ~180) — the identity contract, and the re-report this design missed
+
+**What this design did not anticipate:** the watch's rebuilt `OmniPumpManager` RE-REPORTS
+pre-takeover doses out of the inherited `podState`. Two guaranteed cases: (a) a bolus that
+finished seconds before the grant rides `podState.unfinalizedBolus` un-pruned (the phone's
+`beginGrant` does no quiesce read, and prune only happens inside a comms session's
+`dosesForStorage`); the watch's first status read finalizes and re-reports it. (b) the running
+temp re-reports as a mutable `NewPumpEvent` on every status-bearing read
+(`PodState.dosesToStore` unconditionally appends `unfinalizedBolus`/`unfinalizedTempBasal`).
+Field: epoch 47's `+1.15U` cycle-1 IOB echo; epochs 42/44/45's cross-epoch inflation.
+
+**The identity contract (why this was ever a bug):** LoopKit's `PumpEvent` DISCARDS an incoming
+`DoseEntry.syncIdentifier` and derives dose identity as `raw.hexadecimalString`
+(`PumpEvent+CoreDataClass.swift:229`). OmniBLE's raw is `UnfinalizedDose.uniqueKey` =
+`utf8("\(doseType) \(scheduledUnits ?? units) \(ISO8601 start)")` — deterministic, cancel-stable,
+no UUID — so a re-report on ANY device carries byte-identical raw, and the phone's stored
+syncIdentifier IS `hex(raw)`. The seed encoded `raw = utf8(hexString)` (hex-of-hex), giving one
+physical dose two identities and blinding all three stock dedup layers (PumpEvent raw uniqueness
++ store-trump merge; `CachedInsulinDeliveryObject` syncIdentifier uniqueness; `appendedUnion`).
+Log proof: one bolus as seeded `id=303561` vs pod-native `id=33305a`.
+
+**The fix — `LoanSeedIdentity.raw(forSyncIdentifier:)` (LoanProtocolV2.swift):** hex-DECODE the
+phone's syncIdentifier back to the original bytes (utf8 fallback for non-hex ids). Consequences,
+all via stock machinery, no new filtering logic: pod re-reports land on the seeded row (silent
+same-raw skip); re-seeds across epochs upsert-dedup EVEN IF the wipe misfires (the epoch-42
+class); the mutable running-temp re-report collapses onto the seeded Fix-2-trimmed row (its
+post-takeover continuation until the watch's first enact stays unbooked — bounded small, C5
+territory, odometer audit still sees total truth). A watch-side "drop pre-takeover pod events"
+filter was considered and REJECTED: it fights R12 (pod = delivery source of truth) and R5/R22
+(never understate; never touch confirmed records); restoring identity lets the pod re-report
+freely and dedups it instead.
+
+**Still true / still deferred:** the wipe remains the only defense for (a) doses DELETED on the
+phone between epochs (grant no longer carries them, so nothing upserts over stale rows) and
+(b) watch-ENACTED prior-epoch doses, which live in the watch store under pod-native uniqueKey
+raws but return in the next grant under the phone's JOURNAL identity (hex of utf8
+"loanv2-<uuid>") — different raw, so the upsert protection does not cover them (adversarial
+review, 2026-07-28). The `[wipe-audit]` instrumentation + force-repurge (build 179) stays to
+catch both. A phone-side pre-grant quiesce (`refreshLentDeviceStatus` before `releaseConnection`)
+would prune `podState` and freshen the odometer baseline (`deliveredAtGrant` currently uses a
+CACHED odometer) at ~1s grant latency — deferred; with identity restored the re-reports it would
+prevent are harmless.
+
+**Known, accepted trade-off (adversarial review 2026-07-28, tracked for a ruling):** the
+inherited running temp's post-takeover delivery ([takeover → watch's first enact or programmed
+end]) is never booked on the watch — the seeded row is immutable and every same-raw re-report
+(mutable and the final cancel-finalized version) loses to it under store-trump. Typical closed
+loop: ≤~0.2–0.4 U gross (first enact truncates within a cycle). Open loop: display-only. Worst
+case (max temp inherited + a stalled closed-loop session that never enacts): ~1–2 U understated
+through DIA — the direction FLIP vs the pre-fix double-count. Mitigations if ruled needed:
+pre-grant quiesce, or seeding the open temp MUTABLE full-span (stock semantics — but that
+reverses Fix 2 and needs its own review).
+
+**Tests:** `testLoanSeedIdentityRawRoundTripAndFallbacks` (decoder),
+`testSeedIdentityDedupsPodNativeReReport` (store round-trip: seed + pod re-report → ONE dose),
+`testDoubleHexSeedIdentityDuplicates_preFixRegressionShape` (sensitivity control: the bug shape
+must still double-count, proving the main test can fail).

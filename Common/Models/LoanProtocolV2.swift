@@ -187,6 +187,56 @@ extension LoanDoseRecord {
     }
 }
 
+/// #69 double-hex fix (build ~180): the `NewPumpEvent.raw` bytes a grant dose must be seeded under.
+///
+/// IDENTITY CONTRACT — why decoding matters: LoopKit's PumpEvent DISCARDS an incoming
+/// DoseEntry.syncIdentifier and derives dose identity as `raw.hexadecimalString`
+/// (PumpEvent+CoreDataClass.swift:229). So for every pump-event-sourced dose, the phone's stored
+/// syncIdentifier IS the hex of the raw its own pump manager reported — and OmniBLE's raw is
+/// `UnfinalizedDose.uniqueKey` = utf8("\(doseType) \(scheduledUnits ?? units) \(ISO8601 start)")
+/// (UnfinalizedDose.swift:54), fully deterministic and cancel-stable, no UUID. DECODING the hex
+/// therefore recovers the exact bytes the watch's own rebuilt pump manager will use when it
+/// re-reports the same physical dose out of the inherited podState (a just-finished bolus rides
+/// the grant un-pruned; the running temp re-reports on every status read). Same raw → the
+/// re-report lands on the SAME PumpEvent row (raw uniqueness constraint, store-trump merge) and
+/// the SAME delivery-store row (syncIdentifier constraint) instead of a second copy — and a
+/// re-seed across epochs upserts instead of accumulating EVEN IF the wipe misfires.
+///
+/// The pre-180 bug: seeding raw = utf8(hexString) gave one physical dose two identities (hex vs
+/// hex-of-hex — log proof: seeded id=303561 vs pod-native id=33305a for one bolus), which blinded
+/// every stock dedup layer → the cycle-1 bolus echo (+1.15U, epoch 47) and cross-epoch IOB
+/// inflation (epoch 42/44/45). Non-hex identifiers (epoch-keyed fallback "loanv2-grant-…",
+/// UUID-style ids) keep the utf8 encoding — for phone rows whose raw was born as a utf8 string
+/// (hand-back journal writes) the hex decode reproduces those original bytes too.
+public enum LoanSeedIdentity {
+    public static func raw(forSyncIdentifier syncIdentifier: String) -> Data {
+        return hexDecoded(syncIdentifier) ?? Data(syncIdentifier.utf8)
+    }
+
+    /// Strict hex → bytes (case-insensitive; nil on any non-hex character or odd length).
+    /// Local copy of LoopKit's `Data(hexadecimalString:)`, which is internal to that module.
+    static func hexDecoded(_ string: String) -> Data? {
+        func nibble(_ u: UInt16) -> UInt8? {
+            switch u {
+            case 0x30...0x39: return UInt8(u - 0x30)          // '0'-'9'
+            case 0x41...0x46: return UInt8(u - 0x41 + 10)     // 'A'-'F'
+            case 0x61...0x66: return UInt8(u - 0x61 + 10)     // 'a'-'f'
+            default: return nil
+            }
+        }
+        var data = Data(capacity: string.utf16.count / 2)
+        var even = true
+        var byte: UInt8 = 0
+        for c in string.utf16 {
+            guard let val = nibble(c) else { return nil }
+            if even { byte = val << 4 } else { byte += val; data.append(byte) }
+            even.toggle()
+        }
+        guard even, !data.isEmpty else { return nil }
+        return data
+    }
+}
+
 extension LoanGrant {
     /// The seeded insulin history as DoseEntries with deterministic, epoch-keyed sync
     /// identifiers ("loanv2-grant-<epoch>-<index>") — idempotent under grant redelivery.
