@@ -103,6 +103,10 @@ final class PodLoanWatchController {
     private var pendingUncertainEventID: UUID?
     private var chaseWorkItem: DispatchWorkItem?
     private var resendWorkItem: DispatchWorkItem?
+    /// #67: when the LIVE hand-back gives up waiting for the phone's ack and resumes on the
+    /// watch. Set at the End tap (beginHandback), cleared on ack/cancel/timeout. Nil for a
+    /// recovered/revoke drain (no local loan to resume — those keep resending).
+    private var handbackDeadline: Date?
     private var requestTimeoutWork: DispatchWorkItem?
     /// Surfaced on the glance idle screen after a failed/timed-out start, so the user
     /// sees WHY instead of a silent return to idle.
@@ -937,6 +941,11 @@ final class PodLoanWatchController {
             guard !self.handbackRequested else { return }
             self.handbackRequested = true
             self.handbackResendCount = 0
+            // #67: bound the wait for the phone's ack. Pre-scheduled alert fires from a suspended
+            // app; the resend loop resumes Sport Mode on the watch at the same deadline. Covers
+            // both the interim-drain path below and the legacy single-phase finalize.
+            self.handbackDeadline = Date().addingTimeInterval(HandbackStuckAlert.interval)
+            HandbackStuckAlert.arm()
             guard self.phoneSupportsInterimHandback else {
                 // REAL-3 skew gate: an old phone treats ANY offer as final — go
                 // straight to the legacy single-phase hand-back (stop, then offer).
@@ -956,8 +965,43 @@ final class PodLoanWatchController {
             guard self.phase == .active, self.handbackRequested else { return }
             self.handbackRequested = false
             self.resendWorkItem?.cancel()
+            self.handbackDeadline = nil
+            HandbackStuckAlert.disarm()   // #67: aborted before the budget — no stuck alert
             SportLog.event("loan", "HAND-BACK cancelled — Sport Mode continues")
         }
+    }
+
+    /// #67: the phone never acked the hand-back within the budget (unreachable, or silently
+    /// dropping offers — #35). We stayed the pod's SOLE OWNER throughout — interim: still dosing;
+    /// final: dosing stopped but the pod is STILL HELD (release only on the final ack) — so
+    /// recovery is clean: resume Sport Mode on the watch in the SAME loop mode (never auto-open
+    /// or auto-close — Jeremy 2026-07-28). Unacked records stay in the journal and re-offer on a
+    /// later hand-back (the phone dedups by event ID); the odometer reconciles the totals then.
+    /// The pre-scheduled HandbackStuckAlert delivers the wrist notification (even from a suspended
+    /// app, in which case this state restore runs on the next wake).
+    private func handbackTimedOut() {
+        resendWorkItem?.cancel()
+        handbackDeadline = nil
+        let wasFinal = (phase == .handingBack)
+        handbackRequested = false
+        finalOfferSent = false
+        if wasFinal, let manager = pumpManager {
+            // finalize nilled loopManager.pumpManager but self.pumpManager still HOLDS the pod —
+            // re-point the loop and re-loop, no re-takeover needed.
+            phase = .active
+            loopManager.pumpManager = manager
+            loopManager.loanDoseRecorder = self
+            SensorBlackoutAlert.refresh()   // dosing resumes → re-arm the blackout dead-man
+            onLoanActiveChanged?(true)
+            SportLog.event("loan", "HAND-BACK timed out (final, \(Int(HandbackStuckAlert.interval))s) — iPhone never acked; resumed Sport Mode on the watch (still holding the pod)")
+            loopManager.checkPumpDataAndLoop()   // re-establish a temp this cycle
+        } else {
+            // Interim hang: never stopped dosing; phase already .active. Just abort the drain.
+            SportLog.event("loan", "HAND-BACK timed out (interim, \(Int(HandbackStuckAlert.interval))s) — iPhone never acked; Sport Mode continues on the watch")
+        }
+        // HandbackStuckAlert is intentionally NOT disarmed here — its pre-scheduled notification
+        // is the user's signal that End didn't complete. It self-expires; a later successful
+        // hand-back re-arms a fresh one.
     }
 
     /// WS1: the drain is fully acked while still active — NOW stop dosing, close the
@@ -1053,6 +1097,14 @@ final class PodLoanWatchController {
         resendWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
+            // #67: give up after the budget and resume Sport Mode on the watch (we stayed the
+            // pod's sole owner throughout). Only the LIVE hand-back (deadline set) — a
+            // recovered/revoke drain has no local loan to resume, so it keeps resending.
+            if let deadline = self.handbackDeadline, Date() >= deadline,
+               self.phase == .handingBack || (self.phase == .active && self.handbackRequested) {
+                self.handbackTimedOut()
+                return
+            }
             if self.phase == .handingBack || self.phase == .revoked || self.phase == .recoveredDrain
                 || (self.phase == .active && self.handbackRequested) {   // WS1 interim drain
                 self.sendHandbackOffer(freshened: freshened, recovered: recovered)
@@ -1112,6 +1164,8 @@ final class PodLoanWatchController {
         epoch = nil
         deliveredAtTakeover = nil
         manualSuspendEnd = nil
+        handbackDeadline = nil
+        HandbackStuckAlert.disarm()   // #67: hand-back completed cleanly
         onLoanActiveChanged?(false)
         SportLog.event("loan", "CLOSED — records drained, pod released, cursor \(ack.committedCursor)")
     }
@@ -1123,6 +1177,8 @@ final class PodLoanWatchController {
         guard phase != .idle else { return }
         // Stop dosing, zero post-revoke pod commands (DESIGN-6), drain what we have.
         handbackRequested = false   // WS1: phone-initiated revoke supersedes a pending drain
+        handbackDeadline = nil
+        HandbackStuckAlert.disarm()   // #67: the phone took over — no stuck alert
         loopManager.pumpManager = nil
         chaseWorkItem?.cancel()
         pendingUncertainEventID = nil   // round-3 liveness: no cross-loan chase residue

@@ -130,3 +130,39 @@ enum SensorCodeAlert {
         center.removeDeliveredNotifications(withIdentifiers: [identifier])
     }
 }
+
+/// #67 (2026-07-28): the hand-back to the iPhone never got acked within the budget — the
+/// phone is unreachable, or silently dropping offers (#35). Pre-scheduled like the watchdogs
+/// above so the wrist alert fires FROM OUTSIDE a suspended app (a hand-back can hang while the
+/// app is backgrounded). Armed at the End tap (beginHandback), disarmed on ack / cancel / a
+/// phone revoke. On expiry the watch also resumes Sport Mode locally in the SAME loop mode
+/// (PodLoanWatchController.handbackTimedOut) — the two are coordinated at the same deadline.
+enum HandbackStuckAlert {
+
+    /// How long to wait for the phone's ack before giving up and resuming on the watch. ~8
+    /// resends at 15 s — long enough to ride a briefly-asleep / out-of-range phone, short
+    /// enough not to strand the user. The un-dosed window in the final-hang case is just
+    /// open-loop scheduled basal (bounded, the validated E4 posture). Tune freely.
+    static let interval: TimeInterval = 2 * 60
+
+    private static let identifier = "sportmode.handbackStuck"
+
+    static func arm() {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [identifier])
+        let content = UNMutableNotificationContent()
+        content.title = NSLocalizedString("Couldn't End Sport Mode", comment: "Hand-back-stuck alert title")
+        content.body = NSLocalizedString("The iPhone didn't respond, so Sport Mode is still running on your watch. Tap End to try again.", comment: "Hand-back-stuck alert body")
+        content.interruptionLevel = .timeSensitive
+        content.sound = .default
+        content.threadIdentifier = identifier
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: false)
+        center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
+    }
+
+    static func disarm() {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [identifier])
+        center.removeDeliveredNotifications(withIdentifiers: [identifier])
+    }
+}
