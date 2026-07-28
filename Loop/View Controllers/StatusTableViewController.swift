@@ -578,7 +578,13 @@ final class StatusTableViewController: LoopChartsTableViewController {
             if let glucoseSamples = glucoseSamples {
                 self.statusCharts.setGlucoseValues(glucoseSamples)
             }
-            if (automaticDosingEnabled || !FeatureFlags.simpleBolusCalculatorEnabled), let predictedGlucoseValues = predictedGlucoseValues {
+            // #21: while the pod is on the watch the phone isn't the dosing controller, so its
+            // prediction/IOB/COB are stale-and-misleading — suppress them (the watch's glance owns
+            // these; the pump tile already reads "Pod on Watch"). Reload re-fires on the loan
+            // transition via .PumpManagerChanged.
+            if self.deviceManager.isPodLoanedToWatch {
+                self.statusCharts.setPredictedGlucoseValues([])
+            } else if (automaticDosingEnabled || !FeatureFlags.simpleBolusCalculatorEnabled), let predictedGlucoseValues = predictedGlucoseValues {
                 self.statusCharts.setPredictedGlucoseValues(predictedGlucoseValues)
             } else {
                 self.statusCharts.setPredictedGlucoseValues([])
@@ -602,8 +608,10 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
             let charts = self.statusCharts
 
-            // Active Insulin
-            if let iobValues = iobValues {
+            // Active Insulin (#21: empty while the pod is on the watch)
+            if self.deviceManager.isPodLoanedToWatch {
+                charts.setIOBValues([])
+            } else if let iobValues = iobValues {
                 charts.setIOBValues(iobValues)
             }
 
@@ -624,13 +632,15 @@ final class StatusTableViewController: LoopChartsTableViewController {
                 self.totalDelivery = totalDelivery
             }
 
-            // Active Carbohydrates
-            if let cobValues = cobValues {
+            // Active Carbohydrates (#21: empty while the pod is on the watch)
+            if self.deviceManager.isPodLoanedToWatch {
+                charts.setCOBValues([])
+            } else if let cobValues = cobValues {
                 charts.setCOBValues(cobValues)
             }
             if let index = charts.cob.cobPoints.closestIndex(priorTo: Date()) {
                 self.currentCOBDescription = String(describing: charts.cob.cobPoints[index].y)
-            } else if let carbsOnBoard = carbsOnBoard {
+            } else if !self.deviceManager.isPodLoanedToWatch, let carbsOnBoard = carbsOnBoard {
                 self.currentCOBDescription = self.carbFormatter.string(from: carbsOnBoard)
             } else {
                 self.currentCOBDescription = nil
