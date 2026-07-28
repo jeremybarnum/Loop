@@ -879,13 +879,19 @@ final class PodLoanPhoneController {
     }
 
     private static func loanRecord(from dose: DoseEntry) -> LoanDoseRecord? {
+        // #69: carry the phone's stable syncIdentifier (so the watch's re-seeds upsert-dedup instead
+        // of accumulating) and insulinType (so the watch decays on the same model). Both flow through
+        // seedDoseEntry → the seeded DoseEntry.
         switch dose.type {
         case .bolus:
-            return LoanDoseRecord(kind: .bolus, startDate: dose.startDate, endDate: dose.endDate, amount: dose.deliveredUnits ?? dose.programmedUnits)
+            return LoanDoseRecord(kind: .bolus, startDate: dose.startDate, endDate: dose.endDate, amount: dose.deliveredUnits ?? dose.programmedUnits,
+                                  syncIdentifier: dose.syncIdentifier, insulinType: dose.insulinType)
         case .tempBasal:
-            return LoanDoseRecord(kind: .tempBasal, startDate: dose.startDate, endDate: dose.endDate, unitsPerHour: dose.unitsPerHour)
+            return LoanDoseRecord(kind: .tempBasal, startDate: dose.startDate, endDate: dose.endDate, unitsPerHour: dose.unitsPerHour,
+                                  syncIdentifier: dose.syncIdentifier, insulinType: dose.insulinType)
         case .suspend:
-            return LoanDoseRecord(kind: .suspend, startDate: dose.startDate, endDate: dose.endDate, unitsPerHour: 0)
+            return LoanDoseRecord(kind: .suspend, startDate: dose.startDate, endDate: dose.endDate, unitsPerHour: 0,
+                                  syncIdentifier: dose.syncIdentifier, insulinType: dose.insulinType)
         case .basal, .resume:
             return nil
         }

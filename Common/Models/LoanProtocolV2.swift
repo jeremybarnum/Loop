@@ -126,9 +126,19 @@ public struct LoanDoseRecord: Codable, Equatable {
     public let absorptionTime: TimeInterval?
     /// Free-form: mode names for .modeChange, cancellation context, etc.
     public let note: String?
+    /// #69 stable-syncId: the phone's OWN dose syncIdentifier. Carried so the watch seeds with a
+    /// STABLE identity — a re-seed across epochs then upsert-dedups (same identity → one row)
+    /// instead of accumulating under fresh epoch-keyed ids, the class of bug behind the takeover
+    /// IOB inflation. nil (older phone) → the watch falls back to its epoch-keyed id.
+    public let syncIdentifier: String?
+    /// #69 insulin-model fidelity: the dose's insulin type, so the watch decays it on the SAME
+    /// model the phone used. Novolog resolves to rapid-acting-adult on both, but fiasp/lyumjev
+    /// differ — without this the watch silently decays them on the adult curve. nil → typeless.
+    public let insulinType: InsulinType?
 
     public init(kind: Kind, startDate: Date, endDate: Date? = nil, unitsPerHour: Double? = nil,
-                amount: Double? = nil, absorptionTime: TimeInterval? = nil, note: String? = nil) {
+                amount: Double? = nil, absorptionTime: TimeInterval? = nil, note: String? = nil,
+                syncIdentifier: String? = nil, insulinType: InsulinType? = nil) {
         self.kind = kind
         self.startDate = startDate
         self.endDate = endDate
@@ -136,6 +146,8 @@ public struct LoanDoseRecord: Codable, Equatable {
         self.amount = amount
         self.absorptionTime = absorptionTime
         self.note = note
+        self.syncIdentifier = syncIdentifier
+        self.insulinType = insulinType
     }
 }
 
@@ -160,15 +172,15 @@ extension LoanDoseRecord {
         case .bolus:
             guard let units = amount else { return nil }
             return DoseEntry(type: .bolus, startDate: startDate, endDate: endDate ?? startDate,
-                             value: units, unit: .units, syncIdentifier: syncIdentifier)
+                             value: units, unit: .units, syncIdentifier: syncIdentifier, insulinType: insulinType)
         case .tempBasal, .boundaryTruncation:
             guard let rate = unitsPerHour, let end = endDate else { return nil }
             return DoseEntry(type: .tempBasal, startDate: startDate, endDate: end,
-                             value: rate, unit: .unitsPerHour, syncIdentifier: syncIdentifier)
+                             value: rate, unit: .unitsPerHour, syncIdentifier: syncIdentifier, insulinType: insulinType)
         case .suspend:
             guard let end = endDate else { return nil }
             return DoseEntry(type: .tempBasal, startDate: startDate, endDate: end,
-                             value: 0, unit: .unitsPerHour, syncIdentifier: syncIdentifier)
+                             value: 0, unit: .unitsPerHour, syncIdentifier: syncIdentifier, insulinType: insulinType)
         case .resume, .carb, .plumbingCancel, .modeChange:
             return nil
         }
@@ -188,7 +200,12 @@ extension LoanGrant {
         var records = doseHistory
         if let boundary = boundaryRecord { records.append(boundary) }
         return records.enumerated().compactMap { index, record in
-            record.seedDoseEntry(syncIdentifier: "loanv2-grant-\(epoch)-\(index)")
+            // #69 stable-syncId: prefer the phone's OWN dose syncIdentifier so a re-seed across
+            // epochs upsert-dedups (same identity → one row) instead of accumulating under fresh
+            // epoch-keyed ids. Epoch-keyed fallback keeps older phones (no syncIdentifier) working
+            // — and stays unique per (epoch,index) so their re-seeds still rely on the wipe.
+            let syncId = record.syncIdentifier ?? "loanv2-grant-\(epoch)-\(index)"
+            return record.seedDoseEntry(syncIdentifier: syncId)
         }
     }
 }
