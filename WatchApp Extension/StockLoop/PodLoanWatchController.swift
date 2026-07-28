@@ -494,7 +494,8 @@ final class PodLoanWatchController {
                     self.loopManager.pumpManager = manager
                     self.loopManager.loanDoseRecorder = self
                     self.onLoanActiveChanged?(true)
-                    SportLog.event("loan", "ACTIVE — epoch \(grant.epoch), pod taken after \(attempt + 1) read(s), odometer \(String(format: "%.2f", delivered)) U")
+                    let takeoverSecs = self.attemptStartedAt.map { Date().timeIntervalSince($0) } ?? -1
+                    SportLog.event("loan", String(format: "ACTIVE — epoch %d, pod taken after %d read(s) in %.1fs [takeover-timing], odometer %.2f U", grant.epoch, attempt + 1, takeoverSecs, delivered))
                     self.sendMessage(.takeoverComplete(TakeoverComplete(epoch: grant.epoch, firstPodStatus: self.currentPodStatus())))
                     // #69: refresh the glance eventual + IOB from the just-seeded insulin/carbs/
                     // glucose NOW (display-only, no enact) so the prediction reflects the seeded
@@ -551,7 +552,8 @@ final class PodLoanWatchController {
                     // #42 diagnosis: log the pod BLE state each failed read so "unreachable"
                     // shows WHY — stuck disconnected (pod not advertising / still held by the
                     // phone) vs connecting-but-no-response.
-                    SportLog.event("loan", "takeover read \(attempt + 1)/\(maxAttempts) — pod BLE state \(manager.podLoanConnectionStateDescription)")
+                    let readElapsed = self.attemptStartedAt.map { Date().timeIntervalSince($0) } ?? -1
+                    SportLog.event("loan", String(format: "takeover read %d/%d (+%.1fs) — pod BLE state %@", attempt + 1, maxAttempts, readElapsed, manager.podLoanConnectionStateDescription))
                     self.queue.asyncAfter(deadline: .now() + 3) {
                         guard self.phase == .takingOver, self.epoch == grant.epoch else {
                             // OBS-1: the ladder was superseded during the 3s inter-attempt wait
@@ -565,7 +567,8 @@ final class PodLoanWatchController {
                     self.teardownPump()
                     self.phase = .idle
                     self.lastIdleNote = NSLocalizedString("Pod didn't answer after 40s. Check the pod is nearby and awake, then try again.", comment: "Glance: pod unreachable at takeover")
-                    SportLog.event("loan", "TAKEOVER FAILED — pod unreachable after \(maxAttempts) reads (~40s), final BLE state \(manager.podLoanConnectionStateDescription), epoch \(grant.epoch)")
+                    let failSecs = self.attemptStartedAt.map { Date().timeIntervalSince($0) } ?? -1
+                    SportLog.event("loan", String(format: "TAKEOVER FAILED — pod unreachable after %d reads in %.1fs [takeover-timing], final BLE state %@, epoch %d", maxAttempts, failSecs, manager.podLoanConnectionStateDescription, grant.epoch))
                     self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "pod unreachable at takeover")))
                 }
             }
