@@ -73,6 +73,23 @@ supervised session *if* that session is short and watched. Jeremy sets the final
     wins via the ported fresh/aging/stale gate (#48) — NOT source-stateful. A stale phone
     sample automatically loses to a fresh direct sample, so once the phone is out of range
     nothing "waits" for it (Jeremy's key constraint).
+  - **BUILT (device) 2026-07-28.** WatchLoopManager observes `LoopDataManager.didUpdateContext
+    Notification`; during a loan (pumpManager set) it routes the phone's `context.newGlucoseSample`
+    into the DOSING store (`ingestPhoneGlucoseFromContext`). Key simplification (Jeremy's syncId
+    insight, verified in source): the relayed sample carries the phone's REAL G7 syncIdentifier
+    (`WatchContext.newGlucoseSample`), and the watch's direct read builds its sample with the SAME
+    G7SensorKit code (`G7ClientTransportAdapter` → `G7CGMManager`, from the same sensor-clock id) —
+    so an overlapping grid point AUTO-DEDUPS in the store by syncId. No preference/failover state:
+    a date pre-check (skip if the store already has ≥ this date) means a fresh direct read always
+    wins and phone BG fills only gaps. Mixed provenance zeroes momentum briefly at the boundary
+    (accepted). A syncId is logged on ingest; empirical syncId-match confirmation is captured at #32
+    (phone real G7 + watch direct G7). Device-only (`#if !targetEnvironment(simulator)`; the sim
+    keeps its #61 timer path).
+
+- **Pre-test observation (Jeremy 2026-07-28 — MEASURE before test release):** takeover and
+  hand-back appear more reliable with Loop in the FOREGROUND (watchOS suspends a backgrounded
+  app, interrupting BLE/WCSession work). Quantify foreground-vs-background success before release;
+  may motivate a "keep foreground during takeover/hand-back" nudge.
   - Phone-preferred DEDUP: before writing a direct sample, suppress it ONLY if a *fresh*
     phone sample already covers that ~5-min EGV window; never suppress a direct read when
     the phone sample is absent or stale. Keeps ~one sample/window → single provenance for

@@ -384,6 +384,15 @@ final class WatchLoopManager {
             let enacted = DoseEntry(type: .tempBasal, startDate: start, endDate: start.addingTimeInterval(duration), value: unitsPerHour, unit: .unitsPerHour)
             self.dataAccessQueue.async { self.cachedEnactedTempBasal = enacted }
         }
+        #if !targetEnvironment(simulator)
+        // #39: phone-BG fallback. Every phone context update, during a loan, mirror the phone's
+        // relayed CGM into the DOSING store (device only; the simulator drives it via the
+        // #61 timer — simStartGlucoseFeed — to avoid a synthetic-vs-real syncId double-ingest).
+        NotificationCenter.default.addObserver(forName: LoopDataManager.didUpdateContextNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            self?.ingestPhoneGlucoseFromContext()
+        }
+        #endif
     }
 
     func attach(cgmStack: G7ClientTransportAdapter) {
@@ -1866,6 +1875,40 @@ extension WatchLoopManager: CGMManagerDelegate {
         // The phone routes these to CgmEventStore (sensor start/expiry bookkeeping); no
         // watch-side CgmEventStore yet. Log-only in M4.
         log.default("CGM event(s): %{public}d", events.count)
+    }
+
+    /// #39 (2026-07-28): phone-BG fallback. During a loan, mirror the phone's relayed CGM into
+    /// the DOSING glucose store so the closed loop survives a direct-G7 dropout. The relayed
+    /// sample carries the phone's REAL G7 syncIdentifier (WatchContext.newGlucoseSample), so when
+    /// direct G7 also has this grid point the store auto-dedups by syncId — this only fills GAPS.
+    /// Fired on every phone context update (didUpdateContextNotification); gated to an active loan
+    /// (pumpManager set). The date pre-check IS the failover for free: we ingest only when the
+    /// phone reading is NEWER than anything already stored, so a fresh direct G7 always wins and
+    /// phone BG fills in only once direct goes stale. (Mixed provenance zeroes momentum briefly at
+    /// the boundary — accepted, per design.)
+    func ingestPhoneGlucoseFromContext() {
+        guard pumpManager != nil else { return }   // active loan only — the watch is the dosing controller
+        guard let ctx = ExtensionDelegate.shared().loopManager.activeContext,
+              let sample = ctx.newGlucoseSample else { return }
+        deviceQueue.async {
+            // Fill a gap only: skip if the store already has a reading at/after this one (a fresher
+            // direct-G7 read wins). syncId dedup in the store is the belt for the exact-overlap case.
+            if let latest = self.glucoseStore.latestGlucose?.startDate, latest >= sample.date { return }
+            self.glucoseStore.addGlucoseSamples([sample]) { result in
+                if case .failure(let error) = result {
+                    self.log.error("phone-BG fallback add failed: %{public}@", String(describing: error))
+                    return
+                }
+                self.dataAccessQueue.async { self.glucoseMomentumEffect = nil }   // #51 parity
+                let mgdl = Int(sample.quantity.doubleValue(for: .milligramsPerDeciliter))
+                SportLog.event("loan", "phone-BG fallback: ingested \(mgdl) mg/dL syncId=\(sample.syncIdentifier ?? "?") (direct-G7 gap) — triggering loop")
+                let now = Date()
+                if now.timeIntervalSince(self.lastCGMLoopTrigger) > .minutes(4.2) {
+                    self.lastCGMLoopTrigger = now
+                    self.checkPumpDataAndLoop()
+                }
+            }
+        }
     }
 
     #if targetEnvironment(simulator)
