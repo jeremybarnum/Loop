@@ -342,6 +342,22 @@ final class PodLoanPhoneController {
             return
         }
 
+        // #42: don't hand a still-returning pod to the watch. After a reclaim the phone
+        // enters .owner but the pod BLE isn't truly back for up to ~2 min — reclaimConnection()
+        // only re-arms the bid. Granting inside that settle window releases a half-reconnected
+        // pod, and the watch's takeover then races the phone's in-flight link → takeover fails
+        // (the "rapid hand-back → re-takeover" bug). Deny-and-retry until the pod is genuinely
+        // reachable (isConnectionReady) or the settle ceiling clears — conservative: it never
+        // grants a not-ready pod, and the user's next Start succeeds once it's home.
+        if let started = reclaimStartedAt,
+           deps.now().timeIntervalSince(started) < Self.reclaimSettleTimeout,
+           !deps.isConnectionReady() {
+            os_log("Grant deferred: pod still returning from the last reclaim (%.0fs into settle) — deny-and-retry",
+                   log: log, type: .default, deps.now().timeIntervalSince(started))
+            deny("The pod is still returning from the last session. Try Start again in a few seconds.")
+            return
+        }
+
         // Deny-on-missing (R1/R16): the grant is refused, never defaulted.
         let settings = deps.settings()
         guard settings.basalRateSchedule != nil,

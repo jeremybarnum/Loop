@@ -32,6 +32,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     private var addedDoses: [[DoseEntry]] = []
     private var pauseCalls: [Bool] = []
     private var notices: [String] = []
+    /// #42: drives Dependencies.isConnectionReady — false = pod still returning from a reclaim.
+    private var connectionReady = true
     private var pump: MockPumpManager!
     private var settings: LoopSettings!
     private let lock = NSLock()
@@ -53,6 +55,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         addedDoses = []
         pauseCalls = []
         notices = []
+        connectionReady = true
         pump = MockPumpManager()
         MockPumpManager.testConnectionReleased = false
 
@@ -100,7 +103,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             issueNotice: { [weak self] title, _ in
                 guard let self = self else { return }
                 self.lock.lock(); self.notices.append(title); self.lock.unlock()
-            }
+            },
+            isConnectionReady: { [weak self] in self?.connectionReady ?? true }
         ))
     }
 
@@ -226,6 +230,38 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         waitForState(controller, .owner)
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed on force")
         XCTAssertEqual(pauseCalls.last, false, "dosing restored on force reclaim")
+    }
+
+    /// #42: a re-Start while the pod is still returning from the previous reclaim must
+    /// deny-and-retry — never hand the watch a half-reconnected pod (the race that fails
+    /// takeover). Once the pod is truly back (isConnectionReady), the next request grants.
+    func testGrantDeferredWhilePodStillReturningFromReclaim() throws {
+        let controller = makeController()
+        establishLoan(controller)
+        controller.reclaimNow()
+        waitForState(controller, .reclaimPending)
+
+        connectionReady = false                       // pod's BLE not truly back yet
+        controller.forceReclaimToOwner(reason: "test")
+        waitForState(controller, .owner)              // settle window now open
+
+        let denied = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
+        wait(for: [denied], timeout: 5)
+        if case .denied? = lastSent() {} else {
+            XCTFail("expected .denied while the pod is returning, got \(String(describing: lastSent()))")
+        }
+        if case .grant? = lastSent() { XCTFail("must not grant a not-yet-returned pod (#42)") }
+        XCTAssertFalse(MockPumpManager.testConnectionReleased, "a denied re-Start must not release the pod")
+
+        // Pod is home now → a fresh request grants.
+        connectionReady = true
+        let granted = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
+        wait(for: [granted], timeout: 5)
+        if case .grant? = lastSent() {} else {
+            XCTFail("expected a grant once the pod is back, got \(String(describing: lastSent()))")
+        }
     }
 
     // MARK: - Hand-back ordering + idempotency
