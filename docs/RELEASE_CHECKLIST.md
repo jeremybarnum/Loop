@@ -59,9 +59,16 @@ supervised session *if* that session is short and watched. Jeremy sets the final
   The watch loop consumes BOTH phone-relayed BG and its own direct-G7 BG, so a
   watch-can't-read loop falls back to the phone instead of going dark (direct mitigation
   for the 2026-07-24 failure). Agreed design 2026-07-27:
-  - Relay the phone's EGVs over the existing WCSession loan channel — fresher + more
-    deterministic than reading phone BG from HealthKit on the watch (HK watch-sync lag
-    would undercut the point). Supersedes the original "read from HealthKit" framing.
+  - Reuse the STOCK WatchContext glucose the phone already sends every cycle (value/date/
+    trend/syncID via WatchDataManager.createWatchContext → ExtensionDelegate.updateContext)
+    — NO new relay. Today that BG lands in `activeContext` (complication / glance HUD /
+    recommended-bolus DISPLAY only) and never reaches the dosing store; our loop doses only
+    from the direct-G7 store (processCGMReadingResult → glucoseStore.addGlucoseSamples). The
+    WatchContext→dosing-store bridge already exists and is proven: `simIngestPhoneGlucose()`
+    writes it to the real glucoseStore + invalidates momentum (#51) + triggers the loop, but
+    is `#if targetEnvironment(simulator)` (task #61 harness). #39 = promote that ingest to
+    device, gated to an active loan. (Supersedes BOTH the original "read from HealthKit" and
+    my earlier "new WCSession relay" framings — the transport is stock and already flowing.)
   - Both sources write the watch glucose store; SELECTION is stock's most-recent-fresh-
     wins via the ported fresh/aging/stale gate (#48) — NOT source-stateful. A stale phone
     sample automatically loses to a fresh direct sample, so once the phone is out of range
