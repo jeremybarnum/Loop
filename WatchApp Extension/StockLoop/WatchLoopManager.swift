@@ -504,6 +504,8 @@ final class WatchLoopManager {
 
     /// Mirrors DeviceDataManager.lastCGMLoopTrigger (deviceQueue only).
     private var lastCGMLoopTrigger: Date = .distantPast
+    /// #39 storm latch: last phone-fallback syncId attempted (serial deviceQueue only).
+    var lastPhoneFallbackSyncId: String?
 
     private let doseEnactor = WatchDoseEnactor()
 
@@ -1891,6 +1893,14 @@ extension WatchLoopManager: CGMManagerDelegate {
         guard let ctx = ExtensionDelegate.shared().loopManager.activeContext,
               let sample = ctx.newGlucoseSample else { return }
         deviceQueue.async {
+            // Same-sample repeat latch (#39, field 2026-07-29: the same sample ingested 3× in
+            // 12 ms — one didUpdateContextNotification per context-adjacent update, and the
+            // latestGlucose freshness guard below reads BEFORE the async add commits, so storms
+            // slip past it; the store's syncId constraint absorbed the duplicate rows but the
+            // completion re-logged and re-fired the loop trigger each time). Set synchronously
+            // on the serial deviceQueue so repeats bail before the add.
+            if sample.syncIdentifier == self.lastPhoneFallbackSyncId { return }
+            self.lastPhoneFallbackSyncId = sample.syncIdentifier
             // Fill a gap only: skip if the store already has a reading at/after this one (a fresher
             // direct-G7 read wins). syncId dedup in the store is the belt for the exact-overlap case.
             if let latest = self.glucoseStore.latestGlucose?.startDate, latest >= sample.date { return }
