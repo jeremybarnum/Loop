@@ -258,6 +258,22 @@ extension LoanGrant {
             return record.seedDoseEntry(syncIdentifier: syncId)
         }
     }
+
+    /// #72 (build ~181): the seed carries FINISHED history only. A dose still DELIVERING at the
+    /// takeover instant (the running temp; a mid-flight bolus) is split out as `live` and NOT
+    /// seeded: the grant's podState blob already carries it, and the watch's own pump manager
+    /// reports it as a MUTABLE dose on the first status read — stock ownership, exactly how the
+    /// phone books its own running temp. Stock IOB math integrates a mutable dose's delivery only
+    /// up to now + model.delay (InsulinMath.continuousDeliveryInsulinOnBoard's loop bound), so the
+    /// watch's IOB then TRACKS delivery in real time (0.50 → 0.57 over 5 min of a +1 U/hr net
+    /// temp) and the eventual cancel/expiry finalization books actual units under the pod-native
+    /// raw — with no seeded row to swallow it. (Supersedes Fix 2's trim-at-takeover, which — once
+    /// the #69 identity fix made dedup work — permanently froze the temp at the takeover instant
+    /// and understated IOB for the temp's remaining life.)
+    func seedDoseEntries(finishedBy instant: Date) -> (seed: [DoseEntry], live: [DoseEntry]) {
+        let all = seedDoseEntries()
+        return (all.filter { $0.endDate <= instant }, all.filter { $0.endDate > instant })
+    }
 }
 
 /// Event = record + identity + provenance. IDs are minted at INTENT time, before

@@ -377,4 +377,28 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertEqual(LoanSeedIdentity.raw(forSyncIdentifier: "abc"), Data("abc".utf8), "odd length is not hex")
         XCTAssertEqual(LoanSeedIdentity.raw(forSyncIdentifier: ""), Data(), "empty stays empty via fallback")
     }
+
+    // MARK: - #72: the seed carries finished history only; live doses belong to the pod
+
+    func testSeedDoseEntriesSplitsLiveFromFinished() {
+        let now = Date()
+        let finishedBolus = LoanDoseRecord(kind: .bolus, startDate: now.addingTimeInterval(-1800),
+                                           endDate: now.addingTimeInterval(-1754), amount: 2.0)
+        let finishedTemp = LoanDoseRecord(kind: .tempBasal, startDate: now.addingTimeInterval(-3600),
+                                          endDate: now.addingTimeInterval(-1800), unitsPerHour: 2.0)
+        let runningTemp = LoanDoseRecord(kind: .tempBasal, startDate: now.addingTimeInterval(-600),
+                                         endDate: now.addingTimeInterval(1200), unitsPerHour: 2.0)
+        let grant = LoanGrant(epoch: 9, expiresAt: now.addingTimeInterval(60), pumpManagerRawState: Data(),
+                              podAddress: 0x1F0F, therapySettingsRaw: Data(), settingsTimeZoneID: "UTC",
+                              doseHistory: [finishedBolus, finishedTemp, runningTemp], boundaryRecord: nil)
+
+        let (seed, live) = grant.seedDoseEntries(finishedBy: now)
+        XCTAssertEqual(seed.count, 2, "finished bolus + finished temp are seedable history")
+        XCTAssertEqual(live.count, 1, "the running temp is live — pod state owns it, never seeded")
+        XCTAssertEqual(live.first?.unitsPerHour, 2.0)
+        XCTAssertTrue(live.first!.endDate > now)
+        XCTAssertFalse(seed.contains { $0.endDate > now }, "nothing still-delivering may enter the seed")
+        // The split is a partition of the unfiltered seed set.
+        XCTAssertEqual(seed.count + live.count, grant.seedDoseEntries().count)
+    }
 }

@@ -684,4 +684,43 @@ final class WatchStoreEffectsTests: XCTestCase {
                        "the seeded trimmed endDate must survive — a full-span resurrection re-inflates IOB with the undelivered tail")
         XCTAssertEqual(temps.first?.isMutable, false, "the surviving row is the immutable seeded version")
     }
+
+    // MARK: - #72: a pod-owned live temp must make IOB TRACK delivery in real time
+
+    /// Jeremy's reference example (2026-07-28): schedule 1.0 U/hr, a 2.0 U/hr temp running at
+    /// takeover → net +1.0 U/hr → IOB must GROW ~0.08 U per 5 min (minus early decay) while the
+    /// temp runs. SCOPE (adversarial-review correction): this test pins the STORE half of #72 —
+    /// GIVEN a mutable full-span row, stock IOB math (delivery integrated only to eval-time +
+    /// model delay, InsulinMath's continuousDeliveryInsulinOnBoard loop bound) yields
+    /// delivered-so-far + a constant ~delay lookahead, so the delta between two instants is pure
+    /// delivery tracking. The MANAGER half — that the watch's pump manager actually supplies the
+    /// mutable row for an inherited temp (it arrives C5-cancelled in the grant blob and must be
+    /// re-armed) — is pinned separately in OmniTests (testPodLoanRearm*); this test injects the
+    /// row by hand and cannot certify that layer.
+    func testPodOwnedMutableTempTracksDeliveryInIOB() {
+        let (doseStore, _) = makeStoresFixed()   // schedule 1.0 U/hr
+        let now = Date()
+        let start = now.addingTimeInterval(-.minutes(10))
+        // The pod manager's report: mutable, full programmed span, pod-native raw. No seeded row.
+        let running = DoseEntry(type: .tempBasal, startDate: start,
+                                endDate: start.addingTimeInterval(.minutes(30)),
+                                value: 2.0, unit: .unitsPerHour, isMutable: true)
+        let exp = expectation(description: "pod report")
+        doseStore.addPumpEvents([NewPumpEvent(date: start, dose: running,
+                                              raw: Data("tempBasal 2.0 2026-07-28T22:00:00Z".utf8),
+                                              title: "Temp Basal")],
+                                lastReconciliation: now, replacePendingEvents: true) { error in
+            XCTAssertNil(error); exp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+
+        let iobAt5  = iob(doseStore, at: start.addingTimeInterval(.minutes(5)))
+        let iobAt10 = iob(doseStore, at: start.addingTimeInterval(.minutes(10)))
+
+        XCTAssertGreaterThan(iobAt10, iobAt5, "IOB must grow while the pod-owned temp delivers")
+        // Net delivery between the two instants = 1.0 U/hr × 5 min ≈ 0.083 U, minus a sliver of
+        // early decay. This is the 0.50 → 0.57 behavior: reality-tracking, not frozen-at-takeover.
+        XCTAssertEqual(iobAt10 - iobAt5, 0.083, accuracy: 0.04,
+                       "the IOB delta over 5 min of a +1.0 U/hr net temp must be ~0.08 U")
+    }
 }

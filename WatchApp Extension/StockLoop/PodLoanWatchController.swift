@@ -446,8 +446,22 @@ final class PodLoanWatchController {
         ingestGrantHistory(grant)
         // Cross-device adoption: the phone's bleIdentifier is useless here — scan for
         // the pod by its address and adopt the peripheral THIS watch discovers.
-        let scanning = manager.podLoanBeginTakeover()
+        // #72: the grant's LIVE temp record (still-delivering at takeover, omitted from the
+        // seed) gates and parameterizes the re-arm — it corroborates that the PHONE's books
+        // also believe the temp is running (guards the stale-C5-signature corner across
+        // back-to-back loans), and its endDate is the only way to restore a 0 U/hr temp's span.
+        let liveTempRecord = grant.seedDoseEntries(finishedBy: Date()).live.first { $0.type == .tempBasal }
+        let scanning = manager.podLoanBeginTakeover(liveTempStart: liveTempRecord?.startDate,
+                                                    liveTempEnd: liveTempRecord?.endDate)
         SportLog.event("loan", "pump rebuilt — \(scanning ? "scanning for the pod by address" : "no pod address!") for takeover")
+        // #72: beginTakeover re-armed the C5-cancelled inherited temp (if any) so THIS watch
+        // tracks its live delivery — IOB climbs with the running temp instead of freezing at
+        // the handover stamp. The seed omits it (live dose); the pod's mutable re-reports own it.
+        if let liveTemp = manager.podLoanLiveTempBasalDescription {
+            SportLog.event("loan", "#72: tracking inherited running temp — \(liveTemp) (mutable, pod-owned; IOB tracks delivery)")
+        } else if liveTempRecord != nil {
+            SportLog.event("loan", "#72: live temp in grant but NOT re-armed (no C5 signature / start mismatch) — record stays closed at handover")
+        }
 
         // First pod status = the takeover proof (§2.3). The pod's BLE session takes
         // SECONDS to establish after construction (scan → connect → EAP-AKA), but a
@@ -532,7 +546,11 @@ final class PodLoanWatchController {
                             // scheduled-vs-actual delay says whether runtime was stolen.
                             let before = manager.podLoanConnectionStateDescription
                             let lateBy = Date().timeIntervalSince(scheduledReleaseAt)
-                            manager.releaseConnection()
+                            // #72: ORPHAN, not release — E4 drops the BLE link but the watch
+                            // remains the controller; the C5 record-close in releaseConnection()
+                            // is handover accounting and was silently truncating the running temp
+                            // at every E4 release (killing live IOB tracking ~90s in).
+                            manager.podLoanOrphanConnection()
                             self.lastPodLinkContact = Date()
                             SportLog.event("loan", String(format: "E4: pod BLE released (+90s deferred, %.0fs late) — state was %@ at cancel%@",
                                                           lateBy,
@@ -687,7 +705,9 @@ final class PodLoanWatchController {
             // we cancelled" is the load-bearing fact — and a state that is not .connected
             // going in means there was nothing to cancel.
             let before = manager.podLoanConnectionStateDescription
-            manager.releaseConnection()
+            // #72: ORPHAN, not release — same as the deferred takeover release: E4 keeps the
+            // watch as controller, so the running temp's record must NOT close here.
+            manager.podLoanOrphanConnection()
             self.lastPodLinkContact = Date()
             self.queue.asyncAfter(deadline: .now() + 3) { [weak self] in
                 guard let self = self, let manager = self.pumpManager else { return }
@@ -725,11 +745,6 @@ final class PodLoanWatchController {
     /// `seedDoseEntries` still tolerates it for older phones and `reconciled()` would collapse
     /// it regardless. See docs/DESIGN_LOAN_ADDPUMPEVENTS.md.
     private func ingestGrantHistory(_ grant: LoanGrant) {
-        let entries = grant.seedDoseEntries()
-        // #1 handover-IOB diagnostic: seed magnitude + the double-seed detector (should now
-        // always read "no" — the phone stopped sending the boundaryRecord in Fix 1).
-        let grossImpliedSum = entries.reduce(0.0) { $0 + $1.programmedUnits }
-        let boundaryDup = Self.boundaryDuplicatesHistory(grant)
         // WIPE-THEN-SEED (IOB dedup, 2026-07-22). Epoch-keyed syncIds mean each takeover would
         // otherwise re-insert the same 16 h under fresh identifiers, compounding IOB across
         // epochs. The grant IS ground truth at takeover (it already contains this watch's
@@ -739,15 +754,25 @@ final class PodLoanWatchController {
         let doseStore = loopManager.doseStore
         let seamLog = OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController")
         let seedReconciliation = Date()
-        // Fix 2 (2026-07-28): a still-open, future-ending temp is seeded TRIMMED to the takeover
-        // instant (in the entries→events map below), so its undelivered [now→end] tail no longer
-        // inflates SEED-IN IOB — the seed reads delivered-only, matching the phone. (Before Fix 2 the
-        // tail counted until the first watch temp trimmed it, causing the SEED-IN→first-cycle IOB
-        // drop and the phone-vs-watch IOB gap Jeremy saw, e.g. phone 1.23 vs watch 1.39.)
-        let openTemps = entries.filter { $0.type == .tempBasal && $0.endDate > seedReconciliation }
-        let openTempNote = openTemps.isEmpty ? "" :
-            String(format: "; %d open temp(s) trimmed at seed (Fix 2), latest programmed +%.0fm",
-                   openTemps.count, (openTemps.map { $0.endDate }.max()!.timeIntervalSince(seedReconciliation)) / 60)
+        // #72 (2026-07-28, supersedes Fix 2's trim): the seed carries FINISHED history only. A
+        // dose still DELIVERING at takeover (running temp, mid-flight bolus) is OMITTED — the
+        // grant's podState blob already carries it, and this watch's pump manager reports it as a
+        // live MUTABLE dose on the first status read (stock ownership, exactly how the phone books
+        // its own running temp). IOB then TRACKS its delivery in real time (Jeremy's 0.50 → 0.57)
+        // and the eventual cancel/expiry books ACTUAL units under the pod-native raw — no seeded
+        // row exists to swallow it. Fix 2's trim, once #69 made identity dedup work, froze the
+        // temp at the takeover instant and understated IOB for the temp's remaining life.
+        // FIELD-LOG NOTE: when liveNote is non-empty, SEED-IN IOB reads LOW by the live dose's
+        // contribution until the first pod read lands (seconds), so [iob-diff] Δwire<0 then
+        // Δreconcile>0 by ~the same amount is EXPECTED, not a bug.
+        let (entries, liveDoses) = grant.seedDoseEntries(finishedBy: seedReconciliation)
+        // #1 handover-IOB diagnostic: seed magnitude + the double-seed detector (should now
+        // always read "no" — the phone stopped sending the boundaryRecord in Fix 1).
+        let grossImpliedSum = entries.reduce(0.0) { $0 + $1.programmedUnits }
+        let boundaryDup = Self.boundaryDuplicatesHistory(grant)
+        let liveNote = liveDoses.isEmpty ? "" :
+            String(format: "; %d live dose(s) omitted — pod state owns them (#72), latest ends +%.0fm",
+                   liveDoses.count, (liveDoses.map { $0.endDate }.max()!.timeIntervalSince(seedReconciliation)) / 60)
         doseStore.deleteAllPumpEvents { error in
             if let error = error {
                 os_log("Grant ingest: pump-event wipe failed: %{public}@", log: seamLog, type: .error, String(describing: error))
@@ -762,39 +787,37 @@ final class PodLoanWatchController {
                 // seedNow() carries the seed; it's gated below on a verified-empty audit that
                 // force-repurges a dirty store first, and logs the leak either way (#69 wipe-audit).
                 func seedNow() {
-                    guard !entries.isEmpty else {
-                        self.loopManager.invalidateInsulinEffect()
-                        return
-                    }
                     // NewPumpEvent identity lives in `raw` (its hex becomes the dose syncIdentifier —
                     // PumpEvent DISCARDS DoseEntry.syncIdentifier). The phone's syncId IS hex(raw) of
                     // what its pump manager reported, so LoanSeedIdentity.raw() hex-DECODES it back to
                     // the original bytes (#69 double-hex fix): the rebuilt pump manager's inevitable
-                    // re-reports of inherited podState doses (just-finished bolus, running temp) then
-                    // land on the SAME row via the raw uniqueness constraint instead of a second copy
-                    // (the +1.15U cycle-1 bolus echo), and re-seeds across epochs upsert-dedup even if
-                    // the wipe misfires. Non-hex ids (epoch-keyed fallback) keep utf8, as before.
+                    // re-reports of inherited podState doses then land on the SAME row via the raw
+                    // uniqueness constraint instead of a second copy (the +1.15U cycle-1 bolus echo),
+                    // and re-seeds across epochs upsert-dedup even if the wipe misfires. Non-hex ids
+                    // (epoch-keyed fallback) keep utf8, as before. Live doses are NOT here (#72 —
+                    // omitted by seedDoseEntries(finishedBy:), pod state owns them).
                     let events = entries.map { dose -> NewPumpEvent in
-                        // Fix 2 (#69): trim a still-open temp to the takeover instant so the seed is
-                        // delivered-only (matches the phone). Rate/scheduledBasalRate/syncId preserved;
-                        // deliveredUnits stays nil so IOB integrates only [start→now]. The first cycle
-                        // reconciles against the pod odometer regardless. raw uses the ORIGINAL dose
-                        // syncId (trim does not change identity — uniqueKey is keyed on start, not end).
-                        let seedDose = (dose.type == .tempBasal && dose.endDate > seedReconciliation)
-                            ? dose.trimmed(to: seedReconciliation, syncIdentifier: dose.syncIdentifier)
-                            : dose
-                        return NewPumpEvent(date: seedDose.startDate, dose: seedDose,
-                                            raw: LoanSeedIdentity.raw(forSyncIdentifier: dose.syncIdentifier ?? UUID().uuidString),
-                                            title: Self.pumpEventTitle(for: seedDose.type))
+                        NewPumpEvent(date: dose.startDate, dose: dose,
+                                     raw: LoanSeedIdentity.raw(forSyncIdentifier: dose.syncIdentifier ?? UUID().uuidString),
+                                     title: Self.pumpEventTitle(for: dose.type))
                     }
-                    doseStore.addPumpEvents(events, lastReconciliation: seedReconciliation, replacePendingEvents: true) { error in
+                    // An EMPTY seed (cleared phone history, or all-live doses) still goes through
+                    // addPumpEvents: it stamps lastPumpEventsReconciliation = takeover instant
+                    // (assigned before the empty-guard, pinned by
+                    // testEmptyPumpEventsStillRefreshesLastAddedPumpData) so pumpDataTooOld can't
+                    // deadlock the first cycle. replacePendingEvents:false (#72): a pod-owned live-
+                    // dose report that raced ahead of the seed must NOT be purged — the wipe already
+                    // cleared stale mutable rows, and every manager report (replace:true) self-heals
+                    // any that leak past it.
+                    doseStore.addPumpEvents(events, lastReconciliation: seedReconciliation, replacePendingEvents: false) { error in
                         if let error = error {
                             os_log("Grant history ingest failed: %{public}@", log: seamLog, type: .error, String(describing: error))
                         } else {
-                            SportLog.event("loan", String(format: "insulin books rebuilt from grant — %d records (wipe-then-seed, addPumpEvents) · grossImpliedΣ=%.2fU · boundaryDup=%@%@",
+                            SportLog.event("loan", String(format: "insulin books rebuilt from grant — %d records (wipe-then-seed, addPumpEvents) · grossImpliedΣ=%.2fU · boundaryDup=%@%@%@",
                                                            events.count, grossImpliedSum,
                                                            boundaryDup ? "YES" : "no",
-                                                           boundaryDup ? " (#1 double-seed — expected gone post-Fix1)" : ""))
+                                                           boundaryDup ? " (#1 double-seed — expected gone post-Fix1)" : "",
+                                                           liveNote))
                         }
                         self.loopManager.invalidateInsulinEffect()
                         // SEED-IN IOB anchor (#1): the watch's IOB right after seeding, to compare
@@ -805,7 +828,7 @@ final class PodLoanWatchController {
                                 // instead of blank until the first loop cycle (#69 glance consistency;
                                 // the glance COB already reads its store live).
                                 self.loopManager.primeInsulinOnBoard(iob)
-                                SportLog.event("loan", String(format: "SEED-IN IOB=%.2fU @ takeover (%d seeded doses%@)", iob.value, events.count, openTempNote))
+                                SportLog.event("loan", String(format: "SEED-IN IOB=%.2fU @ takeover (%d seeded doses%@)", iob.value, events.count, liveNote))
                                 // INSTRUMENTATION ONLY (#69): record the phone/seed IOB anchors and dump
                                 // the per-dose decomposition, so the first post-takeover cycle can emit
                                 // [iob-diff] (phone vs seed vs cycle1) and localize the ~0.3U leak.

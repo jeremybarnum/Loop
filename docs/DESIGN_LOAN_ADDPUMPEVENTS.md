@@ -159,15 +159,58 @@ would prune `podState` and freshen the odometer baseline (`deliveredAtGrant` cur
 CACHED odometer) at ~1s grant latency — deferred; with identity restored the re-reports it would
 prevent are harmless.
 
-**Known, accepted trade-off (adversarial review 2026-07-28, tracked for a ruling):** the
-inherited running temp's post-takeover delivery ([takeover → watch's first enact or programmed
-end]) is never booked on the watch — the seeded row is immutable and every same-raw re-report
-(mutable and the final cancel-finalized version) loses to it under store-trump. Typical closed
-loop: ≤~0.2–0.4 U gross (first enact truncates within a cycle). Open loop: display-only. Worst
-case (max temp inherited + a stalled closed-loop session that never enacts): ~1–2 U understated
-through DIA — the direction FLIP vs the pre-fix double-count. Mitigations if ruled needed:
-pre-grant quiesce, or seeding the open temp MUTABLE full-span (stock semantics — but that
-reverses Fix 2 and needs its own review).
+**#72 step 1 (Jeremy's ruling, 2026-07-28 evening — "IOB should match reality"): the seed
+carries FINISHED history only.** A dose still DELIVERING at the takeover instant is OMITTED
+from the seed (`seedDoseEntries(finishedBy:)`) and ownership passes to the pod-state blob + the
+watch's own pump manager. Status by dose kind (adversarial review, same evening):
+
+- **Mid-flight bolus: RESOLVED.** C5 does not touch boluses, so it rides the blob genuinely
+  unfinished; the watch's first status read reports it MUTABLE, IOB tracks its remaining
+  infusion, and completion books actual units under the pod-native raw. (Pre-#72 it was seeded
+  immutable at full programmed units and the pod's finalization was swallowed.)
+- **Running temp: RESOLVED via the watch-side RE-ARM + the E4 orphan/handover release split
+  (#72 step 2, same evening; both refined by a second adversarial pass).** Two mechanisms were
+  freezing the record: (i) the phone's C5 record-close cancels `podState.unfinalizedTempBasal`
+  at the handover stamp BEFORE `pump.rawValue` is serialized, so the watch inherits the temp
+  already-cancelled (and stock's untracked-temp resurrect is commented out in this fork);
+  (ii) the WATCH's own E4 releases reused `releaseConnection()` and re-ran the same C5 cancel
+  at takeover+90s and after every dose — silently re-truncating the running temp (its own
+  enacted temps included) on every orphan cycle. Fixes: `podLoanBeginTakeover(liveTempStart:
+  liveTempEnd:)` RE-ARMS the inherited temp (`UnfinalizedDose.podLoanRearmHandoverCancel`) —
+  the C5 cancel is exactly reversible (`cancel(at:)` stamps `scheduledUnits`/`scheduledTempRate`
+  and nothing else ever sets them; restore is idempotent and uniqueKey-identity-stable); and
+  the E4 paths now call `podLoanOrphanConnection()` (BLE drop WITHOUT the record-close — E4 is
+  not a handover, the watch remains the controller). Guards from the review: the re-arm fires
+  ONLY when the grant's dose history carries a MATCHING live temp record (start ±2s) — the
+  phone's books distinguish a genuinely-live temp (mutable full-span record) from a stale C5
+  signature lingering across back-to-back loans; and a 0 U/hr temp (Loop's standard predicted
+  low, whose span the cancel math destroys as 0/0) restores from the record's programmed end
+  (refuses without it). Post-re-arm the stock truth-table books reality: still running →
+  mutable re-reports, IOB tracks (0.50 → 0.57); stopped early → finalized at the status date
+  (units stay programmed-basis — stock behavior, noted); expired → full span. The PHONE's copy
+  stays cancelled — R2 and hand-back accounting untouched; the watch never journals the
+  inherited temp. Known residual edges (documented, not regressions): phone-ahead clock skew
+  can classify a just-finished dose as live and omit it (narrow — requires skew exceeding the
+  dose-end→ingest gap); the stale-signature corner survives only if the phone re-grants with
+  NO status read since reclaim (the rapid-re-takeover #42 shape). Manager-layer tests
+  (OmniTests): `testPodLoanRearmReversesC5Cancel`, `testPodLoanRearmSurvivesRawValueRoundTrip`
+  (the grant-blob path), `testPodLoanRearmIdempotentAndSelective`,
+  `testPodLoanRearmPreservesUniqueKeyIdentity`, `testPodLoanRearmExpiredTempBooksFullSpan`,
+  `testPodLoanRearmZeroRateTempNeedsRecordEnd`.
+
+Mechanics that DID verify: stock IOB integrates a dose's delivery only up to eval-time + model
+delay (`InsulinMath.continuousDeliveryInsulinOnBoard`'s loop bound;
+`percentEffectRemaining(t≤delay)=1`), so a genuinely-MUTABLE full-span row yields delivered-
+so-far + a constant ~10-min lookahead — `testPodOwnedMutableTempTracksDeliveryInIOB` pins that
+store-level mechanic — and with step 2's re-arm + orphan split the manager now supplies the
+mutable row for temps as well as boluses. The seed also switched to
+`replacePendingEvents:false` (a pod live-dose report racing ahead of the seed must not be
+purged; every manager report runs replace:true and self-heals stragglers), and an EMPTY seed
+still calls `addPumpEvents([])` to stamp `lastPumpEventsReconciliation` (pumpDataTooOld guard).
+Field-log note: with a live dose omitted, SEED-IN IOB reads shifted by that dose's net
+contribution until the first pod read lands — LOW for an above-schedule temp or a bolus, HIGH
+for a below-schedule/zero temp — so an `[iob-diff]` Δwire offset with an opposite Δreconcile
+rebound is EXPECTED at such takeovers; the seed log carries "N live dose(s) omitted" to flag it.
 
 **Tests:** `testLoanSeedIdentityRawRoundTripAndFallbacks` (decoder),
 `testSeedIdentityDedupsPodNativeReReport` (store round-trip: seed + pod re-report → ONE dose),
