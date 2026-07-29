@@ -1515,7 +1515,29 @@ final class WatchLoopManager {
             if let reclaim = self.e4ReclaimPodForDose {
                 reclaim { ok in
                     if ok {
-                        deliverBolus()
+                        // #64 ROOT CAUSE (2026-07-29): this completion runs ON the loan
+                        // controller's serial queue (reclaimPodForDose wraps every path in
+                        // queue.async, including the still-connected short-circuit), and
+                        // deliverBolus → loanWillEnactBolus → mintIntent does queue.sync
+                        // onto that SAME queue — a guaranteed libdispatch trap, before
+                        // enactBolus is ever issued (apparent success at the crown, crash
+                        // 0-40s later, NO insulin delivered). The automatic enactor never
+                        // hits this because it re-enters from its own dosingQueue — mirror
+                        // that discipline: hop off the loan queue before delivering.
+                        // (.async is load-bearing: with E4 off, the reclaim closure
+                        // completes SYNCHRONOUSLY on dataAccessQueue — a .sync hop would
+                        // deadlock on itself. Adversarial-review verified.)
+                        let hopStart = Date()
+                        self.dataAccessQueue.async {
+                            // Visibility: a manual bolus queued behind a full automatic
+                            // enact (updateGroup.wait holds this queue ~15-45s) is loud
+                            // in the log, not a silent delay (adversarial review).
+                            let waited = Date().timeIntervalSince(hopStart)
+                            if waited > 2.0 {
+                                SportLog.event("loan", String(format: "MANUAL BOLUS queued %.0fs behind the dosing queue (automatic cycle in flight)", waited))
+                            }
+                            deliverBolus()
+                        }
                     } else {
                         self.e4ReleasePodAfterDose?()
                         SportLog.event("loan", "MANUAL BOLUS FAILED — E4 pod reconnect timed out (pod unreachable)")

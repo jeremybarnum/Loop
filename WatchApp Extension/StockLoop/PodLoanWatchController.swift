@@ -1582,6 +1582,11 @@ extension PodLoanWatchController: WatchLoanDoseRecording {
     }
 
     private func mintIntent(record: LoanDoseRecord, uncertainKind: EventProvenance.UncertainKind) -> UUID? {
+        // QUEUE-ORDER INVARIANT (#64, load-bearing both directions): callers sync INTO
+        // this serial queue from dataAccessQueue/main — so no block running ON this queue
+        // may ever dispatch sync onto WatchLoopManager.dataAccessQueue (ABBA deadlock),
+        // and mintIntent must never be reached from this queue itself (libdispatch trap —
+        // the #64 crash: the E4 reclaim completion ran deliverBolus here directly).
         var minted: UUID?
         queue.sync {
             // A new programming command destroys pending verdict evidence: the
