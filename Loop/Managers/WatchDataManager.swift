@@ -88,13 +88,38 @@ final class WatchDataManager: NSObject {
                     // pre-loan loop already queued (the podOnLoanProvider gate stops FUTURE re-arms,
                     // but the queued 20/40/60/120-min ladder must be killed now so it never fires
                     // mid-loan). Also covers relaunch-into-loan (this closure runs at reconcile).
-                    self.deviceManager.alertManager?.clearLoopNotRunningNotifications()
+                    // #26: the ForLoanGrant variant also drops the future rungs' bookkeeping so
+                    // loan-end inference can't record phantom "issued" alerts for cancelled rungs.
+                    self.deviceManager.alertManager?.clearLoopNotRunningNotificationsForLoanGrant()
+                    // #26 (replace, don't just mute): arm the watch-silence dead-man — during a
+                    // loan the alarm-worthy failure is the WATCH going dark, not the phone not
+                    // looping. Ungated arm (the loan state flips after this closure runs);
+                    // main-hopped so every watch-silence mutation serializes on one queue.
+                    DispatchQueue.main.async { [weak self] in
+                        self?.deviceManager.alertManager?.armWatchSilenceNotifications()
+                    }
                 } else {
                     // Restore defaults to OPEN loop when the capture is missing —
                     // never invent closed-loop-on (R7's override is the settings UI).
                     let prior = UserDefaults.standard.object(forKey: dosingKey) as? Bool ?? false
                     UserDefaults.standard.removeObject(forKey: dosingKey)
                     self.deviceManager.loopManager.mutateSettings { $0.dosingEnabled = prior }
+                    // #26: this closure runs ON the loan controller's serial queue, and the
+                    // reschedule below reads the podOnLoan gate, which does queue.sync onto that
+                    // SAME queue — calling it inline is a guaranteed deadlock (adversarial
+                    // review blocker). Hop to main: by the time it runs, state == .owner is
+                    // already set (every unpause site flips state first), so the gate is open
+                    // and reads safely cross-queue. The main hop also serializes the clear
+                    // against any in-flight watch-receipt re-arm (TOCTOU).
+                    DispatchQueue.main.async { [weak self] in
+                        // Loan ended — the watch no longer owes us a heartbeat.
+                        self?.deviceManager.alertManager?.clearWatchSilenceNotifications()
+                        // Reclaim-gap fix: the "Loop Failure" ladder only re-arms on a SUCCESSFUL
+                        // loop, so a phone that fails to resume looping after reclaim — exactly
+                        // the case the ladder exists for — would stay silent forever. Re-arm from
+                        // the reclaim instant; the first successful loop reschedules normally.
+                        self?.deviceManager.alertManager?.rescheduleLoopNotRunningNotifications(Date())
+                    }
                 }
             },
             send: { [weak self] dictionary in
@@ -593,6 +618,7 @@ final class WatchDataManager: NSObject {
 
 extension WatchDataManager: WCSessionDelegate {
     func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
+        deviceManager.alertManager?.noteWatchContactDuringLoan()   // #26: any watch traffic re-arms the silence dead-man
         switch message["name"] as? String {
         case PotentialCarbEntryUserInfo.name?:
             if let potentialCarbEntry = PotentialCarbEntryUserInfo(rawValue: message)?.carbEntry {
@@ -666,6 +692,7 @@ extension WatchDataManager: WCSessionDelegate {
     }
 
     func session(_ session: WCSession, didReceive file: WCSessionFile) {
+        deviceManager.alertManager?.noteWatchContactDuringLoan()   // #26: the 5-min log pulse is the loan's heartbeat
         // Watch diagnostics log → Documents, visible in the Files app (On My iPhone →
         // Loop) so it can be AirDropped from the PHONE (watchOS has no AirDrop; logs
         // were being texted). Copy immediately — the system deletes file.fileURL when
@@ -733,6 +760,7 @@ extension WatchDataManager: WCSessionDelegate {
     }
 
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        deviceManager.alertManager?.noteWatchContactDuringLoan()   // #26: loan protocol traffic re-arms the silence dead-man
         // M5: loan protocol v2 rides its own single key. Unknown payloads are logged
         // and ignored — never asserted on (failure-matrix row 17: WC redelivers
         // queued userInfo across reinstalls).

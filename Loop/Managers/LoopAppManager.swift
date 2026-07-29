@@ -213,6 +213,13 @@ class LoopAppManager: NSObject {
         // the pod is loaned to the watch — the watch owns not-looping alerting on the wrist. alertManager
         // is built above and deviceDataManager just now, so wire the loan predicate here.
         alertManager.podOnLoanProvider = { [weak deviceDataManager] in deviceDataManager?.isPodLoanedToWatch ?? false }
+        // #26 hardening (adversarial review): if the app died between the loan-end state flip and
+        // the main-queue clear, the pre-scheduled watch-silence dead-man is orphaned and would fire
+        // a phantom critical alert 15/30 min after a completed hand-back. Launching with NO active
+        // loan → clear defensively; launching INTO a loan re-arms at reconcile anyway.
+        if !(deviceDataManager?.isPodLoanedToWatch ?? false) {
+            alertManager.clearWatchSilenceNotifications()
+        }
 
         // STOCK LAUNCH-CRASH FIX #2 (moved here from initialize() — see the comment
         // there). settingsManager now exists, so the async push-token callback is safe.

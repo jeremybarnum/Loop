@@ -200,7 +200,14 @@ public final class AlertManager {
         for (minutes, isCritical) in [(20.0, false), (40.0, false), (60.0, true), (120.0, true)] {
             let warningInterval = TimeInterval(minutes: minutes)
             let timeUntilNotification = lastLoopDate.addingTimeInterval(warningInterval).timeIntervalSinceNow
-            guard timeUntilNotification >= 0 else { break }
+            // #26 (adversarial review): `continue`, not `break`. Now that clearLoopNotRunning-
+            // Notifications removes PENDING rungs, a reschedule with a stale lastLoopDate (e.g. a
+            // mute-settings change 25 min into a stall) must RE-ADD the still-future rungs the
+            // clear just removed — `break` re-added nothing and silently disarmed the escalation.
+            // With `continue` the future rungs land at identical fire times to the ones removed,
+            // restoring the exact pre-clear net behavior; for a fresh lastLoopDate all rungs are
+            // future and continue ≡ break.
+            guard timeUntilNotification >= 0 else { continue }
 
             let formatter = DateComponentsFormatter()
             formatter.maximumUnitCount = 1
@@ -253,6 +260,91 @@ public final class AlertManager {
         UserDefaults.appGroup?.loopNotRunningNotifications = scheduledNotifications
     }
 
+    // MARK: - Sport Mode watch-silence dead-man (#26, 2026-07-29)
+
+    /// The REPLACE half of "replace, don't just mute": while the pod is loaned to the watch the
+    /// "Loop Failure" ladder above is suppressed (podOnLoanProvider gate) — the equivalent alarm
+    /// during a loan is silence from the WATCH. A healthy session talks constantly (the 5-min log
+    /// pulse, loan protocol messages), so every receipt re-arms this pre-scheduled ladder
+    /// (fires from a suspended app — the LoopStallWatchdog pattern); if the watch goes dark for
+    /// 15/30 min the phone says so out loud. Armed ungated at grant (the pause closure runs
+    /// BEFORE the loan state flips, so the podOnLoan gate would eat it); refreshed gated on the
+    /// funnels; cleared at every loan end (all reclaim paths funnel through the unpause closure).
+    private enum WatchSilence {
+        static let category = "SportModeWatchSilent"
+        static let ladder: [(interval: TimeInterval, isCritical: Bool)] = [
+            (TimeInterval(minutes: 15), false),
+            (TimeInterval(minutes: 30), true),
+        ]
+        static func identifier(_ interval: TimeInterval) -> String { "\(category)\(interval)" }
+    }
+
+    /// Grant-time variant of clearLoopNotRunningNotifications (#26): also drops the bookkeeping
+    /// records for the cancelled future rungs. Without this, the grant-era entries (alertAt in
+    /// the future) survive the whole loan — the podOnLoan gate keeps schedule from overwriting
+    /// them — and at loan end inferDelivered records phantom "Loop Failure" alerts as issued for
+    /// rungs that were cancelled and never fired (adversarial review).
+    func clearLoopNotRunningNotificationsForLoanGrant() {
+        clearLoopNotRunningNotifications()
+        UserDefaults.appGroup?.loopNotRunningNotifications = []
+    }
+
+    /// Watch traffic arrived while a loan is active → the session is alive; push the dead-man out.
+    /// Hops to main before the gate: (a) keeps the gate's `queue.sync` off the WCSession delegate
+    /// thread, and (b) serializes gate+arm against the loan-end clear (also main-hopped), so a
+    /// receipt racing the hand-back re-checks the gate AFTER the state flip and cannot re-arm a
+    /// phantom dead-man (adversarial-review TOCTOU).
+    func noteWatchContactDuringLoan() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.podOnLoanProvider() else { return }
+            self.armWatchSilenceNotifications()
+        }
+    }
+
+    /// Ungated arm — called at grant (loan state hasn't flipped yet) and by the gated refresh.
+    func armWatchSilenceNotifications() {
+        clearWatchSilenceNotifications()
+        let formatter = DateComponentsFormatter()
+        formatter.maximumUnitCount = 1
+        formatter.allowedUnits = [.hour, .minute]
+        formatter.unitsStyle = .full
+        for (interval, isCritical) in WatchSilence.ladder {
+            let content = UNMutableNotificationContent()
+            content.title = NSLocalizedString("Sport Mode: Watch Silent", comment: "Notification title when the watch has not been heard from during a loan")
+            if let intervalString = formatter.string(from: interval)?.localizedLowercase {
+                content.body = String(format: NSLocalizedString("Nothing heard from your Apple Watch in %@ while it holds the pod. Check that Sport Mode is still looping.", comment: "Notification body for watch silence during a loan. Parameter is the silence duration"), intervalString)
+            }
+            let shouldMuteAlert = alertMuter.shouldMuteAlert(scheduledAt: interval)
+            if isCritical, FeatureFlags.criticalAlertsEnabled {
+                if #available(iOS 15.0, *) {
+                    content.interruptionLevel = .critical
+                }
+                content.sound = shouldMuteAlert ? .defaultCriticalSound(withAudioVolume: 0.0) : .defaultCritical
+            } else {
+                if #available(iOS 15.0, *) {
+                    content.interruptionLevel = .timeSensitive
+                }
+                content.sound = shouldMuteAlert ? nil : .default
+            }
+            content.categoryIdentifier = WatchSilence.category
+            content.threadIdentifier = WatchSilence.category
+            let request = UNNotificationRequest(
+                identifier: WatchSilence.identifier(interval),
+                content: content,
+                trigger: UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: false)
+            )
+            UNUserNotificationCenter.current().add(request)
+        }
+    }
+
+    func clearWatchSilenceNotifications() {
+        let identifiers = WatchSilence.ladder.map { WatchSilence.identifier($0.interval) }
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
+        // A fired silence alert must leave Notification Center once the watch resumes contact
+        // (or the loan ends) — pending-only removal left it lingering (adversarial review).
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: identifiers)
+    }
+
     func inferDeliveredLoopNotRunningNotifications() {
         // Infer that any past alerts have been delivered at this point
         let now = getCurrentDate()
@@ -273,6 +365,17 @@ public final class AlertManager {
 
     func clearLoopNotRunningNotifications() {
         inferDeliveredLoopNotRunningNotifications()
+
+        // #26 (adversarial review, 2026-07-29): also remove the PENDING ladder. This method only
+        // ever cleared DELIVERED notifications, so the 20/40/60/120-min requests queued by the
+        // last pre-grant loop stayed armed and fired as false "Loop Failure" alarms mid-loan on
+        // any Sport Mode session longer than ~20 min — the grant-time call here was a no-op for
+        // exactly the thing it claimed to kill. Harmless for the stock reschedule path (schedule
+        // re-adds the same fixed identifiers immediately after).
+        let ladderIdentifiers = [20.0, 40.0, 60.0, 120.0].map {
+            "\(LoopNotificationCategory.loopNotRunning.rawValue)\(TimeInterval(minutes: $0))"
+        }
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ladderIdentifiers)
 
         // Clear out any existing not-running notifications
         UNUserNotificationCenter.current().getDeliveredNotifications { (notifications) in
