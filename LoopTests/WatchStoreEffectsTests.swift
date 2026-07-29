@@ -685,6 +685,95 @@ final class WatchStoreEffectsTests: XCTestCase {
         XCTAssertEqual(temps.first?.isMutable, false, "the surviving row is the immutable seeded version")
     }
 
+    // MARK: - #73/#74 SessionInsulinLedger — the single-owner timeline
+
+    private func makeLedger(basalRate: Double = 1.0) -> SessionInsulinLedger {
+        SessionInsulinLedger(
+            basalSchedule: BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: basalRate)])!,
+            insulinModelProvider: PresetInsulinModelProvider(defaultRapidActingModel: nil),
+            longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration)
+    }
+
+    /// THE STOCK-MATH GUARANTEE: identical finished doses into the DoseStore (via the seed
+    /// path) and into the ledger must produce the same IOB — the ledger changes STORAGE,
+    /// never math. (Small tolerance: DoseStore.insulinOnBoard picks the max of the two
+    /// 5-min-grid values adjacent to the query date; the ledger evaluates at the date.)
+    func testLedgerMatchesDoseStoreIOB() {
+        let (doseStore, _) = makeStoresFixed()   // basal 1.0 U/hr
+        let now = Date()
+        let doses = [
+            DoseEntry(type: .tempBasal, startDate: now.addingTimeInterval(-.minutes(90)),
+                      endDate: now.addingTimeInterval(-.minutes(60)), value: 3.0, unit: .unitsPerHour,
+                      syncIdentifier: "aa01"),
+            DoseEntry(type: .bolus, startDate: now.addingTimeInterval(-.minutes(45)),
+                      endDate: now.addingTimeInterval(-.minutes(44)), value: 1.5, unit: .units,
+                      syncIdentifier: "aa02"),
+            DoseEntry(type: .tempBasal, startDate: now.addingTimeInterval(-.minutes(30)),
+                      endDate: now.addingTimeInterval(-.minutes(10)), value: 0.0, unit: .unitsPerHour,
+                      syncIdentifier: "aa03"),
+        ]
+        let events = doses.map { dose in
+            NewPumpEvent(date: dose.startDate, dose: dose,
+                         raw: LoanSeedIdentity.raw(forSyncIdentifier: dose.syncIdentifier!),
+                         title: "seed")
+        }
+        let exp = expectation(description: "store seed")
+        doseStore.addPumpEvents(events, lastReconciliation: now, replacePendingEvents: false) { error in
+            XCTAssertNil(error); exp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+        let storeIOB = iob(doseStore, at: now)
+
+        var ledger = makeLedger()
+        ledger.seed(finished: doses, live: [])
+        let ledgerIOB = ledger.insulinOnBoard(at: now)
+
+        XCTAssertEqual(ledgerIOB, storeIOB, accuracy: 0.03,
+                       "same doses, same math — the ledger replaces storage, not InsulinMath")
+    }
+
+    /// The single coherence rule: an enact truncates the open predecessor at its start —
+    /// the same supersede fold the hand-back journal applies on the phone.
+    func testLedgerSupersedeTruncation() {
+        var ledger = makeLedger()
+        let now = Date()
+        let t1Start = now.addingTimeInterval(-.minutes(20))
+        ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: t1Start,
+                                     endDate: t1Start.addingTimeInterval(.minutes(30)),
+                                     value: 3.0, unit: .unitsPerHour))
+        let t2Start = now.addingTimeInterval(-.minutes(10))
+        ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: t2Start,
+                                     endDate: t2Start.addingTimeInterval(.minutes(30)),
+                                     value: 2.0, unit: .unitsPerHour))
+
+        XCTAssertEqual(ledger.doses.count, 2)
+        XCTAssertEqual(ledger.doses[0].endDate.timeIntervalSince1970, t2Start.timeIntervalSince1970, accuracy: 0.001,
+                       "predecessor truncated at the successor's start")
+        // Net delivered: 3.0 for 10 min (net 2.0/hr → 0.333) + 2.0 running 10 min (net 1.0/hr →
+        // 0.167 delivered-so-far) ≈ 0.5, PLUS the running temp's ~10-min model-delay lookahead
+        // (stock counts not-yet-acting insulin at 100% remaining: ≈ +0.167) minus early decay —
+        // the same delivered-plus-lookahead semantics as the phone's own mutable row.
+        let iobNow = ledger.insulinOnBoard(at: now)
+        XCTAssertEqual(iobNow, 0.67, accuracy: 0.15, "delivered-so-far + delay lookahead, decayed")
+    }
+
+    /// Jeremy's 0.50→0.57 example, ledger-native: a live (inherited) temp seeded full-span
+    /// tracks its delivery in real time — no re-arm, no mutability machinery.
+    func testLedgerLiveTempTracksDelivery() {
+        var ledger = makeLedger()   // schedule 1.0
+        let start = Date().addingTimeInterval(-.minutes(10))
+        ledger.seed(finished: [], live: [
+            DoseEntry(type: .tempBasal, startDate: start,
+                      endDate: start.addingTimeInterval(.minutes(30)),
+                      value: 2.0, unit: .unitsPerHour)   // net +1.0 U/hr
+        ])
+        let iobAt5 = ledger.insulinOnBoard(at: start.addingTimeInterval(.minutes(5)))
+        let iobAt10 = ledger.insulinOnBoard(at: start.addingTimeInterval(.minutes(10)))
+        XCTAssertGreaterThan(iobAt10, iobAt5, "IOB grows while the live temp delivers")
+        XCTAssertEqual(iobAt10 - iobAt5, 0.083, accuracy: 0.04,
+                       "~0.08 U per 5 min of a +1.0 U/hr net temp — reality-tracking by construction")
+    }
+
     // MARK: - #72: a pod-owned live temp must make IOB TRACK delivery in real time
 
     /// Jeremy's reference example (2026-07-28): schedule 1.0 U/hr, a 2.0 U/hr temp running at

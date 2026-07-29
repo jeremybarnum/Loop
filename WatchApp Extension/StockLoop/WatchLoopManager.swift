@@ -378,6 +378,8 @@ final class WatchLoopManager {
         // #50: cache each accepted temp so runningTempBasal() can report what the pod is
         // running while E4 has it orphaned (basalDeliveryState is nil then). Built here so the
         // DoseEntry uses this manager's testable clock; the cache is dataAccessQueue-isolated.
+        // #73/#74 shadow ledger: enactor-accepted doses flow into the session timeline.
+        doseEnactor.ledgerRecord = { [weak self] dose in self?.ledgerRecordEnact(dose) }
         doseEnactor.onTempBasalEnacted = { [weak self] unitsPerHour, duration in
             guard let self = self else { return }
             let start = self.now()
@@ -506,6 +508,46 @@ final class WatchLoopManager {
     private var lastCGMLoopTrigger: Date = .distantPast
     /// #39 storm latch: last phone-fallback syncId attempted (serial deviceQueue only).
     var lastPhoneFallbackSyncId: String?
+
+    // MARK: - #73/#74 SessionInsulinLedger (SHADOW MODE)
+
+    /// The single-owner session dose timeline (see SessionInsulinLedger.swift for the full
+    /// rationale). dataAccessQueue-confined; in shadow mode it only feeds [ledger-diff] —
+    /// dosing and display still read the DoseStore. Reverting = delete these hooks.
+    private var sessionLedger: SessionInsulinLedger?
+
+    /// Takeover: build a fresh ledger from the grant split. Uses the SAME config the store
+    /// path nets/decays with (frozen grant basalProfile, same model provider) so the shadow
+    /// diff isolates STORAGE behavior, not math.
+    func ledgerSeed(finished: [DoseEntry], live: [DoseEntry]) {
+        dataAccessQueue.async {
+            guard let schedule = self.doseStore.basalProfile else {
+                SportLog.event("ledger", "seed SKIPPED — no basal profile yet")
+                return
+            }
+            var ledger = SessionInsulinLedger(
+                basalSchedule: schedule,
+                insulinModelProvider: self.doseStore.insulinModelProvider,
+                longestEffectDuration: self.doseStore.longestEffectDuration)
+            ledger.seed(finished: finished, live: live)
+            self.sessionLedger = ledger
+            SportLog.event("ledger", "seeded — \(ledger.summary) (\(finished.count) finished + \(live.count) live)")
+        }
+    }
+
+    /// A pod-ACCEPTED watch enact enters the timeline (truncating the open predecessor).
+    func ledgerRecordEnact(_ dose: DoseEntry) {
+        dataAccessQueue.async {
+            self.sessionLedger?.recordEnact(dose)
+        }
+    }
+
+    /// Session over — the ledger simply ends (no wipe machinery to fight).
+    func ledgerClear() {
+        dataAccessQueue.async {
+            self.sessionLedger = nil
+        }
+    }
 
     private let doseEnactor = WatchDoseEnactor()
 
@@ -1043,6 +1085,22 @@ final class WatchLoopManager {
 
         _ = updateGroup.wait(timeout: .distantFuture)
 
+        // #73/#74 SHADOW: the ledger's IOB next to the store's, every cycle. Δ attribution is
+        // TWO-SIDED (adversarial review): a step-drop in STORE is the cliff class (store losing
+        // doses); a persistent ledger<store after an UNCERTAIN enact is the LEDGER's known gap
+        // (uncertain-command cluster unledgered); a one-cycle ledger>store spike at a MANUAL
+        // bolus is expected FIFO timing (ledger records at accept, store at the pod report).
+        // Cutover only after field diffs prove out with these signatures accounted.
+        if let ledger = sessionLedger {
+            let ledgerIOB = ledger.insulinOnBoard(at: now())
+            let storeIOB = insulinOnBoard?.value
+            SportLog.event("ledger-diff", String(format: "store=%@ ledger=%.2f Δ=%@ · %@",
+                                                 storeIOB.map { String(format: "%.2f", $0) } ?? "—",
+                                                 ledgerIOB,
+                                                 storeIOB.map { String(format: "%+.2f", $0 - ledgerIOB) } ?? "—",
+                                                 ledger.summary))
+        }
+
         // INSTRUMENTATION ONLY (#69): the FIRST post-takeover cycle — now that this cycle's IOB is
         // computed, reconcile phone-IOB (grant snapshot) vs SEED-IN anchor vs cycle-1 computed, and
         // dump the per-dose decomposition once. One-shot: consuming the anchors clears them.
@@ -1433,6 +1491,13 @@ final class WatchLoopManager {
                         SportLog.event("loan", "MANUAL BOLUS FAILED — \(String(describing: error))")
                     } else {
                         SportLog.event("loan", "MANUAL BOLUS delivering")
+                        // #73/#74 shadow ledger: point-ish event; DASH delivers ~1.5 U/min.
+                        let acceptedAt = Date()
+                        self.ledgerRecordEnact(DoseEntry(
+                            type: .bolus, startDate: acceptedAt,
+                            endDate: acceptedAt.addingTimeInterval(rounded / 1.5 * 60),
+                            value: rounded, unit: .units,
+                            insulinType: pumpManager.status.insulinType))
                         // 134: fold the bolus into IOB/prediction/HUD NOW, not at the next
                         // reading (field: 0.75 U showed no immediate IOB update anywhere).
                         self.dataAccessQueue.async {
@@ -1659,6 +1724,8 @@ final class WatchDoseEnactor {
     /// #50: fired with the (rate, duration) the pod just accepted for a temp basal, so the
     /// owner can cache what is running without querying the pod — E4 orphans it seconds later.
     var onTempBasalEnacted: ((_ unitsPerHour: Double, _ duration: TimeInterval) -> Void)?
+    /// #73/#74 shadow ledger: pod-ACCEPTED doses flow to the owner's session timeline.
+    var ledgerRecord: ((DoseEntry) -> Void)?
 
     func enact(recommendation: AutomaticDoseRecommendation, with pumpManager: PumpManager, completion: @escaping (PumpManagerError?) -> Void) {
         dosingQueue.async {
@@ -1737,6 +1804,14 @@ final class WatchDoseEnactor {
                         // is running once E4 orphans it (basalDeliveryState goes nil seconds
                         // after release).
                         self.onTempBasalEnacted?(basalAdjustment.unitsPerHour, basalAdjustment.duration)
+                        // #73/#74 shadow ledger: the accepted temp enters the single-owner
+                        // timeline (truncating its open predecessor — the journal's rule).
+                        let acceptedAt = Date()
+                        self.ledgerRecord?(DoseEntry(
+                            type: .tempBasal, startDate: acceptedAt,
+                            endDate: acceptedAt.addingTimeInterval(basalAdjustment.duration),
+                            value: basalAdjustment.unitsPerHour, unit: .unitsPerHour,
+                            insulinType: pumpManager.status.insulinType))
                     }
                     doseDispatchGroup.leave()
                 }
@@ -1761,6 +1836,14 @@ final class WatchDoseEnactor {
                     self.loanRecorder?.loanDidEnact(eventID: eventID, error: error)
                     if let error = error {
                         bolusError = error
+                    } else {
+                        // #73/#74 shadow ledger: point-ish event; DASH delivers ~1.5 U/min.
+                        let acceptedAt = Date()
+                        self.ledgerRecord?(DoseEntry(
+                            type: .bolus, startDate: acceptedAt,
+                            endDate: acceptedAt.addingTimeInterval(bolusUnits / 1.5 * 60),
+                            value: bolusUnits, unit: .units,
+                            insulinType: pumpManager.status.insulinType))
                     }
                     doseDispatchGroup.leave()
                 }

@@ -766,6 +766,10 @@ final class PodLoanWatchController {
         // contribution until the first pod read lands (seconds), so [iob-diff] Δwire<0 then
         // Δreconcile>0 by ~the same amount is EXPECTED, not a bug.
         let (entries, liveDoses) = grant.seedDoseEntries(finishedBy: seedReconciliation)
+        // #73/#74 SHADOW LEDGER: the single-owner session timeline gets the same split — no
+        // wipe needed on its side (a new ledger IS the wipe). Runs alongside the store path;
+        // [ledger-diff] compares them every cycle.
+        loopManager.ledgerSeed(finished: entries, live: liveDoses)
         // #1 handover-IOB diagnostic: seed magnitude + the double-seed detector (should now
         // always read "no" — the phone stopped sending the boundaryRecord in Fix 1).
         let grossImpliedSum = entries.reduce(0.0) { $0 + $1.programmedUnits }
@@ -1118,6 +1122,13 @@ final class PodLoanWatchController {
         let suspendActive = (self.manualSuspendEnd ?? .distantPast) > Date()
         let cancelIfNeeded: (@escaping () -> Void) -> Void = { proceed in
             if case .tempBasal = manager.status.basalDeliveryState, !suspendActive {
+                // #73/#74 shadow ledger: the safe-cancel truncates the open temp in the ledger
+                // too — otherwise a failed-offer resume keeps a phantom full-span temp
+                // (adversarial review). Zero-length 0-temp = pure truncation marker.
+                let cancelAt = Date()
+                self.loopManager.ledgerRecordEnact(DoseEntry(
+                    type: .tempBasal, startDate: cancelAt, endDate: cancelAt,
+                    value: 0, unit: .unitsPerHour))
                 manager.enactTempBasal(unitsPerHour: 0, for: 0) { _ in proceed() }
             } else {
                 proceed()
@@ -1421,6 +1432,8 @@ final class PodLoanWatchController {
         pumpManager?.pumpManagerDelegate = nil
         pumpManager = nil
         UserDefaults.standard.removeObject(forKey: Keys.pumpRawValue)
+        // #73/#74: the session ledger ends with the session.
+        loopManager.ledgerClear()
     }
 
     // MARK: - Uncertainty chase (the genuinely-additive layer-1 piece, d27a40c7 port)

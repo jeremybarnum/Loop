@@ -185,6 +185,8 @@
 		43CE7CDE1CA8B63E003CC1B0 /* Data.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43CE7CDD1CA8B63E003CC1B0 /* Data.swift */; };
 		43D0E4A22F1A000100000002 /* LoanProtocolV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */; };
 		43D0E4A32F1A000100000003 /* LoanProtocolV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */; };
+		43D0E4B22F1A000100000012 /* SessionInsulinLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4B12F1A000100000011 /* SessionInsulinLedger.swift */; };
+		43D0E4B32F1A000100000013 /* SessionInsulinLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4B12F1A000100000011 /* SessionInsulinLedger.swift */; };
 		43D0E4A62F1A000100000006 /* LoanReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A42F1A000100000004 /* LoanReconciler.swift */; };
 		43D0E4A72F1A000100000007 /* PodLoanPhoneController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A52F1A000100000005 /* PodLoanPhoneController.swift */; };
 		43D0E4A92F1A000100000009 /* LoanProtocolV2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A82F1A000100000008 /* LoanProtocolV2Tests.swift */; };
@@ -967,6 +969,7 @@
 		43CB2B2A1D924D450079823D /* WCSession.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WCSession.swift; sourceTree = "<group>"; };
 		43CE7CDD1CA8B63E003CC1B0 /* Data.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Data.swift; sourceTree = "<group>"; };
 		43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanProtocolV2.swift; sourceTree = "<group>"; };
+		43D0E4B12F1A000100000011 /* SessionInsulinLedger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionInsulinLedger.swift; sourceTree = "<group>"; };
 		43D0E4A42F1A000100000004 /* LoanReconciler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanReconciler.swift; sourceTree = "<group>"; };
 		43D0E4A52F1A000100000005 /* PodLoanPhoneController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanPhoneController.swift; sourceTree = "<group>"; };
 		43D0E4A82F1A000100000008 /* LoanProtocolV2Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanProtocolV2Tests.swift; sourceTree = "<group>"; };
@@ -2262,6 +2265,7 @@
 				4F11D3BF20DCBEEC006E072C /* GlucoseBackfillRequestUserInfo.swift */,
 				4372E48F213CFCE70068E043 /* LoopSettingsUserInfo.swift */,
 				43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */,
+				43D0E4B12F1A000100000011 /* SessionInsulinLedger.swift */,
 				43D0E4AC2F1A00010000000C /* SensorCodeUserInfo.swift */,
 				43C3B6F620BBCAA30026CAFA /* PumpManager.swift */,
 				C1FB428E217921D600FAB378 /* PumpManagerUI.swift */,
@@ -3663,6 +3667,7 @@
 				4F11D3C220DD80B3006E072C /* WatchHistoricalGlucose.swift in Sources */,
 				4372E490213CFCE70068E043 /* LoopSettingsUserInfo.swift in Sources */,
 				43D0E4A22F1A000100000002 /* LoanProtocolV2.swift in Sources */,
+				43D0E4B22F1A000100000012 /* SessionInsulinLedger.swift in Sources */,
 				43D0E4AD2F1A00010000000D /* SensorCodeUserInfo.swift in Sources */,
 				C174233C259BEB0F00399C9D /* ManualEntryDoseViewModel.swift in Sources */,
 				89CA2B3D226E6B13004D9350 /* LocalTestingScenariosManager.swift in Sources */,
@@ -3799,6 +3804,7 @@
 				43CB2B2B1D924D450079823D /* WCSession.swift in Sources */,
 				4372E491213D05F90068E043 /* LoopSettingsUserInfo.swift in Sources */,
 				43D0E4A32F1A000100000003 /* LoanProtocolV2.swift in Sources */,
+				43D0E4B32F1A000100000013 /* SessionInsulinLedger.swift in Sources */,
 				43D0E4AE2F1A00010000000E /* SensorCodeUserInfo.swift in Sources */,
 				4345E40421F68AD9009E00E5 /* TextRowController.swift in Sources */,
 				43BFF0B51E45C1E700FF19A9 /* NumberFormatter.swift in Sources */,
