@@ -298,6 +298,47 @@ final class StatusTableViewController: LoopChartsTableViewController {
         // prompt→relay→watch path, no real sensor needed. Compiled out unless FAKE_NEW_SENSOR.
         toolbarItems! += [space, UIBarButtonItem(image: UIImage(systemName: "ladybug"), style: .plain, target: self, action: #selector(debugSimulateNewSensor))]
         #endif
+        // *** DIABETIFY *** phone toggle (bench, 2026-07-29): mirrors the ladybug pattern
+        // (debug toolbar button + confirmation gate) — the CGM HUD's own tap is a
+        // production surface (presents the CGM settings VC on the FIRST tap, so a
+        // multi-tap gesture there can never complete). Appended after the real items so
+        // updateToolbarItems' indices hold; gated on the established debug-features flag
+        // (DEBUG_FEATURES_ENABLED, set in LoopConfigOverride.xcconfig for bench builds).
+        if FeatureFlags.allowDebugFeatures {
+            toolbarItems! += [space, UIBarButtonItem(image: UIImage(systemName: "waveform.path.ecg"), style: .plain, target: self, action: #selector(debugToggleDiabetify))]
+        }
+    }
+
+    // *** DIABETIFY *** toolbar toggle handler: confirmation-gated flip of the
+    // "g7.diabetify" flag (phone side; the watch has its own toggle + flag). The HUD's
+    // red "Δ⚠︎ DIABETIFY" unit-label badge refreshes via reloadData immediately.
+    @objc private func debugToggleDiabetify() {
+        let alert: UIAlertController
+        if DiabetifyTransform.isActive {
+            alert = UIAlertController(
+                title: "Disable Diabetify?",
+                message: "Real CGM values resume from the next reading. (Already-stored transformed history remains.)",
+                preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "Disable", style: .default) { [weak self] _ in
+                UserDefaults.standard.set(false, forKey: DiabetifyTransform.defaultsKey)
+                self?.log.default("[diabetify] DISABLED via debug toolbar")
+                self?.refreshContext.update(with: .status)
+                self?.reloadData(animated: true)
+            })
+        } else {
+            alert = UIAlertController(
+                title: "Enable Diabetify?",
+                message: "BENCH TEST ONLY: transforms real CGM readings (y=3(x−80)+115). REMOVE BEFORE PRODUCTION",
+                preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "Enable", style: .destructive) { [weak self] _ in
+                UserDefaults.standard.set(true, forKey: DiabetifyTransform.defaultsKey)
+                self?.log.default("[diabetify] *** ENABLED *** via debug toolbar — y=3(x−80)+115 clamp [40,400]")
+                self?.refreshContext.update(with: .status)
+                self?.reloadData(animated: true)
+            })
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(alert, animated: true)
     }
 
     #if FAKE_NEW_SENSOR
@@ -662,6 +703,19 @@ final class StatusTableViewController: LoopChartsTableViewController {
                 hudView.cgmStatusHUD.presentStatusHighlight(self.deviceManager.cgmStatusHighlight)
                 hudView.cgmStatusHUD.presentStatusBadge(self.deviceManager.cgmStatusBadge)
                 hudView.cgmStatusHUD.lifecycleProgress = self.deviceManager.cgmLifecycleProgress
+
+                // *** DIABETIFY *** ringfence badge (bench, 2026-07-29): while the transform
+                // remaps real G7 readings, the unit label under the BG number becomes a red
+                // "Δ⚠︎ DIABETIFY" — the least invasive persistent surface on the HUD (the
+                // status highlight would REPLACE the glucose number; a banner row needs new
+                // cell plumbing). Reasserted every reload; setGlucoseQuantity above restores
+                // the real unit text on the first reload after the flag goes off.
+                if DiabetifyTransform.isActive {
+                    hudView.cgmStatusHUD.glucoseValueHUD.unitLabel.text = "Δ⚠︎ DIABETIFY"
+                    hudView.cgmStatusHUD.glucoseValueHUD.unitLabel.textColor = .systemRed
+                } else {
+                    hudView.cgmStatusHUD.glucoseValueHUD.unitLabel.textColor = .secondaryLabel
+                }
 
                 // Pump Status
                 hudView.pumpStatusHUD.presentStatusHighlight(self.deviceManager.pumpStatusHighlight)

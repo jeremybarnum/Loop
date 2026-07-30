@@ -1995,13 +1995,31 @@ extension WatchLoopManager: CGMManagerDelegate {
     /// stock provenance, dedup, and persistence — before any loop consideration.
     private func processCGMReadingResult(_ manager: CGMManager, readingResult: CGMReadingResult, completion: @escaping () -> Void) {
         switch readingResult {
-        case .newData(let values):
+        case .newData(let rawValues):
             // BENCH-ONLY (#33/R29): substitute scripted values AFTER a successful real read.
             // Deliberately here and not upstream — the G7 connect/handshake already happened,
             // so radio contention and E4 timing stay genuine and a MISSED window stays
             // missed. Everything downstream (store, momentum, prediction, DoseMath, the pod
             // command) is real. No-op unless the bench flag is on.
-            let values = FakeGlucose.isEnabled ? FakeGlucose.substitute(values) : values
+            let values: [NewGlucoseSample]
+            if FakeGlucose.isEnabled {
+                values = FakeGlucose.substitute(rawValues)
+            } else if DiabetifyTransform.isActive {
+                // *** DIABETIFY *** (bench, 2026-07-29): remap the REAL direct-G7 reading
+                // at the watch SOURCE adapter — the single choke point where G7 samples
+                // enter this store. The phone-BG fallback (ingestPhoneGlucoseFromContext)
+                // and the loan-grant glucose seed (PodLoanWatchController.ingestGrantGlucose)
+                // deliberately do NOT transform: both relay values from the phone's
+                // GlucoseStore, which were already transformed at the PHONE's source
+                // adapter (DeviceDataManager.processCGMReadingResult) — transforming a
+                // relay would double-apply (3x → 9x). FakeGlucose wins if both flags are
+                // somehow on (its script ignores incoming quantities anyway).
+                values = DiabetifyTransform.substitute(rawValues) { line in
+                    SportLog.event("diabetify", line)
+                }
+            } else {
+                values = rawValues
+            }
             glucoseStore.addGlucoseSamples(values) { result in
                 if case .failure(let error) = result {
                     self.log.error("Failure adding glucose samples: %{public}@", String(describing: error))

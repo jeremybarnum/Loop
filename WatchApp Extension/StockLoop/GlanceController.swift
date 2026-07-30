@@ -72,6 +72,10 @@ struct GlanceUIState {
     /// G7 pairing code likely wrong (aesVerifyFailed ×2) — glance shows a re-enter banner.
     var needsSensorCode: Bool = false
 
+    /// *** DIABETIFY *** ringfence badge (bench, 2026-07-29): true while the g7.diabetify
+    /// transform is remapping real G7 readings — the glance must never look normal then.
+    var diabetifyActive: Bool = false
+
     /// Loop open/close control (active only). `canToggleLoop` is false when the phone
     /// disallows dosing (the watch can't close what the phone opened) or when suspended.
     var loopClosed: Bool = false
@@ -220,6 +224,8 @@ final class GlanceViewModel: ObservableObject {
         }
         // Cross-cutting (any phase): a likely-wrong G7 pairing code surfaces the re-enter banner.
         state.needsSensorCode = session.stack.client.needsSensorCode
+        // Cross-cutting: the DIABETIFY bench transform shows its ringfence badge in every phase.
+        state.diabetifyActive = DiabetifyTransform.isActive
     }
 
     // MARK: State builders (static + pure, so previews and tests can drive them)
@@ -458,6 +464,15 @@ struct GlanceView: View {
             Button(action: onLoopTap) { loopIndicator }
                 .buttonStyle(.plain)
                 .disabled(model.state.phase != .active)
+            // *** DIABETIFY *** ringfence badge: persistent while the bench transform is
+            // remapping real G7 readings (3x amplification) — every phase, impossible to miss.
+            if model.state.diabetifyActive {
+                Text("Δ⚠︎ DIABETIFY")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.glanceCrit)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+            }
             Spacer()
             statusRight
         }
