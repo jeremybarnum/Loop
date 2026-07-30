@@ -887,11 +887,16 @@ final class PodLoanPhoneController {
             return LoanDoseRecord(kind: .bolus, startDate: dose.startDate, endDate: dose.endDate, amount: dose.deliveredUnits ?? dose.programmedUnits,
                                   syncIdentifier: dose.syncIdentifier, insulinType: dose.insulinType)
         case .tempBasal:
+            // #80: send the pod's ACTUAL floored delivery (the bolus arm above already does) —
+            // without it the watch re-derives with round() and over-states IOB by ~0.025 U per
+            // elapsed temp slice (field 2026-07-30: phone 0.70 vs watch 1.00 over 33 slices).
             return LoanDoseRecord(kind: .tempBasal, startDate: dose.startDate, endDate: dose.endDate, unitsPerHour: dose.unitsPerHour,
-                                  syncIdentifier: dose.syncIdentifier, insulinType: dose.insulinType)
+                                  syncIdentifier: dose.syncIdentifier, insulinType: dose.insulinType,
+                                  deliveredUnits: dose.deliveredUnits)
         case .suspend:
             return LoanDoseRecord(kind: .suspend, startDate: dose.startDate, endDate: dose.endDate, unitsPerHour: 0,
-                                  syncIdentifier: dose.syncIdentifier, insulinType: dose.insulinType)
+                                  syncIdentifier: dose.syncIdentifier, insulinType: dose.insulinType,
+                                  deliveredUnits: dose.deliveredUnits)
         case .basal, .resume:
             return nil
         }

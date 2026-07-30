@@ -889,3 +889,78 @@ final class LoanBooksHarnessTests: XCTestCase {
                                  "sanity: COB can never exceed the entry")
     }
 }
+
+// MARK: - #80: pulse-quantization fidelity across the wire
+
+/// FIELD (2026-07-30 18:45, epoch 73): phone IOB 0.70 vs watch 1.00 on the SAME 41 seeded
+/// records — a +0.30 "wire" gap with the watch's two books in perfect agreement (store =
+/// ledger = 1.00), so the defect was in TRANSPORT, not storage.
+///
+/// Mechanism: Omnipod delivers whole 0.05 U pulses, so OmniBLE FLOORS a superseded temp's
+/// units and LoopKit reads that via `deliveredUnits`. `LoanDoseRecord` carried actual units
+/// for boluses but NOT for temps, so the watch re-derived with `round(programmedUnits)`
+/// (DoseEntry.swift:147-153) — +0.025 U per elapsed temp slice, one-signed, saturating near
+/// +0.4 U after hours of dense looping. The phone is correct: the pod cannot deliver a
+/// fraction of a pulse.
+final class LoanWireQuantizationTests: XCTestCase {
+
+    /// A 5-min temp at 0.70 U/hr (== scheduled) delivers floor(0.0583/0.05)*0.05 = 0.05 U.
+    /// Rounding instead yields 0.05 too — but at 1.15 U/hr the paths diverge, which is the
+    /// general case this pins: the seeded dose must reproduce the phone's FLOORED units.
+    func testTempSeedPreservesPodFlooredDelivery() {
+        let start = Date().addingTimeInterval(-.minutes(30))
+        let end = start.addingTimeInterval(.minutes(5))
+        let rate = 1.15                                    // U/hr
+        let programmed = rate * 5.0 / 60.0                 // 0.09583 U
+        let podFloored = (programmed / 0.05).rounded(.down) * 0.05   // 0.05 U — what the pod gave
+
+        let record = LoanDoseRecord(kind: .tempBasal, startDate: start, endDate: end,
+                                    unitsPerHour: rate, syncIdentifier: "wire-1",
+                                    deliveredUnits: podFloored)
+        guard let seeded = record.seedDoseEntry(syncIdentifier: "wire-1") else {
+            return XCTFail("temp record must seed")
+        }
+        XCTAssertEqual(seeded.deliveredUnits ?? -1, podFloored, accuracy: 1e-9,
+                       "the pod's floored delivery must survive the wire")
+        XCTAssertEqual(seeded.unitsInDeliverableIncrements, podFloored, accuracy: 1e-9,
+                       "LoopKit must consume the floored actual, not round(programmed)")
+
+        // Pre-fix shape: no deliveredUnits → LoopKit's round() fallback over-states delivery.
+        let legacy = LoanDoseRecord(kind: .tempBasal, startDate: start, endDate: end,
+                                    unitsPerHour: rate, syncIdentifier: "wire-1")
+        guard let legacySeeded = legacy.seedDoseEntry(syncIdentifier: "wire-1") else {
+            return XCTFail("legacy record must still seed (older phone)")
+        }
+        XCTAssertNil(legacySeeded.deliveredUnits, "older phones send no actual — fallback path")
+        XCTAssertGreaterThan(legacySeeded.unitsInDeliverableIncrements, podFloored,
+                             "the fallback rounds UP here — the field over-statement, pinned")
+    }
+
+    /// The field signature: ~0.025 U per slice accumulates one-signed across a dense
+    /// looping window. 33 slices produced +0.30 in the field; this pins the per-slice
+    /// mechanism and its sign rather than re-deriving the whole IOB integral.
+    func testQuantizationDriftIsOneSignedAcrossSlices() {
+        let base = Date().addingTimeInterval(-.hours(3))
+        var flooredTotal = 0.0
+        var roundedTotal = 0.0
+        for slice in 0..<33 {
+            let start = base.addingTimeInterval(.minutes(Double(slice) * 5))
+            let rate = 0.70 + Double(slice % 7) * 0.15     // a realistic spread of temps
+            let programmed = rate * 5.0 / 60.0
+            let podFloored = (programmed / 0.05).rounded(.down) * 0.05
+            let withActual = LoanDoseRecord(kind: .tempBasal, startDate: start,
+                                            endDate: start.addingTimeInterval(.minutes(5)),
+                                            unitsPerHour: rate, syncIdentifier: "s\(slice)",
+                                            deliveredUnits: podFloored)
+            let withoutActual = LoanDoseRecord(kind: .tempBasal, startDate: start,
+                                               endDate: start.addingTimeInterval(.minutes(5)),
+                                               unitsPerHour: rate, syncIdentifier: "s\(slice)")
+            flooredTotal += withActual.seedDoseEntry(syncIdentifier: "s\(slice)")?.unitsInDeliverableIncrements ?? 0
+            roundedTotal += withoutActual.seedDoseEntry(syncIdentifier: "s\(slice)")?.unitsInDeliverableIncrements ?? 0
+        }
+        XCTAssertGreaterThan(roundedTotal, flooredTotal,
+                             "the pre-fix path must over-count — one-signed, never under")
+        XCTAssertEqual(roundedTotal - flooredTotal, 0.025 * 33, accuracy: 0.025 * 33 * 0.6,
+                       "drift scales with slice count at ~0.025 U each (field: 33 slices → +0.30)")
+    }
+}

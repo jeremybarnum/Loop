@@ -135,10 +135,19 @@ public struct LoanDoseRecord: Codable, Equatable {
     /// model the phone used. Novolog resolves to rapid-acting-adult on both, but fiasp/lyumjev
     /// differ — without this the watch silently decays them on the adult curve. nil → typeless.
     public let insulinType: InsulinType?
+    /// #80 pulse fidelity: the pod's ACTUAL delivered units for this dose. Omnipod delivers only
+    /// whole 0.05 U pulses, so OmniBLE FLOORS a superseded temp's units to the pulse boundary and
+    /// LoopKit reads that via `deliveredUnits`. Without it on the wire the watch re-derives with
+    /// `round(programmedUnits)` (DoseEntry.swift:147-153 — the Medtronic-era fallback), netting
+    /// +0.025 U per elapsed temp slice against the phone: the 2026-07-30 wire gap (phone 0.70 vs
+    /// watch 1.00 over 33 slices; the `net=-0.008` decomp rows are its fingerprint). The BOLUS arm
+    /// already carried actual units; this closes the temp arm. nil (older phone) → round fallback.
+    public let deliveredUnits: Double?
 
     public init(kind: Kind, startDate: Date, endDate: Date? = nil, unitsPerHour: Double? = nil,
                 amount: Double? = nil, absorptionTime: TimeInterval? = nil, note: String? = nil,
-                syncIdentifier: String? = nil, insulinType: InsulinType? = nil) {
+                syncIdentifier: String? = nil, insulinType: InsulinType? = nil,
+                deliveredUnits: Double? = nil) {
         self.kind = kind
         self.startDate = startDate
         self.endDate = endDate
@@ -148,6 +157,7 @@ public struct LoanDoseRecord: Codable, Equatable {
         self.note = note
         self.syncIdentifier = syncIdentifier
         self.insulinType = insulinType
+        self.deliveredUnits = deliveredUnits
     }
 }
 
@@ -175,12 +185,16 @@ extension LoanDoseRecord {
                              value: units, unit: .units, syncIdentifier: syncIdentifier, insulinType: insulinType)
         case .tempBasal, .boundaryTruncation:
             guard let rate = unitsPerHour, let end = endDate else { return nil }
+            // #80: carry the pod's floored actual delivery so the watch nets on the SAME quantum
+            // the phone did (nil → LoopKit's round(programmedUnits) fallback, the pre-fix behavior).
             return DoseEntry(type: .tempBasal, startDate: startDate, endDate: end,
-                             value: rate, unit: .unitsPerHour, syncIdentifier: syncIdentifier, insulinType: insulinType)
+                             value: rate, unit: .unitsPerHour, deliveredUnits: deliveredUnits,
+                             syncIdentifier: syncIdentifier, insulinType: insulinType)
         case .suspend:
             guard let end = endDate else { return nil }
             return DoseEntry(type: .tempBasal, startDate: startDate, endDate: end,
-                             value: 0, unit: .unitsPerHour, syncIdentifier: syncIdentifier, insulinType: insulinType)
+                             value: 0, unit: .unitsPerHour, deliveredUnits: deliveredUnits,
+                             syncIdentifier: syncIdentifier, insulinType: insulinType)
         case .resume, .carb, .plumbingCancel, .modeChange:
             return nil
         }

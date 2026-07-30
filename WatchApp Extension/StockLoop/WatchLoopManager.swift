@@ -943,9 +943,14 @@ final class WatchLoopManager {
                     netSum += d.netBasalUnits
                     let sched = d.scheduledBasalRate.map { String(format: "%.2f", $0.doubleValue(for: uhr)) } ?? "nil"
                     let id = d.syncIdentifier.map { String($0.suffix(6)) } ?? "—"
-                    rows.append(String(format: "%@ %@..%@ net=%+.3f sched=%@ mut=%@ id=%@",
+                    // #80: `del=` shows whether the pod's ACTUAL delivery rode the wire.
+                    // del=nil means LoopKit falls back to round(programmedUnits) — the
+                    // rounding path that over-states IOB ~0.025 U per temp slice. Post-fix,
+                    // pod-native seeded temps must show a number here, not "nil".
+                    let del = d.deliveredUnits.map { String(format: "%.3f", $0) } ?? "nil"
+                    rows.append(String(format: "%@ %@..%@ net=%+.3f sched=%@ mut=%@ del=%@ id=%@",
                                        "\(d.type)", tf.string(from: d.startDate), tf.string(from: d.endDate),
-                                       d.netBasalUnits, sched, d.isMutable ? "Y" : "n", id))
+                                       d.netBasalUnits, sched, d.isMutable ? "Y" : "n", del, id))
                 }
                 SportLog.event("iob-decomp", "@\(label) Σnet=\(String(format: "%.3f", netSum))U n=\(rows.count) · " + rows.joined(separator: " | "))
             }
