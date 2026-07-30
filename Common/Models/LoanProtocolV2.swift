@@ -837,3 +837,31 @@ extension LoanMessage {
         }
     }
 }
+
+// MARK: - #74 ledger cutover: assumed-dose conversion
+
+extension LoanDoseRecord {
+    /// The DoseEntry a chase-pending ASSUMED record models, for the session ledger's
+    /// mirror of the journal's direction-aware convention (book only when it means MORE
+    /// insulin than schedule; the caller applies that gate). Bolus end falls back to the
+    /// DASH delivery ramp (1.5 U/min); temp/suspend end falls back to the stock 30-min
+    /// program length. Non-dose kinds return nil.
+    public func podLoanLedgerDoseEntry(insulinType: InsulinType?) -> DoseEntry? {
+        switch kind {
+        case .bolus:
+            guard let units = amount else { return nil }
+            return DoseEntry(type: .bolus, startDate: startDate,
+                             endDate: endDate ?? startDate.addingTimeInterval(units / 1.5 * 60),
+                             value: units, unit: .units,
+                             insulinType: insulinType ?? self.insulinType)
+        case .tempBasal, .suspend:
+            guard let rate = unitsPerHour else { return nil }
+            return DoseEntry(type: .tempBasal, startDate: startDate,
+                             endDate: endDate ?? startDate.addingTimeInterval(.minutes(30)),
+                             value: rate, unit: .unitsPerHour,
+                             insulinType: insulinType ?? self.insulinType)
+        case .resume, .carb, .plumbingCancel, .boundaryTruncation, .modeChange:
+            return nil
+        }
+    }
+}

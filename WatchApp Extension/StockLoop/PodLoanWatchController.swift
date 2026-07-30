@@ -1476,6 +1476,16 @@ final class PodLoanWatchController {
                         self.streamRecords()
                         SportLog.event("verdict", "DELIVERED — pod confirmed the uncertain command")
                     case .refuted(let kind):
+                        // #74: reverse the ledger's assumed booking BEFORE annulling
+                        // (the record lookup needs the event still present). A
+                        // skipped-reduction was never booked → removeDose no-ops.
+                        if let event = self.journal.unackedEvents().first(where: { $0.id == eventID }),
+                           case .assumed(let kind) = event.provenance, kind != .skippedReduction,
+                           let dose = event.record.podLoanLedgerDoseEntry(insulinType: nil) {
+                            // skippedReduction was never booked — removing would rely on
+                            // "no ±2s neighbor" luck (adversarial review); guard explicitly.
+                            self.loopManager.ledgerRemoveDose(type: dose.type, startingAt: dose.startDate)
+                        }
                         self.journal.annul(id: eventID)
                         self.pendingUncertainEventID = nil
                         self.streamRecords()
@@ -1637,12 +1647,29 @@ extension PodLoanWatchController: WatchLoanDoseRecording {
             // .assumed record only when "applied" models MORE insulin. An uncertain
             // BELOW-schedule temp is re-tagged as a skipped-reduction marker instead —
             // the C-prime fingerprint (R22) if it turns out real and unresolved.
+            var retaggedSkippedReduction = false
             if let events = self.journal.unackedEvents().first(where: { $0.id == eventID }),
                events.record.kind == .tempBasal || events.record.kind == .suspend,
                let rate = events.record.unitsPerHour,
                let scheduled = self.loopManager.settings.basalRateSchedule?.value(at: events.record.startDate),
                rate < scheduled {
                 self.journal.amend(id: eventID, record: events.record, provenance: .assumed(.skippedReduction))
+                retaggedSkippedReduction = true
+            }
+
+            // #74 cutover blocker (uncertain-command cluster): mirror the journal's
+            // direction-aware .assumed convention into the ledger. Book the assumed dose
+            // ONLY when it models MORE insulin than schedule (bolus always; above-schedule
+            // temps) — a skipped-reduction stays unbooked, so predecessors keep running in
+            // the ledger (conservative, high-IOB direction, same as R5). A later REFUTED
+            // verdict reverses the booking; DELIVERED/exhausted/noPendingCommand leave it
+            // standing, exactly like the journal record. Without this, every uncertain
+            // enact left a persistent ledger<store gap (documented shadow-mode blocker).
+            if !retaggedSkippedReduction,
+               let record = self.journal.unackedEvents().first(where: { $0.id == eventID })?.record,
+               let dose = record.podLoanLedgerDoseEntry(insulinType: self.pumpManager?.status.insulinType) {
+                self.loopManager.ledgerRecordEnact(dose)
+                SportLog.event("ledger", "assumed dose BOOKED (uncertain enact, chase pending) — \(record.kind)")
             }
 
             self.pendingUncertainEventID = eventID

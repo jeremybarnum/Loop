@@ -83,7 +83,28 @@ public struct SessionInsulinLedger {
                 liv.type != .bolus && abs(liv.startDate.timeIntervalSince(fin.startDate)) < 1.0
             })
         }
-        doses = (deduped + live).sorted { $0.startDate < $1.startDate }
+        var merged = (deduped + live).sorted { $0.startDate < $1.startDate }
+        // Defense-in-depth (2026-07-29 duplicate-twin trace): if the GRANT ever carries one
+        // physical bolus under two identities (loanv2 fold row + pod-native row — the phone
+        // store's version of tonight's watch-side zombie), collapse same-units (±0.01U)
+        // same-instant (±2s) bolus twins, keeping the longer span (pod-actual timing).
+        // Not implicated in the observed incident (the grant had ONE bolus; the ledger was
+        // structurally immune) — this guards the mirrored phone-side topology only.
+        // Bolus-only pass (adversarial review: adjacent-only comparison could be defeated
+        // by an interposed same-second temp under the non-stable sort) — compare every
+        // bolus pair within the window, keep the longer span (pod-actual timing).
+        var dropped = Set<Int>()
+        let bolusIndices = merged.indices.filter { merged[$0].type == .bolus }
+        for (i, ai) in bolusIndices.enumerated() {
+            guard !dropped.contains(ai) else { continue }
+            for bi in bolusIndices.dropFirst(i + 1) where !dropped.contains(bi) {
+                let a = merged[ai], b = merged[bi]
+                guard abs(a.programmedUnits - b.programmedUnits) < 0.01,
+                      abs(a.startDate.timeIntervalSince(b.startDate)) <= 2.0 else { continue }
+                dropped.insert(b.endDate.timeIntervalSince(b.startDate) >= a.endDate.timeIntervalSince(a.startDate) ? ai : bi)
+            }
+        }
+        doses = merged.indices.filter { !dropped.contains($0) }.map { merged[$0] }
     }
 
     /// A watch enact the pod ACCEPTED. Basal-affecting doses (temp/suspend — the enactor
@@ -105,6 +126,24 @@ public struct SessionInsulinLedger {
         }
         doses.append(dose)
         doses.sort { $0.startDate < $1.startDate }
+    }
+
+    /// #74 cutover: reverse a previously booked ASSUMED dose whose chase verdict came back
+    /// REFUTED (the command never reached the pod). Removes the first dose of `type` whose
+    /// start is within `tolerance` of `startingAt`.
+    ///
+    /// KNOWN EDGE (documented, accepted — adversarial review): if the assumed dose
+    /// truncated a predecessor when booked, removal does not un-truncate it. For an
+    /// ABOVE-SCHEDULE predecessor this UNDER-counts IOB from the refuted start until the
+    /// next accepted enact (anti-conservative, bounded by |pred−sched| × chase window
+    /// ≤85s + one cycle). Accepted for the flag-off ship; restore-the-tail lands with
+    /// the remaining #74 work before the flag flips in the field.
+    public mutating func removeDose(type: DoseType, startingAt: Date, tolerance: TimeInterval = 2.0) -> Bool {
+        guard let index = doses.firstIndex(where: {
+            $0.type == type && abs($0.startDate.timeIntervalSince(startingAt)) <= tolerance
+        }) else { return false }
+        doses.remove(at: index)
+        return true
     }
 
     // MARK: - Reads (stock math, no stores)

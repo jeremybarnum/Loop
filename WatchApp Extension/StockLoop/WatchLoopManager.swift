@@ -430,6 +430,8 @@ final class WatchLoopManager {
         }
     }
     private var insulinOnBoard: InsulinValue?
+    /// #74 cutover: the store's IOB kept as the SHADOW series while the ledger drives.
+    private var storeIOBShadow: Double?
     /// #50: the temp basal we last successfully enacted, cached so the watch knows what the
     /// pod is running without querying it. E4 orphans the pod after each dose, so
     /// `pumpManager.status.basalDeliveryState` reverts to nil within seconds even though the
@@ -535,10 +537,27 @@ final class WatchLoopManager {
         }
     }
 
+    /// #74 CUTOVER FLAG: when true (g7.ledgerCutover, default false) AND a session ledger
+    /// exists (loan active), the ledger drives IOB display and insulin effects; the store
+    /// keeps running untouched and the [ledger-diff] line flips to shadowing the STORE.
+    /// Revert = flip the flag back — no data migration in either direction.
+    private var ledgerCutoverActive: Bool {
+        UserDefaults.standard.bool(forKey: "g7.ledgerCutover")
+    }
+
     /// A pod-ACCEPTED watch enact enters the timeline (truncating the open predecessor).
     func ledgerRecordEnact(_ dose: DoseEntry) {
         dataAccessQueue.async {
             self.sessionLedger?.recordEnact(dose)
+        }
+    }
+
+    /// #74: a chase verdict REFUTED a previously booked assumed dose — reverse it.
+    func ledgerRemoveDose(type: DoseType, startingAt: Date) {
+        dataAccessQueue.async {
+            if self.sessionLedger?.removeDose(type: type, startingAt: startingAt) == true {
+                SportLog.event("ledger", "assumed dose REMOVED (chase refuted) — \(type) @ \(startingAt)")
+            }
         }
     }
 
@@ -1013,30 +1032,48 @@ final class WatchLoopManager {
         }
 
         if insulinEffect == nil || insulinEffect?.first?.startDate ?? .distantFuture > insulinEffectStartDate {
-            updateGroup.enter()
-            doseStore.getGlucoseEffects(start: insulinEffectStartDate, end: nil, basalDosingEnd: now()) { result in
-                switch result {
-                case .failure(let error):
-                    self.log.error("Could not fetch insulin effects: %{public}@", String(describing: error))
-                    self.insulinEffect = nil
-                case .success(let effects):
-                    self.insulinEffect = effects
+            // #74 CUTOVER: behind g7.ledgerCutover, the session ledger drives the insulin
+            // effects — same public InsulinMath, same basalDosingEnd trim-at-now contract
+            // (canon: no forward credit for temps in the prediction). Fail-safe: any
+            // missing ledger precondition falls back to the store path, never to nil.
+            if ledgerCutoverActive, let ledger = sessionLedger,
+               let isf = doseStore.insulinSensitivityScheduleApplyingOverrideHistory {
+                // filterDateRange is LOAD-BEARING (adversarial blocker): it drops the floored
+                // grid point so first.startDate > insulinEffectStartDate, which is what re-arms
+                // the recompute gate above every cycle — without it the prediction FREEZES at
+                // the first computation while IOB keeps moving. Mirrors the store path exactly.
+                self.insulinEffect = ledger.glucoseEffects(insulinSensitivity: isf, basalDosingEnd: now(), from: insulinEffectStartDate, to: nil).filterDateRange(insulinEffectStartDate, nil)
+            } else {
+                updateGroup.enter()
+                doseStore.getGlucoseEffects(start: insulinEffectStartDate, end: nil, basalDosingEnd: now()) { result in
+                    switch result {
+                    case .failure(let error):
+                        self.log.error("Could not fetch insulin effects: %{public}@", String(describing: error))
+                        self.insulinEffect = nil
+                    case .success(let effects):
+                        self.insulinEffect = effects
+                    }
+                    updateGroup.leave()
                 }
-                updateGroup.leave()
             }
         }
 
         if insulinEffectIncludingPendingInsulin == nil {
-            updateGroup.enter()
-            doseStore.getGlucoseEffects(start: insulinEffectStartDate, end: nil, basalDosingEnd: nil) { result in
-                switch result {
-                case .failure(let error):
-                    self.log.error("Could not fetch insulin effects including pending: %{public}@", String(describing: error))
-                    self.insulinEffectIncludingPendingInsulin = nil
-                case .success(let effects):
-                    self.insulinEffectIncludingPendingInsulin = effects
+            if ledgerCutoverActive, let ledger = sessionLedger,
+               let isf = doseStore.insulinSensitivityScheduleApplyingOverrideHistory {
+                self.insulinEffectIncludingPendingInsulin = ledger.glucoseEffects(insulinSensitivity: isf, basalDosingEnd: nil, from: insulinEffectStartDate, to: nil).filterDateRange(insulinEffectStartDate, nil)
+            } else {
+                updateGroup.enter()
+                doseStore.getGlucoseEffects(start: insulinEffectStartDate, end: nil, basalDosingEnd: nil) { result in
+                    switch result {
+                    case .failure(let error):
+                        self.log.error("Could not fetch insulin effects including pending: %{public}@", String(describing: error))
+                        self.insulinEffectIncludingPendingInsulin = nil
+                    case .success(let effects):
+                        self.insulinEffectIncludingPendingInsulin = effects
+                    }
+                    updateGroup.leave()
                 }
-                updateGroup.leave()
             }
         }
 
@@ -1071,16 +1108,24 @@ final class WatchLoopManager {
             }
         }
 
+        // The store IOB is fetched EITHER WAY: as the live number (shadow mode) or as the
+        // shadow series for [ledger-diff] (cutover mode — the comparison must not collapse
+        // to ledger-vs-ledger).
+        let cutover = ledgerCutoverActive && sessionLedger != nil
         updateGroup.enter()
         doseStore.insulinOnBoard(at: now()) { result in
             switch result {
             case .failure(let error):
                 self.log.error("Failure getting insulin on board: %{public}@", String(describing: error))
-                self.insulinOnBoard = nil
+                if cutover { self.storeIOBShadow = nil } else { self.insulinOnBoard = nil }
             case .success(let insulinValue):
-                self.insulinOnBoard = insulinValue
+                if cutover { self.storeIOBShadow = insulinValue.value } else { self.insulinOnBoard = insulinValue }
             }
             updateGroup.leave()
+        }
+        if cutover, let ledger = sessionLedger {
+            // #74 CUTOVER: displayed + dosing IOB from the single-owner timeline.
+            self.insulinOnBoard = InsulinValue(startDate: now(), value: ledger.insulinOnBoard(at: now()))
         }
 
         _ = updateGroup.wait(timeout: .distantFuture)
@@ -1093,12 +1138,13 @@ final class WatchLoopManager {
         // Cutover only after field diffs prove out with these signatures accounted.
         if let ledger = sessionLedger {
             let ledgerIOB = ledger.insulinOnBoard(at: now())
-            let storeIOB = insulinOnBoard?.value
-            SportLog.event("ledger-diff", String(format: "store=%@ ledger=%.2f Δ=%@ · %@",
+            let storeIOB = ledgerCutoverActive ? storeIOBShadow : insulinOnBoard?.value
+            SportLog.event("ledger-diff", String(format: "store=%@ ledger=%.2f Δ=%@ · %@%@",
                                                  storeIOB.map { String(format: "%.2f", $0) } ?? "—",
                                                  ledgerIOB,
                                                  storeIOB.map { String(format: "%+.2f", $0 - ledgerIOB) } ?? "—",
-                                                 ledger.summary))
+                                                 ledger.summary,
+                                                 ledgerCutoverActive ? " · CUTOVER (ledger drives; store is shadow)" : ""))
         }
 
         // INSTRUMENTATION ONLY (#69): the FIRST post-takeover cycle — now that this cycle's IOB is
