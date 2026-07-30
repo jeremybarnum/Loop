@@ -542,7 +542,10 @@ final class WatchLoopManager {
     /// keeps running untouched and the [ledger-diff] line flips to shadowing the STORE.
     /// Revert = flip the flag back — no data migration in either direction.
     private var ledgerCutoverActive: Bool {
-        UserDefaults.standard.bool(forKey: "g7.ledgerCutover")
+        // DEFAULT ON since build 189 (Jeremy 2026-07-29: "yes, flip the default" — the
+        // side-by-sides proved the ledger against the phone at every seam). The key now
+        // exists only as the one-line REVERT switch back to the store path.
+        UserDefaults.standard.object(forKey: "g7.ledgerCutover") as? Bool ?? true
     }
 
     /// A pod-ACCEPTED watch enact enters the timeline (truncating the open predecessor).
