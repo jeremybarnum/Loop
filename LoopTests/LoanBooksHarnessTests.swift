@@ -20,6 +20,18 @@
 //      by decay + the zero-temp's withheld basal; when the rows match, nothing leaks.
 //   4. testReGrantRoundTripPreservesBooks — seed → enact chain → hand-back fold →
 //      re-grant reseed must conserve IOB across the epoch boundary (cross-epoch fidelity).
+//   5. testBolusDeliveryQueueShapeDoesNotTrap — the #64 bolus-crash queue invariant: the
+//      FIXED dispatch topology (reclaim completion on the loan queue → async hop to the
+//      dosing queue → journal mint queue.sync back onto the loan queue) must complete.
+//   6. testBolusBooksLandInBothBooksAfterQueueHop — books-level #64: a bolus delivered
+//      through the hopped topology lands in BOTH books with IOB parity (field 20:45
+//      signature: store = ledger = 2.33).
+//   7. testCarbRoundTripDynamicAbsorptionParity — the carb fold seam: a watch loan carb
+//      folded to the phone in LoanReconciler's shape, fed the SAME stock-computed ICE
+//      velocities, must produce the same dynamic COB and carb-effect curve.
+//   8. testTruncatedPhoneICEOverstatesCOB — the relay-gap hypothesis: a phone missing the
+//      loan-window glucose observes less absorption → MORE COB (the 6g-vs-7g +1g seam of
+//      2026-07-29 21:21) — the diagnostic pin for glucose-relay completeness.
 //
 //  Conventions copied from WatchStoreEffectsTests: PersistenceController-per-store temp
 //  dirs, the fixed-store construction (shared TemporaryScheduleOverrideHistory at init,
@@ -37,6 +49,7 @@
 import XCTest
 import HealthKit
 import LoopKit
+import LoopCore
 @testable import Loop
 
 // MARK: - File fixtures
@@ -60,6 +73,30 @@ private func podRaw(type: String, value: Double, start: Date) -> Data {
 
 private func hexString(_ data: Data) -> String {
     return data.map { String(format: "%02hhx", $0) }.joined()
+}
+
+// MARK: - Carb-side fixtures (tests 7-8)
+
+/// The carb therapy fixtures: CR 10 g/U, ISF 50 mg/dL/U → carbohydrate sensitivity
+/// 5 mg/dL per gram — the divisor that turns observed counteraction into absorbed grams.
+private let fieldCarbRatio = CarbRatioSchedule(unit: .gram(), dailyItems: [RepeatingScheduleValue(startTime: 0, value: 10.0)])!
+private let fieldISF = InsulinSensitivitySchedule(unit: .milligramsPerDeciliter, dailyItems: [RepeatingScheduleValue(startTime: 0, value: 50.0)])!
+
+/// A bare glucose sample for the stock ICE computation. `counteractionEffects(to:)`
+/// (LoopKit GlucoseMath.swift:161) requires matching provenance across each pair, no
+/// display-only samples, and >4 min spacing — one fixed provenance and a 5-min grid
+/// satisfy all three. (MealDetectionManagerTests' MockGlucoseSample is fileprivate,
+/// hence this local twin.)
+private struct SimGlucoseSample: GlucoseSampleValue {
+    let startDate: Date
+    let quantity: HKQuantity
+    let provenanceIdentifier = "LoanBooksHarnessTests"
+    let isDisplayOnly = false
+    let wasUserEntered = false
+    let condition: LoopKit.GlucoseCondition? = nil
+    let trend: LoopKit.GlucoseTrend? = nil
+    let trendRate: HKQuantity? = nil
+    let syncIdentifier: String? = nil
 }
 
 // MARK: - The driver
@@ -539,5 +576,316 @@ final class LoanBooksHarnessTests: XCTestCase {
                        "the ledger's live timeline and its folded-and-reseeded twin must agree — the fold loses nothing")
         XCTAssertEqual(sample2.store, ledger1, accuracy: 0.05,
                        "cross-epoch fidelity: IOB is conserved through fold → re-grant → reseed")
+    }
+
+    // MARK: - 5. The #64 bolus-crash queue invariant (shape)
+
+    /// FIELD (2026-07-29, #64): an E4 reclaim completion runs ON the loan controller's
+    /// serial queue (reclaimPodForDose wraps every path in queue.async, including the
+    /// still-connected short-circuit), and deliverBolus → loanWillEnactBolus → mintIntent
+    /// does queue.sync onto that SAME queue — a guaranteed libdispatch trap BEFORE
+    /// enactBolus was ever issued (apparent success at the crown, crash 0-40 s later, NO
+    /// insulin delivered). The fix (WatchLoopManager.enactManualBolus, ~:1515-1545): hop
+    /// to the dosing queue via .async before delivering — and .async is load-bearing,
+    /// because with E4 off the reclaim closure completes SYNCHRONOUSLY on the dosing
+    /// queue itself, where a .sync hop would deadlock on itself.
+    ///
+    /// That code is watch-target-only, so this pins the SHAPE with real DispatchQueues:
+    /// both delivery legs of the fixed topology must complete. (No trap-reproduction
+    /// test on purpose — the broken shape deadlocks/traps and would hang CI; the
+    /// invariant that must never regress is that the fixed shape completes.)
+    func testBolusDeliveryQueueShapeDoesNotTrap() {
+        let loanQueue = DispatchQueue(label: "test.loan-controller")   // PodLoanWatchController's serial queue
+        let dosingQueue = DispatchQueue(label: "test.dataAccessQueue") // WatchLoopManager.dataAccessQueue
+
+        // The journal mint, as loanWillEnactBolus does it: queue.sync onto the LOAN queue.
+        // Safe if and only if the caller is NOT already on the loan queue — the invariant.
+        func mintJournalIntent() -> Bool {
+            var minted = false
+            loanQueue.sync { minted = true }
+            return minted
+        }
+
+        // Leg 1 — the field-crash path, fixed: the reclaim completion arrives ON the loan
+        // queue; delivery hops to the dosing queue via .async; the mint then syncs back
+        // onto the (now free) loan queue and the pod command follows.
+        let reclaimLeg = expectation(description: "reclaim-path delivery completes")
+        loanQueue.async {
+            dosingQueue.async {
+                XCTAssertTrue(mintJournalIntent(),
+                              "mint must complete before the pod command — the bug trapped here")
+                reclaimLeg.fulfill()   // stands in for pumpManager.enactBolus reaching the pod
+            }
+        }
+
+        // Leg 2 — the E4-off short-circuit: the reclaim closure completes SYNCHRONOUSLY
+        // on the dosing queue, so the SAME hop line re-dispatches onto the queue it is
+        // already on. .async makes that legal; a .sync hop would self-deadlock (the
+        // adversarial-review edge documented at the fix site).
+        let shortCircuitLeg = expectation(description: "short-circuit delivery completes")
+        dosingQueue.async {
+            dosingQueue.async {
+                XCTAssertTrue(mintJournalIntent(),
+                              "the mint must also clear when the hop was a same-queue re-dispatch")
+                shortCircuitLeg.fulfill()
+            }
+        }
+
+        wait(for: [reclaimLeg, shortCircuitLeg], timeout: 5)
+    }
+
+    // MARK: - 6. The #64 bolus — books land after the hop
+
+    /// Books-level #64: the crash fired BEFORE the pod command, so the field signature of
+    /// the FIX is a bolus that (a) survives the queue topology and (b) lands in BOTH books
+    /// coherently. This replays the fixed shape, then books the delivered bolus the way the
+    /// session does — store via the pod-style report batch, ledger via recordEnact — and
+    /// pins IOB parity (field 20:45 DOSING panel: store = ledger = 2.33 after the first
+    /// post-fix manual bolus).
+    func testBolusBooksLandInBothBooksAfterQueueHop() {
+        let now = Date()
+        let bolusStart = now.addingTimeInterval(-.minutes(5))  // enacted 5 min ago — inside
+                                                               // the 10-min model delay, so
+                                                               // IOB is the full programmed
+                                                               // units in both books
+
+        // The delivery gate: same fixed topology as test 5, one leg. The bolus is booked
+        // only after the hopped delivery closure has completed and the mint succeeded —
+        // the ordering the fix restores (mint, THEN pod command, THEN books).
+        let loanQueue = DispatchQueue(label: "test.loan-controller-books")
+        let dosingQueue = DispatchQueue(label: "test.dataAccessQueue-books")
+        var mintedBeforeCommand = false
+        let delivered = expectation(description: "hopped delivery completes")
+        loanQueue.async {
+            dosingQueue.async {
+                loanQueue.sync { mintedBeforeCommand = true }  // the journal mint
+                delivered.fulfill()                            // the pod command issues
+            }
+        }
+        wait(for: [delivered], timeout: 5)
+        XCTAssertTrue(mintedBeforeCommand, "no delivery without a completed mint — #64 ordering")
+
+        // The books: pod-accepted bolus, both writers, exactly as the session records it.
+        let driver = makeDriver()
+        driver.enactBolus(units: 2.33, at: bolusStart)
+
+        let sample = driver.tick(at: now)
+        XCTAssertEqual(sample.store, 2.33, accuracy: 0.1,
+                       "the store must carry the full delivered bolus (field 20:45: 2.33)")
+        XCTAssertEqual(sample.ledger, 2.33, accuracy: 0.1,
+                       "the ledger must carry the same bolus via recordEnact")
+        XCTAssertEqual(sample.store, sample.ledger, accuracy: 0.1,
+                       "both books, one bolus, one number — the post-fix field signature")
+    }
+
+    // MARK: - Carb-side helpers (tests 7-8)
+
+    /// One isolated CarbStore per side (watch/phone must never share a Core Data table),
+    /// built the WatchStoreEffectsTests "fixed" way: overrideHistory at init (the dynamic
+    /// COB path guards the *ApplyingOverrideHistory getters), schedules via the setters,
+    /// production absorption times (fast 30 min / medium 3 h / slow 5 h).
+    private func makeCarbStore() -> CarbStore {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        cacheDirs.append(dir)
+        let store = CarbStore(
+            healthKitSampleStore: nil,
+            cacheStore: PersistenceController(directoryURL: dir),
+            cacheLength: .hours(24),
+            defaultAbsorptionTimes: LoopCoreConstants.defaultCarbAbsorptionTimes,
+            overrideHistory: TemporaryScheduleOverrideHistory(),
+            provenanceIdentifier: "LoanBooksHarnessTests")
+        store.carbRatioSchedule = fieldCarbRatio
+        store.insulinSensitivitySchedule = fieldISF
+        return store
+    }
+
+    /// The carb fold's data shape, both directions: the watch's loan-time entry AND the
+    /// phone-side fold write are the SAME NewCarbEntry surface — quantity + startDate +
+    /// absorptionTime, foodType nil, NO carried identity. LoanReconciler.reconcile mints
+    /// exactly this (LoanReconciler.swift:169-176) and the phone lands it through
+    /// carbStore.addCarbEntry (WatchDataManager.swift:140-145), which mints a FRESH
+    /// native syncIdentifier + the phone's own provenance (CarbStore.swift:483-497).
+    /// So carb identity is NOT preserved across the fold (unlike insulin's hex(raw)
+    /// contract) — round-trip parity rides ONLY on the three absorption-relevant fields,
+    /// which is precisely what tests 7-8 exercise.
+    private func addCarb(_ store: CarbStore, grams: Double, at start: Date, absorptionTime: TimeInterval) {
+        let exp = expectation(description: "addCarbEntry")
+        let entry = NewCarbEntry(quantity: HKQuantity(unit: .gram(), doubleValue: grams),
+                                 startDate: start, foodType: nil, absorptionTime: absorptionTime)
+        store.addCarbEntry(entry) { result in
+            if case .failure(let error) = result {
+                XCTFail("addCarbEntry failed: \(error)")
+            }
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 10)
+    }
+
+    private func cob(_ store: CarbStore, at date: Date, velocities: [GlucoseEffectVelocity]?) -> Double {
+        var value = Double.nan
+        let exp = expectation(description: "carbsOnBoard")
+        store.carbsOnBoard(at: date, effectVelocities: velocities) { result in
+            if case .success(let v) = result {
+                value = v.value
+            }
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 10)
+        XCTAssertFalse(value.isNaN, "carbsOnBoard must resolve")
+        return value
+    }
+
+    private func carbEffects(_ store: CarbStore, start: Date, end: Date, velocities: [GlucoseEffectVelocity]) -> [GlucoseEffect] {
+        var effects: [GlucoseEffect] = []
+        let exp = expectation(description: "getGlucoseEffects")
+        store.getGlucoseEffects(start: start, end: end, effectVelocities: velocities) { result in
+            if case .success(let value) = result {
+                effects = value.effects
+            }
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 10)
+        return effects
+    }
+
+    /// The sinusoidal session BG: 140 + 40·sin(2π(t−45 min)/180 min) sampled every 5 min
+    /// over [0, 90] — 100 → 140 → 180 mg/dL, with the STEEP half of the wave in the middle
+    /// and late window (the field evening-meal shape: absorption running ahead of the
+    /// model exactly when the loan owns the glucose).
+    private func sinusoidSamples(from start: Date, count: Int = 19) -> [SimGlucoseSample] {
+        return (0..<count).map { i in
+            let t = TimeInterval(i) * .minutes(5)
+            let bg = 140.0 + 40.0 * sin(2.0 * Double.pi * (t - .minutes(45)) / .minutes(180))
+            return SimGlucoseSample(startDate: start.addingTimeInterval(t),
+                                    quantity: HKQuantity(unit: .milligramsPerDeciliter, doubleValue: bg))
+        }
+    }
+
+    /// ICE the STOCK way — this is not a replication but the real implementation: the
+    /// phone's update cycle calls glucoseStore.getCounteractionEffects (LoopDataManager
+    /// .swift:1071) → GlucoseStore.counteractionEffects(for:to:) (GlucoseStore.swift:756)
+    /// → the pure collection extension counteractionEffects(to:) (GlucoseMath.swift:161),
+    /// which computes velocity = (glucoseChange − insulinEffectChange) / Δt per sample
+    /// pair. The tests call that same extension directly. A FLAT (all-zero) insulin-effect
+    /// series makes the ICE exactly the glucose velocity — the known-input case.
+    private func stockICE(samples: [SimGlucoseSample], flatInsulinEffectsFrom start: Date, to end: Date) -> [GlucoseEffectVelocity] {
+        var effects: [GlucoseEffect] = []
+        var date = start
+        while date <= end {
+            effects.append(GlucoseEffect(startDate: date,
+                                         quantity: HKQuantity(unit: .milligramsPerDeciliter, doubleValue: 0)))
+            date = date.addingTimeInterval(.minutes(5))
+        }
+        return samples.counteractionEffects(to: effects)
+    }
+
+    // MARK: - 7. Carb round trip — dynamic absorption parity across the fold
+
+    /// Jeremy's round-trip spec: (1) the watch CarbStore takes a 20 g / 3 h entry
+    /// mid-session; (2) a sinusoidal BG series + a flat insulin-effect series produce the
+    /// ICE velocities the stock way; (3) watch COB and carb effects are read at the
+    /// hand-back instant with those velocities; (4) a phone store seeded from the FOLDED
+    /// entry (LoanReconciler's shape — same quantity/startDate/absorptionTime, fresh
+    /// native identity) and fed the SAME ICE series must agree: COB within 0.5 g, effect
+    /// curve within a few mg/dL. When the phone's glucose picture is complete, the carb
+    /// seam closes — the null half of the test-8 relay-gap pin.
+    func testCarbRoundTripDynamicAbsorptionParity() {
+        let now = Date()
+        let handback = now
+        let meal = now.addingTimeInterval(-.minutes(90))   // entered mid-session
+
+        // (1) The watch-side entry.
+        let watchCarbs = makeCarbStore()
+        addCarb(watchCarbs, grams: 20, at: meal, absorptionTime: .hours(3))
+
+        // (2) Stock ICE from the sinusoid against flat insulin effects.
+        let samples = sinusoidSamples(from: meal)
+        let velocities = stockICE(samples: samples,
+                                  flatInsulinEffectsFrom: meal.addingTimeInterval(-.minutes(5)),
+                                  to: handback.addingTimeInterval(.minutes(5)))
+        XCTAssertEqual(velocities.count, 18, "19 samples on a 5-min grid → 18 velocity spans")
+
+        // (3) Watch COB at hand-back. The BG rose 80 mg/dL over the window → at CSF
+        // 5 mg/dL/g the ICE credits ~16 g absorbed → COB ~4 g. The static (no-velocity)
+        // read stays near ~9 g — assert the spread so the test proves the velocities are
+        // actually consumed (dynamic absorption), not silently ignored.
+        let watchCOB = cob(watchCarbs, at: handback, velocities: velocities)
+        let watchStaticCOB = cob(watchCarbs, at: handback, velocities: nil)
+        XCTAssertGreaterThan(watchCOB, 1.0, "sanity: carbs still on board at hand-back (0 would make parity trivial)")
+        XCTAssertLessThan(watchCOB, watchStaticCOB - 2.0,
+                          "dynamic COB must sit well below static COB here — proof the ICE series drove absorption")
+
+        // (4) The phone store, seeded in the fold's shape, same ICE series.
+        let phoneCarbs = makeCarbStore()
+        addCarb(phoneCarbs, grams: 20, at: meal, absorptionTime: .hours(3))
+        let phoneCOB = cob(phoneCarbs, at: handback, velocities: velocities)
+        XCTAssertEqual(phoneCOB, watchCOB, accuracy: 0.5,
+                       "same entry fields, same ICE → same dynamic COB; the fold carries everything the math reads")
+
+        // Carb-effect curve parity over the prediction hour after hand-back.
+        let watchFx = carbEffects(watchCarbs, start: handback, end: handback.addingTimeInterval(.hours(1)), velocities: velocities)
+        let phoneFx = carbEffects(phoneCarbs, start: handback, end: handback.addingTimeInterval(.hours(1)), velocities: velocities)
+        XCTAssertFalse(watchFx.isEmpty, "the watch must produce a carb-effect curve")
+        XCTAssertEqual(watchFx.count, phoneFx.count, "same entries, same window → same effect grid")
+        for i in stride(from: 0, to: min(watchFx.count, phoneFx.count), by: 3) {
+            XCTAssertEqual(watchFx[i].startDate, phoneFx[i].startDate, "effect grids must align")
+            XCTAssertEqual(watchFx[i].quantity.doubleValue(for: .milligramsPerDeciliter),
+                           phoneFx[i].quantity.doubleValue(for: .milligramsPerDeciliter),
+                           accuracy: 2.0,
+                           "carb-effect curve must match across the fold at sample \(i)")
+        }
+    }
+
+    // MARK: - 8. The relay gap — truncated phone ICE overstates COB
+
+    /// FIELD (2026-07-29 21:21, the +1 g COB seam): right after hand-back the watch read
+    /// ~6 g COB while the phone read ~7 g from the same carb — the 6g-vs-7g signature.
+    /// Hypothesis: the phone's glucose history is missing (part of) the loan window (the
+    /// relay gap), so its ICE series is TRUNCATED where the meal actually absorbed.
+    ///
+    /// The mechanism, from the stock math (CarbMath.swift, CarbStatusBuilder): absorption
+    /// is only CREDITED where velocities exist — `lastEffectDate = velocities.last.endDate`
+    /// freezes observation there, and past it COB extrapolates from the observed-so-far
+    /// percent along the model curve. Less observed glucose while BG runs ahead of the
+    /// model → less credited absorption → MORE COB → a HIGHER eventual prediction on the
+    /// phone. This test pins that direction: it is the diagnostic for whether phone-side
+    /// glucose relay completeness matters (if the field seam were store-shape instead,
+    /// test 7's parity would fail, not this).
+    func testTruncatedPhoneICEOverstatesCOB() {
+        let now = Date()
+        let handback = now
+        let meal = now.addingTimeInterval(-.minutes(90))
+        let relayCutoff = meal.addingTimeInterval(.minutes(30))   // last glucose the phone got
+
+        let watchCarbs = makeCarbStore()
+        addCarb(watchCarbs, grams: 20, at: meal, absorptionTime: .hours(3))
+        let phoneCarbs = makeCarbStore()
+        addCarb(phoneCarbs, grams: 20, at: meal, absorptionTime: .hours(3))
+
+        let samples = sinusoidSamples(from: meal)
+        let velocities = stockICE(samples: samples,
+                                  flatInsulinEffectsFrom: meal.addingTimeInterval(-.minutes(5)),
+                                  to: handback.addingTimeInterval(.minutes(5)))
+        // The relay gap: the phone's ICE series ends where its glucose history ends.
+        let phoneVelocities = velocities.filter { $0.endDate <= relayCutoff }
+        XCTAssertEqual(phoneVelocities.count, 6, "30 min of relayed glucose → 6 velocity spans")
+
+        let watchCOB = cob(watchCarbs, at: handback, velocities: velocities)
+        let phoneTruncatedCOB = cob(phoneCarbs, at: handback, velocities: phoneVelocities)
+        // Control: the same phone store with the FULL series matches the watch — the
+        // divergence below is the ICE series, not the store or the folded entry.
+        let phoneFullCOB = cob(phoneCarbs, at: handback, velocities: velocities)
+        XCTAssertEqual(phoneFullCOB, watchCOB, accuracy: 0.5,
+                       "full ICE on the phone closes the seam — isolates the gap to the velocity series")
+
+        // THE PIN — divergence direction: phone sees less absorption → MORE COB.
+        // (Field magnitude was +1 g on a shallow rise; this steeper fixture opens a wider
+        // gap, so assert the direction with a ≥1 g floor rather than a point value.)
+        XCTAssertGreaterThan(phoneTruncatedCOB, watchCOB,
+                             "relay-gap direction: the truncated-ICE phone must read HIGHER COB (6g-vs-7g, 2026-07-29 21:21)")
+        XCTAssertGreaterThan(phoneTruncatedCOB - watchCOB, 1.0,
+                             "the gap must be material — at least the field's +1 g seam")
+        XCTAssertLessThanOrEqual(phoneTruncatedCOB, 20.0 + 0.01,
+                                 "sanity: COB can never exceed the entry")
     }
 }
