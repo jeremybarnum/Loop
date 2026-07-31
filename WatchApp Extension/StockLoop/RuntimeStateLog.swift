@@ -65,29 +65,62 @@ enum RuntimeStateLog {
 
     private static var timer: DispatchSourceTimer?
     private static var lastTick = Date()
+    /// State observed at the last HEALTHY tick — i.e. the state we were in when execution
+    /// stopped. The GAP line used to snapshot state AFTER the wake, which always reports the
+    /// state we came back to and never the one we went down in (#82).
+    private static var lastTickState = "unknown"
+    private static var lastBackgroundProof = Date.distantPast
     /// 30 s cadence; anything past 45 s means we were not executing. The margin absorbs
     /// ordinary timer leeway without masking a real suspension.
     private static let interval: TimeInterval = 30
     private static let tolerance: TimeInterval = 45
+    /// One BG-ALIVE line every 2 min: enough to prove background execution across a whole
+    /// night, sparse enough not to bury the log.
+    private static let backgroundProofInterval: TimeInterval = 120
+
+    /// Set by `WorkoutKeepalive` at init so every runtime line can say whether the keepalive
+    /// that is supposed to be holding us up was actually alive at that moment. Sampled from
+    /// the heartbeat queue, so the implementation must be thread-safe.
+    static var keepaliveProbe: (() -> String)?
+
+    private static func keepaliveTag() -> String { keepaliveProbe?() ?? "keepalive ?" }
 
     /// Start while a session is live — that is the only window where lost runtime can
     /// cost a reading or strand a pod command.
     static func startHeartbeat() {
         stopHeartbeat()
         lastTick = Date()
+        lastTickState = appStateName()
+        lastBackgroundProof = .distantPast
         let t = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
         t.schedule(deadline: .now() + interval, repeating: interval, leeway: .seconds(2))
         t.setEventHandler {
             let now = Date()
             let gap = now.timeIntervalSince(lastTick)
+            let wentDownIn = lastTickState        // captured BEFORE we overwrite it
             lastTick = now
-            guard gap > tolerance else { return }   // healthy: stay quiet
-            SportLog.event("runtime", String(format: "GAP %.0fs (expected %.0fs) — app was NOT executing · %@",
-                                             gap, interval, snapshot()))
+            let state = appStateName()
+            lastTickState = state
+
+            if gap > tolerance {
+                SportLog.event("runtime", String(format:
+                    "GAP %.0fs (expected %.0fs) — app was NOT executing · went down in state %@ · woke in %@ · %@ · %@",
+                    gap, interval, wentDownIn, state, keepaliveTag(), snapshot()))
+                return
+            }
+            // A healthy tick while genuinely BACKGROUNDED is the only direct evidence that
+            // WKBackgroundModes=workout-processing is doing its job (#82) — before build 199
+            // the app was suspended within seconds of backgrounding, so this line could never
+            // appear. Absence of BG-ALIVE across a night is the failure signal; one line every
+            // 2 min is the pass signal.
+            if state == "background", now.timeIntervalSince(lastBackgroundProof) >= backgroundProofInterval {
+                lastBackgroundProof = now
+                SportLog.event("runtime", "BG-ALIVE — executing while backgrounded · \(keepaliveTag()) · \(snapshot())")
+            }
         }
         t.resume()
         timer = t
-        SportLog.event("runtime", "heartbeat armed (30s; reports only gaps >45s) · \(snapshot())")
+        SportLog.event("runtime", "heartbeat armed (30s; gaps >45s + BG-ALIVE every 2min while backgrounded) · \(keepaliveTag()) · \(snapshot())")
     }
 
     static func stopHeartbeat() {
