@@ -607,8 +607,42 @@ final class PodLoanWatchController {
     private var lastPodLinkContact: Date?
 
     func reclaimPodForDose(_ completion: @escaping (Bool) -> Void) {
+        reclaimPodForDose(radioWaited: 0, completion)
+    }
+
+    /// #81 (2026-07-30 forensics): the reclaim must not start INSIDE the G7's connect+auth
+    /// burst. Across 140 ladders spanning five days, the single discriminator is how much
+    /// live G7 GATT session remains when the reclaim starts: >1s remaining → 0/45 success;
+    /// closing within 1s → 62/69; no link → 23/26 (p ≈ 2.7e-27). A G7 SCAN in flight is
+    /// harmless (4/4) — the contended resource is the connection initiator, not the scanner.
+    ///
+    /// It regressed via two changes that only co-occurred on 2026-07-30: the loop trigger
+    /// moved to the phone-BG fallback (fires ~1s AFTER G7 connect, i.e. mid-handshake, where
+    /// the watch's own glucose packet used to fire at handshake END), and #54 made scan-adopt
+    /// primary (a one-shot scan is contention-sensitive where the old queued pending-connect
+    /// with its read-6 escalation was not). Jul 25-26, live sensor, old paths: 59/59.
+    ///
+    /// The enact path already waits (WatchLoopManager :1822) — but the "pump data N min old"
+    /// pre-cycle refresh reclaims BEFORE any arbitration, which is the caller that failed all
+    /// day. Gating here covers every caller.
+    ///
+    /// DEFERRED, not slept: this runs on the pump-delegate serial queue, so a Thread.sleep
+    /// would stall pod callbacks for the whole wait. Re-dispatch instead, and ALWAYS proceed
+    /// on budget exhaustion — the ladder is the safety gate; a dose is never skipped here.
+    private func reclaimPodForDose(radioWaited: TimeInterval, _ completion: @escaping (Bool) -> Void) {
         queue.async {
             guard self.phase == .active, let manager = self.pumpManager else { completion(false); return }
+            if self.isRadioBusy?() == true, radioWaited < 15 {
+                self.queue.asyncAfter(deadline: .now() + 0.5) {
+                    self.reclaimPodForDose(radioWaited: radioWaited + 0.5, completion)
+                }
+                return
+            }
+            if radioWaited > 0 {
+                let stuck = self.isRadioBusy?() == true
+                SportLog.event("radio", String(format: "reclaim waited %.1fs for the G7 handshake%@",
+                                               radioWaited, stuck ? " — still busy at budget, proceeding anyway" : ", then proceeded"))
+            }
             let idle = self.lastPodLinkContact.map { Date().timeIntervalSince($0) }
             SportLog.event("loan", String(format: "E4: reclaim starting — pod BLE state %@, released=%@, idle %@",
                                           manager.podLoanConnectionStateDescription,
