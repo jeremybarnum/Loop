@@ -36,6 +36,8 @@ struct LoanDebugView: View {
     /// *** DIABETIFY *** current flag state, refreshed with everything else.
     @State private var diabetifyOn: Bool = DiabetifyTransform.isActive
 
+    @State private var radioStressOn = UserDefaults.standard.bool(forKey: "g7.radioStressAlwaysEnact")
+
     private let refresh = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     private var session: StockLoopSession {
@@ -133,6 +135,26 @@ struct LoanDebugView: View {
                     lastAction = enable ? "diabetify ON" : "diabetify OFF"
                 }
                 .foregroundColor(diabetifyOn ? Color.red : nil)
+
+                Divider().padding(.vertical, 2)
+
+                // *** RADIO STRESS (BENCH) *** #83 (2026-07-30): force a distinct pod
+                // command on cycles DoseMath would leave alone, so every 5-min cycle
+                // exercises reading + enact — the gold-standard contention load. Timing
+                // seams untouched (that is why E5 is the wrong instrument: it fires +8s,
+                // clear of the teardown window where contention actually lives).
+                Text("RADIO STRESS (BENCH)").font(.footnote).foregroundColor(.secondary)
+                row("always enact", radioStressOn ? "ON — nudges no-change cycles" : "off")
+                Button("Radio Stress: \(radioStressOn ? "ON" : "OFF")") {
+                    let enable = !UserDefaults.standard.bool(forKey: "g7.radioStressAlwaysEnact")
+                    UserDefaults.standard.set(enable, forKey: "g7.radioStressAlwaysEnact")
+                    radioStressOn = enable
+                    SportLog.event("radio-stress", enable
+                        ? "*** RADIO STRESS ENABLED *** — no-change cycles will force a pulse-step temp so every cycle hits the pod"
+                        : "radio stress disabled — no-change cycles go quiet again")
+                    lastAction = enable ? "radio stress ON" : "radio stress OFF"
+                }
+                .foregroundColor(radioStressOn ? Color.red : nil)
 
                 Divider().padding(.vertical, 2)
 
