@@ -48,6 +48,7 @@ final class WorkoutKeepalive: NSObject, HKWorkoutSessionDelegate {
     private var authOK = false                  // MAIN-only — HealthKit workout auth granted
     private var authInFlight = false            // MAIN-only — a first-time auth request is pending
     private var recoverInFlight = false         // MAIN-only — a recoverActiveWorkoutSession probe is pending
+    private var recoveryProbed = false          // MAIN-only — the once-per-process survivor probe has run
     private var recoverGeneration: UInt64 = 0   // MAIN-only — invalidates a superseded probe watchdog
 
     // The runtime heartbeat ticks on a utility queue, so it cannot read the MAIN-only state
@@ -86,6 +87,17 @@ final class WorkoutKeepalive: NSObject, HKWorkoutSessionDelegate {
         // HealthKit even though our `session` reference died with the old process. Creating a
         // second one on top of it fails, so adopt the survivor first and only start fresh if
         // there is nothing to adopt. Without this, every relaunch-recovery path silently lost.
+        //
+        // But the probe MUST NOT sit in front of the normal start. `acquire()` is called from
+        // the FOREGROUND precisely because a start while backgrounded fails with HK error 14,
+        // and an async HealthKit round-trip pushes the start to a later main-queue turn — long
+        // enough for the app to background in between, turning a working start into a failing
+        // one. A survivor can only come from a PREVIOUS process, so probing once per process is
+        // sufficient; after that, go straight to the start on this same turn. A failed start is
+        // the one signal that HealthKit may be holding a session we don't know about, so that
+        // re-arms the probe (see startSession()).
+        guard !recoveryProbed else { authoriseThenStart(); return }
+        recoveryProbed = true
         recoverInFlight = true
         healthStore.recoverActiveWorkoutSession { [weak self] recovered, error in
             guard let self else { return }
@@ -116,14 +128,16 @@ final class WorkoutKeepalive: NSObject, HKWorkoutSessionDelegate {
         }
         // The probe MUST NOT be able to strand the keepalive: if HealthKit never calls back,
         // `recoverInFlight` would latch true and no session could ever start again. Fall through
-        // to the plain start after 5 s. A late callback is harmless — it no-ops (or ends the
-        // stale session it recovered) once `session` is non-nil.
+        // to the plain start after 2 s — it is a local healthd query, so anything slower is a
+        // hang, and every second here is a second the keepalive is not holding us up. A late
+        // callback is harmless: it no-ops (or ends the stale session it recovered) once
+        // `session` is non-nil.
         recoverGeneration &+= 1
         let generation = recoverGeneration   // a later probe invalidates this watchdog
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             guard let self, self.recoverInFlight, self.recoverGeneration == generation else { return }
             self.recoverInFlight = false
-            log("WorkoutKeepalive: recoverActiveWorkoutSession did not call back in 5s — starting a fresh session")
+            log("WorkoutKeepalive: recoverActiveWorkoutSession did not call back in 2s — starting a fresh session")
             self.authoriseThenStart()
         }
     }
@@ -170,6 +184,9 @@ final class WorkoutKeepalive: NSObject, HKWorkoutSessionDelegate {
             log("WorkoutKeepalive: HKWorkoutSession(.other) started — background runtime ACTIVE (holders: \(holderTag()))")
         } catch {
             session = nil   // stay restartable — the next foreground ensureRunning retries
+            // A failed start is the one thing that suggests HealthKit is holding a session we
+            // don't know about, so let the next attempt probe for a survivor again.
+            recoveryProbed = false
             setTag("keepalive START-FAILED")
             log("WorkoutKeepalive: HKWorkoutSession start FAILED: \(error)")
         }
