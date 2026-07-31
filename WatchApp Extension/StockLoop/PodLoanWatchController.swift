@@ -48,6 +48,10 @@ final class PodLoanWatchController {
     /// Fix B (radio arbiter): the quiet verdict chase also yields to an active G7
     /// handshake (the crude Verify chase was loudDrop==false). Wired by the session.
     var isRadioBusy: (() -> Bool)?
+    /// #82: R26's G7 stand-down, applied to the bounded steady-state DOSE ladder (the
+    /// takeover hook stays separate — it also drives log snapshots, which a 5-min dose
+    /// must not trigger).
+    var onDoseRadioHold: ((Bool) -> Void)?
 
     /// R26 (reverse arbiter): the pod TAKEOVER outranks the G7 — during the bounded
     /// ~40s ladder the G7 client stands down, because G7 scans/handshakes starve pod
@@ -653,7 +657,28 @@ final class PodLoanWatchController {
                 completion(true)
                 return
             }   // still connected — nothing to do
-            SportLog.event("loan", "E4: reclaiming pod to dose (scan-adopt primary, #54)")
+            // #82 (2026-07-30 field, build 192): the isRadioBusy gate covers only the
+            // HANDSHAKE. The 21:40 failure had no wait line because the G7 never connected
+            // that cycle — it sat with a pending connect armed plus a 60s passive observer
+            // scan, and the pod's 28s ladder ran entirely inside that window: radio genuinely
+            // occupied, busy signal said free, all 14 reads failed. R26 already solves exactly
+            // this for TAKEOVER by telling the G7 to stand down; takeovers have been flawless
+            // all day because of it. Assert the same hold for the bounded dose ladder.
+            //
+            // Cost is bounded and acceptable (same reasoning R26 accepted): the ladder is
+            // ≤40s, and the cycle only runs because a reading JUST arrived, so the next G7
+            // window is ~5 min out. setPodTakeoverHold itself refuses to interrupt a
+            // handshake mid-flight, so this cannot corrupt an in-progress G7 session.
+            //
+            // RELEASE DISCIPLINE: a stuck hold would starve the CGM, so every exit from the
+            // ladder goes through releaseHoldAndComplete — attemptReclaimRead calls its
+            // completion exactly once, on success, exhaustion, and teardown alike.
+            self.onDoseRadioHold?(true)
+            let releaseHoldAndComplete: (Bool) -> Void = { [weak self] connected in
+                self?.onDoseRadioHold?(false)
+                completion(connected)
+            }
+            SportLog.event("loan", "E4: reclaiming pod to dose (scan-adopt primary, #54) — G7 standing down for the ladder")
             manager.reclaimConnection()
             // #54 (build ~178): scan-adopt is the PRIMARY reclaim, not a mid-ladder fallback.
             // Field data (build 157, overnight 44/44): the bare pending-connect "won" a reclaim
@@ -665,7 +690,7 @@ final class PodLoanWatchController {
             // re-connects the bare bid too, so both paths race from t=0. The read ladder below is
             // the success probe; the release path cancels an unfinished scan (cancelLoanScan).
             manager.podLoanEscalateReclaim()
-            self.attemptReclaimRead(manager: manager, attempt: 0, completion: completion)
+            self.attemptReclaimRead(manager: manager, attempt: 0, completion: releaseHoldAndComplete)
         }
     }
 

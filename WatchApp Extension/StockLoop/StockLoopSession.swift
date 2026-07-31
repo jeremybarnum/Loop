@@ -63,6 +63,12 @@ final class StockLoopSession {
             self?.sendLogSnapshot(holding ? "takeover start" : "takeover verdict")
         }
 
+        // #82: the same stand-down for the bounded steady-state dose ladder. No log
+        // snapshot here (unlike takeover) — this fires every 5 minutes.
+        loanController.onDoseRadioHold = { [weak self] holding in
+            self?.stack.client.setPodTakeoverHold(holding)
+        }
+
         // E4 Stage 2 (task #40): the loop reclaims the E4-orphaned pod to dose, then
         // re-releases it for G7. Gated on the e4ReleasePod flag — when OFF, reclaim
         // returns connected=true immediately so the dosing path is byte-for-byte the
