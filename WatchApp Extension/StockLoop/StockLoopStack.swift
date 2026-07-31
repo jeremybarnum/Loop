@@ -62,7 +62,8 @@ enum StockLoopStack {
         let loopManager = WatchLoopManager(
             doseStore: stores.doseStore,
             glucoseStore: stores.glucoseStore,
-            carbStore: stores.carbStore
+            carbStore: stores.carbStore,
+            overrideHistory: stores.overrideHistory
         )
 
         // The M3 CGM stack (formerly G7TransportBringup.makeStack), now delegate-wired:
@@ -90,7 +91,7 @@ enum StockLoopStack {
     /// NOTE (unchanged from M1): must not be invoked while the stock watch LoopDataManager is
     /// live — it would open a second PersistenceController against the same local directory.
     /// M5 integration resolves this by unifying store ownership (one PersistenceController).
-    static func makeStores() -> (doseStore: DoseStore, glucoseStore: GlucoseStore, carbStore: CarbStore) {
+    static func makeStores() -> (doseStore: DoseStore, glucoseStore: GlucoseStore, carbStore: CarbStore, overrideHistory: TemporaryScheduleOverrideHistory) {
         // M5 integration: a DISTINCT directory from the stock watch LoopDataManager's
         // controllerInLocalDirectory() store — resolves the M1/M4 caveat about two
         // PersistenceControllers on one directory, so assemble() can safely run beside
@@ -108,8 +109,8 @@ enum StockLoopStack {
         // OverrideHistory, which is nil whenever overrideHistory is nil — even with
         // the ISF schedule set — so insulinEffect failed every cycle after the
         // schedule fix. Shared instance across stores, mirroring the phone's
-        // DeviceDataManager wiring. (No overrides are ever ACTIVE on the watch —
-        // an empty history resolves schedules verbatim.)
+        // DeviceDataManager wiring. #68: a granted override IS recorded into this
+        // history at takeover, so schedules resolve scaled exactly as on the phone.
         let overrideHistory = TemporaryScheduleOverrideHistory()
 
         let doseStore = DoseStore(
@@ -140,6 +141,12 @@ enum StockLoopStack {
             provenanceIdentifier: provenanceIdentifier
         )
 
-        return (doseStore, glucoseStore, carbStore)
+        // #68: the shared history is now RETURNED, not swallowed. The watch records the
+        // granted override into it exactly as the phone's LoopDataManager does
+        // (:270 overrideHistory.recordOverride) — without that, basal/ISF/carb-ratio all
+        // resolve UNSCALED during a loan and historical temps net against the wrong
+        // baseline. The comment below used to say "no overrides are ever ACTIVE on the
+        // watch"; that was the gap, not a design choice.
+        return (doseStore, glucoseStore, carbStore, overrideHistory)
     }
 }

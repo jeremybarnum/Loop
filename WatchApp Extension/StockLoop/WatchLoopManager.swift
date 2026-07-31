@@ -114,8 +114,37 @@ final class WatchLoopManager {
     /// (the phone's LoopDataManager does this same store sync in its settings didSet).
     /// Propagate here so EVERY settings application — grant, future mid-session pushes —
     /// keeps the stores consistent. All four store setters are Locked<> (any-queue safe).
+    /// #68 overrides: the SAME history instance both stores were constructed with, so
+    /// recording here re-resolves basal / ISF / carb ratio through
+    /// basalProfileApplyingOverrideHistory et al. Mirrors the phone's
+    /// LoopDataManager.overrideHistory (:346) and its record site (:270).
+    let overrideHistory: TemporaryScheduleOverrideHistory
+
     var settings: LoopSettings {
         didSet {
+            // #68: mirror LoopDataManager :269-270 — an override only takes effect through
+            // the HISTORY, not the settings object. Without this the watch resolves every
+            // schedule UNSCALED during a loan (basal, ISF, carb ratio) and nets historical
+            // temps against the wrong baseline, which reads exactly like an IOB bug.
+            if settings.scheduleOverride != oldValue.scheduleOverride {
+                overrideHistory.recordOverride(settings.scheduleOverride)
+                if let o = settings.scheduleOverride {
+                    let target = o.settings.targetRange.map {
+                        String(format: "%.0f-%.0f", $0.lowerBound.doubleValue(for: .milligramsPerDeciliter),
+                               $0.upperBound.doubleValue(for: .milligramsPerDeciliter))
+                    } ?? "unchanged"
+                    SportLog.event("override", String(format: "APPLIED %@ · insulin needs %.0f%% (basal x%.2f, ISF x%.2f, CR x%.2f) · target %@ · ends %@",
+                                                      o.context.presetNameForLog,
+                                                      o.settings.effectiveInsulinNeedsScaleFactor * 100,
+                                                      o.settings.basalRateMultiplier ?? 1.0,
+                                                      o.settings.insulinSensitivityMultiplier ?? 1.0,
+                                                      o.settings.carbRatioMultiplier ?? 1.0,
+                                                      target,
+                                                      o.duration.isInfinite ? "indefinite" : ISO8601DateFormatter().string(from: o.scheduledInterval.end)))
+                } else if oldValue.scheduleOverride != nil {
+                    SportLog.event("override", "CLEARED — schedules resolve unscaled again")
+                }
+            }
             // Mirrors the phone LoopDataManager.settings didSet (:294-339) — same four
             // store syncs, same FeatureFlags-gated model provider, same cache
             // invalidation. Deviations: no mealDetectionManager/analytics (absent on
@@ -370,10 +399,13 @@ final class WatchLoopManager {
     /// Test seam, same shape as the phone's `now()`.
     var now: () -> Date = { Date() }
 
-    init(doseStore: DoseStore, glucoseStore: GlucoseStore, carbStore: CarbStore, settings: LoopSettings = LoopSettings()) {
+    init(doseStore: DoseStore, glucoseStore: GlucoseStore, carbStore: CarbStore,
+         overrideHistory: TemporaryScheduleOverrideHistory = TemporaryScheduleOverrideHistory(),
+         settings: LoopSettings = LoopSettings()) {
         self.doseStore = doseStore
         self.glucoseStore = glucoseStore
         self.carbStore = carbStore
+        self.overrideHistory = overrideHistory
         self.settings = settings
         // #50: cache each accepted temp so runningTempBasal() can report what the pod is
         // running while E4 has it orphaned (basalDeliveryState is nil then). Built here so the
@@ -1792,6 +1824,21 @@ final class WatchLoopManager {
                     SportLog.event("e5", "E5 temp enacted OK — pod exchange complete")
                 }
             }
+        }
+    }
+}
+
+// MARK: - #68 override telemetry helper
+
+extension TemporaryScheduleOverride.Context {
+    /// Greppable preset identity for the [override] lines — the name is what Jeremy will
+    /// match against the phone when reconciling a session.
+    var presetNameForLog: String {
+        switch self {
+        case .preMeal: return "pre-meal"
+        case .legacyWorkout: return "workout(legacy)"
+        case .preset(let preset): return "\(preset.symbol) \(preset.name)"
+        case .custom: return "custom"
         }
     }
 }

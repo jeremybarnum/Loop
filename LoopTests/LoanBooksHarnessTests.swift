@@ -1052,3 +1052,145 @@ final class LedgerRefuteRestoreTests: XCTestCase {
         XCTAssertFalse(ledger.doses.contains { abs($0.startDate.timeIntervalSince(assumedStart)) < 0.001 })
     }
 }
+
+// MARK: - #68 overrides across the loan
+
+/// Jeremy's ruling (2026-07-31): overrides carry BOTH ways, stock framework, no sport-mode
+/// special case. The gap these pin: the watch's stores were built with an override history
+/// that nothing ever recorded into, so a granted override changed NOTHING — basal, ISF and
+/// carb ratio all resolved unscaled and historical temps netted against the wrong baseline.
+/// The phone does exactly one thing (LoopDataManager:270 overrideHistory.recordOverride);
+/// the watch now mirrors it in its settings didSet.
+///
+/// Fixture is Jeremy's: 60% insulin needs, target raised to 140-160.
+final class LoanOverrideTests: XCTestCase {
+
+    private var cacheDir: URL!
+    private var cacheStore: PersistenceController!
+
+    private let baseBasal = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: 1.0)])!
+    private let baseISF = InsulinSensitivitySchedule(unit: .milligramsPerDeciliter, dailyItems: [RepeatingScheduleValue(startTime: 0, value: 50.0)])!
+    private let baseCR = CarbRatioSchedule(unit: .gram(), dailyItems: [RepeatingScheduleValue(startTime: 0, value: 10.0)])!
+
+    override func setUp() {
+        super.setUp()
+        cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        cacheStore = PersistenceController(directoryURL: cacheDir)
+    }
+    override func tearDown() {
+        cacheStore = nil
+        try? FileManager.default.removeItem(at: cacheDir)
+        super.tearDown()
+    }
+
+    /// The fixture: "Exercise" — 60% insulin needs, target 140-160.
+    private func exerciseOverride(start: Date, duration: TimeInterval = .hours(1)) -> TemporaryScheduleOverride {
+        let settings = TemporaryScheduleOverrideSettings(
+            unit: .milligramsPerDeciliter,
+            targetRange: DoubleRange(minValue: 140, maxValue: 160),
+            insulinNeedsScaleFactor: 0.6)
+        return TemporaryScheduleOverride(context: .custom,
+                                         settings: settings,
+                                         startDate: start,
+                                         duration: .finite(duration),
+                                         enactTrigger: .local,
+                                         syncIdentifier: UUID())
+    }
+
+    /// THE CORE CLAIM: one scale factor moves all three schedules coherently — basal DOWN,
+    /// ISF and carb ratio UP (you are more sensitive, so each unit does more).
+    func testOverrideScalesAllThreeSchedules() {
+        let history = TemporaryScheduleOverrideHistory()
+        let now = Date()
+        history.recordOverride(exerciseOverride(start: now.addingTimeInterval(-.minutes(5))))
+
+        let scaledBasal = history.resolvingRecentBasalSchedule(baseBasal, relativeTo: now)
+        let scaledISF = history.resolvingRecentInsulinSensitivitySchedule(baseISF, relativeTo: now)
+        let scaledCR = history.resolvingRecentCarbRatioSchedule(baseCR, relativeTo: now)
+
+        XCTAssertEqual(scaledBasal.value(at: now), 0.60, accuracy: 0.001,
+                       "basal scales BY the factor: 1.0 x 0.6")
+        XCTAssertEqual(scaledISF.value(at: now), 50.0 / 0.6, accuracy: 0.01,
+                       "ISF scales by the RECIPROCAL: more sensitive at 60% needs")
+        XCTAssertEqual(scaledCR.value(at: now), 10.0 / 0.6, accuracy: 0.01,
+                       "carb ratio likewise — fewer units per gram")
+    }
+
+    /// The gap that made this a bug rather than a missing feature: a DoseStore built with an
+    /// empty history resolves everything unscaled, so a granted override is silently inert.
+    func testEmptyHistoryLeavesSchedulesUnscaled_theWatchGapPreFix() {
+        let empty = TemporaryScheduleOverrideHistory()
+        let now = Date()
+        XCTAssertEqual(empty.resolvingRecentBasalSchedule(baseBasal, relativeTo: now).value(at: now),
+                       1.0, accuracy: 0.001,
+                       "pre-fix watch shape: the override exists in settings but changes nothing")
+    }
+
+    /// Retro-netting: a temp that RAN during the override must net against the overridden
+    /// basal, not the raw one — this is why history matters and 'is one active now' does not.
+    /// 0.60 U/hr under a 0.6-scaled 1.0 schedule is exactly neutral; against the raw
+    /// schedule it would look like a 0.40 U/hr suppression.
+    func testTempDuringOverrideNetsAgainstTheOverriddenSchedule() {
+        let now = Date()
+        let overrideStart = now.addingTimeInterval(-.minutes(60))
+        let history = TemporaryScheduleOverrideHistory()
+        history.recordOverride(exerciseOverride(start: overrideStart, duration: .hours(2)))
+
+        let store = DoseStore(
+            healthKitSampleStore: nil, cacheStore: cacheStore,
+            insulinModelProvider: PresetInsulinModelProvider(defaultRapidActingModel: nil),
+            longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration,
+            basalProfile: baseBasal, insulinSensitivitySchedule: baseISF,
+            overrideHistory: history, provenanceIdentifier: "LoanOverrideTests")
+
+        guard let scaled = store.basalProfileApplyingOverrideHistory else {
+            return XCTFail("the store must resolve a schedule through the history")
+        }
+        XCTAssertEqual(scaled.value(at: now.addingTimeInterval(-.minutes(30))), 0.60, accuracy: 0.001,
+                       "mid-override the effective basal is 0.60 — a 0.60 U/hr temp nets to ZERO, not -0.40")
+    }
+
+    /// Round-trip through the wire the grant actually uses: LoopSettings.rawValue already
+    /// carries scheduleOverride and overridePresets, so phone->watch needs no protocol
+    /// change — only the recording the watch was missing.
+    func testOverrideSurvivesTheGrantSettingsRoundTrip() {
+        var settings = LoopSettings()
+        settings.basalRateSchedule = baseBasal
+        settings.insulinSensitivitySchedule = baseISF
+        settings.carbRatioSchedule = baseCR
+        let now = Date()
+        settings.scheduleOverride = exerciseOverride(start: now)
+
+        guard let decoded = LoopSettings(rawValue: settings.rawValue) else {
+            return XCTFail("settings must round-trip")
+        }
+        guard let override = decoded.scheduleOverride else {
+            return XCTFail("the active override must survive the grant blob")
+        }
+        XCTAssertEqual(override.settings.effectiveInsulinNeedsScaleFactor, 0.6, accuracy: 0.001)
+        XCTAssertEqual(override.settings.targetRange?.lowerBound.doubleValue(for: .milligramsPerDeciliter) ?? 0,
+                       140, accuracy: 0.1)
+        XCTAssertEqual(override.settings.targetRange?.upperBound.doubleValue(for: .milligramsPerDeciliter) ?? 0,
+                       160, accuracy: 0.1)
+        XCTAssertEqual(override.syncIdentifier, settings.scheduleOverride?.syncIdentifier,
+                       "identity must survive so the two devices can agree on WHICH override")
+    }
+
+    /// Target range: the watch's DoseMath reads effectiveGlucoseTargetRangeSchedule(), so an
+    /// override must move the target it drives to — 140-160, not the base 100-115.
+    func testEffectiveTargetRangeFollowsTheOverride() {
+        var settings = LoopSettings()
+        settings.glucoseTargetRangeSchedule = GlucoseRangeSchedule(
+            unit: .milligramsPerDeciliter,
+            dailyItems: [RepeatingScheduleValue(startTime: 0, value: DoubleRange(minValue: 100, maxValue: 115))])!
+        let now = Date()
+        settings.scheduleOverride = exerciseOverride(start: now.addingTimeInterval(-.minutes(1)))
+
+        guard let effective = settings.effectiveGlucoseTargetRangeSchedule() else {
+            return XCTFail("an effective schedule must exist")
+        }
+        let range = effective.quantityRange(at: now)
+        XCTAssertEqual(range.lowerBound.doubleValue(for: .milligramsPerDeciliter), 140, accuracy: 0.1)
+        XCTAssertEqual(range.upperBound.doubleValue(for: .milligramsPerDeciliter), 160, accuracy: 0.1)
+    }
+}
