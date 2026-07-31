@@ -2376,7 +2376,11 @@ extension WatchLoopManager: CGMManagerDelegate {
             } else {
                 values = rawValues
             }
-            glucoseStore.addGlucoseSamples(values) { result in
+            // #83: the phone relay may already have filed this exact reading under its own name
+            // tag. Same sensor stamp = same reading; first writer wins.
+            dropAlreadyStored(values) { kept in
+            guard !kept.isEmpty else { completion(); return }
+            self.glucoseStore.addGlucoseSamples(kept) { result in
                 if case .failure(let error) = result {
                     self.log.error("Failure adding glucose samples: %{public}@", String(describing: error))
                 }
@@ -2388,6 +2392,7 @@ extension WatchLoopManager: CGMManagerDelegate {
                 // read `momentum —` while BG swung ±20/cycle, leaving the prediction trend-blind.
                 self.dataAccessQueue.async { self.glucoseMomentumEffect = nil }
                 completion()
+            }
             }
         case .unreliableData:
             // Stock G7CGMManager already withholds unreliable readings upstream of this.
@@ -2432,7 +2437,9 @@ extension WatchLoopManager: CGMManagerDelegate {
             // Fill a gap only: skip if the store already has a reading at/after this one (a fresher
             // direct-G7 read wins). syncId dedup in the store is the belt for the exact-overlap case.
             if let latest = self.glucoseStore.latestGlucose?.startDate, latest >= sample.date { return }
-            self.glucoseStore.addGlucoseSamples([sample]) { result in
+            self.dropAlreadyStored([sample]) { kept in
+            guard !kept.isEmpty else { return }   // #83: direct G7 already filed this reading
+            self.glucoseStore.addGlucoseSamples(kept) { result in
                 if case .failure(let error) = result {
                     self.log.error("phone-BG fallback add failed: %{public}@", String(describing: error))
                     return
@@ -2446,6 +2453,73 @@ extension WatchLoopManager: CGMManagerDelegate {
                     self.checkPumpDataAndLoop()
                 }
             }
+            }
+        }
+    }
+
+    // MARK: - #83: one physical reading, one row
+
+    /// The part of a G7 syncIdentifier that BOTH devices agree on.
+    ///
+    /// G7CGMManager builds it as `"\(activatedAt…hours) \(sensorID) \(timestamp)"`
+    /// (G7SensorKit/G7CGMManager.swift:421). Fields 2 and 3 come off the sensor itself and are
+    /// therefore device-independent. Field 1 is each device's own ESTIMATE of when the sensor was
+    /// started — `Date() − messageTimestamp`, latched the first time that device saw the sensor
+    /// (G7CGMManager.swift:301-310, and independently on the watch in
+    /// G7ClientTransportAdapter.swift:88-89). The phone and the watch latch at different instants,
+    /// so their estimates differ by a fraction of a second and the full string never matches.
+    ///
+    /// That is why the store's syncIdentifier uniqueness constraint never fired: the same physical
+    /// reading arrived under two different names and was filed twice, once from the direct G7 read
+    /// and once from the phone relay. Measured 2026-07-31: the sample count in the 25-minute
+    /// momentum window tracked the relay exactly — 5 clean, climbing to 10 while the relay ran,
+    /// decaying back to 5 within 25 minutes of it stopping, and one stray relay producing one
+    /// +1 blip. Mostly benign (duplicate points carry the same value, so a regression through them
+    /// barely moves) EXCEPT at `GlucoseMath.swift:103`, whose `count > 2` floor counts ROWS: a
+    /// two-reading window that stock refuses to regress becomes four rows, clears the floor, and
+    /// manufactures a trend.
+    ///
+    /// Verified device-independent against the field log — the stamp parsed out of the watch's own
+    /// raw BLE frames equalled the phone's relayed stamp on 13 of 14 cycles (the exception was the
+    /// phone relaying a ~110-minute-stale reading near a grant, which is genuinely a different
+    /// reading and correctly does NOT dedup).
+    private static func sensorIdentity(_ syncIdentifier: String?) -> String? {
+        guard let s = syncIdentifier, let sp = s.firstIndex(of: " ") else { return nil }
+        let tail = s[s.index(after: sp)...]
+        return tail.isEmpty ? nil : String(tail)
+    }
+
+    /// Drop candidates the store has already filed under a different device's name for the SAME
+    /// physical reading. First writer wins, which gives the phone's copy while the phone is there
+    /// (its relay lands ~7 s ahead of the direct read) and the direct copy once it is not —
+    /// Jeremy's stated preference, with no arbitration logic.
+    ///
+    /// FAILS OPEN: if the store read errors we keep every candidate. A duplicate row is a mild
+    /// distortion; a dropped reading is a missed loop cycle.
+    private func dropAlreadyStored(_ samples: [NewGlucoseSample],
+                                   completion: @escaping ([NewGlucoseSample]) -> Void) {
+        let wanted = samples.compactMap { Self.sensorIdentity($0.syncIdentifier) }
+        guard !wanted.isEmpty else { completion(samples); return }
+        // The stamp is unique per reading, so a short window is plenty; this only has to cover the
+        // seconds between the relay and the direct read for the same grid point.
+        let since = Date().addingTimeInterval(-.minutes(30))
+        glucoseStore.getGlucoseSamples(start: since, end: nil) { result in
+            guard case .success(let stored) = result else {
+                completion(samples)   // fail open
+                return
+            }
+            let seen = Set(stored.compactMap { Self.sensorIdentity($0.syncIdentifier) })
+            guard !seen.isEmpty else { completion(samples); return }
+            var dropped: [String] = []
+            let kept = samples.filter { s in
+                guard let id = Self.sensorIdentity(s.syncIdentifier), seen.contains(id) else { return true }
+                dropped.append(id)
+                return false
+            }
+            if !dropped.isEmpty {
+                SportLog.event("glucose", "#83 dedup: dropped \(dropped.count) already-filed reading(s) [\(dropped.joined(separator: ", "))] — same sensor stamp, different device name tag")
+            }
+            completion(kept)
         }
     }
 
