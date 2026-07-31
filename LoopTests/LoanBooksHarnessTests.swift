@@ -964,3 +964,91 @@ final class LoanWireQuantizationTests: XCTestCase {
                        "drift scales with slice count at ~0.025 U each (field: 33 slices → +0.30)")
     }
 }
+
+// MARK: - #74: refuted uncertain command must restore what it truncated
+
+/// The last documented ledger corner, closed in the SIM rather than waiting for a rare
+/// field event (Jeremy 2026-07-30: "can you field verify that one on the sim?").
+///
+/// Sequence: a high temp is running; an uncertain enact books an assumed dose (R5 books
+/// only above-schedule commands, so this is the case that matters) which truncates the
+/// running temp; the chase then comes back REFUTED — the pod never received it. Reality:
+/// the original temp kept running to its programmed end. Pre-fix the ledger removed the
+/// assumed dose but left the predecessor short, so the interval fell back to schedule and
+/// IOB UNDER-counted — anti-conservative, since the pod was still delivering above it.
+final class LedgerRefuteRestoreTests: XCTestCase {
+
+    private func makeLedger(basalRate: Double = 0.70) -> SessionInsulinLedger {
+        SessionInsulinLedger(
+            basalSchedule: BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: basalRate)])!,
+            insulinModelProvider: PresetInsulinModelProvider(defaultRapidActingModel: nil),
+            longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration)
+    }
+
+    func testRefutedAssumedDoseRestoresTruncatedPredecessor() {
+        var ledger = makeLedger()
+        let now = Date()
+        let runningStart = now.addingTimeInterval(-.minutes(10))
+        let runningEnd = runningStart.addingTimeInterval(.minutes(30))   // programmed end, +20 min from now
+
+        // A 3.00 U/hr temp is running (well above the 0.70 schedule).
+        ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: runningStart, endDate: runningEnd,
+                                     value: 3.00, unit: .unitsPerHour, syncIdentifier: "running"))
+        let iobWithRunningTempIntact = ledger.insulinOnBoard(at: now.addingTimeInterval(.minutes(15)))
+
+        // An uncertain enact books an assumed 4.00 U/hr dose, truncating the running temp.
+        let assumedStart = now
+        ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: assumedStart,
+                                     endDate: assumedStart.addingTimeInterval(.minutes(30)),
+                                     value: 4.00, unit: .unitsPerHour, syncIdentifier: "assumed"))
+        XCTAssertEqual(ledger.doses.count, 2)
+        XCTAssertEqual(ledger.doses[0].endDate.timeIntervalSince1970,
+                       assumedStart.timeIntervalSince1970, accuracy: 0.01,
+                       "booking the assumed dose truncates the running temp at its start")
+
+        // The chase refutes it: the pod never got the command.
+        XCTAssertTrue(ledger.removeDose(type: .tempBasal, startingAt: assumedStart))
+        XCTAssertEqual(ledger.doses.count, 1)
+        XCTAssertEqual(ledger.doses[0].endDate.timeIntervalSince1970,
+                       runningEnd.timeIntervalSince1970, accuracy: 0.01,
+                       "the refuted command never ran, so the predecessor's programmed tail must return")
+
+        // And the IOB must match the never-interrupted world, not a schedule-filled gap.
+        XCTAssertEqual(ledger.insulinOnBoard(at: now.addingTimeInterval(.minutes(15))),
+                       iobWithRunningTempIntact, accuracy: 0.001,
+                       "post-refute IOB must equal the world where the uncertain command never happened")
+    }
+
+    /// The restore must NOT fire when a later accepted command has since taken over the
+    /// edge — that one legitimately owns the truncation.
+    func testRestoreSkipsWhenALaterCommandOwnsTheEdge() {
+        var ledger = makeLedger()
+        let now = Date()
+        let runningStart = now.addingTimeInterval(-.minutes(10))
+
+        ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: runningStart,
+                                     endDate: runningStart.addingTimeInterval(.minutes(30)),
+                                     value: 3.00, unit: .unitsPerHour, syncIdentifier: "running"))
+        let assumedStart = now
+        ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: assumedStart,
+                                     endDate: assumedStart.addingTimeInterval(.minutes(30)),
+                                     value: 4.00, unit: .unitsPerHour, syncIdentifier: "assumed"))
+        // A later ACCEPTED command supersedes the assumed one.
+        let acceptedStart = now.addingTimeInterval(.minutes(2))
+        ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: acceptedStart,
+                                     endDate: acceptedStart.addingTimeInterval(.minutes(30)),
+                                     value: 1.50, unit: .unitsPerHour, syncIdentifier: "accepted"))
+
+        XCTAssertTrue(ledger.removeDose(type: .tempBasal, startingAt: assumedStart))
+        // The running temp still ends where the ASSUMED dose cut it; extending it now would
+        // overlap the accepted command, which is the one actually running.
+        // (Match by start time, not syncIdentifier: LoopKit's trimmed(to:) NULLS the
+        // identifier — the same behavior behind this morning's reservoir-branch finding.)
+        guard let running = ledger.doses.first(where: {
+            abs($0.startDate.timeIntervalSince(runningStart)) < 0.001
+        }) else { return XCTFail("the running temp must still be in the timeline") }
+        XCTAssertLessThanOrEqual(running.endDate, acceptedStart,
+                                 "no restore across a later accepted command — it owns the edge")
+        XCTAssertFalse(ledger.doses.contains { abs($0.startDate.timeIntervalSince(assumedStart)) < 0.001 })
+    }
+}

@@ -58,6 +58,15 @@ public struct SessionInsulinLedger {
     /// needs (versus reconciled() + resolveMutable + replacePendingEvents + raw constraints).
     public private(set) var doses: [DoseEntry] = []
 
+    /// #74 refute-restore bookkeeping: what each accepted basal command truncated.
+    /// Bounded by the session's dose count and cleared as causes are removed.
+    private struct Truncation {
+        let causeStart: Date
+        let predecessorStart: Date
+        let originalEnd: Date
+    }
+    private var truncations: [Truncation] = []
+
     public init(basalSchedule: BasalRateSchedule,
                 insulinModelProvider: InsulinModelProvider,
                 longestEffectDuration: TimeInterval) {
@@ -112,6 +121,19 @@ public struct SessionInsulinLedger {
     /// the same supersede rule the hand-back journal fold applies on the phone.
     public mutating func recordEnact(_ dose: DoseEntry) {
         if dose.type != .bolus {
+            // #74 refute-restore: remember what this command truncated, so a later REFUTED
+            // chase verdict can put the predecessor's tail back. Without this, removing the
+            // assumed dose left the predecessor short and the interval fell back to schedule
+            // — an UNDER-count for an above-schedule predecessor (anti-conservative; the
+            // pod was still running it). Keyed by the causing dose's start, which is also
+            // what removeDose matches on.
+            truncations.removeAll { abs($0.causeStart.timeIntervalSince(dose.startDate)) < 0.001 }
+            for existing in doses where existing.type != .bolus
+                && existing.startDate < dose.startDate && existing.endDate > dose.startDate {
+                truncations.append(Truncation(causeStart: dose.startDate,
+                                              predecessorStart: existing.startDate,
+                                              originalEnd: existing.endDate))
+            }
             // An accepted basal command supersedes EVERY open basal dose: earlier-starting
             // ones are truncated at its start; equal- or later-starting overlaps (same-second
             // enacts, clock skew vs a phone-stamped live seed) are removed outright — the pod
@@ -132,17 +154,49 @@ public struct SessionInsulinLedger {
     /// REFUTED (the command never reached the pod). Removes the first dose of `type` whose
     /// start is within `tolerance` of `startingAt`.
     ///
-    /// KNOWN EDGE (documented, accepted — adversarial review): if the assumed dose
-    /// truncated a predecessor when booked, removal does not un-truncate it. For an
-    /// ABOVE-SCHEDULE predecessor this UNDER-counts IOB from the refuted start until the
-    /// next accepted enact (anti-conservative, bounded by |pred−sched| × chase window
-    /// ≤85s + one cycle). Accepted for the flag-off ship; restore-the-tail lands with
-    /// the remaining #74 work before the flag flips in the field.
+    /// Restores any tail the refuted dose truncated (the pod never ran it, so its
+    /// predecessor kept going to its programmed end) — closed 2026-07-30, sim-verified.
+    /// RESIDUAL, deliberately not restored: a predecessor the command removed OUTRIGHT
+    /// (equal- or later-starting overlap) is gone rather than trimmed; that path needs a
+    /// same-instant collision with a refuted command, and the direction is conservative.
     public mutating func removeDose(type: DoseType, startingAt: Date, tolerance: TimeInterval = 2.0) -> Bool {
         guard let index = doses.firstIndex(where: {
             $0.type == type && abs($0.startDate.timeIntervalSince(startingAt)) <= tolerance
         }) else { return false }
-        doses.remove(at: index)
+        let removed = doses.remove(at: index)
+
+        // Restore any tail this dose truncated: the pod never ran the refuted command, so
+        // its predecessor kept running to its programmed end. Only extend a predecessor
+        // that is still present AND still ends exactly where this dose cut it (anything
+        // else means a later command has since superseded it, and that one owns the edge).
+        for truncation in truncations where abs(truncation.causeStart.timeIntervalSince(removed.startDate)) < 0.001 {
+            guard let restoreIndex = doses.firstIndex(where: {
+                $0.type != .bolus
+                    && abs($0.startDate.timeIntervalSince(truncation.predecessorStart)) < 0.001
+                    && abs($0.endDate.timeIntervalSince(truncation.causeStart)) < 0.001
+            }) else { continue }
+            let predecessor = doses[restoreIndex]
+            // Clamp to whatever superseded it NEXT: an accepted command that landed after
+            // the refuted one legitimately owns the edge, and restoring past it would
+            // double-book that interval (sim-caught 2026-07-30). Physically exact: the pod
+            // ran the original temp until the next accepted command replaced it.
+            let nextBasalStart = doses.enumerated()
+                .filter { $0.offset != restoreIndex && $0.element.type != .bolus
+                          && $0.element.startDate > predecessor.startDate }
+                .map(\.element.startDate)
+                .min()
+            let restoredEnd = min(truncation.originalEnd, nextBasalStart ?? truncation.originalEnd)
+            guard restoredEnd > predecessor.endDate else { continue }
+            doses[restoreIndex] = DoseEntry(type: predecessor.type,
+                                            startDate: predecessor.startDate,
+                                            endDate: restoredEnd,
+                                            value: predecessor.unitsPerHour,
+                                            unit: .unitsPerHour,
+                                            deliveredUnits: nil,
+                                            syncIdentifier: predecessor.syncIdentifier,
+                                            insulinType: predecessor.insulinType)
+        }
+        truncations.removeAll { abs($0.causeStart.timeIntervalSince(removed.startDate)) < 0.001 }
         return true
     }
 
