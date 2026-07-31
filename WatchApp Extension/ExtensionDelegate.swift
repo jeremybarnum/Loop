@@ -98,6 +98,14 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         // foregrounding — bonding the new sensor while a slow connection is costless.
         stockLoopSession.stack.client.prewarmIfPending()
 
+        // #82: re-assert the workout keepalive on every foreground. G7Client's comment
+        // claimed this already happened; it did not — the only caller was the 5-minute log
+        // pulse, a DispatchSourceTimer that by construction cannot fire while the process is
+        // suspended. So the recovery mechanism was scheduled by the very clock that
+        // suspension stops. Cheap, idempotent (holder-refcounted), and the one moment we
+        // KNOW we are executing.
+        stockLoopSession.stack.client.ensureKeepalive()
+
         NotificationCenter.default.post(name: type(of: self).didBecomeActiveNotification, object: self)
     }
 

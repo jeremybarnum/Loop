@@ -3081,7 +3081,7 @@
 								enabled = 0;
 							};
 							com.apple.BackgroundModes.watchos.app = {
-								enabled = 0;
+								enabled = 1;
 							};
 						};
 					};
