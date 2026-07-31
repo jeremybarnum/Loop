@@ -155,6 +155,13 @@ final class ActionHUDController: HUDInterfaceController {
         presentController(withName: OnOffSelectionController.className, context: viewModel)
     }
 
+    /// #68 part B scope note (Jeremy 2026-07-31): PRE-MEAL IS OUT OF SCOPE. This path is
+    /// deliberately untouched, so during a loan a pre-meal target still requires the phone to
+    /// acknowledge — the stock behavior. Only `scheduleOverride` (the Preset/Workout button)
+    /// became watch-owned. If pre-meal is ever brought in, it needs the same three writes
+    /// `applyOverrideDuringLoan` does plus its own journal payload; `LoopSettings` refuses to
+    /// carry a `.preMeal` context in `scheduleOverride` (LoopSettings.swift:46), so it cannot
+    /// be smuggled through the record kind added here.
     func setPreMealEnabled(_ isPreMealEnabled: Bool) {
         updateForPreMeal(enabled: isPreMealEnabled)
         pendingMessageResponses += 1
@@ -249,7 +256,6 @@ final class ActionHUDController: HUDInterfaceController {
 
     private func sendOverride(_ override: TemporaryScheduleOverride?) {
         updateForOverrideContext(override?.context)
-        pendingMessageResponses += 1
 
         var settings = loopManager.settings
         let isPreMealEnabled = settings.preMealOverride?.isActive() == true
@@ -257,6 +263,21 @@ final class ActionHUDController: HUDInterfaceController {
             settings.preMealOverride = nil
         }
         settings.scheduleOverride = override
+
+        // #68 part B (Jeremy 2026-07-31): during a POD LOAN the watch owns overrides.
+        //
+        // Stock's path below only applies the override LOCALLY once the phone acknowledges the
+        // settings message — correct when the phone is the therapy authority, and exactly wrong
+        // for Sport Mode, where the phone is routinely out of range and the WATCH is the one
+        // dosing. So when a loan is active the selection takes effect on the wrist immediately
+        // and unconditionally, and the change rides the loan journal home instead of the WC
+        // settings channel. Outside a loan nothing here changes: stock behavior, byte for byte.
+        if ExtensionDelegate.shared().stockLoopSession.loanController.isLoanActive {
+            applyOverrideDuringLoan(override, settings: settings)
+            return
+        }
+
+        pendingMessageResponses += 1
 
         let userInfo = LoopSettingsUserInfo(settings: settings)
         do {
@@ -294,6 +315,45 @@ final class ActionHUDController: HUDInterfaceController {
                 )
             }
         }
+    }
+
+    /// #68 part B: apply a wrist-selected override during an ACTIVE loan.
+    ///
+    /// Three writes, in this order, none of them gated on the phone:
+    ///  1. the wrist UI's own settings (`LoopDataManager`, `@PersistedProperty`) — this is what
+    ///     `update()` reads for the button state, so without it the button snaps back on the
+    ///     next context refresh;
+    ///  2. the LOAN's dosing settings (`WatchLoopManager`) — part A's didSet records into the
+    ///     shared `TemporaryScheduleOverrideHistory`, which rescales basal / ISF / carb ratio
+    ///     and invalidates the cached effects, so the next cycle doses under the override;
+    ///  3. the loan JOURNAL — the durable channel that carries the change to the phone at
+    ///     hand-back even if the phone was never reachable while the loan ran.
+    ///
+    /// The WC push at the end is a BEST-EFFORT courtesy so a phone that happens to be in range
+    /// reflects the change now rather than at hand-back. Its failure is not surfaced (no "Send
+    /// Failed" alert): an unreachable phone is the normal Sport Mode condition, and the override
+    /// is already live and already durable. If it DOES land, the phone applies it immediately
+    /// and the journal record later no-ops on the syncIdentifier idempotency check.
+    private func applyOverrideDuringLoan(_ override: TemporaryScheduleOverride?, settings: LoopSettings) {
+        let session = ExtensionDelegate.shared().stockLoopSession
+
+        loopManager.settings.preMealOverride = settings.preMealOverride
+        loopManager.settings.scheduleOverride = settings.scheduleOverride
+        session.stack.loopManager.applyWristOverride(override)
+        session.loanController.loanDidRecordOverride(override)
+
+        let userInfo = LoopSettingsUserInfo(settings: settings)
+        try? WCSession.default.sendSettingsUpdateMessage(userInfo, completionHandler: { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let context):
+                    ExtensionDelegate.shared().loopManager.updateContext(context)
+                case .failure:
+                    // Expected during sport — the override is live on the wrist and journaled.
+                    break
+                }
+            }
+        })
     }
 }
 

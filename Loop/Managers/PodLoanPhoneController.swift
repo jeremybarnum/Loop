@@ -42,6 +42,14 @@ final class PodLoanPhoneController {
         /// InsulinDeliveryStore/HealthKit — behaving exactly like real pump insulin (#69/#52).
         var addPumpEvents: ([NewPumpEvent], _ lastReconciliation: Date?, @escaping (Error?) -> Void) -> Void
         var addCarb: (NewCarbEntry, @escaping (Error?) -> Void) -> Void
+        /// #68 part B: apply a WATCH-enacted temporary schedule override to the phone's
+        /// LoopSettings (nil = the wrist cleared it). Sovereignty ruling (2026-07-31): while
+        /// the watch holds the pod it OWNS overrides, so this is a straight assignment — there
+        /// is no merge with whatever the phone thought, and no user prompt. The phone's own
+        /// override UI already funnels to a reclaim prompt during a loan (#71), so a competing
+        /// phone-side edit cannot exist. Default no-op keeps the state-machine tests (and any
+        /// caller that doesn't care about overrides) constructing unchanged.
+        var applyScheduleOverride: (TemporaryScheduleOverride?) -> Void = { _ in }
         /// 16 h insulin history for the grant.
         var doseHistory: (_ start: Date, _ completion: @escaping ([DoseEntry]) -> Void) -> Void
         /// Active carb entries for the grant (#49) — seeded so the watch predicts with COB.
@@ -454,6 +462,7 @@ final class PodLoanPhoneController {
                             doseHistory: history.compactMap(Self.loanRecord(from:)),
                             boundaryRecord: nil,   // Fix 1: running temp already lives in doseHistory (see above)
                             supportsInterimHandback: true,   // WS1 capability gate (REAL-3)
+                            supportsOverrideRecords: true,   // #68B: this phone decodes .overrideChange
                             // Same source LoopDataManager:458 reads. Without this the watch runs
                             // Standard RC while this phone may be running Integral — different
                             // predictions from identical inputs, silently (audit 2026-07-22).
@@ -683,6 +692,14 @@ final class PodLoanPhoneController {
                     self.deps.addCarb(carb) { _ in }  // merge-not-replace at integration
                 }
 
+                // #68 part B: the watch owned overrides for the loan, so a drained override
+                // record lands on the phone here — after the store write commits, alongside
+                // carbs, and touching NO dose accounting. Stale offers are excluded: a dead
+                // loan cannot change live therapy settings.
+                if !isStale, let change = outcome.overrideChange {
+                    self.applyWatchOverride(change, epoch: offer.epoch, isFinal: isFinal)
+                }
+
                 // Over/under delivery warning removed for now (Jeremy 2026-07-27): the hand-back is
                 // silent — records committed, delta captured in the [phone] reconcile line above, no
                 // user notice. outcome.residualShortfallUnits is still computed but no longer surfaced;
@@ -707,6 +724,76 @@ final class PodLoanPhoneController {
                 }
             }
         }
+    }
+
+    // MARK: - #68 part B: watch-enacted overrides landing on the phone
+
+    /// Apply (or clear) a watch-enacted override on this phone, idempotently.
+    ///
+    /// IDEMPOTENCY is by the override's OWN `syncIdentifier` (the UUID `createOverride` minted
+    /// on the wrist and the record carried home), not by event bookkeeping alone:
+    ///   - `.set` whose syncIdentifier already matches what the phone holds → SKIP. That covers
+    ///     the routine replay (the watch resends an offer every 15 s until acked, and a duplicate
+    ///     FINAL offer is normal), plus the case where the phone already got the override live
+    ///     over the WC settings channel while it happened to be reachable.
+    ///   - `.cleared` when the phone already holds nothing → SKIP, so a replayed drain cannot
+    ///     "re-clear" — which matters because a re-clear is not harmless: it would cancel an
+    ///     override the user set on the PHONE after the loan ended.
+    /// The persisted `committedIDs` filter upstream is the second belt (an already-committed
+    /// record never reaches the reconciler again); this check is the one that survives even a
+    /// staged-state reset, because it compares against live truth rather than history.
+    ///
+    /// LOGGED BOTH WAYS — os_log locally and `handbackDiag` (which the watch mirrors into the
+    /// iCloud session log as `[phone] …`), so a session's override story is legible from the
+    /// watch log alone, which is the only log Jeremy reads in the field.
+    private func applyWatchOverride(_ change: LoanReconciler.OverrideChange, epoch: Int, isFinal: Bool) {
+        let current = deps.settings().scheduleOverride
+        let phase = isFinal ? "final" : "interim"
+        switch change {
+        case .set(let override):
+            guard current?.syncIdentifier != override.syncIdentifier else {
+                os_log("[override] from watch: SKIPPED — %{public}@ already applied (sync %{public}@)",
+                       log: log, type: .default, Self.overrideNameForLog(override), override.syncIdentifier.uuidString)
+                handbackDiag(epoch, "[override] SKIPPED (already applied) \(Self.overrideNameForLog(override))")
+                return
+            }
+            deps.applyScheduleOverride(override)
+            let ends = override.duration.isInfinite ? "indefinite" : ISO8601DateFormatter().string(from: override.scheduledEndDate)
+            os_log("[override] from watch: APPLIED %{public}@ · insulin needs %.0f%% · target %{public}@ · ends %{public}@ · sync %{public}@ (%{public}@ drain)",
+                   log: log, type: .default, Self.overrideNameForLog(override),
+                   override.settings.effectiveInsulinNeedsScaleFactor * 100,
+                   Self.targetForLog(override), ends, override.syncIdentifier.uuidString, phase)
+            handbackDiag(epoch, String(format: "[override] APPLIED %@ · needs %.0f%% · target %@ · ends %@ (%@ drain)",
+                                       Self.overrideNameForLog(override),
+                                       override.settings.effectiveInsulinNeedsScaleFactor * 100,
+                                       Self.targetForLog(override), ends, phase))
+        case .cleared:
+            guard current != nil else {
+                os_log("[override] from watch: SKIPPED clear — the phone holds no override", log: log, type: .default)
+                handbackDiag(epoch, "[override] SKIPPED clear (phone already has none)")
+                return
+            }
+            deps.applyScheduleOverride(nil)
+            os_log("[override] from watch: CLEARED %{public}@ — phone schedules resolve unscaled again (%{public}@ drain)",
+                   log: log, type: .default, current.map(Self.overrideNameForLog) ?? "—", phase)
+            handbackDiag(epoch, "[override] CLEARED \(current.map(Self.overrideNameForLog) ?? "—") (\(phase) drain)")
+        }
+    }
+
+    private static func overrideNameForLog(_ override: TemporaryScheduleOverride) -> String {
+        switch override.context {
+        case .preMeal: return "pre-meal"
+        case .legacyWorkout: return "workout(legacy)"
+        case .preset(let preset): return "\(preset.symbol) \(preset.name)"
+        case .custom: return "custom"
+        }
+    }
+
+    private static func targetForLog(_ override: TemporaryScheduleOverride) -> String {
+        guard let range = override.settings.targetRange else { return "unchanged" }
+        return String(format: "%.0f-%.0f",
+                      range.lowerBound.doubleValue(for: .milligramsPerDeciliter),
+                      range.upperBound.doubleValue(for: .milligramsPerDeciliter))
     }
 
     private func finishLoanAfterCommit() {

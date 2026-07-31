@@ -89,6 +89,8 @@ final class PodLoanWatchController {
     /// WS1 capability gate (REAL-3): interim offers only when the granting phone
     /// understands them; false/nil grant → legacy single-phase hand-back.
     private var phoneSupportsInterimHandback = false
+    /// #68B: only mint .overrideChange when the granting phone can decode it.
+    private var phoneSupportsOverrideRecords = false
     /// WS1 round-2 fix: finalizeHandback flips phase BEFORE its ~3-15s of pod work
     /// (temp-cancel + status reads); a duplicate interim ack arriving in that window
     /// must NOT close the loan (the final offer hasn't been sent — the phone would
@@ -378,6 +380,7 @@ final class PodLoanWatchController {
 
         epoch = grant.epoch
         phoneSupportsInterimHandback = grant.supportsInterimHandback ?? false   // WS1 REAL-3 gate
+        phoneSupportsOverrideRecords = grant.supportsOverrideRecords ?? false    // #68B skew gate
         chaseWorkItem?.cancel()         // round-3 liveness: fresh loan, no chase residue
         pendingUncertainEventID = nil
         inFlightEventIDs = []
@@ -1651,6 +1654,88 @@ extension PodLoanWatchController: WatchLoanDoseRecording {
         //           provenance: .confirmed)
         //       self.streamRecords()
         //   }
+    }
+
+    /// #68 part B: journal a WRIST-enacted override change so it follows the pod home.
+    ///
+    /// Rides the ordinary journal, exactly like the (currently suppressed) carb path: it
+    /// inherits the per-loan seq, the commit cursor, resend-until-ack, and the hand-back drain —
+    /// which is precisely what makes a phone-ABSENT override still reach the phone. A bespoke
+    /// WC message would be dropped on the floor the moment the phone is out of range, and Sport
+    /// Mode's whole premise is that it is.
+    ///
+    /// Minted `.confirmed`, NOT through `mintIntent`: this is not a pod command. There is no
+    /// transmission to be uncertain about and no verdict to chase, so it must never enter
+    /// `inFlightEventIDs` (which would withhold it from streams and — worse — block a WS1
+    /// hand-back drain waiting for a classification that can never arrive).
+    ///
+    /// Called from the wrist UI on main; `queue.async` (never `sync`) keeps the #64 queue-order
+    /// invariant intact.
+    ///
+    /// EDGE CASES (verified, not assumed — no machinery added for any of them):
+    ///
+    ///  • OVERRIDE EXPIRES MID-LOAN. Stock handles it, via the override's OWN end date, in both
+    ///    places that matter. Schedules: `TemporaryScheduleOverrideHistory.resolvingRecent*`
+    ///    scopes each multiplier to `[startDate, actualEndDate]` (overridesReflectingEnabled-
+    ///    Duration → applyingOverride(relativeTo:)), so cycles after the end resolve unscaled
+    ///    while the temps that ran DURING it still net against the scaled baseline. Target:
+    ///    `GlucoseRangeSchedule.value(at:)` gates on `Date() < override.end`, so the target
+    ///    snaps back on expiry. Nothing here polls or sweeps — an expired override simply
+    ///    stops mattering. The journal record is a point event ("at 14:02 the wrist set this
+    ///    override, which ends at 15:02"), so its meaning is unchanged by expiry: the phone
+    ///    applies the same override, already expired or expiring, and treats it identically.
+    ///
+    ///  • HAND-BACK WITH AN OVERRIDE ACTIVE. It PERSISTS on the phone — that is the ruling, and
+    ///    it is what falls out of the design: the drain applies it to the phone's LoopSettings
+    ///    and nothing revokes it at loan end. The user set an override; ending Sport Mode is
+    ///    not a request to cancel it.
+    ///
+    ///  • LOAN ENDS BY REVOCATION OR CRASH. The record either drained or it did not, and both
+    ///    are safe. Mint persists to disk BEFORE returning (LoanEventJournal.mintEvent), so:
+    ///    a revoke routes through `handleRevoke` → `sendHandbackOffer(recovered: true)`, which
+    ///    carries every unacked event including this one; a crash/relaunch finds the undrained
+    ///    journal, enters `.recoveredDrain`, and `drainRecoveredIfNeeded()` offers the same set.
+    ///    If the phone is simply never reachable the record stays unacked and re-offers on a
+    ///    later hand-back (#67), exactly like an unacked dose. The only true loss window is a
+    ///    process death between the wrist apply and this mint — sub-millisecond, and in that
+    ///    window the override was never durable ANYWHERE, so nothing is left inconsistent.
+    ///
+    ///  • WATCH APP RELAUNCHES MID-LOAN. The applied override does NOT survive INTO A LOAN,
+    ///    because the loan itself does not: `init` routes any live phase to `.recoveredDrain`
+    ///    (never resurrect a session). So there is no state where dosing continues under an
+    ///    override the sport manager has forgotten. What DOES survive is the wrist UI's copy
+    ///    (stock `LoopDataManager.settings` is `@PersistedProperty`), which is display-only
+    ///    once the loan is dead; the sport `WatchLoopManager.settings` is grant-scoped by
+    ///    construction and is rebuilt by the NEXT grant — which carries the phone's override
+    ///    (part A), i.e. this one, once the recovered drain lands. Deliberately no new
+    ///    persistence: the correct source of truth after a relaunch is the phone, not a
+    ///    cached wrist value.
+    func loanDidRecordOverride(_ override: TemporaryScheduleOverride?) {
+        let name = override.map { $0.context.presetNameForLog } ?? "cleared"
+        queue.async {
+            guard self.phase == .active else {
+                // Outside a loan the phone owns overrides and the stock WC settings path
+                // already carries them — journaling here would be a record with no loan to
+                // ride home on. (ActionHUDController only calls this during a loan; this is
+                // the guard for a hand-back landing between the tap and this hop.)
+                SportLog.event("override", "NOT JOURNALED (\(name)) — no active loan (phase \(self.phase.rawValue)); the stock phone path owns it")
+                return
+            }
+            guard self.phoneSupportsOverrideRecords else {
+                // Skew gate (#68B): an older phone cannot decode this kind, and an
+                // undecodable offer strands the loan. The override is LIVE on the wrist —
+                // dosing is correct here — it simply will not follow the pod home.
+                SportLog.event("override", "NOT JOURNALED (\(name)) — this phone build predates override records; the override is LIVE on the watch but will NOT follow the pod home. Update the phone app to sync overrides.")
+                return
+            }
+            let record = LoanDoseRecord.overrideChange(override, at: Date(), note: name)
+            guard let event = try? self.journal.mintEvent(record: record, provenance: .confirmed) else {
+                SportLog.event("override", "** JOURNAL MINT FAILED for \(name) — the override is LIVE on the watch but will NOT follow the pod home **")
+                return
+            }
+            SportLog.event("override", "JOURNALED \(name) — seq \(event.seq), event \(event.id.uuidString.prefix(8)), sync \(record.syncIdentifier ?? "—") (rides the drain to the phone)")
+            self.streamRecords()
+        }
     }
 
     private func mintIntent(record: LoanDoseRecord, uncertainKind: EventProvenance.UncertainKind) -> UUID? {

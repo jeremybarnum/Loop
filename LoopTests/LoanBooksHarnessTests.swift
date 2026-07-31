@@ -1065,21 +1065,34 @@ final class LedgerRefuteRestoreTests: XCTestCase {
 /// Fixture is Jeremy's: 60% insulin needs, target raised to 140-160.
 final class LoanOverrideTests: XCTestCase {
 
-    private var cacheDir: URL!
-    private var cacheStore: PersistenceController!
+    private var cacheDir: URL?
+    private var _cacheStore: PersistenceController?
+
+    /// ON DEMAND, not in setUp. `PersistenceController` initializes its Core Data stack
+    /// ASYNCHRONOUSLY, while tearDown deletes the directory synchronously — so every
+    /// controller a test does not actually use is still a live "vnode unlinked while in use"
+    /// race against the OTHER suites' stores in this same process (the `Failed to stat path
+    /// …/tmp/<uuid>/Model.sqlite` noise, which turns into a store that answers with zero rows).
+    /// Only two tests in this class need a store; building one for all of them measurably
+    /// raised the flake rate of unrelated suites. Nothing else changes — same construction,
+    /// same per-test isolation.
+    private var cacheStore: PersistenceController {
+        if let existing = _cacheStore { return existing }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = PersistenceController(directoryURL: dir)
+        cacheDir = dir
+        _cacheStore = store
+        return store
+    }
 
     private let baseBasal = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: 1.0)])!
     private let baseISF = InsulinSensitivitySchedule(unit: .milligramsPerDeciliter, dailyItems: [RepeatingScheduleValue(startTime: 0, value: 50.0)])!
     private let baseCR = CarbRatioSchedule(unit: .gram(), dailyItems: [RepeatingScheduleValue(startTime: 0, value: 10.0)])!
 
-    override func setUp() {
-        super.setUp()
-        cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        cacheStore = PersistenceController(directoryURL: cacheDir)
-    }
     override func tearDown() {
-        cacheStore = nil
-        try? FileManager.default.removeItem(at: cacheDir)
+        _cacheStore = nil
+        if let dir = cacheDir { try? FileManager.default.removeItem(at: dir) }
+        cacheDir = nil
         super.tearDown()
     }
 
@@ -1192,5 +1205,315 @@ final class LoanOverrideTests: XCTestCase {
         let range = effective.quantityRange(at: now)
         XCTAssertEqual(range.lowerBound.doubleValue(for: .milligramsPerDeciliter), 140, accuracy: 0.1)
         XCTAssertEqual(range.upperBound.doubleValue(for: .milligramsPerDeciliter), 160, accuracy: 0.1)
+    }
+
+    // MARK: - #68 PART B: watch-enacted overrides ride the journal home
+
+    /// The wrist fixture, created exactly the way the wrist creates it: the stock
+    /// OverrideSelectionController hands a preset to `createOverride(enactTrigger: .local)`
+    /// (ActionHUDController :301-303). Same 60% / 140-160 therapy content as the granted
+    /// fixture above — the point of the pair is that route does not change effect.
+    private func exercisePreset() -> TemporaryScheduleOverridePreset {
+        TemporaryScheduleOverridePreset(
+            symbol: "🏃",
+            name: "Exercise",
+            settings: TemporaryScheduleOverrideSettings(
+                unit: .milligramsPerDeciliter,
+                targetRange: DoubleRange(minValue: 140, maxValue: 160),
+                insulinNeedsScaleFactor: 0.6),
+            duration: .finite(.hours(1)))
+    }
+
+    /// 1. The record kind round-trips through the loan wire with the override's IDENTITY
+    ///    intact — identity is what makes the phone-side apply idempotent, so losing it
+    ///    across the wire would silently turn every replayed drain into a re-apply.
+    ///    Encoded inside a real `HandbackOffer` envelope, not just the struct, so the
+    ///    envelope's hand-rolled kind discriminator is exercised too.
+    func testOverrideChangeRecordRoundTripsWithIdentityIntact() {
+        let now = Date()
+        let override = exercisePreset().createOverride(enactTrigger: .local, beginningAt: now)
+        let record = LoanDoseRecord.overrideChange(override, at: now, note: "🏃 Exercise")
+
+        XCTAssertEqual(record.kind, .overrideChange)
+        XCTAssertFalse(record.overrideChangeIsClear, "a SET record must not read as a clear")
+        XCTAssertEqual(record.syncIdentifier, override.syncIdentifier.uuidString,
+                       "the record's identity IS the override's syncIdentifier")
+
+        let event = LoanEvent(id: UUID(), seq: 7, provenance: .confirmed, record: record, loggedAt: now)
+        let offer = HandbackOffer(epoch: 3, handedBackAt: now, finalStatus: nil, odometer: nil,
+                                  events: [event], tombstones: [], recovered: false, released: true)
+        guard let wire = try? LoanMessage.handbackOffer(offer).transportDictionary(),
+              let decodedMessage = try? LoanMessage.decode(fromTransport: wire),
+              case .handbackOffer(let decodedOffer) = decodedMessage,
+              let decodedRecord = decodedOffer.events.first?.record else {
+            return XCTFail("the override record must survive the v2 envelope")
+        }
+
+        XCTAssertEqual(decodedRecord.kind, .overrideChange)
+        XCTAssertEqual(decodedRecord.syncIdentifier, override.syncIdentifier.uuidString)
+        guard let payload = decodedRecord.overrideChangePayload else {
+            return XCTFail("the override payload must decode on the phone")
+        }
+        XCTAssertEqual(payload.syncIdentifier, override.syncIdentifier,
+                       "identity must survive the plist payload too, not just the record header")
+        XCTAssertEqual(payload.settings.effectiveInsulinNeedsScaleFactor, 0.6, accuracy: 0.001)
+        XCTAssertEqual(payload.settings.targetRange?.lowerBound.doubleValue(for: .milligramsPerDeciliter) ?? 0,
+                       140, accuracy: 0.1)
+        XCTAssertEqual(payload.settings.targetRange?.upperBound.doubleValue(for: .milligramsPerDeciliter) ?? 0,
+                       160, accuracy: 0.1)
+        if case .preset(let preset) = payload.context {
+            XCTAssertEqual(preset.name, "Exercise", "the preset name rides home for the phone's log line")
+        } else {
+            XCTFail("the preset context must survive — it is what names the override on both devices")
+        }
+    }
+
+    /// 3. A CLEAR (nil payload) round-trips as a clear and reconciles to `.cleared` — and the
+    ///    LAST record in a drain wins, so a set→clear pair inside one drain must NOT resurrect
+    ///    the set. That ordering is the whole reason the fold is last-wins.
+    func testClearedOverrideRoundTripsAndClears() {
+        let now = Date()
+        let clear = LoanDoseRecord.overrideChange(nil, at: now)
+        XCTAssertTrue(clear.overrideChangeIsClear)
+        XCTAssertNil(clear.overrideRaw)
+        XCTAssertNil(clear.syncIdentifier, "a clear names no override")
+        XCTAssertNil(clear.overrideChangePayload)
+
+        // Through the wire.
+        let event = LoanEvent(id: UUID(), seq: 2, provenance: .confirmed, record: clear, loggedAt: now)
+        let offer = HandbackOffer(epoch: 1, handedBackAt: now, finalStatus: nil, odometer: nil,
+                                  events: [event], tombstones: [], recovered: false, released: true)
+        guard let wire = try? LoanMessage.handbackOffer(offer).transportDictionary(),
+              case .handbackOffer(let decoded)? = try? LoanMessage.decode(fromTransport: wire),
+              let decodedClear = decoded.events.first?.record else {
+            return XCTFail("the clear record must survive the v2 envelope")
+        }
+        XCTAssertTrue(decodedClear.overrideChangeIsClear,
+                      "an absent payload must decode as CLEARED, not as 'no override record'")
+
+        // Reconciled alone → cleared.
+        let soloOutcome = LoanReconciler.reconcile(LoanReconciler.Input(
+            events: [LoanEvent(id: UUID(), seq: 1, provenance: .confirmed, record: decodedClear, loggedAt: now)],
+            odometer: nil, schedule: baseBasal, loanStart: now.addingTimeInterval(-.hours(1)), loanEnd: now))
+        XCTAssertEqual(soloOutcome.overrideChange, .cleared)
+        XCTAssertTrue(soloOutcome.doses.isEmpty, "an override record is not dose accounting")
+
+        // Set THEN clear in one drain → cleared (last wins; no resurrection).
+        let override = exercisePreset().createOverride(enactTrigger: .local, beginningAt: now.addingTimeInterval(-.minutes(20)))
+        let setEvent = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
+                                 record: .overrideChange(override, at: now.addingTimeInterval(-.minutes(20))),
+                                 loggedAt: now.addingTimeInterval(-.minutes(20)))
+        let clearEvent = LoanEvent(id: UUID(), seq: 2, provenance: .confirmed, record: clear, loggedAt: now)
+        let pairOutcome = LoanReconciler.reconcile(LoanReconciler.Input(
+            events: [setEvent, clearEvent], odometer: nil, schedule: baseBasal,
+            loanStart: now.addingTimeInterval(-.hours(1)), loanEnd: now))
+        XCTAssertEqual(pairOutcome.overrideChange, .cleared,
+                       "set→clear in one drain must land as CLEARED — the reverse would resurrect a cancelled override")
+
+        // And a drain with no override record at all leaves the phone's override alone.
+        let bolus = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
+                              record: LoanDoseRecord(kind: .bolus, startDate: now, amount: 1.0), loggedAt: now)
+        let noneOutcome = LoanReconciler.reconcile(LoanReconciler.Input(
+            events: [bolus], odometer: nil, schedule: baseBasal,
+            loanStart: now.addingTimeInterval(-.hours(1)), loanEnd: now))
+        XCTAssertNil(noneOutcome.overrideChange,
+                     "no override record must mean 'do not touch', never 'clear'")
+    }
+
+    /// 2. Applying on the phone is IDEMPOTENT across a replayed drain. Both layers are pinned:
+    ///    the persisted committed-event-ID filter (a resent offer carries the same event), and
+    ///    the syncIdentifier check (the phone already holds this override — e.g. the live WC
+    ///    push landed first, or the staged state was reset). The second is the one that matters
+    ///    for "must not resurrect a cleared override", so the clear arm is pinned too.
+    func testPhoneApplyIsIdempotentAcrossAReplayedDrain() {
+        let now = Date()
+        let override = exercisePreset().createOverride(enactTrigger: .local, beginningAt: now)
+
+        // (a) Replayed FINAL offer: the second delivery must apply nothing.
+        let harness = PhoneOverrideHarness()
+        defer { harness.tearDown() }
+        let record = LoanDoseRecord.overrideChange(override, at: now, note: "🏃 Exercise")
+        let event = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed, record: record, loggedAt: now)
+        harness.deliverFinalOffer(events: [event], at: now)
+        XCTAssertEqual(harness.applied.count, 1, "the first drain applies the wrist override")
+        XCTAssertTrue(harness.phoneOverride?.syncIdentifier == override.syncIdentifier,
+                      "and the phone ends up holding exactly the wrist's override")
+
+        harness.deliverFinalOffer(events: [event], at: now)
+        XCTAssertEqual(harness.applied.count, 1,
+                       "a replayed drain must not re-apply — committed event IDs are persisted")
+
+        // (b) Same override arriving under a DIFFERENT event id (staged state lost, or the live
+        //     WC push beat the journal home): the syncIdentifier check must skip it.
+        let replayUnderNewID = LoanEvent(id: UUID(), seq: 2, provenance: .confirmed, record: record, loggedAt: now)
+        harness.deliverFinalOffer(events: [replayUnderNewID], at: now)
+        XCTAssertEqual(harness.applied.count, 1,
+                       "already-applied by syncIdentifier → SKIP, independent of event bookkeeping")
+
+        // (c) A CLEAR against a phone that holds nothing must also skip — re-clearing would
+        //     cancel an override the user set on the PHONE after the loan ended.
+        let cleanHarness = PhoneOverrideHarness()
+        defer { cleanHarness.tearDown() }
+        let clearEvent = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
+                                   record: .overrideChange(nil, at: now), loggedAt: now)
+        cleanHarness.deliverFinalOffer(events: [clearEvent], at: now)
+        XCTAssertTrue(cleanHarness.applied.isEmpty,
+                      "clearing a phone that already holds no override is a no-op, not a write")
+
+        // ...but a clear against a phone that DOES hold one lands exactly once.
+        let liveHarness = PhoneOverrideHarness()
+        defer { liveHarness.tearDown() }
+        liveHarness.phoneOverride = override
+        let clearEvent2 = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
+                                    record: .overrideChange(nil, at: now), loggedAt: now)
+        liveHarness.deliverFinalOffer(events: [clearEvent2], at: now)
+        XCTAssertEqual(liveHarness.applied.count, 1)
+        XCTAssertNil(liveHarness.applied.first ?? nil, "the clear applies nil")
+        XCTAssertNil(liveHarness.phoneOverride)
+    }
+
+    /// 4. A WRIST-set override rescales the watch's schedules exactly the way a GRANTED one
+    ///    does. Both routes end at the same single mechanism — `overrideHistory.recordOverride`,
+    ///    which is all WatchLoopManager's settings didSet does (part A) — so this pins that a
+    ///    `.preset`/`.local` override created on the wrist is not a second-class citizen.
+    ///    (The watch extension target is not linkable from LoopTests, so the assertion is
+    ///    against the same stores/history WatchLoopManager holds, constructed identically to
+    ///    StockLoopStack.makeStores.)
+    func testWristSetOverrideRescalesSchedulesLikeAGrantedOne() {
+        let now = Date()
+        let start = now.addingTimeInterval(-.minutes(10))
+
+        // Granted route: the phone's override arrives in the grant's LoopSettings blob.
+        let grantedHistory = TemporaryScheduleOverrideHistory()
+        grantedHistory.recordOverride(exerciseOverride(start: start, duration: .hours(2)))
+
+        // Wrist route: the user picks the preset on the watch during the loan.
+        let wristHistory = TemporaryScheduleOverrideHistory()
+        let wristOverride = exercisePreset().createOverride(enactTrigger: .local, beginningAt: start)
+        wristHistory.recordOverride(wristOverride)
+
+        XCTAssertEqual(wristHistory.resolvingRecentBasalSchedule(baseBasal, relativeTo: now).value(at: now),
+                       grantedHistory.resolvingRecentBasalSchedule(baseBasal, relativeTo: now).value(at: now),
+                       accuracy: 0.0001, "basal: wrist-set == granted")
+        XCTAssertEqual(wristHistory.resolvingRecentBasalSchedule(baseBasal, relativeTo: now).value(at: now),
+                       0.60, accuracy: 0.001, "and both are the 60%-needs value")
+        XCTAssertEqual(wristHistory.resolvingRecentInsulinSensitivitySchedule(baseISF, relativeTo: now).value(at: now),
+                       grantedHistory.resolvingRecentInsulinSensitivitySchedule(baseISF, relativeTo: now).value(at: now),
+                       accuracy: 0.0001, "ISF: wrist-set == granted")
+        XCTAssertEqual(wristHistory.resolvingRecentCarbRatioSchedule(baseCR, relativeTo: now).value(at: now),
+                       grantedHistory.resolvingRecentCarbRatioSchedule(baseCR, relativeTo: now).value(at: now),
+                       accuracy: 0.0001, "carb ratio: wrist-set == granted")
+
+        // The stores the loop actually reads resolve through that same history instance —
+        // this is the #41/#68 wall: an override that isn't in the history changes nothing.
+        let store = DoseStore(
+            healthKitSampleStore: nil, cacheStore: cacheStore,
+            insulinModelProvider: PresetInsulinModelProvider(defaultRapidActingModel: nil),
+            longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration,
+            basalProfile: baseBasal, insulinSensitivitySchedule: baseISF,
+            overrideHistory: wristHistory, provenanceIdentifier: "LoanOverrideTests")
+        XCTAssertEqual(store.basalProfileApplyingOverrideHistory?.value(at: now) ?? -1, 0.60, accuracy: 0.001,
+                       "the watch's DoseStore nets temps against the WRIST-scaled basal")
+        XCTAssertEqual(store.insulinSensitivityScheduleApplyingOverrideHistory?.value(at: now) ?? -1,
+                       50.0 / 0.6, accuracy: 0.01)
+
+        // And the target the watch's DoseMath drives to follows the wrist selection.
+        var settings = LoopSettings()
+        settings.glucoseTargetRangeSchedule = GlucoseRangeSchedule(
+            unit: .milligramsPerDeciliter,
+            dailyItems: [RepeatingScheduleValue(startTime: 0, value: DoubleRange(minValue: 100, maxValue: 115))])!
+        settings.scheduleOverride = wristOverride
+        guard let effective = settings.effectiveGlucoseTargetRangeSchedule() else {
+            return XCTFail("an effective schedule must exist")
+        }
+        XCTAssertEqual(effective.quantityRange(at: now).lowerBound.doubleValue(for: .milligramsPerDeciliter),
+                       140, accuracy: 0.1)
+        XCTAssertEqual(effective.quantityRange(at: now).upperBound.doubleValue(for: .milligramsPerDeciliter),
+                       160, accuracy: 0.1)
+    }
+}
+
+// MARK: - Phone-side override harness (#68 part B)
+
+/// The real `PodLoanPhoneController`, driven straight into LOANED via its persisted state so a
+/// hand-back offer can be delivered without a pump or a live grant. Captures every
+/// `applyScheduleOverride` call and models the phone's LoopSettings well enough for the
+/// controller's "already applied?" read.
+private final class PhoneOverrideHarness {
+
+    /// Every applyScheduleOverride call, in order (`nil` element = a clear).
+    private(set) var applied: [TemporaryScheduleOverride?] = []
+    /// Stands in for the phone's LoopSettings.scheduleOverride — read by the idempotency check,
+    /// written by the apply, exactly as `mutateSettings { $0.scheduleOverride = … }` does.
+    var phoneOverride: TemporaryScheduleOverride?
+
+    private let lock = NSLock()
+    private var controller: PodLoanPhoneController!
+    private static let defaultsKeys = ["PodLoanPhoneController.state", "PodLoanPhoneController.epoch",
+                                       "PodLoanPhoneController.cursor", "PodLoanPhoneController.pendingRevoke",
+                                       "PodLoanPhoneController.committedIDs", "PodLoanPhoneController.loanStartedAt"]
+    private static var stagedFileURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("PodLoanStagedRecordsV2.json")
+    }
+
+    init(epoch: Int = 1) {
+        Self.wipePersistedState()
+        // Persisted-state derivation is how this controller boots: write LOANED at `epoch` and
+        // it comes up mid-loan, ready to receive the hand-back offer.
+        UserDefaults.standard.set("loaned", forKey: "PodLoanPhoneController.state")
+        UserDefaults.standard.set(epoch, forKey: "PodLoanPhoneController.epoch")
+
+        var settings = LoopSettings()
+        settings.basalRateSchedule = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: 1.0)])!
+
+        controller = PodLoanPhoneController(dependencies: .init(
+            pumpManager: { nil },
+            settings: { [weak self] in
+                var s = settings
+                s.scheduleOverride = self?.phoneOverride
+                return s
+            },
+            setAutomaticDosingPaused: { _ in },
+            send: { _ in },
+            addPumpEvents: { _, _, completion in completion(nil) },
+            addCarb: { _, completion in completion(nil) },
+            applyScheduleOverride: { [weak self] override in
+                guard let self = self else { return }
+                self.lock.lock()
+                self.applied.append(override)
+                self.phoneOverride = override
+                self.lock.unlock()
+            },
+            doseHistory: { _, completion in completion([]) },
+            issueNotice: { _, _ in }))
+        // The 90 s post-reclaim re-audit needs a pump; stub it out so nothing fires late.
+        controller.postReclaimReAudit = {}
+    }
+
+    /// Deliver a FINAL (released) hand-back offer and run the commit path to completion.
+    ///
+    /// DETERMINISTIC, not timed: the controller's work is two hops on ONE serial queue
+    /// (handleIncoming's async block, then the block the addPumpEvents completion enqueues —
+    /// this harness's addPumpEvents calls its completion inline). `isPodLoanedOut` is a
+    /// `queue.sync` read, so N round-trips guarantee the first N enqueued blocks have run.
+    /// That matters most for the SKIP assertions: "applied.count did not change" is only
+    /// meaningful once the path has definitely finished, and a sleep-and-hope would make
+    /// those the flakiest assertions in the file.
+    func deliverFinalOffer(events: [LoanEvent], at date: Date) {
+        let offer = HandbackOffer(epoch: 1, handedBackAt: date, finalStatus: nil, odometer: nil,
+                                  events: events, tombstones: [], recovered: false, released: true)
+        controller.handleIncoming(userInfo: try! LoanMessage.handbackOffer(offer).transportDictionary())
+        for _ in 0..<4 { _ = controller.isPodLoanedOut }
+    }
+
+    func tearDown() {
+        controller = nil
+        Self.wipePersistedState()
+    }
+
+    private static func wipePersistedState() {
+        for key in defaultsKeys { UserDefaults.standard.removeObject(forKey: key) }
+        try? FileManager.default.removeItem(at: stagedFileURL)
     }
 }

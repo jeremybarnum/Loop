@@ -231,6 +231,43 @@ final class WatchLoopManager {
         }
     }
 
+    // MARK: - #68 part B: wrist-enacted overrides
+
+    /// Apply an override the USER just selected on the wrist to this loan's DOSING settings.
+    ///
+    /// This is the whole watch-side mechanism: assigning `settings.scheduleOverride` runs the
+    /// part-A didSet above, which records into the shared `overrideHistory` — and THAT is what
+    /// rescales basal / ISF / carb ratio and invalidates the cached effects, so the very next
+    /// cycle doses under the override. Nothing else is needed, and nothing here is conditional
+    /// on the phone: the point of Sport Mode is that the phone is usually absent.
+    ///
+    /// QUEUE: called from the wrist UI (main). `settings` has exactly one other writer — grant
+    /// intake on the loan controller's queue — and grants are refused unless the phase is
+    /// idle/requested (PodLoanWatchController.handleGrant), i.e. never while a loan is active
+    /// and the preset button is live. So the two writers cannot overlap. (The store setters the
+    /// didSet drives are `Locked<>` and any-queue safe regardless.)
+    ///
+    /// TELEMETRY: `SET-ON-WRIST` is the user's intent; the didSet's `APPLIED` / `CLEARED` line
+    /// that follows is the dosing manager confirming it took, with the resolved multipliers.
+    /// Seeing intent without confirmation is the signature of a settings object that refused it.
+    func applyWristOverride(_ override: TemporaryScheduleOverride?) {
+        if let o = override {
+            let target = o.settings.targetRange.map {
+                String(format: "%.0f-%.0f", $0.lowerBound.doubleValue(for: .milligramsPerDeciliter),
+                       $0.upperBound.doubleValue(for: .milligramsPerDeciliter))
+            } ?? "unchanged"
+            SportLog.event("override", String(format: "SET-ON-WRIST %@ · insulin needs %.0f%% · target %@ · ends %@ · sync %@",
+                                              o.context.presetNameForLog,
+                                              o.settings.effectiveInsulinNeedsScaleFactor * 100,
+                                              target,
+                                              o.duration.isInfinite ? "indefinite" : ISO8601DateFormatter().string(from: o.scheduledInterval.end),
+                                              o.syncIdentifier.uuidString))
+        } else {
+            SportLog.event("override", "SET-ON-WRIST · CLEARED by user — the loan's schedules resolve unscaled from here")
+        }
+        settings.scheduleOverride = override
+    }
+
     // MARK: - Glance surface (R23; display only — no dosing paths read this)
 
     struct GlanceData {

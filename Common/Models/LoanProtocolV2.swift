@@ -113,6 +113,28 @@ public struct LoanDoseRecord: Codable, Equatable {
         case boundaryTruncation
         /// The picker changed the dosing mode (R18/R20) — mode transitions are events.
         case modeChange
+        /// #68 part B: the WRIST enacted (or cleared) a temporary schedule override during
+        /// the loan. Not a dose — it carries no insulin and contributes nothing to the
+        /// odometer audit — but it IS journal-worthy: while the watch holds the pod it owns
+        /// overrides (sovereignty ruling, 2026-07-31), so the override has to follow the pod
+        /// home. Riding the journal (rather than a bespoke WC message) is what makes a
+        /// phone-ABSENT override survive: it inherits seq ordering, the commit cursor,
+        /// resend-until-ack, and the hand-back drain for free. Payload lives in
+        /// `overrideRaw` (nil = the user CLEARED the override).
+        ///
+        /// DEPLOYMENT SKEW (flagged, deliberately NOT gated — Jeremy's call to make):
+        /// `Kind` is a plain String enum, so a phone build that predates this case THROWS on
+        /// decode and the whole offer becomes undecodable. That is the §2.9 path, not a silent
+        /// drop: the phone nacks + shows "The watch sent a message this phone build cannot
+        /// read… Nothing was discarded", the watch shows its twin alert, and every record stays
+        /// in the journal — updating the phone drains it intact. So a new-watch/old-phone pair
+        /// STRANDS the loan (loudly, recoverably via the escape-hatch reclaim) rather than
+        /// losing data. This is the first kind minted since the protocol froze at v2, so the
+        /// hazard is real rather than theoretical; the alternative is a WS1/REAL-3-style
+        /// capability flag in the grant, which would instead degrade SILENTLY (the override
+        /// would work on the wrist but never follow the pod home). Loud-and-recoverable was
+        /// chosen over silent-and-lossy. Revisit if watch/phone builds routinely diverge.
+        case overrideChange
     }
 
     public let kind: Kind
@@ -143,11 +165,20 @@ public struct LoanDoseRecord: Codable, Equatable {
     /// watch 1.00 over 33 slices; the `net=-0.008` decomp rows are its fingerprint). The BOLUS arm
     /// already carried actual units; this closes the temp arm. nil (older phone) → round fallback.
     public let deliveredUnits: Double?
+    /// #68 part B (.overrideChange only): the plist-encoded `TemporaryScheduleOverride.rawValue`
+    /// the wrist enacted. nil ON AN `.overrideChange` RECORD MEANS CLEARED — the user turned the
+    /// preset off — which is why this is a payload field and not a flag: "cleared" and "no
+    /// override record at all" must stay distinguishable on the phone. Plist rather than the
+    /// LoopKit Codable conformance, for the same reason the grant carries `therapySettingsRaw`
+    /// that way: the wire format versions independently of LoopKit's Codable evolution, and
+    /// `rawValue` is the encoding LoopSettings itself already persists overrides through.
+    /// nil on every other kind (and on records from an older watch, which never mint this kind).
+    public let overrideRaw: Data?
 
     public init(kind: Kind, startDate: Date, endDate: Date? = nil, unitsPerHour: Double? = nil,
                 amount: Double? = nil, absorptionTime: TimeInterval? = nil, note: String? = nil,
                 syncIdentifier: String? = nil, insulinType: InsulinType? = nil,
-                deliveredUnits: Double? = nil) {
+                deliveredUnits: Double? = nil, overrideRaw: Data? = nil) {
         self.kind = kind
         self.startDate = startDate
         self.endDate = endDate
@@ -158,6 +189,56 @@ public struct LoanDoseRecord: Codable, Equatable {
         self.syncIdentifier = syncIdentifier
         self.insulinType = insulinType
         self.deliveredUnits = deliveredUnits
+        self.overrideRaw = overrideRaw
+    }
+}
+
+// MARK: - #68 part B: override records
+
+extension LoanDoseRecord {
+
+    /// Mint the journal record for a wrist-enacted override change. `override == nil` is the
+    /// CLEAR (empty payload), which the phone applies as `scheduleOverride = nil`.
+    ///
+    /// IDENTITY: `syncIdentifier` carries the override's OWN `syncIdentifier` (a UUID minted by
+    /// `createOverride`), which is what makes the phone-side apply idempotent — a replayed drain
+    /// re-derives the same identity and the phone recognises the override it already holds. A
+    /// clear has no override to name, so it has no syncIdentifier; its exactly-once guarantee is
+    /// the enclosing `LoanEvent.id` (the phone's persisted `committedIDs` filter) plus the
+    /// "already nil → skip" check. `endDate` is the override's scheduled end (nil = indefinite),
+    /// carried for the log line and for anyone reading the journal by hand.
+    public static func overrideChange(_ override: TemporaryScheduleOverride?,
+                                      at date: Date,
+                                      note: String? = nil) -> LoanDoseRecord {
+        let raw: Data? = override.flatMap { o in
+            try? PropertyListSerialization.data(fromPropertyList: o.rawValue, format: .binary, options: 0)
+        }
+        return LoanDoseRecord(
+            kind: .overrideChange,
+            startDate: date,
+            endDate: override.flatMap { $0.duration.isInfinite ? nil : $0.scheduledEndDate },
+            note: note,
+            syncIdentifier: override?.syncIdentifier.uuidString,
+            overrideRaw: raw)
+    }
+
+    /// The override this `.overrideChange` record carries, decoded. nil for a CLEAR record —
+    /// so callers must gate on `kind == .overrideChange` FIRST and treat nil as "clear", never
+    /// as "not an override record". (An undecodable payload also lands here; a decode failure
+    /// would otherwise silently become a clear, so `overrideChangeIsClear` distinguishes them.)
+    public var overrideChangePayload: TemporaryScheduleOverride? {
+        guard kind == .overrideChange, let data = overrideRaw,
+              let raw = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? TemporaryScheduleOverride.RawValue
+        else { return nil }
+        return TemporaryScheduleOverride(rawValue: raw)
+    }
+
+    /// True when this record is an override CLEAR (empty payload) rather than a set. Kept
+    /// separate from `overrideChangePayload == nil` so an undecodable payload is NOT silently
+    /// treated as a clear — clearing a live override on the strength of a corrupt blob would be
+    /// a therapy change nobody asked for.
+    public var overrideChangeIsClear: Bool {
+        return kind == .overrideChange && overrideRaw == nil
     }
 }
 
@@ -195,7 +276,8 @@ extension LoanDoseRecord {
             return DoseEntry(type: .tempBasal, startDate: startDate, endDate: end,
                              value: 0, unit: .unitsPerHour, deliveredUnits: deliveredUnits,
                              syncIdentifier: syncIdentifier, insulinType: insulinType)
-        case .resume, .carb, .plumbingCancel, .modeChange:
+        // #68 part B: .overrideChange carries no insulin — it never seeds a dose.
+        case .resume, .carb, .plumbingCancel, .modeChange, .overrideChange:
             return nil
         }
     }
@@ -392,6 +474,14 @@ public struct LoanGrant: Codable, Equatable {
     /// would treat the first interim offer as a completed hand-back, reclaiming the
     /// pod while the watch is still dosing. nil (old phone) → legacy single-phase.
     public let supportsInterimHandback: Bool?
+    /// #68B skew gate: does the GRANTING phone understand `.overrideChange` records?
+    /// The watch and phone apps install separately on this rig, so a watch newer than its
+    /// phone is routine. Minting a kind the phone cannot decode makes the whole hand-back
+    /// offer undecodable and STRANDS the loan until the builds match (escape-hatch reclaim
+    /// is the only way out) — unacceptable mid-exercise. When false/nil the watch still
+    /// applies the override LOCALLY (dosing is correct on the wrist) and logs loudly that
+    /// it will not follow the pod home. nil (older phone) => false.
+    public let supportsOverrideRecords: Bool?
     /// Phone-local algorithm-experiment toggle (`UserDefaults.integralRetrospectiveCorrectionEnabled`,
     /// read at LoopDataManager:457 to pick Integral vs Standard RC). It is NOT part of
     /// LoopSettings, so it has to ride separately — otherwise the watch silently runs
@@ -429,6 +519,7 @@ public struct LoanGrant: Codable, Equatable {
                 therapySettingsRaw: Data, settingsTimeZoneID: String,
                 doseHistory: [LoanDoseRecord], boundaryRecord: LoanDoseRecord?,
                 supportsInterimHandback: Bool? = nil,
+                supportsOverrideRecords: Bool? = nil,
                 integralRetrospectiveCorrectionEnabled: Bool? = nil,
                 carbHistory: [LoanCarbRecord]? = nil,
                 glucoseHistory: [LoanGlucoseRecord]? = nil,
@@ -442,6 +533,7 @@ public struct LoanGrant: Codable, Equatable {
         self.doseHistory = doseHistory
         self.boundaryRecord = boundaryRecord
         self.supportsInterimHandback = supportsInterimHandback
+        self.supportsOverrideRecords = supportsOverrideRecords
         self.integralRetrospectiveCorrectionEnabled = integralRetrospectiveCorrectionEnabled
         self.carbHistory = carbHistory
         self.glucoseHistory = glucoseHistory
@@ -874,7 +966,10 @@ extension LoanDoseRecord {
                              endDate: endDate ?? startDate.addingTimeInterval(.minutes(30)),
                              value: rate, unit: .unitsPerHour,
                              insulinType: insulinType ?? self.insulinType)
-        case .resume, .carb, .plumbingCancel, .boundaryTruncation, .modeChange:
+        // #68 part B: .overrideChange is a therapy-settings event, not a dose — the shadow
+        // ledger never books it (it changes the SCHEDULE the ledger nets against, which the
+        // override history already handles for both books).
+        case .resume, .carb, .plumbingCancel, .boundaryTruncation, .modeChange, .overrideChange:
             return nil
         }
     }

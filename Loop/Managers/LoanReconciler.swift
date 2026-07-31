@@ -63,6 +63,20 @@ enum LoanReconciler {
         /// A negative remainder no fingerprint explains — surfaced, never subtracted
         /// (the ruled layer-3 notice, R22).
         var residualShortfallUnits: Double?
+        /// #68 part B: the override state this drain hands back, or nil when the drain
+        /// carried no `.overrideChange` record at all (→ the phone's own override is left
+        /// completely alone). LAST record wins: within one drain the watch may have set,
+        /// re-set and cleared, and only the final wrist state is therapy-relevant.
+        /// This is NOT dose accounting — it never touches `doses`.
+        var overrideChange: OverrideChange?
+    }
+
+    /// The two things a drained override record can say. Modelled as an enum rather than a
+    /// `TemporaryScheduleOverride??` so "clear it" and "there was nothing to say" cannot be
+    /// confused at a call site — confusing them would silently cancel a phone override.
+    enum OverrideChange: Equatable {
+        case set(TemporaryScheduleOverride)
+        case cleared
     }
 
     // MARK: - The pure core
@@ -174,6 +188,20 @@ enum LoanReconciler {
                         foodType: nil,
                         absorptionTime: event.record.absorptionTime))
                 }
+            case .overrideChange:
+                // #68 part B: the wrist owned overrides for the length of the loan, so the
+                // drain replays that ownership onto the phone. Fold in seq order and let the
+                // LAST record win — a set→clear pair inside one drain must land as "cleared",
+                // never as "set" (that is the resurrection this ordering rules out). Writes
+                // nothing to `doses`: an override changes the SCHEDULE insulin is netted
+                // against, and the phone's own override history does that job.
+                if event.record.overrideChangeIsClear {
+                    outcome.overrideChange = .cleared
+                } else if let override = event.record.overrideChangePayload {
+                    outcome.overrideChange = .set(override)
+                }
+                // An undecodable payload falls through deliberately: leave the phone's
+                // override exactly as it is rather than guess (see overrideChangeIsClear).
             case .resume, .plumbingCancel, .modeChange:
                 break  // bookkeeping; the temp/suspend records carry the insulin truth
             }

@@ -143,6 +143,18 @@ final class WatchDataManager: NSObject {
                     if case .failure(let error) = result { completion(error) } else { completion(nil) }
                 }
             },
+            applyScheduleOverride: { [weak self] override in
+                // #68 part B: the watch's override lands on the phone through the SAME single
+                // door every other override uses — mutateSettings, whose didSet does the
+                // overrideHistory.recordOverride (LoopDataManager:269-270) that actually
+                // rescales basal/ISF/carb-ratio. Nothing bespoke, and no merge: during a loan
+                // the watch is sovereign over overrides, so this is a straight assignment.
+                // Called INLINE on the loan controller's queue (as setAutomaticDosingPaused
+                // above already does) so the controller's "already applied?" read and this
+                // write cannot interleave; mutateSettings is Locked-based and any-queue safe,
+                // and its own oldValue != newValue guard makes a redundant write free.
+                self?.deviceManager.loopManager.mutateSettings { $0.scheduleOverride = override }
+            },
             doseHistory: { [weak self] start, completion in
                 guard let self = self else { completion([]); return }
                 self.deviceManager.doseStore.getNormalizedDoseEntries(start: start) { result in
