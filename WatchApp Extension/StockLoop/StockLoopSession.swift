@@ -48,7 +48,16 @@ final class StockLoopSession {
 
         // Fix B (radio arbiter, c6c9e18f port): BG wins the single watch radio — loop
         // pod commands and the quiet verdict chase yield to an active G7 handshake.
-        let radioBusy: () -> Bool = { [weak self] in self?.stack.client.isHandshakeActive ?? false }
+        // #84 (Jeremy's rule, 2026-07-31): "full priority to the sensor until it gets a
+        // reading, then it stands down until the next window". The sensor is BUSY for its
+        // whole attempt — armed connect, scan, handshake — not just the handshake. A dose
+        // only exists because a reading arrived, so waiting costs nothing that mattered
+        // sooner, and it adapts to retries automatically (a sensor needing three tries just
+        // keeps the pod waiting; without a reading there is nothing new to dose on).
+        let radioBusy: () -> Bool = { [weak self] in
+            guard let client = self?.stack.client else { return false }
+            return client.isAttemptActive || client.isHandshakeActive
+        }
         stack.loopManager.isRadioBusy = radioBusy
         loanController.isRadioBusy = radioBusy
 
@@ -63,11 +72,12 @@ final class StockLoopSession {
             self?.sendLogSnapshot(holding ? "takeover start" : "takeover verdict")
         }
 
-        // #82: the same stand-down for the bounded steady-state dose ladder. No log
-        // snapshot here (unlike takeover) — this fires every 5 minutes.
-        loanController.onDoseRadioHold = { [weak self] holding in
-            self?.stack.client.setPodTakeoverHold(holding)
-        }
+        // #82 RETIRED by #84 (2026-07-31): the dose-window stand-down is deliberately NOT
+        // wired. It stranded the radio overnight — the app suspended mid-ladder holding the
+        // sensor off, and with no BLE events left to wake it the watch went dark for 2.9h
+        // (02:21 GAP 10555s). Waiting for the sensor's attempt to END cannot strand
+        // anything, and covers the same three occupancy states the hold was added for.
+        // The TAKEOVER hold (R26, above) stays: it is user-present and bounded.
 
         // E4 Stage 2 (task #40): the loop reclaims the E4-orphaned pod to dose, then
         // re-releases it for G7. Gated on the e4ReleasePod flag — when OFF, reclaim

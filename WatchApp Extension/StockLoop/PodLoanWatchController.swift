@@ -636,7 +636,7 @@ final class PodLoanWatchController {
     private func reclaimPodForDose(radioWaited: TimeInterval, _ completion: @escaping (Bool) -> Void) {
         queue.async {
             guard self.phase == .active, let manager = self.pumpManager else { completion(false); return }
-            if self.isRadioBusy?() == true, radioWaited < 15 {
+            if self.isRadioBusy?() == true, radioWaited < 60 {
                 self.queue.asyncAfter(deadline: .now() + 0.5) {
                     self.reclaimPodForDose(radioWaited: radioWaited + 0.5, completion)
                 }
@@ -673,12 +673,15 @@ final class PodLoanWatchController {
             // RELEASE DISCIPLINE: a stuck hold would starve the CGM, so every exit from the
             // ladder goes through releaseHoldAndComplete — attemptReclaimRead calls its
             // completion exactly once, on success, exhaustion, and teardown alike.
+            // #82 RETIRED by #84: left unwired in StockLoopSession (nil = no-op). The hold
+            // stranded the radio when the app suspended mid-ladder; the widened wait above
+            // achieves the same separation without ever holding the sensor off.
             self.onDoseRadioHold?(true)
             let releaseHoldAndComplete: (Bool) -> Void = { [weak self] connected in
                 self?.onDoseRadioHold?(false)
                 completion(connected)
             }
-            SportLog.event("loan", "E4: reclaiming pod to dose (scan-adopt primary, #54) — G7 standing down for the ladder")
+            SportLog.event("loan", "E4: reclaiming pod to dose (scan-adopt primary, #54) — sensor attempt idle")
             manager.reclaimConnection()
             // #54 (build ~178): scan-adopt is the PRIMARY reclaim, not a mid-ladder fallback.
             // Field data (build 157, overnight 44/44): the bare pending-connect "won" a reclaim

@@ -809,6 +809,28 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     private func setHandshakeActive(_ active: Bool) {
         handshakeActiveLock.lock(); _handshakeActive = active; handshakeActiveLock.unlock()
     }
+
+    /// #84 (Jeremy's rule, 2026-07-31): the sensor owns the radio for its WHOLE attempt —
+    /// armed connect, scan, and handshake — not just the handshake. A dose only ever exists
+    /// BECAUSE a reading arrived, so "sensor first, always" costs the pod nothing it needed
+    /// earlier: it waits out the attempt, then has ~4 quiet minutes before the next window.
+    ///
+    /// Why this replaces the stand-down (#82): the handshake-only signal missed the armed
+    /// connect (the 2026-07-30 21:40 failure — connect armed + observer scan, busy signal
+    /// said free, 14 reads failed), and the hold that covered it could STRAND the radio if
+    /// the app suspended mid-ladder (the 2026-07-31 02:21 blackout — 2.9h with the sensor
+    /// held off and no BLE events left to wake the app). Waiting cannot strand anything.
+    ///
+    /// Mirrors isHandshakeActive's locking (written on cbQueue, read from dosing queues).
+    private let attemptActiveLock = NSLock()
+    private var _attemptActivePublic = false
+    var isAttemptActive: Bool {
+        attemptActiveLock.lock(); defer { attemptActiveLock.unlock() }
+        return _attemptActivePublic
+    }
+    private func setAttemptActivePublic(_ active: Bool) {
+        attemptActiveLock.lock(); _attemptActivePublic = active; attemptActiveLock.unlock()
+    }
     private var wantConnect = false
     private var autoRepeatWork: DispatchWorkItem?
 
@@ -873,6 +895,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                 return
             }
             self.attemptActive = true
+            self.setAttemptActivePublic(true)
             self.attemptGeneration &+= 1   // new attempt identity (see attemptGeneration / runHandshake guard)
             self.finished = false
             self.setHandshakeActive(false)   // Fix B: a fresh attempt begins in the lightweight pounce phase
@@ -917,6 +940,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             self.dataStream.close(); self.authStream.close(); self.ctrlStream.close()
             if self.attemptActive {
                 self.attemptActive = false
+                self.setAttemptActivePublic(false)
                 self.finished = true   // suppress the disconnect->fail path
             }
             self.teardownPrewarm(bonded: false)   // release a pre-warm keepalive if one was running
@@ -993,6 +1017,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                 if let p = self.peripheral { self.central?.cancelPeripheralConnection(p) }
                 self.dataStream.close(); self.authStream.close(); self.ctrlStream.close()
                 self.attemptActive = false
+                self.setAttemptActivePublic(false)
                 self.finished = true
                 self.workout.release("prewarm")   // hand the hold to "soak" (already acquired above)
             }
@@ -1063,6 +1088,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         if let p = peripheral, !e2SkipCancel { central?.cancelPeripheralConnection(p) }
         dataStream.close(); authStream.close(); ctrlStream.close()
         attemptActive = false
+        setAttemptActivePublic(false)
         setHandshakeActive(false)   // Fix B: handshake window closed → the pod may use the radio again
         teardownPrewarm(bonded: success)   // no-op unless a pre-warm bond was in flight
         let useReconnect = reconnectMode && savedPeripheral != nil
@@ -1392,6 +1418,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             peripheral = nil
             scanWindowStarted = false
             attemptActive = true
+            setAttemptActivePublic(true)
             attemptGeneration &+= 1   // BT-toggle resume is a new attempt too — supersede any stale handshake
             handshakeTask?.cancel(); handshakeTask = nil   // …and stop the stale task from touching the link
             beginAcquire()
