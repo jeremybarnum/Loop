@@ -55,6 +55,7 @@ struct LoanDebugView: View {
                 row("closed?", (dosing?.closedLoopEnabled ?? false) ? "YES" : "no")
                 row("BG now", dosing?.glucose.map { String(format: "%.0f", $0.doubleValue(for: .milligramsPerDeciliter)) } ?? "—")
                 row("eventual", dosing?.eventual.map { String(format: "%.0f", $0.doubleValue(for: .milligramsPerDeciliter)) } ?? "—")
+                predictionReconciliation
                 row("COB / IOB", "\(cobText) / \(dosing?.iob.map { String(format: "%.2f U", $0) } ?? "—")")
                 row("recommend", dosing?.recommendedTempRate.map { String(format: "%+.2f U/hr", $0) } ?? "—")
                 row("running", dosing?.tempRate.map { String(format: "%+.2f U/hr net", $0) } ?? "none (scheduled)")
@@ -195,6 +196,45 @@ struct LoanDebugView: View {
             session.stack.loopManager.glanceCarbsOnBoard { v in
                 DispatchQueue.main.async { cobText = v.map { String(format: "%.0f g", $0) } ?? "—" }
             }
+        }
+    }
+
+    /// #86 (Jeremy 2026-07-31): the prediction's four components — INSULIN, carbs, momentum,
+    /// retrospection — on one line, arithmetically reconciled to the `eventual` row above it.
+    ///
+    ///     133 ins-4 carb+0 mom+6 RC+16 r+0 = 151
+    ///
+    /// Every term is mg/dL, forced-sign, and the row LITERALLY ADDS UP: `r` is the closure
+    /// term, so start + ins + carb + mom + RC + r == eventual as rendered. The components come
+    /// from `WatchLoopManager.computePredictionBreakdown()`, which replays `LoopMath`'s own
+    /// per-date arithmetic per contributor (including the momentum blend's (1 − split) scaling
+    /// of the other effects), so the true residual is ~0 and `r` carries only integer rounding.
+    /// A big `r` on the wrist therefore means the decomposition has drifted from the prediction
+    /// — deliberately visible rather than silently absorbed.
+    ///
+    /// Monospaced (the `LogView` register, :248) so the signed terms don't jitter on the 2 s
+    /// refresh; it WRAPS rather than truncating or shrinking, matching this screen's habit —
+    /// no number is ever clipped.
+    @ViewBuilder
+    private var predictionReconciliation: some View {
+        if let b = dosing?.predictionBreakdown {
+            // `-0.0` formats as "-0"; normalize so a zero term reads "+0".
+            let s = WatchLoopManager.PredictionBreakdown.round0(b.startMgdl)
+            let ins = WatchLoopManager.PredictionBreakdown.round0(b.insulinMgdl)
+            let carb = WatchLoopManager.PredictionBreakdown.round0(b.carbMgdl)
+            let mom = WatchLoopManager.PredictionBreakdown.round0(b.momentumMgdl)
+            let rc = WatchLoopManager.PredictionBreakdown.round0(b.retrospectiveMgdl)
+            let ev = WatchLoopManager.PredictionBreakdown.round0(b.eventualMgdl)
+            let r = WatchLoopManager.PredictionBreakdown.round0(ev - (s + ins + carb + mom + rc))
+            Text(String(format: "%.0f ins%+.0f carb%+.0f mom%+.0f RC%+.0f r%+.0f = %.0f",
+                        s, ins, carb, mom, rc, r, ev))
+                .font(.system(size: 11, design: .monospaced))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Text("— no prediction to reconcile")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

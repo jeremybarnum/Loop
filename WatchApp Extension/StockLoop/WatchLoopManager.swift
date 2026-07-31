@@ -270,6 +270,57 @@ final class WatchLoopManager {
 
     // MARK: - Glance surface (R23; display only — no dosing paths read this)
 
+    /// #86 (Jeremy 2026-07-31: "add the prediction components to the diagnostic screen —
+    /// INSULIN, carbs, momentum, retrospection … one line with an arithmetic reconciliation
+    /// to the eventual BG"). DISPLAY + LOGGING ONLY — nothing here is read by any dosing path.
+    ///
+    /// An EXACT decomposition of `eventual − start`, produced by mirroring
+    /// `LoopMath.predictGlucose`'s OWN accounting (LoopKit/LoopMath.swift:118-175) rather than
+    /// by differencing the stored effect arrays. Two things make the naive difference fail to
+    /// add up, and both are handled here:
+    ///   1. ANCHOR. `[predict]`'s `net()` (:824) anchors at the last effect entry with
+    ///      `startDate <= now()`; `LoopMath` anchors every timeline at the STARTING GLUCOSE's
+    ///      date and only applies deltas at dates strictly greater than it (LoopMath.swift:163).
+    ///      We anchor where the prediction anchors.
+    ///   2. MOMENTUM BLEND. `LoopMath` does not ADD momentum to the summed effects — inside the
+    ///      blend window it REPLACES them: `slot = (1 − split)·slot + split·Δmomentum`
+    ///      (LoopMath.swift:132-160). Differencing the arrays double-counts the suppressed
+    ///      slice. We apply the same (1 − split) scaling PER SOURCE, so the four terms are
+    ///      shares of exactly the arithmetic the prediction ran.
+    ///
+    /// `residualMgdl` is therefore ~0 BY CONSTRUCTION. It is still carried and still rendered:
+    /// a non-zero residual means this mirror has drifted from `LoopMath`, or `predictedGlucose`
+    /// was built from a different glucose sample than the one we anchored on — which is exactly
+    /// the kind of thing worth showing rather than silently forcing the row to close.
+    struct PredictionBreakdown {
+        /// The prediction's own anchor: `glucoseStore.latestGlucose`, mg/dL.
+        let startMgdl: Double
+        /// `predictedGlucose.last` — the same number the `eventual` row shows, mg/dL.
+        let eventualMgdl: Double
+        let insulinMgdl: Double
+        let carbMgdl: Double
+        let momentumMgdl: Double
+        let retrospectiveMgdl: Double
+        /// eventual − (start + the four terms). ~0 unless this mirror has drifted.
+        let residualMgdl: Double
+        /// −ISF × IOB: what the insulin term WOULD be if `insulinEffect` were current. The gap
+        /// against `insulinMgdl` is the stale-insulinEffect tell (2026-07-31: −4 against 1.33 U).
+        let insulinExpectedMgdl: Double?
+        let isfMgdlPerU: Double?
+        let iobUnits: Double?
+        let momentumPointCount: Int
+        let computedAt: Date
+
+        /// Shared rounding for the reconciliation row: the wrist and `[predict-recon]` render
+        /// the SAME integers, so the logged line is literally the line on the watch. Collapses
+        /// `-0.0` (which "%+.0f" would print as "-0") and never lets a non-finite term through.
+        static func round0(_ v: Double) -> Double {
+            guard v.isFinite else { return 0 }
+            let x = v.rounded()
+            return x == 0 ? 0 : x
+        }
+    }
+
     struct GlanceData {
         let glucose: HKQuantity?
         let glucoseDate: Date?
@@ -290,6 +341,9 @@ final class WatchLoopManager {
         /// last cycle's error (nil = clean), so a stalled/erroring loop is visible.
         let recommendedTempRate: Double?
         let lastLoopErrorText: String?
+        /// #86 display-only: last cycle's exact prediction decomposition (nil until the first
+        /// successful prediction of the session). Cached at cycle end — NEVER computed here.
+        let predictionBreakdown: PredictionBreakdown?
     }
 
 
@@ -347,7 +401,12 @@ final class WatchLoopManager {
                 // for the log line; the panel was still reading the live value (field
                 // 2026-07-22: eventual ~200 with a blank recommend).
                 recommendedTempRate: lastRecommendation?.basalAdjustment?.unitsPerHour,
-                lastLoopErrorText: lastLoopError.map { String(describing: $0) })
+                lastLoopErrorText: lastLoopError.map { String(describing: $0) },
+                // #86: READ the cached value. Computing it here would run a full per-source
+                // replay of LoopMath on the MAIN thread every 2 s (this whole closure is
+                // `dataAccessQueue.sync` from the debug page's timer) — cache at cycle end,
+                // read at render.
+                predictionBreakdown: lastPredictionBreakdown)
         }
     }
 
@@ -551,6 +610,10 @@ final class WatchLoopManager {
     private var predictedGlucose: [PredictedGlucoseValue]?
     private var predictedGlucoseIncludingPendingInsulin: [PredictedGlucoseValue]?
 
+    /// #86 INSTRUMENTATION ONLY: last cycle's exact prediction decomposition, computed once at
+    /// the end of `logPredictionBreakdown` and read (never computed) by `glanceData()`.
+    private var lastPredictionBreakdown: PredictionBreakdown?
+
     private var recommendedAutomaticDose: (recommendation: AutomaticDoseRecommendation, date: Date)?
 
     /// INSTRUMENTATION ONLY (#45): the phone's prediction decomposition carried in the grant,
@@ -619,10 +682,34 @@ final class WatchLoopManager {
         UserDefaults.standard.object(forKey: "g7.ledgerCutover") as? Bool ?? true
     }
 
+    /// #84: the ledger's counterpart to the phone's `clearCachedInsulinEffects()`
+    /// (LoopDataManager.swift:472). Stock reaches it through a DoseStore notification observer
+    /// (LoopDataManager.swift:206-219) that fires on EVERY dosing change; under the ledger
+    /// cutover our doses never touch DoseStore, so that observer never fires and the cached
+    /// insulin effects went stale for the whole epoch — the prediction kept the array built at
+    /// takeover and every subsequent temp basal was invisible to it (measured 2026-07-31: the
+    /// predicted-minimum horizon pinned to one absolute wall-clock time for 11 consecutive
+    /// cycles, and the insulin term reading −4 mg/dL against IOB 1.33 U at ISF 70, where the
+    /// invariant demands −ISF × IOB ≈ −93). The loop then stacked insulin onto a prediction that
+    /// contained none, and the counteraction pass — fed the same frozen array — booked real
+    /// insulin action as positive discrepancy, inflating RC.
+    ///
+    /// MUST be called on `dataAccessQueue`, INLINE with the mutation that dirties the ledger:
+    /// hopping through `invalidateInsulinEffect()` would enqueue a second block on this serial
+    /// queue that could land after the next cycle has already read the stale array.
+    private func clearCachedInsulinEffects() {   // dataAccessQueue
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+        insulinEffect = nil
+        insulinEffectIncludingPendingInsulin = nil
+        predictedGlucose = nil
+        predictedGlucoseIncludingPendingInsulin = nil
+    }
+
     /// A pod-ACCEPTED watch enact enters the timeline (truncating the open predecessor).
     func ledgerRecordEnact(_ dose: DoseEntry) {
         dataAccessQueue.async {
             self.sessionLedger?.recordEnact(dose)
+            self.clearCachedInsulinEffects()   // #84 — the dose must reach the next prediction
         }
     }
 
@@ -630,6 +717,7 @@ final class WatchLoopManager {
     func ledgerRemoveDose(type: DoseType, startingAt: Date) {
         dataAccessQueue.async {
             if self.sessionLedger?.removeDose(type: type, startingAt: startingAt) == true {
+                self.clearCachedInsulinEffects()   // #84 — a reversal changes the curve too
                 SportLog.event("ledger", "assumed dose REMOVED (chase refuted) — \(type) @ \(startingAt)")
             }
         }
@@ -854,6 +942,10 @@ final class WatchLoopManager {
         SportLog.event("predict", "eventual \(eventual) · min \(minPredicted) · suspendThr \(suspendThr) · net effects: carbs \(net(carbEffect)), insulin \(net(insulinEffect)), momentum \(net(glucoseMomentumEffect)), RC \(rc) · rec \(rec)")
         SportLog.event("curve", curveSummary(predictedGlucose))
         emitPredictionSnapshotAndDiff()
+        // #86: the third decomposition — the one that ADDS UP — plus the cache the DOSING
+        // panel renders. Last, so `[predict]` / `[predict-snapshot]` / `[predict-recon]` read
+        // raw → marginal → exact in that order for any one cycle.
+        emitPredictionReconciliation()
     }
 
     /// INSTRUMENTATION ONLY (#45): three lines appended each cycle after `[predict]`/`[curve]` —
@@ -1117,10 +1209,20 @@ final class WatchLoopManager {
             // missing ledger precondition falls back to the store path, never to nil.
             if ledgerCutoverActive, let ledger = sessionLedger,
                let isf = doseStore.insulinSensitivityScheduleApplyingOverrideHistory {
-                // filterDateRange is LOAD-BEARING (adversarial blocker): it drops the floored
-                // grid point so first.startDate > insulinEffectStartDate, which is what re-arms
-                // the recompute gate above every cycle — without it the prediction FREEZES at
-                // the first computation while IOB keeps moving. Mirrors the store path exactly.
+                // filterDateRange mirrors the store path exactly; keep it.
+                //
+                // #84 CORRECTION (2026-07-31): the comment that stood here claimed this call
+                // "re-arms the recompute gate above every cycle". It does not, and the freeze it
+                // warned about is exactly what shipped. The gate only fires when the cached array
+                // starts LATER than the needed start, i.e. when EARLIER data is wanted; it cannot
+                // re-arm as the clock advances, because insulinEffectStartDate moves FORWARD with
+                // each cycle while first.startDate stays put. Worse, after a takeover
+                // invalidateGlucoseDerivedEffects() empties insulinCounteractionEffects, so
+                // insulinEffectStartDate falls back to ~24 h in the past and the comparison can
+                // never be true again. What actually keeps this array fresh is
+                // clearCachedInsulinEffects() on every ledger mutation (see ledgerRecordEnact) —
+                // the ledger's stand-in for the DoseStore notification stock relies on. Do not
+                // re-derive freshness from this gate.
                 self.insulinEffect = ledger.glucoseEffects(insulinSensitivity: isf, basalDosingEnd: now(), from: insulinEffectStartDate, to: nil).filterDateRange(insulinEffectStartDate, nil)
             } else {
                 updateGroup.enter()
@@ -1395,6 +1497,140 @@ final class WatchLoopManager {
             prediction.append(PredictedGlucoseValue(startDate: finalDate, quantity: last.quantity))
         }
         return prediction.last?.quantity.doubleValue(for: .milligramsPerDeciliter)
+    }
+
+    /// #86 INSTRUMENTATION ONLY (display + logging; no dosing path reads this). Build the EXACT
+    /// per-source decomposition of `eventual − start` described on `PredictionBreakdown`.
+    ///
+    /// This is a per-contributor restatement of `LoopMath.predictGlucose` (LoopMath.swift:118-175)
+    /// over the SAME inputs, in the SAME order, as `predictGlucose()` (:1349-1361 — carb, insulin
+    /// non-pending, RC, with momentum blended). Instead of accumulating one Double per date, it
+    /// accumulates one Double PER SOURCE per date and runs the identical blend, so the four terms
+    /// necessarily sum to what the prediction moved.
+    ///
+    /// Runs once per cycle on `dataAccessQueue` (cheap: no `LoopMath.predictGlucose` calls at all,
+    /// unlike the leave-one-out counterfactuals at :1384 which run five predictions).
+    private func computePredictionBreakdown() -> PredictionBreakdown? {   // dataAccessQueue
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+        let unit = HKUnit.milligramsPerDeciliter
+
+        guard let glucose = glucoseStore.latestGlucose,
+              let eventual = predictedGlucose?.last?.quantity.doubleValue(for: unit) else { return nil }
+
+        let startDate = glucose.startDate
+        let start = glucose.quantity.doubleValue(for: unit)
+
+        // Slot layout, fixed: [carb, insulin, RC, momentum].
+        let carbIdx = 0, insIdx = 1, rcIdx = 2, momIdx = 3
+        let emptySlot = [0.0, 0.0, 0.0, 0.0]
+        var byDate: [Date: [Double]] = [:]
+
+        // First-difference each timeline exactly as LoopMath.swift:122-130 does (the first entry
+        // contributes 0 — `previousEffectValue` is seeded from it).
+        func accumulate(_ timeline: [GlucoseEffect], _ idx: Int) {
+            var previous = timeline.first?.quantity.doubleValue(for: unit) ?? 0
+            for effect in timeline {
+                let value = effect.quantity.doubleValue(for: unit)
+                var slot = byDate[effect.startDate] ?? emptySlot
+                slot[idx] += value - previous
+                byDate[effect.startDate] = slot
+                previous = value
+            }
+        }
+
+        if let carbEffect = carbEffect { accumulate(carbEffect, carbIdx) }
+        if let insulinEffect = insulinEffect { accumulate(insulinEffect, insIdx) }   // non-pending, matches dosing
+        accumulate(retrospectiveGlucoseEffect, rcIdx)
+
+        // Momentum blend — LoopMath.swift:132-160, sliced by contributor. LoopMath writes
+        // `slot = (1 − split)·slot + split·Δ`; scaling EVERY source (momentum included, so a
+        // repeated date behaves identically) by (1 − split) and then adding the momentum share
+        // is the same number, attributed.
+        let momentum = glucoseMomentumEffect ?? []
+        if momentum.count > 1 {
+            var previous = momentum[0].quantity.doubleValue(for: unit)
+            let blendCount = momentum.count - 2
+            let timeDelta = momentum[1].startDate.timeIntervalSince(momentum[0].startDate)
+            let momentumOffset = startDate.timeIntervalSince(momentum[0].startDate)
+            let blendSlope = 1.0 / Double(blendCount)
+            let blendOffset = momentumOffset / timeDelta * blendSlope
+
+            for (index, effect) in momentum.enumerated() {
+                let value = effect.quantity.doubleValue(for: unit)
+                let change = value - previous
+                let split = min(1.0, max(0.0, Double(momentum.count - index) / Double(blendCount) - blendSlope + blendOffset))
+                var slot = byDate[effect.startDate] ?? emptySlot
+                for s in slot.indices { slot[s] *= (1.0 - split) }
+                slot[momIdx] += split * change
+                byDate[effect.startDate] = slot
+                previous = value
+            }
+        }
+
+        // Only dates strictly after the anchor move the prediction (LoopMath.swift:163).
+        var terms = emptySlot
+        for (date, slot) in byDate where date > startDate {
+            for s in terms.indices { terms[s] += slot[s] }
+        }
+        // Degenerate momentum arrays can make LoopMath's blend arithmetic non-finite
+        // (blendCount == 0 ⇒ 1/0). Never render NaN: zero the term and let the residual carry it.
+        for s in terms.indices where !terms[s].isFinite { terms[s] = 0 }
+
+        let isfSchedule = doseStore.insulinSensitivityScheduleApplyingOverrideHistory ?? settings.insulinSensitivitySchedule
+        let isf = isfSchedule?.quantity(at: startDate).doubleValue(for: unit)
+        let iob = insulinOnBoard?.value
+        let insulinExpected: Double? = (isf != nil && iob != nil) ? -(isf! * iob!) : nil
+
+        let residual = eventual - (start + terms[carbIdx] + terms[insIdx] + terms[rcIdx] + terms[momIdx])
+
+        return PredictionBreakdown(
+            startMgdl: start,
+            eventualMgdl: eventual,
+            insulinMgdl: terms[insIdx],
+            carbMgdl: terms[carbIdx],
+            momentumMgdl: terms[momIdx],
+            retrospectiveMgdl: terms[rcIdx],
+            residualMgdl: residual,
+            insulinExpectedMgdl: insulinExpected,
+            isfMgdlPerU: isf,
+            iobUnits: iob,
+            momentumPointCount: momentum.count,
+            computedAt: now())
+    }
+
+    /// #86: cache the exact decomposition for the DOSING panel and emit it as a greppable
+    /// `[predict-recon]` line. Unlike `[predict]` (raw array deltas, anchored at now) and
+    /// `[predict-snapshot]` (MARGINAL leave-one-out impacts), this one ADDS UP — so a run of
+    /// cycles can be grepped and summed without re-deriving the momentum blend by hand.
+    private func emitPredictionReconciliation() {   // dataAccessQueue
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+        guard let b = computePredictionBreakdown() else {
+            lastPredictionBreakdown = nil
+            SportLog.event("predict-recon", "— (no prediction to reconcile)")
+            return
+        }
+        lastPredictionBreakdown = b
+
+        // Render from the SAME rounded integers the wrist shows, and close the line with the
+        // rounding remainder, so the logged row is literally the row on the watch.
+        let s = PredictionBreakdown.round0(b.startMgdl), ev = PredictionBreakdown.round0(b.eventualMgdl)
+        let ins = PredictionBreakdown.round0(b.insulinMgdl), carb = PredictionBreakdown.round0(b.carbMgdl)
+        let mom = PredictionBreakdown.round0(b.momentumMgdl), rc = PredictionBreakdown.round0(b.retrospectiveMgdl)
+        let shown = PredictionBreakdown.round0(ev - (s + ins + carb + mom + rc))
+
+        let expected: String
+        if let e = b.insulinExpectedMgdl, let isf = b.isfMgdlPerU, let iob = b.iobUnits {
+            expected = String(format: " | ins expected %+.0f (ISF %.0f × IOB %.2f) → GAP %+.0f",
+                              e, isf, iob, b.insulinMgdl - e)
+        } else {
+            expected = " | ins expected — (no ISF/IOB)"
+        }
+
+        SportLog.event("predict-recon", String(format:
+            "%.0f ins %+.0f carb %+.0f mom %+.0f RC %+.0f r %+.0f = %.0f (Δ%+.0f) | exact: ins %+.1f carb %+.1f mom %+.1f RC %+.1f resid %+.2f%@ | momPts=%d",
+            s, ins, carb, mom, rc, shown, ev, ev - s,
+            b.insulinMgdl, b.carbMgdl, b.momentumMgdl, b.retrospectiveMgdl, b.residualMgdl,
+            expected, b.momentumPointCount))
     }
 
     // MARK: - Recommendation (mirrors updatePredictedGlucoseAndRecommendedDose(with:) — :1695)
