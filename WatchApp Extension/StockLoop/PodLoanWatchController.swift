@@ -400,6 +400,7 @@ final class PodLoanWatchController {
         attemptStartedAt = Date()
         lastTakeoverReadAt = nil          // #86: fresh ladder, fresh stall measurement
         takeoverMaxReadGap = 0
+        PodLoanConnectClock.reset()       // #86: connect/disconnect stamps describe THIS attempt
         phase = .takingOver
         loopManager.settings = decodedSettings!
         // Frozen-at-grant like the therapy settings above: run the RC implementation the
@@ -593,7 +594,15 @@ final class PodLoanWatchController {
                         self.takeoverMaxReadGap = max(self.takeoverMaxReadGap, readNow.timeIntervalSince(prev))
                     }
                     self.lastTakeoverReadAt = readNow
-                    SportLog.event("loan", String(format: "takeover read %d/%d (+%.1fs) — pod BLE state %@", attempt + 1, maxAttempts, readElapsed, manager.podLoanConnectionStateDescription))
+                    // #86: pair OUR observation with the BLE stack's own timestamps. If didConnect
+                    // reads +12s while this poll is landing at +68s, the link was up and only our
+                    // deferred timer was late — fix the ladder. If didConnect says "never", the
+                    // radio genuinely hasn't connected — fix the keepalive. The poll alone cannot
+                    // distinguish those, which is why this line exists.
+                    SportLog.event("loan", String(format: "takeover read %d/%d (+%.1fs) — pod BLE state %@ · %@",
+                                                  attempt + 1, maxAttempts, readElapsed,
+                                                  manager.podLoanConnectionStateDescription,
+                                                  PodLoanConnectClock.summary(since: self.attemptStartedAt)))
                     self.queue.asyncAfter(deadline: .now() + 3) {
                         guard self.phase == .takingOver, self.epoch == grant.epoch else {
                             // OBS-1: the ladder was superseded during the 3s inter-attempt wait
@@ -633,10 +642,11 @@ final class PodLoanWatchController {
                             "Pod didn't answer after %.0fs. Check the pod is nearby and awake, then try again.",
                             comment: "Glance: pod unreachable at takeover"), failSecs)
                     }
-                    SportLog.event("loan", String(format: "TAKEOVER FAILED — %@ after %d reads in %.1fs [takeover-timing], max inter-read gap %.1fs (ladder ticks every 3s), %@, final BLE state %@, epoch %d",
-                                                  stalled ? "APP SUSPENDED mid-ladder (pod may have been fine)" : "pod unreachable",
+                    SportLog.event("loan", String(format: "TAKEOVER FAILED — %@ after %d reads in %.1fs [takeover-timing], max inter-read gap %.1fs (ladder ticks every 3s), %@, final BLE state %@, %@, epoch %d",
+                                                  stalled ? "ladder STALLED (our polling was deferred; see cb: for whether the link was up)" : "pod unreachable",
                                                   maxAttempts, failSecs, self.takeoverMaxReadGap, batteryTag(),
-                                                  manager.podLoanConnectionStateDescription, grant.epoch))
+                                                  manager.podLoanConnectionStateDescription,
+                                                  PodLoanConnectClock.summary(since: self.attemptStartedAt), grant.epoch))
                     self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: stalled ? "watch app suspended mid-takeover" : "pod unreachable at takeover")))
                 }
             }
