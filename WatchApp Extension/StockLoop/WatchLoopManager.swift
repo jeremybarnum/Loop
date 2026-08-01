@@ -701,8 +701,16 @@ final class WatchLoopManager {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
         insulinEffect = nil
         insulinEffectIncludingPendingInsulin = nil
-        predictedGlucose = nil
-        predictedGlucoseIncludingPendingInsulin = nil
+        // NOT predictedGlucose — the watch deliberately diverges from the phone here, and the
+        // first cut of this method broke it. Stock's clearCachedInsulinEffects() also nils
+        // predictedGlucose; on the watch that value is DISPLAY-ONLY (the glance/diagnostic
+        // "eventually N" row — DoseMath uses the locally-computed prediction), and #48 rules that
+        // the last eventual stays visible with a freshness grade rather than blanking on a failed
+        // cycle. See the identical note at the carbEffect didSet (~:552). Because this method now
+        // runs on EVERY ledger write, nil-ing it here blanked the eventual after every enact —
+        // observed on the wrist 2026-07-31, with the reconciliation row still rendering 106
+        // because it is cached separately at predict time. The stale array was the #84 bug;
+        // predictedGlucose was never part of it and is recomputed each cycle regardless.
     }
 
     /// A pod-ACCEPTED watch enact enters the timeline (truncating the open predecessor).
