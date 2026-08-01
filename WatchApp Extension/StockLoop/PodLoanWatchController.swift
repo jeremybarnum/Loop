@@ -619,8 +619,14 @@ final class PodLoanWatchController {
                     // a suspended app sends the user to the wrong place — so say which one it was.
                     let stalled = self.takeoverMaxReadGap > 20
                     if stalled {
+                        // Say ONLY what was measured. An earlier draft of this note told the user
+                        // to charge; the field data refutes that — epoch 80 took over fine at 20%
+                        // while the wrist was up, and epoch 78 ran unsuspended at 65% under the
+                        // same no-keepalive condition. What tracks the outcome is whether anything
+                        // kept the app awake during the connect, not the battery level. Guessing a
+                        // remedy is how the previous note ended up blaming a healthy pod.
                         self.lastIdleNote = String(format: NSLocalizedString(
-                            "The watch app stopped running mid-connect (%@). Put the watch on the charger, then try again.",
+                            "The watch app stopped running mid-connect (%@). Keep the watch awake — wrist up or screen on — and try again.",
                             comment: "Glance: takeover failed because the app was suspended"), batteryTag())
                     } else {
                         self.lastIdleNote = String(format: NSLocalizedString(
