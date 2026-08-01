@@ -401,6 +401,11 @@ final class PodLoanWatchController {
         lastTakeoverReadAt = nil          // #86: fresh ladder, fresh stall measurement
         takeoverMaxReadGap = 0
         PodLoanConnectClock.reset()       // #86: connect/disconnect stamps describe THIS attempt
+        // #86: stamp every BLE edge with the execution state it fired in. The flapping has only
+        // ever been seen overnight/wrist-down; Sport Mode is awake and moving. This is how we
+        // find out whether the regime that matters behaves the same way.
+        PodLoanConnectClock.appStateProbe = { RuntimeStateLog.appStateName() }
+        RuntimeStateLog.probeTimerDeferral("takeover-start")
         phase = .takingOver
         loopManager.settings = decodedSettings!
         // Frozen-at-grant like the therapy settings above: run the RC implementation the
@@ -594,6 +599,10 @@ final class PodLoanWatchController {
                         self.takeoverMaxReadGap = max(self.takeoverMaxReadGap, readNow.timeIntervalSince(prev))
                     }
                     self.lastTakeoverReadAt = readNow
+                    // #86: probe the NEXT inter-read interval directly, so a stalled ladder says
+                    // whether the OS deferred our timer or the read itself blocked. Only on the
+                    // first few reads — this is a meter, not a metronome.
+                    if attempt < 3 { RuntimeStateLog.probeTimerDeferral("ladder-read\(attempt + 1)") }
                     // #86: pair OUR observation with the BLE stack's own timestamps. If didConnect
                     // reads +12s while this poll is landing at +68s, the link was up and only our
                     // deferred timer was late — fix the ladder. If didConnect says "never", the

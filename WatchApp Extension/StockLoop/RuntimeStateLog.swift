@@ -85,6 +85,31 @@ enum RuntimeStateLog {
 
     private static func keepaliveTag() -> String { keepaliveProbe?() ?? "keepalive ?" }
 
+    // MARK: - #86: direct timer-deferral meter
+
+    /// Measure how late a scheduled block ACTUALLY runs.
+    ///
+    /// Until now the deferral was INFERRED from gaps between takeover-ladder reads, which cannot
+    /// separate "watchOS deferred our timer" from "the read itself blocked". This asks for a known
+    /// delay on the same queue kind the ladder uses and reports what it got, so the two become
+    /// distinguishable. Fire-and-forget; nothing waits on it.
+    ///
+    /// Reports only when late by more than `tolerance`, so a healthy run stays quiet — but ALWAYS
+    /// reports on the first probe of an attempt (`label` carrying "start") so each ladder has at
+    /// least one datapoint even when the OS is behaving.
+    static func probeTimerDeferral(_ label: String, requested: TimeInterval = 3.0,
+                                   tolerance: TimeInterval = 1.0) {
+        let asked = Date()
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + requested) {
+            let actual = Date().timeIntervalSince(asked)
+            let late = actual - requested
+            guard late > tolerance || label.contains("start") else { return }
+            SportLog.event("runtime", String(format:
+                "timer-probe [%@] asked %.1fs got %.1fs (late %+.1fs) · %@ · %@",
+                label, requested, actual, late, keepaliveTag(), snapshot()))
+        }
+    }
+
     /// Start while a session is live — that is the only window where lost runtime can
     /// cost a reading or strand a pod command.
     static func startHeartbeat() {
