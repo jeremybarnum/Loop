@@ -303,8 +303,28 @@ final class WatchLoopManager {
         let retrospectiveMgdl: Double
         /// eventual − (start + the four terms). ~0 unless this mirror has drifted.
         let residualMgdl: Double
-        /// −ISF × IOB: what the insulin term WOULD be if `insulinEffect` were current. The gap
-        /// against `insulinMgdl` is the stale-insulinEffect tell (2026-07-31: −4 against 1.33 U).
+        /// The insulin tail BEFORE the momentum blend: `last − value(at-or-before now)` of
+        /// `insulinEffect`, the same quantity `[predict]` prints. This — not `insulinMgdl` — is
+        /// what the −ISF × IOB invariant applies to.
+        ///
+        /// `insulinMgdl` above is BLENDED. `LoopMath.predictGlucose` (LoopKit LoopMath.swift:148-159,
+        /// byte-identical to upstream/dev) scales the SUMMED effect delta at each early slot by
+        /// `(1 − split)` while fading momentum in, so it attenuates insulin, carbs and RC together
+        /// for the first few bins after the last reading. That is momentum doing its job — the
+        /// observed trend outranks the model in the near term — and it makes `insulinMgdl`
+        /// legitimately smaller in magnitude than −ISF × IOB whenever momentum exists.
+        let insulinRawTailMgdl: Double?
+        /// −ISF × IOB. Compare against `insulinRawTailMgdl`, NEVER against `insulinMgdl`.
+        ///
+        /// 2026-08-01: an earlier version of this row compared it against the blended term and
+        /// called the difference a "GAP", which manufactured a discrepancy that cost a morning.
+        /// Note also that this quantity is NOT expected to match exactly when a temp is running:
+        /// `insulinOnBoard` counts the temp's full remaining programmed delivery while
+        /// `glucoseEffects` trims at `basalDosingEnd = now()`. Stock does the same — measured on
+        /// the phone's own issue report the same day: IOB 2.5954 U against an insulinEffect tail
+        /// of −124.02 mg/dL at ISF 70, a 0.82 U difference, which was exactly the 15 minutes
+        /// still to run on a 4.5 U/hr temp. So a residual here is expected; a term that does not
+        /// TRACK IOB at all is the real alarm (that was #84).
         let insulinExpectedMgdl: Double?
         let isfMgdlPerU: Double?
         let iobUnits: Double?
@@ -1589,6 +1609,16 @@ final class WatchLoopManager {
         let iob = insulinOnBoard?.value
         let insulinExpected: Double? = (isf != nil && iob != nil) ? -(isf! * iob!) : nil
 
+        // The UNBLENDED tail — the quantity the −ISF × IOB invariant actually governs. Same
+        // anchor rule as `net()` (:824-830) and `[predict]`: last minus the last sample at or
+        // before now, falling back to the first sample when the whole series is in the future.
+        let rawTail: Double? = {
+            guard let effects = insulinEffect, let last = effects.last else { return nil }
+            let t = now()
+            guard let anchor = effects.last(where: { $0.startDate <= t }) ?? effects.first else { return nil }
+            return last.quantity.doubleValue(for: unit) - anchor.quantity.doubleValue(for: unit)
+        }()
+
         let residual = eventual - (start + terms[carbIdx] + terms[insIdx] + terms[rcIdx] + terms[momIdx])
 
         return PredictionBreakdown(
@@ -1599,6 +1629,7 @@ final class WatchLoopManager {
             momentumMgdl: terms[momIdx],
             retrospectiveMgdl: terms[rcIdx],
             residualMgdl: residual,
+            insulinRawTailMgdl: rawTail,
             insulinExpectedMgdl: insulinExpected,
             isfMgdlPerU: isf,
             iobUnits: iob,
@@ -1626,19 +1657,26 @@ final class WatchLoopManager {
         let mom = PredictionBreakdown.round0(b.momentumMgdl), rc = PredictionBreakdown.round0(b.retrospectiveMgdl)
         let shown = PredictionBreakdown.round0(ev - (s + ins + carb + mom + rc))
 
-        let expected: String
-        if let e = b.insulinExpectedMgdl, let isf = b.isfMgdlPerU, let iob = b.iobUnits {
-            expected = String(format: " | ins expected %+.0f (ISF %.0f × IOB %.2f) → GAP %+.0f",
-                              e, isf, iob, b.insulinMgdl - e)
+        // The invariant check, against the RAW tail — never against the blended term above.
+        // Reads as its own sentence so nobody has to reconstruct this morning's argument to
+        // interpret it: raw tail, what -ISF x IOB says it should be, and the residual in UNITS
+        // (mg/dL is unreadable across different ISFs). A residual of roughly the running temp's
+        // remaining delivery is EXPECTED and stock; a raw tail that ignores IOB is #84 again.
+        let invariant: String
+        if let raw = b.insulinRawTailMgdl, let e = b.insulinExpectedMgdl, let isf = b.isfMgdlPerU, let iob = b.iobUnits {
+            invariant = String(format: " | raw ins tail %+.1f vs −ISF×IOB %+.1f (ISF %.0f × IOB %.2f) resid %+.3f U",
+                               raw, e, isf, iob, (raw - e) / isf)
+        } else if let e = b.insulinExpectedMgdl {
+            invariant = String(format: " | raw ins tail — · −ISF×IOB %+.1f", e)
         } else {
-            expected = " | ins expected — (no ISF/IOB)"
+            invariant = " | raw ins tail — · −ISF×IOB — (no ISF/IOB)"
         }
 
         SportLog.event("predict-recon", String(format:
-            "%.0f ins %+.0f carb %+.0f mom %+.0f RC %+.0f r %+.0f = %.0f (Δ%+.0f) | exact: ins %+.1f carb %+.1f mom %+.1f RC %+.1f resid %+.2f%@ | momPts=%d",
+            "%.0f ins %+.0f carb %+.0f mom %+.0f RC %+.0f r %+.0f = %.0f (Δ%+.0f) | blended: ins %+.1f carb %+.1f mom %+.1f RC %+.1f resid %+.2f%@ | momPts=%d",
             s, ins, carb, mom, rc, shown, ev, ev - s,
             b.insulinMgdl, b.carbMgdl, b.momentumMgdl, b.retrospectiveMgdl, b.residualMgdl,
-            expected, b.momentumPointCount))
+            invariant, b.momentumPointCount))
     }
 
     // MARK: - Recommendation (mirrors updatePredictedGlucoseAndRecommendedDose(with:) — :1695)
