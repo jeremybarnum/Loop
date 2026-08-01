@@ -77,6 +77,12 @@ final class PodLoanWatchController {
     /// When the current Start attempt began (request sent) — drives the R24 glance
     /// progress bar. Meaningful only while phase is requested/takingOver.
     private var attemptStartedAt: Date?
+    /// #86: wall-clock of the previous takeover-ladder read, and the largest gap seen between two
+    /// consecutive reads this attempt. The ladder self-schedules every 3 s, so a gap far past that
+    /// means the APP STOPPED EXECUTING mid-connect — not that the pod went quiet. Distinguishing
+    /// those two is the whole point: they send the user to opposite places.
+    private var lastTakeoverReadAt: Date?
+    private var takeoverMaxReadGap: TimeInterval = 0
     /// Hand-back offer resend counter (reset when a drain begins) — makes an
     /// unreachable-phone wait self-documenting in the log.
     private var handbackResendCount = 0
@@ -392,6 +398,8 @@ final class PodLoanWatchController {
         // the takeover only; the request stage renders indeterminate. This also keeps
         // a late queued grant (after the 25s timeout) from inheriting a dead anchor.
         attemptStartedAt = Date()
+        lastTakeoverReadAt = nil          // #86: fresh ladder, fresh stall measurement
+        takeoverMaxReadGap = 0
         phase = .takingOver
         loopManager.settings = decodedSettings!
         // Frozen-at-grant like the therapy settings above: run the RC implementation the
@@ -578,6 +586,13 @@ final class PodLoanWatchController {
                     // shows WHY — stuck disconnected (pod not advertising / still held by the
                     // phone) vs connecting-but-no-response.
                     let readElapsed = self.attemptStartedAt.map { Date().timeIntervalSince($0) } ?? -1
+                    // #86: measure the inter-read gap. The ladder re-arms itself every 3 s, so
+                    // anything much larger is suspended-app time, not pod silence.
+                    let readNow = Date()
+                    if let prev = self.lastTakeoverReadAt {
+                        self.takeoverMaxReadGap = max(self.takeoverMaxReadGap, readNow.timeIntervalSince(prev))
+                    }
+                    self.lastTakeoverReadAt = readNow
                     SportLog.event("loan", String(format: "takeover read %d/%d (+%.1fs) — pod BLE state %@", attempt + 1, maxAttempts, readElapsed, manager.podLoanConnectionStateDescription))
                     self.queue.asyncAfter(deadline: .now() + 3) {
                         guard self.phase == .takingOver, self.epoch == grant.epoch else {
@@ -591,10 +606,32 @@ final class PodLoanWatchController {
                 } else {
                     self.teardownPump()
                     self.phase = .idle
-                    self.lastIdleNote = NSLocalizedString("Pod didn't answer after 40s. Check the pod is nearby and awake, then try again.", comment: "Glance: pod unreachable at takeover")
                     let failSecs = self.attemptStartedAt.map { Date().timeIntervalSince($0) } ?? -1
-                    SportLog.event("loan", String(format: "TAKEOVER FAILED — pod unreachable after %d reads in %.1fs [takeover-timing], final BLE state %@, epoch %d", maxAttempts, failSecs, manager.podLoanConnectionStateDescription, grant.epoch))
-                    self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "pod unreachable at takeover")))
+                    // #86: the takeover ladder runs with NO keepalive — startSoak() only fires
+                    // once the loan goes ACTIVE, which needs a takeover that already succeeded
+                    // (StockLoopSession.swift:104). So the whole connect phase is unprotected, and
+                    // on a low battery watchOS suspends the app mid-ladder. Observed 2026-07-31,
+                    // epochs 81-83 at 15%: reads stalled 86 s and 70 s, each resuming only on a
+                    // wrist raise, and three takeovers failed in a row while the pod was fine.
+                    //
+                    // The old note blamed the pod ("check the pod is nearby and awake") and quoted
+                    // a 40 s timeout that no longer matches the ~180 s ladder. Blaming the pod for
+                    // a suspended app sends the user to the wrong place — so say which one it was.
+                    let stalled = self.takeoverMaxReadGap > 20
+                    if stalled {
+                        self.lastIdleNote = String(format: NSLocalizedString(
+                            "The watch app stopped running mid-connect (%@). Put the watch on the charger, then try again.",
+                            comment: "Glance: takeover failed because the app was suspended"), batteryTag())
+                    } else {
+                        self.lastIdleNote = String(format: NSLocalizedString(
+                            "Pod didn't answer after %.0fs. Check the pod is nearby and awake, then try again.",
+                            comment: "Glance: pod unreachable at takeover"), failSecs)
+                    }
+                    SportLog.event("loan", String(format: "TAKEOVER FAILED — %@ after %d reads in %.1fs [takeover-timing], max inter-read gap %.1fs (ladder ticks every 3s), %@, final BLE state %@, epoch %d",
+                                                  stalled ? "APP SUSPENDED mid-ladder (pod may have been fine)" : "pod unreachable",
+                                                  maxAttempts, failSecs, self.takeoverMaxReadGap, batteryTag(),
+                                                  manager.podLoanConnectionStateDescription, grant.epoch))
+                    self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: stalled ? "watch app suspended mid-takeover" : "pod unreachable at takeover")))
                 }
             }
         }
