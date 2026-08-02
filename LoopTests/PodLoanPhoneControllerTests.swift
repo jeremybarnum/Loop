@@ -201,7 +201,15 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     }
 
     /// Bug E regression: a phone stranded in a transient non-owner state must recover
-    /// and grant on a fresh request, not refuse forever.
+    /// on a fresh request and must never refuse forever.
+    ///
+    /// #42 (2026-08-02): the contract changed. Recovery still happens on the FIRST request,
+    /// but it lands in .owner with the settle window open — a force-recovered phone has not
+    /// yet completed a pod round-trip, and granting an unverified pod is exactly the race
+    /// that fails takeovers in the field. So: first request recovers + denies (with the
+    /// "still returning" reason, which eagerly kicks verification), and once the round-trip
+    /// lands the NEXT request grants. The invariant this test protects is unchanged: no
+    /// permanent refusal.
     func testStrandedStateRecoversOnNewRequest() throws {
         let controller = makeController()
         // Strand it: escape-hatch reclaim with no watch to hand back → reclaimPending.
@@ -209,12 +217,24 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         controller.reclaimNow()
         waitForState(controller, .reclaimPending)
 
-        // A fresh request should force-recover to owner and grant (not deny).
+        // First request: force-recovers to owner, denies (unverified), and kicks the
+        // verification round-trip.
+        let deniedSent = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
+        wait(for: [deniedSent], timeout: 5)
+        waitForState(controller, .owner)
+        if case .denied? = lastSent() {} else if case .grant? = lastSent() {
+            XCTFail("must not grant an unverified pod straight out of a stranded state (#42)")
+        }
+
+        // The eager kick runs MockPumpManager.ensureCurrentPumpData (fresh lastSync) —
+        // wait for the settle window to clear, then a fresh request grants.
+        waitUntil(timeout: 8, "reclaim verification") { !controller.isReclaimSettling }
         let grantSent = expectSend()
         controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
         wait(for: [grantSent], timeout: 5)
         if case .grant? = lastSent() {} else {
-            XCTFail("expected a grant after recovering the stranded state, got \(String(describing: lastSent()))")
+            XCTFail("expected a grant after recovery + verification, got \(String(describing: lastSent()))")
         }
         waitForState(controller, .grantOffered)
     }
@@ -254,14 +274,32 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         if case .grant? = lastSent() { XCTFail("must not grant a not-yet-returned pod (#42)") }
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "a denied re-Start must not release the pod")
 
-        // Pod is home now → a fresh request grants.
+        // #42 (2026-08-02): the link coming up is no longer enough — readiness is a
+        // completed pod ROUND-TRIP. Flip the link up, let the chase verify against
+        // MockPumpManager (fresh lastSync), and only then does a request grant.
         connectionReady = true
+        waitUntil(timeout: 8, "reclaim verification") { !controller.isReclaimSettling }
         let granted = expectSend()
         controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
         wait(for: [granted], timeout: 5)
         if case .grant? = lastSent() {} else {
-            XCTFail("expected a grant once the pod is back, got \(String(describing: lastSent()))")
+            XCTFail("expected a grant once the round-trip verified, got \(String(describing: lastSent()))")
         }
+    }
+
+    /// Spin-wait helper for conditions that settle via background queues (the reclaim
+    /// verification chase ticks every 2 s and completes via MockPumpManager's main-queue
+    /// ensureCurrentPumpData).
+    private func waitUntil(timeout: TimeInterval, _ label: String, _ condition: @escaping () -> Bool) {
+        let exp = expectation(description: label)
+        DispatchQueue.global().async {
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline {
+                if condition() { exp.fulfill(); return }
+                usleep(100_000)
+            }
+        }
+        wait(for: [exp], timeout: timeout + 1)
     }
 
     // MARK: - Hand-back ordering + idempotency

@@ -132,22 +132,87 @@ final class PodLoanPhoneController {
     private var reclaimStartedAt: Date?
     private var reclaimSettleWork: DispatchWorkItem?
     private static let reclaimSettleTimeout: TimeInterval = .minutes(5)
+    /// #42 (2026-08-02): set when a pod ROUND-TRIP has completed since the reclaim began.
+    /// This — not the peripheral's Bluetooth state — is what "the pod is back" means.
+    /// Field measurement: after a hand-back the pod advertises immediately, the phone's
+    /// standing bid connects within seconds, and isConnectionReady() flips true long before
+    /// the phone has actually TALKED to the pod. Grants issued in that gap release a
+    /// half-returned pod, and the watch's takeover then flaps against it (~90 s of #7/#11).
+    /// Every recorded failure sat inside that window; every success outside it.
+    private var reclaimVerifiedAt: Date?
+    private var reclaimVerifyInFlight = false
 
     /// reclaimConnection() only re-arms the BLE bid; the actual reconnect lands
     /// seconds-to-minutes later. Open a bounded window so the tile keeps showing "Reclaiming…"
     /// until the pod is genuinely reachable, without ever sticking (the ceiling clears it).
     /// Runs on `queue` (state is queue-confined, as the sync accessors below assume).
+    ///
+    /// #42: the window now also CHASES completion instead of waiting for it. Left alone, the
+    /// first post-reclaim pod round-trip is whenever the phone's 5-minute cycle next runs —
+    /// or, on a locked phone, whenever iOS feels like it (one hand-back completed the moment
+    /// an unrelated notification woke the phone). ensureCurrentPumpData is fired as soon as
+    /// the link is up, so "returned" happens in seconds when the phone is awake instead of
+    /// minutes by accident.
     private func beginReclaimSettleWindow() {
         let started = deps.now()
         reclaimStartedAt = started
+        reclaimVerifiedAt = nil
+        reclaimVerifyInFlight = false
         reclaimSettleWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self = self, self.reclaimStartedAt == started else { return }
+            os_log("Reclaim settle CEILING reached (%.0fs) without a verified round-trip — clearing anyway",
+                   log: self.log, type: .error, Self.reclaimSettleTimeout)
             self.reclaimStartedAt = nil            // ceiling reached — stop settling
             self.deps.ownershipDidChange()         // final re-render that clears the tile
         }
         reclaimSettleWork = work
         queue.asyncAfter(deadline: .now() + Self.reclaimSettleTimeout, execute: work)
+        chaseReclaimVerification(started: started)
+    }
+
+    /// Poll on `queue` every 2 s: once the link is up, do ONE pod round-trip and mark the
+    /// reclaim verified when it lands. Self-cancelling when superseded (a new settle window,
+    /// the ceiling, or a grant taking us out of .owner).
+    private func chaseReclaimVerification(started: Date, attempt: Int = 0) {
+        guard reclaimStartedAt == started, reclaimVerifiedAt == nil else { return }
+        attemptReclaimVerificationNow(started: started)
+        queue.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.chaseReclaimVerification(started: started, attempt: attempt + 1)
+        }
+    }
+
+    /// One verification attempt, no rescheduling. Also called EAGERLY from the grant-deny
+    /// path: a premature Start is the strongest possible signal the user wants the pod back,
+    /// so their tap accelerates the very check their retry is waiting on.
+    private func attemptReclaimVerificationNow(started: Date) {
+        guard reclaimStartedAt == started, reclaimVerifiedAt == nil else { return }
+        if deps.isConnectionReady(), !reclaimVerifyInFlight, let pump = deps.pumpManager() {
+            reclaimVerifyInFlight = true
+            pump.ensureCurrentPumpData { [weak self] lastSync in
+                guard let self = self else { return }
+                self.queue.async {
+                    self.reclaimVerifyInFlight = false
+                    guard self.reclaimStartedAt == started, self.reclaimVerifiedAt == nil else { return }
+                    // lastSync only advances on a SUCCESSFUL pod comms round-trip, so
+                    // lastSync > started is the proof the pod is genuinely home. A stale
+                    // date means the read failed — keep chasing until the ceiling.
+                    if let sync = lastSync, sync > started {
+                        let elapsed = self.deps.now().timeIntervalSince(started)
+                        self.reclaimVerifiedAt = self.deps.now()
+                        self.reclaimSettleWork?.cancel()
+                        self.reclaimStartedAt = nil
+                        os_log("Reclaim VERIFIED — pod round-trip complete %.0fs after reclaim began",
+                               log: self.log, type: .default, elapsed)
+                        // Ride the existing diag channel so the unified watch/iCloud log
+                        // carries the completion time — the measurement #42 was missing.
+                        self.sendMessage(.diag(LoanDiag(epoch: self.epoch,
+                            text: String(format: "reclaim VERIFIED — pod round-trip complete +%.0fs", elapsed))))
+                        self.deps.ownershipDidChange()
+                    }
+                }
+            }
+        }
     }
 
     /// True whenever this phone does NOT own the pod's connection (any non-owner
@@ -172,7 +237,12 @@ final class PodLoanPhoneController {
         return queue.sync {
             guard state == .owner, let started = reclaimStartedAt else { return false }
             if deps.now().timeIntervalSince(started) >= Self.reclaimSettleTimeout { return false }
-            return !deps.isConnectionReady()
+            // #42: settling until a pod ROUND-TRIP has landed, not until the peripheral shows
+            // .connected — the Bluetooth state flips true seconds after hand-back while the
+            // actual return conversation hasn't happened. This is what kept "Reclaiming…"
+            // honest AND sticky before; now it clears the moment the round-trip completes,
+            // which the chase makes prompt.
+            return reclaimVerifiedAt == nil
         }
     }
     private var epoch: Int {
@@ -357,12 +427,20 @@ final class PodLoanPhoneController {
         // (the "rapid hand-back → re-takeover" bug). Deny-and-retry until the pod is genuinely
         // reachable (isConnectionReady) or the settle ceiling clears — conservative: it never
         // grants a not-ready pod, and the user's next Start succeeds once it's home.
+        // #42 (2026-08-02): readiness = a completed pod ROUND-TRIP since the reclaim began,
+        // NOT the peripheral state. isConnectionReady() flips true within seconds of hand-back
+        // (baseband connect) while the pod's actual return work hasn't happened; grants issued
+        // on that signal released a half-returned pod and the watch takeover flapped against it
+        // for ~90 s (every recorded failure was inside this window — 9-85 s gaps; every success
+        // outside). The chase in beginReclaimSettleWindow makes verification prompt, so this
+        // deny window is short in practice when the phone is awake.
         if let started = reclaimStartedAt,
            deps.now().timeIntervalSince(started) < Self.reclaimSettleTimeout,
-           !deps.isConnectionReady() {
-            os_log("Grant deferred: pod still returning from the last reclaim (%.0fs into settle) — deny-and-retry",
+           reclaimVerifiedAt == nil {
+            os_log("Grant deferred: pod still returning from the last reclaim (%.0fs into settle, round-trip not yet verified) — deny-and-retry",
                    log: log, type: .default, deps.now().timeIntervalSince(started))
             deny("The pod is still returning from the last session. Try Start again in a few seconds.")
+            attemptReclaimVerificationNow(started: started)   // the tap accelerates the return check
             return
         }
 
