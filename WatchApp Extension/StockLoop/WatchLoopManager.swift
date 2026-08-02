@@ -1694,13 +1694,30 @@ final class WatchLoopManager {
         guard let glucoseTargetRange = settings.effectiveGlucoseTargetRangeSchedule() else {
             return .configurationError("glucoseTargetRangeSchedule")
         }
-        guard let basalRateSchedule = settings.basalRateSchedule else {
+        // #68 FIX (2026-08-01): DoseMath must consume the OVERRIDE-APPLIED schedules, exactly as
+        // the phone does (LoopDataManager.swift:1726ff guards on basalRateScheduleApplyingOverride-
+        // History / insulinSensitivityScheduleApplyingOverrideHistory). This port passed the raw
+        // settings schedules, so an active override moved the TARGET (effectiveGlucoseTargetRange-
+        // Schedule below) but not the SCALES: field 2026-08-01, with a 60%-needs override the
+        // [dosemath] line read `scheduled 0.70 · ISF 70` where 0.42 / ~117 were intended — every
+        // "neutral" temp was a 1.67x high temp in override terms, and corrections were 1.67x
+        // oversized. Systematic OVER-delivery under a reduced-needs override.
+        //
+        // The prediction path already used the applied ISF (:1211, :1607), so prediction and
+        // dosing disagreed about the same override. The [dosemath] log line below prints these
+        // same locals, so with this fix the wrist telemetry shows the applied values — scheduled
+        // 0.42 / ISF 117 under the 60% preset — which is the field verification.
+        //
+        // Fallback to the raw settings schedule only when the override-history accessor itself is
+        // nil (no overrideHistory wired — pre-#68 grants), mirroring the :1607 pattern; never nil
+        // out dosing because override plumbing is absent.
+        guard let basalRateSchedule = doseStore.basalProfileApplyingOverrideHistory ?? settings.basalRateSchedule else {
             return .configurationError("basalRateSchedule")
         }
-        guard let insulinSensitivity = settings.insulinSensitivitySchedule else {
+        guard let insulinSensitivity = doseStore.insulinSensitivityScheduleApplyingOverrideHistory ?? settings.insulinSensitivitySchedule else {
             return .configurationError("insulinSensitivitySchedule")
         }
-        guard settings.carbRatioSchedule != nil else {
+        guard (carbStore.carbRatioScheduleApplyingOverrideHistory ?? settings.carbRatioSchedule) != nil else {
             return .configurationError("carbRatioSchedule")
         }
         guard let maxBasal = settings.maximumBasalRatePerHour else {
