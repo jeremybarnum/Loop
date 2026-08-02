@@ -392,7 +392,13 @@ final class WatchLoopManager {
                 // ("%+.2f"), so net makes it meaningful: + above schedule, − a reduction,
                 // 0 at schedule. (Was the ABSOLUTE rate, so a low-temp rendered as a
                 // meaningless "+0.00" that read as "no action" — 2026-07-25.)
-                let scheduled = settings.basalRateSchedule?.value(at: now()) ?? 0
+                //
+                // #68 (2026-08-01): net against the OVERRIDE-APPLIED schedule, not the raw one.
+                // Netting against raw 0.70 under a 60% override rendered "+0.00" while the pod ran
+                // 1.67x the override's intended basal — Jeremy read exactly that "0" as "not
+                // low-temping". Under the override a suspend is −0.42 and raw-schedule is +0.28,
+                // and the wrist must say so. Same fix, same accessor as the DoseMath guards.
+                let scheduled = (doseStore.basalProfileApplyingOverrideHistory ?? settings.basalRateSchedule)?.value(at: now()) ?? 0
                 tempRate = dose.unitsPerHour - scheduled
             }
             return GlanceData(
@@ -471,7 +477,8 @@ final class WatchLoopManager {
         ctx.loopLastRunDate = lastLoopCompleted
         ctx.isClosedLoop = _closedLoopEnabled
         if let dose = runningTempBasal() {
-            let scheduled = settings.basalRateSchedule?.value(at: now()) ?? 0
+            // #68 (2026-08-01): override-applied schedule, matching the glance fix above.
+            let scheduled = (doseStore.basalProfileApplyingOverrideHistory ?? settings.basalRateSchedule)?.value(at: now()) ?? 0
             ctx.lastNetTempBasalDose = dose.unitsPerHour - scheduled
             ctx.lastNetTempBasalDate = dose.startDate
         } else {
