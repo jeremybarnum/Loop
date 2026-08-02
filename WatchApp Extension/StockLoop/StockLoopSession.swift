@@ -40,10 +40,23 @@ final class StockLoopSession {
 
         loanController.send = { dictionary in
             // transferUserInfo: queued, survives reachability flaps and relaunches —
-            // the delivery semantics the protocol's cursor/IDs are built around.
+            // the delivery semantics the protocol's cursor/IDs are built around. It is also
+            // explicitly NON-URGENT, which is wrong for the interactive handshake: see
+            // LoanMessage.isInteractiveHandshake for the 2026-08-02 field case where a Start
+            // request sat in the queue past the watch's own 25 s timeout. Those kinds take
+            // sendMessage (wakes the phone app in ms) and fall back to the queue on failure,
+            // so reliability is never worse than it was.
             let session = WCSession.default
-            SportLog.event("wc", "send \(dictionary.keys.joined(separator: ",")) — session \(session.activationState.rawValue), reachable \(session.isReachable)")
-            session.transferUserInfo(dictionary)
+            let urgent = LoanMessage.isInteractiveHandshake(transport: dictionary) && session.isReachable
+            SportLog.event("wc", "send \(dictionary.keys.joined(separator: ",")) — session \(session.activationState.rawValue), reachable \(session.isReachable), path \(urgent ? "urgent" : "queued")")
+            guard urgent else {
+                session.transferUserInfo(dictionary)
+                return
+            }
+            session.sendMessage(dictionary, replyHandler: nil, errorHandler: { error in
+                SportLog.event("wc", "urgent send FAILED (\(error.localizedDescription)) — falling back to the queued path")
+                session.transferUserInfo(dictionary)
+            })
         }
 
         // Fix B (radio arbiter, c6c9e18f port): BG wins the single watch radio — loop

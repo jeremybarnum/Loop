@@ -261,6 +261,16 @@ extension ExtensionDelegate: WCSessionDelegate {
         updateContext(applicationContext)
     }
 
+    /// #42: the IMMEDIATE channel. sendMessage(replyHandler: nil) is delivered here, NOT to
+    /// didReceiveUserInfo — without this method the interactive loan handshake would be
+    /// dropped on the floor. Loan payloads only; anything else on this path is unexpected.
+    func session(_ session: WCSession, didReceiveMessage message: [String : Any]) {
+        if stockLoopSession.handleIncomingIfLoanMessage(message) {
+            return
+        }
+        log.default("Ignoring unexpected sendMessage: %{public}@", String(describing: message.keys))
+    }
+
     // This method is called on a background thread of your app
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any] = [:]) {
         // M5: loan protocol v2 rides its own single key; consumed entirely by the

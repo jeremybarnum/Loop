@@ -123,7 +123,21 @@ final class WatchDataManager: NSObject {
                 }
             },
             send: { [weak self] dictionary in
-                self?.watchSession?.transferUserInfo(dictionary)
+                guard let session = self?.watchSession else { return }
+                // #42 (2026-08-02): mirror of the watch's transport policy. The interactive
+                // handshake (grant / denial / revoke / hand-back ack) takes the immediate
+                // channel so a backgrounded watch app is woken now instead of whenever iOS
+                // decides to drain its queue; record-bearing and diagnostic traffic keeps
+                // transferUserInfo's guaranteed delivery. Failure falls back to that queue,
+                // so this is never less reliable than the previous unconditional path.
+                guard LoanMessage.isInteractiveHandshake(transport: dictionary),
+                      session.isReachable else {
+                    session.transferUserInfo(dictionary)
+                    return
+                }
+                session.sendMessage(dictionary, replyHandler: nil, errorHandler: { _ in
+                    session.transferUserInfo(dictionary)
+                })
             },
             addPumpEvents: { [weak self] events, lastReconciliation, completion in
                 guard let self = self else { completion(nil); return }
@@ -769,6 +783,26 @@ extension WatchDataManager: WCSessionDelegate {
                 }
             }
         }
+    }
+
+    /// #42: the IMMEDIATE channel. sendMessage(replyHandler: nil) lands HERE — the
+    /// replyHandler variant above is only called when the sender supplied one — so without
+    /// this method the watch's urgent Start request would be silently dropped. Mirrors the
+    /// loan routing in didReceiveUserInfo below, including the sensor-code re-relay that a
+    /// request triggers.
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        deviceManager.alertManager?.noteWatchContactDuringLoan()   // #26: re-arm the silence dead-man
+        guard message[LoanProtocol.userInfoKey] != nil else {
+            log.default("Ignoring unexpected sendMessage from watch: %{public}@", String(describing: message.keys))
+            return
+        }
+        let peekedKind: String? = (message[LoanProtocol.userInfoKey] as? Data)
+            .flatMap { try? JSONDecoder().decode(LoanKindPeek.self, from: $0) }?.kind
+        log.default("Loan sendMessage delivered (urgent path): kind=%{public}@", peekedKind ?? "unknown")
+        if peekedKind == "request" {
+            deviceManager.ensureSensorCodeRelayed()
+        }
+        podLoanController.handleIncoming(userInfo: message)
     }
 
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {

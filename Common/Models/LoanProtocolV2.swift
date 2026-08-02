@@ -930,6 +930,47 @@ extension LoanMessage {
         return [LoanProtocol.userInfoKey: data]
     }
 
+    /// #42 (2026-08-02): which kinds ride the IMMEDIATE WCSession channel (sendMessage)
+    /// instead of the queued one (transferUserInfo).
+    ///
+    /// transferUserInfo is explicitly NON-URGENT: iOS drains it opportunistically. Field
+    /// 2026-08-02 08:38 — a Start request sat queued while the phone slept; the phone's
+    /// answer reached the watch 40 s later, 15 s AFTER the watch's 25 s timeout had already
+    /// told the user the takeover had failed. An unrelated sensor-code relay arrived 0.1 s
+    /// from the grant: the signature of a whole queue flushing when the phone woke.
+    ///
+    /// So the INTERACTIVE moments of a loan — everything the user is watching a spinner
+    /// through, at the start and the end — take the immediate channel, which wakes the
+    /// counterpart app in milliseconds. Background bookkeeping (record streaming, status,
+    /// diagnostics) keeps transferUserInfo, whose guaranteed, relaunch-surviving delivery
+    /// the cursor/ID machinery is built around.
+    ///
+    /// Every urgent kind here is idempotent under those same cursor/ID rules (a redelivered
+    /// offer re-acks the same cursor; a repeat request is exactly a double-tap of Start), so
+    /// the rare delivered-but-reported-failed duplicate from the fallback is harmless.
+    public var isInteractiveHandshake: Bool {
+        switch self {
+        case .request, .grant, .denied, .nack, .revoke, .handbackOffer, .handbackAck:
+            return true
+        case .takeoverComplete, .takeoverFailed, .doseRecordBatch, .statusQuery,
+             .statusReport, .diag:
+            return false
+        }
+    }
+
+    /// Transport-level peek: safe on any dictionary, false for anything not ours.
+    public static func isInteractiveHandshake(transport userInfo: [String: Any]) -> Bool {
+        // sendMessage caps payloads far below transferUserInfo. Anything unexpectedly large
+        // takes the queue rather than burning a round-trip on a certain failure.
+        if let data = userInfo[LoanProtocol.userInfoKey] as? Data, data.count > 24_000 {
+            return false
+        }
+        // `try?` flattens the throwing-optional, so this unwraps to a concrete message:
+        // nil covers both "not ours" and "undecodable", and both correctly take the queue.
+        guard let message = try? decode(fromTransport: userInfo) else { return false }
+        return message.isInteractiveHandshake
+    }
+
     /// nil = not a v2 payload (not ours to handle — lets v1/other WC traffic pass).
     /// throws = it IS a v2 payload that cannot be decoded → ProtocolNack path (§2.9).
     public static func decode(fromTransport userInfo: [String: Any]) throws -> LoanMessage? {
