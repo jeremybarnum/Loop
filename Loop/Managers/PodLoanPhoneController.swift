@@ -141,6 +141,12 @@ final class PodLoanPhoneController {
     /// Every recorded failure sat inside that window; every success outside it.
     private var reclaimVerifiedAt: Date?
     private var reclaimVerifyInFlight = false
+    /// #42 (2026-08-02): last request identity handled, for transport-redelivery suppression.
+    /// sendMessage can report a timeout WITHOUT meaning undelivered, so the queued fallback
+    /// sends a second copy that also lands. See handleRequest for what that cost in the field.
+    private var lastRequestID: String?
+    private var lastRequestAt: Date?
+    private static let requestDedupeWindow: TimeInterval = .minutes(2)
 
     /// reclaimConnection() only re-arms the BLE bid; the actual reconnect lands
     /// seconds-to-minutes later. Open a bounded window so the tile keeps showing "Reclaiming…"
@@ -374,6 +380,27 @@ final class PodLoanPhoneController {
     // MARK: - Grant (§2.2)
 
     private func handleRequest(_ request: LoanRequest) {
+        // #42 (2026-08-02): suppress a TRANSPORT redelivery of the same request. This is not
+        // the same as a user tapping Start twice — a second tap arrives seconds later against
+        // settled state, whereas a redelivered copy arrives milliseconds later while the FIRST
+        // is still in flight. Field 18:20:54 that day: copy 1 granted epoch 122 and released
+        // the pod; copy 2 landed in .grantOffered, took the stale-state recovery below,
+        // force-reclaimed the pod it had just released (`released=false`) and re-granted —
+        // which the reclaim-settle guard then denied. The watch was left holding a grant for a
+        // pod still on the phone, so every ladder read returned `no-peripheral` and the loan
+        // died. Genuine retries carry a fresh ID and are unaffected; a pre-207 watch sends no
+        // ID and behaves exactly as before.
+        if let id = request.requestID, id == lastRequestID,
+           let seenAt = lastRequestAt,
+           deps.now().timeIntervalSince(seenAt) < Self.requestDedupeWindow {
+            os_log("Duplicate loan request %{public}@ ignored (transport redelivery, %.1fs after the first)",
+                   log: log, type: .default, id, deps.now().timeIntervalSince(seenAt))
+            return
+        }
+        if let id = request.requestID {
+            lastRequestID = id
+            lastRequestAt = deps.now()
+        }
         guard request.supportedVersions.contains(LoanProtocol.version) else {
             sendMessage(.nack(ProtocolNack(seenVersion: request.supportedVersions.max())))
             return

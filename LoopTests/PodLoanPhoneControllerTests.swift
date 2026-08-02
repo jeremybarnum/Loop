@@ -239,6 +239,92 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         waitForState(controller, .grantOffered)
     }
 
+    /// #42 regression (field 2026-08-02, epoch 122): a TRANSPORT redelivery of the same
+    /// request must be ignored. Before the fix, copy 2 arrived while the phone sat in
+    /// .grantOffered from copy 1, took the stale-state recovery path, force-reclaimed the pod
+    /// it had just released, and re-granted — which the reclaim-settle guard denied. The watch
+    /// was left holding a grant for a pod still on the phone and every ladder read returned
+    /// no-peripheral. Exactly one grant may result, and the pod must stay released.
+    func testDuplicateRequestRedeliveryIsIgnored() throws {
+        let controller = makeController()
+        let request = LoanRequest(watchBuild: "t")          // ONE id, sent twice by the transport
+
+        let granted = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.request(request).transportDictionary())
+        wait(for: [granted], timeout: 5)
+        guard case .grant? = lastSent() else { return XCTFail("expected a grant on the first copy") }
+        waitForState(controller, .grantOffered)
+        XCTAssertTrue(MockPumpManager.testConnectionReleased, "the grant released the pod")
+
+        let epochAfterFirst = grantedEpochs().last
+        XCTAssertEqual(grantedEpochs().count, 1, "one request, one grant")
+
+        // The redelivered copy must change NOTHING. The assertion that bites is the grant
+        // COUNT: without dedupe the second copy takes the stale-state recovery path and the
+        // phone re-grants under a NEW epoch, which supersedes the grant the watch is already
+        // acting on — that divergence is the field failure, and a "was there a denial?" check
+        // does not catch it (verified: that weaker test passed with the fix disabled).
+        controller.handleIncoming(userInfo: try LoanMessage.request(request).transportDictionary())
+        settle()
+        XCTAssertEqual(grantedEpochs().count, 1,
+                       "a redelivered request must not mint a second grant (#42)")
+        XCTAssertEqual(grantedEpochs().last, epochAfterFirst,
+                       "the epoch the watch is acting on must not be superseded (#42)")
+        XCTAssertFalse(sentKinds().contains("denied"),
+                       "a redelivered request must not produce a denial (#42)")
+        XCTAssertEqual(controller.state, .grantOffered, "state must be untouched by a redelivery")
+        XCTAssertTrue(MockPumpManager.testConnectionReleased,
+                      "the redelivery must not re-arm/reclaim the released pod (#42)")
+    }
+
+    /// Epochs of every grant sent so far — the count is the #42 invariant.
+    private func grantedEpochs() -> [Int] {
+        lock.lock(); defer { lock.unlock() }
+        return sent.compactMap { if case .grant(let g) = $0 { return g.epoch } else { return nil } }
+    }
+
+    private func sentKinds() -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return sent.map { message in
+            switch message {
+            case .grant: return "grant"
+            case .denied: return "denied"
+            case .nack: return "nack"
+            default: return "other"
+            }
+        }
+    }
+
+    /// Let the controller's serial queue drain when the expectation is that NOTHING is sent.
+    private func settle(_ seconds: TimeInterval = 0.6) {
+        let e = expectation(description: "queue settled")
+        DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { e.fulfill() }
+        wait(for: [e], timeout: seconds + 2)
+    }
+
+    /// The dedupe keys on identity, not on "a request arrived recently" — a genuine retry
+    /// carries a fresh ID and must still be honoured.
+    func testFreshRequestAfterDuplicateStillHandled() throws {
+        let controller = makeController()
+        let first = LoanRequest(watchBuild: "t")
+        let granted = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.request(first).transportDictionary())
+        wait(for: [granted], timeout: 5)
+        controller.handleIncoming(userInfo: try LoanMessage.request(first).transportDictionary())
+
+        // A NEW request (fresh id) while .grantOffered takes the recovery path as before.
+        let second = LoanRequest(watchBuild: "t")
+        XCTAssertNotEqual(first.requestID, second.requestID, "each request mints its own id")
+        let responded = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.request(second).transportDictionary())
+        wait(for: [responded], timeout: 5)
+        // Grant or deny is state-dependent; the invariant is that it was NOT silently dropped.
+        switch lastSent() {
+        case .grant?, .denied?: break
+        default: XCTFail("a fresh request must be handled, got \(String(describing: lastSent()))")
+        }
+    }
+
     /// The R7 override: forceReclaimToOwner returns to owner and restores dosing.
     func testForceReclaimReturnsToOwner() throws {
         let controller = makeController()

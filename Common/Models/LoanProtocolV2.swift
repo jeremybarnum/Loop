@@ -439,10 +439,27 @@ public enum LoanDosingMode: String, Codable {
 public struct LoanRequest: Codable, Equatable {
     public let watchBuild: String
     public let supportedVersions: [Int]
+    /// #42 (2026-08-02): identity for duplicate suppression. The transport may deliver the
+    /// SAME request twice — sendMessage reports a timeout without meaning "undelivered", so
+    /// the queued fallback re-sends a copy that also arrives (field 18:20:54 that day).
+    ///
+    /// Two copies milliseconds apart are NOT the same as a user double-tapping Start: the
+    /// second lands while the phone is still in .grantOffered from the first, takes the
+    /// stale-state recovery path, force-reclaims the pod it JUST released, and re-grants —
+    /// which the reclaim-settle guard then denies. Observed result: the watch held a grant
+    /// for epoch 122 while the pod stayed on the phone (`released=false`), so its whole
+    /// ladder read `no-peripheral` and the loan died.
+    ///
+    /// Optional for back-compat: a pre-207 watch sends none, and the phone then behaves
+    /// exactly as it did before (no dedupe).
+    public let requestID: String?
 
-    public init(watchBuild: String, supportedVersions: [Int] = [LoanProtocol.version]) {
+    public init(watchBuild: String,
+                supportedVersions: [Int] = [LoanProtocol.version],
+                requestID: String = UUID().uuidString) {
         self.watchBuild = watchBuild
         self.supportedVersions = supportedVersions
+        self.requestID = requestID
     }
 }
 
