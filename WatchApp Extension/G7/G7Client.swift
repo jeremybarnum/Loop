@@ -1580,13 +1580,19 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
 
     func centralManager(_ central: CBCentralManager,
                         didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        log("connect failed: \(error?.localizedDescription ?? "unknown")")
+        // #86-adjacent (2026-08-01): domain#code, same greppable convention as the pod side's
+        // PodLoanConnectClock. localizedDescription hid the code, and the code is the diagnosis:
+        // #11 connectionLimitReached vs #6 timeout vs #10 connectionFailed are three different
+        // problems. Last overnight burned 82 attempts for 27 readings with no way to say which.
+        let reason = (error as NSError?).map { "reason=\($0.domain)#\($0.code)" } ?? "reason=nil"
+        log("connect failed: \(reason) (\(error?.localizedDescription ?? "unknown"))")
         if attemptActive { finishAttempt(success: false, message: "Connect failed") }
     }
 
     func centralManager(_ central: CBCentralManager,
                         didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        log("!! disconnected (\(error?.localizedDescription ?? "clean"))")
+        let dropReason = (error as NSError?).map { "\($0.domain)#\($0.code)" } ?? "clean"
+        log("!! disconnected (\(dropReason))")
         onConnectionChange?(false, peripheral.name)   // M3 (watch-from-stock): stock-adapter hook
         dataStream.close(); authStream.close(); ctrlStream.close()
         // If we disconnected before finishing, the awaiting handshake throws .disconnected
