@@ -2449,6 +2449,26 @@ extension WatchLoopManager: CGMManagerDelegate {
             // #83: the phone relay may already have filed this exact reading under its own name
             // tag. Same sensor stamp = same reading; first writer wins.
             dropAlreadyStored(values) { kept in
+            // 2026-08-03: this choke point — the ONLY place direct-G7 samples enter the store —
+            // logged NOTHING on success, so a night could show zero `*** VALUE` lines (which the
+            // BLE layer emits only for LIVE notification values) while the store filled normally
+            // from BACKFILL batches. `.newData` carries an array precisely because the G7 hands
+            // back history plus the current value together. Scoring CGM reliability by grepping
+            // `*** VALUE` therefore undercounted real coverage, which is how the 2026-08-03
+            // overnight got read as "0 reads in 2.8 h" when glucose was in fact arriving on a
+            // clean 5-minute grid. Log every ingestion with its SOURCE so the three paths
+            // (direct-G7 here, phone relay in ingestPhoneGlucoseFromContext, grant seed in
+            // PodLoanWatchController) are countable and distinguishable from the log alone.
+            let deliveredCount = values.count
+            let latest = kept.max(by: { $0.date < $1.date }) ?? values.max(by: { $0.date < $1.date })
+            let latestDesc: String = {
+                guard let s = latest else { return "none" }
+                let mgdl = Int(s.quantity.doubleValue(for: .milligramsPerDeciliter).rounded())
+                return "\(mgdl) mg/dL age \(Int(Date().timeIntervalSince(s.date)))s"
+            }()
+            let batchTag = deliveredCount > 1 ? " BATCH(backfill+live)" : ""
+            SportLog.event("glucose",
+                "INGEST src=direct-G7 stored=\(kept.count)/\(deliveredCount) · latest \(latestDesc)\(batchTag)")
             guard !kept.isEmpty else { completion(); return }
             self.glucoseStore.addGlucoseSamples(kept) { result in
                 if case .failure(let error) = result {
@@ -2516,6 +2536,8 @@ extension WatchLoopManager: CGMManagerDelegate {
                 }
                 self.dataAccessQueue.async { self.glucoseMomentumEffect = nil }   // #51 parity
                 let mgdl = Int(sample.quantity.doubleValue(for: .milligramsPerDeciliter))
+                SportLog.event("glucose",
+                    "INGEST src=phone-relay stored=1/1 · latest \(mgdl) mg/dL age \(Int(Date().timeIntervalSince(sample.date)))s (direct-G7 gap)")
                 SportLog.event("loan", "phone-BG fallback: ingested \(mgdl) mg/dL syncId=\(sample.syncIdentifier ?? "?") (direct-G7 gap) — triggering loop")
                 let now = Date()
                 if now.timeIntervalSince(self.lastCGMLoopTrigger) > .minutes(4.2) {

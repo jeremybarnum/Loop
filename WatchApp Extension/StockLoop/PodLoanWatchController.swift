@@ -1099,6 +1099,11 @@ final class PodLoanWatchController {
         loopManager.glucoseStore.addGlucoseSamples(samples) { result in
             switch result {
             case .success(let stored):
+                // 2026-08-03: same "INGEST src=" key as the direct-G7 and phone-relay paths, so
+                // one grep counts every route glucose can enter this store by. Without it,
+                // scoring CGM coverage meant grepping a BLE-layer line that only fires for live
+                // notification values and silently misses backfill batches.
+                SportLog.event("glucose", "INGEST src=grant-seed stored=\(stored.count)/\(samples.count) · loan takeover warm-up")
                 SportLog.event("loan", "seeded \(stored.count) glucose sample\(stored.count == 1 ? "" : "s") from the phone (momentum/RC warm-up)")
                 self.loopManager.invalidateGlucoseDerivedEffects()
             case .failure(let error):
