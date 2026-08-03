@@ -92,7 +92,13 @@ final class PodLoanWatchController {
     /// those two is the whole point: they send the user to opposite places.
     private var lastTakeoverReadAt: Date?
     /// #86: the pending takeover retry, held so the session-established event can fire it early.
-    private var takeoverRetryWork: DispatchWorkItem?
+    /// The ACTION is a plain closure and the BACKSTOP is the cancellable timer — they must not
+    /// be the same object. 213 stored one DispatchWorkItem for both, then did cancel() followed
+    /// by perform(); a cancelled work item releases its block and performs nothing, so the
+    /// ladder stopped dead the instant the event fired (field 2026-08-03 18:33:24, epoch 147:
+    /// "session ESTABLISHED" logged, then silence, no retry and no timeout).
+    private var takeoverRetryAction: (() -> Void)?
+    private var takeoverBackstop: DispatchWorkItem?
     private var takeoverMaxReadGap: TimeInterval = 0
     /// Hand-back offer resend counter (reset when a drain begins) — makes an
     /// unreachable-phone wait self-documenting in the log.
@@ -527,18 +533,20 @@ final class PodLoanWatchController {
     private func setTakeoverSessionListener(_ armed: Bool) {
         guard armed else {
             PodLoanConnectClock.podLoanOnSessionEstablished = nil
-            takeoverRetryWork?.cancel()
-            takeoverRetryWork = nil
+            takeoverBackstop?.cancel()
+            takeoverBackstop = nil
+            takeoverRetryAction = nil
             return
         }
         PodLoanConnectClock.podLoanOnSessionEstablished = { [weak self] in
             guard let self = self else { return }
             self.queue.async {
-                guard self.phase == .takingOver, let fire = self.takeoverRetryWork else { return }
+                guard self.phase == .takingOver, let action = self.takeoverRetryAction else { return }
                 SportLog.event("loan", "takeover: pod session ESTABLISHED (stack event) — reading now instead of waiting for the backstop")
-                self.takeoverRetryWork = nil
-                fire.cancel()
-                self.queue.asyncAfter(deadline: .now() + 0.25, execute: fire.perform)
+                self.takeoverRetryAction = nil
+                self.takeoverBackstop?.cancel()      // cancel the TIMER only
+                self.takeoverBackstop = nil
+                self.queue.asyncAfter(deadline: .now() + 0.25) { action() }   // the action still lives
             }
         }
     }
@@ -665,9 +673,10 @@ final class PodLoanWatchController {
                     // event can run it IMMEDIATELY. The timer is a backstop at 8 s (was a 3 s
                     // metronome) — with the event driving progress, polling faster only burns
                     // the attempt budget against a stale state read.
-                    let retry = DispatchWorkItem { [weak self] in
+                    let retryAction: () -> Void = { [weak self] in
                         guard let self = self else { return }
-                        self.takeoverRetryWork = nil
+                        self.takeoverRetryAction = nil
+                        self.takeoverBackstop = nil
                         guard self.phase == .takingOver, self.epoch == grant.epoch else {
                             // OBS-1: the ladder was superseded during the 3s inter-attempt wait
                             // (re-Start or a newer epoch). Emit the verdict instead of vanishing.
@@ -676,8 +685,10 @@ final class PodLoanWatchController {
                         }
                         self.attemptTakeoverRead(manager: manager, grant: grant, attempt: attempt + 1)
                     }
-                    self.takeoverRetryWork = retry
-                    self.queue.asyncAfter(deadline: .now() + 8, execute: retry)
+                    self.takeoverRetryAction = retryAction
+                    let backstop = DispatchWorkItem { retryAction() }
+                    self.takeoverBackstop = backstop
+                    self.queue.asyncAfter(deadline: .now() + 8, execute: backstop)
                 } else {
                     self.teardownPump()
                     self.phase = .idle
