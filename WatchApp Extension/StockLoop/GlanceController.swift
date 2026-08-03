@@ -203,7 +203,13 @@ final class GlanceViewModel: ObservableObject {
             // Honest limbo (party finding 2026-07-18: 97 min of ambiguity): while the
             // iPhone is unreachable this state can persist — say exactly what's true.
             s.loopStatusText = NSLocalizedString("ending…", comment: "Glance status during hand-back")
-            s.idleNote = NSLocalizedString("Ending Sport Mode — waiting for iPhone. The pod is still on your watch; bolus is unavailable until the iPhone connects.", comment: "Glance note while a hand-back waits for the phone")
+            // #67 follow-up (2026-08-03): distinguish "the phone is thinking about it" from
+            // "I cannot reach the phone at all". The second has a remedy the user can act on
+            // NOW; the old single message left them staring at "ending…" for the full 120 s
+            // timeout with no idea which it was (field 2026-08-02 23:58, phone Bluetooth off).
+            s.idleNote = snap.phoneReachable
+                ? NSLocalizedString("Ending Sport Mode — waiting for iPhone. The pod is still on your watch; bolus is unavailable until the iPhone connects.", comment: "Glance note while a hand-back waits for the phone")
+                : NSLocalizedString("Can't reach iPhone. Move it closer, or check that its Bluetooth is on. Sport Mode will end by itself as soon as the phone connects — the pod is still on your watch.", comment: "Glance note while a hand-back waits for an UNREACHABLE phone")
             state = s
         case .revoked, .recoveredDrain:
             var s = GlanceUIState(); s.phase = .draining
@@ -216,6 +222,14 @@ final class GlanceViewModel: ObservableObject {
             if snap.handbackPending {
                 s.handbackPending = true
                 s.loopStatusText = NSLocalizedString("ending…", comment: "Glance status while a hand-back drains in the background")
+                // WS1 interim drain — the watch is STILL looping, so this path deliberately
+                // carried no note. But an unreachable phone is exactly the case the user must
+                // be told about (it is why "ending…" appears to hang), and it is the state
+                // they actually hit: End tapped while the loop keeps running. Looping
+                // continuing is the reassuring half of the message, so say both.
+                if !snap.phoneReachable {
+                    s.idleNote = NSLocalizedString("Can't reach iPhone. Move it closer, or check that its Bluetooth is on. Sport Mode will end as soon as the phone connects; looping continues until then.", comment: "Glance note when an interim hand-back is blocked by an unreachable phone")
+                }
             }
             state = s
             session.stack.loopManager.glanceCarbsOnBoard { [weak self] cob in

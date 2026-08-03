@@ -38,6 +38,9 @@ final class StockLoopSession {
         stack = StockLoopStack.assemble()
         loanController = PodLoanWatchController(loopManager: stack.loopManager)
 
+        // #67 follow-up: the one question the hand-back UI needs answered.
+        loanController.isPhoneReachable = { WCSession.default.isReachable }
+
         loanController.send = { dictionary in
             // transferUserInfo: queued, survives reachability flaps and relaunches —
             // the delivery semantics the protocol's cursor/IDs are built around. It is also

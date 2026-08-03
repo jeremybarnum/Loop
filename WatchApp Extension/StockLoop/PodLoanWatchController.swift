@@ -37,6 +37,14 @@ final class PodLoanWatchController {
     private let loopManager: WatchLoopManager
     private let journal: LoanEventJournal
 
+    /// #67 follow-up (2026-08-03): is the counterpart app reachable right now
+    /// (WCSession.isReachable at integration)? Injected so the controller stays testable.
+    /// Default true = behave exactly as before wherever it is not wired.
+    var isPhoneReachable: () -> Bool = { true }
+    /// Last reachability logged during a hand-back, so the log records TRANSITIONS rather
+    /// than repeating the same line every 15 s resend.
+    private var lastHandbackReachable: Bool?
+
     /// Injected transport: dictionary -> WCSession.transferUserInfo (integration step).
     var send: (([String: Any]) -> Void)?
 
@@ -1314,6 +1322,20 @@ final class PodLoanWatchController {
         if handbackResendCount == 1 || handbackResendCount % 4 == 0 {
             SportLog.event("loan", "hand-back offer attempt \(handbackResendCount) — waiting for iPhone ack")
         }
+        // #67 follow-up (2026-08-03): say WHY the wait is happening. Field 2026-08-02 23:58 —
+        // End was tapped with the phone unreachable, and the only feedback for 120 s was
+        // "ending…". `reachable false` was on every send line in the log the whole time: the
+        // signal existed, we just never surfaced it. Log transitions here; the glance note is
+        // driven off DebugSnapshot.phoneReachable. NOTE we do NOT abort on unreachable —
+        // reachability flaps, and the queued offer lands the moment the phone returns (that
+        // night: ack in 47 ms once reachable). Fast feedback, slow abort.
+        let reachableNow = isPhoneReachable()
+        if lastHandbackReachable != reachableNow {
+            SportLog.event("loan", reachableNow
+                ? "hand-back: iPhone reachable — offer should ack shortly"
+                : "hand-back: iPhone UNREACHABLE — offer queued, will land when it returns (still looping)")
+            lastHandbackReachable = reachableNow
+        }
         sendMessage(.handbackOffer(offer))
 
         // Resend until ack (rows 9/10): same event IDs every retry by construction.
@@ -1475,6 +1497,11 @@ final class PodLoanWatchController {
         /// WS1: a hand-back is requested and draining while the watch is still in
         /// control (phase .active) — the glance shows "ending…" + Cancel.
         let handbackPending: Bool
+        /// #67 follow-up (2026-08-03): can we reach the iPhone right now? The ONLY thing the
+        /// watch needs to know — it does not care whether the phone is out of range, has
+        /// Bluetooth off, or is powered down; all three are "can't reach it" and all three
+        /// have the same remedy. Drives the hand-back wrist note.
+        let phoneReachable: Bool
     }
 
     /// True while this watch owns the pod (phase .active) — the carb/bolus flow
@@ -1498,7 +1525,8 @@ final class PodLoanWatchController {
                 suspendEndsAt: (manualSuspendEnd ?? .distantPast) > Date() ? manualSuspendEnd : nil,
                 lastIdleNote: lastIdleNote,
                 startedAt: attemptStartedAt,
-                handbackPending: handbackRequested)
+                handbackPending: handbackRequested,
+                phoneReachable: isPhoneReachable())
         }
     }
 
