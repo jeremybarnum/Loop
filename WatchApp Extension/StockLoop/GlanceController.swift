@@ -83,6 +83,10 @@ struct GlanceUIState {
 
     /// Idle-only: why the last Start attempt returned to idle (timeout / refusal).
     var idleNote: String? = nil
+    /// #67 follow-up (2026-08-03): the iPhone can't be reached while a hand-back is trying.
+    /// Explicit rather than inferred from idleNote being non-nil — idleNote is set on other
+    /// paths too, and "is the phone reachable" must not depend on which of them ran last.
+    var phoneUnreachable: Bool = false
 
     /// Starting-only (R24): when the Start attempt began — the view animates the
     /// ~10s determinate pod bar from this anchor. nil = indeterminate fallback.
@@ -207,6 +211,7 @@ final class GlanceViewModel: ObservableObject {
             // "I cannot reach the phone at all". The second has a remedy the user can act on
             // NOW; the old single message left them staring at "ending…" for the full 120 s
             // timeout with no idea which it was (field 2026-08-02 23:58, phone Bluetooth off).
+            s.phoneUnreachable = !snap.phoneReachable
             s.idleNote = snap.phoneReachable
                 ? NSLocalizedString("Ending Sport Mode — waiting for iPhone. The pod is still on your watch; bolus is unavailable until the iPhone connects.", comment: "Glance note while a hand-back waits for the phone")
                 : NSLocalizedString("Can't reach iPhone. Move it closer, or check that its Bluetooth is on. Sport Mode will end by itself as soon as the phone connects — the pod is still on your watch.", comment: "Glance note while a hand-back waits for an UNREACHABLE phone")
@@ -227,6 +232,7 @@ final class GlanceViewModel: ObservableObject {
                 // be told about (it is why "ending…" appears to hang), and it is the state
                 // they actually hit: End tapped while the loop keeps running. Looping
                 // continuing is the reassuring half of the message, so say both.
+                s.phoneUnreachable = !snap.phoneReachable
                 if !snap.phoneReachable {
                     s.idleNote = NSLocalizedString("Can't reach iPhone. Move it closer, or check that its Bluetooth is on. Sport Mode will end as soon as the phone connects; looping continues until then.", comment: "Glance note when an interim hand-back is blocked by an unreachable phone")
                 }
@@ -686,10 +692,26 @@ struct GlanceView: View {
                 // so the active body is pure number + rail. While a hand-back drains, keep
                 // the honest "still in control" note here (Cancel is top-right).
                 if model.state.handbackPending {
-                    Text(NSLocalizedString("Records syncing to iPhone…", comment: "Glance note while a hand-back drains"))
-                        .font(.system(size: 10))
-                        .foregroundColor(.glanceDim)
-                        .multilineTextAlignment(.center)
+                    // #67 follow-up (2026-08-03): "Records syncing…" is FALSE when the phone
+                    // can't be reached — nothing is syncing, and the reassuring dim styling
+                    // made a stuck hand-back look like normal progress. Field 00:41:43 that
+                    // night: End tapped with phone BT+WiFi off; isReachable correctly returned
+                    // false and the controller logged it, but this branch rendered no note at
+                    // all (idleNote is only drawn on the idle screen and in .handingBack), so
+                    // the wrist still read "Records syncing to iPhone…". Detection was right;
+                    // this was the missing half.
+                    if model.state.phoneUnreachable, let note = model.state.idleNote {
+                        Text(note)
+                            .font(.system(size: 11))
+                            .foregroundColor(.glanceWarn)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text(NSLocalizedString("Records syncing to iPhone…", comment: "Glance note while a hand-back drains"))
+                            .font(.system(size: 10))
+                            .foregroundColor(.glanceDim)
+                            .multilineTextAlignment(.center)
+                    }
                 }
             }
             .padding(.bottom, 2)
