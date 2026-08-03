@@ -72,6 +72,7 @@ final class PodLoanWatchController {
             UserDefaults.standard.set(phase.rawValue, forKey: Keys.phase)
             if (oldValue == .takingOver) != (phase == .takingOver) {
                 onTakeoverRadioHold?(phase == .takingOver)
+                setTakeoverSessionListener(phase == .takingOver)
             }
         }
     }
@@ -90,6 +91,8 @@ final class PodLoanWatchController {
     /// means the APP STOPPED EXECUTING mid-connect — not that the pod went quiet. Distinguishing
     /// those two is the whole point: they send the user to opposite places.
     private var lastTakeoverReadAt: Date?
+    /// #86: the pending takeover retry, held so the session-established event can fire it early.
+    private var takeoverRetryWork: DispatchWorkItem?
     private var takeoverMaxReadGap: TimeInterval = 0
     /// Hand-back offer resend counter (reset when a drain begins) — makes an
     /// unreachable-phone wait self-documenting in the log.
@@ -502,6 +505,44 @@ final class PodLoanWatchController {
     }
 
     /// ~40s of retries (14 × 3s) while the pod's BLE session establishes.
+    /// #86 (2026-08-03): the takeover waits for the pod stack's own session-established EVENT
+    /// instead of inferring readiness from a polled CBPeripheral.state.
+    ///
+    /// The pre-stock build was trivially reliable here because it did exactly this: it parked
+    /// the takeover completion and finished on podCommsDidEstablishSession. The from-stock
+    /// rewrite replaced that with a 3 s poll of peripheral.state — read from the loan
+    /// controller's queue, where that property is not valid. Field 2026-08-03 epoch 143, app
+    /// running perfectly (max inter-read gap 3.3 s), the reads contradicted the connect
+    /// callbacks every time: read 4 reported "disconnected" 0.3 s after didConnect, read 9
+    /// "connecting" 0.5 s after didConnect. bleRunSession bails on that stale value, so no byte
+    /// was ever sent and the pod hung up on the silent link — seven connections, 3.5-3.6 s each.
+    ///
+    /// So: the event now drives the retry, and the 3 s metronome becomes a slow backstop. A
+    /// short debounce after the event lets the peripheral state propagate to our queue before
+    /// the read, since the guard downstream still consults it.
+    ///
+    /// Deliberately NOT applied to the E4 steady-state reclaim, which is 40-for-40 in the field
+    /// precisely because it never re-enters this configuration path. Takeover-only, which is
+    /// the "special protocol for the initial takeover" ruling.
+    private func setTakeoverSessionListener(_ armed: Bool) {
+        guard armed else {
+            PodLoanConnectClock.podLoanOnSessionEstablished = nil
+            takeoverRetryWork?.cancel()
+            takeoverRetryWork = nil
+            return
+        }
+        PodLoanConnectClock.podLoanOnSessionEstablished = { [weak self] in
+            guard let self = self else { return }
+            self.queue.async {
+                guard self.phase == .takingOver, let fire = self.takeoverRetryWork else { return }
+                SportLog.event("loan", "takeover: pod session ESTABLISHED (stack event) — reading now instead of waiting for the backstop")
+                self.takeoverRetryWork = nil
+                fire.cancel()
+                self.queue.asyncAfter(deadline: .now() + 0.25, execute: fire.perform)
+            }
+        }
+    }
+
     private func attemptTakeoverRead(manager: OmniPumpManager, grant: LoanGrant, attempt: Int) {
         let maxAttempts = 14
         manager.podLoanReadStatus { [weak self] success in
@@ -620,7 +661,13 @@ final class PodLoanWatchController {
                                                   attempt + 1, maxAttempts, readElapsed,
                                                   manager.podLoanConnectionStateDescription,
                                                   PodLoanConnectClock.summary(since: self.attemptStartedAt)))
-                    self.queue.asyncAfter(deadline: .now() + 3) {
+                    // #86: the retry is now a cancellable work item so the session-established
+                    // event can run it IMMEDIATELY. The timer is a backstop at 8 s (was a 3 s
+                    // metronome) — with the event driving progress, polling faster only burns
+                    // the attempt budget against a stale state read.
+                    let retry = DispatchWorkItem { [weak self] in
+                        guard let self = self else { return }
+                        self.takeoverRetryWork = nil
                         guard self.phase == .takingOver, self.epoch == grant.epoch else {
                             // OBS-1: the ladder was superseded during the 3s inter-attempt wait
                             // (re-Start or a newer epoch). Emit the verdict instead of vanishing.
@@ -629,6 +676,8 @@ final class PodLoanWatchController {
                         }
                         self.attemptTakeoverRead(manager: manager, grant: grant, attempt: attempt + 1)
                     }
+                    self.takeoverRetryWork = retry
+                    self.queue.asyncAfter(deadline: .now() + 8, execute: retry)
                 } else {
                     self.teardownPump()
                     self.phase = .idle
