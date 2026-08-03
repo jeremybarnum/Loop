@@ -83,6 +83,12 @@ final class StockLoopSession {
         // succeeded the moment the radio freed.
         loanController.onTakeoverRadioHold = { [weak self] holding in
             self?.stack.client.setPodTakeoverHold(holding)
+            // #86 (2026-08-03): the same window needs background RUNTIME, not just the radio.
+            // This hook already fires true on entering .takingOver and false on every exit, so
+            // it is exactly the ladder's lifetime. Without it the 3 s poll is throttled the
+            // moment the wrist drops and the read budget burns on wall-clock instead of
+            // attempts — the measured cause of that day's takeover failures.
+            self?.stack.client.setTakeoverKeepalive(holding)
             // Log pipeline v4: snapshot at takeover start (grant picture) and at the
             // verdict — the ~40s window that decides a session, captured either way.
             self?.sendLogSnapshot(holding ? "takeover start" : "takeover verdict")

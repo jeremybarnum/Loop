@@ -1042,6 +1042,31 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         workout.ensureRunning()
     }
 
+    /// #86 (2026-08-03): hold background runtime across the TAKEOVER ladder.
+    ///
+    /// The ladder polls every 3 s, but nothing kept the app alive during it — "soak" is only
+    /// acquired once the loan goes ACTIVE, which requires a takeover that already succeeded.
+    /// So the entire connect phase ran unprotected, and the moment the wrist dropped watchOS
+    /// throttled the timer. Measured 2026-08-03 epoch 140: reads 1-9 ticked at a metronomic
+    /// 3.3 s with the screen on, then RESIGN ACTIVE at +26 s and the next gaps were 13 s, 7 s,
+    /// 81 s, 23 s — 14 reads spread over 157 s of wall clock instead of 42 s, and the attempt
+    /// died with the pod perfectly reachable. Every success that day (6.6 s, 8.7 s) simply
+    /// finished before the wrist could drop. This is also why the pre-stock build was trivially
+    /// reliable: it waited on a session-established CALLBACK, which survives suspension, rather
+    /// than on a timer, which does not.
+    ///
+    /// Acquired at grant — the user has just tapped Start, so the app is guaranteed foreground
+    /// and an HKWorkoutSession can legally begin (the same reason "prewarm" is foreground-only).
+    /// Refcounted, so it composes with soak/prewarm and releasing it never ends a session that
+    /// steady-state looping still wants.
+    func setTakeoverKeepalive(_ holding: Bool) {
+        if holding {
+            workout.acquire("takeover")
+        } else {
+            workout.release("takeover")
+        }
+    }
+
     /// End the soak: release the "soak" keepalive hold and stop all polling. The session actually
     /// ends only when no other holder (a pre-warm) still wants it.
     func stopSoak() {
