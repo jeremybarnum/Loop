@@ -429,6 +429,19 @@ final class PodLoanWatchController {
         // GRANTING phone runs, instead of silently assuming Standard. nil (older phone) →
         // Standard, the pre-existing behavior.
         loopManager.setIntegralRetrospectiveCorrection(grant.integralRetrospectiveCorrectionEnabled ?? false)
+        // R23 OVERTURNED 2026-08-04 (Jeremy): "if phone closed, watch closed. If phone open,
+        // watch open." R23 reset every loan to OPEN/advisory and its amendment went further,
+        // removing any influence of the phone's mode on the wrist; both are superseded — the
+        // reason is intuitiveness for a second user, not a change of confidence in the
+        // fail-safe, so a broader release may revert to always-open.
+        //
+        // Frozen at the grant like the therapy settings. nil (a phone predating the field)
+        // → false, i.e. exactly the old start-OPEN rule, so build skew degrades to the
+        // previous behavior rather than to an unintended closed loop.
+        loopManager.setClosedLoopEnabled(grant.phoneClosedLoopEnabled ?? false,
+                                         reason: grant.phoneClosedLoopEnabled == nil
+                                            ? "(older phone sent no loop mode — defaulting open)"
+                                            : "inherited from the phone at grant")
         // INSTRUMENTATION ONLY (#45): stash the phone's prediction decomposition + echo it into the
         // log, BEFORE the takeover read / first prediction refresh, so [predict-diff] and [iob-diff]
         // Leg 1 have the phone baseline in hand. The serial dataAccessQueue guarantees the stash
@@ -1380,7 +1393,12 @@ final class PodLoanWatchController {
             events: offerEvents,
             tombstones: journal.pendingTombstones(),
             recovered: recovered,
-            released: phase != .active)   // WS1: interim while still dosing; final after finalize
+            released: phase != .active,   // WS1: interim while still dosing; final after finalize
+            // R23 overturned 2026-08-04 (Jeremy): the phone inherits the wrist's loop mode on
+            // the way back, mirroring the grant's outbound inheritance. Read through the
+            // NON-BLOCKING mirror: this runs on `queue`, and `closedLoopEnabled` would sync
+            // onto dataAccessQueue — the #64 deadlock direction.
+            watchClosedLoopEnabled: loopManager.closedLoopEnabledNonBlocking)
         handbackResendCount += 1
         // Self-documenting limbo (party finding: 97 silent minutes of 15s resends):
         // log the attempt count each minute so the wait is visible in the log.

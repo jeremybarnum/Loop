@@ -50,6 +50,11 @@ final class PodLoanPhoneController {
         /// phone-side edit cannot exist. Default no-op keeps the state-machine tests (and any
         /// caller that doesn't care about overrides) constructing unchanged.
         var applyScheduleOverride: (TemporaryScheduleOverride?) -> Void = { _ in }
+        /// R23 OVERTURNED 2026-08-04 (Jeremy): "the loop should inherit the watch state" on the
+        /// way back, mirroring the grant's outbound inheritance. Records the WRIST's final loop
+        /// mode so the reclaim restores THAT rather than the value captured before the loan.
+        /// Default no-op keeps the state-machine tests constructing unchanged.
+        var noteWatchClosedLoop: (Bool) -> Void = { _ in }
         /// 16 h insulin history for the grant.
         var doseHistory: (_ start: Date, _ completion: @escaping ([DoseEntry]) -> Void) -> Void
         /// Active carb entries for the grant (#49) — seeded so the watch predicts with COB.
@@ -572,6 +577,11 @@ final class PodLoanPhoneController {
                             // Standard RC while this phone may be running Integral — different
                             // predictions from identical inputs, silently (audit 2026-07-22).
                             integralRetrospectiveCorrectionEnabled: UserDefaults.standard.integralRetrospectiveCorrectionEnabled,
+                            // R23 OVERTURNED 2026-08-04 (Jeremy): the wrist follows the phone's
+                            // loop mode instead of resetting to OPEN each loan. Snapshotted at
+                            // the grant like the therapy settings, so a later phone-side toggle
+                            // does not reach through to a loan already in flight.
+                            phoneClosedLoopEnabled: settings.dosingEnabled,
                             carbHistory: carbs,
                             glucoseHistory: glucose,
                             predictionSnapshot: snapshot)
@@ -698,6 +708,15 @@ final class PodLoanPhoneController {
         let canTransition = state == .loaned || state == .reclaimPending || state == .grantOffered
         if !isStale, isFinal, canTransition {
             state = .reconciling
+            // Record the wrist's loop mode BEFORE the unpause runs, so the restore path reads
+            // it instead of the pre-loan capture. Gated on the same transition-owning condition
+            // as the odometer audit: a duplicate final (routine — 15s resends vs ack latency)
+            // must not re-apply it after the user has since changed the phone's own setting.
+            // nil (older watch) leaves the captured pre-loan value alone.
+            if let watchClosed = offer.watchClosedLoopEnabled {
+                deps.noteWatchClosedLoop(watchClosed)
+                handbackDiag(offer.epoch, "loop mode INHERITED from the wrist — phone will resume \(watchClosed ? "CLOSED" : "OPEN")")
+            }
         }
         // Round-2 fix: the odometer audit runs ONLY on the transition-owning final
         // offer. A duplicate final (routine: 15s resends vs ack latency) arrives

@@ -506,6 +506,18 @@ public struct LoanGrant: Codable, Equatable {
     /// identical inputs with no error (audit 2026-07-22). Frozen for the loan exactly like
     /// the therapy settings. nil (older phone) → Standard, the pre-existing behavior.
     public let integralRetrospectiveCorrectionEnabled: Bool?
+    /// The phone's own loop mode (`LoopSettings.dosingEnabled`) at the moment of the grant.
+    ///
+    /// R23 originally reset every loan to OPEN/advisory, and the R23 amendment (2026-07-18)
+    /// went further and removed any influence of the phone's mode on the wrist. OVERTURNED
+    /// 2026-08-04 (Jeremy): "if phone closed, watch closed. If phone open, watch open." The
+    /// rationale is intuitiveness for a second user rather than a change of confidence in the
+    /// fail-safe — a broader release may well revert to always-open.
+    ///
+    /// Optional for deployment skew, like the capability flags above: the watch and phone apps
+    /// install separately on this rig, so a watch newer than its phone is routine. nil (older
+    /// phone that does not send it) → false, i.e. exactly the previous start-OPEN behavior.
+    public let phoneClosedLoopEnabled: Bool?
     /// Active carbs the phone holds, seeded so the WATCH's own loop predicts with COB —
     /// not just IOB. The grant carried 16h of INSULIN (doseHistory) but no carbs, so the
     /// watch predicted LOWER than reality and under-delivered into a rising meal (field
@@ -538,6 +550,7 @@ public struct LoanGrant: Codable, Equatable {
                 supportsInterimHandback: Bool? = nil,
                 supportsOverrideRecords: Bool? = nil,
                 integralRetrospectiveCorrectionEnabled: Bool? = nil,
+                phoneClosedLoopEnabled: Bool? = nil,
                 carbHistory: [LoanCarbRecord]? = nil,
                 glucoseHistory: [LoanGlucoseRecord]? = nil,
                 predictionSnapshot: LoanPredictionSnapshot? = nil) {
@@ -552,6 +565,7 @@ public struct LoanGrant: Codable, Equatable {
         self.supportsInterimHandback = supportsInterimHandback
         self.supportsOverrideRecords = supportsOverrideRecords
         self.integralRetrospectiveCorrectionEnabled = integralRetrospectiveCorrectionEnabled
+        self.phoneClosedLoopEnabled = phoneClosedLoopEnabled
         self.carbHistory = carbHistory
         self.glucoseHistory = glucoseHistory
         self.predictionSnapshot = predictionSnapshot
@@ -730,10 +744,15 @@ public struct HandbackOffer: Codable, Equatable {
     /// ack the cursor but do NOT reclaim. `true` = the watch has released the pod.
     /// nil (legacy senders, which only offered after stopping) = treat as released.
     public let released: Bool?
+    /// The wrist's loop mode at hand-back. R23 overturned 2026-08-04 (Jeremy): the phone
+    /// INHERITS the watch's state on the way back, mirroring the grant's outbound inheritance,
+    /// rather than restoring the value captured before the loan. nil (older watch) → the phone
+    /// keeps its captured pre-loan value, i.e. the previous restore behavior.
+    public let watchClosedLoopEnabled: Bool?
 
     public init(epoch: Int, handedBackAt: Date, finalStatus: LoanPodStatus?,
                 odometer: LoanOdometerSnapshot?, events: [LoanEvent], tombstones: [UUID],
-                recovered: Bool, released: Bool? = nil) {
+                recovered: Bool, released: Bool? = nil, watchClosedLoopEnabled: Bool? = nil) {
         self.epoch = epoch
         self.handedBackAt = handedBackAt
         self.finalStatus = finalStatus
@@ -742,6 +761,7 @@ public struct HandbackOffer: Codable, Equatable {
         self.tombstones = tombstones
         self.recovered = recovered
         self.released = released
+        self.watchClosedLoopEnabled = watchClosedLoopEnabled
     }
 }
 

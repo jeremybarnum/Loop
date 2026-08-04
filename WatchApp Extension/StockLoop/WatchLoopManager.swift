@@ -249,10 +249,30 @@ final class WatchLoopManager {
     var closedLoopEnabled: Bool {
         dataAccessQueue.sync { _closedLoopEnabled }
     }
-    func setClosedLoopEnabled(_ enabled: Bool) {
+    /// Lock-guarded mirror of `_closedLoopEnabled` for callers that MUST NOT block on
+    /// `dataAccessQueue`. The loan controller's queue is one: a `sync` from there onto
+    /// dataAccessQueue is the #64 deadlock direction (apparent success at the crown, crash
+    /// 0-40s later, no insulin delivered), and the hand-back offer is built on that queue.
+    private let closedLoopMirrorLock = NSLock()
+    private var _closedLoopMirror = false
+    var closedLoopEnabledNonBlocking: Bool {
+        closedLoopMirrorLock.lock()
+        defer { closedLoopMirrorLock.unlock() }
+        return _closedLoopMirror
+    }
+
+    /// `reason` exists so the log distinguishes a wrist tap from the grant-inherited mode
+    /// (R23 overturned 2026-08-04) — otherwise every field log claims the user did it.
+    func setClosedLoopEnabled(_ enabled: Bool, reason: String = "by user") {
+        // Mirror synchronously so a hand-back offer built immediately after a wrist tap
+        // carries the value the user just chose, not the one before it.
+        closedLoopMirrorLock.lock()
+        _closedLoopMirror = enabled
+        closedLoopMirrorLock.unlock()
+
         dataAccessQueue.async {
             self._closedLoopEnabled = enabled
-            SportLog.event("loop", enabled ? "CLOSED by user — the watch will adjust basal" : "OPENED by user — advisory only, no dosing")
+            SportLog.event("loop", enabled ? "CLOSED \(reason) — the watch will adjust basal" : "OPENED \(reason) — advisory only, no dosing")
         }
     }
 

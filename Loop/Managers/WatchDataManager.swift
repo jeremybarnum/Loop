@@ -169,6 +169,15 @@ final class WatchDataManager: NSObject {
                 // and its own oldValue != newValue guard makes a redundant write free.
                 self?.deviceManager.loopManager.mutateSettings { $0.scheduleOverride = override }
             },
+            // R23 overturned 2026-08-04: overwrite the captured pre-loan value with the WRIST's
+            // final mode, so the restore in setAutomaticDosingPaused(false) picks it up
+            // untouched. Writing the SAME key inherits the persistence that already survives a
+            // relaunch mid-loan, and leaves the "missing capture defaults to OPEN" fail-safe
+            // exactly as it was. Called inline on the loan controller's queue, like the
+            // override door above; UserDefaults is any-queue safe.
+            noteWatchClosedLoop: { closed in
+                UserDefaults.standard.set(closed, forKey: dosingKey)
+            },
             doseHistory: { [weak self] start, completion in
                 guard let self = self else { completion([]); return }
                 self.deviceManager.doseStore.getNormalizedDoseEntries(start: start) { result in

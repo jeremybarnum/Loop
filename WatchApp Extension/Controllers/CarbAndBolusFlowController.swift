@@ -50,9 +50,23 @@ final class CarbAndBolusFlowController: WKHostingController<CarbAndBolusFlow>, I
 
         updateNewCarbEntryUserActivity()
 
+        let appearedAt = Date()
+
         // If the screen turns off, the screen should be dismissed for safety reasons
         willDeactivateObserver = NotificationCenter.default.addObserver(forName: ExtensionDelegate.willResignActiveNotification, object: ExtensionDelegate.shared(), queue: nil, using: { [weak self] (_) in
             if let self = self {
+                // TELEMETRY ONLY — behavior unchanged. A field log showed 302 RESIGN ACTIVE
+                // events, 144 of them within 2s of becoming ACTIVE (some sub-second), and this
+                // observer force-dismisses the carb/bolus flow on every one. We could not tell
+                // from that log whether a flow was actually open at the time, so we could not
+                // size the problem. This line answers exactly that, and how long the user had
+                // before the screen was taken away. Do NOT change the dismiss behavior on the
+                // strength of this alone — it is a deliberate stock safety behavior.
+                SportLog.event("bolus-ui", String(
+                    format: "flow DISMISSED by resign-active after %.1fs open · %@",
+                    Date().timeIntervalSince(appearedAt),
+                    RuntimeStateLog.snapshot()
+                ))
                 WKInterfaceDevice.current().play(.failure)
                 self.dismiss()
             }

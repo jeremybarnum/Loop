@@ -172,6 +172,34 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   pod"), and closing without BG is not refused: it ARMS, and the stale
   gate keeps it paused until readings flow.
 
+- **R23 OVERTURNED (loop mode only) — the wrist follows the phone** (2026-08-04,
+  Jeremy): "I'm confident enough in the system now that when the loan starts, if
+  the phone was on closed loop, I want to loop closed… for Caitlin's purposes,
+  following the phone will be more intuitive." So: **if phone closed, watch
+  closed; if phone open, watch open — and the same on the way back, the loop
+  inherits the watch state.** This supersedes BOTH R23's "each loan starts
+  OPEN/advisory… reset OPEN each loan" and the R23 AMENDMENT's removal of any
+  phone influence on the wrist's mode. Everything else in R23/R24 stands — the
+  pill still toggles, close is still crown-confirmed, open is still immediate.
+  Explicitly provisional: "Maybe, if we release this more broadly, we could go
+  back to always open." The reason is intuitiveness for a second user, NOT a
+  change of confidence in the fail-safe.
+
+  Wire: `LoanGrant.phoneClosedLoopEnabled` (outbound, frozen at grant like the
+  therapy settings) and `HandbackOffer.watchClosedLoopEnabled` (return). Both
+  optional — nil from an older counterpart falls back to the PREVIOUS behavior
+  (start OPEN / restore the pre-loan capture), so build skew degrades to the old
+  rule rather than to an unintended closed loop. The return value is written into
+  the same persisted key the reclaim already restores from, so it inherits the
+  relaunch-survival and the "missing capture defaults to OPEN" fail-safe.
+
+  KNOWN CONSEQUENCE, accepted: because the phone now inherits the wrist, a
+  session that ended OPEN on the watch leaves the phone in open loop after the
+  pod comes home — including if the watch opened itself. Flagged at ruling time
+  and chosen anyway for symmetry; the inheritance is logged on both sides
+  (`[loop] … inherited from the phone at grant`, `[phone] loop mode INHERITED
+  from the wrist`) so it is never silent.
+
 - **R24 — Sport Mode connect/onboarding UX** (2026-07-18): return to the
   crude build's proven pattern — it "was very good and working perfectly"
   (Jeremy). Pod takeover: a DETERMINATE ~10-second progress bar (the pod

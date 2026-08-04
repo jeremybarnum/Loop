@@ -127,9 +127,11 @@ final class StockLoopSession {
             guard let self = self else { return }
             if active {
                 os_log("Loan active: starting G7 transport", log: self.log, type: .default)
-                // R23 confidence model: every loan starts OPEN (advisory); the user
-                // closes the loop deliberately from the glance screen.
-                self.stack.loopManager.setClosedLoopEnabled(false)
+                // R23's "every loan starts OPEN" reset was OVERTURNED 2026-08-04 (Jeremy):
+                // the wrist inherits the phone's loop mode, applied from the grant in
+                // PodLoanWatchController. Deliberately NOT re-asserted here — this callback
+                // also fires on the hand-back-timeout resume path (:1284), where the user's
+                // own choice for the session must survive rather than be reset under them.
                 self.stack.client.prewarmIfPending()
                 self.stack.client.startSoak()
                 // H19: arm the loop-stall dead-man for the session; every live loop
