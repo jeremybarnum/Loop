@@ -175,6 +175,23 @@ extension CarbAndBolusFlow {
             }
         case .size44mm, .size45mm:
             return 5
+        case .size187x223, .size208x248, .size205x251, .size211x257:
+            // Measured, not guessed. On a Series 11 46mm (208x248) sim, screenshotting the
+            // bolus-amount label either side of the bolusEntry → bolusConfirmation transition
+            // and nulling its drift — which is precisely what this constant is for:
+            //
+            //   manualBolus   5pt → -4.5pt drift · 14pt → 0.0 · 19pt → +2.5
+            //   carbEntry                          9pt → 0.0 · 14pt → +2.5
+            //
+            // Drift moves 1pt per 1pt of padding, so these are the exact zeroes. The split
+            // mirrors the 40/41mm arm, where carb entry likewise wants less than manual bolus.
+            // Only 208x248 was measured; the other three are carried by analogy as large
+            // screens. Before this arm existed they fell to .size40mm and got 7/19.
+            if case .carbEntry = configuration {
+                return 9
+            } else {
+                return 14
+            }
         }
     }
 }
@@ -205,7 +222,7 @@ extension CarbAndBolusFlow {
         ) {
             self.transitionToBolusEntry()
         }
-        .offset(y: actionButtonOffsetY)
+        // No `.offset(y:)` here — see saveCarbsAndBolusButton.
         .transition(.fadeIn(after: 0.175))
     }
 
@@ -222,7 +239,13 @@ extension CarbAndBolusFlow {
                 self.viewModel.addCarbsWithoutBolusing()
             }
         }
-        .offset(y: actionButtonOffsetY)
+        // Stock shipped a per-size-class `.offset(y:)` here (20pt on 40/41mm, 27pt on
+        // 44/45mm) to push the button toward the bezel on watchOS 6-era safe areas. `.offset`
+        // is a render-time shift, not layout: the `Spacer()` above already bottom-aligns this
+        // button, so the shift moves it *below* the safe area with nothing to absorb it. On
+        // watchOS 10+ the bottom inset shrank and the capsule is sheared off — measured on a
+        // 44mm SE 3 sim, which reproduces the on-wrist clipping exactly at 27 and is clean at
+        // 0. Bottom alignment is now left to the layout system, which is size-class agnostic.
         .transition(.fadeIn(after: 0.35, removal: .identity))
     }
 
@@ -234,17 +257,6 @@ extension CarbAndBolusFlow {
                 : Text("Save", comment: "Button text to confirm carb entry without bolusing on Apple Watch")
         case .manualBolus:
             return Text("Bolus", comment: "Button text to confirm manual bolus on Apple Watch")
-        }
-    }
-
-    private var actionButtonOffsetY: CGFloat {
-        switch sizeClass {
-        case .size38mm, .size42mm:
-            return 0
-        case .size40mm, .size41mm:
-            return 20
-        case .size44mm, .size45mm:
-            return 27
         }
     }
 
