@@ -1799,16 +1799,40 @@ extension PodLoanWatchController: WatchLoanDoseRecording {
     /// entry during a loan isn't part of v1, so this is a guard: we do NOT mint a `.carb` journal
     /// event or stream it. Re-enable the round-trip (restore the mint + streamRecords below) when the
     /// phone-side idempotent carb ingest lands. The carb-entry UI still calls this; it just no-ops.
+    /// #49/#66 (2026-08-04): watch-entered carbs now follow the pod home.
+    ///
+    /// Rides the ordinary journal, exactly like the override path — which means it inherits the
+    /// per-loan seq, the commit cursor, resend-until-ack and the hand-back drain for free. The
+    /// phone side was already complete: LoanReconciler turns a .carb record into a NewCarbEntry
+    /// (LoanReconciler.swift:183-189) and both commit sites run behind
+    /// `.filter { !stagedTombstones.contains($0.id) && !committedIDs.contains($0.id) }`, so a
+    /// redelivered record is dropped before it can reach addCarb. That protocol-level gate is
+    /// what #66 asked for; NewCarbEntry itself carries no identity (CarbStore mints a fresh
+    /// syncIdentifier on every addCarbEntry), so the store can never dedupe and the cursor has
+    /// to be the guard.
+    ///
+    /// No skew gate needed, unlike .overrideChange: .carb is an original kind that every phone
+    /// build in the field can already decode.
     func loanDidRecordCarbs(_ entry: NewCarbEntry) {
-        SportLog.event("loan", String(format: "carb entry during loan (%.0f g) — NOT returned to phone (one-way carbs in v1)", entry.quantity.doubleValue(for: .gram())))
-        // Deferred round-trip (do not remove — the re-enable path):
-        //   queue.async {
-        //       guard self.phase == .active else { return }
-        //       _ = try? self.journal.mintEvent(record: LoanDoseRecord(kind: .carb, startDate: entry.startDate,
-        //           amount: entry.quantity.doubleValue(for: .gram()), absorptionTime: entry.absorptionTime),
-        //           provenance: .confirmed)
-        //       self.streamRecords()
-        //   }
+        let grams = entry.quantity.doubleValue(for: .gram())
+        queue.async {
+            guard self.phase == .active else {
+                SportLog.event("loan", String(format: "carb entry ignored (%.0f g) — no active loan to journal it against", grams))
+                return
+            }
+            let record = LoanDoseRecord(kind: .carb,
+                                        startDate: entry.startDate,
+                                        amount: grams,
+                                        absorptionTime: entry.absorptionTime)
+            guard let event = try? self.journal.mintEvent(record: record, provenance: .confirmed) else {
+                SportLog.event("loan", String(format: "** CARB JOURNAL MINT FAILED (%.0f g) — the carb is LIVE on the watch but will NOT follow the pod home **", grams))
+                return
+            }
+            SportLog.event("loan", String(format: "carb JOURNALED %.0f g (absorption %.1f h) — seq %d, event %@",
+                                          grams, (entry.absorptionTime ?? 0) / 3600, event.seq,
+                                          String(event.id.uuidString.prefix(8))))
+            self.streamRecords()
+        }
     }
 
     /// #68 part B: journal a WRIST-enacted override change so it follows the pod home.

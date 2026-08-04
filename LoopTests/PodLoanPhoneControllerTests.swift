@@ -30,6 +30,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     private var sent: [LoanMessage] = []
     private var sentExpectations: [XCTestExpectation] = []
     private var addedDoses: [[DoseEntry]] = []
+    /// #49/#66: every NewCarbEntry the controller committed, for round-trip assertions.
+    private var addedCarbs: [NewCarbEntry] = []
     private var pauseCalls: [Bool] = []
     private var notices: [String] = []
     /// #42: drives Dependencies.isConnectionReady — false = pod still returning from a reclaim.
@@ -98,7 +100,10 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 self.lock.lock(); self.addedDoses.append(events.compactMap { $0.dose }); self.lock.unlock()
                 completion(nil)
             },
-            addCarb: { _, completion in completion(nil) },
+            addCarb: { [weak self] entry, completion in
+                self?.lock.lock(); self?.addedCarbs.append(entry); self?.lock.unlock()
+                completion(nil)
+            },
             doseHistory: { _, completion in completion([]) },
             issueNotice: { [weak self] title, _ in
                 guard let self = self else { return }
@@ -129,6 +134,13 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             e.fulfill()
         }
         wait(for: [e], timeout: 5)
+    }
+
+    /// #49/#66: carbs the phone actually committed, for the watch->phone round-trip tests.
+    private func carbEvent(seq: Int, grams: Double, at date: Date, absorption: TimeInterval) -> LoanEvent {
+        LoanEvent(id: UUID(), seq: seq, provenance: .confirmed,
+                  record: LoanDoseRecord(kind: .carb, startDate: date, amount: grams, absorptionTime: absorption),
+                  loggedAt: date)
     }
 
     private func makeEvent(seq: Int, units: Double, at date: Date) -> LoanEvent {
@@ -323,6 +335,79 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         case .grant?, .denied?: break
         default: XCTFail("a fresh request must be handled, got \(String(describing: lastSent()))")
         }
+    }
+
+    // MARK: - #49/#66 watch-entered carbs follow the pod home
+
+    /// The round trip the carb button was disabled for. A carb entered on the wrist rides the
+    /// journal like any other record; the hand-back drain must land it in the phone's CarbStore
+    /// with quantity, start time and absorption interval intact.
+    func testWatchCarbRoundTripsToThePhoneOnHandback() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        let mealAt = Date().addingTimeInterval(-.minutes(20))
+
+        let acked = expectSend()
+        let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                                  events: [carbEvent(seq: 1, grams: 42, at: mealAt, absorption: .hours(3))],
+                                  tombstones: [], recovered: false)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        wait(for: [acked], timeout: 5)
+        waitForState(controller, .owner)
+
+        XCTAssertEqual(addedCarbs.count, 1, "the wrist carb must reach the phone's CarbStore")
+        guard let carb = addedCarbs.first else { return }
+        XCTAssertEqual(carb.quantity.doubleValue(for: .gram()), 42, accuracy: 0.001, "grams must survive the fold")
+        XCTAssertEqual(carb.startDate.timeIntervalSince1970, mealAt.timeIntervalSince1970, accuracy: 1,
+                       "meal time must survive — absorption is computed from it")
+        XCTAssertEqual(carb.absorptionTime ?? -1, .hours(3), accuracy: 1,
+                       "absorption interval must survive; without it the phone re-derives a default curve")
+    }
+
+    /// #66: NewCarbEntry carries NO identity and CarbStore mints a fresh syncIdentifier on every
+    /// addCarbEntry, so the store itself can never dedupe. Idempotency has to come from the
+    /// protocol's committed-ID gate. A redelivered offer (lost ack, row 10) must therefore commit
+    /// the carb exactly once — otherwise every resend inflates COB, which is the #65 phantom-COB
+    /// failure mode arriving by a different door.
+    func testRedeliveredCarbCommitsOnlyOnce() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        let mealAt = Date().addingTimeInterval(-.minutes(10))
+        let event = carbEvent(seq: 1, grams: 30, at: mealAt, absorption: .hours(2))
+
+        let first = expectSend()
+        let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                                  events: [event], tombstones: [], recovered: false)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        wait(for: [first], timeout: 5)
+        XCTAssertEqual(addedCarbs.count, 1, "first delivery commits the carb")
+
+        // Same offer, same event id — the watch resends until acked, so this is routine.
+        let second = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        wait(for: [second], timeout: 5)
+        XCTAssertEqual(addedCarbs.count, 1,
+                       "a redelivered carb must NOT be committed twice — COB would inflate on every resend (#65/#66)")
+    }
+
+    /// Carbs and insulin arrive through different stores; a drain carrying both must not let one
+    /// interfere with the other.
+    func testMixedCarbAndBolusDrainLandsInBothStores() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        let at = Date().addingTimeInterval(-.minutes(5))
+
+        let acked = expectSend()
+        let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                                  events: [makeEvent(seq: 1, units: 2.5, at: at),
+                                           carbEvent(seq: 2, grams: 15, at: at, absorption: .hours(2))],
+                                  tombstones: [], recovered: false)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        wait(for: [acked], timeout: 5)
+        waitForState(controller, .owner)
+
+        XCTAssertEqual(addedCarbs.count, 1, "the carb landed")
+        XCTAssertEqual(addedDoses.flatMap { $0 }.filter { $0.type == .bolus }.count, 1, "the bolus landed")
     }
 
     /// The R7 override: forceReclaimToOwner returns to owner and restores dosing.

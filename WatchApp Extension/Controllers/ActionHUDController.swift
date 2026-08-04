@@ -93,12 +93,21 @@ final class ActionHUDController: HUDInterfaceController {
             }
         }
 
-        // v1 Sport Mode build (Jeremy 2026-07-26): carb entry on the watch is suppressed — carbs are
-        // one-way phone→watch (seeded + wiped-then-replaced at takeover) and watch-entered carbs are
-        // NOT returned (loanDidRecordCarbs is a no-op). Rather than offer an action that won't
-        // round-trip and confuse the user, grey the carb button unconditionally (overrides the state
-        // set above). Revert this one line when bidirectional carb sync (#49/#66) lands.
-        carbsButtonGroup.state = .disabled
+        // #49/#66 (2026-08-04): bidirectional carb sync has landed, so the unconditional disable
+        // that stood here since 2026-07-26 is removed and the button follows the ordinary state
+        // logic above.
+        //
+        // The precondition it was waiting on ("watch-entered carbs are NOT returned") is met and
+        // PROVEN, not assumed: loanDidRecordCarbs now mints a .carb journal record, LoanReconciler
+        // converts it to a NewCarbEntry, and the phone commits it on the hand-back drain.
+        // testWatchCarbRoundTripsToThePhoneOnHandback asserts grams / meal time / absorption
+        // interval all survive the fold.
+        //
+        // Redelivery safety, which is the part that actually mattered: NewCarbEntry carries no
+        // identity and CarbStore mints a fresh syncIdentifier per addCarbEntry, so the store can
+        // never dedupe. The protocol's committed-ID filter is the guard, and
+        // testRedeliveredCarbCommitsOnlyOnce was verified to FAIL (2 != 1) with that filter
+        // disabled — so a resent hand-back offer cannot inflate COB.
 
         glucoseFormatter.updateUnit(to: loopManager.displayGlucoseUnit)
     }
