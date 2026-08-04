@@ -102,6 +102,8 @@ struct GlanceUIState {
     /// WS1: hand-back requested but still draining — watch remains in control;
     /// the glance shows "ending…" plus a Cancel affordance.
     var handbackPending: Bool = false
+    /// When the current reclaim began — anchors the determinate reclaim bar (2026-08-04).
+    var handbackStartedAt: Date? = nil
 }
 
 // MARK: - View model
@@ -218,6 +220,7 @@ final class GlanceViewModel: ObservableObject {
             state = s
         case .revoked, .recoveredDrain:
             var s = GlanceUIState(); s.phase = .draining
+            s.handbackStartedAt = snap.handbackStartedAt
             s.loopStatusText = NSLocalizedString("returning records…", comment: "Glance status while draining records")
             state = s
         case .active:
@@ -226,6 +229,7 @@ final class GlanceViewModel: ObservableObject {
                                      phoneGlucoseDate: ExtensionDelegate.shared().loopManager.activeContext?.glucoseDate)
             if snap.handbackPending {
                 s.handbackPending = true
+                s.handbackStartedAt = snap.handbackStartedAt
                 s.loopStatusText = NSLocalizedString("ending…", comment: "Glance status while a hand-back drains in the background")
                 // WS1 interim drain — the watch is STILL looping, so this path deliberately
                 // carried no note. But an unreachable phone is exactly the case the user must
@@ -711,6 +715,9 @@ struct GlanceView: View {
                             .font(.system(size: 10))
                             .foregroundColor(.glanceDim)
                             .multilineTextAlignment(.center)
+                        if let began = model.state.handbackStartedAt {
+                            reclaimBar(since: began)
+                        }
                     }
                 }
             }
@@ -721,7 +728,13 @@ struct GlanceView: View {
             EmptyView()
         case .handingBack, .draining:
             VStack(spacing: 4) {
-                ProgressView()
+                if let began = model.state.handbackStartedAt, !model.state.phoneUnreachable {
+                    reclaimBar(since: began)
+                } else {
+                    // No anchor (relaunch mid-reclaim) or a phone we cannot reach — honest
+                    // indeterminate rather than a bar implying progress that isn't happening.
+                    ProgressView()
+                }
                 if let note = model.state.idleNote {
                     Text(note)
                         .font(.system(size: 11))
@@ -738,8 +751,51 @@ struct GlanceView: View {
     /// It fills to 95% on schedule and holds there honestly (with a note) if the
     /// takeover overruns; completion is the whole view flipping to the active glance.
     /// The G7 prediction rides below — deliberately decoupled from the pod bar.
-    private static let podTakeoverExpected: TimeInterval = 10
-    private static let podTakeoverOverrun: TimeInterval = 14
+    /// Deliberately PESSIMISTIC (Jeremy, 2026-08-04): "I want the successful grant to almost
+    /// always finish early… that way the typical takeover is a pleasant surprise." Measured
+    /// takeovers run 8-12s, so a 12s fill means the good case completes at or before the bar
+    /// lands rather than after it — the bar is an upper estimate to be beaten, not a forecast
+    /// to be matched.
+    /// Reclaim (hand-back) bar, 2026-08-04. Same pessimistic philosophy as the takeover bar
+    /// and calibrated to the LONG tail rather than the median: reclaims are usually quick but
+    /// run ~20s often enough that a fast bar would stall visibly. Jeremy: "calibrating it to
+    /// the long tail would again signal to the user that sometimes it's a bit long, and then
+    /// usually they get pleasantly surprised."
+    private static let podReclaimExpected: TimeInterval = 20
+    private static let podReclaimOverrun: TimeInterval = 26
+
+    /// The determinate reclaim bar. Deliberately NOT shown when the phone is unreachable —
+    /// #67 follow-up (2026-08-03): a reassuring bar is exactly what made a stuck hand-back
+    /// look like normal progress, and when the phone can't be reached nothing IS progressing.
+    /// That case keeps the explicit warning instead; this bar only ever claims progress that
+    /// is really possible.
+    @ViewBuilder
+    private func reclaimBar(since began: Date) -> some View {
+        TimelineView(.animation(minimumInterval: 0.1)) { timeline in
+            let elapsed = timeline.date.timeIntervalSince(began)
+            let progress = min(max(elapsed, 0) / Self.podReclaimExpected, 0.95)
+            VStack(spacing: 3) {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.glanceDim.opacity(0.25))
+                        Capsule().fill(Color.glanceAccent)
+                            .frame(width: max(6, geo.size.width * progress))
+                    }
+                }
+                .frame(height: 5)
+                if elapsed > Self.podReclaimOverrun {
+                    Text(NSLocalizedString("taking longer than usual…", comment: "Glance note when the reclaim overruns"))
+                        .font(.system(size: 11))
+                        .foregroundColor(.glanceWarn)
+                }
+            }
+        }
+    }
+
+    private static let podTakeoverExpected: TimeInterval = 12
+    /// Kept 4s beyond the fill, as before, so "taking longer than usual" still means genuinely
+    /// atypical rather than firing the moment the bar pins.
+    private static let podTakeoverOverrun: TimeInterval = 16
 
     private var startingBlock: some View {
         VStack(spacing: 4) {

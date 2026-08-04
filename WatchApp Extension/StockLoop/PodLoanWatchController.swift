@@ -136,6 +136,10 @@ final class PodLoanWatchController {
     /// watch. Set at the End tap (beginHandback), cleared on ack/cancel/timeout. Nil for a
     /// recovered/revoke drain (no local loan to resume — those keep resending).
     private var handbackDeadline: Date?
+    /// When the CURRENT hand-back began — the anchor for the reclaim progress bar (2026-08-04).
+    /// Set and cleared in lockstep with `handbackDeadline`, which already marks exactly the
+    /// hand-back's lifetime, so there is no second lifecycle to keep in step.
+    private var handbackStartedAt: Date?
     private var requestTimeoutWork: DispatchWorkItem?
     /// Surfaced on the glance idle screen after a failed/timed-out start, so the user
     /// sees WHY instead of a silent return to idle.
@@ -1247,6 +1251,7 @@ final class PodLoanWatchController {
             // app; the resend loop resumes Sport Mode on the watch at the same deadline. Covers
             // both the interim-drain path below and the legacy single-phase finalize.
             self.handbackDeadline = Date().addingTimeInterval(HandbackStuckAlert.interval)
+            self.handbackStartedAt = Date()
             HandbackStuckAlert.arm()
             guard self.phoneSupportsInterimHandback else {
                 // REAL-3 skew gate: an old phone treats ANY offer as final — go
@@ -1268,6 +1273,7 @@ final class PodLoanWatchController {
             self.handbackRequested = false
             self.resendWorkItem?.cancel()
             self.handbackDeadline = nil
+            self.handbackStartedAt = nil
             HandbackStuckAlert.disarm()   // #67: aborted before the budget — no stuck alert
             SportLog.event("loan", "HAND-BACK cancelled — Sport Mode continues")
         }
@@ -1284,6 +1290,7 @@ final class PodLoanWatchController {
     private func handbackTimedOut() {
         resendWorkItem?.cancel()
         handbackDeadline = nil
+        handbackStartedAt = nil
         let wasFinal = (phase == .handingBack)
         handbackRequested = false
         finalOfferSent = false
@@ -1493,6 +1500,7 @@ final class PodLoanWatchController {
         deliveredAtTakeover = nil
         manualSuspendEnd = nil
         handbackDeadline = nil
+        handbackStartedAt = nil
         HandbackStuckAlert.disarm()   // #67: hand-back completed cleanly
         onLoanActiveChanged?(false)
         SportLog.event("loan", "CLOSED — records drained, pod released, cursor \(ack.committedCursor)")
@@ -1506,6 +1514,7 @@ final class PodLoanWatchController {
         // Stop dosing, zero post-revoke pod commands (DESIGN-6), drain what we have.
         handbackRequested = false   // WS1: phone-initiated revoke supersedes a pending drain
         handbackDeadline = nil
+        handbackStartedAt = nil
         HandbackStuckAlert.disarm()   // #67: the phone took over — no stuck alert
         loopManager.pumpManager = nil
         chaseWorkItem?.cancel()
@@ -1580,6 +1589,8 @@ final class PodLoanWatchController {
         /// WS1: a hand-back is requested and draining while the watch is still in
         /// control (phase .active) — the glance shows "ending…" + Cancel.
         let handbackPending: Bool
+        /// When the current hand-back began — anchors the reclaim progress bar.
+        let handbackStartedAt: Date?
         /// #67 follow-up (2026-08-03): can we reach the iPhone right now? The ONLY thing the
         /// watch needs to know — it does not care whether the phone is out of range, has
         /// Bluetooth off, or is powered down; all three are "can't reach it" and all three
@@ -1609,6 +1620,7 @@ final class PodLoanWatchController {
                 lastIdleNote: lastIdleNote,
                 startedAt: attemptStartedAt,
                 handbackPending: handbackRequested,
+                handbackStartedAt: handbackStartedAt,
                 phoneReachable: isPhoneReachable())
         }
     }
