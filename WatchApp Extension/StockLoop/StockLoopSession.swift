@@ -11,6 +11,7 @@
 //
 
 import Foundation
+import OmnipodKit        // #86: PodLoanConnectClock.podLoanLogSink (pod BLE layer -> watch log)
 import WatchConnectivity
 import os.log
 
@@ -37,6 +38,13 @@ final class StockLoopSession {
 
         stack = StockLoopStack.assemble()
         loanController = PodLoanWatchController(loopManager: stack.loopManager)
+
+        // #86 (2026-08-03): let the pod BLE layer write into the watch's mirrored log.
+        // OmnipodKit logs via os_log, which never reaches the g7watch file the field analysis
+        // reads — a [CONFIG] diagnostic added to settle "did we ever talk to the pod" produced
+        // zero visible lines for exactly that reason. Wired here (watch only; the phone leaves
+        // the sink nil and keeps os_log).
+        PodLoanConnectClock.podLoanLogSink = { line in SportLog.event("pod-ble", line) }
 
         // #67 follow-up: the one question the hand-back UI needs answered.
         loanController.isPhoneReachable = { WCSession.default.isReachable }
