@@ -39,6 +39,32 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
     private static let defaultSupportedBolusVolumes = (0...600).map { 0.05 * Double($0) } // U
     private static let defaultMaxBolus: Double = 10 // U
 
+    /// Whether the pod was on loan when this flow opened, latched once.
+    ///
+    /// Latched rather than live-read for two reasons. (1) `isLoanActive` is `queue.sync` onto
+    /// the loan controller's serial queue — the same queue that runs the ~40s takeover ladder —
+    /// and the context observer below runs on the MAIN thread on every loop cycle, so a live
+    /// read there would put a main-thread hop onto a busy queue several times a minute.
+    /// (2) The dial's ceiling must not move under the user's thumb mid-entry. Delivery still
+    /// re-reads the LIVE gate at the moment it commits (see `sendSetBolusUserInfo`), which is
+    /// the read that actually decides where insulin is commanded from.
+    private let wasOnLoanAtOpen: Bool
+
+    /// The dial's ceiling and increment ladder.
+    ///
+    /// During a loan the authority for the ceiling is the GRANT's therapy maximumBolus. The HUD
+    /// `LoopDataManager.settings` is a different object whose only writer is a settings message
+    /// the phone pushes, so in Sport Mode it is either stale or — on a watch that has never been
+    /// in range of the phone — the hardcoded 10 U default. Both directions are wrong: below the
+    /// prescribed max the user cannot dial it, above it the dial accepts an amount that
+    /// `enactManualBolus` then refuses after the screen has dismissed.
+    private static func pickerValues(hud: LoopDataManager, grantedMaxBolus: Double?) -> BolusPickerValues {
+        BolusPickerValues(
+            supportedVolumes: hud.supportedBolusVolumes ?? defaultSupportedBolusVolumes,
+            maxBolus: grantedMaxBolus ?? hud.settings.maximumBolus ?? defaultMaxBolus
+        )
+    }
+
     // MARK: - Initialization
     let configuration: CarbAndBolusFlow.Configuration
     private let dismiss: () -> Void
@@ -57,12 +83,21 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
             self._recommendedBolusAmount = Published(initialValue: activeContext?.recommendedBolusDose)
         }
 
+        let session = ExtensionDelegate.shared().stockLoopSession
+        let onLoan = session.loanController.isLoanActive
+        let grantedMaxBolus = onLoan ? session.stack.loopManager.grantedMaximumBolus : nil
+        self.wasOnLoanAtOpen = onLoan
+
         self._bolusPickerValues = Published(
-            initialValue: BolusPickerValues(
-                supportedVolumes: loopManager.supportedBolusVolumes ?? Self.defaultSupportedBolusVolumes,
-                maxBolus: loopManager.settings.maximumBolus ?? Self.defaultMaxBolus
-            )
+            initialValue: Self.pickerValues(hud: loopManager, grantedMaxBolus: grantedMaxBolus)
         )
+
+        SportLog.event("bolus-ui", String(
+            format: "flow open · %@ · dial max %.2f U (%@)",
+            onLoan ? "ON LOAN" : "phone-owned",
+            grantedMaxBolus ?? loopManager.settings.maximumBolus ?? Self.defaultMaxBolus,
+            grantedMaxBolus != nil ? "grant" : (loopManager.settings.maximumBolus != nil ? "phone-pushed" : "DEFAULT 10U — phone never seen")
+        ))
 
         self.configuration = configuration
         self.dismiss = dismiss
@@ -79,9 +114,13 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
                 return
             }
             
-            self.bolusPickerValues = BolusPickerValues(
-                supportedVolumes: loopManager.supportedBolusVolumes ?? Self.defaultSupportedBolusVolumes,
-                maxBolus: loopManager.settings.maximumBolus ?? Self.defaultMaxBolus
+            // `wasOnLoanAtOpen` is latched, so this observer — which runs on MAIN on every
+            // loop cycle — never touches the loan controller's queue.
+            self.bolusPickerValues = Self.pickerValues(
+                hud: loopManager,
+                grantedMaxBolus: self.wasOnLoanAtOpen
+                    ? ExtensionDelegate.shared().stockLoopSession.stack.loopManager.grantedMaximumBolus
+                    : nil
             )
 
             switch self.configuration {

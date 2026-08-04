@@ -31,9 +31,17 @@ extension WCSession {
             throw MessageError.activation
         }
 
+        // Was `log; return` — it returned WITHOUT calling replyHandler OR errorHandler and
+        // without throwing, so the caller's `isComputingRecommendedBolus = true` was never
+        // cleared and the bolus screen sat on "REC: Calculating…" forever with no timeout and
+        // no error. That is the on-wrist hang (2026-08-04): it only "recovered" because the
+        // context observer re-fires this call every loop cycle, so it cleared whenever the
+        // phone happened to come back. Throw like the other reachability guards in this file
+        // (sendSettingsUpdateMessage :81, sendContextRequestMessage :167) so the caller's
+        // existing catch clears the spinner and surfaces the failure.
         guard isReachable else {
-            log.default("sendPotentialCarbEntryMessage: Phone is unreachable, taking no action")
-            return
+            log.default("sendPotentialCarbEntryMessage: Phone is unreachable")
+            throw MessageError.reachability
         }
 
         sendMessage(carbEntry.rawValue,

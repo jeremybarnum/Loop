@@ -120,8 +120,33 @@ final class WatchLoopManager {
     /// LoopDataManager.overrideHistory (:346) and its record site (:270).
     let overrideHistory: TemporaryScheduleOverrideHistory
 
+    /// The therapy maximumBolus the GRANT delivered, in a form the main thread may read.
+    ///
+    /// The manual-bolus dial used to take its ceiling from the HUD `LoopDataManager`'s
+    /// settings — a different object, whose only writer is a `LoopSettingsUserInfo` the PHONE
+    /// pushes, falling back to a hardcoded 10 U on a watch that has never been in range. So in
+    /// Sport Mode the dial was capped by the wrong number in both directions: below the
+    /// prescribed max (can't dial it) or above it (dial accepts, then `enactManualBolus`
+    /// refuses at :1921 after the screen has already dismissed).
+    ///
+    /// `settings` is a mutable value type owned by `dataAccessQueue`, so it must not be read
+    /// across queues; this is a scalar snapshot republished on every assignment.
+    private let grantedMaximumBolusLock = NSLock()
+    private var _grantedMaximumBolus: Double?
+
+    /// Therapy maximumBolus from the loan grant, or nil if no grant has landed. Main-safe.
+    var grantedMaximumBolus: Double? {
+        grantedMaximumBolusLock.lock()
+        defer { grantedMaximumBolusLock.unlock() }
+        return _grantedMaximumBolus
+    }
+
     var settings: LoopSettings {
         didSet {
+            grantedMaximumBolusLock.lock()
+            _grantedMaximumBolus = settings.maximumBolus
+            grantedMaximumBolusLock.unlock()
+
             // #68: mirror LoopDataManager :269-270 — an override only takes effect through
             // the HISTORY, not the settings object. Without this the watch resolves every
             // schedule UNSCALED during a loan (basal, ISF, carb ratio) and nets historical
