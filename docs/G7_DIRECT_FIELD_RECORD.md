@@ -86,6 +86,7 @@ the race and masks direct reads as `stored=0/N` duplicates.
 | 2026-07-21 | E1 | — | — | **94%** | No pod at all (standalone diagnostic) |
 | 2026-08-03 | ~216 | 2.8h | — | see §5 | D2W on, phone BT+WiFi off. Loop stayed fed; direct-G7 rate not computed with the correct metric. |
 | **2026-08-04** | **218** | **3.5h** | **3.1** | **26%** | **epoch 168 — bad. Detail below.** |
+| **2026-08-04 pm** | **220** | **1.8h** | **12.5** | **100%** | **23/23, pod ON LOAN and dosing. Detail in §3b.** |
 
 ### Epoch 168 (2026-08-04 08:45→12:16, build 218) — the bad run
 
@@ -128,6 +129,48 @@ window is fought from cold, and cold acquisition is too slow to land inside the 
 short advertisement burst. Whether the handle is being cleared, never set, or invalidated is
 the open question. `savedPeripheral = nil` at `G7Client.swift:1243` (the stale-handle
 fallback) is the first place to look.
+
+---
+
+### 2026-08-04 15:36-17:26 (build 220) — 100%, and it refutes §7's leading hypothesis
+
+23 readings across 23 five-minute windows. Gaps 4.7-5.3 min, none over 6. Phone BT off
+(last `phone-relay` ingest 14:20:52). A pod was ON LOAN and dosing throughout — 105 `E4:`
+lines, 4 doses enacted and accepted — so this is NOT the E1 no-pod condition.
+
+The 65-min hole before it (14:31→15:36) was **app suspension, not a G7 failure**:
+`BACKGROUND (another app / screen off)` at 14:41:38, `WILL FOREGROUND` at 15:31:51.
+
+**Same-day, same-log comparison against epoch 168:**
+
+| | epoch 168 (24%) | afternoon (100%) |
+|---|---|---|
+| live `*** VALUE` | 0 | 0 |
+| cold reacquires | 84 | 36 |
+| warm reacquires | 0 | 0 |
+| cold per attempt | 1.68 | 1.71 |
+| central RECREATE/hr | 2.8 | 2.1 |
+| attempts/hr | 14.2 | 11.3 |
+
+**TWO OPEN QUESTIONS FROM §7 ARE NOW CLOSED — both were dead ends:**
+
+1. **"Zero live reads" is NOT a failure signature.** The 100% run also had zero. Every
+   reading in a PERFECT run arrived by backfill. Backfill-only is simply how this stack
+   delivers; stop treating it as a symptom. (§7 question 2 — closed.)
+
+2. **"The warm bonded handle isn't persisting, and cold acquisition is too slow" is
+   REFUTED.** The 100% run was also 100% cold, at the same cold-per-attempt ratio (1.71 vs
+   1.68). Cold acquisition every window is demonstrably fast enough for a perfect catch
+   rate. Do not spend more time on `savedPeripheral` / the warm branch on these grounds.
+   (§7 question 1 — closed.)
+
+**What remains.** The stack's mechanics were essentially IDENTICAL in a 24% run and a 100%
+run on the same device, same day, same build family. Only the yield differed. The higher
+attempt rate in the bad run is a SYMPTOM (a failure re-arms in 3s and hunts), not a cause.
+That points outside our code — RF environment, sensor session, body position — which is
+consistent with Jeremy's standing prior and with §5's observation that the Dexcom app was
+failing at the same time on the bad morning. The highest-value experiment is still §5:
+paired direct-G7 vs D2W observation at the same timestamps.
 
 ---
 
