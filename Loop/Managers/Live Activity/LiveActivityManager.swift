@@ -378,6 +378,21 @@ class LiveActivityManager : LiveActivityManagerProxy {
     }
 
     private func getGlucoseRanges(glucoseRangeSchedule: GlucoseRangeSchedule, presetContext: Preset?, start: Date, end: Date, unit: HKUnit) -> [GlucoseRangeValue] {
+        // `quantityBetween` bottoms out in DailyValueSchedule.between, which recurses ONCE PER
+        // DAY across the span (LoopKit/DailyValueSchedule.swift:151) and is not tail-recursive.
+        // Span in days is therefore stack depth. `start` is the oldest glucose sample, which is
+        // normally 2-6h back (getGlucoseSample queries Date.now-2h/-6h), but a replayed fixture
+        // can leave a sample years behind a live `end`: measured at 2020-08-11 -> 2026-08-05,
+        // 2184 days, which overflows the 544 KB test stack and takes down the whole host with
+        // SIGBUS on the stack guard page. The chart draws hours, so a day is already generous
+        // and this never binds in production.
+        var start = start
+        let maxChartSpan = TimeInterval(hours: 24)
+        if end.timeIntervalSince(start) > maxChartSpan {
+            print("[LiveActivity] chart span \(Int(end.timeIntervalSince(start) / 86400))d exceeds 24h — clamping start (stale glucose sample?)")
+            start = end.addingTimeInterval(-maxChartSpan)
+        }
+
         var glucoseRanges: [GlucoseRangeValue] = []
         for item in glucoseRangeSchedule.quantityBetween(start: start, end: end) {
             let minValue = item.value.lowerBound.doubleValue(for: unit)
