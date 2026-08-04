@@ -34,6 +34,16 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
     private var contextUpdateObservation: AnyObject?
     private var hasSentConfirmationMessage = false
     private var contextDate: Date?
+    /// Monotonic token identifying the newest in-flight recommendation request.
+    ///
+    /// The spinner used to be stranded by a STALE reply: the `defer` that clears
+    /// `isComputingRecommendedBolus` sits AFTER the entry-equality guard, so a reply that did
+    /// not match the current entry returned without ever clearing it — a permanent
+    /// "REC: Calculating…" with the phone perfectly reachable. Mismatches are routine, not
+    /// exotic: the context observer re-fires `recommendBolus` on EVERY loop cycle while the
+    /// screen is open, so adjusting the dial puts two requests in flight and the older reply
+    /// strands the flag. Only the newest request may touch the spinner or the value.
+    private var recommendationRequestToken = 0
 
     // MARK: - Constants
     private static let defaultSupportedBolusVolumes = (0...600).map { 0.05 * Double($0) } // U
@@ -171,6 +181,8 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
 
     private func recommendBolus(for entry: NewCarbEntry) {
         let potentialEntry = PotentialCarbEntryUserInfo(carbEntry: entry)
+        recommendationRequestToken += 1
+        let token = recommendationRequestToken
         do {
             isComputingRecommendedBolus = true
             try WCSession.default.sendPotentialCarbEntryMessage(potentialEntry,
@@ -183,13 +195,20 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
                             return
                         }
 
-                        // Only update if this recommendation corresponds to the current carb entry under consideration.
-                        guard context.potentialCarbEntry == self.carbEntryUnderConsideration else {
+                        // Superseded by a newer request, which now owns the spinner — drop this
+                        // reply entirely rather than clearing a flag we no longer own.
+                        guard token == self.recommendationRequestToken else {
                             return
                         }
 
-                        defer {
-                            self.isComputingRecommendedBolus = false
+                        // Clear FIRST, unconditionally: this is the newest request, so whatever
+                        // else is true about the reply, the screen is no longer computing.
+                        self.isComputingRecommendedBolus = false
+
+                        // Only publish if the recommendation corresponds to the entry under
+                        // consideration (kept for the VALUE; it no longer gates the spinner).
+                        guard context.potentialCarbEntry == self.carbEntryUnderConsideration else {
+                            return
                         }
 
                         self.contextDate = context.creationDate
@@ -204,7 +223,8 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
                 },
                 errorHandler: { error in
                     DispatchQueue.main.async { [weak self] in
-                        self?.isComputingRecommendedBolus = false
+                        guard let self = self, token == self.recommendationRequestToken else { return }
+                        self.isComputingRecommendedBolus = false
                         WKInterfaceDevice.current().play(.failure)
                         ExtensionDelegate.shared().present(error)
                     }

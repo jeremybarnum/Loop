@@ -206,6 +206,12 @@ final class GlanceViewModel: ObservableObject {
                                        now: Date())
         case .handingBack:
             var s = GlanceUIState(); s.phase = .handingBack
+            // MISSED IN THE FIRST CUT (build 221 shipped without a bar on this screen —
+            // Jeremy, on-wrist): this is the PRIMARY reclaim screen, and a fresh
+            // GlanceUIState() leaves handbackStartedAt nil, so the view fell through to the
+            // indeterminate spinner. The anchor was wired into .revoked/.recoveredDrain and
+            // the active-screen interim drain but not here.
+            s.handbackStartedAt = snap.handbackStartedAt
             // Honest limbo (party finding 2026-07-18: 97 min of ambiguity): while the
             // iPhone is unreachable this state can persist — say exactly what's true.
             s.loopStatusText = NSLocalizedString("ending…", comment: "Glance status during hand-back")
