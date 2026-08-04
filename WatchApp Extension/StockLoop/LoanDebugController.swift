@@ -230,6 +230,17 @@ struct LoanDebugView: View {
                         s, ins, carb, mom, rc, r, ev))
                 .font(.system(size: 11, design: .monospaced))
                 .frame(maxWidth: .infinity, alignment: .leading)
+            // #46 (2026-08-04): say WHICH retrospective model produced that RC term. The watch
+            // adopts the phone's Integral toggle at takeover, so a mismatch here against the
+            // phone's setting is the signature of the two devices predicting differently — the
+            // thing #46 existed to prevent, and previously only checkable in the log.
+            Text(String(format: "RC model: %@ · %d discrepanc%@",
+                        (dosing?.retrospectiveCorrectionIsIntegral ?? false) ? "Integral" : "Standard",
+                        dosing?.retrospectiveDiscrepancyCount ?? 0,
+                        (dosing?.retrospectiveDiscrepancyCount ?? 0) == 1 ? "y" : "ies"))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             Text("— no prediction to reconcile")
                 .font(.system(size: 11, design: .monospaced))

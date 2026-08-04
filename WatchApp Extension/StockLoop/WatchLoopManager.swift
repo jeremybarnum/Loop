@@ -364,6 +364,14 @@ final class WatchLoopManager {
         /// #86 display-only: last cycle's exact prediction decomposition (nil until the first
         /// successful prediction of the session). Cached at cycle end — NEVER computed here.
         let predictionBreakdown: PredictionBreakdown?
+        /// #46 (Jeremy 2026-08-04): which retrospective-correction model is actually running,
+        /// and how much data it has. The watch adopts the PHONE's Integral toggle from the grant
+        /// (PodLoanWatchController:431), so this is the readout that proves the two devices are
+        /// predicting with the same algorithm — the divergence #46 was opened for. It was only
+        /// ever visible in the log line `[rc] type=… · discrepancies=…`; on the wrist there was
+        /// no way to tell Integral from Standard while looking at a suspicious eventual.
+        let retrospectiveCorrectionIsIntegral: Bool
+        let retrospectiveDiscrepancyCount: Int
     }
 
 
@@ -432,7 +440,11 @@ final class WatchLoopManager {
                 // replay of LoopMath on the MAIN thread every 2 s (this whole closure is
                 // `dataAccessQueue.sync` from the debug page's timer) — cache at cycle end,
                 // read at render.
-                predictionBreakdown: lastPredictionBreakdown)
+                predictionBreakdown: lastPredictionBreakdown,
+                // Same queue as the rest of this closure, so these are consistent with the
+                // prediction being rendered rather than a torn read from another cycle.
+                retrospectiveCorrectionIsIntegral: retrospectiveCorrection is IntegralRetrospectiveCorrection,
+                retrospectiveDiscrepancyCount: retrospectiveGlucoseDiscrepancies?.count ?? 0)
         }
     }
 
