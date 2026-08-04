@@ -793,8 +793,18 @@ final class PodLoanPhoneController {
                     return
                 }
 
-                for carb in outcome.carbs {
-                    self.deps.addCarb(carb) { _ in }  // merge-not-replace at integration
+                // #66 (2026-08-04): gate carbs on !isStale, matching the override change below.
+                // The commit used to run unconditionally while committedIDs.formUnion sat inside
+                // the `if !isStale` block at the bottom of this closure — so a stale redelivery
+                // committed the carbs and recorded nothing, and every resend added another copy.
+                // Insulin is immune (NewPumpEvent.raw dedupes at the store); carbs have no
+                // identity at all, so the cursor is the only guard and it was being skipped.
+                if !isStale {
+                    for carb in outcome.carbs {
+                        self.deps.addCarb(carb) { _ in }  // merge-not-replace at integration
+                    }
+                } else if !outcome.carbs.isEmpty {
+                    self.handbackDiag(offer.epoch, "stale offer — \(outcome.carbs.count) carb(s) NOT committed (a dead loan cannot add carbs)")
                 }
 
                 // #68 part B: the watch owned overrides for the loan, so a drained override
@@ -1028,6 +1038,21 @@ final class PodLoanPhoneController {
             let outcome = LoanReconciler.reconcile(input)  // isFinalHandback defaults true → all finalized
             deps.addPumpEvents(newPumpEvents(from: outcome.doses), deps.now()) { _ in }
             for carb in outcome.carbs { deps.addCarb(carb) { _ in } }
+            // #66 (2026-08-04): RECORD what we just committed. This path read committedIDs in
+            // the filter above but never added to it, and it sends no handbackAck — so the
+            // watch's 15 s resend loop kept redelivering the same offer against an unchanged
+            // set, and each delivery committed the carbs again.
+            //
+            // Insulin survived this because NewPumpEvent carries `raw`, which the store dedupes
+            // on. Carbs cannot: NewCarbEntry has no identity field and CarbStore mints a fresh
+            // syncIdentifier per addCarbEntry, so the cursor IS the only guard. Duplicate carbs
+            // here then mirror into every later grant via wipe-then-replace — the #65
+            // phantom-COB failure mode with the phone as the source.
+            //
+            // Reached whenever a watch goes unreachable mid-loan: the 45 s reachability timeout,
+            // a stranded-state relaunch, or a fresh request while still loaned.
+            committedIDs.formUnion(events.map(\.id))
+            persistCommittedIDs()
             deps.issueNotice("Sport Mode Reset", "A previous watch loan was ended without a clean hand-back; its records were saved. Check Event History and the pod.")
         }
 

@@ -410,6 +410,73 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertEqual(addedDoses.flatMap { $0 }.filter { $0.type == .bolus }.count, 1, "the bolus landed")
     }
 
+    /// #66 (2026-08-04): forceReclaimToOwner commits STAGED events, and used to do so without
+    /// recording their IDs — while also sending no handbackAck, so the watch's 15 s resend loop
+    /// kept redelivering the same offer against an unchanged committedIDs set. Every resend
+    /// added another copy of the carb.
+    ///
+    /// This is the path a watch takes whenever it goes unreachable mid-loan (the 45 s
+    /// reachability timeout, a stranded relaunch, or a fresh request while loaned), so it is not
+    /// an exotic corner. Insulin survived it because NewPumpEvent.raw dedupes at the store;
+    /// NewCarbEntry has no identity, so the cursor is the only guard.
+    func testForceReclaimThenRedeliveryCommitsCarbOnce() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        let mealAt = Date().addingTimeInterval(-.minutes(15))
+        let event = carbEvent(seq: 1, grams: 25, at: mealAt, absorption: .hours(3))
+
+        // The watch streams the carb, then goes unreachable before any hand-back completes.
+        controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
+            DoseRecordBatch(epoch: grant.epoch, events: [event], tombstones: [])).transportDictionary())
+        settle()
+
+        // The phone gives up and force-reclaims — this commits the staged carb.
+        controller.forceReclaimToOwner(reason: "test: watch unreachable")
+        waitForState(controller, .owner)
+        let afterReclaim = addedCarbs.count
+        XCTAssertEqual(afterReclaim, 1, "force-reclaim commits the staged carb once")
+
+        // The watch reconnects and redelivers, as its resend loop does — no ack was ever sent.
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                          events: [event], tombstones: [], recovered: true)).transportDictionary())
+        settle()
+
+        XCTAssertEqual(addedCarbs.count, 1,
+                       "the redelivered carb must NOT be committed again after a force-reclaim (#66) — " +
+                       "duplicates here mirror into every later grant and inflate COB (#65)")
+    }
+
+    /// #66: a STALE offer (an epoch the phone has moved past) used to commit its carbs
+    /// unconditionally while committedIDs.formUnion sat inside the `if !isStale` branch — so the
+    /// carbs landed and nothing was recorded, and each resend added another. The override change
+    /// on the very next line was already correctly gated, which is what makes this an
+    /// inconsistency rather than a deliberate choice: a dead loan cannot add carbs either.
+    func testStaleOfferDoesNotCommitCarbs() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        let mealAt = Date().addingTimeInterval(-.minutes(15))
+
+        // Close the loan cleanly so the epoch advances; a later offer on the OLD epoch is stale.
+        let acked = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                          events: [], tombstones: [], recovered: false)).transportDictionary())
+        wait(for: [acked], timeout: 5)
+        waitForState(controller, .owner)
+        let baseline = addedCarbs.count
+
+        // A stale offer arrives carrying a carb.
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: grant.epoch - 1, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                          events: [carbEvent(seq: 9, grams: 40, at: mealAt, absorption: .hours(3))],
+                          tombstones: [], recovered: false)).transportDictionary())
+        settle()
+
+        XCTAssertEqual(addedCarbs.count, baseline,
+                       "a stale offer must not commit carbs — it records no IDs, so every resend would add another (#66)")
+    }
+
     /// The R7 override: forceReclaimToOwner returns to owner and restores dosing.
     func testForceReclaimReturnsToOwner() throws {
         let controller = makeController()
