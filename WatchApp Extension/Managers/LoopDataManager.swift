@@ -52,6 +52,11 @@ class LoopDataManager {
 
     private var needsDidUpdateContextNotification: Bool = false
 
+    /// The most recent context the PHONE sent, kept even while a loan makes it non-authoritative
+    /// for display. The watch's phone-BG fallback reads its glucose from here: that relay is the
+    /// backup CGM source and must survive the display gate below. Main queue only.
+    private(set) var phoneRelayContext: WatchContext?
+
     /// The last attempt to backfill glucose. We use a date because the message timeout is longer
     /// than our desired retry interval, so we allow multiple messages in-flight
     /// Main queue only
@@ -104,8 +109,25 @@ extension LoopDataManager {
         // the phone's is stale by construction. Refuse the phone's outright rather than trying
         // to merge — there is no field on it the watch does not know better, except the display
         // unit, which publishHUDContext already carries forward.
+        // The phone's context is always retained for its GLUCOSE, whatever we do about display.
+        if !context.isWatchAuthored {
+            phoneRelayContext = context
+        }
         let onLoan = ExtensionDelegate.shared().stockLoopSession.loanController.isLoanActiveNonBlocking
         if onLoan && !context.isWatchAuthored {
+            // Its LOOP STATE is stale during a loan (see above), so it must not become
+            // activeContext. But two things still have to happen, and an early `return` here
+            // silently killed both — the backup BG source, during exactly the window it exists
+            // for (caught by Jeremy before this shipped):
+            //
+            //   1. the relayed reading still belongs in the store, and
+            //   2. the notification must still fire — WatchLoopManager's
+            //      ingestPhoneGlucoseFromContext hangs off didUpdateContextNotification, and
+            //      that notification is posted by activeContext's didSet, which we are skipping.
+            if let newGlucoseSample = context.newGlucoseSample {
+                glucoseStore.addGlucoseSamples([newGlucoseSample]) { (_) in }
+            }
+            NotificationCenter.default.post(name: LoopDataManager.didUpdateContextNotification, object: self)
             return
         }
         if activeContext == nil || context.shouldReplace(activeContext!) {

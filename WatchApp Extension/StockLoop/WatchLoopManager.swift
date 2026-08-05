@@ -2644,7 +2644,10 @@ extension WatchLoopManager: CGMManagerDelegate {
     /// the boundary — accepted, per design.)
     func ingestPhoneGlucoseFromContext() {
         guard pumpManager != nil else { return }   // active loan only — the watch is the dosing controller
-        guard let ctx = ExtensionDelegate.shared().loopManager.activeContext,
+        // #47: read the PHONE's relay explicitly. activeContext is watch-authored during a loan
+        // now, so reading it here would hand this method the watch's own reading back and the
+        // fallback would never ingest anything.
+        guard let ctx = ExtensionDelegate.shared().loopManager.phoneRelayContext,
               let sample = ctx.newGlucoseSample else { return }
         deviceQueue.async {
             // Same-sample repeat latch (#39, field 2026-07-29: the same sample ingested 3× in
