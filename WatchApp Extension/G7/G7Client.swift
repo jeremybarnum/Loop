@@ -1136,6 +1136,13 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             let work = DispatchWorkItem { [weak self] in self?.beginObserverScan() }
             observerWork = work
             cbQueue.asyncAfter(deadline: .now() + 280, execute: work)
+            log("[observer] armed for +280s (watch the next predicted ad window)")
+        } else if success {
+            // The observer produced ZERO lines across a 6.5h overnight with 68 successful reads
+            // (2026-08-05). It is the only instrument that can separate "sensor was silent" from
+            // "our armed connect slept through a visible ad", so its silence has to be explained
+            // rather than assumed benign.
+            log("[observer] NOT armed — useReconnect=\(useReconnect) soakActive=\(soakActive)")
         }
         onMain {
             self.isRunning = false
@@ -1361,9 +1368,22 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     private func beginObserverScan() {   // on cbQueue
         // Never perturb real work: skip when a takeover holds the radio, a handshake
         // is live, a real scan is running, or we're not in an armed-connect soak.
-        guard soakActive, attemptActive, !podTakeoverHold, !isHandshakeActive,
-              !prewarmActive, central != nil, central.state == .poweredOn,
-              !central.isScanning, peripheral?.state != .connected else { return }
+        // Was a single `guard ... else { return }`. A silent return is exactly what made this
+        // undiagnosable: the watch never fired and left no trace of which precondition refused.
+        var blockers: [String] = []
+        if !soakActive { blockers.append("soakInactive") }
+        if !attemptActive { blockers.append("noAttemptActive") }
+        if podTakeoverHold { blockers.append("podTakeoverHold") }
+        if isHandshakeActive { blockers.append("handshakeActive") }
+        if prewarmActive { blockers.append("prewarmActive") }
+        if central == nil { blockers.append("noCentral") }
+        else if central.state != .poweredOn { blockers.append("centralNotPoweredOn") }
+        else if central.isScanning { blockers.append("alreadyScanning") }
+        if peripheral?.state == .connected { blockers.append("alreadyConnected") }
+        guard blockers.isEmpty else {
+            log("[observer] window watch BLOCKED — \(blockers.joined(separator: ","))")
+            return
+        }
         observerScanActive = true
         observerSightings = 0
         log("[observer] window watch: passive scan 60s around the predicted ad window")
