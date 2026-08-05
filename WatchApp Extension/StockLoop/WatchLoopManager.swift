@@ -620,11 +620,21 @@ final class WatchLoopManager {
             // on it would take the entire HUD down with it. ctx is a class, so mutating it
             // updates what the UI already holds; re-post so the flow picks it up.
             self.recommendManualBolus { result in
-                guard case .success(let recommendation) = result else { return }
-                DispatchQueue.main.async {
-                    ctx.recommendedBolusDose = recommendation.amount
-                    let loopDataManager = ExtensionDelegate.shared().loopManager
-                    NotificationCenter.default.post(name: LoopDataManager.didUpdateContextNotification, object: loopDataManager)
+                switch result {
+                case .success(let recommendation):
+                    // The stock flow renders this as "REC: N U" under the dial (BolusInput :67).
+                    SportLog.event("loan", String(format: "REC bolus %.2f U — published to the stock bolus flow", recommendation.amount))
+                    DispatchQueue.main.async {
+                        ctx.recommendedBolusDose = recommendation.amount
+                        let loopDataManager = ExtensionDelegate.shared().loopManager
+                        NotificationCenter.default.post(name: LoopDataManager.didUpdateContextNotification, object: loopDataManager)
+                    }
+                case .failure(let error):
+                    // Was `guard case .success ... else { return }` — silent. Field 2026-08-05:
+                    // Jeremy saw no recommendation and there was no way to tell whether it had
+                    // failed, or was legitimately zero, or never ran. A diagnostic that cannot
+                    // distinguish those is the same gap the G7 observer had.
+                    SportLog.event("loan", "REC bolus UNAVAILABLE — \(error) (the flow will show 'REC: – U')")
                 }
             }
         }
