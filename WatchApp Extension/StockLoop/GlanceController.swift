@@ -520,11 +520,29 @@ final class GlanceViewModel: ObservableObject {
         } else if let eventual = data.eventual {
             s.eventualText = String(format: "%.0f", eventual.doubleValue(for: .milligramsPerDeciliter))
         }
-        // PROVENANCE (Jeremy 2026-07-20: "the UI doesn't make it clear if it's
-        // dexcom direct or not"): the sport store is direct-only by construction,
-        // so a fresh number here is ALWAYS the watch's own radio — say so.
+        // PROVENANCE (Jeremy 2026-07-20: "the UI doesn't make it clear if it's dexcom direct
+        // or not"). This used to read "the sport store is direct-only by construction, so a
+        // fresh number here is ALWAYS the watch's own radio — say so", and printed "G7 direct"
+        // unconditionally. THAT PREMISE IS FALSE: the phone-BG fallback
+        // (ingestPhoneGlucoseFromContext) writes relayed readings into the very same
+        // glucoseStore — `INGEST src=phone-relay stored=1/1 … (direct-G7 gap)` in the field
+        // logs. So the line claimed a direct sensor read for numbers the phone had supplied,
+        // which is exactly the confusion Jeremy flagged on 2026-08-05.
+        //
+        // Now driven by bgSource, which tracks the direct-G7 LINK (stamped on arrival, before
+        // the store's first-writer-wins dedup can discard the direct copy in favour of the
+        // phone's ~7s-earlier relay). So it says "G7 direct" when the watch's own radio is
+        // genuinely delivering, even when the phone also is — and "via iPhone" when the phone
+        // is carrying it alone.
         if !isStale, let age = age {
-            s.g7EtaText = String(format: NSLocalizedString("G7 direct · %dm", comment: "Glance provenance line for a fresh direct reading (1: minutes ago)"), Int(age / 60))
+            switch s.bgSource {
+            case .directG7:
+                s.g7EtaText = String(format: NSLocalizedString("G7 direct · %dm", comment: "Glance provenance line for a fresh direct reading (1: minutes ago)"), Int(age / 60))
+            case .phoneRelay:
+                s.g7EtaText = String(format: NSLocalizedString("via iPhone · %dm", comment: "Glance provenance line when the phone is relaying in a direct-G7 gap (1: minutes ago)"), Int(age / 60))
+            case .none:
+                break   // no source stamped yet (first cycle after launch) — say nothing rather than guess
+            }
         }
 
         // Status line + suspend + open/close.
@@ -815,23 +833,13 @@ struct GlanceView: View {
             } else if model.state.viaPhone, model.state.phase == .idle || model.state.phase == .starting {
                 Text("via iPhone").font(.system(size: 12)).foregroundColor(.glanceDim)
             }
-            // OPTION C (Jeremy 2026-08-05): name the source, but only during a loan — that is
-            // the only time "is the watch standing on its own?" is the live question. Warn-tinted
-            // for `phone` so filling-in never reads as success at a glance. Note this tracks the
-            // direct G7 LINK, not the stored row: with the phone nearby its relay lands ~7s ahead
-            // and wins the store's first-writer dedup, so labelling the row would say "phone"
-            // almost always and hide a perfectly healthy direct link.
-            if model.state.phase == .active, model.state.bgSource != .none {
-                Text(model.state.bgSource == .directG7
-                     ? NSLocalizedString("G7", comment: "Glance BG source tag: direct sensor reading")
-                     : NSLocalizedString("phone", comment: "Glance BG source tag: relayed from the iPhone"))
-                    .font(.system(size: 11))
-                    .foregroundColor(model.state.bgSource == .directG7 ? .glanceDim : .glanceWarn)
-            }
             // R24: predicted next G7 while active without a fresh direct reading.
             // (While starting, the prediction rides under the pod bar instead.)
             if model.state.phase == .active, let eta = model.state.g7EtaText {
-                Text(eta).font(.system(size: 11)).foregroundColor(.glanceDim)
+                // Warn-tinted when the phone is carrying the reading, so filling-in never
+                // reads as success at a glance.
+                Text(eta).font(.system(size: 11))
+                    .foregroundColor(model.state.bgSource == .phoneRelay ? .glanceWarn : .glanceDim)
             }
         }
     }
