@@ -58,7 +58,15 @@ enum RuntimeStateLog {
     /// correlated against all of the conditions at once.
     static func snapshot() -> String {
         let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled ? " · LOW-POWER" : ""
-        return "state \(appStateName()) · \(batteryTag())\(lowPower)"
+        // Include the keepalive here too (2026-08-04). It was already on the heartbeat/GAP/
+        // deferral lines but NOT on the [app] ACTIVE / RESIGN ACTIVE lines — which are exactly
+        // the ones that show the screen going dark. Jeremy, field: during reclaim "the watch
+        // screen seems to go dark kind of aggressively... it sort of wants to go back to the
+        // clock screen", wrist up, 38% battery. A live HKWorkoutSession keeps the app frontmost
+        // on wrist raise, so whether one was running at that instant decides between "the
+        // session ended when the watch's part finished, and this is ordinary watchOS behaviour"
+        // and "something dropped the session while the hand-back was still in flight".
+        return "state \(appStateName()) · \(keepaliveTag()) · \(batteryTag())\(lowPower)"
     }
 
     // MARK: - Suspension detector
