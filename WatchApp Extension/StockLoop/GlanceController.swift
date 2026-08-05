@@ -131,6 +131,18 @@ final class GlanceViewModel: ObservableObject {
 
     private var timer: Timer?
     private var latestCOB: Double?
+    /// Render telemetry (2026-08-05). The stale-glance report is undecidable from the field:
+    /// a six-hour-old frame that is INTERNALLY CONSISTENT could be a watchOS UI snapshot
+    /// (system redisplays the last captured screen on wrist-raise, app never re-rendered) or
+    /// an app-side freeze (we rendered, with stale inputs). Nothing on the wrist distinguishes
+    /// them, and BG cannot arbitrate because an overnight trace is flat enough that a 6h-old
+    /// value looks reasonable. So log what we ACTUALLY rendered, with each input's own age:
+    /// next occurrence, the log either shows a render carrying live values at that moment
+    /// (⇒ the screen was a system snapshot, no app-side fix applies) or a render carrying the
+    /// stale ones (⇒ ours, and the ages say which input rotted).
+    private var lastRenderLogAt: Date?
+    private var lastRenderLogKey: String?
+    private var latestCOBAt: Date?
     private let isPreview: Bool
 
     /// Display staleness: one 5-min G7 grid + grace. Display only — the dosing
@@ -284,14 +296,35 @@ final class GlanceViewModel: ObservableObject {
                 }
             }
             state = s
+            logRender(iob: data.iob, cob: latestCOB, glucoseDate: data.glucoseDate, now: Date())
             session.stack.loopManager.glanceCarbsOnBoard { [weak self] cob in
-                DispatchQueue.main.async { self?.latestCOB = cob }
+                DispatchQueue.main.async { self?.latestCOB = cob; self?.latestCOBAt = Date() }
             }
         }
         // Cross-cutting (any phase): a likely-wrong G7 pairing code surfaces the re-enter banner.
         state.needsSensorCode = session.stack.client.needsSensorCode
         // Cross-cutting: the DIABETIFY bench transform shows its ringfence badge in every phase.
         state.diabetifyActive = DiabetifyTransform.isActive
+    }
+
+    /// Emit at most one line per value-change or per 60s, so the 2s tick cannot flood the log.
+    /// `cobAge` is the age of the CACHED cob (latestCOB is written by an async callback and is
+    /// therefore always one fetch behind); `bgAge` is the age of the glucose SAMPLE the same
+    /// frame rendered. A frame whose ages disagree wildly is an app-side mix; a frame that never
+    /// appears in the log at the moment the wrist showed it is a system snapshot.
+    private func logRender(iob: Double?, cob: Double?, glucoseDate: Date?, now: Date) {
+        let key = String(format: "%@|%@", iob.map { String(format: "%.2f", $0) } ?? "nil",
+                                          cob.map { String(format: "%.1f", $0) } ?? "nil")
+        if key == lastRenderLogKey, let last = lastRenderLogAt, now.timeIntervalSince(last) < 60 { return }
+        lastRenderLogKey = key
+        lastRenderLogAt = now
+        let bgAge = glucoseDate.map { Int(now.timeIntervalSince($0)) }
+        let cobAge = latestCOBAt.map { Int(now.timeIntervalSince($0)) }
+        SportLog.event("glance", String(format: "RENDER iob=%@ cob=%@ · bgAge=%@ cobCacheAge=%@",
+                                        iob.map { String(format: "%.2f", $0) } ?? "nil",
+                                        cob.map { String(format: "%.1f", $0) } ?? "nil",
+                                        bgAge.map { "\($0)s" } ?? "nil",
+                                        cobAge.map { "\($0)s" } ?? "never"))
     }
 
     // MARK: State builders (static + pure, so previews and tests can drive them)

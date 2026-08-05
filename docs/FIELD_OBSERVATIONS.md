@@ -70,3 +70,80 @@ about explicitly. Never silently dropped.
   had the same gap — a sensor-side EGV outage, not an acquisition failure. Note
   the recovery readings were 51/55 mg/dL: a sensor outage can mask a low, which
   is what the 20-min SensorBlackoutAlert (R25b) exists for.
+
+- **(2026-08-04): "Reclaiming…" persists 60–100 s on the phone pill.** Bimodal:
+  `reclaim VERIFIED` lands at +2/4/6/7 s on the fast runs and +59/68/87/99/101 s on
+  the slow ones. Ruled out by measurement, not argument:
+  - *Ack starvation* — refuted. The phone's ack of the final offer is 0.3–6 s and
+    the watch reports CLOSED 0.9–7.2 s after End. Both sides finish the protocol
+    fast; the delay is entirely downstream.
+  - *App suspension on the watch* — refuted by Jeremy: the tests were wrist-up with
+    the Loop app foregrounded on the phone.
+
+  Root cause: the watch never actually dropped the pod's BLE link. `teardownPump()`
+  nil'd the delegate, nil'd the pump manager, and trusted ARC to unwind
+  BlePodComms → BluetoothManager → CBCentralManager. Nothing called
+  `cancelPeripheralConnection`, nothing removed the pod from `autoConnectIDs`, so
+  one lingering reference kept the pod CONNECTED — and a connected pod does not
+  advertise, so the phone's standing connect could not land however aggressive it
+  is. The tell Jeremy found: tapping into pump status during "Reclaiming…" showed
+  data minutes old, from *before* the loan.
+
+  Confirmed as a from-stock regression against crude, which released explicitly:
+  `PodController.releasePod()` → `podComms?.forgetPod()` →
+  `bluetoothManager.disconnectFromDevice(...)`. from-stock's teardown had no
+  equivalent — which is exactly why Jeremy remembered crude not having this.
+  E4 has released explicitly all along (every five minutes, logging a clean
+  `state connected -> disconnected (+3s)`); only the hand-back path was missing it.
+
+  Fix: `teardownPump()` now calls `podLoanOrphanConnection()` first — the disconnect
+  + `cancelLoanScan` WITHOUT the C5 record-close, since `finalizeHandback` has
+  already closed the temp and `ledgerClear()` supersedes it. `releaseConnection()`
+  now logs which branch it took, because a release that finds no `bleIdentifier` is
+  a silent no-op.
+
+- **(2026-08-05, build 228): hand-back BLE release CONFIRMED; residual is bench-only.**
+  Three loans on 228, teardown fired every time (0.01-0.02s):
+  | epoch | loan | E4 released | reclaim |
+  |---|---|---|---|
+  | 192 | 174s | yes | 4s (control — the realistic case) |
+  | 191 | 36s | **no** | **4s** (227 gave 59-186s in this regime) |
+  | 193 | 9.9s | no | no `reclaim VERIFIED` within 25s |
+
+  191 is the result: the explicit release converts the short-loan case. 193 shows the
+  teardown is NECESSARY but not SUFFICIENT — it handed back 39s after the previous verified
+  read, the freshest the phone's pump data can be, which points at the C3 staleness gate
+  (`chaseReclaimVerification` -> `ensureCurrentPumpData` skips the read under 6 min).
+  UNSETTLED: 192 handed back 3.1 min after its prior read — inside the window, so C3 predicts
+  it should also have stalled, and it verified in 4s. One fitting case, one contradicting.
+  Jeremy's call: sub-90s loans are a bench artifact (real workouts are 20-60 min), so this is
+  low priority.
+
+- **(2026-08-05): the pump pill can go quiet while the bolus gate is still live.**
+  Two predicates that must agree, don't: `isReclaimSettling` (drives the sweep,
+  PodLoanPhoneController.swift:283) has a 5-minute ceiling; `isReclaimSettlingOnly` (drives
+  the #71 bolus gate, :164) has NO ceiling. Past 5 minutes unverified the pill reads
+  "returned" while carb/bolus entry is still refused. Jeremy's criterion (2026-08-05): a mixed
+  chart state is fine "as long as the pump pill doesn't indicate the return is complete" —
+  which this violates. NOTE: a proposed one-line fix (sweep on
+  `isPodLoanReclaiming || isPodSettlingAfterReclaim`) is a NO-OP — `isPodLoanReclaiming`
+  already covers both phases. STILL UNEXPLAINED: at 00:23, ~25s into epoch 193's settle, the
+  pill showed no sweep at all, well inside the 5-minute ceiling. Diagnose before fixing.
+
+- **(2026-08-05): "Pod on Watch" renders two different ways — a bug, not a mode.**
+  `presentStatusHighlight()` (PumpStatusHUDView) removes basalRateHUD + pumpManagerProvidedHUD
+  so the highlight REPLACES them, but it early-returns when the highlight is already in the
+  stack. `configurePumpManagerHUDViews()` re-adds the pod icon (StatusTableViewController:1822)
+  and only then calls `presentStatusHighlight` (:1826) — which returns early, leaving the icon
+  visible. `.PumpManagerChanged` fires on every loan transition, so which variant you see is
+  just whether a highlight was already up at the last reconfigure.
+
+- **(2026-08-05): End cancels an in-flight manual bolus and blames the pod.**
+  `attemptReclaimRead` guards `phase == .active` (PodLoanWatchController.swift:900, :921);
+  hand-back flips the phase, the ladder aborts, and the user sees
+  "MANUAL BOLUS FAILED — E4 pod reconnect timed out (pod unreachable)". Seen 3x (227 00:07:51
+  twice, 228 00:18:44), each within ~0.5s of a hand-back, with NO `E4: reclaim read N/14`
+  lines — every other route to `completion(false)` logs one, so it was the phase guard. No
+  insulin was delivered (fail-loud worked); the diagnosis is what's wrong. OPEN: never yet
+  observed a manual bolus that was allowed to finish, so "End kills it" vs "bolusing during a
+  loan is broken" is undecided — needs one bolus on a >90s loan with End untouched.
