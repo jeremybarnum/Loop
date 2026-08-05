@@ -143,6 +143,7 @@ final class GlanceViewModel: ObservableObject {
     private var lastRenderLogAt: Date?
     private var lastRenderLogKey: String?
     private var latestCOBAt: Date?
+    private var appStateObservers: [NSObjectProtocol] = []
     private let isPreview: Bool
 
     /// Display staleness: one 5-min G7 grid + grace. Display only — the dosing
@@ -154,12 +155,48 @@ final class GlanceViewModel: ObservableObject {
         // One refresh so the first render has data; the repeating tick is owned by the
         // controller's visibility (startRefreshing / stopRefreshing).
         refresh()
+        observeAppState()
+    }
+
+    /// THE STALE-GLANCE FIX (2026-08-05, field: a 6-hour-frozen frame on a healthy loop).
+    ///
+    /// `startRefreshing()`/`stopRefreshing()` had exactly one caller each — `didAppear()` and
+    /// `didDeactivate()` (:58/:63) — and `refresh()` is the ONLY writer of `state`. On watchOS a
+    /// bare screen DIM delivers `didDeactivate` but a bare UNDIM does NOT deliver `didAppear`, so
+    /// the first dim killed the timer and nothing could ever restart it. The display then had no
+    /// writer at all until a genuine appearance transition.
+    ///
+    /// Proven from the overnight log: between 00:32 and 07:00 there are 51 ACTIVE/RESIGN ACTIVE
+    /// pairs and ZERO true BACKGROUND — i.e. 51 wrist-raises, none of which refreshed the screen.
+    /// The frame stayed at its ~00:32 values (IOB 3.02 -> "3.0", COB 24.4 -> "24") until the
+    /// night's first real background->foreground at 07:00:02/07:00:56 finally fired `didAppear`.
+    ///
+    /// So drive the tick from the notifications the log PROVES fire on exactly those transitions
+    /// (ExtensionDelegate.swift:109/:120 — they are what emitted all 51 `[app]` lines) instead of
+    /// relying on WKInterfaceController appearance semantics. `didAppear`/`didDeactivate` stay
+    /// wired too; both paths are idempotent.
+    private func observeAppState() {
+        let center = NotificationCenter.default
+        appStateObservers = [
+            center.addObserver(forName: ExtensionDelegate.didBecomeActiveNotification,
+                               object: nil, queue: .main) { [weak self] _ in
+                self?.startRefreshing()
+            },
+            center.addObserver(forName: ExtensionDelegate.willResignActiveNotification,
+                               object: nil, queue: .main) { [weak self] _ in
+                self?.stopRefreshing()
+            },
+        ]
     }
 
     /// Begin the on-screen refresh tick. Idempotent.
     func startRefreshing() {
-        guard !isPreview, timer == nil else { return }
-        refresh()   // don't show up to 2s of staleness on the way in
+        guard !isPreview else { return }
+        // ALWAYS catch up first. This used to sit BEHIND `guard timer == nil`, so any re-entry
+        // with a live timer skipped the immediate render — the recovery path was as silent as
+        // the failure. Cheap (one queue-free read) and it makes re-entry self-healing.
+        refresh()
+        guard timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             self?.refresh()
         }
@@ -178,7 +215,10 @@ final class GlanceViewModel: ObservableObject {
         state = preview
     }
 
-    deinit { timer?.invalidate() }
+    deinit {
+        timer?.invalidate()
+        appStateObservers.forEach(NotificationCenter.default.removeObserver)
+    }
 
     func cancelHandback() {
         guard !isPreview else { return }
