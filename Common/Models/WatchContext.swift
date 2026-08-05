@@ -30,6 +30,10 @@ final class WatchContext: RawRepresentable {
     var glucoseSyncIdentifier: String?
 
     var predictedGlucose: WatchPredictedGlucose?
+    /// #47 (2026-08-05): true only for a context the WATCH built for itself during a loan.
+    /// Deliberately NOT encoded into rawValue — a context decoded from the phone always reads
+    /// false, which is exactly the discrimination `updateContext` needs.
+    var isWatchAuthored: Bool = false
     var eventualGlucose: HKQuantity? {
         return predictedGlucose?.values.last?.quantity
     }

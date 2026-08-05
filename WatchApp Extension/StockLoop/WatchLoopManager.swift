@@ -575,6 +575,10 @@ final class WatchLoopManager {
     private func publishHUDContext() {   // dataAccessQueue
         guard pumpManager != nil else { return }   // loan active only — otherwise the phone owns the HUD
         let ctx = WatchContext()
+        ctx.isWatchAuthored = true   // #47: outranks the phone's relay of the same reading
+        // #47: the stock chart's prediction line reads context.predictedGlucose and was never
+        // populated here, so it sat empty for the whole loan (field 2026-08-05).
+        ctx.predictedGlucose = predictedGlucose.flatMap { WatchPredictedGlucose(values: $0) }
         let latest = glucoseStore.latestGlucose
         ctx.glucose = latest?.quantity
         ctx.glucoseDate = latest?.startDate
@@ -606,6 +610,22 @@ final class WatchLoopManager {
                 ctx.displayGlucoseUnit = loopDataManager.activeContext?.displayGlucoseUnit ?? ctx.displayGlucoseUnit
                 loopDataManager.updateContext(ctx)
                 NotificationCenter.default.post(name: LoopDataManager.didUpdateContextNotification, object: loopDataManager)
+            }
+            // #47: the stock carb/bolus flow reads context.recommendedBolusDose, which only the
+            // phone ever set — hence a blank recommendation for the whole loan. Fill it from the
+            // watch's own DoseMath.
+            //
+            // Deliberately AFTER the install, not before: a recommendation can legitimately fail
+            // (missing momentum/carb/insulin effect early in a session) and blocking the context
+            // on it would take the entire HUD down with it. ctx is a class, so mutating it
+            // updates what the UI already holds; re-post so the flow picks it up.
+            self.recommendManualBolus { result in
+                guard case .success(let recommendation) = result else { return }
+                DispatchQueue.main.async {
+                    ctx.recommendedBolusDose = recommendation.amount
+                    let loopDataManager = ExtensionDelegate.shared().loopManager
+                    NotificationCenter.default.post(name: LoopDataManager.didUpdateContextNotification, object: loopDataManager)
+                }
             }
         }
     }

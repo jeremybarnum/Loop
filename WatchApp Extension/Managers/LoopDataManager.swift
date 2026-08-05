@@ -92,6 +92,22 @@ extension LoopDataManager {
     func updateContext(_ context: WatchContext) {
         dispatchPrecondition(condition: .onQueue(.main))
 
+        // #47 ROOT CAUSE (2026-08-05): `shouldReplace` compares ONLY glucoseDate, with `>=`.
+        // The phone relays the same physical reading the watch just took, so its context
+        // carries an EQUAL timestamp and replaces the watch's — silently discarding the
+        // watch-authored isClosedLoop, IOB, COB, temp and prediction. That is why every stock
+        // watch screen reverted to the phone's view during a loan: the ring showing the phone's
+        // loop mode, the blank prediction line, the blank recommended bolus. One cause, three
+        // symptoms, all reported separately.
+        //
+        // During a loan the WATCH is the dosing controller, so its context is authoritative and
+        // the phone's is stale by construction. Refuse the phone's outright rather than trying
+        // to merge — there is no field on it the watch does not know better, except the display
+        // unit, which publishHUDContext already carries forward.
+        let onLoan = ExtensionDelegate.shared().stockLoopSession.loanController.isLoanActiveNonBlocking
+        if onLoan && !context.isWatchAuthored {
+            return
+        }
         if activeContext == nil || context.shouldReplace(activeContext!) {
             if let newGlucoseSample = context.newGlucoseSample {
                 self.glucoseStore.addGlucoseSamples([newGlucoseSample]) { (_) in }

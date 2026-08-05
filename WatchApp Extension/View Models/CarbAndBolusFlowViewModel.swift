@@ -364,6 +364,17 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(1)) {
                 self.dismiss()
+                // Land on the glance, not the stock HUD (Jeremy 2026-08-05). This flow is
+                // presented FROM HUDInterfaceController, so dismiss() returns there — one swipe
+                // away from the screen that carries the dose's own status ("reaching pod…",
+                // "delivering"). StockLoopSession already rules the glance "the landing surface
+                // during a loan" (:154) and calls this on takeover; it just was never applied
+                // here. Loan only — outside one the stock HUD is the correct home.
+                if ExtensionDelegate.shared().stockLoopSession.loanController.isLoanActiveNonBlocking {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        GlanceController.current?.becomeCurrentPage()
+                    }
+                }
             }
             return
         }
