@@ -394,6 +394,15 @@ final class PodLoanWatchController {
             SportLog.event("loan", "grant REJECTED — stale epoch \(grant.epoch) (known \(known))")
             return
         }
+        // SPLIT-BRAIN GUARD (see handleRevoke): the existing expiry check cannot catch this —
+        // the lease is 5 min against a 25s request timeout — and the stale-epoch check above is
+        // inert because a timed-out request leaves `epoch` nil. Fails safe: the phone keeps the
+        // pod and the user taps Start again.
+        if let revoked = lastRevokedEpoch, grant.epoch <= revoked {
+            SportLog.event("loan", "grant REJECTED — epoch \(grant.epoch) at or below the last revoke (ev=\(revoked)); the phone already asked for the pod back")
+            sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "grant superseded by a revoke")))
+            return
+        }
 
         // Therapy settings snapshot: the ONLY dosing limits (R1/R16); frozen for the
         // loan (spec §8). WS4a (ruled 2026-07-19): validate COMPLETENESS at the loan
@@ -787,6 +796,8 @@ final class PodLoanWatchController {
     /// difference; idle duration is one of the few candidate discriminators left, so it is
     /// measured rather than eyeballed from timestamps.
     private var lastPodLinkContact: Date?
+    /// Highest epoch the phone has ever revoked — survives an unmatched revoke (see handleRevoke).
+    private var lastRevokedEpoch: Int?
 
     func reclaimPodForDose(_ completion: @escaping (Bool) -> Void) {
         reclaimPodForDose(radioWaited: 0, completion)
@@ -898,7 +909,10 @@ final class PodLoanWatchController {
         manager.podLoanReadStatus { [weak self] success in
             guard let self = self else { completion(false); return }
             self.queue.async {
-                guard self.phase == .active else { completion(false); return }
+                guard self.phase == .active else {
+                    SportLog.event("loan", "E4: reclaim ABORTED — phase left .active (now \(self.phase.rawValue)). An in-flight dose is CANCELLED BY THE HAND-BACK, not by an unreachable pod — this is the 3x field failure (227 00:07:51, 228 00:18:44), all within ~1s of an End tap.")
+                    completion(false); return
+                }
                 if success {
                     self.lastPodLinkContact = Date()
                     SportLog.event("loan", "E4: pod reconnected for dose (after \(attempt + 1) read(s)) — state \(manager.podLoanConnectionStateDescription)")
@@ -918,7 +932,10 @@ final class PodLoanWatchController {
                     // these reads just poll for the winner. (Was: bare-connect first, escalate at read 6,
                     // which burned ~15s on the ~98% of reclaims the bare bid never won.)
                     self.queue.asyncAfter(deadline: .now() + 2) {
-                        guard self.phase == .active else { completion(false); return }
+                        guard self.phase == .active else {
+                            SportLog.event("loan", "E4: reclaim ABORTED mid-ladder — phase left .active (now \(self.phase.rawValue)); in-flight dose cancelled by the hand-back")
+                            completion(false); return
+                        }
                         self.attemptReclaimRead(manager: manager, attempt: attempt + 1, completion: completion)
                     }
                 } else {
@@ -1549,7 +1566,32 @@ final class PodLoanWatchController {
     // MARK: - Revoke (§3.2)
 
     private func handleRevoke(_ revoke: Revoke) {
-        guard let current = epoch ?? journal.activeEpoch, revoke.epoch == current else { return }
+        // SPLIT-BRAIN GUARD (2026-08-05). Record that the phone asked for the pod back BEFORE
+        // the epoch match, and log it — this used to `return` in silence.
+        //
+        // The hole it closes: the watch's request patience is 25s (:304) but a grant's lease is
+        // 5 MINUTES (PodLoanPhoneController :603). A grant delivered on the queued path can land
+        // after the watch has given up and dropped to .idle with `epoch` still nil. If the phone
+        // revoked in between, that revoke matched nothing here and vanished; the late grant then
+        // arrived un-expired into .idle — an accepting phase (:383) — and the watch took the pod.
+        // The phone meanwhile ignores the resulting takeoverComplete (it requires .grantOffered,
+        // PodLoanPhoneController :662), times out, and forceReclaimToOwner sets state = .owner
+        // AND setAutomaticDosingPaused(false). Both sides then believe they own the pod.
+        //
+        // The pod is single-central so they cannot drive it at the same instant — but E4 frees
+        // the radio 90s after takeover and 12s after every dose, so they would ALTERNATE, each
+        // dosing off its own books with no sight of the other's insulin.
+        //
+        // Remembering the epoch is enough: the phone increments on every grant, so a legitimate
+        // later grant is > this and still passes. Crude was immune the same way (it refused a
+        // grant older than the last revoke, WatchPodLoanCoordinator :475-479).
+        if revoke.epoch > (lastRevokedEpoch ?? Int.min) {
+            lastRevokedEpoch = revoke.epoch
+        }
+        guard let current = epoch ?? journal.activeEpoch, revoke.epoch == current else {
+            SportLog.event("loan", "revoke ev=\(revoke.epoch) matched no live session (epoch \(epoch.map(String.init) ?? "nil"), phase \(phase.rawValue)) — RECORDED; any grant at or below ev=\(revoke.epoch) will now be refused")
+            return
+        }
         guard phase != .idle else { return }
         // Stop dosing, zero post-revoke pod commands (DESIGN-6), drain what we have.
         handbackRequested = false   // WS1: phone-initiated revoke supersedes a pending drain

@@ -147,3 +147,40 @@ about explicitly. Never silently dropped.
   insulin was delivered (fail-loud worked); the diagnosis is what's wrong. OPEN: never yet
   observed a manual bolus that was allowed to finish, so "End kills it" vs "bolusing during a
   loan is broken" is undecided — needs one bolus on a >90s loan with End untouched.
+
+- **(2026-08-05, build 228): manual bolus during a loan WORKS — phone fully unreachable.**
+  First confirmed watch-local manual bolus with `reachable false` on every line (phone BT off
+  deliberately, which also removes any chance of a hand-back flipping the phase):
+  ```
+  08:20:21  [bolus-ui] flow open · ON LOAN
+  08:20:56  [radio] reclaim waited 24.0s for the G7 handshake, then proceeded
+  08:20:56  E4: reclaim starting — released=yes, idle 282s
+  08:21:00  E4: pod reconnected for dose (after 2 read(s))
+  08:21:00  MANUAL BOLUS 0.20 U — enacting on the watch pump
+  08:21:01  MANUAL BOLUS delivering
+  ```
+  Anatomy of the ~15s the user perceives: **24s waiting on the G7 radio arbiter**, 4s reclaiming
+  the pod from a cold 282s orphan, 1.3s delivering. The pod is NOT the bottleneck — the radio
+  arbiter is, by 6x.
+
+  This settles the three earlier failures (227 00:07:51 ×2, 228 00:18:44): all were End
+  cancelling an in-flight bolus via `attemptReclaimRead`'s `guard phase == .active`
+  (PodLoanWatchController.swift:900/:921). Bolusing during a loan is not broken. What is broken
+  is that `CarbAndBolusFlowViewModel` auto-dismisses the flow after 1s and then shows NOTHING for
+  the next ~15s while the radio arbiter waits — so the user reasonably reads it as hung and taps
+  End, silently destroying their own dose. Fix set: (1) don't discard an in-flight bolus on End,
+  (2) surface "delivering", (3) stop blaming the pod for a user-initiated abort.
+
+- **(2026-08-05): an uncertain command blocks hand-back for up to 85s, silently.**
+  Field: watch showed "records syncing" while the phone still showed "Pod on Watch" — looked hung,
+  self-healed in 73s. Chain: `08:26:04 enacting temp 0.35 U/hr` → `08:26:11 temp enact FAILED —
+  communication(...)` (sent, response lost ⇒ genuinely uncertain) → verdict chase opens on the
+  5/20/60s ladder → End at 08:26:31 drains but `pendingUncertainEventID` blocks the record from
+  streaming → four offers go out carrying `ev=0`, phone re-acks the same cursor → `08:27:41
+  [verdict] chase exhausted` at exactly +85s → record streams → `08:27:44` ack, pod released.
+  The state machine is CORRECT (the exhaust path exists precisely so "a WS1 drain isn't blocked
+  behind a dead chase", PodLoanWatchController.swift:1805) and waiting is right when a dose is
+  genuinely uncertain. The defect is silence: neither screen says a lost command is being
+  confirmed or that it can take 90s. An accidental Cancel mid-sequence was incidental, not causal.
+  Open ruling: collapse the chase when a hand-back is pending, since the exhaust comment itself
+  says the .assumed record stands and the R22 hand-back audit settles it anyway.

@@ -228,6 +228,23 @@ final class WatchLoopManager {
     /// Forwarded to the enactor (automatic path); enactManualBolus uses them directly.
     /// Wired by StockLoopSession to the loan controller (which owns the OmniPumpManager);
     /// no-op / immediate-connected when E4 is off.
+    private let manualBolusLock = NSLock()
+    private var _manualBolusInFlight = false
+    /// True from the moment a manual bolus begins its E4 pod reclaim until it resolves.
+    ///
+    /// Field 2026-08-05: a manual bolus took ~29s wall-clock — 24s of it waiting for the G7 to
+    /// release the radio, then 4s reclaiming the pod, then 1.3s delivering. The bolus flow
+    /// auto-dismisses after 1s and shows NOTHING for the rest, so the wrist looks idle while the
+    /// dose is very much in progress. Jeremy read that silence as a hang and tapped End three
+    /// separate times, and End cancels the in-flight reclaim — the user's impatience silently
+    /// destroyed their own dose. The glance reads this so the wait is legible.
+    var manualBolusInFlight: Bool {
+        manualBolusLock.lock(); defer { manualBolusLock.unlock() }; return _manualBolusInFlight
+    }
+    fileprivate func setManualBolusInFlight(_ inFlight: Bool) {
+        manualBolusLock.lock(); _manualBolusInFlight = inFlight; manualBolusLock.unlock()
+    }
+
     var e4ReclaimPodForDose: ((@escaping (Bool) -> Void) -> Void)? {
         get { doseEnactor.e4ReclaimPodForDose }
         set { doseEnactor.e4ReclaimPodForDose = newValue }
@@ -1994,9 +2011,11 @@ final class WatchLoopManager {
                         }
                         self.loop()
                     }
+                    self.setManualBolusInFlight(false)
                     DispatchQueue.main.async { completion(error) }
                 }
             }
+            self.setManualBolusInFlight(true)
             // E4 Stage 2: the pod is orphaned for G7 — reclaim it before the bolus.
             // User is PRESENT, so a few seconds' reconnect is fine; on failure FAIL
             // LOUDLY (never a silent no-bolus). No-op immediate when E4 is off.
@@ -2028,7 +2047,8 @@ final class WatchLoopManager {
                         }
                     } else {
                         self.e4ReleasePodAfterDose?()
-                        SportLog.event("loan", "MANUAL BOLUS FAILED — E4 pod reconnect timed out (pod unreachable)")
+                        SportLog.event("loan", "MANUAL BOLUS FAILED — the pod did not reconnect in time. If Sport Mode was just ended, the hand-back cancelled it (see the E4 reclaim ABORTED line above) — that is NOT a pod fault.")
+                        self.setManualBolusInFlight(false)
                         DispatchQueue.main.async { completion(WatchLoopError.pumpManagerUnconnected) }
                     }
                 }

@@ -101,6 +101,14 @@ final class StatusTableViewController: LoopChartsTableViewController {
                     self?.registerPumpManager()
                     self?.configurePumpManagerHUDViews()
                     self?.updateToolbarItems()
+                    // #21 suppression wipes the IOB/COB series (setIOBValues([]) etc) while the
+                    // pod is on the watch, and restores them only `else if let iobValues = ...`
+                    // — i.e. only on a reload whose currentContext carries .insulin/.carbs. The
+                    // comment there claims "Reload re-fires on the loan transition via
+                    // .PumpManagerChanged"; it did not — this observer never reloaded chart data
+                    // at all. Field 2026-08-05: Active Insulin sat blank for ~2 min after a
+                    // hand-back while the phone was already looping. Make the claim true.
+                    self?.reloadData(animated: true)
                 }
             },
             notificationCenter.addObserver(forName: .CGMManagerChanged, object: deviceManager, queue: nil) { [weak self] (notification: Notification) in
@@ -1823,6 +1831,13 @@ final class StatusTableViewController: LoopChartsTableViewController {
                 }
                 pumpManagerHUDProvider.visible = active && onscreen
             }
+            // The addPumpManagerViewToHUD above puts the pod icon BACK into the stack, but
+            // presentStatusHighlight early-returns when a highlight is already showing
+            // (PumpStatusHUDView :46) — so it never removes it again. That is the "Pod on Watch
+            // WITH a pod icon next to it" variant Jeremy spotted; which one you get is just
+            // whether a highlight happened to be up at the last reconfigure. Dismiss first so
+            // the present path actually runs its removal.
+            hudView.pumpStatusHUD.dismissStatusHighlight()
             hudView.pumpStatusHUD.presentStatusHighlight(deviceManager.pumpStatusHighlight)
             hudView.pumpStatusHUD.lifecycleProgress = deviceManager.pumpLifecycleProgress
             // The reclaim fill has to start HERE too: .PumpManagerChanged (which every loan

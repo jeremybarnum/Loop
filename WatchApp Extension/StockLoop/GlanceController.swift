@@ -335,6 +335,12 @@ final class GlanceViewModel: ObservableObject {
                     s.idleNote = NSLocalizedString("Can't reach iPhone. Move it closer, or check that its Bluetooth is on. Sport Mode will end as soon as the phone connects; looping continues until then.", comment: "Glance note when an interim hand-back is blocked by an unreachable phone")
                 }
             }
+            // A manual bolus spends most of its wall-clock waiting on the radio arbiter, with
+            // the flow already dismissed. Say so, or the wrist looks idle and the user taps End
+            // — which cancels the dose (field: 3x).
+            if session.stack.loopManager.manualBolusInFlight {
+                s.loopStatusText = NSLocalizedString("delivering bolus…", comment: "Glance status while a manual bolus reclaims the pod and delivers")
+            }
             state = s
             logRender(iob: data.iob, cob: latestCOB, glucoseDate: data.glucoseDate, now: Date())
             session.stack.loopManager.glanceCarbsOnBoard { [weak self] cob in
