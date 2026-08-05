@@ -193,7 +193,10 @@ final class GlanceViewModel: ObservableObject {
     private func refresh() {
         guard !isPreview else { return }
         let session = ExtensionDelegate.shared().stockLoopSession
-        let snap = session.loanController.debugSnapshot()
+        // Main-safe read: the loan queue doubles as the pump's delegate queue, so a sync
+        // here blocked the whole UI for the length of any bolus / takeover / reclaim.
+        session.loanController.refreshDebugSnapshot()
+        guard let snap = session.loanController.mirroredDebugSnapshot else { return }
 
         switch snap.phase {
         case .idle:

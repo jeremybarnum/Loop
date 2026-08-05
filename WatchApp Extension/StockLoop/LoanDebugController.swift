@@ -176,7 +176,10 @@ struct LoanDebugView: View {
         }
         }
         .onReceive(refresh) { _ in
-            snapshot = session.loanController.debugSnapshot()
+            // Same 2s main-thread timer problem as the glance: the loan queue is the pump's
+            // delegate queue, so a sync read froze the UI for the length of any pod operation.
+            session.loanController.refreshDebugSnapshot()
+            snapshot = session.loanController.mirroredDebugSnapshot ?? snapshot
             g7 = session.stack.client.identitySnapshot()
             diabetifyOn = DiabetifyTransform.isActive
             let gd = session.stack.loopManager.glanceData()
@@ -187,7 +190,10 @@ struct LoanDebugView: View {
             }
         }
         .onAppear {
-            snapshot = session.loanController.debugSnapshot()
+            // Same 2s main-thread timer problem as the glance: the loan queue is the pump's
+            // delegate queue, so a sync read froze the UI for the length of any pod operation.
+            session.loanController.refreshDebugSnapshot()
+            snapshot = session.loanController.mirroredDebugSnapshot ?? snapshot
             g7 = session.stack.client.identitySnapshot()
             diabetifyOn = DiabetifyTransform.isActive
             let gd = session.stack.loopManager.glanceData()

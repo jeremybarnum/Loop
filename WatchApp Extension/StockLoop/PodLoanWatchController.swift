@@ -1604,9 +1604,48 @@ final class PodLoanWatchController {
         return queue.sync { phase == .active }
     }
 
+    /// Lock-guarded mirror of the last snapshot, refreshed asynchronously on `queue`.
+    ///
+    /// `debugSnapshot()` is `queue.sync`, and `queue` is ALSO OmniPumpManager's delegateQueue
+    /// (:498) — so it is occupied for the whole duration of a bolus, a takeover ladder or an
+    /// E4 reclaim. GlanceViewModel polls on a 2s MAIN-THREAD timer, so every one of those
+    /// polls blocked the main thread for the length of the pod operation. On the wrist that
+    /// is the bolus screen freezing until delivery completes and then unfreezing as the
+    /// haptic lands (Jeremy, build 223) — and it would equally freeze the UI during any long
+    /// pod operation. An adversarial review flagged this exact 2Hz-sync pattern and I wrongly
+    /// filed it as harmless precedent.
+    ///
+    /// Display reads take the mirror instead: at most one refresh interval stale, never
+    /// blocking. Dosing paths that genuinely need current state still call `debugSnapshot()`.
+    private let snapshotMirrorLock = NSLock()
+    private var _snapshotMirror: DebugSnapshot?
+
+    /// Main-safe: never touches `queue`. Nil only before the first refresh completes.
+    var mirroredDebugSnapshot: DebugSnapshot? {
+        snapshotMirrorLock.lock()
+        defer { snapshotMirrorLock.unlock() }
+        return _snapshotMirror
+    }
+
+    /// Ask for a fresh mirror. Returns immediately; the work lands on `queue` behind whatever
+    /// pod operation is in flight, which is exactly the wait we refuse to make main sit through.
+    func refreshDebugSnapshot() {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            let snap = self.buildDebugSnapshot()
+            self.snapshotMirrorLock.lock()
+            self._snapshotMirror = snap
+            self.snapshotMirrorLock.unlock()
+        }
+    }
+
     func debugSnapshot() -> DebugSnapshot {
-        return queue.sync {
-            DebugSnapshot(
+        return queue.sync { buildDebugSnapshot() }
+    }
+
+    /// MUST be called on `queue` — reads queue-confined state.
+    private func buildDebugSnapshot() -> DebugSnapshot {
+        return DebugSnapshot(
                 phase: phase,
                 epoch: epoch ?? journal.activeEpoch,
                 mode: currentMode(),
@@ -1622,7 +1661,6 @@ final class PodLoanWatchController {
                 handbackPending: handbackRequested,
                 handbackStartedAt: handbackStartedAt,
                 phoneReachable: isPhoneReachable())
-        }
     }
 
     /// Bench helper: force a real pod status round-trip and report reachability.

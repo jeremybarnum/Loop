@@ -1825,6 +1825,11 @@ final class StatusTableViewController: LoopChartsTableViewController {
             }
             hudView.pumpStatusHUD.presentStatusHighlight(deviceManager.pumpStatusHighlight)
             hudView.pumpStatusHUD.lifecycleProgress = deviceManager.pumpLifecycleProgress
+            // The reclaim fill has to start HERE too: .PumpManagerChanged (which every loan
+            // state transition posts) routes to this function, NOT to the periodic HUD update
+            // where the other call site lives. Without this a short handover could finish
+            // before anything ever started the fill.
+            updatePodReclaimFill()
         }
     }
 
