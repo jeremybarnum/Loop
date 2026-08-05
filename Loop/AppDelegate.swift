@@ -8,7 +8,6 @@
 
 import UIKit
 import LoopKit
-import OmnipodKit   // PodLoanConnectClock.podLoanLogSink — the phone's pod-BLE lines into PhoneLog
 
 final class AppDelegate: UIResponder, UIApplicationDelegate, WindowProvider {
     var window: UIWindow?
@@ -23,15 +22,19 @@ final class AppDelegate: UIResponder, UIApplicationDelegate, WindowProvider {
 
         setenv("CFNETWORK_DIAGNOSTICS", "3", 1)
 
-        // PHONE LOG (2026-08-05). Start the session file and, crucially, install the pod-BLE
-        // sink the phone has always left nil — OmnipodKit calls PodLoanConnectClock.podLoanLog
-        // from releaseConnection and the other loan seams, and on the phone those lines went to
-        // os_log only, i.e. nowhere anyone would ever read them. That is precisely why
-        // "did the phone actually drop the pod's link at grant?" has been unanswerable all day,
-        // for both the hand-back stall and the takeover failures.
+        // PHONE LOG (2026-08-05): the phone had no mirrored log at all, which blocked two
+        // investigations in one day — the hand-back stall and the takeover failures, both of
+        // which reduced to "did the phone actually drop the pod's link?".
+        //
+        // NOT wired here: OmnipodKit's PodLoanConnectClock.podLoanLogSink. Reaching it needs
+        // `import OmnipodKit`, and the Loop app deliberately does not depend on it — pump
+        // managers are PLUGINS, which is exactly why PodLoanPhoneController casts to LoopKit's
+        // PumpConnectionLendable rather than to OmniPumpManager. A simulator build tolerated the
+        // import (the plugin's module was in its search path); the device archive did not, and
+        // the archive is right. The decisive observation does not need it anyway: `linkUp` at
+        // grant reads isConnectionReady straight off the protocol.
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         PhoneLog.startSession(build: build)
-        PodLoanConnectClock.podLoanLogSink = { line in PhoneLog.event("pod-ble", line) }
 
         log.default("lastPathComponent = %{public}@", String(describing: Bundle.main.appStoreReceiptURL?.lastPathComponent))
 
