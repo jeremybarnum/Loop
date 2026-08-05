@@ -45,6 +45,30 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
     /// strands the flag. Only the newest request may touch the spinner or the value.
     private var recommendationRequestToken = 0
 
+    /// Set once the user reaches the crown-confirmation step. From there the amount is
+    /// committed, so a recommendation that keeps changing is useless — and actively harmful.
+    ///
+    /// The `.carbEntry` arm of the context observer re-fires `recommendBolus` on EVERY loop
+    /// cycle (and a loan posts one context per cycle, plus another from `activeContext`'s
+    /// didSet). Each re-fire flips `isComputingRecommendedBolus`, which republishes through
+    /// `@ObservedObject` and rebuilds `CarbAndBolusFlow.body` — constructing a BRAND NEW
+    /// `BolusConfirmationView`, whose `resetProgress` PeriodicPublisher is a `let` and is
+    /// therefore recreated and re-subscribed. That is the asymmetry behind "spinning the crown
+    /// to bolus from carb delivery doesn't complete the spin" (Jeremy, on-wrist 2026-08-04):
+    /// the `.manualBolus` arm never re-fires, so the standalone bolus is quiet and its spin
+    /// lands. The crown SETTINGS were always identical — the churn was not.
+    private var isAwaitingBolusConfirmation = false
+
+    /// The flow reached the crown-confirmation step; stop soliciting recommendations.
+    func beginBolusConfirmation() {
+        isAwaitingBolusConfirmation = true
+    }
+
+    /// The user backed out of confirmation; recommendations may resume.
+    func endBolusConfirmation() {
+        isAwaitingBolusConfirmation = false
+    }
+
     // MARK: - Constants
     private static let defaultSupportedBolusVolumes = (0...600).map { 0.05 * Double($0) } // U
     private static let defaultMaxBolus: Double = 10 // U
@@ -138,7 +162,9 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
                 // If this new context wasn't generated in response to a potential carb entry message,
                 // recompute the recommended bolus for the carb entry under consideration.
                 let wasContextGeneratedFromPotentialCarbEntryMessage = loopManager.activeContext?.potentialCarbEntry != nil
-                if !wasContextGeneratedFromPotentialCarbEntryMessage, let entry = self.carbEntryUnderConsideration {
+                if !wasContextGeneratedFromPotentialCarbEntryMessage,
+                   !self.isAwaitingBolusConfirmation,
+                   let entry = self.carbEntryUnderConsideration {
                     self.recommendBolus(for: entry)
                 }
             case .manualBolus:

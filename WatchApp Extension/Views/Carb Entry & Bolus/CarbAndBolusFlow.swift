@@ -137,6 +137,7 @@ extension CarbAndBolusFlow {
     }
 
     private func returnToCarbEntry() {
+        viewModel.endBolusConfirmation()
         withAnimation {
             flowState = .carbEntry
         }
@@ -232,6 +233,9 @@ extension CarbAndBolusFlow {
             color: bolusAmount > 0 || configuration == .manualBolus ? .insulin : .blue
         ) {
             if self.bolusAmount > 0 {
+                // Freeze recommendations before entering the crown ceremony — a re-fire there
+                // rebuilds BolusConfirmationView and resets the spin (see the view model).
+                self.viewModel.beginBolusConfirmation()
                 withAnimation {
                     self.flowState = .bolusConfirmation
                 }
