@@ -514,14 +514,7 @@ final class PodLoanWatchController {
         guard let rawValue = (try? PropertyListSerialization.propertyList(from: grant.pumpManagerRawState, options: [], format: nil)) as? [String: Any],
               let rawState = rawValue["state"] as? PumpManager.RawStateValue,
               let manager = OmniPumpManager(rawState: rawState) else {
-            let ackWait = finalOfferSentAt.map { Date().timeIntervalSince($0) }
-        SportLog.event("loan", String(format: "ack RECEIVED %@ after the final offer — releasing the pod now",
-                                      ackWait.map { String(format: "+%.1fs", $0) } ?? "(no offer stamp)"))
-        let releaseBegan = Date()
-        teardownPump()
-        SportLog.event("loan", String(format: "pod BLE teardown returned in %.2fs (the phone's standing connect can land from here)",
-                                      Date().timeIntervalSince(releaseBegan)))
-        finalOfferSentAt = nil
+            teardownPump()
             phase = .idle
             lastIdleNote = NSLocalizedString("Couldn't read the pod from the phone. Try again.", comment: "Glance: pump snapshot rejected")
             SportLog.event("loan", "grant FAILED — could not rebuild the pump from the phone's snapshot")
@@ -1529,7 +1522,18 @@ final class PodLoanWatchController {
         // flag from THIS loan would block the NEXT loan's drain indefinitely.
         pendingUncertainEventID = nil
         inFlightEventIDs = []
+        // Splits "Reclaiming…" into its two candidate components: how long the watch waited
+        // for PERMISSION to release (the phone's ack), versus how long the release itself took.
+        // The ack only rides WCSession's immediate channel while the watch is reachable, so a
+        // wrist dropped after End pushes it into the queued path.
+        let ackWait = finalOfferSentAt.map { Date().timeIntervalSince($0) }
+        SportLog.event("loan", String(format: "ack RECEIVED %@ after the final offer — releasing the pod now",
+                                      ackWait.map { String(format: "+%.1fs", $0) } ?? "(no offer stamp)"))
+        let releaseBegan = Date()
         teardownPump()
+        SportLog.event("loan", String(format: "pod BLE teardown returned in %.2fs — the phone's standing connect can land from here",
+                                      Date().timeIntervalSince(releaseBegan)))
+        finalOfferSentAt = nil
         journal.end()
         phase = .idle
         epoch = nil
