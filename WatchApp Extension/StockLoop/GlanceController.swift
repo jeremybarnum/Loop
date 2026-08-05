@@ -44,6 +44,24 @@ final class GlanceController: WKHostingController<GlanceView> {
     override var body: GlanceView {
         GlanceView(model: model)
     }
+
+    /// The 2s refresh runs ONLY while this page is actually on screen.
+    ///
+    /// It used to run for the controller's whole lifetime, so it kept firing while the stock
+    /// carb/bolus flow was presented modally OVER the glance — invisible, but still taking the
+    /// loan controller's queue every 2s. That queue doubles as the pump's delegateQueue, so
+    /// during a bolus the tick queued behind pod BLE work and stalled the main thread: the
+    /// frozen carb screen Jeremy hit on build 223. The mirror (ba92c3cb) stops it blocking;
+    /// this stops it running at all when nothing is looking at it.
+    override func didAppear() {
+        super.didAppear()
+        model.startRefreshing()
+    }
+
+    override func didDeactivate() {
+        super.didDeactivate()
+        model.stopRefreshing()
+    }
 }
 
 // MARK: - UI state (a pure value the view renders; previews hand-build these)
@@ -121,10 +139,25 @@ final class GlanceViewModel: ObservableObject {
 
     init() {
         isPreview = false
+        // One refresh so the first render has data; the repeating tick is owned by the
+        // controller's visibility (startRefreshing / stopRefreshing).
         refresh()
+    }
+
+    /// Begin the on-screen refresh tick. Idempotent.
+    func startRefreshing() {
+        guard !isPreview, timer == nil else { return }
+        refresh()   // don't show up to 2s of staleness on the way in
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             self?.refresh()
         }
+    }
+
+    /// Stop ticking while off screen — nothing is reading this, and each tick takes the loan
+    /// controller's queue, which the pump also uses.
+    func stopRefreshing() {
+        timer?.invalidate()
+        timer = nil
     }
 
     /// Preview-only: fixed state, no timer, no store access.
