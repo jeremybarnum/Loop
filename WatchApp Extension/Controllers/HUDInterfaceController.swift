@@ -54,7 +54,6 @@ class HUDInterfaceController: WKInterfaceController {
         loopHUDImage.setHidden(false)
 
         let date = activeContext.loopLastRunDate
-        let isClosedLoop = activeContext.isClosedLoop ?? false
         // R23, finally applied here: during a loan the ring's freshness is BG RECENCY, on the
         // same thresholds the glance uses — "meaningful OPEN or CLOSED, and stale G7 is the
         // likely failure. Drives the stock ring color." It was ruled 2026-07-18 and only ever
@@ -67,6 +66,19 @@ class HUDInterfaceController: WKInterfaceController {
         // so that path is untouched. `isLoanActiveNonBlocking` is a lock-guarded mirror — the
         // live gate is queue.sync onto the pump's delegateQueue and must not be read from here.
         let onLoan = ExtensionDelegate.shared().stockLoopSession.loanController.isLoanActiveNonBlocking
+        // ...and the SHAPE has to come from the same place as the colour. This read
+        // `activeContext.isClosedLoop` unconditionally — the PHONE's mode — so during a loan the
+        // stock screen showed the phone's loop while the glance showed the watch's. Field
+        // 2026-08-05: "glance is closed and stock is open, even though they are both green."
+        // Green matched because the colour fix above landed; the shape never did, and I closed
+        // that observation as fixed when only half of it was.
+        //
+        // During a loan the WATCH is the dosing controller and its mode is the true one (R23 as
+        // amended: the watch is sovereign in a loan). Non-blocking mirror for the same reason
+        // isLoanActiveNonBlocking is: the live accessor takes the dosing queue.
+        let isClosedLoop = onLoan
+            ? ExtensionDelegate.shared().stockLoopSession.stack.loopManager.closedLoopEnabledNonBlocking
+            : (activeContext.isClosedLoop ?? false)
         loopHUDImage.setLoopImage(isClosedLoop: isClosedLoop, {
             if onLoan {
                 guard let glucoseDate = activeContext.glucoseDate else { return .unknown }

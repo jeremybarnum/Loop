@@ -345,10 +345,17 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
                         // wrist down — a transient alert alone reads as delivered.
                         // (Do NOT re-open the send window: carbs are already
                         // journaled; a re-tap would double-log them.)
+                        // FAILURE always buzzes: the pod beeps only when it ACCEPTS, so a
+                        // bolus that never reached it is silent — and silence would otherwise
+                        // mean both "still working" and "it failed". This is the one signal
+                        // nothing else carries.
                         WKInterfaceDevice.current().play(.failure)
                         Self.notifyBolusFailure(units: units, carbGrams: carbEntry?.quantity.doubleValue(for: .gram()), error: error)
                         ExtensionDelegate.shared().present(error)
-                    } else {
+                    } else if !session.stack.loopManager.podBeepsOnManualBolus {
+                        // SUCCESS only when the pod is silent. With beeps on, the pod's
+                        // acknowledgement beep fires at this same instant and says the same
+                        // thing — two signals, one event, no added meaning (Jeremy 2026-08-05).
                         WKInterfaceDevice.current().play(.success)
                     }
                 }

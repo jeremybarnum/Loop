@@ -359,8 +359,14 @@ final class GlanceViewModel: ObservableObject {
                 // a hang — which is what cost three doses to End taps.
                 // Outranks the hand-back drain: a dose in flight is what gets destroyed by a
                 // mistimed tap; "ending…" merely describes waiting.
+                //
+                // NOT "delivering" — nothing is being delivered yet. This window is the radio
+                // arbiter wait plus the pod reconnect, and it ENDS when the pod accepts the
+                // command (which is what fires the success haptic; measured 1.3s to accept
+                // against ~8s to actually push 0.2U). Calling it "delivering" was the same
+                // class of lie as the old unconditional "G7 direct" label.
                 s.transientText = Date().timeIntervalSince(startedAt) < 20
-                    ? NSLocalizedString("delivering bolus…", comment: "Glance status while a manual bolus reclaims the pod and delivers")
+                    ? NSLocalizedString("reaching pod…", comment: "Glance status while a manual bolus waits for the radio and reconnects the pod")
                     : NSLocalizedString("waiting for sensor — bolus will deliver", comment: "Glance status when a manual bolus is waiting out the G7 radio handshake")
             }
             state = s

@@ -1691,6 +1691,12 @@ final class PodLoanWatchController {
     /// delegateQueue and must never be sync'd from the UI (see the snapshot mirror below).
     private let loanActiveMirrorLock = NSLock()
     private var _loanActiveMirror = false
+    /// Does the POD beep for a manual bolus? (acknowledgement at accept, completion at end)
+    /// Read live, because the watch inherits the phone's beep settings in the grant.
+    var podBeepsOnManualBolus: Bool {
+        pumpManager?.podLoanBeepsOnManualBolus ?? false
+    }
+
     var isLoanActiveNonBlocking: Bool {
         loanActiveMirrorLock.lock()
         defer { loanActiveMirrorLock.unlock() }

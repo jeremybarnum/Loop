@@ -209,6 +209,14 @@ final class WatchLoopManager {
     /// therapy-settings-only limits; max-temp = therapy max-basal) — the remaining gate
     /// is the protocol itself, never a direct assignment from app code.
     var pumpManager: PumpManager?
+    /// True when the POD itself will beep for a manual bolus, making the watch's success
+    /// haptic redundant (both fire the instant the pod accepts). False when the pod is
+    /// silenced — then the haptic is the ONLY confirmation and must stay.
+    ///
+    /// A closure, not a cast: this file works against the `PumpManager` protocol and does not
+    /// import OmnipodKit. Wired in StockLoopSession alongside isRadioBusy / e4ReclaimPodForDose.
+    var podBeepsOnManualBolusProbe: (() -> Bool)?
+    var podBeepsOnManualBolus: Bool { podBeepsOnManualBolusProbe?() ?? false }
 
     /// The loan controller's dose-recording hooks (spec §1.2); set alongside
     /// `pumpManager` by PodLoanWatchController, cleared with it.

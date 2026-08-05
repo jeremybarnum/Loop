@@ -83,6 +83,9 @@ final class StockLoopSession {
             return client.isAttemptActive || client.isHandshakeActive
         }
         stack.loopManager.isRadioBusy = radioBusy
+        stack.loopManager.podBeepsOnManualBolusProbe = { [weak self] in
+            self?.loanController.podBeepsOnManualBolus ?? false
+        }
         loanController.isRadioBusy = radioBusy
 
         // R26 (reverse arbiter): the pod TAKEOVER outranks the G7 — during its
