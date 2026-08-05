@@ -1766,8 +1766,28 @@ final class PodLoanWatchController {
     }
 
     private func teardownPump() {
-        // Dropping the manager tears down BlePodComms and its BluetoothManager — the
-        // watch stops bidding for the pod's single BLE slot (zombie-bidder :1009).
+        // EXPLICITLY drop the BLE link before dropping the manager (2026-08-04).
+        //
+        // This used to rely on deallocation alone: nil the delegate, nil the manager, and trust
+        // ARC to tear down BlePodComms -> BluetoothManager -> CBCentralManager. That is the
+        // weakest release path in the codebase, and it was being used at the ONE moment the pod
+        // must actually become free. Nothing ever called cancelPeripheralConnection, nothing
+        // removed the pod from autoConnectIDs, and any lingering reference kept the link — so
+        // the pod stayed CONNECTED (and therefore not advertising), and the phone's standing
+        // connect could not land no matter how aggressive it is.
+        //
+        // Field evidence (Jeremy, 2026-08-04): during "Reclaiming…" the phone's pump status
+        // read minutes old — from BEFORE the loan — so the phone genuinely did not have the pod.
+        // Measured: the watch reported CLOSED 0.9-7.2s after End, yet the phone did not reach a
+        // verified round-trip for another 85-99s. And crude never had this, because crude never
+        // had this teardown path. E4 meanwhile releases explicitly every five minutes and logs a
+        // clean `state connected -> disconnected (+3s)`.
+        //
+        // podLoanOrphanConnection is the right primitive rather than releaseConnection: it does
+        // the disconnect + cancelLoanScan WITHOUT the C5 record-close, which finalizeHandback
+        // has already performed and which ledgerClear below supersedes anyway.
+        SportLog.event("handback", "teardownPump: releasing BLE explicitly (see PODLOAN orphan log for the identifier)")
+        pumpManager?.podLoanOrphanConnection()
         pumpManager?.pumpManagerDelegate = nil
         pumpManager = nil
         UserDefaults.standard.removeObject(forKey: Keys.pumpRawValue)
