@@ -184,3 +184,75 @@ about explicitly. Never silently dropped.
   confirmed or that it can take 90s. An accidental Cancel mid-sequence was incidental, not causal.
   Open ruling: collapse the chase when a hand-back is pending, since the exhaust comment itself
   says the .assumed record stands and the R22 hand-back audit settles it anyway.
+
+- **(2026-08-05, build 234): takeover failures — four hypotheses ruled OUT, one piece of evidence still missing.**
+  4 failures in 6 takeovers, every one identical: 14 reads, ~113.5s, `lastFail=CBErrorDomain#11`
+  (connectionLimitReached) on all 12 trail entries, with `held[devices=1(conn 0/ing 0/dis 1)]` —
+  our own pod central holding a peripheral but nothing connected.
+
+  RULED OUT, each on data rather than argument:
+  - *G7 contention* — on failures `pod takeover holds the radio — G7 standing down` fires and then
+    NOTHING for 114s: no mid-flight handshake, no yield, no attempt. On successes the G7 releases
+    within 6-8s. The G7 is not holding the slot.
+  - *Aggressive retry* (Jeremy's own suggestion) — no correlation. Gaps after the phone's last
+    reclaim: 388s FAILED, 352s FAILED, 75s OK in 8.6s (fastest of the day), 68s FAILED, 148s OK.
+    The two longest waits both failed.
+  - *App/screen state* — the trail tags each attempt `@active` or `@inactive`. A single failing run
+    (15:16) contains both. Overall 120 active / 204 inactive across failures.
+  - *Stale peripheral handle* — that was the G7 ladder's refuted theory, but same class: the pod's
+    identifier is stable and scan-adopt finds it (held[devices=1] proves discovery succeeded).
+
+  WHERE IT FAILS, precisely: not discovery — CONNECT. Crude's takeover
+  (PodController.takeOverExternalPod) scanned with a 25s deadline and failed at *discovery*
+  ("pod addr not found in scan within timeout"). From-stock finds the pod and cannot connect to it.
+  Different failure, different subsystem.
+
+  TWO CANDIDATES LEFT, and the watch log cannot separate them:
+  1. The phone never actually released. `GRANT +3s — pod BLE released=true` reports
+     `state.podConnectionReleased`, a flag set synchronously — never an observed disconnect.
+     NOTE crude's phone side is the SAME shape (releaseConnection with no verification,
+     WatchDataManager :676), so this is not by itself the from-stock regression.
+  2. We exhausted our own connection slots. From-stock does `pump rebuilt` on every takeover —
+     a fresh OmniPumpManager -> BlePodComms -> BluetoothManager -> CBCentralManager each time.
+     Crude reused ONE PodController and swapped podComms inside it. Abandoned centrals would be
+     exactly the "elsewhere" that peripheralCensus is blind to. CAVEAT: a count-of-centrals-vs-
+     outcome test on 227/228 showed no correlation, so this candidate already survived one
+     failed test and must not be treated as the answer.
+
+  DECIDING EVIDENCE (not yet obtained): the PHONE's os_log during a failed takeover — either a
+  sysdiagnose taken within a minute of the failure, or (better) `log stream` with the phone
+  cabled to the Mac, which lets a takeover be watched live. That shows whether the phone's
+  CoreBluetooth actually issues the disconnect at grant. Until then both candidates stand.
+
+  Also: the takeover failure MESSAGE is wrong and a rewrite is deliberately POSTPONED until the
+  cause is known (Jeremy). It says the pod may be far away or asleep and that it "didn't answer" —
+  but the pod is on the body, awake, and talking to the phone. What failed is the handover.
+  His wording: "Sport Mode initiation failed. Phone still controls pod. Try again after 30 seconds."
+
+- **(2026-08-05, build 234): #47 field-validated.** Jeremy confirmed on the wrist: prediction graph
+  populated on the stock watch screen, recommendation present on the standalone bolus screen,
+  auto-return to the glance after carb/bolus. The single fix — refusing the phone's context during
+  a loan and publishing the watch's own — lit up all of them, as predicted. Two items partially
+  land: the pod bolusing status on the glance works but "needs work" (UX refinement pending), and
+  the recommendation on the CARB screen does not work at all, because that path is architecturally
+  different (see below).
+
+- **(2026-08-05): the carb→bolus recommendation still asks the PHONE, and that is the remaining gap.**
+  Two screens, two data paths, only one fixed:
+  - *standalone bolus* reads `activeContext.recommendedBolusDose` — #47 now fills it from the
+    watch's own `recommendManualBolus`. WORKS.
+  - *carb→bolus* calls `sendPotentialCarbEntryMessage` (CarbAndBolusFlowViewModel :208), which asks
+    the PHONE "what would you bolus for these carbs?" and applies the phone's whole reply context.
+    Wrong twice over during a loan: the phone cannot answer when out of range (sport mode's entire
+    premise), and when it can, it computes from ITS IOB/COB — blind to everything the watch has
+    dosed since takeover. Worse, the reply calls `updateContext` with a phone-authored context,
+    which #47's gate now refuses, so on 234 the path is doubly dead.
+  The fix is the Stage-2 work Jeremy scoped early: compute the potential-entry recommendation
+  locally on the watch. The watch already has `recommendManualBolus`; the difference is layering
+  one unsaved carb entry onto the carb effect before predicting. Jeremy 2026-08-05: this is the
+  MORE common user action than a standalone bolus, so it matters more than its position implies.
+
+  UI note (verified, no work needed): both screens render the same `BolusInput` view — "REC: N U"
+  in insulin colour under the dial, and `handleNewBolusRecommendation` (:336) pre-fills the dial
+  when the user has not started dialling. Sport mode uses stock's flow unmodified; only the data
+  source differs. So a fix at the data layer lights the whole screen with no view work.

@@ -559,7 +559,20 @@ final class PodLoanPhoneController {
         lendable.releaseConnection()
         queue.asyncAfter(deadline: .now() + 3) { [weak self, weak lendable] in
             guard let self = self, let lendable = lendable else { return }
-            self.handbackDiag(releaseEpoch, "GRANT +3s — pod BLE released=\(lendable.isConnectionReleased)")
+            // `released` is a FLAG — set synchronously by releaseConnection, it says only that we
+            // asked. `linkUp` is `isConnectionReady`, which on OmniPumpManager is literally
+            // `podLoanConnectionStateDescription == "connected"` — the peripheral's own state.
+            //
+            // This is the line the whole takeover investigation has been missing. 4 of 6 takeovers
+            // failed on build 234, every connect returning connectionLimitReached while the WATCH's
+            // central held nothing — so something else held the slot, and the only candidate we
+            // could not test was "the phone never actually let go". released=true says nothing
+            // about that. linkUp=true three seconds after a release says it outright.
+            self.handbackDiag(releaseEpoch, "GRANT +3s — pod BLE released=\(lendable.isConnectionReleased) linkUp=\(lendable.isConnectionReady)")
+            if lendable.isConnectionReady {
+                self.handbackDiag(releaseEpoch, "GRANT +3s — ** STILL CONNECTED after release — the watch's takeover will be refused (single-central pod) **")
+            }
+            PhoneLog.flush()   // the analysis wants this file current at exactly this moment
         }
 
         epoch += 1
@@ -706,6 +719,11 @@ final class PodLoanPhoneController {
     /// silently fails to ack. Purely diagnostic.
     private func handbackDiag(_ epoch: Int, _ text: String) {
         os_log("HANDBACK-DIAG e%d: %{public}@", log: log, type: .default, epoch, text)
+        // ...and into the phone's own mirrored file. These lines are relayed to the WATCH's log
+        // too, but only while the watch is reachable and only as a [phone] echo. The file is the
+        // phone's independent account — which is what was missing when both the hand-back stall
+        // and the takeover failures came down to "did the phone actually release the pod?".
+        PhoneLog.event("loan", "e\(epoch) \(text)")
         sendMessage(.diag(LoanDiag(epoch: epoch, text: text)))
     }
 
