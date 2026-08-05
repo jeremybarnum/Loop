@@ -1059,6 +1059,18 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     /// and an HKWorkoutSession can legally begin (the same reason "prewarm" is foreground-only).
     /// Refcounted, so it composes with soak/prewarm and releasing it never ends a session that
     /// steady-state looping still wants.
+    /// Same refcounted holder mechanism as `setTakeoverKeepalive`, for the RETURN path.
+    /// Acquired while a hand-back is outstanding so the watch stays reachable and the phone's
+    /// ack takes WCSession's immediate channel instead of the queue — the ack is what permits
+    /// the watch to release the pod, so a starved ack directly extends "Reclaiming…".
+    func setHandbackKeepalive(_ holding: Bool) {
+        if holding {
+            workout.acquire("handback")
+        } else {
+            workout.release("handback")
+        }
+    }
+
     func setTakeoverKeepalive(_ holding: Bool) {
         if holding {
             workout.acquire("takeover")

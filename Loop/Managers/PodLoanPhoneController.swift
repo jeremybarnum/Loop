@@ -749,6 +749,7 @@ final class PodLoanPhoneController {
             // as the odometer audit: a duplicate final (routine — 15s resends vs ack latency)
             // must not re-apply it after the user has since changed the phone's own setting.
             // nil (older watch) leaves the captured pre-loan value alone.
+            handbackDiag(offer.epoch, "commit done — ACKing now; the watch cannot release the pod until this lands")
             if let watchClosed = offer.watchClosedLoopEnabled {
                 deps.noteWatchClosedLoop(watchClosed)
                 handbackDiag(offer.epoch, "loop mode INHERITED from the wrist — phone will resume \(watchClosed ? "CLOSED" : "OPEN")")

@@ -102,6 +102,16 @@ final class StockLoopSession {
             self?.sendLogSnapshot(holding ? "takeover start" : "takeover verdict")
         }
 
+        // Hand-back needs the same runtime the takeover ladder needed. Without it the watch
+        // stops being reachable the moment the wrist drops after End, the phone's ack falls
+        // back to the queued channel, and the pod stays held until iOS decides to deliver it.
+        loanController.onHandbackRuntimeHold = { [weak self] holding in
+            self?.stack.client.setHandbackKeepalive(holding)
+            SportLog.event("loan", holding
+                ? "hand-back runtime hold ACQUIRED — staying reachable for the phone's ack"
+                : "hand-back runtime hold released")
+        }
+
         // #82 RETIRED by #84 (2026-07-31): the dose-window stand-down is deliberately NOT
         // wired. It stranded the radio overnight — the app suspended mid-ladder holding the
         // sensor off, and with no BLE events left to wake it the watch went dark for 2.9h

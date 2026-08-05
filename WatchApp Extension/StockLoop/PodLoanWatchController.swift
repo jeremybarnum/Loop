@@ -67,12 +67,33 @@ final class PodLoanWatchController {
     /// fired with true on entering .takingOver and false on leaving it (any exit).
     var onTakeoverRadioHold: ((Bool) -> Void)?
 
+    /// True while a hand-back is in flight and the watch still holds the pod.
+    ///
+    /// The RELEASE is gated on the phone's ack, and that ack only takes WCSession's immediate
+    /// channel while `session.isReachable`; otherwise it falls back to transferUserInfo, which
+    /// iOS drains on its own schedule. The user's habit makes that the common case — tap End,
+    /// drop the wrist, look at the phone — so the watch stops being reachable at exactly the
+    /// moment permission to let go is being sent. Field symptom (Jeremy, 2026-08-04): the carb
+    /// and insulin records are already visible on the phone while "Reclaiming…" persists another
+    /// 20-50s. The records being visible proves the commit landed; the wait is the ack.
+    ///
+    /// Takeover already solved this class with a keepalive holder for its ~40s ladder; the
+    /// return path never got one. This is that hook. It changes NO safety property — the
+    /// release stays gated on the ack — it just stops the ack from being starved.
+    var onHandbackRuntimeHold: ((Bool) -> Void)?
+
     private(set) var phase: Phase {
         didSet {
             UserDefaults.standard.set(phase.rawValue, forKey: Keys.phase)
             if (oldValue == .takingOver) != (phase == .takingOver) {
                 onTakeoverRadioHold?(phase == .takingOver)
                 setTakeoverSessionListener(phase == .takingOver)
+            }
+            // Hold runtime for the whole hand-back, i.e. while the watch is waiting to be told
+            // it may release. .handingBack is the phase in which the pod is still held and the
+            // ack is outstanding.
+            if (oldValue == .handingBack) != (phase == .handingBack) {
+                onHandbackRuntimeHold?(phase == .handingBack)
             }
         }
     }
@@ -140,6 +161,10 @@ final class PodLoanWatchController {
     /// Set and cleared in lockstep with `handbackDeadline`, which already marks exactly the
     /// hand-back's lifetime, so there is no second lifecycle to keep in step.
     private var handbackStartedAt: Date?
+    /// When the FINAL (released=true) offer was sent — the clock the ack is racing.
+    /// Splits "Reclaiming…" into the two intervals we could not previously tell apart:
+    /// waiting for the phone's permission, versus iOS actually freeing the pod's BLE slot.
+    private var finalOfferSentAt: Date?
     private var requestTimeoutWork: DispatchWorkItem?
     /// Surfaced on the glance idle screen after a failed/timed-out start, so the user
     /// sees WHY instead of a silent return to idle.
@@ -486,7 +511,14 @@ final class PodLoanWatchController {
         guard let rawValue = (try? PropertyListSerialization.propertyList(from: grant.pumpManagerRawState, options: [], format: nil)) as? [String: Any],
               let rawState = rawValue["state"] as? PumpManager.RawStateValue,
               let manager = OmniPumpManager(rawState: rawState) else {
-            teardownPump()
+            let ackWait = finalOfferSentAt.map { Date().timeIntervalSince($0) }
+        SportLog.event("loan", String(format: "ack RECEIVED %@ after the final offer — releasing the pod now",
+                                      ackWait.map { String(format: "+%.1fs", $0) } ?? "(no offer stamp)"))
+        let releaseBegan = Date()
+        teardownPump()
+        SportLog.event("loan", String(format: "pod BLE teardown returned in %.2fs (the phone's standing connect can land from here)",
+                                      Date().timeIntervalSince(releaseBegan)))
+        finalOfferSentAt = nil
             phase = .idle
             lastIdleNote = NSLocalizedString("Couldn't read the pod from the phone. Try again.", comment: "Glance: pump snapshot rejected")
             SportLog.event("loan", "grant FAILED — could not rebuild the pump from the phone's snapshot")
@@ -1406,6 +1438,7 @@ final class PodLoanWatchController {
             // NON-BLOCKING mirror: this runs on `queue`, and `closedLoopEnabled` would sync
             // onto dataAccessQueue — the #64 deadlock direction.
             watchClosedLoopEnabled: loopManager.closedLoopEnabledNonBlocking)
+        if offer.released == true, finalOfferSentAt == nil { finalOfferSentAt = Date() }
         handbackResendCount += 1
         // Self-documenting limbo (party finding: 97 silent minutes of 15s resends):
         // log the attempt count each minute so the wait is visible in the log.
