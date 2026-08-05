@@ -136,6 +136,23 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
         self.configuration = configuration
         self.dismiss = dismiss
 
+        // FRESH ON OPEN, not once per cycle (field 2026-08-05: "bolus recommendation in sport
+        // mode is a bit sluggish to update — even when the glance has the new IOB and the new
+        // prediction, the recommendation doesn't").
+        //
+        // He is describing a real defect, not lag. The seed above comes from
+        // activeContext.recommendedBolusDose, which publishHUDContext fills ONCE PER LOOP CYCLE
+        // — so on opening the screen it can be five minutes old, computed against IOB that has
+        // since changed. The glance looks live by comparison because it reads glanceData() on
+        // every 2s tick. A dosing recommendation that stale is worse than no recommendation,
+        // because it looks current.
+        //
+        // So recompute now, on the watch, at the moment the user is actually looking at it.
+        // Loan only: off-loan the phone owns the number and pushes it, exactly as in stock.
+        if onLoan, case .manualBolus = configuration {
+            refreshLoanBolusRecommendation()
+        }
+
         contextUpdateObservation = NotificationCenter.default.addObserver(
             forName: LoopDataManager.didUpdateContextNotification,
             object: loopManager,
@@ -295,6 +312,30 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
     /// which is why the send window is deliberately not re-opened), so the notification has to
     /// say both that the carbs landed and that the bolus must be delivered from the plain Bolus
     /// screen. Field 2026-08-05 00:18: 6 g journaled, 0.20 U lost, and nothing said what to do.
+    /// Ask the WATCH for a recommendation right now (loan only). Mirrors what the phone does
+    /// off-loan: compute against current state when the screen opens, rather than serving a
+    /// number cached by the last loop cycle.
+    private func refreshLoanBolusRecommendation() {
+        isComputingRecommendedBolus = true
+        ExtensionDelegate.shared().stockLoopSession.stack.loopManager.recommendManualBolus { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self, !self.hasSentConfirmationMessage else { return }
+                self.isComputingRecommendedBolus = false
+                switch result {
+                case .success(let recommendation):
+                    SportLog.event("bolus-ui", String(format: "REC refreshed on open: %.2f U", recommendation.amount))
+                    self.recommendedBolusAmount = recommendation.amount
+                case .failure(let error):
+                    // Leave whatever the context seeded rather than blanking a usable number:
+                    // the guards inside recommendManualBolus (momentum/carb/insulin effects) go
+                    // unsatisfied in the first cycles of a loan, and a stale-but-real value beats
+                    // "REC: – U" there. Said out loud so it is never inferred from silence.
+                    SportLog.event("bolus-ui", "REC refresh on open FAILED — \(error) (keeping the cycle's value)")
+                }
+            }
+        }
+    }
+
     private static func notifyBolusFailure(units: Double, carbGrams: Double?, error: Swift.Error) {
         let content = UNMutableNotificationContent()
         content.title = NSLocalizedString("Bolus Not Delivered", comment: "Watch notification title for a failed loan-time bolus")
