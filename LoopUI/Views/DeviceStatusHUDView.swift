@@ -41,6 +41,69 @@ import LoopKitUI
         didSet {
             backgroundView.backgroundColor = .systemBackground
             backgroundView.layer.cornerRadius = 23
+            backgroundView.clipsToBounds = true   // so the fill below honors the pill's radius
+        }
+    }
+
+    // MARK: - Activity fill (2026-08-04)
+
+    /// A left-to-right fill of the pill's BACKGROUND, behind the icon and text.
+    ///
+    /// Jeremy, on the thin vertical `progressView` used for pod lifecycle: "that bar sucks and
+    /// doesn't work. I'm picturing something moving left to right filling in the background
+    /// behind Reclaiming." At 3pt wide against a 46pt pill, the lifecycle bar reads as a
+    /// decoration rather than progress — and it is semantically taken anyway (pod EOL /
+    /// expiry / fault), so a transient activity indicator must not borrow it.
+    ///
+    /// This is a separate channel: a tinted view pinned to the pill's leading edge whose width
+    /// is a fraction of the pill. It sits at index 0 of `backgroundView`, so the label and icon
+    /// always draw on top.
+    private lazy var activityFillView: UIView = {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        view.isHidden = true
+        view.translatesAutoresizingMaskIntoConstraints = false
+        backgroundView.insertSubview(view, at: 0)
+        NSLayoutConstraint.activate([
+            view.leadingAnchor.constraint(equalTo: backgroundView.leadingAnchor),
+            view.topAnchor.constraint(equalTo: backgroundView.topAnchor),
+            view.bottomAnchor.constraint(equalTo: backgroundView.bottomAnchor),
+        ])
+        let width = view.widthAnchor.constraint(equalTo: backgroundView.widthAnchor, multiplier: 0)
+        width.isActive = true
+        activityFillWidth = width
+        return view
+    }()
+
+    private var activityFillWidth: NSLayoutConstraint?
+
+    /// Drive the background fill. `fraction` nil clears it; 0...1 fills that much of the pill.
+    /// `animated` lets the caller step it smoothly toward the next value rather than jumping.
+    public func setActivityFill(_ fraction: Double?, color: UIColor = .systemOrange, animated: Bool = true) {
+        guard let fraction = fraction else {
+            activityFillView.isHidden = true
+            activityFillWidth?.isActive = false
+            activityFillWidth = activityFillView.widthAnchor.constraint(equalTo: backgroundView.widthAnchor, multiplier: 0)
+            activityFillWidth?.isActive = true
+            return
+        }
+
+        activityFillView.isHidden = false
+        // Tinted, not opaque: the pill's text must stay legible where the fill has passed.
+        activityFillView.backgroundColor = color.withAlphaComponent(0.22)
+
+        activityFillWidth?.isActive = false
+        let clamped = CGFloat(fraction.clamped(to: 0...1))
+        activityFillWidth = activityFillView.widthAnchor.constraint(equalTo: backgroundView.widthAnchor,
+                                                                    multiplier: max(clamped, 0.0001))
+        activityFillWidth?.isActive = true
+
+        if animated {
+            UIView.animate(withDuration: 0.3, delay: 0, options: [.curveLinear, .beginFromCurrentState]) {
+                self.backgroundView.layoutIfNeeded()
+            }
+        } else {
+            backgroundView.layoutIfNeeded()
         }
     }
     
