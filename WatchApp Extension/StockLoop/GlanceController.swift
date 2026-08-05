@@ -92,12 +92,20 @@ struct GlanceUIState {
     /// display window; "phone" = only the relay did. Answers "is the watch standing alone?"
     enum BGSource { case directG7, phoneRelay, none }
     var bgSource: BGSource = .none
+    /// LINE 2 IS THE TRANSIENT SLOT (Jeremy, 2026-08-05). The glance body under the number is
+    /// two lines: line 1 = stale age / eventual BG, line 2 = provenance. His ruling: "the
+    /// eventual BG is quite important, whereas provenance and status is more of a
+    /// troubleshooting thing that will be trumped by the transient messages" — so line 2 carries
+    /// transients and falls back to provenance, and line 1 is left alone.
+    ///
+    /// This has to be its own field rather than `loopStatusText`, because `loopIndicator`
+    /// renders that ONLY for starting/handingBack/draining — during .active it draws the ring
+    /// and no text at all (Jeremy 2026-07-24, "the ring says it all"). Two transients were
+    /// therefore invisible: the bolus status in 229/230 (which is how Jeremy found this), and
+    /// "ending…" during a WS1 interim drain, which runs while the phase is still .active.
+    var transientText: String? = nil
     /// G7 pairing code likely wrong (aesVerifyFailed ×2) — glance shows a re-enter banner.
     var needsSensorCode: Bool = false
-
-    /// *** DIABETIFY *** ringfence badge (bench, 2026-07-29): true while the g7.diabetify
-    /// transform is remapping real G7 readings — the glance must never look normal then.
-    var diabetifyActive: Bool = false
 
     /// Loop open/close control (active only). `canToggleLoop` is false when the phone
     /// disallows dosing (the watch can't close what the phone opened) or when suspended.
@@ -330,6 +338,9 @@ final class GlanceViewModel: ObservableObject {
                 s.handbackPending = true
                 s.handbackStartedAt = snap.handbackStartedAt
                 s.loopStatusText = NSLocalizedString("ending…", comment: "Glance status while a hand-back drains in the background")
+                // ...and onto line 2, or it is invisible: this drain runs while the phase is
+                // still .active, where loopIndicator draws the ring and no text.
+                s.transientText = s.loopStatusText
                 // WS1 interim drain — the watch is STILL looping, so this path deliberately
                 // carried no note. But an unreachable phone is exactly the case the user must
                 // be told about (it is why "ending…" appears to hang), and it is the state
@@ -346,7 +357,9 @@ final class GlanceViewModel: ObservableObject {
             if let startedAt = session.stack.loopManager.manualBolusStartedAt {
                 // Under ~20s reads as normal work. Past that it needs a reason, or it reads as
                 // a hang — which is what cost three doses to End taps.
-                s.loopStatusText = Date().timeIntervalSince(startedAt) < 20
+                // Outranks the hand-back drain: a dose in flight is what gets destroyed by a
+                // mistimed tap; "ending…" merely describes waiting.
+                s.transientText = Date().timeIntervalSince(startedAt) < 20
                     ? NSLocalizedString("delivering bolus…", comment: "Glance status while a manual bolus reclaims the pod and delivers")
                     : NSLocalizedString("waiting for sensor — bolus will deliver", comment: "Glance status when a manual bolus is waiting out the G7 radio handshake")
             }
@@ -358,8 +371,6 @@ final class GlanceViewModel: ObservableObject {
         }
         // Cross-cutting (any phase): a likely-wrong G7 pairing code surfaces the re-enter banner.
         state.needsSensorCode = session.stack.client.needsSensorCode
-        // Cross-cutting: the DIABETIFY bench transform shows its ringfence badge in every phase.
-        state.diabetifyActive = DiabetifyTransform.isActive
     }
 
     /// Emit at most one line per value-change or per 60s, so the 2s tick cannot flood the log.
@@ -647,15 +658,6 @@ struct GlanceView: View {
             Button(action: onLoopTap) { loopIndicator }
                 .buttonStyle(.plain)
                 .disabled(model.state.phase != .active)
-            // *** DIABETIFY *** ringfence badge: persistent while the bench transform is
-            // remapping real G7 readings (3x amplification) — every phase, impossible to miss.
-            if model.state.diabetifyActive {
-                Text("Δ⚠︎ DIABETIFY")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(.glanceCrit)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-            }
             Spacer()
             statusRight
         }
@@ -833,9 +835,15 @@ struct GlanceView: View {
             } else if model.state.viaPhone, model.state.phase == .idle || model.state.phase == .starting {
                 Text("via iPhone").font(.system(size: 12)).foregroundColor(.glanceDim)
             }
-            // R24: predicted next G7 while active without a fresh direct reading.
-            // (While starting, the prediction rides under the pod bar instead.)
-            if model.state.phase == .active, let eta = model.state.g7EtaText {
+            // LINE 2 — the transient slot. A live transient trumps provenance; otherwise this
+            // is the provenance/next-G7 line (R24), which is diagnostic and can wait.
+            if let transient = model.state.transientText {
+                Text(transient)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.glanceWarn)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.7)
+            } else if model.state.phase == .active, let eta = model.state.g7EtaText {
                 // Warn-tinted when the phone is carrying the reading, so filling-in never
                 // reads as success at a glance.
                 Text(eta).font(.system(size: 11))

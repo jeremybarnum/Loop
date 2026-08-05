@@ -589,17 +589,7 @@ final class DeviceDataManager {
     private func processCGMReadingResult(_ manager: CGMManager, readingResult: CGMReadingResult, completion: @escaping () -> Void) {
         switch readingResult {
         case .newData(let rawValues):
-            // *** DIABETIFY *** (bench, 2026-07-29): remap REAL CGM readings at the phone
-            // SOURCE adapter — the single choke point where every G7SensorKit reading
-            // (delegate push at cgmManager(_:hasNew:) AND the refreshCGM() fetch path)
-            // becomes stored glucose. Everything downstream relays the TRANSFORMED value:
-            // WatchContext/createWatchContext reads glucoseStore.latestGlucose, so the
-            // watch's phone-BG fallback and loan-grant seed receive already-transformed
-            // samples and must not (and do not) transform again. No-op unless the
-            // "g7.diabetify" bench flag is on (default false).
-            let values = DiabetifyTransform.isActive
-                ? DiabetifyTransform.substitute(rawValues, log: { self.log.default("[diabetify] %{public}@", $0) })
-                : rawValues
+            let values = rawValues
             loopManager.addGlucoseSamples(values) { result in
                 if !values.isEmpty {
                     DispatchQueue.main.async {

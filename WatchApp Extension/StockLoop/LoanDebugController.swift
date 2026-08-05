@@ -33,8 +33,6 @@ struct LoanDebugView: View {
     /// Refreshes on the same 2s timer as everything else.
     @State private var dosing: WatchLoopManager.GlanceData?
     @State private var cobText: String = "—"
-    /// *** DIABETIFY *** current flag state, refreshed with everything else.
-    @State private var diabetifyOn: Bool = DiabetifyTransform.isActive
 
     @State private var radioStressOn = UserDefaults.standard.bool(forKey: "g7.radioStressAlwaysEnact")
 
@@ -120,25 +118,6 @@ struct LoanDebugView: View {
 
                 Divider().padding(.vertical, 2)
 
-                // *** DIABETIFY *** on-wrist toggle (bench, 2026-07-29): the only watch
-                // switch for the g7.diabetify remap. Unlike the retired FakeGlucose/E5
-                // toggles this flag deliberately SURVIVES restarts (multi-day non-diabetic
-                // wear); the glance badge + per-reading SportLog lines are the ringfence.
-                Text("DIABETIFY (BENCH)").font(.footnote).foregroundColor(.secondary)
-                row("transform", diabetifyOn ? "ON — y=3(x−80)+115" : "off")
-                Button("Diabetify: \(diabetifyOn ? "ON" : "OFF")") {
-                    let enable = !DiabetifyTransform.isActive
-                    UserDefaults.standard.set(enable, forKey: DiabetifyTransform.defaultsKey)
-                    diabetifyOn = enable
-                    SportLog.event("diabetify", enable
-                        ? "*** DIABETIFY ENABLED *** (on-wrist toggle) — real G7 readings remap y=3(x−80)+115 clamp [40,400]"
-                        : "diabetify disabled (on-wrist toggle) — real values resume next reading")
-                    lastAction = enable ? "diabetify ON" : "diabetify OFF"
-                }
-                .foregroundColor(diabetifyOn ? Color.red : nil)
-
-                Divider().padding(.vertical, 2)
-
                 // *** RADIO STRESS (BENCH) *** #83 (2026-07-30): force a distinct pod
                 // command on cycles DoseMath would leave alone, so every 5-min cycle
                 // exercises reading + enact — the gold-standard contention load. Timing
@@ -181,7 +160,6 @@ struct LoanDebugView: View {
             session.loanController.refreshDebugSnapshot()
             snapshot = session.loanController.mirroredDebugSnapshot ?? snapshot
             g7 = session.stack.client.identitySnapshot()
-            diabetifyOn = DiabetifyTransform.isActive
             let gd = session.stack.loopManager.glanceData()
             dosing = gd
             iobText = gd.iob.map { String(format: "%.2f U", $0) } ?? "—"
@@ -195,7 +173,6 @@ struct LoanDebugView: View {
             session.loanController.refreshDebugSnapshot()
             snapshot = session.loanController.mirroredDebugSnapshot ?? snapshot
             g7 = session.stack.client.identitySnapshot()
-            diabetifyOn = DiabetifyTransform.isActive
             let gd = session.stack.loopManager.glanceData()
             dosing = gd
             iobText = gd.iob.map { String(format: "%.2f U", $0) } ?? "—"

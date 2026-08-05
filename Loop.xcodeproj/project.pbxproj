@@ -187,14 +187,11 @@
 		43D0E4A32F1A000100000003 /* LoanProtocolV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */; };
 		43D0E4B22F1A000100000012 /* SessionInsulinLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4B12F1A000100000011 /* SessionInsulinLedger.swift */; };
 		43D0E4B32F1A000100000013 /* SessionInsulinLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4B12F1A000100000011 /* SessionInsulinLedger.swift */; };
-		43D0E4BA2F1A00010000001A /* DiabetifyTransform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4B92F1A000100000019 /* DiabetifyTransform.swift */; };
-		43D0E4BB2F1A00010000001B /* DiabetifyTransform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4B92F1A000100000019 /* DiabetifyTransform.swift */; };
 		43D0E4A62F1A000100000006 /* LoanReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A42F1A000100000004 /* LoanReconciler.swift */; };
 		43D0E4A72F1A000100000007 /* PodLoanPhoneController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A52F1A000100000005 /* PodLoanPhoneController.swift */; };
 		43D0E4A92F1A000100000009 /* LoanProtocolV2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A82F1A000100000008 /* LoanProtocolV2Tests.swift */; };
 		33A29C3ED5AD4D4195A88A85 /* WatchStoreEffectsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 732DA97BFF3C44B3A0A3D63F /* WatchStoreEffectsTests.swift */; };
 		43D0E4B72F1A000100000017 /* LoanBooksHarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4B82F1A000100000018 /* LoanBooksHarnessTests.swift */; };
-		43D0E4BD2F1A00010000001D /* DiabetifyTransformTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4BC2F1A00010000001C /* DiabetifyTransformTests.swift */; };
 		49B8A19F8BBE91531BBE4A2E /* WatchDosingLimitsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 253FAE509D95209395E23A42 /* WatchDosingLimitsTests.swift */; };
 		43D0E4AB2F1A00010000000B /* PodLoanPhoneControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4AA2F1A00010000000A /* PodLoanPhoneControllerTests.swift */; };
 		43D0E4AD2F1A00010000000D /* SensorCodeUserInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4AC2F1A00010000000C /* SensorCodeUserInfo.swift */; };
@@ -974,13 +971,11 @@
 		43CE7CDD1CA8B63E003CC1B0 /* Data.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Data.swift; sourceTree = "<group>"; };
 		43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanProtocolV2.swift; sourceTree = "<group>"; };
 		43D0E4B12F1A000100000011 /* SessionInsulinLedger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionInsulinLedger.swift; sourceTree = "<group>"; };
-		43D0E4B92F1A000100000019 /* DiabetifyTransform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiabetifyTransform.swift; sourceTree = "<group>"; };
 		43D0E4A42F1A000100000004 /* LoanReconciler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanReconciler.swift; sourceTree = "<group>"; };
 		43D0E4A52F1A000100000005 /* PodLoanPhoneController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanPhoneController.swift; sourceTree = "<group>"; };
 		43D0E4A82F1A000100000008 /* LoanProtocolV2Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanProtocolV2Tests.swift; sourceTree = "<group>"; };
 		732DA97BFF3C44B3A0A3D63F /* WatchStoreEffectsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchStoreEffectsTests.swift; sourceTree = "<group>"; };
 		43D0E4B82F1A000100000018 /* LoanBooksHarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanBooksHarnessTests.swift; sourceTree = "<group>"; };
-		43D0E4BC2F1A00010000001C /* DiabetifyTransformTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiabetifyTransformTests.swift; sourceTree = "<group>"; };
 		253FAE509D95209395E23A42 /* WatchDosingLimitsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchDosingLimitsTests.swift; sourceTree = "<group>"; };
 		43D0E4AA2F1A00010000000A /* PodLoanPhoneControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanPhoneControllerTests.swift; sourceTree = "<group>"; };
 		43D0E4AC2F1A00010000000C /* SensorCodeUserInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorCodeUserInfo.swift; sourceTree = "<group>"; };
@@ -2145,7 +2140,6 @@
 				43D0E4A82F1A000100000008 /* LoanProtocolV2Tests.swift */,
 				732DA97BFF3C44B3A0A3D63F /* WatchStoreEffectsTests.swift */,
 				43D0E4B82F1A000100000018 /* LoanBooksHarnessTests.swift */,
-				43D0E4BC2F1A00010000001C /* DiabetifyTransformTests.swift */,
 				253FAE509D95209395E23A42 /* WatchDosingLimitsTests.swift */,
 				43D0E4AA2F1A00010000000A /* PodLoanPhoneControllerTests.swift */,
 				E93E86AC24DDE02C00FF40C8 /* Mock Stores */,
@@ -2275,7 +2269,6 @@
 				4372E48F213CFCE70068E043 /* LoopSettingsUserInfo.swift */,
 				43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */,
 				43D0E4B12F1A000100000011 /* SessionInsulinLedger.swift */,
-				43D0E4B92F1A000100000019 /* DiabetifyTransform.swift */,
 				43D0E4AC2F1A00010000000C /* SensorCodeUserInfo.swift */,
 				43C3B6F620BBCAA30026CAFA /* PumpManager.swift */,
 				C1FB428E217921D600FAB378 /* PumpManagerUI.swift */,
@@ -3678,7 +3671,6 @@
 				4372E490213CFCE70068E043 /* LoopSettingsUserInfo.swift in Sources */,
 				43D0E4A22F1A000100000002 /* LoanProtocolV2.swift in Sources */,
 				43D0E4B22F1A000100000012 /* SessionInsulinLedger.swift in Sources */,
-				43D0E4BA2F1A00010000001A /* DiabetifyTransform.swift in Sources */,
 				43D0E4AD2F1A00010000000D /* SensorCodeUserInfo.swift in Sources */,
 				C174233C259BEB0F00399C9D /* ManualEntryDoseViewModel.swift in Sources */,
 				89CA2B3D226E6B13004D9350 /* LocalTestingScenariosManager.swift in Sources */,
@@ -3816,7 +3808,6 @@
 				4372E491213D05F90068E043 /* LoopSettingsUserInfo.swift in Sources */,
 				43D0E4A32F1A000100000003 /* LoanProtocolV2.swift in Sources */,
 				43D0E4B32F1A000100000013 /* SessionInsulinLedger.swift in Sources */,
-				43D0E4BB2F1A00010000001B /* DiabetifyTransform.swift in Sources */,
 				43D0E4AE2F1A00010000000E /* SensorCodeUserInfo.swift in Sources */,
 				4345E40421F68AD9009E00E5 /* TextRowController.swift in Sources */,
 				43BFF0B51E45C1E700FF19A9 /* NumberFormatter.swift in Sources */,
@@ -3901,7 +3892,6 @@
 				43D0E4A92F1A000100000009 /* LoanProtocolV2Tests.swift in Sources */,
 				33A29C3ED5AD4D4195A88A85 /* WatchStoreEffectsTests.swift in Sources */,
 				43D0E4B72F1A000100000017 /* LoanBooksHarnessTests.swift in Sources */,
-				43D0E4BD2F1A00010000001D /* DiabetifyTransformTests.swift in Sources */,
 				49B8A19F8BBE91531BBE4A2E /* WatchDosingLimitsTests.swift in Sources */,
 				43D0E4AB2F1A00010000000B /* PodLoanPhoneControllerTests.swift in Sources */,
 				A9BD28E7272226B40071DF15 /* TestLocalizedError.swift in Sources */,

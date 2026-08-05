@@ -2543,19 +2543,6 @@ extension WatchLoopManager: CGMManagerDelegate {
             let values: [NewGlucoseSample]
             if FakeGlucose.isEnabled {
                 values = FakeGlucose.substitute(rawValues)
-            } else if DiabetifyTransform.isActive {
-                // *** DIABETIFY *** (bench, 2026-07-29): remap the REAL direct-G7 reading
-                // at the watch SOURCE adapter — the single choke point where G7 samples
-                // enter this store. The phone-BG fallback (ingestPhoneGlucoseFromContext)
-                // and the loan-grant glucose seed (PodLoanWatchController.ingestGrantGlucose)
-                // deliberately do NOT transform: both relay values from the phone's
-                // GlucoseStore, which were already transformed at the PHONE's source
-                // adapter (DeviceDataManager.processCGMReadingResult) — transforming a
-                // relay would double-apply (3x → 9x). FakeGlucose wins if both flags are
-                // somehow on (its script ignores incoming quantities anyway).
-                values = DiabetifyTransform.substitute(rawValues) { line in
-                    SportLog.event("diabetify", line)
-                }
             } else {
                 values = rawValues
             }
