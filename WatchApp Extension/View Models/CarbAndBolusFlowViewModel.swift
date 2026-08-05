@@ -290,13 +290,25 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
 
     /// A durable local notification for a loan-time bolus failure — survives the
     /// flow's auto-dismiss, the app backgrounding, and a lowered wrist.
-    private static func notifyBolusFailure(units: Double, error: Swift.Error) {
+    /// `carbGrams` non-nil means carbs were ALREADY journaled before the bolus was attempted —
+    /// the trap case. The user cannot recover by re-running the carb flow (it would double-log,
+    /// which is why the send window is deliberately not re-opened), so the notification has to
+    /// say both that the carbs landed and that the bolus must be delivered from the plain Bolus
+    /// screen. Field 2026-08-05 00:18: 6 g journaled, 0.20 U lost, and nothing said what to do.
+    private static func notifyBolusFailure(units: Double, carbGrams: Double?, error: Swift.Error) {
         let content = UNMutableNotificationContent()
         content.title = NSLocalizedString("Bolus Not Delivered", comment: "Watch notification title for a failed loan-time bolus")
-        content.body = String(
-            format: NSLocalizedString("%1$@ U did not deliver. %2$@", comment: "Watch notification body for a failed loan-time bolus (1: units, 2: reason)"),
-            NumberFormatter.localizedString(from: NSNumber(value: units), number: .decimal),
-            error.localizedDescription)
+        let unitsText = NumberFormatter.localizedString(from: NSNumber(value: units), number: .decimal)
+        if let carbGrams = carbGrams {
+            content.body = String(
+                format: NSLocalizedString("%1$@ g was logged, but %2$@ U did not deliver. Use the Bolus screen to deliver it — do NOT re-enter the carbs.", comment: "Watch notification body when carbs logged but the bolus failed (1: grams, 2: units)"),
+                NumberFormatter.localizedString(from: NSNumber(value: Int(carbGrams.rounded())), number: .none),
+                unitsText)
+        } else {
+            content.body = String(
+                format: NSLocalizedString("%1$@ U did not deliver. %2$@", comment: "Watch notification body for a failed loan-time bolus (1: units, 2: reason)"),
+                unitsText, error.localizedDescription)
+        }
         content.sound = .default
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: "loan.bolus.failure", content: content, trigger: nil))
@@ -334,7 +346,7 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
                         // (Do NOT re-open the send window: carbs are already
                         // journaled; a re-tap would double-log them.)
                         WKInterfaceDevice.current().play(.failure)
-                        Self.notifyBolusFailure(units: units, error: error)
+                        Self.notifyBolusFailure(units: units, carbGrams: carbEntry?.quantity.doubleValue(for: .gram()), error: error)
                         ExtensionDelegate.shared().present(error)
                     } else {
                         WKInterfaceDevice.current().play(.success)

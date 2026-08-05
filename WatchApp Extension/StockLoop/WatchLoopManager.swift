@@ -241,8 +241,18 @@ final class WatchLoopManager {
     var manualBolusInFlight: Bool {
         manualBolusLock.lock(); defer { manualBolusLock.unlock() }; return _manualBolusInFlight
     }
+    /// When the in-flight bolus started, so the glance can escalate "delivering…" to an
+    /// explanation once the wait stops looking normal. Nil when nothing is in flight.
+    var manualBolusStartedAt: Date? {
+        manualBolusLock.lock(); defer { manualBolusLock.unlock() }
+        return _manualBolusInFlight ? _manualBolusStartedAt : nil
+    }
+    private var _manualBolusStartedAt: Date?
     fileprivate func setManualBolusInFlight(_ inFlight: Bool) {
-        manualBolusLock.lock(); _manualBolusInFlight = inFlight; manualBolusLock.unlock()
+        manualBolusLock.lock()
+        _manualBolusInFlight = inFlight
+        _manualBolusStartedAt = inFlight ? Date() : nil
+        manualBolusLock.unlock()
     }
 
     var e4ReclaimPodForDose: ((@escaping (Bool) -> Void) -> Void)? {
@@ -406,6 +416,17 @@ final class WatchLoopManager {
     struct GlanceData {
         let glucose: HKQuantity?
         let glucoseDate: Date?
+        /// OPTION C (Jeremy 2026-08-05): when each SOURCE last delivered a reading — the
+        /// direct G7 link's own health, independent of which copy won the store.
+        ///
+        /// `dropAlreadyStored` is first-writer-wins, and the phone's relay lands ~7s ahead of
+        /// the direct read, so with the phone nearby the STORED row is the phone's and the
+        /// direct read is discarded as a duplicate. Labelling the stored row would therefore
+        /// read "phone" almost always and tell Jeremy nothing about the thing he actually wants
+        /// to know: is the watch standing on its own right now? So stamp direct-G7 on ARRIVAL,
+        /// whether or not its copy was kept.
+        let directG7At: Date?
+        let phoneRelayAt: Date?
         let trend: GlucoseTrend?
         let eventual: HKQuantity?
         let iob: Double?
@@ -471,9 +492,12 @@ final class WatchLoopManager {
                 let scheduled = (doseStore.basalProfileApplyingOverrideHistory ?? settings.basalRateSchedule)?.value(at: now()) ?? 0
                 tempRate = dose.unitsPerHour - scheduled
             }
+            let sources = self.lastGlucoseSourceStamps
             return GlanceData(
                 glucose: latest?.quantity,
                 glucoseDate: latest?.startDate,
+                directG7At: sources.direct,
+                phoneRelayAt: sources.phone,
                 trend: (latest as? StoredGlucoseSample)?.trend,
                 // #48 (Jeremy 2026-07-24): keep the eventual VISIBLE; the glance grades its
                 // freshness (fresh/aging/stale on the loop dot — stock's HUDInterfaceController
@@ -659,6 +683,18 @@ final class WatchLoopManager {
         }
     }
     private var insulinOnBoard: InsulinValue?
+    private let bgSourceLock = NSLock()
+    private var _lastDirectG7At: Date?
+    private var _lastPhoneRelayAt: Date?
+    private func noteGlucoseSource(directG7: Bool) {
+        bgSourceLock.lock()
+        if directG7 { _lastDirectG7At = Date() } else { _lastPhoneRelayAt = Date() }
+        bgSourceLock.unlock()
+    }
+    private var lastGlucoseSourceStamps: (direct: Date?, phone: Date?) {
+        bgSourceLock.lock(); defer { bgSourceLock.unlock() }
+        return (_lastDirectG7At, _lastPhoneRelayAt)
+    }
     /// *** RADIO STRESS (BENCH) *** #83 — alternator so forced commands always differ.
     private var radioStressJitterStep = 0
     /// #74 cutover: the store's IOB kept as the SHADOW series while the ledger drives.
@@ -2544,6 +2580,9 @@ extension WatchLoopManager: CGMManagerDelegate {
                 return "\(mgdl) mg/dL age \(Int(Date().timeIntervalSince(s.date)))s"
             }()
             let batchTag = deliveredCount > 1 ? " BATCH(backfill+live)" : ""
+            // Stamp on ARRIVAL even when kept.isEmpty — a direct read the phone's copy beat to
+            // the store still proves the direct link is alive, which is the whole point of C.
+            if deliveredCount > 0 { self.noteGlucoseSource(directG7: true) }
             SportLog.event("glucose",
                 "INGEST src=direct-G7 stored=\(kept.count)/\(deliveredCount) · latest \(latestDesc)\(batchTag)")
             guard !kept.isEmpty else { completion(); return }
@@ -2613,6 +2652,7 @@ extension WatchLoopManager: CGMManagerDelegate {
                 }
                 self.dataAccessQueue.async { self.glucoseMomentumEffect = nil }   // #51 parity
                 let mgdl = Int(sample.quantity.doubleValue(for: .milligramsPerDeciliter))
+                self.noteGlucoseSource(directG7: false)
                 SportLog.event("glucose",
                     "INGEST src=phone-relay stored=1/1 · latest \(mgdl) mg/dL age \(Int(Date().timeIntervalSince(sample.date)))s (direct-G7 gap)")
                 SportLog.event("loan", "phone-BG fallback: ingested \(mgdl) mg/dL syncId=\(sample.syncIdentifier ?? "?") (direct-G7 gap) — triggering loop")

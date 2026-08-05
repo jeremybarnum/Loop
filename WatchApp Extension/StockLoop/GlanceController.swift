@@ -87,6 +87,11 @@ struct GlanceUIState {
     var loopDotColor: Color = .clear
     var loopFreshness: LoopFreshness = .unknown
     var viaPhone: Bool = false
+    /// OPTION C: which source the direct-G7 LINK is currently proving, independent of which
+    /// copy won the store's first-writer-wins dedup. "G7" = a direct read landed inside the
+    /// display window; "phone" = only the relay did. Answers "is the watch standing alone?"
+    enum BGSource { case directG7, phoneRelay, none }
+    var bgSource: BGSource = .none
     /// G7 pairing code likely wrong (aesVerifyFailed ×2) — glance shows a re-enter banner.
     var needsSensorCode: Bool = false
 
@@ -338,8 +343,12 @@ final class GlanceViewModel: ObservableObject {
             // A manual bolus spends most of its wall-clock waiting on the radio arbiter, with
             // the flow already dismissed. Say so, or the wrist looks idle and the user taps End
             // — which cancels the dose (field: 3x).
-            if session.stack.loopManager.manualBolusInFlight {
-                s.loopStatusText = NSLocalizedString("delivering bolus…", comment: "Glance status while a manual bolus reclaims the pod and delivers")
+            if let startedAt = session.stack.loopManager.manualBolusStartedAt {
+                // Under ~20s reads as normal work. Past that it needs a reason, or it reads as
+                // a hang — which is what cost three doses to End taps.
+                s.loopStatusText = Date().timeIntervalSince(startedAt) < 20
+                    ? NSLocalizedString("delivering bolus…", comment: "Glance status while a manual bolus reclaims the pod and delivers")
+                    : NSLocalizedString("waiting for sensor — bolus will deliver", comment: "Glance status when a manual bolus is waiting out the G7 radio handshake")
             }
             state = s
             logRender(iob: data.iob, cob: latestCOB, glucoseDate: data.glucoseDate, now: Date())
@@ -459,6 +468,17 @@ final class GlanceViewModel: ObservableObject {
         if let cob = cob { s.cobText = String(format: "%.0f", cob) }
         if let rate = data.tempRate {
             s.tempText = String(format: "%+.2f", rate)
+        }
+
+        // OPTION C: a direct read inside the display window means the direct link is live,
+        // even if the phone's copy is the row we are rendering.
+        let within: (Date?) -> Bool = { $0.map { now.timeIntervalSince($0) < displayStaleAge } ?? false }
+        if within(data.directG7At) {
+            s.bgSource = .directG7
+        } else if within(data.phoneRelayAt) {
+            s.bgSource = .phoneRelay
+        } else {
+            s.bgSource = .none
         }
 
         // Number + honesty.
@@ -794,6 +814,19 @@ struct GlanceView: View {
                     .font(.system(size: 13))
             } else if model.state.viaPhone, model.state.phase == .idle || model.state.phase == .starting {
                 Text("via iPhone").font(.system(size: 12)).foregroundColor(.glanceDim)
+            }
+            // OPTION C (Jeremy 2026-08-05): name the source, but only during a loan — that is
+            // the only time "is the watch standing on its own?" is the live question. Warn-tinted
+            // for `phone` so filling-in never reads as success at a glance. Note this tracks the
+            // direct G7 LINK, not the stored row: with the phone nearby its relay lands ~7s ahead
+            // and wins the store's first-writer dedup, so labelling the row would say "phone"
+            // almost always and hide a perfectly healthy direct link.
+            if model.state.phase == .active, model.state.bgSource != .none {
+                Text(model.state.bgSource == .directG7
+                     ? NSLocalizedString("G7", comment: "Glance BG source tag: direct sensor reading")
+                     : NSLocalizedString("phone", comment: "Glance BG source tag: relayed from the iPhone"))
+                    .font(.system(size: 11))
+                    .foregroundColor(model.state.bgSource == .directG7 ? .glanceDim : .glanceWarn)
             }
             // R24: predicted next G7 while active without a fresh direct reading.
             // (While starting, the prediction rides under the pod bar instead.)
