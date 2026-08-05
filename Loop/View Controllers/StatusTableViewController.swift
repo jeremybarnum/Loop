@@ -721,6 +721,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
                 hudView.pumpStatusHUD.presentStatusHighlight(self.deviceManager.pumpStatusHighlight)
                 hudView.pumpStatusHUD.presentStatusBadge(self.deviceManager.pumpStatusBadge)
                 hudView.pumpStatusHUD.lifecycleProgress = self.deviceManager.pumpLifecycleProgress
+                self.updatePodReclaimFill()
             }
 
             // Show/hide the table view rows
@@ -1454,6 +1455,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
     @IBAction func userTappedAddCarbs() {
         // PODLOAN (#71): pod on the watch → reclaim first, don't mutate loop state from the phone.
         guard !deviceManager.isPodLoanedToWatch else { return presentPodLoanReclaimPrompt() }
+        guard !deviceManager.isPodSettlingAfterReclaim else { return presentPodSettlingNotice() }
         presentCarbEntryScreen(nil)
     }
 
@@ -1485,6 +1487,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
     @IBAction func presentBolusScreen() {
         // PODLOAN (#71): pod on the watch → reclaim first, don't mutate loop state from the phone.
         guard !deviceManager.isPodLoanedToWatch else { return presentPodLoanReclaimPrompt() }
+        guard !deviceManager.isPodSettlingAfterReclaim else { return presentPodSettlingNotice() }
         presentBolusEntryView()
     }
     
@@ -1893,6 +1896,61 @@ final class StatusTableViewController: LoopChartsTableViewController {
     /// PODLOAN (#71): the pod is on the watch, so front-page mutations (carb / bolus / pre-meal /
     /// override / settings) AND a pump-tile tap all funnel to ONE affordance — reclaim the pod
     /// first. Single prompt, no per-button copy; "Reclaim Now" runs the same path the pod tile does.
+    /// Phase 2 of a reclaim: ownership is back but the pod's BLE link is not, so a command
+    /// issued now dies in a timeout. Jeremy's ruling (2026-08-04): "if someone tries to bolus
+    /// during phase 2, it can throw a message saying that the phone is completing pod takeover
+    /// and to try again." Measured settle times are 2s..190s, so "a moment" is honest and a
+    /// countdown would not be.
+    /// Ticks the pod-reclaim background fill while phase 1 is in flight.
+    private var podReclaimFillTimer: Timer?
+
+    // MARK: - Pod reclaim fill (2026-08-04)
+
+    /// Fills the pump pill's background left-to-right across the ownership handover.
+    ///
+    /// Covers PHASE 1 ONLY, per Jeremy's ruling: "if the core thing is returning control to
+    /// the phone from the watch, and once that happens there's no doubt that the phone is in
+    /// control, it's just a matter of having the phone fully claim the pod, maybe the progress
+    /// bar would be phase one." Phase 2 (the BLE settle) is 2s..190s across 16 measured
+    /// reclaims — unpredictable enough that any bar over it would misrepresent half the time —
+    /// so it gets an explanatory refusal instead (presentPodSettlingNotice).
+    private func updatePodReclaimFill() {
+        guard let hudView = hudView else { return }
+        if let progress = deviceManager.podReclaimHandoverProgress {
+            hudView.pumpStatusHUD.setActivityFill(progress, color: .systemOrange)
+            startPodReclaimFillTimer()
+        } else {
+            hudView.pumpStatusHUD.setActivityFill(nil)
+            podReclaimFillTimer?.invalidate()
+            podReclaimFillTimer = nil
+        }
+    }
+
+    /// The fill is time-based, so it needs its own tick — state changes alone are far too
+    /// sparse to animate it. Runs only while phase 1 is in flight and tears itself down.
+    private func startPodReclaimFillTimer() {
+        guard podReclaimFillTimer == nil else { return }
+        podReclaimFillTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            guard let progress = self.deviceManager.podReclaimHandoverProgress else {
+                self.hudView?.pumpStatusHUD.setActivityFill(nil)
+                self.podReclaimFillTimer?.invalidate()
+                self.podReclaimFillTimer = nil
+                return
+            }
+            self.hudView?.pumpStatusHUD.setActivityFill(progress, color: .systemOrange)
+        }
+    }
+
+    private func presentPodSettlingNotice() {
+        let alert = UIAlertController(
+            title: NSLocalizedString("Finishing Pod Handover", comment: "Title shown when the phone owns the pod but its connection is not re-established"),
+            message: NSLocalizedString("Sport Mode has ended and this phone is back in control, but it is still reconnecting to the pod. Try again in a moment.", comment: "Message shown while the phone is re-establishing the pod connection after a reclaim"),
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: NSLocalizedString("OK", comment: "Dismiss the pod-settling notice"), style: .default))
+        present(alert, animated: true)
+    }
+
     private func presentPodLoanReclaimPrompt() {
         let alert = UIAlertController(
             title: NSLocalizedString("Pod Is on the Watch", comment: "Title of the reclaim prompt when tapping the pump tile during a loan"),

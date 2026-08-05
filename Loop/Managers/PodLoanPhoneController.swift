@@ -118,6 +118,18 @@ final class PodLoanPhoneController {
             // user-visible — crude parity: it pushed every phase, and the 5s frozen
             // tile during hand-back read as ambiguity).
             if oldValue != state {
+                // Phase-1 anchor for the pump pill's fill (2026-08-04). Phase 1 is the
+                // ownership handover — bounded, and the only half worth drawing a bar for.
+                // Measured across 51 real hand-backs: median 6s, p75 24s, p85 61s. Phase 2
+                // (the BLE settle) is deliberately NOT covered: 2s to 190s with no way to
+                // predict which, so a bar there would be a lie about half the time.
+                let inPhase1 = (state == .reconciling || state == .reclaimPending)
+                let wasPhase1 = (oldValue == .reconciling || oldValue == .reclaimPending)
+                if inPhase1 && !wasPhase1 {
+                    reclaimPhase1StartedAt = deps.now()
+                } else if !inPhase1 {
+                    reclaimPhase1StartedAt = nil
+                }
                 deps.ownershipDidChange()
                 // A reclaim just landed us in .owner, but reclaimConnection() only re-armed
                 // the BLE bid — the pod isn't actually back for ~2 min. Open the settle window
@@ -127,6 +139,30 @@ final class PodLoanPhoneController {
                 }
             }
         }
+    }
+
+    /// When the ownership handover (phase 1) began, or nil if not in it.
+    private var reclaimPhase1StartedAt: Date?
+
+    /// Fraction 0...0.95 of the expected phase-1 handover, or nil when phase 1 is not running.
+    ///
+    /// Calibrated PESSIMISTICALLY at 25s, the p75 of 51 measured hand-backs (median 6s), so
+    /// three quarters of reclaims beat the bar — the same "make the good case a pleasant
+    /// surprise" rule Jeremy set for the takeover bar. Holds at 0.95 rather than completing,
+    /// because completion is the tile changing, not the bar filling.
+    var reclaimPhase1Progress: Double? {
+        return queue.sync {
+            guard let started = reclaimPhase1StartedAt else { return nil }
+            let elapsed = deps.now().timeIntervalSince(started)
+            return min(max(elapsed, 0) / 25.0, 0.95)
+        }
+    }
+
+    /// True during the post-handover BLE settle: the phone owns the pod but cannot yet command
+    /// it. Distinct from `isPodLoanedOut` (which is false here, since state is already .owner),
+    /// so a bolus tapped now would be aimed at a link that is not up.
+    var isReclaimSettlingOnly: Bool {
+        return queue.sync { state == .owner && reclaimStartedAt != nil && reclaimVerifiedAt == nil }
     }
 
     // MARK: Reclaim settle window (post-hand-back "Reclaiming…" until the pod is truly back)

@@ -869,6 +869,16 @@ extension DeviceDataManager {
         guard let controller = watchManager?.podLoanController else { return false }
         return controller.isReclaimInProgress || controller.isReclaimSettling
     }
+    /// Phase 2 ONLY: the phone owns the pod but the BLE link is not back yet, so
+    /// `isPodLoanedToWatch` is already false and the #71 reclaim gate no longer fires — a
+    /// bolus tapped here would be aimed at a link that is not up. Measured 2s..190s.
+    var isPodSettlingAfterReclaim: Bool {
+        return watchManager?.podLoanController.isReclaimSettlingOnly ?? false
+    }
+    /// Fraction of the expected phase-1 handover for the pump pill's fill, nil outside phase 1.
+    var podReclaimHandoverProgress: Double? {
+        return watchManager?.podLoanController.reclaimPhase1Progress
+    }
 
     func enactBolus(units: Double, activationType: BolusActivationType, completion: @escaping (_ error: Error?) -> Void = { _ in }) {
         guard let pumpManager = pumpManager else {
