@@ -724,9 +724,6 @@ struct GlanceView: View {
                             .font(.system(size: 10))
                             .foregroundColor(.glanceDim)
                             .multilineTextAlignment(.center)
-                        if let began = model.state.handbackStartedAt {
-                            reclaimBar(since: began)
-                        }
                     }
                 }
             }
@@ -737,13 +734,7 @@ struct GlanceView: View {
             EmptyView()
         case .handingBack, .draining:
             VStack(spacing: 4) {
-                if let began = model.state.handbackStartedAt, !model.state.phoneUnreachable {
-                    reclaimBar(since: began)
-                } else {
-                    // No anchor (relaunch mid-reclaim) or a phone we cannot reach — honest
-                    // indeterminate rather than a bar implying progress that isn't happening.
-                    ProgressView()
-                }
+                ProgressView()
                 if let note = model.state.idleNote {
                     Text(note)
                         .font(.system(size: 11))
@@ -765,41 +756,10 @@ struct GlanceView: View {
     /// takeovers run 8-12s, so a 12s fill means the good case completes at or before the bar
     /// lands rather than after it — the bar is an upper estimate to be beaten, not a forecast
     /// to be matched.
-    /// Reclaim (hand-back) bar, 2026-08-04. Same pessimistic philosophy as the takeover bar
-    /// and calibrated to the LONG tail rather than the median: reclaims are usually quick but
-    /// run ~20s often enough that a fast bar would stall visibly. Jeremy: "calibrating it to
-    /// the long tail would again signal to the user that sometimes it's a bit long, and then
-    /// usually they get pleasantly surprised."
-    private static let podReclaimExpected: TimeInterval = 20
-    private static let podReclaimOverrun: TimeInterval = 26
-
-    /// The determinate reclaim bar. Deliberately NOT shown when the phone is unreachable —
-    /// #67 follow-up (2026-08-03): a reassuring bar is exactly what made a stuck hand-back
-    /// look like normal progress, and when the phone can't be reached nothing IS progressing.
-    /// That case keeps the explicit warning instead; this bar only ever claims progress that
-    /// is really possible.
-    @ViewBuilder
-    private func reclaimBar(since began: Date) -> some View {
-        TimelineView(.animation(minimumInterval: 0.1)) { timeline in
-            let elapsed = timeline.date.timeIntervalSince(began)
-            let progress = min(max(elapsed, 0) / Self.podReclaimExpected, 0.95)
-            VStack(spacing: 3) {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Color.glanceDim.opacity(0.25))
-                        Capsule().fill(Color.glanceAccent)
-                            .frame(width: max(6, geo.size.width * progress))
-                    }
-                }
-                .frame(height: 5)
-                if elapsed > Self.podReclaimOverrun {
-                    Text(NSLocalizedString("taking longer than usual…", comment: "Glance note when the reclaim overruns"))
-                        .font(.system(size: 11))
-                        .foregroundColor(.glanceWarn)
-                }
-            }
-        }
-    }
+    // The watch-side reclaim bar added in build 222 is REMOVED (Jeremy, build 223: "I saw a
+    // flash of a progress bar in the sport loop screen on the watch for the reclaim process.
+    // Confirming that we don't want that"). Reclaim progress belongs on the PHONE's pump pill,
+    // which is the surface that owns the pod's return; the wrist keeps its honest text.
 
     private static let podTakeoverExpected: TimeInterval = 12
     /// Kept 4s beyond the fill, as before, so "taking longer than usual" still means genuinely

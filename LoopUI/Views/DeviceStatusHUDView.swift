@@ -77,6 +77,34 @@ import LoopKitUI
 
     private var activityFillWidth: NSLayoutConstraint?
 
+    /// A repeating left-to-right sweep for an activity of UNPREDICTABLE duration.
+    ///
+    /// Measured pod reclaims spend ~1s in the ownership handover and then 2s..190s waiting for
+    /// the pod's BLE link — a 100x spread we cannot forecast. A determinate fill over that
+    /// would be wrong about half the time and would pin, which is the failure this was meant to
+    /// fix. So the pill sweeps instead: same visual language, no false precision.
+    public func startActivitySweep(color: UIColor = .systemOrange) {
+        activityFillView.isHidden = false
+        activityFillView.backgroundColor = color.withAlphaComponent(0.22)
+        activityFillWidth?.isActive = false
+        activityFillWidth = activityFillView.widthAnchor.constraint(equalTo: backgroundView.widthAnchor, multiplier: 0.35)
+        activityFillWidth?.isActive = true
+        backgroundView.layoutIfNeeded()
+
+        activityFillView.layer.removeAnimation(forKey: "sweep")
+        let sweep = CABasicAnimation(keyPath: "position.x")
+        sweep.byValue = backgroundView.bounds.width + activityFillView.bounds.width
+        sweep.duration = 1.4
+        sweep.repeatCount = .infinity
+        sweep.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        activityFillView.layer.add(sweep, forKey: "sweep")
+    }
+
+    public func stopActivitySweep() {
+        activityFillView.layer.removeAnimation(forKey: "sweep")
+        setActivityFill(nil)
+    }
+
     /// Drive the background fill. `fraction` nil clears it; 0...1 fills that much of the pill.
     /// `animated` lets the caller step it smoothly toward the next value rather than jumping.
     public func setActivityFill(_ fraction: Double?, color: UIColor = .systemOrange, animated: Bool = true) {

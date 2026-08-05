@@ -1906,8 +1906,8 @@ final class StatusTableViewController: LoopChartsTableViewController {
     /// during phase 2, it can throw a message saying that the phone is completing pod takeover
     /// and to try again." Measured settle times are 2s..190s, so "a moment" is honest and a
     /// countdown would not be.
-    /// Ticks the pod-reclaim background fill while phase 1 is in flight.
-    private var podReclaimFillTimer: Timer?
+    /// True while the pump pill is sweeping for an in-flight reclaim.
+    private var isPodReclaimSweeping = false
 
     // MARK: - Pod reclaim fill (2026-08-04)
 
@@ -1921,29 +1921,17 @@ final class StatusTableViewController: LoopChartsTableViewController {
     /// so it gets an explanatory refusal instead (presentPodSettlingNotice).
     private func updatePodReclaimFill() {
         guard let hudView = hudView else { return }
-        if let progress = deviceManager.podReclaimHandoverProgress {
-            hudView.pumpStatusHUD.setActivityFill(progress, color: .systemOrange)
-            startPodReclaimFillTimer()
-        } else {
-            hudView.pumpStatusHUD.setActivityFill(nil)
-            podReclaimFillTimer?.invalidate()
-            podReclaimFillTimer = nil
-        }
-    }
-
-    /// The fill is time-based, so it needs its own tick — state changes alone are far too
-    /// sparse to animate it. Runs only while phase 1 is in flight and tears itself down.
-    private func startPodReclaimFillTimer() {
-        guard podReclaimFillTimer == nil else { return }
-        podReclaimFillTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            guard let progress = self.deviceManager.podReclaimHandoverProgress else {
-                self.hudView?.pumpStatusHUD.setActivityFill(nil)
-                self.podReclaimFillTimer?.invalidate()
-                self.podReclaimFillTimer = nil
-                return
-            }
-            self.hudView?.pumpStatusHUD.setActivityFill(progress, color: .systemOrange)
+        // Sweep across the WHOLE reclaim, both phases. The phone's phase 1 is ~1s (measured:
+        // offer arrives state=loaned 15:28:02.215 -> state=owner 15:28:03.259), so a bar
+        // anchored to it was invisible; and phase 2 is 2s..190s, which no determinate bar can
+        // represent honestly. An indeterminate sweep is the only truthful option here.
+        if deviceManager.isPodLoanReclaiming {
+            guard !isPodReclaimSweeping else { return }
+            isPodReclaimSweeping = true
+            hudView.pumpStatusHUD.startActivitySweep(color: .systemOrange)
+        } else if isPodReclaimSweeping {
+            isPodReclaimSweeping = false
+            hudView.pumpStatusHUD.stopActivitySweep()
         }
     }
 
