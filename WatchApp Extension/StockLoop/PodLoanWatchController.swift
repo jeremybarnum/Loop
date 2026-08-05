@@ -85,6 +85,9 @@ final class PodLoanWatchController {
     private(set) var phase: Phase {
         didSet {
             UserDefaults.standard.set(phase.rawValue, forKey: Keys.phase)
+            loanActiveMirrorLock.lock()
+            _loanActiveMirror = (phase == .active)
+            loanActiveMirrorLock.unlock()
             if (oldValue == .takingOver) != (phase == .takingOver) {
                 onTakeoverRadioHold?(phase == .takingOver)
                 setTakeoverSessionListener(phase == .takingOver)
@@ -1635,6 +1638,17 @@ final class PodLoanWatchController {
     /// routes delivery LOCALLY during a loan (the phone's pod link is released).
     var isLoanActive: Bool {
         return queue.sync { phase == .active }
+    }
+
+    /// Main-safe mirror of "is a loan active". Updated synchronously in the `phase` didSet, so
+    /// it is never stale, and readable without touching `queue` — which doubles as the pump's
+    /// delegateQueue and must never be sync'd from the UI (see the snapshot mirror below).
+    private let loanActiveMirrorLock = NSLock()
+    private var _loanActiveMirror = false
+    var isLoanActiveNonBlocking: Bool {
+        loanActiveMirrorLock.lock()
+        defer { loanActiveMirrorLock.unlock() }
+        return _loanActiveMirror
     }
 
     /// Lock-guarded mirror of the last snapshot, refreshed asynchronously on `queue`.

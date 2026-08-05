@@ -55,7 +55,24 @@ class HUDInterfaceController: WKInterfaceController {
 
         let date = activeContext.loopLastRunDate
         let isClosedLoop = activeContext.isClosedLoop ?? false
+        // R23, finally applied here: during a loan the ring's freshness is BG RECENCY, on the
+        // same thresholds the glance uses — "meaningful OPEN or CLOSED, and stale G7 is the
+        // likely failure. Drives the stock ring color." It was ruled 2026-07-18 and only ever
+        // implemented on the glance, so the two screens could disagree on BOTH inputs and
+        // thresholds: this used loopLastRunDate at 6/20 min, the glance uses glucose age at
+        // 7/15. A loop that ran a minute ago against a G7 that has been quiet for twelve read
+        // fresh here and aging there (Jeremy, field 2026-08-04).
+        //
+        // Outside a loan the phone owns dosing and stock's own loop-run convention is correct,
+        // so that path is untouched. `isLoanActiveNonBlocking` is a lock-guarded mirror — the
+        // live gate is queue.sync onto the pump's delegateQueue and must not be read from here.
+        let onLoan = ExtensionDelegate.shared().stockLoopSession.loanController.isLoanActiveNonBlocking
         loopHUDImage.setLoopImage(isClosedLoop: isClosedLoop, {
+            if onLoan {
+                guard let glucoseDate = activeContext.glucoseDate else { return .unknown }
+                let age = -glucoseDate.timeIntervalSinceNow
+                return age < .minutes(7) ? .fresh : (age < .minutes(15) ? .aging : .stale)
+            }
             if let date = date {
                 switch date.timeIntervalSinceNow {
                 case let t where t > .minutes(-6):
