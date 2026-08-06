@@ -1615,6 +1615,21 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         switch central.state {
         case .poweredOn:
             log("Bluetooth poweredOn")
+            // THIRD SUPPRESSION GATE, and the one that matters most — it must come BEFORE
+            // `attemptActive = true` below.
+            //
+            // On a fresh suppressed launch this is unreachable twice over: connect() returns
+            // early so `wantConnect` stays false, and the central is never constructed so this
+            // delegate never fires at all. The dangerous case is TOGGLING G7CLIENT -> STOCK
+            // mid-session: `wantConnect` is already true and the central already exists, so a
+            // Bluetooth transition would set attemptActive = true, then call beginAcquire(),
+            // which returns immediately under suppression — leaving the flag stuck true with no
+            // attempt running to ever call finishAttempt(). The pod would be blocked PERMANENTLY,
+            // until relaunch: precisely the failure this switch exists to remove.
+            guard !Self.isRadioSuppressed else {
+                logSuppressed("centralManagerDidUpdateState(.poweredOn)")
+                return
+            }
             // Fires on the FIRST start (connect() created the central and is waiting for BT)
             // and when BT is toggled back ON mid-session. WEDGE FIX (safe half, kept): clear a
             // stale `peripheral` left from before a power-off — it used to block the old

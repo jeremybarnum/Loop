@@ -132,10 +132,24 @@ struct LoanDebugView: View {
                 Button("Use \(G7Client.isRadioSuppressed ? "G7CLIENT" : "STOCK")") {
                     let nowSuppressed = !G7Client.isRadioSuppressed
                     UserDefaults.standard.set(nowSuppressed, forKey: G7Client.suppressedKey)
-                    lastAction = nowSuppressed ? "CGM: STOCK (relaunch to be sure)"
-                                               : "CGM: G7CLIENT (relaunch to be sure)"
                     SportLog.event("session", "CGM MODE switched by hand -> "
                         + (nowSuppressed ? "STOCK (G7Client radio suppressed)" : "G7CLIENT (J-PAKE live)"))
+
+                    if nowSuppressed {
+                        // Switching OFF must actively stand the client down, not merely stop it
+                        // starting new work. An attempt already in flight holds the radio arbiter,
+                        // and with the entry points now gated nothing would ever run to clear it —
+                        // the pod would stay blocked until relaunch. stop() cancels the timers,
+                        // drops the link and does setAttemptActivePublic(false, "torn down"),
+                        // which is what actually releases the arbiter.
+                        session.stack.client.stop()
+                        lastAction = "CGM: STOCK — client torn down, pod unblocked"
+                    } else {
+                        // Switching ON does NOT start an attempt here: the client is driven by the
+                        // session (startSoak on loan start / pre-warm on foreground). Starting one
+                        // from a debug tap would race those owners.
+                        lastAction = "CGM: G7CLIENT — active from the next attempt"
+                    }
                 }
 
                 Divider().padding(.vertical, 2)
