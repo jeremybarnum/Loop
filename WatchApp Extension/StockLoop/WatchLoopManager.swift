@@ -232,6 +232,15 @@ final class WatchLoopManager {
         set { doseEnactor.isRadioBusy = newValue }
     }
 
+    /// Diagnostics only: WHY the radio is busy, for the refusal line. `isRadioBusy` is a bare Bool,
+    /// so a deferred dose could say only "the G7 owns the radio" — never which of the two flags,
+    /// nor for how long. Overnight 2026-08-05/06 that cost 67 consecutive refusals whose cause was
+    /// unattributable until the flags were read out of the source by hand a day later.
+    var radioBusyDetail: (() -> String)? {
+        get { doseEnactor.radioBusyDetail }
+        set { doseEnactor.radioBusyDetail = newValue }
+    }
+
     /// E4 Stage 2 (task #40): reclaim the orphaned pod before a dose, release after.
     /// Forwarded to the enactor (automatic path); enactManualBolus uses them directly.
     /// Wired by StockLoopSession to the loan controller (which owns the OmniPumpManager);
@@ -480,9 +489,63 @@ final class WatchLoopManager {
         return nil
     }
 
-    /// Synchronous snapshot of the cached loop state for the glance screen.
+    // MARK: - Glance mirror (main must never wait on dataAccessQueue)
+
+    /// The glance used to read `glanceData()` — a `dataAccessQueue.sync` — from MAIN, on a 2s
+    /// timer. That queue is held for the whole of a dose cycle, and `enactRecommendedAutomaticDose`
+    /// polls the radio arbiter for up to 15s (:2527) before giving up. So any cycle that had to
+    /// wait out the G7 handshake froze the entire UI for as long as it waited.
+    ///
+    /// Measured, build 237: carbs saved 23:41:47.583, compute done 63ms later, then
+    /// `enact DEFERRED — G7 still owns the radio after 15s` at 23:42:04.261 and the glance's next
+    /// render 0.3s after that — main parked ~16.6s. The identical stall is in the build 236 log
+    /// (18:44:05 → 18:44:20, 15.0s), so this is not a regression from the #47 work: that ran 9.4s
+    /// BEFORE the tap and cost 63ms. 99.6% of the freeze is the radio wait.
+    ///
+    /// Same remedy PodLoanWatchController already applies to the loan/pump queue (ba92c3cb,
+    /// `refreshDebugSnapshot`/`mirroredDebugSnapshot`): publish a mirror from the queue, read the
+    /// mirror from main, never block. That fix left `dataAccessQueue` untouched — this is the
+    /// surviving edge of the same defect, and the fourth field report of the class.
+    private let glanceMirrorLock = NSLock()
+    private var _glanceMirror: GlanceData?
+    private var _glanceRefreshPending = false
+
+    /// Main-safe: never touches `dataAccessQueue`. Nil only before the first refresh completes.
+    var mirroredGlanceData: GlanceData? {
+        glanceMirrorLock.lock()
+        defer { glanceMirrorLock.unlock() }
+        return _glanceMirror
+    }
+
+    /// Ask for a fresh mirror. Returns immediately; the work lands on `dataAccessQueue` behind
+    /// whatever cycle is in flight, which is exactly the wait we refuse to make main sit through.
+    func refreshGlanceData() {
+        // Coalesce. The glance asks every 2s; if the queue is held for 16s that would pile up
+        // eight identical rebuilds to run back-to-back the instant it frees. Only the last one
+        // would survive anyway — the mirror is latest-wins — so never queue a second.
+        glanceMirrorLock.lock()
+        if _glanceRefreshPending { glanceMirrorLock.unlock(); return }
+        _glanceRefreshPending = true
+        glanceMirrorLock.unlock()
+
+        dataAccessQueue.async { [weak self] in
+            guard let self = self else { return }
+            let data = self.buildGlanceData()
+            self.glanceMirrorLock.lock()
+            self._glanceMirror = data
+            self._glanceRefreshPending = false
+            self.glanceMirrorLock.unlock()
+        }
+    }
+
+    /// Synchronous snapshot. Kept for the DEBUG page, which is not an always-on surface and can
+    /// afford to wait. The glance must use the mirror above.
     func glanceData() -> GlanceData {
-        return dataAccessQueue.sync {
+        return dataAccessQueue.sync { self.buildGlanceData() }
+    }
+
+    /// MUST be called on `dataAccessQueue` — reads queue-confined state.
+    private func buildGlanceData() -> GlanceData {
             let latest = glucoseStore.latestGlucose
             var tempRate: Double?
             if let dose = runningTempBasal() {
@@ -501,6 +564,23 @@ final class WatchLoopManager {
                 tempRate = dose.unitsPerHour - scheduled
             }
             let sources = self.lastGlucoseSourceStamps
+            // IOB evaluated at `now()` instead of read from the loop's cache. `insulinOnBoard`
+            // is written only by updateCachedEffects, which runs only inside a loop cycle — and
+            // loop() is CGM-triggered (:2523), so a sensor dropout stops IOB recomputation
+            // outright. Field 2026-08-05: the rail held a flat 1.13 U for 28 minutes across a
+            // G7 outage and then fell 0.53 in one step when readings resumed, which reads as an
+            // insulin EVENT rather than as the arithmetic catching up.
+            //
+            // Unlike the prediction — which #48 deliberately MARKS stale rather than blanking,
+            // because it genuinely cannot be recomputed without glucose — IOB is a pure function
+            // of the dose timeline and the clock. So the honest fix is to evaluate it, not to
+            // gate it: stock's HUD blanks stale insulin (ChartHUDController:165) because its
+            // value arrives in a context it cannot recompute; the watch owns the timeline and
+            // can. Same on-demand shape as glanceCarbsOnBoard — which is exactly why COB kept
+            // decaying through that same outage while IOB sat still. Pre-cutover, or before the
+            // ledger is seeded, the cached value remains the only source.
+            let liveIOB: Double? = (ledgerCutoverActive ? sessionLedger?.insulinOnBoard(at: now()) : nil)
+                ?? insulinOnBoard?.value
             return GlanceData(
                 glucose: latest?.quantity,
                 glucoseDate: latest?.startDate,
@@ -516,7 +596,7 @@ final class WatchLoopManager {
                 // 25 min across failed cycles — it now stays shown while the dot goes
                 // amber→red, so it never looks authoritative once old).
                 eventual: predictedGlucose?.last?.quantity,
-                iob: insulinOnBoard?.value,
+                iob: liveIOB,
                 tempRate: tempRate,
                 lastLoopCompleted: lastLoopCompleted,
                 suspendThreshold: settings.suspendThreshold?.quantity,
@@ -539,7 +619,6 @@ final class WatchLoopManager {
                 // prediction being rendered rather than a torn read from another cycle.
                 retrospectiveCorrectionIsIntegral: retrospectiveCorrection is IntegralRetrospectiveCorrection,
                 retrospectiveDiscrepancyCount: retrospectiveGlucoseDiscrepancies?.count ?? 0)
-        }
     }
 
     /// COB for the glance rail (async — the store computes it).
@@ -551,12 +630,21 @@ final class WatchLoopManager {
     /// Field: 15 g entered on the wrist moved `eventual` correctly while COB read a hard 0,
     /// which reads as "the loop lost my carbs" next to a prediction that plainly did not.
     func glanceCarbsOnBoard(_ completion: @escaping (Double?) -> Void) {
-        let velocities = dataAccessQueue.sync { insulinCounteractionEffects }
-        carbStore.carbsOnBoard(at: now(), effectVelocities: velocities) { result in
-            if case .success(let value) = result {
-                completion(value.quantity.doubleValue(for: .gram()))
-            } else {
-                completion(nil)
+        // The velocities read was `dataAccessQueue.sync` ON THE CALLER — i.e. on MAIN, every 2s,
+        // behind whatever cycle held the queue. That is the second half of the freeze the mirror
+        // above fixes, and it is the one that actually proved it: `latestCOB` is written from this
+        // callback on every tick, and its value did not change for 17.0s / ~8 ticks after the carbs
+        // were in the store (build 237, 23:41:47.583 -> 23:42:04.58). An already-completion-based
+        // API has no reason to block its caller at all.
+        dataAccessQueue.async { [weak self] in
+            guard let self = self else { return completion(nil) }
+            let velocities = self.insulinCounteractionEffects
+            self.carbStore.carbsOnBoard(at: self.now(), effectVelocities: velocities) { result in
+                if case .success(let value) = result {
+                    completion(value.quantity.doubleValue(for: .gram()))
+                } else {
+                    completion(nil)
+                }
             }
         }
     }
@@ -721,6 +809,10 @@ final class WatchLoopManager {
         }
     }
     private var insulinOnBoard: InsulinValue?
+    /// Last-seen adapter delivery count, for producer attribution on the INGEST line. Touched only
+    /// on the CGM delegate queue (processCGMReadingResult), so no lock of its own.
+    private var lastAdapterDeliveryCount = 0
+
     private let bgSourceLock = NSLock()
     private var _lastDirectG7At: Date?
     private var _lastPhoneRelayAt: Date?
@@ -728,6 +820,24 @@ final class WatchLoopManager {
         bgSourceLock.lock()
         if directG7 { _lastDirectG7At = Date() } else { _lastPhoneRelayAt = Date() }
         bgSourceLock.unlock()
+    }
+
+    /// The grant seed counts as the PHONE. (Jeremy, 2026-08-05: "treat the seed as the same as
+    /// phone source — in the end, that's what's actually true.") Those samples were carried in the
+    /// grant out of the phone's own glucose store, so "via iPhone" IS their provenance; a separate
+    /// third label would have named the transport rather than the source.
+    ///
+    /// Without this the provenance line went BLANK for the first minutes of every loan. The seed
+    /// stamped nothing, the G7 had stood down to give the pod the radio for the takeover, and the
+    /// relay was off because the watch now owns the pod — so `bgSource` fell to `.none` while a
+    /// real number sat on screen. The `.none` arm's own comment ("first cycle after launch") shows
+    /// the takeover case was never considered. Field 2026-08-05: on-wrist immediately after a
+    /// takeover, BG 116 displayed with no source at all.
+    ///
+    /// Safe from any queue: `noteGlucoseSource` is guarded by `bgSourceLock`, not by
+    /// `dataAccessQueue`, so the loan controller can call this from its own serial queue.
+    func notePhoneGlucoseDelivered() {
+        noteGlucoseSource(directG7: false)
     }
     private var lastGlucoseSourceStamps: (direct: Date?, phone: Date?) {
         bgSourceLock.lock(); defer { bgSourceLock.unlock() }
@@ -746,6 +856,10 @@ final class WatchLoopManager {
 
     /// Mirrors LoopDataManager's buffer multiplier for combining retrospective discrepancies.
     private let retrospectiveCorrectionGroupingIntervalMultiplier = 1.01
+
+    /// Carb entries behind the current `carbEffect`, kept for the #47 potential-entry branch.
+    /// Read/written on `dataAccessQueue` like every other cached effect.
+    private var recentCarbEntries: [StoredCarbEntry]?
 
     private var retrospectiveGlucoseDiscrepancies: [GlucoseEffect]? {
         didSet {
@@ -1465,7 +1579,15 @@ final class WatchLoopManager {
                 case .failure(let error):
                     self.log.error("Failure getting carb effects: %{public}@", String(describing: error))
                     self.carbEffect = nil
-                case .success(let (_, effects)):
+                    self.recentCarbEntries = nil
+                case .success(let (entries, effects)):
+                    // #47: the port discarded these entries. The potential-carb-entry prediction
+                    // needs them to pick a branch: a new entry whose effect is INDEPENDENT of what
+                    // is already on board can simply be summed onto `carbEffect`, but a back-dated
+                    // entry overlaps observed glucose, so dynamic absorption and retrospective
+                    // correction have to be recomputed across the whole set. Same discriminator
+                    // the phone uses (LoopDataManager:1270).
+                    self.recentCarbEntries = entries
                     self.carbEffect = effects
                 }
                 updateGroup.leave()
@@ -1591,7 +1713,48 @@ final class WatchLoopManager {
     /// four effect inputs the phone enables by default (`PredictionInputEffect.all` with
     /// `LoopConstants.retrospectiveCorrectionEnabled == true`). The phone's potential-bolus/
     /// potential-carb-entry arms are meal-entry UI concerns and arrive with that flow.
-    private func predictGlucose(includingPendingInsulin: Bool = false) throws -> [PredictedGlucoseValue] {
+    /// Retrospective correction recomputed against a hypothetical carb effect, WITHOUT touching
+    /// `self.retrospectiveGlucoseEffect` — the cached one belongs to the loop, and a what-if the
+    /// user may still cancel must not disturb it. Mirrors LoopDataManager:1613-1630, with the
+    /// phone's force-unwrapped schedules replaced by guards: the watch reaches this from a UI
+    /// flow rather than from an already-validated dosing cycle, so a missing schedule must fail
+    /// loudly rather than trap.
+    ///
+    /// Carries one inherited wart, deliberately un-fixed: `IntegralRetrospectiveCorrection` holds
+    /// accumulator state across calls, so evaluating a what-if perturbs it. Stock has exactly this
+    /// behaviour at the same call site, and diverging here would put the watch's RC on a different
+    /// trajectory from the phone's — a worse bug than the one it would fix. Flagged, not patched.
+    private func computeRetrospectiveGlucoseEffect(startingAt glucose: GlucoseValue, carbEffects: [GlucoseEffect]) -> [GlucoseEffect] {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+
+        guard let insulinSensitivitySchedule = settings.insulinSensitivitySchedule,
+              let basalRateSchedule = settings.basalRateSchedule,
+              let glucoseTargetRangeSchedule = settings.glucoseTargetRangeSchedule else {
+            SportLog.event("predict", "#47 RC recompute SKIPPED — missing schedules; the potential carb effect stands without retrospective correction")
+            return []
+        }
+
+        let discrepancies = insulinCounteractionEffects.subtracting(carbEffects, withUniformInterval: carbStore.delta)
+        let summed = discrepancies.combinedSums(of: LoopMath.retrospectiveCorrectionGroupingInterval * retrospectiveCorrectionGroupingIntervalMultiplier)
+
+        return retrospectiveCorrection.computeEffect(
+            startingAt: glucose,
+            retrospectiveGlucoseDiscrepanciesSummed: summed,
+            recencyInterval: LoopCoreConstants.inputDataRecencyInterval,
+            insulinSensitivity: insulinSensitivitySchedule.quantity(at: glucose.startDate),
+            basalRate: basalRateSchedule.value(at: glucose.startDate),
+            correctionRange: glucoseTargetRangeSchedule.quantityRange(at: glucose.startDate),
+            retrospectiveCorrectionGroupingInterval: LoopMath.retrospectiveCorrectionGroupingInterval
+        )
+    }
+
+    /// - Parameter potentialCarbEntry: #47 — a carb entry the user is CONSIDERING but has not
+    ///   saved. Folding it into the prediction here is what lets the watch recommend a meal bolus
+    ///   on its own; without it the carb flow had to ask the phone, whose answer is computed from
+    ///   the phone's own books and is therefore blind to everything the watch has done since the
+    ///   grant (and simply absent when the phone is out of range).
+    private func predictGlucose(includingPendingInsulin: Bool = false,
+                                potentialCarbEntry: NewCarbEntry? = nil) throws -> [PredictedGlucoseValue] {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
 
         guard let glucose = glucoseStore.latestGlucose else {
@@ -1630,8 +1793,46 @@ final class WatchLoopManager {
 
         var momentum: [GlucoseEffect] = []
         var effects: [[GlucoseEffect]] = []
+        var retrospectiveEffect = self.retrospectiveGlucoseEffect
 
-        if let carbEffect = self.carbEffect {
+        // #47 potential carb entry. Ported branch-for-branch from LoopDataManager:1266-1307 —
+        // the two cases are NOT interchangeable and the split is the whole point.
+        if let potentialCarbEntry = potentialCarbEntry {
+            let retrospectiveStart = lastGlucoseDate.addingTimeInterval(-type(of: retrospectiveCorrection).retrospectionInterval)
+
+            if potentialCarbEntry.startDate > lastGlucoseDate || recentCarbEntries?.isEmpty != false {
+                // The entry starts after the last reading (or nothing else is on board), so no
+                // observed glucose can have been influenced by it yet: its effect is independent
+                // of the cached one and the two simply sum.
+                if let carbEffect = self.carbEffect {
+                    effects.append(carbEffect)
+                }
+                effects.append(try carbStore.glucoseEffects(
+                    of: [potentialCarbEntry],
+                    startingAt: retrospectiveStart,
+                    endingAt: nil,
+                    effectVelocities: insulinCounteractionEffects))
+            } else {
+                // Back-dated into a window we have already observed. Summing here would
+                // double-count: the counteraction effects over that window ALREADY contain the
+                // meal's rise, and retrospective correction was computed against a carb effect
+                // that did not know about it. So recompute dynamic absorption across the whole
+                // set, then recompute RC against that.
+                var entries = (recentCarbEntries ?? []).map {
+                    NewCarbEntry(quantity: $0.quantity, startDate: $0.startDate, foodType: nil, absorptionTime: $0.absorptionTime)
+                }
+                entries.append(potentialCarbEntry)
+                entries.sort(by: { $0.startDate > $1.startDate })
+
+                let potentialCarbEffect = try carbStore.glucoseEffects(
+                    of: entries,
+                    startingAt: retrospectiveStart,
+                    endingAt: nil,
+                    effectVelocities: insulinCounteractionEffects)
+                effects.append(potentialCarbEffect)
+                retrospectiveEffect = computeRetrospectiveGlucoseEffect(startingAt: glucose, carbEffects: potentialCarbEffect)
+            }
+        } else if let carbEffect = self.carbEffect {
             effects.append(carbEffect)
         }
 
@@ -1643,7 +1844,7 @@ final class WatchLoopManager {
             momentum = momentumEffect
         }
 
-        effects.append(retrospectiveGlucoseEffect)
+        effects.append(retrospectiveEffect)
 
         var prediction = LoopMath.predictGlucose(startingAt: glucose, momentum: momentum, effects: effects)
 
@@ -1992,7 +2193,13 @@ final class WatchLoopManager {
     /// usable for a manual bolus under therapy maxBolus and carbs still log. The notice
     /// rendering lands with the bolus-flow UI integration; this method supplies policy
     /// only (the thrown recency error is the notice's trigger).
-    func recommendManualBolus(completion: @escaping (Swift.Result<ManualBolusRecommendation, Error>) -> Void) {
+    /// - Parameter potentialCarbEntry: #47 — when non-nil the recommendation is a MEAL bolus for
+    ///   an entry the user has not saved yet. Two things change, both of them stock's doing:
+    ///   the entry joins the prediction, and the target range switches to the pre-meal range
+    ///   (`presumingMealEntry:`), which is exactly why passing it matters rather than just
+    ///   adding a carb effect.
+    func recommendManualBolus(potentialCarbEntry: NewCarbEntry? = nil,
+                              completion: @escaping (Swift.Result<ManualBolusRecommendation, Error>) -> Void) {
         dataAccessQueue.async {
             do {
                 if let error = self.updateCachedEffects() {
@@ -2006,10 +2213,11 @@ final class WatchLoopManager {
                 guard self.carbEffect != nil else { throw WatchLoopError.missingDataError("carbEffect") }
                 guard self.insulinEffect != nil else { throw WatchLoopError.missingDataError("insulinEffect") }
 
-                let prediction = try self.predictGlucose(includingPendingInsulin: true)
+                let prediction = try self.predictGlucose(includingPendingInsulin: true,
+                                                         potentialCarbEntry: potentialCarbEntry)
 
                 // Same configuration guards as recommendManualBolus (:1539-1547).
-                guard let glucoseTargetRange = self.settings.effectiveGlucoseTargetRangeSchedule() else {
+                guard let glucoseTargetRange = self.settings.effectiveGlucoseTargetRangeSchedule(presumingMealEntry: potentialCarbEntry != nil) else {
                     throw WatchLoopError.configurationError("glucoseTargetRangeSchedule")
                 }
                 guard let insulinSensitivity = self.settings.insulinSensitivitySchedule else {
@@ -2360,6 +2568,8 @@ final class WatchDoseEnactor {
     /// through this enactor today; a future manual path must NOT defer (user present —
     /// the crude loudDrop==true analog).
     var isRadioBusy: (() -> Bool)?
+    /// Diagnostics only — see WatchLoopManager.radioBusyDetail.
+    var radioBusyDetail: (() -> String)?
 
     /// E4 Stage 2 (task #40): while E4 time-separation is active the pod BLE is
     /// orphaned for G7's sake. reclaim it just before dosing; release it just after.
@@ -2397,7 +2607,9 @@ final class WatchDoseEnactor {
             }
             if self.isRadioBusy?() == true {
                 self.log.default("Enact DEFERRED — G7 handshake owns the radio (BG wins); the next reading retries")
-                SportLog.event("radio", "enact DEFERRED — G7 still owns the radio after 15s; retry next reading")
+                // Say WHICH flag and for HOW LONG. "the G7 owns the radio" was true of both a 9s
+                // handshake and a 5h45m armed connect, and the log could not tell them apart.
+                SportLog.event("radio", "enact DEFERRED after 15s — \(self.radioBusyDetail?() ?? "no detail") · retry next reading")
                 completion(.communication(nil))
                 return
             }
@@ -2608,8 +2820,16 @@ extension WatchLoopManager: CGMManagerDelegate {
             // Stamp on ARRIVAL even when kept.isEmpty — a direct read the phone's copy beat to
             // the store still proves the direct link is alive, which is the whole point of C.
             if deliveredCount > 0 { self.noteGlucoseSource(directG7: true) }
+            // WHICH producer supplied this. `src=direct-G7` remains correct as PROVENANCE — the
+            // sample came off the sensor rather than the phone relay — but it is a hardcoded
+            // literal on a delegate shared by TWO independent BLE stacks, so it has never said
+            // which one. `via=` does. If this reads G7SensorKit while G7Client's scanning is what
+            // blocks the pod, the radio is being held by the component that delivers nothing.
+            let adapterNow = G7ClientTransportAdapter.deliveryCount
+            let via = adapterNow != self.lastAdapterDeliveryCount ? "G7Client" : "G7SensorKit"
+            self.lastAdapterDeliveryCount = adapterNow
             SportLog.event("glucose",
-                "INGEST src=direct-G7 stored=\(kept.count)/\(deliveredCount) · latest \(latestDesc)\(batchTag)")
+                "INGEST src=direct-G7 via=\(via) stored=\(kept.count)/\(deliveredCount) · latest \(latestDesc)\(batchTag)")
             guard !kept.isEmpty else { completion(); return }
             self.glucoseStore.addGlucoseSamples(kept) { result in
                 if case .failure(let error) = result {
@@ -2820,6 +3040,17 @@ extension WatchLoopManager: CGMManagerDelegate {
 
     func deviceManager(_ manager: DeviceManager, logEventForDeviceIdentifier deviceIdentifier: String?, type: DeviceLogEntryType, message: String, completion: ((Error?) -> Void)?) {
         log.default("Device %{public}@: %{public}@", deviceIdentifier ?? "unknown", message)
+        // Route to the FILE sink too. This is the only channel through which G7SensorKit reports
+        // itself, and it was going to os_log alone — invisible in g7watch.log, which is the entire
+        // reason it took a day to discover that G7SensorKit is what actually delivers glucose.
+        //
+        // 2026-08-06: 103 readings arrived while G7Client's own read path logged ZERO of its
+        // unconditional markers ("-> glucose [4E]", "*** GLUCOSE<-", "*** VALUE ="), including
+        // 30 readings overnight with the phone's Bluetooth OFF. G7SensorKit runs its own
+        // CBCentralManager, constructed eagerly at launch, and emitted exactly one line into our
+        // log per reading — the INGEST, which credited the wrong component. It calls this delegate
+        // for connect / disconnect / comms, so this one line makes its whole lifecycle visible.
+        SportLog.event("g7kit", "\(type) \(deviceIdentifier ?? "—"): \(message)")
         completion?(nil)
     }
 

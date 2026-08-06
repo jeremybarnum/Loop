@@ -29,6 +29,31 @@ import G7SensorKit
 
 final class G7ClientTransportAdapter {
 
+    /// How many glucose samples THIS adapter has handed to G7CGMManager — i.e. how many came from
+    /// G7Client's own read path, as opposed to G7SensorKit's independent CBCentralManager.
+    ///
+    /// Both producers funnel into the same delegate, and the INGEST log line hardcodes
+    /// "src=direct-G7" (WatchLoopManager :2820), so a stored sample has never named its actual
+    /// producer. That mattered enormously: on 2026-08-06, 103 readings arrived while G7Client's
+    /// unconditional read markers ("-> glucose [4E]", "*** GLUCOSE<-", "*** VALUE =") logged ZERO
+    /// — including 30 overnight with the phone's Bluetooth OFF — and four multi-sample
+    /// BATCH(backfill+live) ingests appeared that G7Client cannot physically produce (it contains
+    /// no backfill code and never discovers that characteristic). Meanwhile G7Client's scanning was
+    /// what blocked the pod from dosing, 79 refusals in one night. The radio was being held by the
+    /// component delivering nothing, and the log said the opposite.
+    ///
+    /// A counter rather than a flag: the reader compares against the value it last saw, so a
+    /// delivery cannot be missed or double-counted regardless of thread timing.
+    private static let deliveryLock = NSLock()
+    private static var _deliveries = 0
+    static var deliveryCount: Int {
+        deliveryLock.lock(); defer { deliveryLock.unlock() }
+        return _deliveries
+    }
+    private static func noteDelivery() {
+        deliveryLock.lock(); _deliveries += 1; deliveryLock.unlock()
+    }
+
     /// The proven transport (owned).
     let client: G7Client
 
@@ -108,6 +133,7 @@ final class G7ClientTransportAdapter {
         // Full stock ingestion: duplicate detection, failed-sensor/session-ended handling,
         // reliability gating (algorithm state), display-only flagging, [40,400] clamping with
         // condition, syncIdentifier provenance — all G7CGMManager's code, not ours.
+        Self.noteDelivery()   // attribute the sample to G7Client at the INGEST line
         manager.sensor(manager.sensor, didRead: message)
     }
 

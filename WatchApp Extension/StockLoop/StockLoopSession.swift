@@ -82,11 +82,31 @@ final class StockLoopSession {
             guard let client = self?.stack.client else { return false }
             return client.isAttemptActive || client.isHandshakeActive
         }
+        // Diagnostics companion to `radioBusy`: the same two flags, but readable. A refusal can now
+        // say "attempt 20604s" instead of "the G7 owns the radio", which is the difference between
+        // a 9-second handshake and the 5h45m armed connect that blocked 67 doses on 2026-08-06.
+        let radioBusyDetail: () -> String = { [weak self] in
+            guard let client = self?.stack.client else { return "no G7 client" }
+            let attempt = client.attemptActiveDuration.map { String(format: "attempt ACTIVE %.0fs", $0) }
+                ?? "attempt idle"
+            return "\(attempt) · handshake \(client.isHandshakeActive ? "ACTIVE" : "idle")"
+        }
         stack.loopManager.isRadioBusy = radioBusy
+        stack.loopManager.radioBusyDetail = radioBusyDetail
+
+        // Pre-warm runs OUTSIDE a loan by design, and every other snapshot trigger is a loan event
+        // (sport start / takeover / loan pulse / loan end). Without this, a pre-warm's log — the
+        // record of whether the sensor bonded and the handle was finally saved — is stranded on the
+        // watch until the next loan happens to flush it, which is how a pressed button produced no
+        // evidence at all on 2026-08-06.
+        stack.client.onPrewarmAttemptEnded = { [weak self] bonded in
+            self?.sendLogSnapshot("prewarm end — " + (bonded ? "BONDED, handle saved" : "not bonded"))
+        }
         stack.loopManager.podBeepsOnManualBolusProbe = { [weak self] in
             self?.loanController.podBeepsOnManualBolus ?? false
         }
         loanController.isRadioBusy = radioBusy
+        loanController.radioBusyDetail = radioBusyDetail
 
         // R26 (reverse arbiter): the pod TAKEOVER outranks the G7 — during its
         // bounded ~40s ladder, G7 scans stop and new attempts defer. Field

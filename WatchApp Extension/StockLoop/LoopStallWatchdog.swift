@@ -51,7 +51,13 @@ enum LoopStallWatchdog {
     static func refresh() {
         let content = UNMutableNotificationContent()
         content.title = NSLocalizedString("Sport Mode Loop Stopped", comment: "Title: the watch closed loop has stopped completing cycles")
-        content.body = NSLocalizedString("The watch hasn't looped in a while — check your pod and glucose. Your pod reverts to its scheduled basal when its last temp expires.", comment: "Body: the watch closed loop has stopped completing cycles")
+        // Wrist copy (field-corrected 2026-08-06). Dropped two things from the original: the
+        // opening clause, which restated the title, and "check your pod" — during a loan the pod
+        // is driven by the watch and there is nothing the user can inspect. KEPT "check your
+        // glucose": a sensor gap is by far the most common cause, and it IS the right action,
+        // since a stalled loop means nothing is watching BG. Temp hedged because the watchdog
+        // fires at 15 min and a temp usually outlasts that.
+        content.body = NSLocalizedString("Check your glucose. Your pod returns to scheduled basal when its temp expires.", comment: "Body: the watch closed loop has stopped completing cycles")
         content.interruptionLevel = useCriticalAlert ? .critical : .timeSensitive
         content.sound = useCriticalAlert ? .defaultCritical : .default
         content.threadIdentifier = identifier

@@ -56,6 +56,9 @@ final class PodLoanWatchController {
     /// Fix B (radio arbiter): the quiet verdict chase also yields to an active G7
     /// handshake (the crude Verify chase was loudDrop==false). Wired by the session.
     var isRadioBusy: (() -> Bool)?
+    /// Diagnostics only: WHICH flag is holding the radio and for how long, for the reclaim wait's
+    /// log line. See WatchLoopManager.radioBusyDetail.
+    var radioBusyDetail: (() -> String)?
     /// #82: R26's G7 stand-down, applied to the bounded steady-state DOSE ladder (the
     /// takeover hook stays separate — it also drives log snapshots, which a 5-min dose
     /// must not trigger).
@@ -766,19 +769,38 @@ final class PodLoanWatchController {
                         // kept the app awake during the connect, not the battery level. Guessing a
                         // remedy is how the previous note ended up blaming a healthy pod.
                         self.lastIdleNote = String(format: NSLocalizedString(
-                            "The watch app stopped running mid-connect (%@). Keep the watch awake — wrist up or screen on — and try again.",
+                            "Sport Mode didn't start — the watch app stopped running mid-connect (%@). Your phone still has the pod. Keep the watch awake — wrist up or screen on — and try again.",
                             comment: "Glance: takeover failed because the app was suspended"), batteryTag())
                     } else {
+                        // 2026-08-05, epoch 221: root-caused, and it is NOT the pod. Every connect
+                        // returned CBErrorDomain#11 (connectionLimitReached) — a limit on THIS
+                        // APP's CoreBluetooth slots, not a busy or sleeping pod. The phone had
+                        // released cleanly (its own log: `GRANT +3s … linkUp=false`) and the pod's
+                        // census held one disconnected device. The slot was ours: the G7 client
+                        // leaves an armed pending connect alive across a takeover
+                        // (G7Client.swift:957), and a pending connect reserves a slot. Hence the
+                        // gap signature — re-takeovers at 12/14/15 s all succeeded, the one after a
+                        // 153 s quiet gap failed, because only the long gap gave the G7 time to
+                        // re-arm.
+                        //
+                        // So telling the user to "check the pod is nearby and awake" sent them to
+                        // inspect healthy hardware for a fault in our own radio bookkeeping. Say
+                        // the two things that are true and useful instead: nothing moved, and a
+                        // short wait is the remedy that actually works in the field.
                         self.lastIdleNote = String(format: NSLocalizedString(
-                            "Pod didn't answer after %.0fs. Check the pod is nearby and awake, then try again.",
-                            comment: "Glance: pod unreachable at takeover"), failSecs)
+                            "Sport Mode didn't start (%.0fs). Your phone still has the pod and is still looping. Wait ~30s, then try again.",
+                            comment: "Glance: takeover failed — the pod link never established"), failSecs)
                     }
                     SportLog.event("loan", String(format: "TAKEOVER FAILED — %@ after %d reads in %.1fs [takeover-timing], max inter-read gap %.1fs (ladder ticks every 3s), %@, final BLE state %@, %@, epoch %d",
                                                   stalled ? "ladder STALLED (our polling was deferred; see cb: for whether the link was up)" : "pod unreachable",
                                                   maxAttempts, failSecs, self.takeoverMaxReadGap, batteryTag(),
                                                   manager.podLoanConnectionStateDescription,
                                                   PodLoanConnectClock.summary(since: self.attemptStartedAt), grant.epoch))
-                    self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: stalled ? "watch app suspended mid-takeover" : "pod unreachable at takeover")))
+                    // The reason string is rendered verbatim in the PHONE's notification body
+                    // ("The watch could not take the pod (…). The phone kept it."), so it carries
+                    // the same obligation as the wrist note above: do not blame the pod for a
+                    // connection slot we were holding ourselves.
+                    self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: stalled ? "watch app suspended mid-takeover" : "couldn't establish the pod link")))
                 }
             }
         }
@@ -833,8 +855,15 @@ final class PodLoanWatchController {
             }
             if radioWaited > 0 {
                 let stuck = self.isRadioBusy?() == true
-                SportLog.event("radio", String(format: "reclaim waited %.1fs for the G7 handshake%@",
-                                               radioWaited, stuck ? " — still busy at budget, proceeding anyway" : ", then proceeded"))
+                // Field 2026-08-06, build 238: 8 of 8 reclaims burned the full 60s. This is the
+                // EXPENSIVE wait — four times the enact's — and it was the one line still reporting
+                // a bare "still busy" with no way to tell a live handshake from an armed connect
+                // that had been sitting for hours. Same detail the enact refusal now carries.
+                let detail = self.radioBusyDetail?() ?? "no detail"
+                SportLog.event("radio", String(format: "reclaim waited %.1fs for the G7 — %@%@",
+                                               radioWaited,
+                                               stuck ? "STILL BUSY at budget, proceeding anyway" : "cleared, proceeding",
+                                               " · " + detail))
             }
             let idle = self.lastPodLinkContact.map { Date().timeIntervalSince($0) }
             SportLog.event("loan", String(format: "E4: reclaim starting — pod BLE state %@, released=%@, idle %@",
@@ -1218,6 +1247,12 @@ final class PodLoanWatchController {
                 wasUserEntered: r.wasUserEntered,
                 syncIdentifier: r.syncIdentifier ?? "loanv2-glucose-\(Int(r.startDate.timeIntervalSince1970 * 1000))")
         }
+        // Stamp the phone as the source BEFORE storing, and regardless of what dedup keeps — the
+        // same OPTION C discipline the direct-G7 path uses (see GlanceData.directG7At). The
+        // question the glance's provenance line answers is "who last delivered a reading to us",
+        // not "whose copy won the store", and on a re-takeover every seeded sample can be a
+        // duplicate while the phone has still just handed us its glucose history.
+        loopManager.notePhoneGlucoseDelivered()
         loopManager.glucoseStore.addGlucoseSamples(samples) { result in
             switch result {
             case .success(let stored):

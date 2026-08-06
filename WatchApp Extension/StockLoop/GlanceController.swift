@@ -331,7 +331,13 @@ final class GlanceViewModel: ObservableObject {
             s.loopStatusText = NSLocalizedString("returning records…", comment: "Glance status while draining records")
             state = s
         case .active:
-            let data = session.stack.loopManager.glanceData()
+            // Main-safe read, exactly as for the loan snapshot above: publish a mirror from
+            // dataAccessQueue, read the mirror here, never sync onto it. A dose cycle holds that
+            // queue for the whole radio-arbiter poll (up to 15s, :2527), and this line — on a 2s
+            // timer, on MAIN — was what turned that wait into a frozen watch. Nil only before the
+            // first mirror lands, in which case we simply skip this tick rather than block.
+            session.stack.loopManager.refreshGlanceData()
+            guard let data = session.stack.loopManager.mirroredGlanceData else { return }
             var s = Self.activeState(data: data, cob: latestCOB, now: Date(),
                                      phoneGlucoseDate: ExtensionDelegate.shared().loopManager.activeContext?.glucoseDate)
             if snap.handbackPending {
@@ -365,9 +371,27 @@ final class GlanceViewModel: ObservableObject {
                 // command (which is what fires the success haptic; measured 1.3s to accept
                 // against ~8s to actually push 0.2U). Calling it "delivering" was the same
                 // class of lie as the old unconditional "G7 direct" label.
+                // The second branch used to read "waiting for sensor — bolus will deliver". That
+                // was wrong twice over (Jeremy, field 2026-08-05: "it seems like that happens every
+                // time… in theory this should only happen when the bolus coincides with a G7 read,
+                // so 10% of the time").
+                //
+                // First, it was never gated on the G7 at all — it is a bare 20-second stopwatch, so
+                // it fired whenever a bolus was merely SLOW. Second, and worse, the wait it named
+                // cannot happen on this path: R5 says a manual bolus NEVER defers to the radio
+                // arbiter because the user is standing there (WatchLoopManager :2176), and there is
+                // no radio/window/defer gate anywhere in enactManualBolus. So the true rate is not
+                // 10%, it is zero.
+                //
+                // What the >20s window actually is: E4 orphans the pod between doses to keep its
+                // radio away from the G7, so every manual bolus must first re-acquire the pod —
+                // scan, connect, establish the session — before it can command it. Naming that is
+                // both honest and more useful, because it identifies the delay as the cost we
+                // deliberately pay for G7 protection. The "bolus will deliver" half stays: it is
+                // what stops the End tap that killed three doses.
                 s.transientText = Date().timeIntervalSince(startedAt) < 20
-                    ? NSLocalizedString("reaching pod…", comment: "Glance status while a manual bolus waits for the radio and reconnects the pod")
-                    : NSLocalizedString("waiting for sensor — bolus will deliver", comment: "Glance status when a manual bolus is waiting out the G7 radio handshake")
+                    ? NSLocalizedString("reaching pod…", comment: "Glance status while a manual bolus reconnects the pod")
+                    : NSLocalizedString("still reaching pod — bolus will deliver", comment: "Glance status when a manual bolus is taking a while to re-acquire the orphaned pod")
             }
             state = s
             logRender(iob: data.iob, cob: latestCOB, glucoseDate: data.glucoseDate, now: Date())

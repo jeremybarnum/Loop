@@ -346,6 +346,21 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     // G7SensorDelegate sensorDidConnect/sensorDisconnected). Bool = connected; String? = the
     // peripheral name when known.
     var onConnectionChange: ((Bool, String?) -> Void)?
+
+    /// Fires at EVERY pre-warm terminus — bonded, gave up, or failed-and-will-retry. Bool = bonded.
+    ///
+    /// Exists because pre-warm is the one operation deliberately designed to run OUTSIDE a loan
+    /// (`prewarmIfPending` guards on `!soakActive`), and EVERY log sync is triggered by a loan
+    /// event — sport start, takeover, loan pulse, loan end. So the one thing that runs with no loan
+    /// is the one thing whose logs can never reach the phone. Field 2026-08-06: the button was
+    /// pressed, the diagnostic screen said "started (keep app open)", and the log sat on the wrist
+    /// for 22 minutes with no way to send it. There is no manual send-log control anywhere.
+    ///
+    /// Distinct from `prewarmDidResolveNotification`, which fires only when the PENDING STATE
+    /// resolves (bonded, or gave up entirely) and is currently observed by nothing. This one is
+    /// "a pre-warm run just ended", which is exactly the moment the log becomes worth sending —
+    /// including the retry-later case, where knowing WHY it failed matters most.
+    var onPrewarmAttemptEnded: ((Bool) -> Void)?
     @Published var trendState: UInt8?     // EGV algorithm-state byte (0x06 = OK/in-session)
     @Published var statusText: String = "Idle"
     @Published var logLines: [String] = []
@@ -509,6 +524,10 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             }
         }
         if resolved { NotificationCenter.default.post(name: Self.prewarmDidResolveNotification, object: nil) }
+        // Push the log now — this run happened outside any loan, so nothing else will send it.
+        // Fires on all three outcomes above; a failed pre-warm is the more interesting one.
+        let didBond = bonded
+        onMain { self.onPrewarmAttemptEnded?(didBond) }
         onMain { self.workout.release("prewarm") }
     }
 
@@ -822,14 +841,58 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     /// held off and no BLE events left to wake the app). Waiting cannot strand anything.
     ///
     /// Mirrors isHandshakeActive's locking (written on cbQueue, read from dosing queues).
+    /// cbQueue-confined. When this attempt armed, and when the sensor was FIRST SEEN in it.
+    ///
+    /// The pair splits the pod's blocked time into "waiting for the sensor to start advertising"
+    /// and "actual radio work" (connect + handshake + read) — which are completely different
+    /// problems with completely different remedies. Field 2026-08-06 build 238: 8 acquisitions in
+    /// 99 minutes, most preceded by a train of ~35s retries (`next attempt in 15s`), and nothing
+    /// recorded whether those retries saw the sensor at all. If the waiting half dominates, the pod
+    /// is being blocked for a sensor that has not shown up yet — measurable headroom rather than
+    /// contention. MEASUREMENT ONLY: the standing rule is never to shorten a connect budget below
+    /// one advertising window, and nothing here changes a budget.
+    private var attemptStartedAt: Date?
+    private var attemptFirstSightingAt: Date?
+
     private let attemptActiveLock = NSLock()
     private var _attemptActivePublic = false
+    private var _attemptActiveSince: Date?
     var isAttemptActive: Bool {
         attemptActiveLock.lock(); defer { attemptActiveLock.unlock() }
         return _attemptActivePublic
     }
-    private func setAttemptActivePublic(_ active: Bool) {
-        attemptActiveLock.lock(); _attemptActivePublic = active; attemptActiveLock.unlock()
+
+    /// How long the broad flag has been set, or nil when clear. Read cross-thread by the pod's
+    /// defer path so a refusal can say WHY and FOR HOW LONG.
+    ///
+    /// #84's premise is that an attempt is SHORT — "waits out the attempt, then has ~4 quiet
+    /// minutes before the next window" — and the rule is correct on that premise. Overnight
+    /// 2026-08-05/06 the premise failed: one attempt stayed active 00:26 → 06:11 and the pod was
+    /// refused 67 consecutive doses while the G7 itself kept reading normally. NOTHING logged the
+    /// flag, so the evidence had to be inferred from the pod's side, and three separate wrong
+    /// explanations survived a full day because of it. The flag now says what it is doing.
+    var attemptActiveDuration: TimeInterval? {
+        attemptActiveLock.lock(); defer { attemptActiveLock.unlock() }
+        return _attemptActiveSince.map { Date().timeIntervalSince($0) }
+    }
+
+    private func setAttemptActivePublic(_ active: Bool, _ reason: String = "-") {
+        attemptActiveLock.lock()
+        let previous = _attemptActiveSince
+        _attemptActivePublic = active
+        _attemptActiveSince = active ? (previous ?? Date()) : nil
+        attemptActiveLock.unlock()
+
+        if active {
+            // Only announce a true transition; re-arming an already-active attempt is not news.
+            if previous == nil { log("[arbiter] attempt ACTIVE — pod is now blocked · \(reason)") }
+        } else {
+            let held = previous.map { Date().timeIntervalSince($0) } ?? -1
+            // 90s is generous: a healthy attempt is connect + handshake + read, single-digit
+            // seconds. Anything past this starved the pod for no benefit, so make it greppable.
+            let flag = held > 90 ? "  ** LONG — pod was blocked this whole time **" : ""
+            log(String(format: "[arbiter] attempt CLEAR after %.1fs — pod unblocked · %@%@", held, reason, flag))
+        }
     }
     private var wantConnect = false
     private var autoRepeatWork: DispatchWorkItem?
@@ -895,7 +958,8 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                 return
             }
             self.attemptActive = true
-            self.setAttemptActivePublic(true)
+            self.attemptStartedAt = Date(); self.attemptFirstSightingAt = nil
+            self.setAttemptActivePublic(true, "connect() — scheduled attempt")
             self.attemptGeneration &+= 1   // new attempt identity (see attemptGeneration / runHandshake guard)
             self.finished = false
             self.setHandshakeActive(false)   // Fix B: a fresh attempt begins in the lightweight pounce phase
@@ -940,7 +1004,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             self.dataStream.close(); self.authStream.close(); self.ctrlStream.close()
             if self.attemptActive {
                 self.attemptActive = false
-                self.setAttemptActivePublic(false)
+                self.setAttemptActivePublic(false, "torn down")
                 self.finished = true   // suppress the disconnect->fail path
             }
             self.teardownPrewarm(bonded: false)   // release a pre-warm keepalive if one was running
@@ -1017,7 +1081,7 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                 if let p = self.peripheral { self.central?.cancelPeripheralConnection(p) }
                 self.dataStream.close(); self.authStream.close(); self.ctrlStream.close()
                 self.attemptActive = false
-                self.setAttemptActivePublic(false)
+                self.setAttemptActivePublic(false, "pre-warm bonded")
                 self.finished = true
                 self.workout.release("prewarm")   // hand the hold to "soak" (already acquired above)
             }
@@ -1124,8 +1188,26 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
         let e2SkipCancel = success && e2CleanTeardown
         if let p = peripheral, !e2SkipCancel { central?.cancelPeripheralConnection(p) }
         dataStream.close(); authStream.close(); ctrlStream.close()
+        // The profile: how the pod's blocked time actually divided. "waiting" is time the sensor
+        // was not yet advertising — the pod was refused for nothing during it. "radio work" is the
+        // connect + handshake + read that the yield genuinely buys. A run of attempts that are
+        // nearly all waiting, or that never see the sensor at all, is the retry train from build
+        // 238 (8 acquisitions in 99 min) and points somewhere quite different from contention.
+        if let started = attemptStartedAt {
+            let total = Date().timeIntervalSince(started)
+            if let seen = attemptFirstSightingAt {
+                let waiting = seen.timeIntervalSince(started)
+                log(String(format: "[arbiter] attempt profile: %.1fs total = %.1fs waiting + %.1fs radio work · %@",
+                           total, waiting, max(0, total - waiting), message))
+            } else {
+                log(String(format: "[arbiter] attempt profile: %.1fs total — sensor NEVER seen · %@", total, message))
+            }
+        }
+        attemptStartedAt = nil
+        attemptFirstSightingAt = nil
+
         attemptActive = false
-        setAttemptActivePublic(false)
+        setAttemptActivePublic(false, (success ? "reading obtained" : "failed") + " — " + message)
         setHandshakeActive(false)   // Fix B: handshake window closed → the pod may use the radio again
         teardownPrewarm(bonded: success)   // no-op unless a pre-warm bond was in flight
         let useReconnect = reconnectMode && savedPeripheral != nil
@@ -1185,12 +1267,20 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     // MARK: Acquisition — scan (default) or pending-connect (A/B experiment)
 
     private func beginAcquire() {   // on cbQueue
+        // Which of the four paths an attempt takes decides how long the pod stays blocked, because
+        // #84 holds the flag for the WHOLE attempt. A targeted pending connect can sit armed
+        // indefinitely waiting for the sensor's next advertisement (radio-passive, but the pod is
+        // refused throughout); a scan is bounded. Overnight 2026-08-05/06 the log said only
+        // "scanning for G7" and could not distinguish these, so the six-hour block had no
+        // attributable cause. Name the path.
         if prewarmActive {
             // Pre-warm always SCANS for the new (never-bonded) sensor — never a targeted reconnect
             // to a stale handle. beginScan runs continuously for the whole bounded pre-warm window.
+            log("[arbiter] acquire path: PRE-WARM scan — continuous for the bounded window (pod blocked meanwhile)")
             beginScan()
         } else if reconnectMode, let saved = savedPeripheral {
             // WARM: in-memory bonded handle → targeted pending connect (the proven 15/15 path).
+            log("[arbiter] acquire path: WARM targeted connect — armed until the sensor advertises (pod blocked meanwhile)")
             beginReconnect(saved)
         } else if reconnectMode, let restored = restorePersistedPeripheral() {
             // COLD (post-relaunch/crash): no in-memory handle, but the bonded identifier is
@@ -1200,9 +1290,25 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             // cold scan whiffs — and the concurrent scan is the safety net so a STALE handle (a
             // new sensor) can never block discovery the way the reverted retrievePeripherals-only
             // version did (it armed a targeted connect with a 400s watchdog and NO scan).
+            log("[arbiter] acquire path: COLD reacquire — targeted connect + parallel scan (pod blocked meanwhile)")
             beginColdReacquire(restored)
         } else {
             // No handle at all (first-ever sensor, or the OS forgot the bond) → scan only.
+            //
+            // Report the CONDITIONS, never a guess at the cause. This branch is the `else` of a
+            // chain whose earlier arms ALSO require `reconnectMode`, so it is reached either with
+            // no handle at all OR with a perfectly good handle and reconnect simply off — two
+            // completely different situations with completely different remedies. The first
+            // version of this line asserted the former without checking, which is precisely the
+            // error the instrumentation was written to catch, committed by the instrumentation.
+            //
+            // It matters: if a handle exists and reconnectMode is off, the WARM path is available
+            // and unused — and warm is a radio-passive targeted connect that never scans, so the
+            // pod would not be blocked for 20s at a time. That would be a far better lever than
+            // anything in the arbiter. Read the persisted key directly (no side effects);
+            // restorePersistedPeripheral() must not be called just to log.
+            let persisted = UserDefaults.standard.string(forKey: Self.savedPeripheralKey) != nil
+            log("[arbiter] acquire path: SCAN — reconnectMode=\(reconnectMode) inMemoryHandle=\(savedPeripheral != nil) persistedHandle=\(persisted) (pod blocked meanwhile)")
             beginScan()
         }
     }
@@ -1475,7 +1581,8 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             peripheral = nil
             scanWindowStarted = false
             attemptActive = true
-            setAttemptActivePublic(true)
+            attemptStartedAt = Date(); attemptFirstSightingAt = nil
+            setAttemptActivePublic(true, "Bluetooth-toggle resume")
             attemptGeneration &+= 1   // BT-toggle resume is a new attempt too — supersede any stale handshake
             handshakeTask?.cancel(); handshakeTask = nil   // …and stop the stale task from touching the link
             beginAcquire()
@@ -1532,6 +1639,9 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
             let connectable = (advertisementData[CBAdvertisementDataIsConnectable] as? NSNumber)?.boolValue
             let connectableText = connectable.map { $0 ? "yes" : "NO" } ?? "?"
             log("  discovered candidate '\(name.isEmpty ? "?" : name)' \(peripheral.identifier) RSSI=\(RSSI) connectable=\(connectableText) state=\(peripheral.state.rawValue)")
+            // First time OUR sensor was seen in this attempt — everything before this instant was
+            // the pod being blocked for a device that had not started advertising yet.
+            if attemptFirstSightingAt == nil { attemptFirstSightingAt = Date() }
             candidates.append((peripheral, RSSI.intValue, name))
         }
 

@@ -329,10 +329,17 @@ extension CarbAndBolusFlow {
             return
         }
 
-        if !receivedInitialBolusRecommendation {
+        // A PRIMING publish is the first COMPUTED recommendation replacing the seed the screen
+        // opened with. It is not news, so it must be handled exactly like the initial value —
+        // never as a change to reconfirm. See publishComputedRecommendation in the view model.
+        let isPriming = viewModel.consumeRecommendationPriming()
+
+        if !receivedInitialBolusRecommendation || isPriming {
             receivedInitialBolusRecommendation = true
 
             // If the user hasn't started to dial a bolus amount, update to the recommended amount.
+            // The `bolusAmount == 0` test still guards a priming publish that lands late: once the
+            // user has dialled something, that is theirs and we do not overwrite it.
             if flowState == .bolusEntry, bolusAmount == 0, let recommendedBolus = recommendedBolus {
                 bolusAmount = recommendedBolus
             }

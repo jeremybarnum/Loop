@@ -45,6 +45,44 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
     /// strands the flag. Only the newest request may touch the spinner or the value.
     private var recommendationRequestToken = 0
 
+    /// PRIMING vs NEWS. The screen opens showing a SEEDED recommendation — `activeContext`'s, up to
+    /// a loop cycle old — and the loan paths then compute a fresh one. That first computed value
+    /// REPLACES the seed; it is not a change the user needs to reconfirm. The view could not tell
+    /// the difference, so it raised "Bolus Recommendation Updated · Please reconfirm the bolus
+    /// amount" on essentially every bolus (Jeremy, field 2026-08-05: "this now appears before every
+    /// bolus attempt which seems clunky").
+    ///
+    /// It fired even when the number was IDENTICAL, because `@Published` publishes on every
+    /// assignment regardless of equality — the phone path guards against exactly that (:275) and
+    /// the loan path I added did not. Both defects are closed here: `publishComputedRecommendation`
+    /// dedupes like the phone path, and flags the first computed publish as priming.
+    ///
+    /// The alert itself is still right for its real purpose — a recommendation that moves WHILE the
+    /// user is looking at it, which is why it also boots them out of the crown ceremony. Firing it
+    /// on routine open-time refresh is what made it noise, and noise is what makes a real change
+    /// invisible.
+    private var pendingPrimingPublish = false
+    private var hasPublishedComputedRecommendation = false
+
+    /// Read-and-clear: was the value the view just received a priming publish?
+    func consumeRecommendationPriming() -> Bool {
+        defer { pendingPrimingPublish = false }
+        return pendingPrimingPublish
+    }
+
+    /// The single seam through which the loan paths publish a computed recommendation.
+    private func publishComputedRecommendation(_ amount: Double?) {
+        let isFirst = !hasPublishedComputedRecommendation
+        hasPublishedComputedRecommendation = true
+        // Same guard the phone path uses: an identical value is not an update, and publishing it
+        // would raise the reconfirm alert for nothing.
+        guard recommendedBolusAmount != amount else { return }
+        // Set BEFORE the assignment — Combine delivers to the view off the publish, so the flag has
+        // to be true by the time `handleNewBolusRecommendation` reads it.
+        pendingPrimingPublish = isFirst
+        recommendedBolusAmount = amount
+    }
+
     /// Set once the user reaches the crown-confirmation step. From there the amount is
     /// committed, so a recommendation that keeps changing is useless — and actively harmful.
     ///
@@ -223,9 +261,24 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
     }
 
     private func recommendBolus(for entry: NewCarbEntry) {
-        let potentialEntry = PotentialCarbEntryUserInfo(carbEntry: entry)
         recommendationRequestToken += 1
         let token = recommendationRequestToken
+
+        // #47. During a loan this asked the PHONE, and the phone has been paused since the grant:
+        // its IOB, COB and prediction are the ones it held when it handed the pod over. So its
+        // answer was not merely stale, it was computed from the wrong device's books — and the
+        // failure was silent. A missing reply leaves `recommendedBolusAmount` nil, nil leaves the
+        // dial at 0, and at 0 the flow's action button is `addCarbsWithoutBolusing()`
+        // (CarbAndBolusFlow:242): carbs saved, bolus screen skipped, nothing said. Field
+        // 2026-08-05: "it seems to just skip right past that, and it's not clear the Bolus is
+        // being delivered or what." With the phone out of range that is the ONLY outcome, which
+        // is precisely the case Sport Mode exists for.
+        if wasOnLoanAtOpen {
+            recommendLoanBolus(for: entry, token: token)
+            return
+        }
+
+        let potentialEntry = PotentialCarbEntryUserInfo(carbEntry: entry)
         do {
             isComputingRecommendedBolus = true
             try WCSession.default.sendPotentialCarbEntryMessage(potentialEntry,
@@ -305,13 +358,6 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
         sendSetBolusUserInfo(carbEntry: carbEntryUnderConsideration, bolus: bolusAmount)
     }
 
-    /// A durable local notification for a loan-time bolus failure — survives the
-    /// flow's auto-dismiss, the app backgrounding, and a lowered wrist.
-    /// `carbGrams` non-nil means carbs were ALREADY journaled before the bolus was attempted —
-    /// the trap case. The user cannot recover by re-running the carb flow (it would double-log,
-    /// which is why the send window is deliberately not re-opened), so the notification has to
-    /// say both that the carbs landed and that the bolus must be delivered from the plain Bolus
-    /// screen. Field 2026-08-05 00:18: 6 g journaled, 0.20 U lost, and nothing said what to do.
     /// Ask the WATCH for a recommendation right now (loan only). Mirrors what the phone does
     /// off-loan: compute against current state when the screen opens, rather than serving a
     /// number cached by the last loop cycle.
@@ -324,7 +370,7 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
                 switch result {
                 case .success(let recommendation):
                     SportLog.event("bolus-ui", String(format: "REC refreshed on open: %.2f U", recommendation.amount))
-                    self.recommendedBolusAmount = recommendation.amount
+                    self.publishComputedRecommendation(recommendation.amount)
                 case .failure(let error):
                     // Leave whatever the context seeded rather than blanking a usable number:
                     // the guards inside recommendManualBolus (momentum/carb/insulin effects) go
@@ -336,6 +382,47 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
         }
     }
 
+    /// #47 loan path: the meal-bolus recommendation computed on the WATCH, with the unsaved entry
+    /// folded into the watch's own prediction. Same shape as `refreshLoanBolusRecommendation`,
+    /// but carb-aware — which also switches the target range to the pre-meal range, so it is a
+    /// genuinely different recommendation and not just "manual bolus plus some carbs".
+    private func recommendLoanBolus(for entry: NewCarbEntry, token: Int) {
+        isComputingRecommendedBolus = true
+        ExtensionDelegate.shared().stockLoopSession.stack.loopManager.recommendManualBolus(potentialCarbEntry: entry) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                // Superseded by a newer request, which now owns the spinner — drop this reply
+                // rather than clearing a flag we no longer own (same discipline as the phone path).
+                guard token == self.recommendationRequestToken else { return }
+                self.isComputingRecommendedBolus = false
+
+                guard entry == self.carbEntryUnderConsideration else { return }
+
+                switch result {
+                case .success(let recommendation):
+                    SportLog.event("bolus-ui", String(format: "REC carb %.0fg (watch-local): %.2f U",
+                                                      entry.quantity.doubleValue(for: .gram()), recommendation.amount))
+                    self.publishComputedRecommendation(recommendation.amount)
+                case .failure(let error):
+                    // Leave it nil and SAY so. nil means the dial sits at 0 and the action button
+                    // reads "Save" rather than "Save and Bolus" — the user can still dial a bolus
+                    // by hand on this same screen, so this is a degraded recommendation rather
+                    // than a trap. But it is exactly the state that used to arrive silently, so
+                    // it never gets to be inferred from an empty log again.
+                    SportLog.event("bolus-ui", "REC carb (watch-local) FAILED — \(error) · dial stays 0, button reads Save")
+                    self.recommendedBolusAmount = nil
+                }
+            }
+        }
+    }
+
+    /// A durable local notification for a loan-time bolus failure — survives the flow's
+    /// auto-dismiss, the app backgrounding, and a lowered wrist.
+    /// `carbGrams` non-nil means carbs were ALREADY journaled before the bolus was attempted —
+    /// the trap case. The user cannot recover by re-running the carb flow (it would double-log,
+    /// which is why the send window is deliberately not re-opened), so the notification has to
+    /// say both that the carbs landed and that the bolus must be delivered from the plain Bolus
+    /// screen. Field 2026-08-05 00:18: 6 g journaled, 0.20 U lost, and nothing said what to do.
     private static func notifyBolusFailure(units: Double, carbGrams: Double?, error: Swift.Error) {
         let content = UNMutableNotificationContent()
         content.title = NSLocalizedString("Bolus Not Delivered", comment: "Watch notification title for a failed loan-time bolus")
