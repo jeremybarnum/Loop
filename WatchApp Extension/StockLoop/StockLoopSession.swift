@@ -200,6 +200,17 @@ final class StockLoopSession {
 
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         SportLog.event("session", "Sport Mode ready — build \(build); tap Start to request a loan")
+
+        // Every log must say which CGM path produced it, or the two configurations are
+        // indistinguishable after the fact — the exact mistake that let G7Client be credited for a
+        // day of readings it did not produce.
+        if G7Client.isRadioSuppressed {
+            SportLog.event("session", "CGM MODE: STOCK — G7SensorKit riding D2W; G7Client radio "
+                + "suppressed, so the pod is never blocked by us. Expect ZERO [arbiter] lines.")
+        } else {
+            SportLog.event("session", "CGM MODE: G7CLIENT — our J-PAKE reader is live and will hold "
+                + "the radio arbiter during attempts.")
+        }
     }
 
     // MARK: Log pipeline v4 — event snapshots + loan pulse (2026-07-20)

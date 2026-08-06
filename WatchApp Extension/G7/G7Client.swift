@@ -925,10 +925,50 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     }
     private func setStatus(_ s: String) { onMain { self.statusText = s } }
 
+    // MARK: - STOCK-CGM EXPERIMENT — the radio kill switch
+    //
+    // Branch `stock-cgm-piggyback` (2026-08-06). Proven on-device that evening: a watch binary
+    // containing NO pairing crypto reaches `bonded=1 authenticated=1` and receives real glucose,
+    // in 731 ms, purely because Dexcom's watch app (D2W) has vouched for the WATCH — the sensor
+    // authenticates the device, not the app. Stock G7SensorKit rides that, exactly as Loop already
+    // does on iPhone. Build 242 then showed G7SensorKit delivering 5/5 readings and G7Client 0,
+    // while G7Client held the pod blocked for stretches of 414s / 585s / 473s.
+    //
+    // So this switch turns G7Client's radio work off entirely and lets the stock path carry CGM.
+    //
+    // It gates `connect()` and `beginAcquire()` — the two choke points — rather than the ~10 call
+    // sites across five files, so no caller can bypass it and a future caller can't forget it.
+    // With `connect()` returning early the CBCentralManager is never even constructed, and
+    // `attemptActive` / `handshakeActive` therefore never go true, which makes the radio arbiter's
+    // `radioBusy` permanently false without touching the arbiter at all.
+    //
+    // DELIBERATELY NOT SUPPRESSED: `ensureKeepalive()` and the workout session. G7SensorKit needs
+    // the process alive to receive anything; killing the keepalive would take down the very path
+    // under test.
+    //
+    // Runtime-flippable from the diagnostic screen so a bad night doesn't need a TestFlight
+    // round-trip — and so the J-PAKE path stays one tap away if the piggyback ever fails.
+    static let suppressedKey = "g7client.radioSuppressed"
+
+    /// Defaults to TRUE on this branch: suppression IS the experiment. `object(forKey:)` rather
+    /// than `bool(forKey:)` so an unset value is distinguishable from an explicit false.
+    static var isRadioSuppressed: Bool {
+        (UserDefaults.standard.object(forKey: suppressedKey) as? Bool) ?? true
+    }
+
+    /// One line per refusal, so a log that shows no G7Client activity says WHY rather than looking
+    /// like the client silently died.
+    private func logSuppressed(_ site: String) {
+        log("[stock-cgm] G7Client radio SUPPRESSED at \(site) — CGM is stock G7SensorKit via D2W; "
+            + "pod is never blocked by us")
+    }
+
     // MARK: Public API (called from the UI / main thread)
 
     /// Begin a single connect → handshake → glucose-read cycle. Safe to call repeatedly.
     func connect() {
+        guard !Self.isRadioSuppressed else { logSuppressed("connect()"); return }
+
         // Validate the pairing code up front.
         let digits = pin.filter { $0.isNumber }
         guard digits.count == 4 else {
@@ -1267,6 +1307,13 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     // MARK: Acquisition — scan (default) or pending-connect (A/B experiment)
 
     private func beginAcquire() {   // on cbQueue
+        // Second gate. `connect()` already returns early when suppressed, so in practice the
+        // central is never created and this is unreachable — but centralManagerDidUpdateState also
+        // calls beginAcquire(), and a central left over from a pre-suppression toggle could still
+        // fire that. Belt and braces: this app doses insulin, and an un-gated scan here would
+        // silently reintroduce the pod blocking the switch exists to remove.
+        guard !Self.isRadioSuppressed else { logSuppressed("beginAcquire()"); return }
+
         // Which of the four paths an attempt takes decides how long the pod stays blocked, because
         // #84 holds the flag for the WHOLE attempt. A targeted pending connect can sit armed
         // indefinitely waiting for the sensor's next advertisement (radio-passive, but the pod is

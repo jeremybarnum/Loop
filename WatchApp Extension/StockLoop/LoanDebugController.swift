@@ -118,6 +118,28 @@ struct LoanDebugView: View {
 
                 Divider().padding(.vertical, 2)
 
+                // *** CGM PATH *** (branch stock-cgm-piggyback, 2026-08-06). STOCK means
+                // G7SensorKit reads the sensor by riding the authenticated session Dexcom's watch
+                // app (D2W) holds — proven on-device: bonded=1 authenticated=1 and a real reading
+                // from a binary with no crypto in it, because the sensor authenticates the WATCH,
+                // not the app. In that mode G7Client never touches the radio, so it can never
+                // block a dose. REQUIRES the Dexcom watch app installed and connected; without it
+                // the sensor hangs up after ~10s and there is no CGM. Flip to G7CLIENT to restore
+                // our own J-PAKE reader. Takes effect on the next attempt; relaunch to be certain.
+                Text("CGM PATH").font(.footnote).foregroundColor(.secondary)
+                row("mode", G7Client.isRadioSuppressed ? "STOCK (D2W piggyback)" : "G7CLIENT (J-PAKE)")
+                row("needs D2W", G7Client.isRadioSuppressed ? "YES — keep it installed" : "no")
+                Button("Use \(G7Client.isRadioSuppressed ? "G7CLIENT" : "STOCK")") {
+                    let nowSuppressed = !G7Client.isRadioSuppressed
+                    UserDefaults.standard.set(nowSuppressed, forKey: G7Client.suppressedKey)
+                    lastAction = nowSuppressed ? "CGM: STOCK (relaunch to be sure)"
+                                               : "CGM: G7CLIENT (relaunch to be sure)"
+                    SportLog.event("session", "CGM MODE switched by hand -> "
+                        + (nowSuppressed ? "STOCK (G7Client radio suppressed)" : "G7CLIENT (J-PAKE live)"))
+                }
+
+                Divider().padding(.vertical, 2)
+
                 // *** RADIO STRESS (BENCH) *** #83 (2026-07-30): force a distinct pod
                 // command on cycles DoseMath would leave alone, so every 5-min cycle
                 // exercises reading + enact — the gold-standard contention load. Timing
