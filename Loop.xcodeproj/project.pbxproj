@@ -195,8 +195,6 @@
 		43D0E4B72F1A000100000017 /* LoanBooksHarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4B82F1A000100000018 /* LoanBooksHarnessTests.swift */; };
 		49B8A19F8BBE91531BBE4A2E /* WatchDosingLimitsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 253FAE509D95209395E23A42 /* WatchDosingLimitsTests.swift */; };
 		43D0E4AB2F1A00010000000B /* PodLoanPhoneControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4AA2F1A00010000000A /* PodLoanPhoneControllerTests.swift */; };
-		43D0E4AD2F1A00010000000D /* SensorCodeUserInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4AC2F1A00010000000C /* SensorCodeUserInfo.swift */; };
-		43D0E4AE2F1A00010000000E /* SensorCodeUserInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4AC2F1A00010000000C /* SensorCodeUserInfo.swift */; };
 		43D381621EBD9759007F8C8F /* HeaderValuesTableViewCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D381611EBD9759007F8C8F /* HeaderValuesTableViewCell.swift */; };
 		43D9001E21EB209400AF44BF /* LoopCore.h in Headers */ = {isa = PBXBuildFile; fileRef = 43D9FFD121EAE05D00AF44BF /* LoopCore.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		43D9002021EB209400AF44BF /* NSTimeInterval.swift in Sources */ = {isa = PBXBuildFile; fileRef = 439897341CD2F7DE00223065 /* NSTimeInterval.swift */; };
@@ -603,11 +601,9 @@
 		E9C58A7F24DB529A00487A17 /* counteraction_effect_falling_glucose.json in Resources */ = {isa = PBXBuildFile; fileRef = E9C58A7A24DB529A00487A17 /* counteraction_effect_falling_glucose.json */; };
 		E9C58A8024DB529A00487A17 /* insulin_effect.json in Resources */ = {isa = PBXBuildFile; fileRef = E9C58A7B24DB529A00487A17 /* insulin_effect.json */; };
 		FADE0001000000000000DE02 /* DevelopmentBranchAlerter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE0001000000000000DE01 /* DevelopmentBranchAlerter.swift */; };
-		FADE00030000000000000011 /* G7Client.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00030000000000000001 /* G7Client.swift */; };
 		FADE00030000000000000012 /* WorkoutKeepalive.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00030000000000000002 /* WorkoutKeepalive.swift */; };
 		FADE00030000000000000013 /* G7SensorKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00030000000000000004 /* G7SensorKit.framework */; };
 		FADE00030000000000000014 /* G7SensorKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00030000000000000004 /* G7SensorKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		FADE00030000000000000016 /* G7ClientTransportAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00030000000000000015 /* G7ClientTransportAdapter.swift */; };
 		FADE00040000000000000021 /* WatchLoopManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000011 /* WatchLoopManager.swift */; };
 		FADE00040000000000000022 /* StockLoopStack.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000012 /* StockLoopStack.swift */; };
 		FADE00040000000000000023 /* LoanEventJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000013 /* LoanEventJournal.swift */; };
@@ -980,7 +976,6 @@
 		43D0E4B82F1A000100000018 /* LoanBooksHarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanBooksHarnessTests.swift; sourceTree = "<group>"; };
 		253FAE509D95209395E23A42 /* WatchDosingLimitsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchDosingLimitsTests.swift; sourceTree = "<group>"; };
 		43D0E4AA2F1A00010000000A /* PodLoanPhoneControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanPhoneControllerTests.swift; sourceTree = "<group>"; };
-		43D0E4AC2F1A00010000000C /* SensorCodeUserInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorCodeUserInfo.swift; sourceTree = "<group>"; };
 		43D381611EBD9759007F8C8F /* HeaderValuesTableViewCell.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = HeaderValuesTableViewCell.swift; sourceTree = "<group>"; };
 		43D533BB1CFD1DD7009E3085 /* WatchApp Extension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = "WatchApp Extension.entitlements"; sourceTree = "<group>"; };
 		43D848AF1E7DCBE100DADCBC /* Result.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Result.swift; sourceTree = "<group>"; };
@@ -1464,11 +1459,8 @@
 		F5E0BDDA27E1D71F0033557E /* he */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = he; path = he.lproj/Localizable.strings; sourceTree = "<group>"; };
 		F5E0BDE327E1D7230033557E /* he */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = he; path = he.lproj/Localizable.strings; sourceTree = "<group>"; };
 		FADE0001000000000000DE01 /* DevelopmentBranchAlerter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevelopmentBranchAlerter.swift; sourceTree = "<group>"; };
-		FADE00030000000000000001 /* G7Client.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = G7Client.swift; sourceTree = "<group>"; };
 		FADE00030000000000000002 /* WorkoutKeepalive.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WorkoutKeepalive.swift; sourceTree = "<group>"; };
-		FADE00030000000000000003 /* G7watchOS-Bridging-Header.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = "G7watchOS-Bridging-Header.h"; sourceTree = "<group>"; };
 		FADE00030000000000000004 /* G7SensorKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = G7SensorKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
-		FADE00030000000000000015 /* G7ClientTransportAdapter.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = G7ClientTransportAdapter.swift; sourceTree = "<group>"; };
 		FADE00040000000000000001 /* OmnipodKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = OmnipodKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		FADE00040000000000000002 /* RileyLinkKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = RileyLinkKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		FADE00040000000000000003 /* RileyLinkBLEKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = RileyLinkBLEKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -1849,7 +1841,6 @@
 				43A9438F1B926B7B0051FA24 /* Assets.xcassets */,
 				4328E0121CFBE1B700E199AA /* Controllers */,
 				4328E01F1CFBE2B100E199AA /* Extensions */,
-				FADE00030000000000000005 /* G7 */,
 				FADE00040000000000000041 /* StockLoop */,
 				4FE3475F20D5D7FA00A86D03 /* Managers */,
 				898ECA5D218ABD17001E9D35 /* Models */,
@@ -2272,7 +2263,6 @@
 				4372E48F213CFCE70068E043 /* LoopSettingsUserInfo.swift */,
 				43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */,
 				43D0E4B12F1A000100000011 /* SessionInsulinLedger.swift */,
-				43D0E4AC2F1A00010000000C /* SensorCodeUserInfo.swift */,
 				43C3B6F620BBCAA30026CAFA /* PumpManager.swift */,
 				C1FB428E217921D600FAB378 /* PumpManagerUI.swift */,
 				435400331C9F878D00D5819C /* SetBolusUserInfo.swift */,
@@ -2764,20 +2754,10 @@
 			path = Fixtures;
 			sourceTree = "<group>";
 		};
-		FADE00030000000000000005 /* G7 */ = {
-			isa = PBXGroup;
-			children = (
-				FADE00030000000000000001 /* G7Client.swift */,
-				FADE00030000000000000015 /* G7ClientTransportAdapter.swift */,
-				FADE00030000000000000002 /* WorkoutKeepalive.swift */,
-				FADE00030000000000000003 /* G7watchOS-Bridging-Header.h */,
-			);
-			path = G7;
-			sourceTree = "<group>";
-		};
 		FADE00040000000000000041 /* StockLoop */ = {
 			isa = PBXGroup;
 			children = (
+				FADE00030000000000000002 /* WorkoutKeepalive.swift */,
 				FADE00040000000000000011 /* WatchLoopManager.swift */,
 				FADE00040000000000000012 /* StockLoopStack.swift */,
 				FADE00040000000000000013 /* LoanEventJournal.swift */,
@@ -3675,7 +3655,6 @@
 				4372E490213CFCE70068E043 /* LoopSettingsUserInfo.swift in Sources */,
 				43D0E4A22F1A000100000002 /* LoanProtocolV2.swift in Sources */,
 				43D0E4B22F1A000100000012 /* SessionInsulinLedger.swift in Sources */,
-				43D0E4AD2F1A00010000000D /* SensorCodeUserInfo.swift in Sources */,
 				C174233C259BEB0F00399C9D /* ManualEntryDoseViewModel.swift in Sources */,
 				89CA2B3D226E6B13004D9350 /* LocalTestingScenariosManager.swift in Sources */,
 				1D05219B2469E9DF000EBBDE /* StoredAlert.swift in Sources */,
@@ -3733,8 +3712,6 @@
 				FADE00040000000000000029 /* SportLog.swift in Sources */,
 				0D2DAE0D29B84EA4910B1837 /* FakeGlucose.swift in Sources */,
 				E3A9C09E7EC24D86B569C037 /* RuntimeStateLog.swift in Sources */,
-				FADE00030000000000000011 /* G7Client.swift in Sources */,
-				FADE00030000000000000016 /* G7ClientTransportAdapter.swift in Sources */,
 				FADE00030000000000000012 /* WorkoutKeepalive.swift in Sources */,
 				894F6DDD243C0A2300CCE676 /* CarbAmountLabel.swift in Sources */,
 				89A605E524327F45009C1096 /* DoseVolumeInput.swift in Sources */,
@@ -3812,7 +3789,6 @@
 				4372E491213D05F90068E043 /* LoopSettingsUserInfo.swift in Sources */,
 				43D0E4A32F1A000100000003 /* LoanProtocolV2.swift in Sources */,
 				43D0E4B32F1A000100000013 /* SessionInsulinLedger.swift in Sources */,
-				43D0E4AE2F1A00010000000E /* SensorCodeUserInfo.swift in Sources */,
 				4345E40421F68AD9009E00E5 /* TextRowController.swift in Sources */,
 				43BFF0B51E45C1E700FF19A9 /* NumberFormatter.swift in Sources */,
 				C1201E2D23ECDF3D002DA84A /* WatchContextRequestUserInfo.swift in Sources */,
@@ -4640,24 +4616,11 @@
 				EXCLUDED_ARCHS = armv7k;
 				"EXCLUDED_ARCHS[sdk=watchsimulator*]" = "armv7k x86_64 i386";
 				FRAMEWORK_SEARCH_PATHS = "";
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/G7Frameworks/libg7auth-watchos.xcframework/watchos-arm64_arm64_32/Headers";
 				INFOPLIST_FILE = "WatchApp Extension/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
-				);
-				"OTHER_LDFLAGS[sdk=watchos*]" = (
-					"-lc++",
-					"-ObjC",
-					"$(SRCROOT)/G7Frameworks/libg7auth-watchos.xcframework/watchos-arm64_arm64_32/libg7auth-watchos-device.a",
-					"$(SRCROOT)/G7Frameworks/openssl-watchos.xcframework/watchos-arm64_arm64_32/libcrypto-watchos-device.a",
-				);
-				"OTHER_LDFLAGS[sdk=watchsimulator*]" = (
-					"-lc++",
-					"-ObjC",
-					"$(SRCROOT)/G7Frameworks/libg7auth-watchos.xcframework/watchos-arm64-simulator/libg7auth-sim.a",
-					"$(SRCROOT)/G7Frameworks/openssl-watchos.xcframework/watchos-arm64-simulator/libcrypto.a",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "$(MAIN_APP_BUNDLE_IDENTIFIER).LoopWatch.watchkitextension";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -4682,24 +4645,11 @@
 				EXCLUDED_ARCHS = armv7k;
 				"EXCLUDED_ARCHS[sdk=watchsimulator*]" = "armv7k x86_64 i386";
 				FRAMEWORK_SEARCH_PATHS = "";
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/G7Frameworks/libg7auth-watchos.xcframework/watchos-arm64_arm64_32/Headers";
 				INFOPLIST_FILE = "WatchApp Extension/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
-				);
-				"OTHER_LDFLAGS[sdk=watchos*]" = (
-					"-lc++",
-					"-ObjC",
-					"$(SRCROOT)/G7Frameworks/libg7auth-watchos.xcframework/watchos-arm64_arm64_32/libg7auth-watchos-device.a",
-					"$(SRCROOT)/G7Frameworks/openssl-watchos.xcframework/watchos-arm64_arm64_32/libcrypto-watchos-device.a",
-				);
-				"OTHER_LDFLAGS[sdk=watchsimulator*]" = (
-					"-lc++",
-					"-ObjC",
-					"$(SRCROOT)/G7Frameworks/libg7auth-watchos.xcframework/watchos-arm64-simulator/libg7auth-sim.a",
-					"$(SRCROOT)/G7Frameworks/openssl-watchos.xcframework/watchos-arm64-simulator/libcrypto.a",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "$(MAIN_APP_BUNDLE_IDENTIFIER).LoopWatch.watchkitextension";
 				PRODUCT_NAME = "$(TARGET_NAME)";

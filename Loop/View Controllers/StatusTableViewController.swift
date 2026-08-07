@@ -300,31 +300,9 @@ final class StatusTableViewController: LoopChartsTableViewController {
             space,
             settings
         ]
-        #if FAKE_NEW_SENSOR
-        // TEST (Component E): appended AFTER the real items so it can't shift the indices
-        // updateToolbarItems relies on. Fires simulateNewSensor → the full new-sensor
-        // prompt→relay→watch path, no real sensor needed. Compiled out unless FAKE_NEW_SENSOR.
-        toolbarItems! += [space, UIBarButtonItem(image: UIImage(systemName: "ladybug"), style: .plain, target: self, action: #selector(debugSimulateNewSensor))]
-        #endif
     }
 
 
-    #if FAKE_NEW_SENSOR
-    @objc private func debugSimulateNewSensor() {
-        // Confirmation gate (2026-07-20): an accidental ladybug tap fired the whole
-        // fake-sensor flow mid-session (prompts + relay). The watch also firewalls
-        // FAKE- ids from touching real identity, but don't even start by accident.
-        let alert = UIAlertController(
-            title: "Simulate New Sensor?",
-            message: "Test tool: fires the new-sensor prompt → relay → prewarm path with a fake sensor ID. Cancel if this was an accidental tap.",
-            preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "Simulate", style: .default) { [weak self] _ in
-            self?.deviceManager.simulateNewSensor()
-        })
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        present(alert, animated: true)
-    }
-    #endif
         
     private func updateToolbarItems() {
         let isPumpOnboarded = onboardingManager.isComplete || deviceManager.pumpManager?.isOnboarded == true

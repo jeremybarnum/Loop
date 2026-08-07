@@ -12,10 +12,8 @@
 //
 //  Assembled graph:
 //
-//    G7Client (proven transport: J-PAKE via libg7auth, connect-per-reading scheduler)
 //        │ raw EGV frames / connection events
 //        ▼
-//    G7ClientTransportAdapter (M3, stock G7SensorDelegate seam)
 //        ▼
 //    G7CGMManager (stock G7SensorKit-watchOS: parse, dedup, reliability gating, clamping)
 //        │ CGMManagerDelegate (delegateQueue = WatchLoopManager.deviceQueue)
@@ -44,18 +42,18 @@ enum StockLoopStack {
 
     /// Everything the assembled loop owns, strongly held.
     struct Stack {
-        let client: G7Client
         let cgmManager: G7CGMManager
-        let adapter: G7ClientTransportAdapter
         let loopManager: WatchLoopManager
     }
 
     /// Constructs and WIRES the whole stock-shaped loop:
-    /// transport -> adapter -> stock CGM manager -> WatchLoopManager -> stores, with the
-    /// enact seam left unconnected (`loopManager.pumpManager == nil`).
+    /// stock G7 CGM manager -> WatchLoopManager -> stores, with the enact seam left
+    /// unconnected (`loopManager.pumpManager == nil`).
     ///
-    /// The caller (M5's app integration) starts the transport (client.startSoak() /
-    /// prewarmIfPending()) and supplies phone-pushed settings; in M4 nothing invokes this.
+    /// There is no transport to start. G7CGMManager builds its own CBCentralManager eagerly and
+    /// begins scanning as soon as Bluetooth powers on, exactly as it does on the phone; the sensor
+    /// authenticates the DEVICE, so the Dexcom watch app's session is what admits us. Our only job
+    /// is to be running when a reading arrives — see StockLoopSession's keepalive.
     static func assemble() -> Stack {
         let stores = makeStores()
 
@@ -66,17 +64,12 @@ enum StockLoopStack {
             overrideHistory: stores.overrideHistory
         )
 
-        // The M3 CGM stack (formerly G7TransportBringup.makeStack), now delegate-wired:
-        // the stock manager's CGMManagerDelegate output is the loop's input.
-        let client = G7Client()
+        // Stock, delegate-wired: the manager's CGMManagerDelegate output is the loop's input.
         let cgmManager = G7CGMManager()
-        let adapter = G7ClientTransportAdapter(client: client, manager: cgmManager)
-
         cgmManager.delegateQueue = loopManager.deviceQueue
         cgmManager.cgmManagerDelegate = loopManager
-        loopManager.attach(cgmStack: adapter)
 
-        return Stack(client: client, cgmManager: cgmManager, adapter: adapter, loopManager: loopManager)
+        return Stack(cgmManager: cgmManager, loopManager: loopManager)
     }
 
     /// The three LoopKit stores against a local (non-app-group) PersistenceController —

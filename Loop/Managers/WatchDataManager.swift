@@ -30,7 +30,6 @@ final class WatchDataManager: NSObject {
 
         NotificationCenter.default.addObserver(self, selector: #selector(updateWatch(_:)), name: .LoopDataUpdated, object: deviceManager.loopManager)
         NotificationCenter.default.addObserver(self, selector: #selector(sendSupportedBolusVolumesIfNeeded), name: .PumpManagerChanged, object: deviceManager)
-        NotificationCenter.default.addObserver(self, selector: #selector(sendSensorCodeToWatch(_:)), name: .SensorCodeCapturedForWatch, object: deviceManager)
 
         watchSession?.delegate = self
         watchSession?.activate()
@@ -41,23 +40,6 @@ final class WatchDataManager: NSObject {
     }
 
     // MARK: - New-sensor code relay (Component A, ported from g7-build-next)
-
-    /// DeviceDataManager captured a new sensor's pairing code (or is re-relaying a
-    /// known one). Push it to the watch — queued, so it survives the watch being
-    /// asleep; parked if the WC session isn't activated yet.
-    @objc private func sendSensorCodeToWatch(_ note: Notification) {
-        guard let code = note.userInfo?["code"] as? String,
-              let sensorID = note.userInfo?["sid"] as? String else { return }
-        let activatedAt = note.userInfo?["act"] as? Date
-        let info = SensorCodeUserInfo(code: code, sensorID: sensorID, activatedAt: activatedAt)
-        guard let session = watchSession, session.activationState == .activated else {
-            UserDefaults.appGroup?.pendingSensorCodeRelay = info.rawValue
-            log.error("Sensor code relay parked: watch session not activated (will fire on activation)")
-            return
-        }
-        session.transferUserInfo(info.rawValue)
-        log.default("Relayed sensor code to watch for sensor %{public}@", sensorID)
-    }
 
     /// Fire a parked sensor-code relay once the session activates.
     private func sendPendingSensorCodeIfNeeded(_ session: WCSession) {
@@ -809,7 +791,6 @@ extension WatchDataManager: WCSessionDelegate {
             .flatMap { try? JSONDecoder().decode(LoanKindPeek.self, from: $0) }?.kind
         log.default("Loan sendMessage delivered (urgent path): kind=%{public}@", peekedKind ?? "unknown")
         if peekedKind == "request" {
-            deviceManager.ensureSensorCodeRelayed()
         }
         podLoanController.handleIncoming(userInfo: message)
     }
@@ -833,7 +814,6 @@ extension WatchDataManager: WCSessionDelegate {
             // install — for the sensor already on-body, re-relay the held code or
             // prompt for it now.
             if peekedKind == "request" {
-                deviceManager.ensureSensorCodeRelayed()
             }
             podLoanController.handleIncoming(userInfo: userInfo)
             return

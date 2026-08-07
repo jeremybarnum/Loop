@@ -105,7 +105,6 @@ struct GlanceUIState {
     /// "ending…" during a WS1 interim drain, which runs while the phase is still .active.
     var transientText: String? = nil
     /// G7 pairing code likely wrong (aesVerifyFailed ×2) — glance shows a re-enter banner.
-    var needsSensorCode: Bool = false
 
     /// Loop open/close control (active only). `canToggleLoop` is false when the phone
     /// disallows dosing (the watch can't close what the phone opened) or when suspended.
@@ -265,14 +264,6 @@ final class GlanceViewModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
     }
 
-    /// Apply a 4-digit sensor code entered on the watch (wrong-code recovery). No sensorID →
-    /// same sensor, corrected pin only; clears needsSensorCode (and its alert, via didSet).
-    /// The next G7 attempt uses the new code.
-    func submitSensorCode(_ code: String) {
-        guard !isPreview else { state.needsSensorCode = false; return }
-        ExtensionDelegate.shared().stockLoopSession.stack.client.applySensorCode(code)
-        refresh()
-    }
 
     /// Open (disable dosing) is fail-safe — no confirm. Close (enable dosing) is gated
     /// by the confirm alert in the view.
@@ -399,8 +390,6 @@ final class GlanceViewModel: ObservableObject {
                 DispatchQueue.main.async { self?.latestCOB = cob; self?.latestCOBAt = Date() }
             }
         }
-        // Cross-cutting (any phase): a likely-wrong G7 pairing code surfaces the re-enter banner.
-        state.needsSensorCode = session.stack.client.needsSensorCode
     }
 
     /// Emit at most one line per value-change or per 60s, so the 2s tick cannot flood the log.
@@ -625,7 +614,6 @@ struct GlanceView: View {
     @ObservedObject var model: GlanceViewModel
     @State private var confirmingClose = false
     @State private var closeProgress: Double = 0   // #22: crown-to-fill loop-close ceremony
-    @State private var enteringCode = false
 
     /// Always-visible build tag so a TestFlight install is unambiguous on-wrist
     /// (Jeremy 2026-07-20 — often installs mid-session and needs to know the build).
@@ -645,7 +633,6 @@ struct GlanceView: View {
     var body: some View {
         VStack(spacing: 0) {
             statusLine
-            if model.state.needsSensorCode { sensorCodeBanner }
             Spacer(minLength: 0)
             centerBlock
             Spacer(minLength: 0)
@@ -653,31 +640,6 @@ struct GlanceView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
-        .sheet(isPresented: $enteringCode) {
-            SensorCodeEntryView { code in
-                model.submitSensorCode(code)
-                enteringCode = false
-            }
-        }
-    }
-
-    /// Wrong-code banner (2026-07-24): shown in any phase when the G7 pairing code is likely
-    /// wrong. Tap → on-wrist 4-digit entry. Watch-primary recovery for the phone-left-behind case.
-    private var sensorCodeBanner: some View {
-        Button { enteringCode = true } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10))
-                Text(NSLocalizedString("Check sensor code — tap to re-enter", comment: "Glance banner: G7 pairing code may be wrong"))
-                    .font(.system(size: 11, weight: .semibold))
-            }
-            .foregroundColor(.glanceCrit)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 3)
-            .background(Color.glanceCrit.opacity(0.15))
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 6)
-        .padding(.top, 2)
     }
 
     private var statusLine: some View {
@@ -1023,38 +985,6 @@ struct GlanceView: View {
 
 // MARK: - On-wrist sensor-code entry (wrong-code recovery)
 
-/// 4-digit sensor-code entry on the watch (2026-07-24). The user may be mid-workout with no
-/// iPhone, so the watch must be able to take the corrected code itself — this is the
-/// watch-primary half of the wrong-code flow. Presented from the glance's re-enter banner.
-struct SensorCodeEntryView: View {
-    let onSubmit: (String) -> Void
-    @State private var code = ""
-
-    private var digits: String { String(code.filter { $0.isNumber }.prefix(4)) }
-
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 8) {
-                Text(NSLocalizedString("Sensor Code", comment: "Sensor code entry title"))
-                    .font(.headline)
-                Text(NSLocalizedString("The new G7 wouldn't authenticate. Enter the 4-digit code from the sensor applicator.", comment: "Sensor code entry explanation"))
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                TextField("0000", text: $code)
-                    .font(.system(size: 30, weight: .bold, design: .rounded).monospacedDigit())
-                    .multilineTextAlignment(.center)
-                Button(NSLocalizedString("Submit", comment: "Submit sensor code")) {
-                    onSubmit(digits)
-                }
-                .disabled(digits.count != 4)
-                .tint(.glanceAccent)
-            }
-            .padding()
-        }
-    }
-}
-
 // MARK: - Palette (R23: true black; calm-blue identity as of 2026-07-24 — was saddle-brown; semantic state colors)
 
 extension Color {
@@ -1192,11 +1122,6 @@ struct GlanceDemoView: View {
             s.phase = .active; s.bgText = "148"; s.bgColor = .dim
             s.staleAgeText = "16 min ago — no direct G7"; s.iobText = "1.8"; s.cobText = "24"
             s.loopFreshness = .stale; s.loopClosed = true }),
-        ("Sensor code wrong (banner)", previewState { s in
-            s.phase = .active; s.bgText = "142"; s.trendSymbol = "→"; s.bgColor = .inRange
-            s.eventualText = "128"; s.iobText = "1.8"; s.cobText = "24"; s.tempText = "+0.75"
-            s.loopFreshness = .fresh; s.loopClosed = true; s.canToggleLoop = true
-            s.needsSensorCode = true }),
         ("Idle · activation", previewState { s in
             s.phase = .idle; s.bgText = "138"; s.trendSymbol = "→"; s.bgColor = .dim
             s.viaPhone = true; s.loopStatusText = "phone loop active" }),

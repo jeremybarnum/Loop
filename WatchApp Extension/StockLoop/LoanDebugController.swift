@@ -15,6 +15,7 @@ import WatchKit
 import WatchConnectivity
 import HealthKit   // #29 DOSING readout: HKQuantity glucose/eventual
 import LoopKit     // #29: the .milligramsPerDeciliter HKUnit convenience
+import G7SensorKit // CGM HEALTH panel reads the stock manager directly
 
 final class LoanDebugController: WKHostingController<LoanDebugView> {
     override var body: LoanDebugView {
@@ -22,9 +23,38 @@ final class LoanDebugController: WKHostingController<LoanDebugView> {
     }
 }
 
+/// What the stock CGM manager knows about the sensor, flattened for the debug page.
+///
+/// Everything here comes off G7CGMManager — there is no second producer to reconcile against.
+/// Deliberately excludes any notion of a pairing code or a bonded peripheral: the sensor
+/// authenticates the DEVICE (the Dexcom watch app is what vouches for it), so those were
+/// properties of the retired J-PAKE reader, not of the CGM.
+struct CGMHealth {
+    let sensorName: String?
+    let lastReadingAge: TimeInterval?
+    let linkState: String
+    let lifecycle: String
+    let expiresIn: String
+
+    init(_ manager: G7CGMManager) {
+        sensorName = manager.sensorName
+        lastReadingAge = manager.latestReadingTimestamp.map { Date().timeIntervalSince($0) }
+        // Scanning AND connected are both normal states in the connect-per-reading rhythm: the
+        // sensor hangs up after each reading, so "scanning" between windows is health, not failure.
+        linkState = manager.isConnected ? "connected" : (manager.isScanning ? "scanning" : "idle")
+        lifecycle = String(describing: manager.lifecycleState)
+        if let expiry = manager.sensorExpiresAt {
+            let hours = expiry.timeIntervalSinceNow / 3600
+            expiresIn = hours > 0 ? String(format: "%.1f h", hours) : "expired"
+        } else {
+            expiresIn = "—"
+        }
+    }
+}
+
 struct LoanDebugView: View {
     @State private var snapshot: PodLoanWatchController.DebugSnapshot?
-    @State private var g7: G7Client.IdentitySnapshot?
+    @State private var cgm: CGMHealth?
     @State private var lastAction: String = "—"
     /// The loop's own IOB (Jeremy 2026-07-19: the dosing math is what matters —
     /// surface it here until the UI pass wires the main screens).
@@ -101,58 +131,21 @@ struct LoanDebugView: View {
 
                 Divider().padding(.vertical, 2)
 
-                // G7 identity: the state that decides fast (targeted reconnect) vs
-                // slow (throttled cold scan) acquisition. "bonded: none" on a session
-                // that can't find the G7 IS the diagnosis — run Prewarm (foreground,
-                // sensor nearby) to bond once; every later session is then targeted.
-                Text("G7 IDENTITY").font(.footnote).foregroundColor(.secondary)
-                row("reconnect", (g7?.reconnectMode ?? false) ? "on" : "OFF")
-                row("bonded", g7?.bondedPeripheral ?? "none")
-                row("sensor id", g7?.lastKnownSensorID ?? "none")
-                row("code", g7?.sensorCode ?? "—")
-                row("prewarm", g7?.pendingPrewarm ?? "—")
-                Button("Prewarm G7 Now") {
-                    session.stack.client.forcePrewarmNow()
-                    lastAction = "prewarm started (keep app open)"
-                }
-
-                Divider().padding(.vertical, 2)
-
-                // *** CGM PATH *** (branch stock-cgm-piggyback, 2026-08-06). STOCK means
-                // G7SensorKit reads the sensor by riding the authenticated session Dexcom's watch
-                // app (D2W) holds — proven on-device: bonded=1 authenticated=1 and a real reading
-                // from a binary with no crypto in it, because the sensor authenticates the WATCH,
-                // not the app. In that mode G7Client never touches the radio, so it can never
-                // block a dose. REQUIRES the Dexcom watch app installed and connected; without it
-                // the sensor hangs up after ~10s and there is no CGM. Flip to G7CLIENT to restore
-                // our own J-PAKE reader. Takes effect on the next attempt; relaunch to be certain.
-                Text("CGM PATH").font(.footnote).foregroundColor(.secondary)
-                row("mode", G7Client.isRadioSuppressed ? "STOCK (D2W piggyback)" : "G7CLIENT (J-PAKE)")
-                row("needs D2W", G7Client.isRadioSuppressed ? "YES — keep it installed" : "no")
-                Button("Use \(G7Client.isRadioSuppressed ? "G7CLIENT" : "STOCK")") {
-                    let nowSuppressed = !G7Client.isRadioSuppressed
-                    UserDefaults.standard.set(nowSuppressed, forKey: G7Client.suppressedKey)
-                    SportLog.event("session", "CGM MODE switched by hand -> "
-                        + (nowSuppressed ? "STOCK (G7Client radio suppressed)" : "G7CLIENT (J-PAKE live)"))
-
-                    if nowSuppressed {
-                        // Switching OFF must actively stand the client down, not merely stop it
-                        // starting new work. An attempt already in flight holds the radio arbiter,
-                        // and with the entry points now gated nothing would ever run to clear it —
-                        // the pod would stay blocked until relaunch. stop() cancels the timers,
-                        // drops the link and does setAttemptActivePublic(false, "torn down"),
-                        // which is what actually releases the arbiter.
-                        session.stack.client.stop()
-                        lastAction = "CGM: STOCK — client torn down, pod unblocked"
-                    } else {
-                        // Switching ON does NOT start an attempt here: the client is driven by the
-                        // session (startSoak on loan start / pre-warm on foreground). Starting one
-                        // from a debug tap would race those owners.
-                        lastAction = "CGM: G7CLIENT — active from the next attempt"
-                    }
-                }
-
-                Divider().padding(.vertical, 2)
+                // CGM HEALTH — read straight off the stock manager, which is now the only
+                // producer. These are the fields that actually diagnose a CGM outage in the field:
+                // is a sensor known, when did it last deliver, and is the link up right now.
+                //
+                // (Replaces the old G7 IDENTITY panel — bonded peripheral / pairing code /
+                // pre-warm state — all of which described the retired J-PAKE reader. There is no
+                // pairing code to show: the sensor authenticates the DEVICE, and the Dexcom watch
+                // app is what vouches for it.)
+                Text("CGM HEALTH").font(.footnote).foregroundColor(.secondary)
+                row("sensor", cgm?.sensorName ?? "none")
+                row("last reading", cgm?.lastReadingAge.map { String(format: "%.0fs ago", $0) } ?? "never")
+                row("link", cgm?.linkState ?? "—")
+                row("state", cgm?.lifecycle ?? "—")
+                row("expires", cgm?.expiresIn ?? "—")
+                row("needs D2W", "YES — Dexcom watch app must stay installed")
 
                 // *** RADIO STRESS (BENCH) *** #83 (2026-07-30): force a distinct pod
                 // command on cycles DoseMath would leave alone, so every 5-min cycle
@@ -195,7 +188,7 @@ struct LoanDebugView: View {
             // delegate queue, so a sync read froze the UI for the length of any pod operation.
             session.loanController.refreshDebugSnapshot()
             snapshot = session.loanController.mirroredDebugSnapshot ?? snapshot
-            g7 = session.stack.client.identitySnapshot()
+            cgm = CGMHealth(session.stack.cgmManager)
             let gd = session.stack.loopManager.glanceData()
             dosing = gd
             iobText = gd.iob.map { String(format: "%.2f U", $0) } ?? "—"
@@ -208,7 +201,7 @@ struct LoanDebugView: View {
             // delegate queue, so a sync read froze the UI for the length of any pod operation.
             session.loanController.refreshDebugSnapshot()
             snapshot = session.loanController.mirroredDebugSnapshot ?? snapshot
-            g7 = session.stack.client.identitySnapshot()
+            cgm = CGMHealth(session.stack.cgmManager)
             let gd = session.stack.loopManager.glanceData()
             dosing = gd
             iobText = gd.iob.map { String(format: "%.2f U", $0) } ?? "—"

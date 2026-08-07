@@ -214,7 +214,7 @@ final class WatchLoopManager {
     /// silenced — then the haptic is the ONLY confirmation and must stay.
     ///
     /// A closure, not a cast: this file works against the `PumpManager` protocol and does not
-    /// import OmnipodKit. Wired in StockLoopSession alongside isRadioBusy / e4ReclaimPodForDose.
+    /// import OmnipodKit. Wired in StockLoopSession alongside e4ReclaimPodForDose.
     var podBeepsOnManualBolusProbe: (() -> Bool)?
     var podBeepsOnManualBolus: Bool { podBeepsOnManualBolusProbe?() ?? false }
 
@@ -225,21 +225,6 @@ final class WatchLoopManager {
         set { doseEnactor.loanRecorder = newValue }
     }
 
-    /// Fix B: the radio-arbiter probe, forwarded to the enactor (StockLoopSession wires
-    /// it to G7Client.isHandshakeActive).
-    var isRadioBusy: (() -> Bool)? {
-        get { doseEnactor.isRadioBusy }
-        set { doseEnactor.isRadioBusy = newValue }
-    }
-
-    /// Diagnostics only: WHY the radio is busy, for the refusal line. `isRadioBusy` is a bare Bool,
-    /// so a deferred dose could say only "the G7 owns the radio" — never which of the two flags,
-    /// nor for how long. Overnight 2026-08-05/06 that cost 67 consecutive refusals whose cause was
-    /// unattributable until the flags were read out of the source by hand a day later.
-    var radioBusyDetail: (() -> String)? {
-        get { doseEnactor.radioBusyDetail }
-        set { doseEnactor.radioBusyDetail = newValue }
-    }
 
     /// E4 Stage 2 (task #40): reclaim the orphaned pod before a dose, release after.
     /// Forwarded to the enactor (automatic path); enactManualBolus uses them directly.
@@ -731,7 +716,6 @@ final class WatchLoopManager {
     // MARK: The CGM input (stock G7CGMManager over the proven transport — M3)
 
     /// Held so the stack has an owner; delegate wiring happens in StockLoopStack.assemble().
-    private(set) var cgmStack: G7ClientTransportAdapter?
 
     // MARK: Queues (mirrors the phone's DeviceDataManager.queue / LoopDataManager.dataAccessQueue split)
 
@@ -776,10 +760,6 @@ final class WatchLoopManager {
         #endif
     }
 
-    func attach(cgmStack: G7ClientTransportAdapter) {
-        self.cgmStack = cgmStack
-    }
-
     // MARK: Cached effects (mirrors LoopDataManager's cached-effect properties; dataAccessQueue only)
 
     private var glucoseMomentumEffect: [GlucoseEffect]?
@@ -811,7 +791,6 @@ final class WatchLoopManager {
     private var insulinOnBoard: InsulinValue?
     /// Last-seen adapter delivery count, for producer attribution on the INGEST line. Touched only
     /// on the CGM delegate queue (processCGMReadingResult), so no lock of its own.
-    private var lastAdapterDeliveryCount = 0
 
     private let bgSourceLock = NSLock()
     private var _lastDirectG7At: Date?
@@ -2567,9 +2546,6 @@ final class WatchDoseEnactor {
     /// reading, which is exactly the fresh BG landing. Only the automatic path runs
     /// through this enactor today; a future manual path must NOT defer (user present —
     /// the crude loudDrop==true analog).
-    var isRadioBusy: (() -> Bool)?
-    /// Diagnostics only — see WatchLoopManager.radioBusyDetail.
-    var radioBusyDetail: (() -> String)?
 
     /// E4 Stage 2 (task #40): while E4 time-separation is active the pod BLE is
     /// orphaned for G7's sake. reclaim it just before dosing; release it just after.
@@ -2590,33 +2566,6 @@ final class WatchDoseEnactor {
             // BG still wins the radio — but WAIT for the handshake instead of throwing the
             // dose cycle away on a millisecond-scale collision.
             //
-            // Field 2026-07-22 15:42: the enact check landed 53ms after the VALUE, while
-            // the G7 link was still up, and the whole cycle was abandoned. The two cycles
-            // that DID dose (15:32, 15:37) differed only in that G7 logged
-            // "!! disconnected (clean)" ~30ms BEFORE the enact ran. Pure race, and losing
-            // it silently costs a full 5-minute dose cycle. E5 hit the identical race and
-            // was fixed with a delay; the production dose path never got that treatment.
-            //
-            // The handshake completes in seconds and the next G7 window is ~5 minutes out,
-            // so waiting is free. Poll rather than block so the dosing queue stays
-            // responsive; give up only if the radio is genuinely stuck.
-            var radioWaited: TimeInterval = 0
-            while self.isRadioBusy?() == true, radioWaited < 15 {
-                Thread.sleep(forTimeInterval: 0.5)
-                radioWaited += 0.5
-            }
-            if self.isRadioBusy?() == true {
-                self.log.default("Enact DEFERRED — G7 handshake owns the radio (BG wins); the next reading retries")
-                // Say WHICH flag and for HOW LONG. "the G7 owns the radio" was true of both a 9s
-                // handshake and a 5h45m armed connect, and the log could not tell them apart.
-                SportLog.event("radio", "enact DEFERRED after 15s — \(self.radioBusyDetail?() ?? "no detail") · retry next reading")
-                completion(.communication(nil))
-                return
-            }
-            if radioWaited > 0 {
-                SportLog.event("radio", String(format: "enact waited %.1fs for the G7 handshake, then proceeded", radioWaited))
-            }
-
             // E4: reclaim the orphaned pod before dosing (bounded). Safe-fallback on
             // failure: skip the dose — never block, never dose against a pod that
             // isn't confirmed connected. Runs on dosingQueue (not the loop's
@@ -2820,16 +2769,12 @@ extension WatchLoopManager: CGMManagerDelegate {
             // Stamp on ARRIVAL even when kept.isEmpty — a direct read the phone's copy beat to
             // the store still proves the direct link is alive, which is the whole point of C.
             if deliveredCount > 0 { self.noteGlucoseSource(directG7: true) }
-            // WHICH producer supplied this. `src=direct-G7` remains correct as PROVENANCE — the
-            // sample came off the sensor rather than the phone relay — but it is a hardcoded
-            // literal on a delegate shared by TWO independent BLE stacks, so it has never said
-            // which one. `via=` does. If this reads G7SensorKit while G7Client's scanning is what
-            // blocks the pod, the radio is being held by the component that delivers nothing.
-            let adapterNow = G7ClientTransportAdapter.deliveryCount
-            let via = adapterNow != self.lastAdapterDeliveryCount ? "G7Client" : "G7SensorKit"
-            self.lastAdapterDeliveryCount = adapterNow
+            // `src=direct-G7` is PROVENANCE: off the sensor rather than via the phone relay. That
+            // distinction still matters and is still worth logging — a run where the relay quietly
+            // covers for a dead direct link would otherwise look healthy. (It once also had to name
+            // WHICH of two BLE stacks produced the sample; there is only one now.)
             SportLog.event("glucose",
-                "INGEST src=direct-G7 via=\(via) stored=\(kept.count)/\(deliveredCount) · latest \(latestDesc)\(batchTag)")
+                "INGEST src=direct-G7 stored=\(kept.count)/\(deliveredCount) · latest \(latestDesc)\(batchTag)")
             guard !kept.isEmpty else { completion(); return }
             self.glucoseStore.addGlucoseSamples(kept) { result in
                 if case .failure(let error) = result {
@@ -2922,8 +2867,8 @@ extension WatchLoopManager: CGMManagerDelegate {
     /// (G7SensorKit/G7CGMManager.swift:421). Fields 2 and 3 come off the sensor itself and are
     /// therefore device-independent. Field 1 is each device's own ESTIMATE of when the sensor was
     /// started — `Date() − messageTimestamp`, latched the first time that device saw the sensor
-    /// (G7CGMManager.swift:301-310, and independently on the watch in
-    /// G7ClientTransportAdapter.swift:88-89). The phone and the watch latch at different instants,
+    /// (G7CGMManager.swift:301-310, latched independently on each device). The phone and
+    /// the watch latch at different instants,
     /// so their estimates differ by a fraction of a second and the full string never matches.
     ///
     /// That is why the store's syncIdentifier uniqueness constraint never fired: the same physical
@@ -3044,7 +2989,7 @@ extension WatchLoopManager: CGMManagerDelegate {
         // itself, and it was going to os_log alone — invisible in g7watch.log, which is the entire
         // reason it took a day to discover that G7SensorKit is what actually delivers glucose.
         //
-        // 2026-08-06: 103 readings arrived while G7Client's own read path logged ZERO of its
+        // 2026-08-06: 103 readings arrived while the since-retired J-PAKE reader logged ZERO of its
         // unconditional markers ("-> glucose [4E]", "*** GLUCOSE<-", "*** VALUE ="), including
         // 30 readings overnight with the phone's Bluetooth OFF. G7SensorKit runs its own
         // CBCentralManager, constructed eagerly at launch, and emitted exactly one line into our

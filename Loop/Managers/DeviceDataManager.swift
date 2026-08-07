@@ -1064,7 +1064,6 @@ extension DeviceDataManager: CGMManagerDelegate {
         // pairing code (phone prompt) and relay it to the watch so the watch's direct
         // G7 reader can authenticate the new sensor and pre-warm while it's costless.
         for event in events where event.type == .sensorStart {
-            handleSensorStart(sensorID: event.deviceIdentifier, activatedAt: event.date)
         }
     }
 
@@ -1072,84 +1071,6 @@ extension DeviceDataManager: CGMManagerDelegate {
 
     /// A new G7 sensor started. If we already hold its 4-digit code, re-relay it to
     /// the watch (in case the first send was missed); otherwise prompt for it.
-    private func handleSensorStart(sensorID: String, activatedAt: Date) {
-        guard !sensorID.isEmpty else { return }
-        DispatchQueue.main.async {
-            // FAKE firewall (2026-07-20): the simulator's FAKE- ids exercise the
-            // prompt→relay path but must never become the persisted "current
-            // sensor" — one accidental ladybug tap poisoned re-relays for days.
-            if !sensorID.hasPrefix("FAKE-") {
-                UserDefaults.appGroup?.lastSeenSensorID = sensorID
-            } else if UserDefaults.appGroup?.lastSeenSensorID?.hasPrefix("FAKE-") == true {
-                UserDefaults.appGroup?.lastSeenSensorID = nil   // repair prior poisoning
-            }
-            if let existing = UserDefaults.appGroup?.sensorPairingCode(for: sensorID) {
-                self.relaySensorCode(existing, sensorID: sensorID, activatedAt: activatedAt)
-            } else {
-                self.presentSensorCodePrompt(sensorID: sensorID, activatedAt: activatedAt)
-            }
-        }
-    }
-
-    /// Loan-time re-arm (Component A): make sure the WATCH holds the CURRENT sensor's
-    /// pairing code — re-relay a held code, or prompt for it. Fired when the watch
-    /// requests a loan, because the automatic .sensorStart capture above only fires
-    /// for sensors started after install; the sensor already on-body at install time
-    /// never got relayed (observed 2026-07-18: watch stuck with the compiled-in
-    /// default code and no bond → throttled cold-scan acquisition).
-    func ensureSensorCodeRelayed() {
-        DispatchQueue.main.async {
-            var lastSeen = UserDefaults.appGroup?.lastSeenSensorID
-            if lastSeen?.hasPrefix("FAKE-") == true {
-                UserDefaults.appGroup?.lastSeenSensorID = nil   // FAKE repair (2026-07-20)
-                lastSeen = nil
-            }
-            let sensorID = lastSeen ?? "MANUAL"
-            if let existing = UserDefaults.appGroup?.sensorPairingCode(for: sensorID) {
-                self.relaySensorCode(existing, sensorID: sensorID, activatedAt: nil)
-            } else {
-                self.presentSensorCodePrompt(sensorID: sensorID, activatedAt: nil)
-            }
-        }
-    }
-
-    /// Prompt (numeric keypad) for the new sensor's code, store it, and relay it.
-    private func presentSensorCodePrompt(sensorID: String, activatedAt: Date?) {
-        let alert = UIAlertController(
-            title: NSLocalizedString("New Sensor", comment: "Title of the new-sensor pairing-code prompt"),
-            message: NSLocalizedString("Enter the sensor code from the Dexcom applicator to enable Sport Mode on the watch.", comment: "Message of the new-sensor pairing-code prompt"),
-            preferredStyle: .alert)
-        alert.addTextField { textField in
-            textField.keyboardType = .numberPad
-            textField.placeholder = NSLocalizedString("4-digit code", comment: "Placeholder for the sensor code field")
-        }
-        alert.addAction(UIAlertAction(title: NSLocalizedString("Save", comment: "Save the sensor code"), style: .default) { [weak self, weak alert] _ in
-            let code = String((alert?.textFields?.first?.text ?? "").filter { $0.isNumber })
-            guard code.count == 4 else { return }
-            UserDefaults.appGroup?.setSensorPairingCode(code, for: sensorID)
-            self?.relaySensorCode(code, sensorID: sensorID, activatedAt: activatedAt)
-        })
-        alert.addAction(UIAlertAction(title: NSLocalizedString("Not Now", comment: "Dismiss the sensor code prompt"), style: .cancel))
-        alertPresenter.present(alert, animated: true, completion: nil)
-    }
-
-    /// Hand off to WatchDataManager (which owns the WC session + its activation
-    /// guard) to push the code to the watch.
-    private func relaySensorCode(_ code: String, sensorID: String, activatedAt: Date?) {
-        var userInfo: [String: Any] = ["code": code, "sid": sensorID]
-        if let activatedAt { userInfo["act"] = activatedAt }
-        NotificationCenter.default.post(name: .SensorCodeCapturedForWatch, object: self, userInfo: userInfo)
-    }
-
-    #if FAKE_NEW_SENSOR
-    /// TEST (Component E): fabricate a `.sensorStart` for a synthetic sensor ID, driving the
-    /// exact prompt → store → relay path the real event takes — so the phone flow is testable
-    /// without activating a real sensor. Behind FAKE_NEW_SENSOR.
-    func simulateNewSensor() {
-        UserDefaults.appGroup?.sensorPairingCodes = [:]   // clear so it prompts
-        handleSensorStart(sensorID: "FAKE-\(UUID().uuidString.prefix(4))", activatedAt: Date())
-    }
-    #endif
 
     func startDateToFilterNewData(for manager: CGMManager) -> Date? {
         dispatchPrecondition(condition: .onQueue(queue))
@@ -1570,7 +1491,6 @@ extension DeviceDataManager: LoopDataManagerDelegate {
 }
 
 extension Notification.Name {
-    static let SensorCodeCapturedForWatch = Notification.Name(rawValue: "com.loopKit.notification.SensorCodeCapturedForWatch")
     static let PumpManagerChanged = Notification.Name(rawValue:  "com.loopKit.notification.PumpManagerChanged")
     static let CGMManagerChanged = Notification.Name(rawValue:  "com.loopKit.notification.CGMManagerChanged")
     static let PumpEventsAdded = Notification.Name(rawValue:  "com.loopKit.notification.PumpEventsAdded")

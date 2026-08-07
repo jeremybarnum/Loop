@@ -80,7 +80,7 @@ final class WorkoutKeepalive: NSObject, HKWorkoutSessionDelegate {
         guard session == nil, !authInFlight, !recoverInFlight else { return }   // running, or a start/probe is pending
         guard !holders.isEmpty else { return }                                  // nobody wants it
         guard HKHealthStore.isHealthDataAvailable() else {
-            log("WorkoutKeepalive: HealthKit unavailable on this device")
+            SportLog.event("keepalive", "HealthKit unavailable on this device")
             return
         }
         // #82: a session started BEFORE a background relaunch can still be running inside
@@ -104,7 +104,7 @@ final class WorkoutKeepalive: NSObject, HKWorkoutSessionDelegate {
             self.onMain {
                 self.recoverInFlight = false
                 if let error {
-                    log("WorkoutKeepalive: recoverActiveWorkoutSession error: \(error)")
+                    SportLog.event("keepalive", "recoverActiveWorkoutSession error: \(error)")
                 }
                 // A release() may have landed while the probe was in flight.
                 guard !self.holders.isEmpty, self.session == nil else {
@@ -116,12 +116,12 @@ final class WorkoutKeepalive: NSObject, HKWorkoutSessionDelegate {
                     self.session = recovered
                     self.authOK = true          // it is running, so sharing was authorised
                     self.setTag("keepalive recovered(\(self.holderTag()))")
-                    log("WorkoutKeepalive: adopted a surviving HKWorkoutSession (state \(recovered.state.rawValue)) — no new session needed (holders: \(self.holderTag()))")
+                    SportLog.event("keepalive", "adopted a surviving HKWorkoutSession (state \(recovered.state.rawValue)) — no new session needed (holders: \(self.holderTag()))")
                     return
                 }
                 if let recovered {
                     recovered.end()             // ended/stopped leftovers can block a fresh start
-                    log("WorkoutKeepalive: discarded a dead recovered session (state \(recovered.state.rawValue))")
+                    SportLog.event("keepalive", "discarded a dead recovered session (state \(recovered.state.rawValue))")
                 }
                 self.authoriseThenStart()
             }
@@ -137,7 +137,7 @@ final class WorkoutKeepalive: NSObject, HKWorkoutSessionDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             guard let self, self.recoverInFlight, self.recoverGeneration == generation else { return }
             self.recoverInFlight = false
-            log("WorkoutKeepalive: recoverActiveWorkoutSession did not call back in 2s — starting a fresh session")
+            SportLog.event("keepalive", "recoverActiveWorkoutSession did not call back in 2s — starting a fresh session")
             self.authoriseThenStart()
         }
     }
@@ -158,7 +158,7 @@ final class WorkoutKeepalive: NSObject, HKWorkoutSessionDelegate {
                 self.authOK = (status == .sharingAuthorized)
                 guard self.authOK else {
                     self.setTag("keepalive DENIED")
-                    log("WorkoutKeepalive: workout share auth NOT granted (status \(status.rawValue), requestOK \(ok), err \(String(describing: err))) — background keepalive will NOT work; tap Allow on the watch")
+                    SportLog.event("keepalive", "workout share auth NOT granted (status \(status.rawValue), requestOK \(ok), err \(String(describing: err))) — background keepalive will NOT work; tap Allow on the watch")
                     return
                 }
                 // Only start if the session is STILL wanted — a release() may have landed while auth
@@ -181,14 +181,14 @@ final class WorkoutKeepalive: NSObject, HKWorkoutSessionDelegate {
             s.startActivity(with: Date())
             session = s
             setTag("keepalive running(\(holderTag()))")
-            log("WorkoutKeepalive: HKWorkoutSession(.other) started — background runtime ACTIVE (holders: \(holderTag()))")
+            SportLog.event("keepalive", "HKWorkoutSession(.other) started — background runtime ACTIVE (holders: \(holderTag()))")
         } catch {
             session = nil   // stay restartable — the next foreground ensureRunning retries
             // A failed start is the one thing that suggests HealthKit is holding a session we
             // don't know about, so let the next attempt probe for a survivor again.
             recoveryProbed = false
             setTag("keepalive START-FAILED")
-            log("WorkoutKeepalive: HKWorkoutSession start FAILED: \(error)")
+            SportLog.event("keepalive", "HKWorkoutSession start FAILED: \(error)")
         }
     }
 
@@ -196,7 +196,7 @@ final class WorkoutKeepalive: NSObject, HKWorkoutSessionDelegate {
         session?.end()
         session = nil
         setTag("keepalive off")
-        log("WorkoutKeepalive: session ended (no holders)")
+        SportLog.event("keepalive", "session ended (no holders)")
     }
 
     private func onMain(_ block: @escaping () -> Void) {
@@ -206,10 +206,10 @@ final class WorkoutKeepalive: NSObject, HKWorkoutSessionDelegate {
     // MARK: HKWorkoutSessionDelegate
     func workoutSession(_ s: HKWorkoutSession, didChangeTo to: HKWorkoutSessionState,
                         from: HKWorkoutSessionState, date: Date) {
-        log("WorkoutKeepalive: state \(from.rawValue) -> \(to.rawValue)")
+        SportLog.event("keepalive", "state \(from.rawValue) -> \(to.rawValue)")
     }
     func workoutSession(_ s: HKWorkoutSession, didFailWithError error: Error) {
-        log("WorkoutKeepalive: session FAILED: \(error)")
+        SportLog.event("keepalive", "session FAILED: \(error)")
         setTag("keepalive FAILED")
         onMain { self.session = nil }   // stay restartable — next foreground ensureRunning retries (HK error 14 path)
     }

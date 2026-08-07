@@ -17,8 +17,6 @@ extension UserDefaults {
         case loopNotRunningNotifications = "com.loopkit.Loop.loopNotRunningNotifications"
         case inFlightAutomaticDose = "com.loopkit.Loop.inFlightAutomaticDose"
         case favoriteFoods = "com.loopkit.Loop.favoriteFoods"
-        case sensorPairingCodes = "com.loopkit.Loop.SensorPairingCodes"
-        case lastSeenSensorID = "com.loopkit.Loop.LastSeenSensorID"
         case pendingSensorCodeRelay = "com.loopkit.Loop.PendingSensorCodeRelay"
     }
 
@@ -26,24 +24,6 @@ extension UserDefaults {
 
     /// Codes captured on the phone when the CGM reports a new sensor, and relayed to
     /// the watch. Low-sensitivity (a 4-digit pairing PIN); kept out of logs.
-    var sensorPairingCodes: [String: String] {
-        get { dictionary(forKey: Key.sensorPairingCodes.rawValue) as? [String: String] ?? [:] }
-        set { set(newValue, forKey: Key.sensorPairingCodes.rawValue) }
-    }
-
-    func sensorPairingCode(for sensorID: String) -> String? { sensorPairingCodes[sensorID] }
-    func setSensorPairingCode(_ code: String, for sensorID: String) {
-        var codes = sensorPairingCodes
-        codes[sensorID] = code
-        sensorPairingCodes = codes
-    }
-
-    /// The most recent G7 sensorID the phone has seen a `.sensorStart` for — so a
-    /// repeated start event for the SAME sensor doesn't re-prompt.
-    var lastSeenSensorID: String? {
-        get { string(forKey: Key.lastSeenSensorID.rawValue) }
-        set { set(newValue, forKey: Key.lastSeenSensorID.rawValue) }
-    }
 
     /// A sensor-code relay parked because the WC session wasn't activated yet; fired
     /// on activation (see WatchDataManager).

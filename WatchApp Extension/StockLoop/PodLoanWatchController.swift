@@ -53,17 +53,6 @@ final class PodLoanWatchController {
     /// pod is released/revoked/failed (transport stops, loop input pauses).
     var onLoanActiveChanged: ((Bool) -> Void)?
 
-    /// Fix B (radio arbiter): the quiet verdict chase also yields to an active G7
-    /// handshake (the crude Verify chase was loudDrop==false). Wired by the session.
-    var isRadioBusy: (() -> Bool)?
-    /// Diagnostics only: WHICH flag is holding the radio and for how long, for the reclaim wait's
-    /// log line. See WatchLoopManager.radioBusyDetail.
-    var radioBusyDetail: (() -> String)?
-    /// #82: R26's G7 stand-down, applied to the bounded steady-state DOSE ladder (the
-    /// takeover hook stays separate — it also drives log snapshots, which a 5-min dose
-    /// must not trigger).
-    var onDoseRadioHold: ((Bool) -> Void)?
-
     /// R26 (reverse arbiter): the pod TAKEOVER outranks the G7 — during the bounded
     /// ~40s ladder the G7 client stands down, because G7 scans/handshakes starve pod
     /// BLE session establishment on the single watch radio. Wired by the session;
@@ -778,7 +767,7 @@ final class PodLoanWatchController {
                         // released cleanly (its own log: `GRANT +3s … linkUp=false`) and the pod's
                         // census held one disconnected device. The slot was ours: the G7 client
                         // leaves an armed pending connect alive across a takeover
-                        // (G7Client.swift:957), and a pending connect reserves a slot. Hence the
+                        // and a pending connect reserves a slot. Hence the
                         // gap signature — re-takeovers at 12/14/15 s all succeeded, the one after a
                         // 153 s quiet gap failed, because only the long gap gave the G7 time to
                         // re-arm.
@@ -821,10 +810,6 @@ final class PodLoanWatchController {
     /// Highest epoch the phone has ever revoked — survives an unmatched revoke (see handleRevoke).
     private var lastRevokedEpoch: Int?
 
-    func reclaimPodForDose(_ completion: @escaping (Bool) -> Void) {
-        reclaimPodForDose(radioWaited: 0, completion)
-    }
-
     /// #81 (2026-07-30 forensics): the reclaim must not start INSIDE the G7's connect+auth
     /// burst. Across 140 ladders spanning five days, the single discriminator is how much
     /// live G7 GATT session remains when the reclaim starts: >1s remaining → 0/45 success;
@@ -841,30 +826,9 @@ final class PodLoanWatchController {
     /// pre-cycle refresh reclaims BEFORE any arbitration, which is the caller that failed all
     /// day. Gating here covers every caller.
     ///
-    /// DEFERRED, not slept: this runs on the pump-delegate serial queue, so a Thread.sleep
-    /// would stall pod callbacks for the whole wait. Re-dispatch instead, and ALWAYS proceed
-    /// on budget exhaustion — the ladder is the safety gate; a dose is never skipped here.
-    private func reclaimPodForDose(radioWaited: TimeInterval, _ completion: @escaping (Bool) -> Void) {
+    func reclaimPodForDose(_ completion: @escaping (Bool) -> Void) {
         queue.async {
             guard self.phase == .active, let manager = self.pumpManager else { completion(false); return }
-            if self.isRadioBusy?() == true, radioWaited < 60 {
-                self.queue.asyncAfter(deadline: .now() + 0.5) {
-                    self.reclaimPodForDose(radioWaited: radioWaited + 0.5, completion)
-                }
-                return
-            }
-            if radioWaited > 0 {
-                let stuck = self.isRadioBusy?() == true
-                // Field 2026-08-06, build 238: 8 of 8 reclaims burned the full 60s. This is the
-                // EXPENSIVE wait — four times the enact's — and it was the one line still reporting
-                // a bare "still busy" with no way to tell a live handshake from an armed connect
-                // that had been sitting for hours. Same detail the enact refusal now carries.
-                let detail = self.radioBusyDetail?() ?? "no detail"
-                SportLog.event("radio", String(format: "reclaim waited %.1fs for the G7 — %@%@",
-                                               radioWaited,
-                                               stuck ? "STILL BUSY at budget, proceeding anyway" : "cleared, proceeding",
-                                               " · " + detail))
-            }
             let idle = self.lastPodLinkContact.map { Date().timeIntervalSince($0) }
             SportLog.event("loan", String(format: "E4: reclaim starting — pod BLE state %@, released=%@, idle %@",
                                           manager.podLoanConnectionStateDescription,
@@ -875,31 +839,13 @@ final class PodLoanWatchController {
                 completion(true)
                 return
             }   // still connected — nothing to do
-            // #82 (2026-07-30 field, build 192): the isRadioBusy gate covers only the
-            // HANDSHAKE. The 21:40 failure had no wait line because the G7 never connected
-            // that cycle — it sat with a pending connect armed plus a 60s passive observer
-            // scan, and the pod's 28s ladder ran entirely inside that window: radio genuinely
-            // occupied, busy signal said free, all 14 reads failed. R26 already solves exactly
-            // this for TAKEOVER by telling the G7 to stand down; takeovers have been flawless
-            // all day because of it. Assert the same hold for the bounded dose ladder.
-            //
-            // Cost is bounded and acceptable (same reasoning R26 accepted): the ladder is
-            // ≤40s, and the cycle only runs because a reading JUST arrived, so the next G7
-            // window is ~5 min out. setPodTakeoverHold itself refuses to interrupt a
-            // handshake mid-flight, so this cannot corrupt an in-progress G7 session.
-            //
-            // RELEASE DISCIPLINE: a stuck hold would starve the CGM, so every exit from the
-            // ladder goes through releaseHoldAndComplete — attemptReclaimRead calls its
-            // completion exactly once, on success, exhaustion, and teardown alike.
-            // #82 RETIRED by #84: left unwired in StockLoopSession (nil = no-op). The hold
-            // stranded the radio when the app suspended mid-ladder; the widened wait above
-            // achieves the same separation without ever holding the sensor off.
-            self.onDoseRadioHold?(true)
-            let releaseHoldAndComplete: (Bool) -> Void = { [weak self] connected in
-                self?.onDoseRadioHold?(false)
-                completion(connected)
-            }
-            SportLog.event("loan", "E4: reclaiming pod to dose (scan-adopt primary, #54) — sensor attempt idle")
+            // NO RADIO STAND-DOWN, and nothing left to stand down. #82 and R26 both existed to
+            // stop OUR G7 reader from occupying the radio during the pod's ladder — #82 was
+            // retired by #84 for stranding the radio when the app suspended mid-ladder, and R26's
+            // radio half retired with the reader itself. The CGM is now stock G7SensorKit riding
+            // the Dexcom watch app's session; this app never drives the sensor radio, so the pod
+            // ladder has no contender to yield to or hold off.
+            SportLog.event("loan", "E4: reclaiming pod to dose (scan-adopt primary, #54)")
             manager.reclaimConnection()
             // #54 (build ~178): scan-adopt is the PRIMARY reclaim, not a mid-ladder fallback.
             // Field data (build 157, overnight 44/44): the bare pending-connect "won" a reclaim
@@ -911,7 +857,7 @@ final class PodLoanWatchController {
             // re-connects the bare bid too, so both paths race from t=0. The read ladder below is
             // the success probe; the release path cancels an unfinished scan (cancelLoanScan).
             manager.podLoanEscalateReclaim()
-            self.attemptReclaimRead(manager: manager, attempt: 0, completion: releaseHoldAndComplete)
+            self.attemptReclaimRead(manager: manager, attempt: 0, completion: completion)
         }
     }
 
@@ -1896,12 +1842,6 @@ final class PodLoanWatchController {
             guard let self = self, self.phase == .active,
                   let manager = self.pumpManager,
                   let eventID = self.pendingUncertainEventID else { return }
-            if self.isRadioBusy?() == true {
-                // Fix B: BG wins the radio — re-arm the next chase attempt instead of
-                // colliding with the in-flight G7 handshake.
-                self.scheduleChase(attempt: attempt + 1)
-                return
-            }
             manager.podLoanResolveUncertainty { verdict in
                 self.queue.async {
                     guard self.pendingUncertainEventID == eventID else { return }

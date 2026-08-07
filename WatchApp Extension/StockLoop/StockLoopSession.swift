@@ -5,9 +5,8 @@
 //  M5 integration: the app-lifecycle OWNER of the assembled stock loop and the loan
 //  controller (resolves M4's "assemble() has no call sites"). ExtensionDelegate holds
 //  one of these lazily; it stays inert (no radio, no dosing) until a loan grant
-//  arrives — the G7 transport starts when the loan becomes ACTIVE and stops when the
-//  pod is released (closedDirect is the only ruled dosing mode wired so far; the
-//  R20 picker adds the others at the UI layer).
+//  arrives (closedDirect is the only ruled dosing mode wired so far; the R20 picker adds
+//  the others at the UI layer). CGM is stock G7SensorKit and runs independently of the loan.
 //
 
 import Foundation
@@ -18,6 +17,31 @@ import os.log
 final class StockLoopSession {
 
     let stack: StockLoopStack.Stack
+
+    /// Background runtime for the whole session.
+    ///
+    /// watchOS suspends a third-party app within seconds of the wrist dropping, and there is NO
+    /// CoreBluetooth state restoration on watchOS — so a suspended app cannot be woken by a BLE
+    /// event. An HKWorkoutSession is the only self-service API that keeps our process (and its BLE
+    /// links) alive, which is what lets the loop run and lets stock G7SensorKit receive at all.
+    /// Riding the Dexcom watch app's authenticated session buys us DATA, not RUNTIME: entitlements
+    /// are not inheritable by a co-resident app.
+    ///
+    /// Refcounted by reason ("soak" for the loan, plus "takeover"/"handback" for the two windows
+    /// that need runtime of their own), so overlapping holds cannot end the session early.
+    private let keepalive = WorkoutKeepalive()
+
+    /// Reference-counted so overlapping reasons can't drop the session out from under each other:
+    /// a hand-back beginning while the takeover hold is still released, say.
+    private func setKeepalive(_ holding: Bool, reason: String) {
+        holding ? keepalive.acquire(reason) : keepalive.release(reason)
+    }
+
+    /// Re-assert the session if something still wants it. Called on every foreground — the one
+    /// moment we KNOW we are executing, which matters because the only other re-assert path is a
+    /// timer that by construction cannot fire while the process is suspended. No-op when nothing
+    /// holds it, so foregrounding outside a loan does not start a workout.
+    func ensureKeepalive() { keepalive.ensureRunning() }
     let loanController: PodLoanWatchController
 
     private let log = OSLog(subsystem: "com.loopkit.Loop", category: "StockLoopSession")
@@ -70,75 +94,25 @@ final class StockLoopSession {
             })
         }
 
-        // Fix B (radio arbiter, c6c9e18f port): BG wins the single watch radio — loop
-        // pod commands and the quiet verdict chase yield to an active G7 handshake.
-        // #84 (Jeremy's rule, 2026-07-31): "full priority to the sensor until it gets a
-        // reading, then it stands down until the next window". The sensor is BUSY for its
-        // whole attempt — armed connect, scan, handshake — not just the handshake. A dose
-        // only exists because a reading arrived, so waiting costs nothing that mattered
-        // sooner, and it adapts to retries automatically (a sensor needing three tries just
-        // keeps the pod waiting; without a reading there is nothing new to dose on).
-        let radioBusy: () -> Bool = { [weak self] in
-            guard let client = self?.stack.client else { return false }
-            // CLASS-LEVEL FIX (2026-08-06). Under suppression G7Client does not touch the radio at
-            // all, so there is nothing here to arbitrate and these flags cannot mean what they say.
-            //
-            // This is deliberately a guard on the ARBITER rather than more flag-clearing inside the
-            // client, because the failure mode is a class, not an instance. Adversarial review of
-            // the suppression commit found that stop() clears attemptActive but NOT
-            // _handshakeActive (the only clears are inside connect(), after the suppression guard,
-            // and inside finishAttempt(), which stop() prevents by setting finished = true). A
-            // handshake in flight when stop() lands therefore strands the flag TRUE forever, and
-            // radioBusy would refuse every dose for the rest of the session — silently, bar one
-            // "enact DEFERRED after 15s — attempt idle · handshake ACTIVE" line per cycle. The same
-            // omission exists in startSoak's pre-warm preemption block. Clearing both instances is
-            // necessary but not sufficient: any future path that strands either flag reintroduces
-            // it. Refusing to arbitrate while suppressed makes the whole class harmless.
-            //
-            // Not reachable on a default install (the client never runs, so the flags never go
-            // true), but reachable after any G7CLIENT session — which is exactly the fallback the
-            // CGM PATH toggle advertises.
-            if G7Client.isRadioSuppressed { return false }
-            return client.isAttemptActive || client.isHandshakeActive
-        }
-        // Diagnostics companion to `radioBusy`: the same two flags, but readable. A refusal can now
-        // say "attempt 20604s" instead of "the G7 owns the radio", which is the difference between
-        // a 9-second handshake and the 5h45m armed connect that blocked 67 doses on 2026-08-06.
-        let radioBusyDetail: () -> String = { [weak self] in
-            guard let client = self?.stack.client else { return "no G7 client" }
-            let attempt = client.attemptActiveDuration.map { String(format: "attempt ACTIVE %.0fs", $0) }
-                ?? "attempt idle"
-            return "\(attempt) · handshake \(client.isHandshakeActive ? "ACTIVE" : "idle")"
-        }
-        stack.loopManager.isRadioBusy = radioBusy
-        stack.loopManager.radioBusyDetail = radioBusyDetail
+        // NO RADIO ARBITER. It existed solely to make loop pod commands yield to our own G7
+        // reader's scan/handshake (#84). With the CGM now carried by stock G7SensorKit riding the
+        // Dexcom watch app's authenticated session, this app never drives the sensor radio, so
+        // there is nothing to arbitrate — and the arbiter's only producer is gone. Field-measured
+        // 2026-08-06 (build 244, deliberate dosing load): zero deferrals, zero blocks, 5/5 readings
+        // captured. The predicate it replaced had refused 79 doses in a single night.
 
-        // Pre-warm runs OUTSIDE a loan by design, and every other snapshot trigger is a loan event
-        // (sport start / takeover / loan pulse / loan end). Without this, a pre-warm's log — the
-        // record of whether the sensor bonded and the handle was finally saved — is stranded on the
-        // watch until the next loan happens to flush it, which is how a pressed button produced no
-        // evidence at all on 2026-08-06.
-        stack.client.onPrewarmAttemptEnded = { [weak self] bonded in
-            self?.sendLogSnapshot("prewarm end — " + (bonded ? "BONDED, handle saved" : "not bonded"))
-        }
         stack.loopManager.podBeepsOnManualBolusProbe = { [weak self] in
             self?.loanController.podBeepsOnManualBolus ?? false
         }
-        loanController.isRadioBusy = radioBusy
-        loanController.radioBusyDetail = radioBusyDetail
 
-        // R26 (reverse arbiter): the pod TAKEOVER outranks the G7 — during its
-        // bounded ~40s ladder, G7 scans stop and new attempts defer. Field
-        // 2026-07-20: takeovers failed inside G7 scan/handshake windows and
-        // succeeded the moment the radio freed.
+        // #86 (2026-08-03): the takeover ladder needs background RUNTIME. This hook fires true on
+        // entering .takingOver and false on every exit, so it is exactly the ladder's lifetime.
+        // Without it the 3 s poll is throttled the moment the wrist drops and the read budget burns
+        // on wall-clock instead of attempts — the measured cause of that day's takeover failures.
+        // (The radio half of R26 — standing the G7 down during the ladder — retired with the
+        // reader that needed standing down.)
         loanController.onTakeoverRadioHold = { [weak self] holding in
-            self?.stack.client.setPodTakeoverHold(holding)
-            // #86 (2026-08-03): the same window needs background RUNTIME, not just the radio.
-            // This hook already fires true on entering .takingOver and false on every exit, so
-            // it is exactly the ladder's lifetime. Without it the 3 s poll is throttled the
-            // moment the wrist drops and the read budget burns on wall-clock instead of
-            // attempts — the measured cause of that day's takeover failures.
-            self?.stack.client.setTakeoverKeepalive(holding)
+            self?.setKeepalive(holding, reason: "takeover")
             // Log pipeline v4: snapshot at takeover start (grant picture) and at the
             // verdict — the ~40s window that decides a session, captured either way.
             self?.sendLogSnapshot(holding ? "takeover start" : "takeover verdict")
@@ -148,7 +122,7 @@ final class StockLoopSession {
         // stops being reachable the moment the wrist drops after End, the phone's ack falls
         // back to the queued channel, and the pod stays held until iOS decides to deliver it.
         loanController.onHandbackRuntimeHold = { [weak self] holding in
-            self?.stack.client.setHandbackKeepalive(holding)
+            self?.setKeepalive(holding, reason: "handback")
             SportLog.event("loan", holding
                 ? "hand-back runtime hold ACQUIRED — staying reachable for the phone's ack"
                 : "hand-back runtime hold released")
@@ -184,8 +158,7 @@ final class StockLoopSession {
                 // PodLoanWatchController. Deliberately NOT re-asserted here — this callback
                 // also fires on the hand-back-timeout resume path (:1284), where the user's
                 // own choice for the session must survive rather than be reset under them.
-                self.stack.client.prewarmIfPending()
-                self.stack.client.startSoak()
+                self.setKeepalive(true, reason: "soak")
                 // H19: arm the loop-stall dead-man for the session; every live loop
                 // cycle re-defers it (WatchLoopManager), so it fires only on a stall.
                 LoopStallWatchdog.refresh()
@@ -205,7 +178,7 @@ final class StockLoopSession {
                 RuntimeStateLog.startHeartbeat()
             } else {
                 os_log("Loan ended: stopping G7 transport", log: self.log, type: .default)
-                self.stack.client.stopSoak()
+                self.setKeepalive(false, reason: "soak")
                 LoopStallWatchdog.disarm()   // clean end — the loop stops on purpose
                 SensorBlackoutAlert.disarm()
                 self.stopLogPulse()
@@ -219,17 +192,6 @@ final class StockLoopSession {
 
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         SportLog.event("session", "Sport Mode ready — build \(build); tap Start to request a loan")
-
-        // Every log must say which CGM path produced it, or the two configurations are
-        // indistinguishable after the fact — the exact mistake that let G7Client be credited for a
-        // day of readings it did not produce.
-        if G7Client.isRadioSuppressed {
-            SportLog.event("session", "CGM MODE: STOCK — G7SensorKit riding D2W; G7Client radio "
-                + "suppressed, so the pod is never blocked by us. Expect ZERO [arbiter] lines.")
-        } else {
-            SportLog.event("session", "CGM MODE: G7CLIENT — our J-PAKE reader is live and will hold "
-                + "the radio arbiter during attempts.")
-        }
     }
 
     // MARK: Log pipeline v4 — event snapshots + loan pulse (2026-07-20)
@@ -257,7 +219,7 @@ final class StockLoopSession {
             // wrist raise. ensureRunning is refcount-aware and a no-op when healthy;
             // in background the restart attempt can fail (HK error 14) but logs the
             // evidence and heals at the first live moment instead of the next launch.
-            self?.stack.client.ensureKeepalive()
+            self?.keepalive.ensureRunning()
         }
         timer.resume()
         logPulse = timer
@@ -282,8 +244,7 @@ final class StockLoopSession {
         standaloneG7TestActive = true
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         SportLog.event("standalone", "=== STANDALONE G7 TEST START (E1, build \(build)) — no pod loan, no dosing — bench diagnostic ===")
-        stack.client.prewarmIfPending()
-        stack.client.startSoak()
+        setKeepalive(true, reason: "soak")
         startLogPulse()   // flush every 5 min for an unattended multi-hour run
     }
 
@@ -291,7 +252,7 @@ final class StockLoopSession {
         guard standaloneG7TestActive else { return }
         standaloneG7TestActive = false
         SportLog.event("standalone", "=== STANDALONE G7 TEST STOP ===")
-        stack.client.stopSoak()
+        setKeepalive(false, reason: "soak")
         stopLogPulse()
         sendLogSnapshot("standalone test end")
     }
