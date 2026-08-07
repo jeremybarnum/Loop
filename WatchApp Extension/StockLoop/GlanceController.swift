@@ -944,10 +944,26 @@ struct GlanceView: View {
     // Confirming that we don't want that"). Reclaim progress belongs on the PHONE's pump pill,
     // which is the surface that owns the pod's return; the wrist keeps its honest text.
 
-    private static let podTakeoverExpected: TimeInterval = 12
-    /// Kept 4s beyond the fill, as before, so "taking longer than usual" still means genuinely
-    /// atypical rather than firing the moment the bar pins.
-    private static let podTakeoverOverrun: TimeInterval = 16
+    /// Paced to where the takeover distribution BREAKS, not to its median.
+    ///
+    /// 87 measured takeovers (2026-07-28 .. 2026-08-07): median 8.2s, p75 12.8s, 82% within 20s —
+    /// but the distribution is BIMODAL. Successes run 5.1 … 15.5, 16.8, 17.1 and then jump straight
+    /// to 30.4, 45.6, 59.0, 62.9 … The fast mode ends at ~17s; beyond it is a different regime
+    /// (multi-read retries) that no fixed duration can honestly represent.
+    ///
+    /// Was 12s — close to the median, and wrong in the way that annoys. The bar filled, pinned at
+    /// 0.95 and SAT there for every takeover past 12 seconds: "basically every single takeover now
+    /// is taking longer than the progress bar" (field 2026-08-07). A pinned bar reads as hung.
+    /// Pacing to the mode boundary instead means the common case finishes EARLY — which reads as
+    /// fast — and only the genuinely atypical tail ever reaches the end.
+    ///
+    /// Deliberately NOT the 90th percentile. p90 is 62.9s, which sits inside the slow mode and
+    /// would give a minute-long bar to the 82% of takeovers that finish inside 20 seconds.
+    private static let podTakeoverExpected: TimeInterval = 17
+    /// ~5s beyond the fill, so "taking longer than usual" still means genuinely atypical rather
+    /// than firing the moment the bar pins. 22s clears the fast mode's slowest sample (17.1s), so
+    /// it only speaks once we are actually in the retry regime.
+    private static let podTakeoverOverrun: TimeInterval = 22
 
     private var startingBlock: some View {
         VStack(spacing: 4) {
