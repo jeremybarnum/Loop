@@ -50,6 +50,10 @@ struct CarbAndBolusFlow: View {
     // MARK: - State: Bolus Confirmation
     @State private var bolusConfirmationProgress: Double = 0
 
+    /// Latched on the zero-bolus save so the button can stop looking armed. See
+    /// saveCarbsAndBolusButton for the field case this exists for.
+    @State private var hasSaved = false
+
     // MARK: - Initialization
 
     private var configuration: Configuration { viewModel.configuration }
@@ -230,8 +234,16 @@ extension CarbAndBolusFlow {
     private var saveCarbsAndBolusButton: some View {
         ActionButton(
             title: saveButtonText,
-            color: bolusAmount > 0 || configuration == .manualBolus ? .insulin : .blue
+            // Muted the moment it is tapped, so the control stops looking like an unpressed
+            // invitation. Field 2026-08-06: see `hasSaved`.
+            color: hasSaved ? .defaultWatchButtonGray
+                : (bolusAmount > 0 || configuration == .manualBolus ? .insulin : .blue)
         ) {
+            // A second tap is already a no-op at the send (CarbAndBolusFlowViewModel's
+            // `hasSentConfirmationMessage` latches before any work), so this guard is about the
+            // INTENT, not the duplicate: stop pretending the button is still armed.
+            guard !self.hasSaved else { return }
+
             if self.bolusAmount > 0 {
                 // Freeze recommendations before entering the crown ceremony — a re-fire there
                 // rebuilds BolusConfirmationView and resets the spin (see the view model).
@@ -240,6 +252,15 @@ extension CarbAndBolusFlow {
                     self.flowState = .bolusConfirmation
                 }
             } else if case .carbEntry = self.configuration {
+                // ZERO-BOLUS SAVE — the one path with no visible acknowledgement (field
+                // 2026-08-06). A bolus gets the whole crown-ceremony screen; carbs-without-bolus
+                // got nothing: same green, same enabled state, for the ~1s before the flow
+                // dismisses. The haptic fires, but a watch off the wrist swallows it, and the
+                // still-inviting button reads as "it didn't take" — so the user taps again, and
+                // then re-enters the carbs entirely once the screen has gone.
+                //
+                // Say it on the button itself, which is where the user is looking.
+                withAnimation { self.hasSaved = true }
                 self.viewModel.addCarbsWithoutBolusing()
             }
         }
@@ -254,6 +275,11 @@ extension CarbAndBolusFlow {
     }
 
     private var saveButtonText: Text {
+        // Once tapped, the label is the acknowledgement — the flow dismisses ~1s later and the
+        // haptic can be missed entirely if the watch is off the wrist.
+        if hasSaved {
+            return Text("Saved", comment: "Button text after carbs have been saved on Apple Watch")
+        }
         switch configuration {
         case .carbEntry:
             return bolusAmount > 0
