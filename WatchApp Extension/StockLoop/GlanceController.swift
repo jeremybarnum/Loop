@@ -202,8 +202,23 @@ final class GlanceViewModel: ObservableObject {
     }
 
     /// Begin the on-screen refresh tick. Idempotent.
+    /// Re-render the moment a fresh mirror lands, rather than waiting for the next 2s tick.
+    ///
+    /// refresh() kicks refreshGlanceData() and then reads mirroredGlanceData on the NEXT line, so
+    /// without this every frame renders the PREVIOUS mirror — one tick stale by construction, and
+    /// on a wrist-raise as stale as whatever was cached before the screen slept (14 min, observed
+    /// 2026-08-06; the half-second flash Jeremy reported 2026-08-07 is the same defect at tick
+    /// scale). Scoped to the on-screen lifetime like the timer, for the same reason: off screen
+    /// nobody is reading, and each render takes the loan controller's queue.
+    private var mirrorObserver: NSObjectProtocol?
+
     func startRefreshing() {
         guard !isPreview else { return }
+        if mirrorObserver == nil {
+            mirrorObserver = NotificationCenter.default.addObserver(
+                forName: WatchLoopManager.glanceMirrorDidUpdate, object: nil, queue: .main
+            ) { [weak self] _ in self?.refresh() }
+        }
         // ALWAYS catch up first. This used to sit BEHIND `guard timer == nil`, so any re-entry
         // with a live timer skipped the immediate render — the recovery path was as silent as
         // the failure. Cheap (one queue-free read) and it makes re-entry self-healing.
@@ -217,6 +232,7 @@ final class GlanceViewModel: ObservableObject {
     /// Stop ticking while off screen — nothing is reading this, and each tick takes the loan
     /// controller's queue, which the pump also uses.
     func stopRefreshing() {
+        if let o = mirrorObserver { NotificationCenter.default.removeObserver(o); mirrorObserver = nil }
         timer?.invalidate()
         timer = nil
     }

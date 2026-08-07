@@ -520,8 +520,21 @@ final class WatchLoopManager {
             self._glanceMirror = data
             self._glanceRefreshPending = false
             self.glanceMirrorLock.unlock()
+            // TELL THE GLANCE IT LANDED (field 2026-08-07: "raising the wrist shows stale BG for
+            // half a second before refreshing"). The caller reads `mirroredGlanceData` on the line
+            // AFTER kicking this off, so without a signal it always renders the PREVIOUS mirror —
+            // one tick stale by construction, and on a wrist-raise as stale as whatever was
+            // published before the screen slept (14 minutes, observed 2026-08-06).
+            //
+            // This is the async price of the freeze fix: reading the mirror instead of blocking on
+            // dataAccessQueue stopped a 16s frozen watch, but turned the read into read-then-refresh.
+            // Posting on arrival makes it refresh-then-read without giving the block back.
+            NotificationCenter.default.post(name: Self.glanceMirrorDidUpdate, object: nil)
         }
     }
+
+    /// Fires on the main queue's notification centre whenever a fresh glance mirror is published.
+    static let glanceMirrorDidUpdate = Notification.Name("com.loopkit.Loop.glanceMirrorDidUpdate")
 
     /// Synchronous snapshot. Kept for the DEBUG page, which is not an always-on surface and can
     /// afford to wait. The glance must use the mirror above.
