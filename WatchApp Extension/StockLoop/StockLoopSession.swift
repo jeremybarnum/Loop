@@ -94,12 +94,18 @@ final class StockLoopSession {
             })
         }
 
-        // NO RADIO ARBITER. It existed solely to make loop pod commands yield to our own G7
-        // reader's scan/handshake (#84). With the CGM now carried by stock G7SensorKit riding the
-        // Dexcom watch app's authenticated session, this app never drives the sensor radio, so
-        // there is nothing to arbitrate — and the arbiter's only producer is gone. Field-measured
-        // 2026-08-06 (build 244, deliberate dosing load): zero deferrals, zero blocks, 5/5 readings
-        // captured. The predicate it replaced had refused 79 doses in a single night.
+        // NO RADIO ARBITER. It existed to make loop pod commands yield to OUR OWN G7 reader's
+        // scan/handshake (#84), and that reader is gone — its flags were the arbiter's only
+        // producer, so the predicate could now only ever read false.
+        //
+        // BE PRECISE ABOUT WHY (corrected 2026-08-06 by review): this is NOT because the app
+        // stopped using the sensor radio. Stock G7SensorKit runs its own CBCentralManager
+        // in-process, scans between readings and calls connect() — the app very much still drives
+        // a sensor radio. What is gone is any signal about WHEN, plus the component whose
+        // scan/handshake was actually starving the pod. Whether stock's own scanning contends with
+        // the pod the way ours did is UNMEASURED; field data so far says no (build 244, deliberate
+        // dosing load: zero deferrals, 9 cycles, 0 errors, 5/5 readings — against 79 refusals and
+        // 585s blocks the night before), but that is one 30-minute run, not a proof.
 
         stack.loopManager.podBeepsOnManualBolusProbe = { [weak self] in
             self?.loanController.podBeepsOnManualBolus ?? false

@@ -1,43 +1,21 @@
-// WorkoutKeepalive.swift — the background-runtime vehicle for the direct G7 reader.
+// WorkoutKeepalive.swift — the background-runtime vehicle for the watch loop.
 //
-// watchOS suspends a backgrounded third-party app within seconds (no CoreBluetooth state
-// restoration on watchOS, so a G7 notification can't wake us). The one self-service API
-// that keeps our OWN process running continuously with BLE alive is an HKWorkoutSession.
-// We start one (activityType .other) while the reader needs to stay awake; the OS won't
-// suspend us, so our 5-min poll timer keeps firing and the G7 connection stays usable
-// wrist-down / screen-off. Same pattern HR-strap and cycling-power-meter apps use.
+// watchOS suspends a backgrounded third-party app within seconds, and there is NO CoreBluetooth
+// state restoration on watchOS — so a suspended app cannot be woken by a BLE event. An
+// HKWorkoutSession is the only self-service API that keeps our process (and its BLE links) alive.
+// That is what lets the loop keep dosing and lets stock G7SensorKit keep receiving with the wrist
+// down. Riding the Dexcom watch app's authenticated session buys us DATA, not RUNTIME:
+// entitlements are not inheritable by a co-resident app.
 //
-// REFERENCE-COUNTED. More than one subsystem can want the keepalive at once: the Sport-Mode
-// soak ("soak") and the one-shot new-sensor pre-warm ("prewarm"). The session runs iff at
-// least one holder wants it — so a pre-warm ending can NEVER stop the keepalive Sport Mode is
-// using, whatever the thread or ordering. ALL state (the holder set + the session + the auth
-// flag) is confined to the MAIN queue — acquire/release/ensureRunning hop there internally — so
-// concurrent callers from the BLE queue, the handshake Task, and the loan-phase observer cannot
-// race it. A start attempted while BACKGROUNDED fails with HealthKit error 14 ("cannot start a
-// workout session while in the background"), so callers MUST acquire from the foreground; a
-// background relaunch that loses the session is recovered by the next foreground ensureRunning()
-// (without it the reader silently suspends — observed 2026-07-15, 3.5h outage).
+// More than one subsystem can want the keepalive at once, so holds are REFCOUNTED BY REASON —
+// "soak" for the duration of a loan, plus "takeover" and "handback" for the two bounded windows
+// that need runtime of their own. Releasing one can never stop a session another still wants.
+// Owned by StockLoopSession, which drives all three.
 //
-// Requires: HealthKit capability (entitlement) + `workout-processing` in WKBackgroundModes
-// + NSHealthShare/UpdateUsageDescription, all in the target's Info.plist/entitlements.
+// (Until 2026-08-06 this file lived under G7/ and was owned by the reverse-engineered G7 reader,
+// with a fourth "prewarm" holder. The reader and pre-warm are gone; three of the four holders were
+// always loan-lifecycle concerns and had nothing to do with the sensor.)
 //
-// 2026-07-31 — the WKBackgroundModes entry was MISSING until build 199, and the measurement
-// that found it is worth recording, because the log had been read the wrong way round for
-// weeks. Builds ≤189 logged "[app] BACKGROUND (resigned active)" on RESIGN-ACTIVE, which fires
-// on every screen dim; counting work inside those windows looked like background execution but
-// was really frontmost-with-screen-off — which is all a workout session ever bought us. Builds
-// ≥190 log the true WKApplication.state, and across four of them 1255 lines carry `state
-// active` against 31 carrying `state background` — every one of the 31 a lifecycle marker or a
-// "[runtime] GAP … app was NOT executing" report. Zero work, ever, in background. The
-// clinching case (build 194): a session started 23:17:44 with holder "soak" was still nominally
-// running at 06:49, yet the app went BACKGROUND at 23:19:02, died 6.5 min later mid-reclaim,
-// and logged nothing until the wrist came up at 02:21:34. A running session that does not keep
-// the process alive is exactly what a missing background mode looks like.
-//
-// So this file's opening premise was aspirational, not observed. `[runtime] BG-ALIVE` lines are
-// the only thing that will make it true — their presence is the pass criterion, their absence
-// across a night is the failure signal.
-
 import Foundation
 import HealthKit
 
