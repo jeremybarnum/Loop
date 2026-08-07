@@ -230,6 +230,12 @@ final class WatchLoopManager {
     /// Forwarded to the enactor (automatic path); enactManualBolus uses them directly.
     /// Wired by StockLoopSession to the loan controller (which owns the OmniPumpManager);
     /// no-op / immediate-connected when E4 is off.
+    /// #94: device-log storm dedupe (see logEventForDeviceIdentifier). Any thread may log.
+    private let deviceLogDedupeLock = NSLock()
+    private var lastDeviceLogLine = ""
+    private var lastDeviceLogAt = Date.distantPast
+    private var suppressedDeviceLogCount = 0
+
     private let manualBolusLock = NSLock()
     private var _manualBolusInFlight = false
     /// True from the moment a manual bolus begins its E4 pod reclaim until it resolves.
@@ -3015,7 +3021,33 @@ extension WatchLoopManager: CGMManagerDelegate {
         // truth, so use it rather than pattern-matching "DXCM" against a peripheral name, which
         // would be another label asserting something it cannot actually verify.
         let source = manager is G7CGMManager ? "cgm" : "pod-ble"
-        SportLog.event(source, "\(type) \(deviceIdentifier ?? "—"): \(message)")
+        // #94 (2026-08-07): DEDUPE THE STORM. A Code=11 connect-retry loop pushed ~2,000
+        // IDENTICAL lines/second through here (1051 in 0.52s, field 16:09:26) — each one a
+        // synchronous NSLog plus a file-append — jamming syslogd and the log queue hard enough
+        // to starve MAIN (the reproducible glance freeze) and rotate all real evidence out of
+        // the log inside a second. The BLE-layer backoff makes the storm cold; this makes even
+        // a future storm cheap AND readable: an identical repeat within 2s is counted, not
+        // written, and the count is flushed on the next DIFFERENT line. Distinct lines pass
+        // through untouched.
+        deviceLogDedupeLock.lock()
+        let line = "\(type) \(deviceIdentifier ?? "—"): \(message)"
+        let now = Date()
+        if line == lastDeviceLogLine, now.timeIntervalSince(lastDeviceLogAt) < 2.0 {
+            suppressedDeviceLogCount += 1
+            lastDeviceLogAt = now
+            deviceLogDedupeLock.unlock()
+            completion?(nil)
+            return
+        }
+        let suppressed = suppressedDeviceLogCount
+        suppressedDeviceLogCount = 0
+        lastDeviceLogLine = line
+        lastDeviceLogAt = now
+        deviceLogDedupeLock.unlock()
+        if suppressed > 0 {
+            SportLog.event(source, "(previous line repeated ×\(suppressed) — suppressed)")
+        }
+        SportLog.event(source, line)
         completion?(nil)
     }
 
