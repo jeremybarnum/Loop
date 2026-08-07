@@ -80,6 +80,25 @@ final class StockLoopSession {
         // keeps the pod waiting; without a reading there is nothing new to dose on).
         let radioBusy: () -> Bool = { [weak self] in
             guard let client = self?.stack.client else { return false }
+            // CLASS-LEVEL FIX (2026-08-06). Under suppression G7Client does not touch the radio at
+            // all, so there is nothing here to arbitrate and these flags cannot mean what they say.
+            //
+            // This is deliberately a guard on the ARBITER rather than more flag-clearing inside the
+            // client, because the failure mode is a class, not an instance. Adversarial review of
+            // the suppression commit found that stop() clears attemptActive but NOT
+            // _handshakeActive (the only clears are inside connect(), after the suppression guard,
+            // and inside finishAttempt(), which stop() prevents by setting finished = true). A
+            // handshake in flight when stop() lands therefore strands the flag TRUE forever, and
+            // radioBusy would refuse every dose for the rest of the session — silently, bar one
+            // "enact DEFERRED after 15s — attempt idle · handshake ACTIVE" line per cycle. The same
+            // omission exists in startSoak's pre-warm preemption block. Clearing both instances is
+            // necessary but not sufficient: any future path that strands either flag reintroduces
+            // it. Refusing to arbitrate while suppressed makes the whole class harmless.
+            //
+            // Not reachable on a default install (the client never runs, so the flags never go
+            // true), but reachable after any G7CLIENT session — which is exactly the fallback the
+            // CGM PATH toggle advertises.
+            if G7Client.isRadioSuppressed { return false }
             return client.isAttemptActive || client.isHandshakeActive
         }
         // Diagnostics companion to `radioBusy`: the same two flags, but readable. A refusal can now

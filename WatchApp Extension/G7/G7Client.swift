@@ -468,6 +468,13 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     }
 
     func prewarmIfPending() {
+        // Leave the PENDING FLAG SET when suppressed — do not consume it, and do not spend an
+        // attempt from the 3-try budget on a run that cannot touch the radio. Returning any later
+        // (i.e. letting the gate inside connect()/beginAcquire() catch it) would burn the budget on
+        // no-ops and clear the pending key, so a user falling back to G7CLIENT via the CGM PATH
+        // toggle would find the pre-bond gone and face a slow cold acquire — silently degrading the
+        // fallback the toggle advertises. Found by adversarial review.
+        guard !Self.isRadioSuppressed else { logSuppressed("prewarmIfPending() — pending flag kept"); return }
         guard UserDefaults.standard.string(forKey: Self.pendingPrewarmKey) != nil else { return }
         guard !soakActive else { return }        // Sport Mode owns the reader; its cold path will bond
         guard !needsSensorCode else { return }   // code is known-bad (JIT prompt up) — don't hammer
@@ -1047,6 +1054,14 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                 self.setAttemptActivePublic(false, "torn down")
                 self.finished = true   // suppress the disconnect->fail path
             }
+            // UNCONDITIONAL, and outside the block above. The handshake flag is the OTHER half of
+            // the radio arbiter (StockLoopSession :83) and it was never cleared here: its only
+            // clears are inside connect() — which a suppressed client never reaches — and inside
+            // finishAttempt(), which the `finished = true` above deliberately prevents. A handshake
+            // in flight when stop() lands therefore stranded it TRUE for the rest of the session,
+            // refusing every dose with nothing but one "enact DEFERRED … handshake ACTIVE" line per
+            // cycle to show for it. Found by adversarial review of the suppression commit.
+            self.setHandshakeActive(false)
             self.teardownPrewarm(bonded: false)   // release a pre-warm keepalive if one was running
             self.onMain { self.isRunning = false; self.statusText = "Stopped" }
         }
@@ -1122,6 +1137,8 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
                 self.dataStream.close(); self.authStream.close(); self.ctrlStream.close()
                 self.attemptActive = false
                 self.setAttemptActivePublic(false, "pre-warm bonded")
+                self.setHandshakeActive(false)   // same omission as stop(): strand it here and the
+                                                 // arbiter refuses every dose for the session
                 self.finished = true
                 self.workout.release("prewarm")   // hand the hold to "soak" (already acquired above)
             }
@@ -1519,6 +1536,12 @@ final class G7Client: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     // MARK: 131 window observer (diagnostic)
 
     private func beginObserverScan() {   // on cbQueue
+        // Gate on the SWITCH, not just on the nil central. Review noted this was the one radio
+        // entry point protected only by the `noCentral` blocker below — correct today, but it makes
+        // safety depend on a nil check somewhere else rather than on the mode, and a central left
+        // over from a G7CLIENT session would satisfy it.
+        guard !Self.isRadioSuppressed else { logSuppressed("beginObserverScan()"); return }
+
         // Never perturb real work: skip when a takeover holds the radio, a handshake
         // is live, a real scan is running, or we're not in an armed-connect soak.
         // Was a single `guard ... else { return }`. A silent return is exactly what made this
