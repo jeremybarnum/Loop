@@ -70,6 +70,15 @@ final class StockLoopSession {
         // the sink nil and keeps os_log).
         PodLoanConnectClock.podLoanLogSink = { line in SportLog.event("pod-ble", line) }
 
+        // Main-thread stall detector (2026-08-07). Started at LAUNCH and never stopped, unlike
+        // the loan-scoped heartbeat below: the two UI freezes on 2026-08-07 were invisible to
+        // every existing instrument, and one of them ended in a watchdog kill that took the
+        // unflushed tail of the log with it. A wedged main thread is exactly the condition under
+        // which nothing else in this app can report anything, so the one detector that can must
+        // always be running. Costs one ping per second on a utility queue and stays silent while
+        // healthy.
+        RuntimeStateLog.startMainStallDetector()
+
         // #67 follow-up: the one question the hand-back UI needs answered.
         loanController.isPhoneReachable = { WCSession.default.isReachable }
 

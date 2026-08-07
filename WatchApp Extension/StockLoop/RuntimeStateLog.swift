@@ -118,6 +118,81 @@ enum RuntimeStateLog {
         }
     }
 
+    // MARK: - Main-thread stall detector (2026-08-07)
+
+    /// Measure how long MAIN is unresponsive, and say so WHILE it is stuck.
+    ///
+    /// Why this exists: on 2026-08-07 the watch UI froze twice in one afternoon and the log could
+    /// not see either one. The heartbeat above only detects the whole PROCESS not executing (it
+    /// ticks on a utility queue, so a wedged main thread leaves it perfectly healthy and silent),
+    /// and the app-state lines only fire on transitions that a frozen UI never reaches. So a
+    /// frozen wrist produced a log that looked completely normal right up until watchOS killed
+    /// the process — at which point the tail of the log was lost with it, because LogFile.append
+    /// is async and its queue died undrained. Two separate root causes (an unbounded glance
+    /// refresh loop, then `queue.sync` from main onto the pod's delegate queue) both had to be
+    /// found by reading source rather than evidence.
+    ///
+    /// The ping runs on a utility queue and the pong on main, so the detector STAYS ALIVE while
+    /// main is wedged: if a ping is still outstanding at the next tick, it reports the stall in
+    /// progress rather than waiting for main to recover (which, in the kill case, never happens).
+    /// Deliberately avoids WKExtension / WKInterfaceDevice — those are main-thread-only, and an
+    /// instrument that blocks on the thing it is measuring is worthless.
+    private static let stallLock = NSLock()
+    private static var pingSentAt: Date?
+    private static var stallReportedFor: Date?
+    /// Report a stall past this. watchOS's own watchdog kills well before a user would call it a
+    /// hang, and 2s is already long enough to read as "unresponsive" on the wrist.
+    private static let stallThreshold: TimeInterval = 2.0
+    private static var stallTimer: DispatchSourceTimer?
+
+    static func startMainStallDetector() {
+        stopMainStallDetector()
+        let t = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        t.schedule(deadline: .now() + 1, repeating: 1.0, leeway: .milliseconds(200))
+        t.setEventHandler {
+            stallLock.lock()
+            let outstanding = pingSentAt
+            let alreadyReported = stallReportedFor
+            stallLock.unlock()
+
+            if let sent = outstanding {
+                // Main has not answered the previous ping. Report it ONCE per stall, from here,
+                // while it is still happening — this is the line that survives a watchdog kill.
+                let stuckFor = Date().timeIntervalSince(sent)
+                if stuckFor > stallThreshold, alreadyReported != sent {
+                    stallLock.lock(); stallReportedFor = sent; stallLock.unlock()
+                    SportLog.event("runtime", String(format:
+                        "MAIN STALLED — main thread has not run for %.1fs (still stuck) · %@", stuckFor, keepaliveTag()))
+                }
+                return   // don't queue a second ping behind the stuck one
+            }
+
+            let sent = Date()
+            stallLock.lock(); pingSentAt = sent; stallLock.unlock()
+            DispatchQueue.main.async {
+                let waited = Date().timeIntervalSince(sent)
+                stallLock.lock()
+                pingSentAt = nil
+                let wasReported = (stallReportedFor == sent)
+                if wasReported { stallReportedFor = nil }
+                stallLock.unlock()
+                // Only speak on recovery if we had already announced the stall, so a healthy run
+                // stays completely silent.
+                if wasReported {
+                    SportLog.event("runtime", String(format: "MAIN RECOVERED — main was blocked for %.1fs", waited))
+                }
+            }
+        }
+        t.resume()
+        stallTimer = t
+    }
+
+    static func stopMainStallDetector() {
+        stallTimer?.cancel()
+        stallTimer = nil
+        stallLock.lock(); pingSentAt = nil; stallReportedFor = nil; stallLock.unlock()
+    }
+
     /// Start while a session is live — that is the only window where lost runtime can
     /// cost a reading or strand a pod command.
     static func startHeartbeat() {

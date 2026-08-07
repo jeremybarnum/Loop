@@ -281,7 +281,12 @@ final class ActionHUDController: HUDInterfaceController {
         // dosing. So when a loan is active the selection takes effect on the wrist immediately
         // and unconditionally, and the change rides the loan journal home instead of the WC
         // settings channel. Outside a loan nothing here changes: stock behavior, byte for byte.
-        if ExtensionDelegate.shared().stockLoopSession.loanController.isLoanActive {
+        // NON-BLOCKING mirror (2026-08-07): this is a MAIN-thread UI action, and the live
+        // `isLoanActive` is `queue.sync` onto the loan controller's queue — which doubles as the
+        // pump's delegate queue and is held for the whole radio round-trip of a dose. Picking an
+        // override while the pod was mid-command froze the UI for the length of that command.
+        // Same class as the carb-flow freeze; the same fix HUDInterfaceController already uses.
+        if ExtensionDelegate.shared().stockLoopSession.loanController.isLoanActiveNonBlocking {
             applyOverrideDuringLoan(override, settings: settings)
             return
         }

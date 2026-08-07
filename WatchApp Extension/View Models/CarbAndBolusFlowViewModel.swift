@@ -120,6 +120,15 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
     /// (2) The dial's ceiling must not move under the user's thumb mid-entry. Delivery still
     /// re-reads the LIVE gate at the moment it commits (see `sendSetBolusUserInfo`), which is
     /// the read that actually decides where insulin is commanded from.
+    ///
+    /// 2026-08-07: latching was not enough — the LATCHING READ ITSELF was `queue.sync` on MAIN,
+    /// in this initialiser, i.e. at the instant the user opens the carb/bolus flow. That queue
+    /// doubles as the pump's delegate queue and is held for the whole radio round-trip of a dose
+    /// (up to ~15s; an E4 reclaim + bolus + release spans ~22s in the field log). So opening the
+    /// carb screen during any pod work froze the UI for the length of that work. Field
+    /// 2026-08-07, build 249: carbs entered fine, then "when I next checked it was frozen", and
+    /// the app was terminated with the loan still open. Now reads the lock-guarded mirror, which
+    /// is what every other UI-side caller already uses.
     private let wasOnLoanAtOpen: Bool
 
     /// The dial's ceiling and increment ladder.
@@ -156,7 +165,8 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
         }
 
         let session = ExtensionDelegate.shared().stockLoopSession
-        let onLoan = session.loanController.isLoanActive
+        // NON-BLOCKING: this runs on MAIN when the flow opens — see `wasOnLoanAtOpen`.
+        let onLoan = session.loanController.isLoanActiveNonBlocking
         let grantedMaxBolus = onLoan ? session.stack.loopManager.grantedMaximumBolus : nil
         self.wasOnLoanAtOpen = onLoan
 
