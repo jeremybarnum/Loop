@@ -210,6 +210,18 @@ final class GlanceViewModel: ObservableObject {
     /// 2026-08-06; the half-second flash Jeremy reported 2026-08-07 is the same defect at tick
     /// scale). Scoped to the on-screen lifetime like the timer, for the same reason: off screen
     /// nobody is reading, and each render takes the loan controller's queue.
+    ///
+    /// THE OBSERVER MUST NOT RE-KICK THE MIRROR (`kickMirror: false`). Build 247 called plain
+    /// refresh() here, which made the notification self-perpetuating: refresh -> refreshGlanceData
+    /// -> mirror lands -> post -> observer -> refresh -> … The `_glanceRefreshPending` coalescing
+    /// guard does NOT stop it, because it is cleared BEFORE the post, so the next kick always gets
+    /// through. That is an unbounded loop running as fast as buildGlanceData() can turn over —
+    /// saturating dataAccessQueue with rebuilds and MAIN with re-renders, and taking the loan
+    /// controller's queue on every pass. Field 2026-08-07 (build 248, whose own diff is innocent
+    /// of this): "it does respond, but it gives no feedback and is very delayed."
+    ///
+    /// Only the .active phase kicks the mirror, so the loop only ran during a loan — which is
+    /// exactly when the watch is dosing and can least afford a saturated main thread.
     private var mirrorObserver: NSObjectProtocol?
 
     func startRefreshing() {
@@ -217,7 +229,7 @@ final class GlanceViewModel: ObservableObject {
         if mirrorObserver == nil {
             mirrorObserver = NotificationCenter.default.addObserver(
                 forName: WatchLoopManager.glanceMirrorDidUpdate, object: nil, queue: .main
-            ) { [weak self] _ in self?.refresh() }
+            ) { [weak self] _ in self?.refresh(kickMirror: false) }
         }
         // ALWAYS catch up first. This used to sit BEHIND `guard timer == nil`, so any re-entry
         // with a live timer skipped the immediate render — the recovery path was as silent as
@@ -309,7 +321,12 @@ final class GlanceViewModel: ObservableObject {
         refresh()
     }
 
-    private func refresh() {
+    /// `kickMirror` = ask for a REBUILD of the glance mirror before rendering. True for every
+    /// caller that wants fresh data (the 2s tick, appearance, post-action refreshes); FALSE for
+    /// the glanceMirrorDidUpdate observer, which is already reacting to a mirror that just landed
+    /// and would otherwise re-kick the rebuild that posts the notification it is handling — the
+    /// 247 feedback loop documented on `mirrorObserver`.
+    private func refresh(kickMirror: Bool = true) {
         guard !isPreview else { return }
         let session = ExtensionDelegate.shared().stockLoopSession
         // Main-safe read: the loan queue doubles as the pump's delegate queue, so a sync
@@ -357,7 +374,7 @@ final class GlanceViewModel: ObservableObject {
             // queue for the whole radio-arbiter poll (up to 15s, :2527), and this line — on a 2s
             // timer, on MAIN — was what turned that wait into a frozen watch. Nil only before the
             // first mirror lands, in which case we simply skip this tick rather than block.
-            session.stack.loopManager.refreshGlanceData()
+            if kickMirror { session.stack.loopManager.refreshGlanceData() }
             guard let data = session.stack.loopManager.mirroredGlanceData else { return }
             var s = Self.activeState(data: data, cob: latestCOB, now: Date(),
                                      phoneGlucoseDate: ExtensionDelegate.shared().loopManager.activeContext?.glucoseDate)
