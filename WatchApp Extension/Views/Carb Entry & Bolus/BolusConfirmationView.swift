@@ -39,8 +39,19 @@ struct BolusConfirmationView: View {
         )
     }
 
-    init(progress: Binding<Double>, onConfirmation completion: @escaping () -> Void) {
+    private let prompt: Text
+
+    /// `prompt` defaults to the bolus wording, so the bolus path is untouched. Carbs reuse this
+    /// ceremony verbatim (2026-08-06): during a loan a carb entry cannot be edited or deleted on
+    /// EITHER device — the watch has no carb-correction path and the phone redirects carb entry to
+    /// a reclaim prompt (#71) — so a mis-entered carb is as unrecoverable as delivered insulin, and
+    /// drives dosing for hours (a 15 g entry produced a 2.65 U/hr temp within seconds on 2026-08-06).
+    /// Same consequence, same ceremony.
+    init(progress: Binding<Double>,
+         prompt: Text = Text("Turn Digital Crown\nto bolus", comment: "Help text for bolus confirmation on Apple Watch"),
+         onConfirmation completion: @escaping () -> Void) {
         self._progressStorage = progress
+        self.prompt = prompt
         self.completion = completion
     }
 
@@ -66,7 +77,7 @@ struct BolusConfirmationView: View {
     private var isFinished: Bool { abs(progress.wrappedValue) >= 1.0 }
 
     private var helpText: some View {
-        Text("Turn Digital Crown\nto bolus", comment: "Help text for bolus confirmation on Apple Watch")
+        prompt
             .font(.footnote)
             .multilineTextAlignment(.center)
             .foregroundColor(Color(.lightGray))

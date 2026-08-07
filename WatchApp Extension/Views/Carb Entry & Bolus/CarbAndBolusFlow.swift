@@ -50,10 +50,6 @@ struct CarbAndBolusFlow: View {
     // MARK: - State: Bolus Confirmation
     @State private var bolusConfirmationProgress: Double = 0
 
-    /// Latched on the zero-bolus save so the button can stop looking armed. See
-    /// saveCarbsAndBolusButton for the field case this exists for.
-    @State private var hasSaved = false
-
     // MARK: - Initialization
 
     private var configuration: Configuration { viewModel.configuration }
@@ -234,34 +230,25 @@ extension CarbAndBolusFlow {
     private var saveCarbsAndBolusButton: some View {
         ActionButton(
             title: saveButtonText,
-            // Muted the moment it is tapped, so the control stops looking like an unpressed
-            // invitation. Field 2026-08-06: see `hasSaved`.
-            color: hasSaved ? .defaultWatchButtonGray
-                : (bolusAmount > 0 || configuration == .manualBolus ? .insulin : .blue)
+            color: bolusAmount > 0 || configuration == .manualBolus ? .insulin : .blue
         ) {
-            // A second tap is already a no-op at the send (CarbAndBolusFlowViewModel's
-            // `hasSentConfirmationMessage` latches before any work), so this guard is about the
-            // INTENT, not the duplicate: stop pretending the button is still armed.
-            guard !self.hasSaved else { return }
+            // EVERY path now ends in the crown ceremony. Previously a bolus got the ceremony and a
+            // zero-bolus carb save got no visible change at all: same green, same enabled button,
+            // for the ~1s before the flow dismissed. The success haptic fires, but a watch off the
+            // wrist swallows it — so the still-armed button read as "that didn't take", inviting a
+            // second tap and then a full re-entry once the screen had gone (field 2026-08-06).
+            //
+            // Symmetry is also the correct SAFETY posture here, not just better feedback. During a
+            // loan a carb entry cannot be edited or deleted on either device, and it drives dosing
+            // for hours — so it deserves the same deliberate gesture as insulin.
+            // A manual bolus dialled to zero has nothing to commit — no carbs, no insulin. Stay
+            // put rather than run a ceremony that would deliver nothing (the pre-existing
+            // behaviour; only the carb-entry path changes here).
+            if self.bolusAmount <= 0, case .manualBolus = self.configuration { return }
 
-            if self.bolusAmount > 0 {
-                // Freeze recommendations before entering the crown ceremony — a re-fire there
-                // rebuilds BolusConfirmationView and resets the spin (see the view model).
-                self.viewModel.beginBolusConfirmation()
-                withAnimation {
-                    self.flowState = .bolusConfirmation
-                }
-            } else if case .carbEntry = self.configuration {
-                // ZERO-BOLUS SAVE — the one path with no visible acknowledgement (field
-                // 2026-08-06). A bolus gets the whole crown-ceremony screen; carbs-without-bolus
-                // got nothing: same green, same enabled state, for the ~1s before the flow
-                // dismisses. The haptic fires, but a watch off the wrist swallows it, and the
-                // still-inviting button reads as "it didn't take" — so the user taps again, and
-                // then re-enters the carbs entirely once the screen has gone.
-                //
-                // Say it on the button itself, which is where the user is looking.
-                withAnimation { self.hasSaved = true }
-                self.viewModel.addCarbsWithoutBolusing()
+            self.viewModel.beginBolusConfirmation()
+            withAnimation {
+                self.flowState = .bolusConfirmation
             }
         }
         // Stock shipped a per-size-class `.offset(y:)` here (20pt on 40/41mm, 27pt on
@@ -275,11 +262,6 @@ extension CarbAndBolusFlow {
     }
 
     private var saveButtonText: Text {
-        // Once tapped, the label is the acknowledgement — the flow dismisses ~1s later and the
-        // haptic can be missed entirely if the watch is off the wrist.
-        if hasSaved {
-            return Text("Saved", comment: "Button text after carbs have been saved on Apple Watch")
-        }
         switch configuration {
         case .carbEntry:
             return bolusAmount > 0
@@ -291,9 +273,16 @@ extension CarbAndBolusFlow {
     }
 
     private var bolusConfirmationView: some View {
-        BolusConfirmationView(progress: $bolusConfirmationProgress, onConfirmation: {
-            self.viewModel.addCarbsAndDeliverBolus(self.bolusAmount)
-        })
+        BolusConfirmationView(
+            progress: $bolusConfirmationProgress,
+            prompt: bolusAmount > 0
+                ? Text("Turn Digital Crown\nto bolus", comment: "Help text for bolus confirmation on Apple Watch")
+                : Text("Turn Digital Crown\nto save carbs", comment: "Help text for carb-only confirmation on Apple Watch"),
+            onConfirmation: {
+                // addCarbsAndDeliverBolus with 0 delivers no insulin — it files the carb entry and
+                // nothing else — so one call covers both paths.
+                self.viewModel.addCarbsAndDeliverBolus(self.bolusAmount)
+            })
         .padding(.bottom, bolusConfirmationPadding)
         .transition(.fadeIn(after: 0.35))
     }
