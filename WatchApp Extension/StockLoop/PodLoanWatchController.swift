@@ -370,20 +370,41 @@ final class PodLoanWatchController {
     #endif
 
     private func handleGrant(_ grant: LoanGrant) {
-        requestTimeoutWork?.cancel()
         SportLog.event("loan", "GRANT received — epoch \(grant.epoch), \(grant.pumpManagerRawState.count)B pod state")
+
+        /// STRANDED-PHASE FIX (backlog triage, 2026-08-06). `requestTimeoutWork?.cancel()` used to
+        /// run as the FIRST line — before any validation. Every rejection below then returned
+        /// without restoring `phase`, so a rejected grant left the controller at `.requested`
+        /// with no timeout pending and nothing to move it. `requestLoan` guards on
+        /// `phase == .idle` (:283), so from then on Start was a silent no-op: Sport Mode
+        /// unstartable until the app was relaunched or debugReset was tapped.
+        ///
+        /// Cancelling here — after the phase check, before the rejections — keeps the original
+        /// intent (a grant that we are going to ACT on stops the timeout) while every rejection
+        /// path goes through `rejectGrant`, which restores `.idle` so the timeout's job is done
+        /// by the state instead.
         guard phase == .idle || phase == .requested else {
             SportLog.event("loan", "grant ignored — wrong phase (\(phase.rawValue))")
             return
         }
+        requestTimeoutWork?.cancel()
+
+        /// Every rejection must leave the controller startable. Logs the reason, tells the phone
+        /// where the protocol expects it, and returns to .idle.
+        func rejectGrant(_ reason: String, notifyPhone: Bool) {
+            SportLog.event("loan", "grant REJECTED — \(reason); returning to idle so Start works again")
+            if notifyPhone {
+                sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: reason)))
+            }
+            phase = .idle
+        }
         guard Date() < grant.expiresAt else {
             // Row 2: a late grant self-rejects; the phone's T1 already reclaimed.
-            SportLog.event("loan", "grant REJECTED — expired before takeover")
-            sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "grant expired")))
+            rejectGrant("grant expired", notifyPhone: true)
             return
         }
         if let known = epoch, grant.epoch <= known {
-            SportLog.event("loan", "grant REJECTED — stale epoch \(grant.epoch) (known \(known))")
+            rejectGrant("stale epoch \(grant.epoch) (known \(known))", notifyPhone: false)
             return
         }
         // SPLIT-BRAIN GUARD (see handleRevoke): the existing expiry check cannot catch this —
@@ -391,8 +412,8 @@ final class PodLoanWatchController {
         // inert because a timed-out request leaves `epoch` nil. Fails safe: the phone keeps the
         // pod and the user taps Start again.
         if let revoked = lastRevokedEpoch, grant.epoch <= revoked {
-            SportLog.event("loan", "grant REJECTED — epoch \(grant.epoch) at or below the last revoke (ev=\(revoked)); the phone already asked for the pod back")
-            sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "grant superseded by a revoke")))
+            rejectGrant("epoch \(grant.epoch) at or below the last revoke (ev=\(revoked)); the phone already asked for the pod back",
+                        notifyPhone: true)
             return
         }
 
@@ -429,8 +450,7 @@ final class PodLoanWatchController {
             try journal.begin(epoch: grant.epoch)
         } catch {
             // An undrained prior loan must drain first — refuse, never clobber.
-            SportLog.event("loan", "grant REJECTED — undrained prior loan must drain first")
-            sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "undrained prior loan")))
+            rejectGrant("undrained prior loan must drain first", notifyPhone: true)
             return
         }
 
@@ -689,7 +709,7 @@ final class PodLoanWatchController {
                     }
                 } else if attempt + 1 < maxAttempts {
                     if attempt == 0 {
-                        SportLog.event("loan", "connecting to pod… (BLE session establishing, up to ~40s)")
+                        SportLog.event("loan", "connecting to pod… (BLE session establishing; typically ~17s, budget ~40s)")
                     }
                     // #42 diagnosis: log the pod BLE state each failed read so "unreachable"
                     // shows WHY — stuck disconnected (pod not advertising / still held by the

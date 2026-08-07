@@ -65,6 +65,7 @@ struct LoanDebugView: View {
     @State private var cobText: String = "—"
 
     @State private var radioStressOn = UserDefaults.standard.bool(forKey: "g7.radioStressAlwaysEnact")
+    @State private var e4On = UserDefaults.standard.bool(forKey: "g7.e4ReleasePod")
 
     private let refresh = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
@@ -146,6 +147,40 @@ struct LoanDebugView: View {
                 row("state", cgm?.lifecycle ?? "—")
                 row("expires", cgm?.expiresIn ?? "—")
                 row("needs D2W", "YES — Dexcom watch app must stay installed")
+
+                // *** E4 A/B (BENCH) *** The reason E4 exists may have just evaporated.
+                //
+                // E4 orphans the pod between doses to time-separate the pod and G7 radios — a
+                // concern that belonged to the reverse-engineered G7 reader deleted on 2026-08-06.
+                // Because the pod is orphaned, every takeover starts from a cold BLE state
+                // (`no-peripheral · didConnect never`), and that cold start IS the takeover time.
+                //
+                // Measured baselines to beat, same sensor, same pod:
+                //   E4 ON, contended (builds 169-177, G7 reader live): 3 FAILURES in 7, successes
+                //     12.8s / 72.7s / 87.4s / 146.5s — an 11x spread
+                //   E4 ON, uncontended (build 245, tonight): 0 failures in 23, 21x 16.8s + 2x 10.7s
+                //   CGM alongside that: 7/8 live slots, 8/8 with backfill, phone BT off
+                //
+                // Turning E4 OFF holds the pod connected between doses, so a takeover should be
+                // near-instant. THE QUESTION IS WHAT IT COSTS: stock G7SensorKit still scans and
+                // connects, so a permanently-held pod link may starve it. Watch BOTH numbers —
+                // takeover seconds AND direct-G7 capture — not just the one that improves.
+                //
+                // E4 was validated on its own merits (build 157: 44/44 overnight), so OFF is the
+                // experiment here, not the default.
+                Text("E4 POD ORPHANING (BENCH)").font(.footnote).foregroundColor(.secondary)
+                row("orphan between doses", e4On ? "ON — cold takeover (~17s)" : "OFF — pod held connected")
+                Button("E4: \(e4On ? "ON" : "OFF")") {
+                    let enable = !UserDefaults.standard.bool(forKey: "g7.e4ReleasePod")
+                    UserDefaults.standard.set(enable, forKey: "g7.e4ReleasePod")
+                    e4On = enable
+                    SportLog.event("e4", enable
+                        ? "*** E4 ON *** — pod orphaned between doses; takeover starts cold"
+                        : "*** E4 OFF *** — pod HELD CONNECTED between doses; watch takeover time AND direct-G7 capture")
+                    lastAction = enable ? "E4 ON (orphan)" : "E4 OFF (hold pod)"
+                }
+
+                Divider().padding(.vertical, 2)
 
                 // *** RADIO STRESS (BENCH) *** #83 (2026-07-30): force a distinct pod
                 // command on cycles DoseMath would leave alone, so every 5-min cycle

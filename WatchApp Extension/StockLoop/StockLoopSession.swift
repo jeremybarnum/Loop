@@ -198,6 +198,12 @@ final class StockLoopSession {
 
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         SportLog.event("session", "Sport Mode ready — build \(build); tap Start to request a loan")
+        // Name the E4 mode at launch. A log that does not say which arm produced it cannot be
+        // compared against the other — the mistake that let a whole day of readings be credited
+        // to the wrong component.
+        SportLog.event("e4", UserDefaults.standard.bool(forKey: "g7.e4ReleasePod")
+            ? "E4 ON — pod orphaned between doses (takeover starts cold; baseline 16.8s)"
+            : "E4 OFF — pod held connected between doses (takeover should be fast; watch CGM capture)")
     }
 
     // MARK: Log pipeline v4 — event snapshots + loan pulse (2026-07-20)
