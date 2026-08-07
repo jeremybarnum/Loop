@@ -3008,7 +3008,14 @@ extension WatchLoopManager: CGMManagerDelegate {
         // CBCentralManager, constructed eagerly at launch, and emitted exactly one line into our
         // log per reading — the INGEST, which credited the wrong component. It calls this delegate
         // for connect / disconnect / comms, so this one line makes its whole lifecycle visible.
-        SportLog.event("g7kit", "\(type) \(deviceIdentifier ?? "—"): \(message)")
+        // ATTRIBUTE FROM THE MANAGER, not from the device name. DeviceManagerDelegate is shared:
+        // the CGM manager AND the pump manager both call this, so the old flat "g7kit" label put
+        // POD BLE traffic under a CGM heading. That cost real time on 2026-08-06 — pod
+        // "max connections" errors read as sensor errors. The `manager` argument is the ground
+        // truth, so use it rather than pattern-matching "DXCM" against a peripheral name, which
+        // would be another label asserting something it cannot actually verify.
+        let source = manager is G7CGMManager ? "cgm" : "pod-ble"
+        SportLog.event(source, "\(type) \(deviceIdentifier ?? "—"): \(message)")
         completion?(nil)
     }
 

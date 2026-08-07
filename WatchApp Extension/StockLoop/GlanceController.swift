@@ -276,6 +276,20 @@ final class GlanceViewModel: ObservableObject {
     /// acked. Cancelable until finalize (the glance shows "ending… / Cancel Ending").
     func endSportMode() {
         guard !isPreview else { state.handbackPending = true; return }
+
+        // ACKNOWLEDGE THE TAP AT ONCE (field 2026-08-07: "it's a bit anxiety producing not to be
+        // sure that it's been tapped"). The hand-back delay itself is honest — the offer has to
+        // reach the phone and be acked — but until this the chip still read "End" in neutral ink
+        // for at least 0.4s, so a registered tap and a missed tap looked identical.
+        //
+        // Two signals, because the button is deliberately small (R21) and a fingertip can cover it:
+        // a haptic that lands even if the chip is obscured, and an immediate flip to the pending
+        // state so the chip becomes "Cancel". The flip is OPTIMISTIC but not a lie — the hand-back
+        // has genuinely been requested by the time it renders — and the refresh below corrects it
+        // within 0.4s if beginHandback declined (wrong phase).
+        WKInterfaceDevice.current().play(.click)
+        state.handbackPending = true
+
         ExtensionDelegate.shared().stockLoopSession.loanController.beginHandback()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
     }
