@@ -103,9 +103,12 @@ final class PodLoanWatchController {
     /// progress bar. Meaningful only while phase is requested/takingOver.
     private var attemptStartedAt: Date?
     /// #86: wall-clock of the previous takeover-ladder read, and the largest gap seen between two
-    /// consecutive reads this attempt. The ladder self-schedules every 3 s, so a gap far past that
-    /// means the APP STOPPED EXECUTING mid-connect — not that the pod went quiet. Distinguishing
-    /// those two is the whole point: they send the user to opposite places.
+    /// consecutive reads this attempt. A read is event-driven when the pod stack's session-
+    /// established callback fires (fast — no fixed period) and backstop-driven otherwise, on an
+    /// 8 s timer (was a 3 s metronome pre-2026-08-03). So an ordinary backstop-only run reads
+    /// ~8 s apart; a gap far past THAT means the APP STOPPED EXECUTING mid-connect — not that the
+    /// pod went quiet. Distinguishing those two is the whole point: they send the user to
+    /// opposite places. (See `driver` on `attemptTakeoverRead` for the per-read tag.)
     private var lastTakeoverReadAt: Date?
     /// #86: the pending takeover retry, held so the session-established event can fire it early.
     /// The ACTION is a plain closure and the BACKSTOP is the cancellable timer — they must not
@@ -576,7 +579,10 @@ final class PodLoanWatchController {
         attemptTakeoverRead(manager: manager, grant: grant, attempt: 0)
     }
 
-    /// ~40s of retries (14 × 3s) while the pod's BLE session establishes.
+    /// Up to 14 reads while the pod's BLE session establishes — fast when the session-established
+    /// event drives them (no fixed period), up to ~112s if every read falls through to the 8s
+    /// backstop (was "~40s (14 × 3s)" before the event-driven rework; that number no longer
+    /// applies to either path).
     /// #86 (2026-08-03): the takeover waits for the pod stack's own session-established EVENT
     /// instead of inferring readiness from a polled CBPeripheral.state.
     ///
@@ -617,7 +623,14 @@ final class PodLoanWatchController {
         }
     }
 
-    private func attemptTakeoverRead(manager: OmniPumpManager, grant: LoanGrant, attempt: Int) {
+    /// `driver` says WHY this particular read fired: "initial" (attempt 0), "event" (the pod
+    /// stack's session-established callback ran it early), or "backstop" (the 8s timer fired with
+    /// no event). #86 max-instrumentation pass (2026-08-07): before this, the fast/slow split
+    /// documented in the takeover-timing analysis (read count 2-5 => ~3s/read, 6+ => ~8s/read,
+    /// exactly the backstop period) had to be INFERRED by cross-referencing the "session
+    /// ESTABLISHED" log line against the read line that followed it. Stamping the driver directly
+    /// on every read line makes that split a single grep instead of a reconstruction.
+    private func attemptTakeoverRead(manager: OmniPumpManager, grant: LoanGrant, attempt: Int, driver: String = "initial") {
         let maxAttempts = 14
         manager.podLoanReadStatus { [weak self] success in
             guard let self = self else { return }
@@ -653,7 +666,8 @@ final class PodLoanWatchController {
                     self.loopManager.loanDoseRecorder = self
                     self.onLoanActiveChanged?(true)
                     let takeoverSecs = self.attemptStartedAt.map { Date().timeIntervalSince($0) } ?? -1
-                    SportLog.event("loan", String(format: "ACTIVE — epoch %d, pod taken after %d read(s) in %.1fs [takeover-timing], odometer %.2f U", grant.epoch, attempt + 1, takeoverSecs, delivered))
+                    SportLog.event("loan", String(format: "ACTIVE — epoch %d, pod taken after %d read(s) in %.1fs [takeover-timing], odometer %.2f U, final read driver=%@ · %@",
+                                                  grant.epoch, attempt + 1, takeoverSecs, delivered, driver, RuntimeStateLog.snapshot()))
                     self.sendMessage(.takeoverComplete(TakeoverComplete(epoch: grant.epoch, firstPodStatus: self.currentPodStatus())))
                     // #69: refresh the glance eventual + IOB from the just-seeded insulin/carbs/
                     // glucose NOW (display-only, no enact) so the prediction reflects the seeded
@@ -715,8 +729,9 @@ final class PodLoanWatchController {
                     // shows WHY — stuck disconnected (pod not advertising / still held by the
                     // phone) vs connecting-but-no-response.
                     let readElapsed = self.attemptStartedAt.map { Date().timeIntervalSince($0) } ?? -1
-                    // #86: measure the inter-read gap. The ladder re-arms itself every 3 s, so
-                    // anything much larger is suspended-app time, not pod silence.
+                    // #86: measure the inter-read gap. Backstop-driven reads land ~8 s apart (event-
+                    // driven reads can be much faster) — a gap well past 8 s is suspended-app time,
+                    // not pod silence.
                     let readNow = Date()
                     if let prev = self.lastTakeoverReadAt {
                         self.takeoverMaxReadGap = max(self.takeoverMaxReadGap, readNow.timeIntervalSince(prev))
@@ -731,15 +746,16 @@ final class PodLoanWatchController {
                     // deferred timer was late — fix the ladder. If didConnect says "never", the
                     // radio genuinely hasn't connected — fix the keepalive. The poll alone cannot
                     // distinguish those, which is why this line exists.
-                    SportLog.event("loan", String(format: "takeover read %d/%d (+%.1fs) — pod BLE state %@ · %@",
-                                                  attempt + 1, maxAttempts, readElapsed,
+                    SportLog.event("loan", String(format: "takeover read %d/%d driver=%@ (+%.1fs) — pod BLE state %@ · %@ · %@",
+                                                  attempt + 1, maxAttempts, driver, readElapsed,
                                                   manager.podLoanConnectionStateDescription,
-                                                  PodLoanConnectClock.summary(since: self.attemptStartedAt)))
+                                                  PodLoanConnectClock.summary(since: self.attemptStartedAt),
+                                                  RuntimeStateLog.snapshot()))
                     // #86: the retry is now a cancellable work item so the session-established
                     // event can run it IMMEDIATELY. The timer is a backstop at 8 s (was a 3 s
                     // metronome) — with the event driving progress, polling faster only burns
                     // the attempt budget against a stale state read.
-                    let retryAction: () -> Void = { [weak self] in
+                    let fireRetry: (String) -> Void = { [weak self] nextDriver in
                         guard let self = self else { return }
                         self.takeoverRetryAction = nil
                         self.takeoverBackstop = nil
@@ -749,22 +765,34 @@ final class PodLoanWatchController {
                             SportLog.event("loan", "TAKEOVER SUPERSEDED — epoch \(grant.epoch) abandoned between reads (now phase \(self.phase.rawValue), epoch \(self.epoch.map(String.init) ?? "nil"))")
                             return
                         }
-                        self.attemptTakeoverRead(manager: manager, grant: grant, attempt: attempt + 1)
+                        self.attemptTakeoverRead(manager: manager, grant: grant, attempt: attempt + 1, driver: nextDriver)
                     }
-                    self.takeoverRetryAction = retryAction
-                    let backstop = DispatchWorkItem { retryAction() }
+                    self.takeoverRetryAction = { fireRetry("event") }
+                    let backstop = DispatchWorkItem { fireRetry("backstop") }
                     self.takeoverBackstop = backstop
                     self.queue.asyncAfter(deadline: .now() + 8, execute: backstop)
                 } else {
                     self.teardownPump()
                     self.phase = .idle
                     let failSecs = self.attemptStartedAt.map { Date().timeIntervalSince($0) } ?? -1
-                    // #86: the takeover ladder runs with NO keepalive — startSoak() only fires
-                    // once the loan goes ACTIVE, which needs a takeover that already succeeded
-                    // (StockLoopSession.swift:104). So the whole connect phase is unprotected, and
-                    // on a low battery watchOS suspends the app mid-ladder. Observed 2026-07-31,
-                    // epochs 81-83 at 15%: reads stalled 86 s and 70 s, each resuming only on a
-                    // wrist raise, and three takeovers failed in a row while the pod was fine.
+                    // #86 (2026-07-31, ORIGINAL finding): the takeover ladder ran with NO keepalive
+                    // — startSoak() only fired once the loan went ACTIVE, which needs a takeover
+                    // that already succeeded — so the whole connect phase was unprotected and, on
+                    // low battery, watchOS suspended the app mid-ladder. Observed 2026-07-31, epochs
+                    // 81-83 at 15%: reads stalled 86 s and 70 s, each resuming only on a wrist raise,
+                    // and three takeovers failed in a row while the pod was fine. Keeping this
+                    // account rather than deleting it — see Jeremy's standing "don't lose the
+                    // narrative" instruction — but it is HISTORY, not current behavior: the 2026-08-06
+                    // keepalive-ownership refactor wired `onTakeoverRadioHold` to the same
+                    // WorkoutKeepalive that soak/handback use (StockLoopSession.swift), so from
+                    // build ~244 on, .takingOver DOES hold runtime for the whole ladder. The
+                    // `takeoverMaxReadGap > 20` heuristic below still catches a suspension if the
+                    // keepalive itself fails to start/renew (HK auth denied, session error) — the
+                    // #86 max-instrumentation pass (2026-08-07) put `RuntimeStateLog.snapshot()` on
+                    // every read line specifically so that question no longer needs inference: if a
+                    // future stall shows "keepalive running(takeover)" on every read, the keepalive
+                    // held and the stall is something else; if it shows "keepalive off" or
+                    // "DENIED"/"FAILED", the keepalive itself is the failure.
                     //
                     // The old note blamed the pod ("check the pod is nearby and awake") and quoted
                     // a 40 s timeout that no longer matches the ~180 s ladder. Blaming the pod for
@@ -774,9 +802,9 @@ final class PodLoanWatchController {
                         // Say ONLY what was measured. An earlier draft of this note told the user
                         // to charge; the field data refutes that — epoch 80 took over fine at 20%
                         // while the wrist was up, and epoch 78 ran unsuspended at 65% under the
-                        // same no-keepalive condition. What tracks the outcome is whether anything
-                        // kept the app awake during the connect, not the battery level. Guessing a
-                        // remedy is how the previous note ended up blaming a healthy pod.
+                        // same pre-08-06 no-keepalive condition. What tracks the outcome is whether
+                        // anything kept the app awake during the connect, not the battery level.
+                        // Guessing a remedy is how the previous note ended up blaming a healthy pod.
                         self.lastIdleNote = String(format: NSLocalizedString(
                             "Sport Mode didn't start — the watch app stopped running mid-connect (%@). Your phone still has the pod. Keep the watch awake — wrist up or screen on — and try again.",
                             comment: "Glance: takeover failed because the app was suspended"), batteryTag())
@@ -800,11 +828,12 @@ final class PodLoanWatchController {
                             "Sport Mode didn't start (%.0fs). Your phone still has the pod and is still looping. Wait ~30s, then try again.",
                             comment: "Glance: takeover failed — the pod link never established"), failSecs)
                     }
-                    SportLog.event("loan", String(format: "TAKEOVER FAILED — %@ after %d reads in %.1fs [takeover-timing], max inter-read gap %.1fs (ladder ticks every 3s), %@, final BLE state %@, %@, epoch %d",
+                    SportLog.event("loan", String(format: "TAKEOVER FAILED — %@ after %d reads in %.1fs [takeover-timing], max inter-read gap %.1fs (event-driven; 8s backstop when no event fires), %@, final BLE state %@, %@, %@, epoch %d",
                                                   stalled ? "ladder STALLED (our polling was deferred; see cb: for whether the link was up)" : "pod unreachable",
                                                   maxAttempts, failSecs, self.takeoverMaxReadGap, batteryTag(),
                                                   manager.podLoanConnectionStateDescription,
-                                                  PodLoanConnectClock.summary(since: self.attemptStartedAt), grant.epoch))
+                                                  PodLoanConnectClock.summary(since: self.attemptStartedAt),
+                                                  RuntimeStateLog.snapshot(), grant.epoch))
                     // The reason string is rendered verbatim in the PHONE's notification body
                     // ("The watch could not take the pod (…). The phone kept it."), so it carries
                     // the same obligation as the wrist note above: do not blame the pod for a
