@@ -140,6 +140,19 @@ enum RuntimeStateLog {
     private static let stallLock = NSLock()
     private static var pingSentAt: Date?
     private static var stallReportedFor: Date?
+    /// Last thing MAIN was seen starting, and when. The stall detector can prove main is wedged
+    /// but not WHERE — build 250 reported a real 2s+ stall that never recovered and gave no clue
+    /// which call it was in, so localising it still came down to reading source and guessing.
+    /// A breadcrumb costs one lock and one string assignment; the stall line then names the last
+    /// main-thread entry point that started and never finished.
+    private static var mainMark = "—"
+    private static var mainMarkAt = Date()
+    private static var lastStallReportAt: Date?
+
+    /// Call at the TOP of a main-thread entry point. Cheap enough for UI paths.
+    static func mark(_ label: String) {
+        stallLock.lock(); mainMark = label; mainMarkAt = Date(); stallLock.unlock()
+    }
     /// Report a stall past this. watchOS's own watchdog kills well before a user would call it a
     /// hang, and 2s is already long enough to read as "unresponsive" on the wrist.
     private static let stallThreshold: TimeInterval = 2.0
@@ -160,9 +173,26 @@ enum RuntimeStateLog {
                 // while it is still happening — this is the line that survives a watchdog kill.
                 let stuckFor = Date().timeIntervalSince(sent)
                 if stuckFor > stallThreshold, alreadyReported != sent {
-                    stallLock.lock(); stallReportedFor = sent; stallLock.unlock()
+                    stallLock.lock()
+                    stallReportedFor = sent
+                    let where_ = mainMark
+                    let markAge = Date().timeIntervalSince(mainMarkAt)
+                    stallLock.unlock()
                     SportLog.event("runtime", String(format:
-                        "MAIN STALLED — main thread has not run for %.1fs (still stuck) · %@", stuckFor, keepaliveTag()))
+                        "MAIN STALLED — main thread has not run for %.1fs (still stuck) · last main entry: %@ (%.1fs ago) · %@",
+                        stuckFor, where_, markAge, keepaliveTag()))
+                }
+                // Re-report every 10s while it stays stuck, so the log shows the stall GROWING
+                // rather than a single line that could be mistaken for a blip. Build 250 logged
+                // exactly one 2.0s line and then died 61s later, which understated it badly.
+                else if stuckFor > stallThreshold, let last = lastStallReportAt,
+                        Date().timeIntervalSince(last) >= 10 {
+                    stallLock.lock()
+                    lastStallReportAt = Date()
+                    let where_ = mainMark
+                    stallLock.unlock()
+                    SportLog.event("runtime", String(format:
+                        "MAIN STILL STALLED — %.0fs and counting · last main entry: %@", stuckFor, where_))
                 }
                 return   // don't queue a second ping behind the stuck one
             }

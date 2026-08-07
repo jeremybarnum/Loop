@@ -226,6 +226,7 @@ final class GlanceViewModel: ObservableObject {
 
     func startRefreshing() {
         guard !isPreview else { return }
+        RuntimeStateLog.mark("glance.startRefreshing")
         if mirrorObserver == nil {
             mirrorObserver = NotificationCenter.default.addObserver(
                 forName: WatchLoopManager.glanceMirrorDidUpdate, object: nil, queue: .main
@@ -244,6 +245,7 @@ final class GlanceViewModel: ObservableObject {
     /// Stop ticking while off screen — nothing is reading this, and each tick takes the loan
     /// controller's queue, which the pump also uses.
     func stopRefreshing() {
+        RuntimeStateLog.mark("glance.stopRefreshing")
         if let o = mirrorObserver { NotificationCenter.default.removeObserver(o); mirrorObserver = nil }
         timer?.invalidate()
         timer = nil
@@ -269,6 +271,7 @@ final class GlanceViewModel: ObservableObject {
     }
 
     func startSportMode() {
+        RuntimeStateLog.mark("glance.startSportMode")
         guard !isPreview else { return }
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         let session = ExtensionDelegate.shared().stockLoopSession
@@ -287,6 +290,7 @@ final class GlanceViewModel: ObservableObject {
     /// dosing/bolus/G7 running while the journal drains, transfer ownership only when
     /// acked. Cancelable until finalize (the glance shows "ending… / Cancel Ending").
     func endSportMode() {
+        RuntimeStateLog.mark("glance.endSportMode")
         guard !isPreview else { state.handbackPending = true; return }
 
         // ACKNOWLEDGE THE TAP AT ONCE (field 2026-08-07: "it's a bit anxiety producing not to be
@@ -328,6 +332,7 @@ final class GlanceViewModel: ObservableObject {
     /// 247 feedback loop documented on `mirrorObserver`.
     private func refresh(kickMirror: Bool = true) {
         guard !isPreview else { return }
+        RuntimeStateLog.mark("glance.refresh(kick:\(kickMirror))")
         let session = ExtensionDelegate.shared().stockLoopSession
         // Main-safe read: the loan queue doubles as the pump's delegate queue, so a sync
         // here blocked the whole UI for the length of any bolus / takeover / reclaim.

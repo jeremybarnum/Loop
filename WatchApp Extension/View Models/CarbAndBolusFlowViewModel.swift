@@ -453,6 +453,7 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
     }
 
     private func sendSetBolusUserInfo(carbEntry: NewCarbEntry?, bolus: Double) {
+        RuntimeStateLog.mark("carbflow.sendSetBolusUserInfo")
         guard !hasSentConfirmationMessage else {
             return
         }

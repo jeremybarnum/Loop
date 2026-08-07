@@ -89,6 +89,7 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         // 135 instrumentation (Jeremy 2026-07-20: "does the log know foreground vs
         // background?"): every radio event between these markers is attributable to
         // an app state — turns the background-degrades-the-pounce anecdote into data.
+        RuntimeStateLog.mark("app.didBecomeActive")
         SportLog.event("app", "ACTIVE (wrist up, frontmost) · \(RuntimeStateLog.snapshot())")
         if WCSession.default.activationState != .activated {
             WCSession.default.activate()
@@ -99,8 +100,10 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         // the process is suspended — so the recovery mechanism was scheduled by the very clock
         // that suspension stops. Cheap, idempotent (holder-refcounted), and the one moment we
         // KNOW we are executing.
+        RuntimeStateLog.mark("app.ensureKeepalive")
         stockLoopSession.ensureKeepalive()
 
+        RuntimeStateLog.mark("app.postDidBecomeActive")
         NotificationCenter.default.post(name: type(of: self).didBecomeActiveNotification, object: self)
     }
 
@@ -109,6 +112,7 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         // we are still frontmost (state .inactive) AND on the way to a true background —
         // the old line said "BACKGROUND" for both, erasing exactly the distinction we
         // needed (Jeremy 2026-07-22). The state tag disambiguates.
+        RuntimeStateLog.mark("app.willResignActive")
         SportLog.event("app", "RESIGN ACTIVE · \(RuntimeStateLog.snapshot())")
         UserDefaults.standard.startOnChartPage = (WKExtension.shared().visibleInterfaceController as? ChartHUDController) != nil
 

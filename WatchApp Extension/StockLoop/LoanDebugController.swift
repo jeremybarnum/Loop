@@ -334,7 +334,13 @@ struct LogView: View {
                     Text(note).font(.system(size: 10)).foregroundColor(.secondary)
                 }
 
-                ShareLink(item: LogFile.tail(maxBytes: 64 * 1024)) {
+                // Share the ALREADY-LOADED text rather than calling LogFile.tail() here.
+                // `item:` is an argument to a View initialiser, so it was re-evaluated on EVERY
+                // body pass — and LogFile.tail() is `queue.sync` onto the log-writer queue plus a
+                // full file read and a 64 KB UTF-8 decode, all on MAIN. That is a main-thread
+                // block whose duration is set by the log-append backlog, which is exactly what
+                // spikes during a loan. `text` is loaded once in onAppear and by Refresh.
+                ShareLink(item: text) {
                     Label("Share log", systemImage: "square.and.arrow.up")
                 }
                 .font(.caption)
