@@ -490,7 +490,14 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
             } else if carbEntry != nil {
                 WKInterfaceDevice.current().play(.success)
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(1)) {
+            // DWELL, sized to what is actually happening (field 2026-08-06: carbs-only "sits on
+            // that view for a second or two"). A BOLUS has a pod command in flight, so the hold
+            // covers real work and gives the ceremony's completion state time to register. A
+            // carbs-only save has already finished — the store write is local and synchronous —
+            // so the same hold is dead time stacked on top of a ceremony the user just completed
+            // by hand. Long enough to see the ring close, short enough not to feel stuck.
+            let dwell: TimeInterval = bolus > 0 ? 1.0 : 0.4
+            DispatchQueue.main.asyncAfter(deadline: .now() + dwell) {
                 self.dismiss()
                 // Land on the glance, not the stock HUD (Jeremy 2026-08-05). This flow is
                 // presented FROM HUDInterfaceController, so dismiss() returns there — one swipe
@@ -525,6 +532,9 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
                 }
             }
 
+            // Flat 1s here, deliberately: this is the PHONE-RELAY path, where the carb entry is
+            // still in flight and its confirmation arrives in sendBolusMessage's reply handler.
+            // Shortening the dwell would dismiss before the ack — the original no-feedback bug.
             DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(1)) {
                 self.dismiss()
             }
