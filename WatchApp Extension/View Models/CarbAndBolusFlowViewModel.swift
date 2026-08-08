@@ -465,7 +465,9 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
         // sees them now) and to the phone via the stock relay (the durable record,
         // bolus zeroed so nothing double-delivers).
         let session = ExtensionDelegate.shared().stockLoopSession
+        RuntimeStateLog.mark("carbflow.deliveryGate(isLoanActive SYNC)")
         if session.loanController.isLoanActive {
+            RuntimeStateLog.mark("carbflow.deliveryGate.passed")
             let activationType: BolusActivationType = .activationTypeFor(recommendedAmount: recommendedBolusAmount, bolusAmount: bolus)
             if let carbEntry = carbEntry {
                 // Local store (this loop's COB sees it now) + a CONFIRMED journal
@@ -509,6 +511,7 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
             // by hand. Long enough to see the ring close, short enough not to feel stuck.
             let dwell: TimeInterval = bolus > 0 ? 1.0 : 0.4
             DispatchQueue.main.asyncAfter(deadline: .now() + dwell) {
+                RuntimeStateLog.mark("carbflow.dwellDismiss")
                 self.dismiss()
                 // Land on the glance, not the stock HUD (Jeremy 2026-08-05). This flow is
                 // presented FROM HUDInterfaceController, so dismiss() returns there — one swipe
@@ -518,6 +521,7 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
                 // here. Loan only — outside one the stock HUD is the correct home.
                 if ExtensionDelegate.shared().stockLoopSession.loanController.isLoanActiveNonBlocking {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        RuntimeStateLog.mark("carbflow.becomeCurrentPage")
                         GlanceController.current?.becomeCurrentPage()
                     }
                 }

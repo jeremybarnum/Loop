@@ -336,8 +336,11 @@ final class GlanceViewModel: ObservableObject {
         let session = ExtensionDelegate.shared().stockLoopSession
         // Main-safe read: the loan queue doubles as the pump's delegate queue, so a sync
         // here blocked the whole UI for the length of any bolus / takeover / reclaim.
+        RuntimeStateLog.mark("glance.refresh.debugSnap")
         session.loanController.refreshDebugSnapshot()
+        RuntimeStateLog.mark("glance.refresh.mirrorRead")
         guard let snap = session.loanController.mirroredDebugSnapshot else { return }
+        RuntimeStateLog.mark("glance.refresh.phase(\(snap.phase.rawValue))")
 
         switch snap.phase {
         case .idle:
@@ -379,8 +382,10 @@ final class GlanceViewModel: ObservableObject {
             // queue for the whole radio-arbiter poll (up to 15s, :2527), and this line — on a 2s
             // timer, on MAIN — was what turned that wait into a frozen watch. Nil only before the
             // first mirror lands, in which case we simply skip this tick rather than block.
+            RuntimeStateLog.mark("glance.refresh.kickGlance")
             if kickMirror { session.stack.loopManager.refreshGlanceData() }
             guard let data = session.stack.loopManager.mirroredGlanceData else { return }
+            RuntimeStateLog.mark("glance.refresh.activeStateBuild")
             var s = Self.activeState(data: data, cob: latestCOB, now: Date(),
                                      phoneGlucoseDate: ExtensionDelegate.shared().loopManager.activeContext?.glucoseDate)
             if snap.handbackPending {
@@ -436,8 +441,11 @@ final class GlanceViewModel: ObservableObject {
                     ? NSLocalizedString("reaching pod…", comment: "Glance status while a manual bolus reconnects the pod")
                     : NSLocalizedString("still reaching pod — bolus will deliver", comment: "Glance status when a manual bolus is taking a while to re-acquire the orphaned pod")
             }
+            RuntimeStateLog.mark("glance.refresh.statePublish")
             state = s
+            RuntimeStateLog.mark("glance.refresh.logRender")
             logRender(iob: data.iob, cob: latestCOB, glucoseDate: data.glucoseDate, now: Date())
+            RuntimeStateLog.mark("glance.refresh.carbFetchDispatch")
             session.stack.loopManager.glanceCarbsOnBoard { [weak self] cob in
                 DispatchQueue.main.async { self?.latestCOB = cob; self?.latestCOBAt = Date() }
             }
