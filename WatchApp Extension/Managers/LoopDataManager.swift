@@ -209,6 +209,7 @@ extension LoopDataManager {
     func requestContextUpdate(completion: @escaping () -> Void = { }) {
         try? WCSession.default.sendContextRequestMessage(WatchContextRequestUserInfo(), completionHandler: { (result) in
             DispatchQueue.main.async {
+                RuntimeStateLog.mark("loop.contextReply")
                 switch result {
                 case .success(let context):
                     self.updateContext(context)

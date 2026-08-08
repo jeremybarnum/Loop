@@ -218,8 +218,12 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         }
     }
 
+    /// #95: last complication-timeline reload — the fan-out is debounced to once per minute.
+    private var lastComplicationReloadAt = Date.distantPast
+
     private func loopManagerDidUpdateContext() {
         dispatchPrecondition(condition: .onQueue(.main))
+        RuntimeStateLog.mark("app.loopManagerDidUpdateContext")
 
         if WKExtension.shared().applicationState != .active {
             WKExtension.shared().scheduleSnapshotRefresh(withPreferredDate: Date(), userInfo: nil) { (error) in
@@ -229,11 +233,23 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
             }
         }
 
-        // Update complication data if needed
-        let server = CLKComplicationServer.sharedInstance()
-        for complication in server.activeComplications ?? [] {
-            log.default("Reloading complication timeline")
-            server.reloadTimeline(for: complication)
+        // Update complication data if needed.
+        // #95 (2026-08-07): this fan-out ran on EVERY context update — and a carb save triggers
+        // several in quick succession (the flow-dismiss requestContextUpdate reply plus the
+        // phone's own post-carb push), each one a synchronous activeComplications XPC plus a
+        // reloadTimeline whose data-source callbacks land back on main. Debounce to once per
+        // 60s: complication timelines are 5-minute-granularity surfaces, and the reload storm
+        // was the trigger that drove the deadlock-shaped re-entrant server query in
+        // ComplicationController (fixed there — this is the belt to that suspender).
+        RuntimeStateLog.mark("app.complicationReload")
+        let now = Date()
+        if now.timeIntervalSince(lastComplicationReloadAt) >= 60 {
+            lastComplicationReloadAt = now
+            let server = CLKComplicationServer.sharedInstance()
+            for complication in server.activeComplications ?? [] {
+                log.default("Reloading complication timeline")
+                server.reloadTimeline(for: complication)
+            }
         }
     }
 }

@@ -175,6 +175,10 @@ enum RuntimeStateLog {
                 if stuckFor > stallThreshold, alreadyReported != sent {
                     stallLock.lock()
                     stallReportedFor = sent
+                    // #95 review: seed the re-report clock here — it was only ever ASSIGNED in
+                    // the else-branch that required it non-nil, so "MAIN STILL STALLED" could
+                    // never fire and the log showed one line per stall however long it ran.
+                    lastStallReportAt = Date()
                     let where_ = mainMark
                     let markAge = Date().timeIntervalSince(mainMarkAt)
                     stallLock.unlock()

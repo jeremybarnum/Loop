@@ -45,11 +45,20 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
 
     private let chartManager = ComplicationChartManager()
 
-    private func updateChartManagerIfNeeded(completion: @escaping () -> Void) {
+    private func updateChartManagerIfNeeded(for complication: CLKComplication, completion: @escaping () -> Void) {
+        // #95 (2026-08-07): DO NOT ask CLKComplicationServer.activeComplications here. This method
+        // runs INSIDE the server's own data-source callbacks (getCurrentTimelineEntry /
+        // getTimelineEntries, invoked on MAIN in response to reloadTimeline), and
+        // `activeComplications` is a SYNCHRONOUS round-trip to that same server — a re-entrant
+        // query into a service that is mid-callback into us. That is a deadlock shape, and it is
+        // queue-independent: main stops forever with every app queue idle, which is exactly the
+        // 6.5-minute wedge of 2026-08-07 23:24 (force-quit) and the post-carb kills — the
+        // context-update fan-out (flow dismiss -> requestContextUpdate reply -> reloadTimeline)
+        // landed here 0.7-1.6s after each carb save. The callback already HAS the complication;
+        // its family answers the only question this guard was asking, with no server round-trip.
         guard
             #available(watchOSApplicationExtension 5.0, *),
-            let activeComplications = CLKComplicationServer.sharedInstance().activeComplications,
-            activeComplications.contains(where: { $0.family == .graphicRectangular })
+            complication.family == .graphicRectangular
         else {
             completion()
             return
@@ -77,7 +86,8 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
     }
 
     func getCurrentTimelineEntry(for complication: CLKComplication, withHandler handler: (@escaping (CLKComplicationTimelineEntry?) -> Void)) {
-        updateChartManagerIfNeeded(completion: {
+        RuntimeStateLog.mark("complication.getCurrentTimelineEntry")
+        updateChartManagerIfNeeded(for: complication, completion: {
             let entry: CLKComplicationTimelineEntry?
             
             let timelineDate = Date()
@@ -107,7 +117,8 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
     }
     
     func getTimelineEntries(for complication: CLKComplication, after date: Date, limit: Int, withHandler handler: (@escaping ([CLKComplicationTimelineEntry]?) -> Void)) {
-        updateChartManagerIfNeeded {
+        RuntimeStateLog.mark("complication.getTimelineEntries")
+        updateChartManagerIfNeeded(for: complication) {
             let entries: [CLKComplicationTimelineEntry]?
             
             guard let context = ExtensionDelegate.shared().loopManager.activeContext,
