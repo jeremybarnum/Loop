@@ -112,12 +112,24 @@ final class WatchDataManager: NSObject {
                 // decides to drain its queue; record-bearing and diagnostic traffic keeps
                 // transferUserInfo's guaranteed delivery. Failure falls back to that queue,
                 // so this is never less reliable than the previous unconditional path.
+                // #61/#35: log the SEND outcome. The grant's delivery was previously a black
+                // box — an urgent send could fail into the queued fallback with no line saying
+                // so, and on the simulator the queued path may not drain for minutes, which
+                // presented as "phone granted, watch timed out" with zero evidence in between.
+                let kind: String? = (dictionary[LoanProtocol.userInfoKey] as? Data)
+                    .flatMap { try? JSONDecoder().decode(LoanKindPeek.self, from: $0) }?.kind
                 guard LoanMessage.isInteractiveHandshake(transport: dictionary),
                       session.isReachable else {
+                    let size = (dictionary[LoanProtocol.userInfoKey] as? Data)?.count ?? 0
+                    self?.log.default("Loan send kind=%{public}@ path=queued (interactive=%{public}@ reachable=%{public}@ bytes=%{public}d)",
+                                      kind ?? "?", String(describing: LoanMessage.isInteractiveHandshake(transport: dictionary)),
+                                      String(describing: session.isReachable), size)
                     session.transferUserInfo(dictionary)
                     return
                 }
-                session.sendMessage(dictionary, replyHandler: nil, errorHandler: { _ in
+                self?.log.default("Loan send kind=%{public}@ path=urgent", kind ?? "?")
+                session.sendMessage(dictionary, replyHandler: nil, errorHandler: { [weak self] error in
+                    self?.log.error("Loan urgent send FAILED kind=%{public}@ — %{public}@ — falling back to queued", kind ?? "?", String(describing: error))
                     session.transferUserInfo(dictionary)
                 })
             },

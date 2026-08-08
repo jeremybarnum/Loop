@@ -999,7 +999,18 @@ extension LoanMessage {
     public static func isInteractiveHandshake(transport userInfo: [String: Any]) -> Bool {
         // sendMessage caps payloads far below transferUserInfo. Anything unexpectedly large
         // takes the queue rather than burning a round-trip on a certain failure.
-        if let data = userInfo[LoanProtocol.userInfoKey] as? Data, data.count > 24_000 {
+        //
+        // #61/#42 (2026-08-08): the gate was 24_000 — and a GRANT (pod state + seeded dose
+        // history + glucose warm-up) routinely exceeds that, so the single most
+        // spinner-watched message in the protocol was being silently demoted to the queued
+        // path this comment block exists to avoid. On the simulator the queue may not drain
+        // for minutes (found because sim grants never arrived: "kind=grant path=queued");
+        // in the field it is a candidate mechanism for slow-takeover tails (grant issued in
+        // 2s, arriving whenever iOS drains the queue). WCSession.sendMessage's real payload
+        // ceiling is ~65 KB; 60_000 leaves envelope margin while letting every observed
+        // grant ride the immediate channel. The errorHandler fallback still catches a
+        // genuine too-big rejection.
+        if let data = userInfo[LoanProtocol.userInfoKey] as? Data, data.count > 60_000 {
             return false
         }
         // `try?` flattens the throwing-optional, so this unwraps to a concrete message:
