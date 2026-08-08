@@ -59,20 +59,48 @@ small difference" is exactly right *for this surface*.
 ## Surface (b): the IOB (and COB) numbers in the UI
 
 **IOB convention: the running temp is counted to now + the insulin model's delay (~10 min) —
-between the other two conventions.**
+between the other two conventions.** *(Challenged 2026-08-08 and re-verified by exact numeric
+replication of the integral — see below. The delay itself is NOT "incorporated into IOB"; the
+forward-counting is an interaction of three verified facts.)*
 
-- Displayed IOB comes from `DoseStore.insulinOnBoard(at: now)` → `getInsulinOnBoardValues`
-  with **`basalDosingEnd: nil` (default — no trim)** (LoopKit `DoseStore.swift:1288-1329`).
-- But the per-dose integration bounds itself at
-  `doseDate <= min(floor((time + model.delay)/delta)·delta, doseDuration)`
-  (LoopKit `InsulinMath.swift:34`) — segments up to **now + `model.delay`** count, and within
-  the delay window `percentEffectRemaining` is 1.0, so they count at full value. For
-  rapid-acting insulin the delay is ~10 minutes.
-- Net: the IOB number includes the running temp's delivery through roughly the next 10 minutes,
-  NOT through its scheduled end, and NOT trimmed at now. This is why hand-computing a
-  prediction from displayed IOB × ISF is *systematically misleading* whenever a temp is
-  running: the prediction (surface a) and the IOB number (surface b) count the same temp
-  differently.
+The three facts, each cited:
+
+1. **The display path does not trim the running temp.** `DoseStore.insulinOnBoard(at: now)` →
+   `getInsulinOnBoardValues(…, basalDosingEnd: nil — the default)` → `trimmed(to: nil)` = the
+   dose keeps its full scheduled span (LoopKit `DoseStore.swift:1319-1329`). The chain to the
+   screen: `doseStore.insulinOnBoard(at: now())` → `self.insulinOnBoard` →
+   `dosingDecision.insulinOnBoard` (phone `LoopDataManager.swift:1128, 1160`).
+2. **The IOB integral's loop walks `model.delay` past now**:
+   `while doseDate <= min(floor((time + model.delay)/delta)·delta, doseDuration)`
+   (LoopKit `InsulinMath.swift:34`) — so delivery segments starting up to ~10 min in the
+   future are visited.
+3. **The delay means exactly what it says** — insulin delivered now doesn't begin absorbing
+   for `delay` (~10 min): `percentEffectRemaining(at: t) = 1 for t ≤ delay`, including
+   negative t (`ExponentialInsulinModel.swift:54-58`). Consequence inside the integral: the
+   future segments visited by (2) score 1.0 — full, unabsorbed weight.
+
+(1)+(2)+(3) ⇒ displayed IOB counts the running temp's **next ~10 minutes of scheduled,
+not-yet-delivered insulin at full value**. In the glucose-*effect* integral the same loop bound
+is harmless — a future segment contributes `1 − pER = 0` — which is likely why the shared bound
+exists; in the IOB integral it is not a no-op.
+
+**Exact numeric replication** (the integrals and model transcribed verbatim; temp 3.8 U/hr vs
+scheduled 0.7 (net 3.1 U/hr), 30-min temp, evaluated 10 min in):
+
+| Convention | Temp's IOB contribution |
+|---|---|
+| untrimmed (display) | **1.292 U** — five 5-min segments at pER 1.0, including the segments starting at now, +5 min, +10 min |
+| trimmed-at-now (dosing) | **0.517 U** — exactly the net insulin actually delivered |
+| difference | **0.775 U of not-yet-delivered insulin in the displayed number** |
+
+Two lesser forward biases stack on top: `insulinOnBoard(at:)` returns the **max** of the two
+timeline values adjacent to `date` (±half a grid step; deliberate, commented for the
+just-scheduled-bolus case — `DoseStore.swift:1294-1298`).
+
+Net: hand-computing a prediction from displayed IOB × ISF is *systematically misleading*
+whenever a temp is running — the prediction (surface a, trimmed at now) and the IOB number
+(surface b, ~10 min forward) count the same temp differently, by up to
+`net rate × delay` (≈ 0.5-0.8 U at typical sport-mode high temps).
 - Watch: glance IOB = `SessionInsulinLedger.insulinOnBoard(at: now())` post-cutover
   (`WatchLoopManager.swift:598`), which uses the same public InsulinMath — same convention.
 - **COB** has no temp-basal question. Both platforms: `carbStore.carbsOnBoard` with dynamic
