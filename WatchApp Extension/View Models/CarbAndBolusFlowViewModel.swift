@@ -491,6 +491,17 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
                         // mean both "still working" and "it failed". This is the one signal
                         // nothing else carries.
                         WKInterfaceDevice.current().play(.failure)
+                        // Log what the WRIST was told, not just what failed. The failure line
+                        // upstream names the error; this names the notification the user
+                        // actually read, with the same numbers. Field 2026-08-08: the 00:04
+                        // "Bolus Not Delivered" notification could only be INFERRED from the
+                        // enact failure, and reconciling a reported alert against the log meant
+                        // guessing which failure produced it.
+                        SportLog.event("bolus-ui", String(
+                            format: "USER ALERTED 'Bolus Not Delivered' — %.2f U did not deliver%@ · reason shown: %@ · haptic=failure",
+                            units,
+                            carbEntry.map { String(format: " (%.0f g ALREADY logged)", $0.quantity.doubleValue(for: .gram())) } ?? "",
+                            error.localizedDescription))
                         Self.notifyBolusFailure(units: units, carbGrams: carbEntry?.quantity.doubleValue(for: .gram()), error: error)
                         ExtensionDelegate.shared().present(error)
                     } else if !session.stack.loopManager.podBeepsOnManualBolus {
