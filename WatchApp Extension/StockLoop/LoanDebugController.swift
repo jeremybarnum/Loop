@@ -224,9 +224,25 @@ struct LoanDebugView: View {
             session.loanController.refreshDebugSnapshot()
             snapshot = session.loanController.mirroredDebugSnapshot ?? snapshot
             cgm = CGMHealth(session.stack.cgmManager)
-            let gd = session.stack.loopManager.glanceData()
-            dosing = gd
-            iobText = gd.iob.map { String(format: "%.2f U", $0) } ?? "—"
+            // #95 ROOT CAUSE (2026-08-07). The comment above says this tick was converted to
+            // mirrors — but only the LOAN-queue read was; this line stayed glanceData(), which is
+            // `dataAccessQueue.sync` (WatchLoopManager: "kept for the DEBUG page, which ... can
+            // afford to wait"). It cannot afford to wait: this closure runs on a 2s MAIN-thread
+            // timer, and watchOS keeps page views alive after they are first visited — so from
+            // the first time the diagnostics page was ever opened, MAIN blocked on
+            // dataAccessQueue every 2 seconds, forever, even with a different page frontmost.
+            // A post-carb cycle holds that queue for the whole enact (2-4s E4-off, ~7s E4-on):
+            // tick lands in the window -> multi-second UI freeze (the recovered 4.1s stall);
+            // E4-on window -> watchdog kill; and when the queue's work item itself waited on a
+            // main-bound completion, MAIN and the queue waited on each other forever (the 6.5
+            // minute wedge of 23:24, force-quit). Same mirror discipline as the glance now:
+            // kick the rebuild, render the last published mirror.
+            RuntimeStateLog.mark("debug.tick")
+            session.stack.loopManager.refreshGlanceData()
+            if let gd = session.stack.loopManager.mirroredGlanceData {
+                dosing = gd
+                iobText = gd.iob.map { String(format: "%.2f U", $0) } ?? "—"
+            }
             session.stack.loopManager.glanceCarbsOnBoard { v in
                 DispatchQueue.main.async { cobText = v.map { String(format: "%.0f g", $0) } ?? "—" }
             }
@@ -237,9 +253,25 @@ struct LoanDebugView: View {
             session.loanController.refreshDebugSnapshot()
             snapshot = session.loanController.mirroredDebugSnapshot ?? snapshot
             cgm = CGMHealth(session.stack.cgmManager)
-            let gd = session.stack.loopManager.glanceData()
-            dosing = gd
-            iobText = gd.iob.map { String(format: "%.2f U", $0) } ?? "—"
+            // #95 ROOT CAUSE (2026-08-07). The comment above says this tick was converted to
+            // mirrors — but only the LOAN-queue read was; this line stayed glanceData(), which is
+            // `dataAccessQueue.sync` (WatchLoopManager: "kept for the DEBUG page, which ... can
+            // afford to wait"). It cannot afford to wait: this closure runs on a 2s MAIN-thread
+            // timer, and watchOS keeps page views alive after they are first visited — so from
+            // the first time the diagnostics page was ever opened, MAIN blocked on
+            // dataAccessQueue every 2 seconds, forever, even with a different page frontmost.
+            // A post-carb cycle holds that queue for the whole enact (2-4s E4-off, ~7s E4-on):
+            // tick lands in the window -> multi-second UI freeze (the recovered 4.1s stall);
+            // E4-on window -> watchdog kill; and when the queue's work item itself waited on a
+            // main-bound completion, MAIN and the queue waited on each other forever (the 6.5
+            // minute wedge of 23:24, force-quit). Same mirror discipline as the glance now:
+            // kick the rebuild, render the last published mirror.
+            RuntimeStateLog.mark("debug.tick")
+            session.stack.loopManager.refreshGlanceData()
+            if let gd = session.stack.loopManager.mirroredGlanceData {
+                dosing = gd
+                iobText = gd.iob.map { String(format: "%.2f U", $0) } ?? "—"
+            }
             session.stack.loopManager.glanceCarbsOnBoard { v in
                 DispatchQueue.main.async { cobText = v.map { String(format: "%.0f g", $0) } ?? "—" }
             }
