@@ -129,6 +129,14 @@ struct GlanceUIState {
     /// completes without waiting for this.
     var g7EtaText: String? = nil
 
+    /// #91 BOLUS DELIVERY WINDOW — non-nil only while the estimate is still running.
+    /// The view animates "bolusing X of Y U" plus a thin bar from these anchors, exactly as
+    /// the takeover bar animates from `startedAt`. ESTIMATE, not a measurement: the pod is
+    /// never queried (same contract as stock's PodDoseProgressEstimator on the phone —
+    /// docs/BOLUS_ANNOUNCEMENT.md). Absent before the pod accepts, which is what makes the
+    /// bar's APPEARANCE the "it started" signal rather than a 0% bar implying we can see in.
+    var bolusDelivery: (units: Double, startedAt: Date, endsAt: Date)? = nil
+
     /// WS1: hand-back requested but still draining — watch remains in control;
     /// the glance shows "ending…" plus a Cancel affordance.
     var handbackPending: Bool = false
@@ -161,6 +169,17 @@ final class GlanceViewModel: ObservableObject {
     /// Display staleness: one 5-min G7 grid + grace. Display only — the dosing
     /// recency gates remain the stock 15-min constants in WatchLoopManager.
     private static let displayStaleAge: TimeInterval = 7 * 60
+
+    /// #91: insulin amounts on the glance. Two decimals matches the pod's deliverable
+    /// resolution and stock's own bolus rendering; the minimum keeps "0.90 U" from
+    /// collapsing to "0.9 U" mid-delivery and looking like the number changed.
+    static let unitsFormatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.minimumFractionDigits = 2
+        f.maximumFractionDigits = 2
+        return f
+    }()
 
     init() {
         isPreview = false
@@ -437,9 +456,31 @@ final class GlanceViewModel: ObservableObject {
                 // both honest and more useful, because it identifies the delay as the cost we
                 // deliberately pay for G7 protection. The "bolus will deliver" half stays: it is
                 // what stops the End tap that killed three doses.
+                // #91 WORDING (Jeremy 2026-08-08: "'reaching' is no good"). Stock's phone names
+                // this same moment — command sent, no progress yet — as "Bolusing 0.90 U"
+                // (BolusProgressTableViewCell :111). We keep stock's shape (gerund + amount) but
+                // NOT its verb: on the phone the pump is connected and the command is in flight
+                // inches away, so "bolusing" is true; here the pod is still orphaned and nothing
+                // has been commanded yet. "starting" is true at every instant of this window, and
+                // naming the AMOUNT tells the user what is coming without exposing our plumbing.
+                let pending = session.stack.loopManager.manualBolusPendingUnits
+                let amount = pending.map { Self.unitsFormatter.string(from: NSNumber(value: $0)) ?? String($0) }
                 s.transientText = Date().timeIntervalSince(startedAt) < 20
-                    ? NSLocalizedString("reaching pod…", comment: "Glance status while a manual bolus reconnects the pod")
-                    : NSLocalizedString("still reaching pod — bolus will deliver", comment: "Glance status when a manual bolus is taking a while to re-acquire the orphaned pod")
+                    ? (amount.map { String(format: NSLocalizedString("starting %@ U…", comment: "Glance status while a manual bolus is being sent to the pod (1: units)"), $0) }
+                        ?? NSLocalizedString("starting bolus…", comment: "Glance status while a manual bolus is being sent, amount unknown"))
+                    // Reuses the takeover bar's existing overrun phrase (:1017) rather than
+                    // inventing a second vocabulary for "slower than expected". The "will
+                    // deliver" half stays — it is what stops the End tap that killed three doses.
+                    : (amount.map { String(format: NSLocalizedString("taking longer than usual — %@ U will deliver", comment: "Glance status when a manual bolus is slow to reach the pod (1: units)"), $0) }
+                        ?? NSLocalizedString("taking longer than usual — the bolus will deliver", comment: "Glance status when a slow manual bolus has no known amount"))
+            }
+            // #91: once the pod ACCEPTS, hand the view the window and let it narrate delivery.
+            // Deliberately after the pre-acceptance branch so acceptance replaces "starting…"
+            // rather than racing it; the two are never both non-nil in practice, because
+            // manualBolusPendingUnits clears in the same completion that sets this.
+            if let delivery = session.stack.loopManager.manualBolusDelivery {
+                s.bolusDelivery = delivery
+                s.transientText = nil   // the view owns this line while a bolus is delivering
             }
             RuntimeStateLog.mark("glance.refresh.statePublish")
             state = s
@@ -889,7 +930,9 @@ struct GlanceView: View {
             }
             // LINE 2 — the transient slot. A live transient trumps provenance; otherwise this
             // is the provenance/next-G7 line (R24), which is diagnostic and can wait.
-            if let transient = model.state.transientText {
+            if let delivery = model.state.bolusDelivery {
+                bolusDeliveryBlock(delivery)
+            } else if let transient = model.state.transientText {
                 Text(transient)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.glanceWarn)
@@ -900,6 +943,54 @@ struct GlanceView: View {
                 // reads as success at a glance.
                 Text(eta).font(.system(size: 11))
                     .foregroundColor(model.state.bgSource == .phoneRelay ? .glanceWarn : .glanceDim)
+            }
+        }
+    }
+
+    /// #91: stock's phone bolus row, in the space a watch has — "bolusing X of Y U" over a thin
+    /// bar. docs/BOLUS_ANNOUNCEMENT.md has the full comparison.
+    ///
+    /// Self-animating via TimelineView, exactly like the takeover bar (:1001), so this costs the
+    /// refresh architecture nothing: no timer, no extra glance ticks, no rebuilds. It is also
+    /// why the numbers stay live while the 2s poll is doing something else.
+    ///
+    /// The 2s cadence is not decorative — it is one pod pulse (Pod.pulseSize 0.05 U ÷
+    /// bolusDeliveryRate 0.025 U/s), the same tick stock's PodDoseProgressEstimator uses. Ticking
+    /// on the pulse boundary is what makes an estimate read as a measurement.
+    ///
+    /// ESTIMATE. The pod is never asked. It is `elapsed / duration` on the dose we booked, which
+    /// is precisely what stock does on the phone — so this inherits stock's honesty limit and no
+    /// more. Deliberately renders NO completed state: at 100% the window simply clears (the
+    /// caller's `manualBolusDelivery` goes nil) and the IOB number is the confirmation, matching
+    /// stock's phone row disappearing. Saying "delivered" from a clock would claim something we
+    /// did not watch happen.
+    @ViewBuilder
+    private func bolusDeliveryBlock(_ delivery: (units: Double, startedAt: Date, endsAt: Date)) -> some View {
+        TimelineView(.periodic(from: delivery.startedAt, by: 2)) { timeline in
+            let duration = delivery.endsAt.timeIntervalSince(delivery.startedAt)
+            let elapsed = timeline.date.timeIntervalSince(delivery.startedAt)
+            let fraction = duration > 0 ? min(max(elapsed / duration, 0), 1) : 1
+            // Rounded to the pod's pulse so the number only ever shows a deliverable volume —
+            // 0.05 U steps, never 0.37 U. Same rounding stock applies via
+            // roundToSupportedBolusVolume.
+            let delivered = (fraction * delivery.units / 0.05).rounded(.down) * 0.05
+            VStack(spacing: 3) {
+                Text(String(format: NSLocalizedString("bolusing %1$@ of %2$@ U", comment: "Glance status while a manual bolus is being delivered (1: units delivered so far, 2: total units)"),
+                            GlanceViewModel.unitsFormatter.string(from: NSNumber(value: delivered)) ?? String(delivered),
+                            GlanceViewModel.unitsFormatter.string(from: NSNumber(value: delivery.units)) ?? String(delivery.units)))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.glanceAccent)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.glanceDim.opacity(0.25))
+                        Capsule().fill(Color.glanceAccent)
+                            .frame(width: max(2, geo.size.width * fraction))
+                    }
+                }
+                .frame(height: 3)
+                .frame(maxWidth: 120)
             }
         }
     }
@@ -1248,6 +1339,39 @@ struct GlanceDemoView: View {
         s.phase = .active; s.bgText = "142"; s.trendSymbol = "↗"; s.bgColor = .inRange
         s.eventualText = "128"; s.iobText = "1.8"; s.cobText = "24"; s.tempText = "+0.75"
         s.loopStatusText = "CLOSED · 2m"; s.loopDotColor = .glanceGood
+    }))
+}
+
+// #91 — the three bolus-announcement states, so the wording can be judged on a real screen
+// rather than argued about in prose. docs/BOLUS_ANNOUNCEMENT.md.
+
+#Preview("Bolus · starting (not yet accepted)") {
+    GlanceView(model: GlanceViewModel(preview: previewState { s in
+        s.phase = .active; s.bgText = "111"; s.trendSymbol = "→"; s.bgColor = .inRange
+        s.eventualText = "88"; s.iobText = "1.2"; s.cobText = "8"; s.tempText = "0.00"
+        s.loopStatusText = "CLOSED · 1m"; s.loopDotColor = .glanceGood
+        // No bar here on purpose: the bar APPEARING is the "it started" signal.
+        s.transientText = "starting 0.90 U…"
+    }))
+}
+
+#Preview("Bolus · delivering") {
+    GlanceView(model: GlanceViewModel(preview: previewState { s in
+        s.phase = .active; s.bgText = "111"; s.trendSymbol = "→"; s.bgColor = .inRange
+        s.eventualText = "88"; s.iobText = "1.7"; s.cobText = "8"; s.tempText = "0.00"
+        s.loopStatusText = "CLOSED · 1m"; s.loopDotColor = .glanceGood
+        // Anchored in the past so the canvas opens mid-delivery instead of at 0%.
+        let started = Date().addingTimeInterval(-22)
+        s.bolusDelivery = (units: 0.90, startedAt: started, endsAt: started.addingTimeInterval(0.90 / 1.5 * 60))
+    }))
+}
+
+#Preview("Bolus · slow to reach the pod") {
+    GlanceView(model: GlanceViewModel(preview: previewState { s in
+        s.phase = .active; s.bgText = "111"; s.trendSymbol = "→"; s.bgColor = .inRange
+        s.eventualText = "88"; s.iobText = "1.2"; s.cobText = "8"; s.tempText = "0.00"
+        s.loopStatusText = "CLOSED · 1m"; s.loopDotColor = .glanceGood
+        s.transientText = "taking longer than usual — 0.90 U will deliver"
     }))
 }
 

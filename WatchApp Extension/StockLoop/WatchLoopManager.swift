@@ -268,10 +268,42 @@ final class WatchLoopManager {
         return _manualBolusInFlight ? _manualBolusStartedAt : nil
     }
     private var _manualBolusStartedAt: Date?
-    fileprivate func setManualBolusInFlight(_ inFlight: Bool) {
+    /// #91: the amount being attempted, so the glance can NAME it during the pre-acceptance
+    /// wait ("starting 0.90 U…") instead of describing our plumbing ("reaching pod…").
+    private var _manualBolusPendingUnits: Double?
+    var manualBolusPendingUnits: Double? {
+        manualBolusLock.lock(); defer { manualBolusLock.unlock() }
+        return _manualBolusInFlight ? _manualBolusPendingUnits : nil
+    }
+    fileprivate func setManualBolusInFlight(_ inFlight: Bool, units: Double? = nil) {
         manualBolusLock.lock()
         _manualBolusInFlight = inFlight
         _manualBolusStartedAt = inFlight ? Date() : nil
+        _manualBolusPendingUnits = inFlight ? units : nil
+        manualBolusLock.unlock()
+    }
+
+    /// #91 DELIVERY WINDOW — the half of a manual bolus that used to be invisible.
+    ///
+    /// `manualBolusInFlight` ends at ACCEPTANCE (the pod acking the command), measured at 1.2s
+    /// on 2026-08-08. The pod then spends ~1.5 U/min actually pushing the dose — 36s for 0.90 U —
+    /// with nothing on the wrist, which is exactly where stock's PHONE starts narrating
+    /// ("Bolused X of Y U" + ring, StatusTableViewController). docs/BOLUS_ANNOUNCEMENT.md.
+    ///
+    /// Same contract as stock's PodDoseProgressEstimator: an ESTIMATE from the dose's own dates
+    /// (`elapsed / duration`), the pod is never queried, no radio is spent. The rate we book
+    /// (1.5 U/min, `:deliverBolus`) IS `Pod.bolusDeliveryRate` — 0.05 U per 2s — so the same
+    /// arithmetic stock uses on the phone applies here unchanged.
+    private var _manualBolusDelivery: (units: Double, startedAt: Date, endsAt: Date)?
+    /// nil once the estimated window has elapsed, so the glance clears itself with no timer.
+    var manualBolusDelivery: (units: Double, startedAt: Date, endsAt: Date)? {
+        manualBolusLock.lock(); defer { manualBolusLock.unlock() }
+        guard let d = _manualBolusDelivery, d.endsAt > Date() else { return nil }
+        return d
+    }
+    fileprivate func setManualBolusDelivering(units: Double, from startedAt: Date, to endsAt: Date) {
+        manualBolusLock.lock()
+        _manualBolusDelivery = (units: units, startedAt: startedAt, endsAt: endsAt)
         manualBolusLock.unlock()
     }
 
@@ -2313,12 +2345,18 @@ final class WatchLoopManager {
                     if let error = error {
                         SportLog.event("loan", "MANUAL BOLUS FAILED — \(String(describing: error))")
                     } else {
-                        SportLog.event("loan", "MANUAL BOLUS delivering")
                         // #73/#74 shadow ledger: point-ish event; DASH delivers ~1.5 U/min.
                         let acceptedAt = Date()
+                        let deliveryEndsAt = acceptedAt.addingTimeInterval(rounded / 1.5 * 60)
+                        SportLog.event("loan", String(format: "MANUAL BOLUS delivering %.2f U — estimated done in %.0fs",
+                                                      rounded, deliveryEndsAt.timeIntervalSince(acceptedAt)))
+                        // #91: hand the glance the window so it can narrate the delivery the way
+                        // stock's phone does. Estimate only — same contract as
+                        // PodDoseProgressEstimator, no pod query, no radio.
+                        self.setManualBolusDelivering(units: rounded, from: acceptedAt, to: deliveryEndsAt)
                         self.ledgerRecordEnact(DoseEntry(
                             type: .bolus, startDate: acceptedAt,
-                            endDate: acceptedAt.addingTimeInterval(rounded / 1.5 * 60),
+                            endDate: deliveryEndsAt,
                             value: rounded, unit: .units,
                             insulinType: pumpManager.status.insulinType))
                         // 134: fold the bolus into IOB/prediction/HUD NOW, not at the next
@@ -2333,7 +2371,7 @@ final class WatchLoopManager {
                     DispatchQueue.main.async { completion(error) }
                 }
             }
-            self.setManualBolusInFlight(true)
+            self.setManualBolusInFlight(true, units: rounded)
             // E4 Stage 2: the pod is orphaned for G7 — reclaim it before the bolus.
             // User is PRESENT, so a few seconds' reconnect is fine; on failure FAIL
             // LOUDLY (never a silent no-bolus). No-op immediate when E4 is off.
