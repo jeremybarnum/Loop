@@ -880,6 +880,13 @@ final class PodLoanWatchController {
     /// pre-cycle refresh reclaims BEFORE any arbitration, which is the caller that failed all
     /// day. Gating here covers every caller.
     ///
+    /// #97: is the pod's standing auto-connect bid currently RELEASED? E4-OFF assumes the pod
+    /// is held; after an E4 release has disarmed the bid, that assumption is false and nothing
+    /// re-arms it. Lock-free read of the manager's own flag; safe from any thread.
+    var podConnectionIsReleased: Bool {
+        return pumpManager?.isConnectionReleased ?? false
+    }
+
     func reclaimPodForDose(_ completion: @escaping (Bool) -> Void) {
         queue.async {
             guard self.phase == .active, let manager = self.pumpManager else { completion(false); return }
@@ -2174,9 +2181,25 @@ extension PodLoanWatchController: WatchLoanDoseRecording {
                 return
             }
 
+            // #99 (2026-08-08): a CERTAIN local refusal is not uncertainty. PodCommsError
+            // .unfinalizedBolus is decided from this device's own state BEFORE any byte reaches
+            // the pod (OmniPumpManager guards on podState.unfinalizedBolus?.isFinished()), so
+            // the command provably never went out. Booking it as an assumed max-exposure dose
+            // invented insulin: field 2026-08-08 00:04:48 — a 2.05 U bolus was refused because
+            // the 1.15 U from 38 s earlier was still delivering (DASH runs ~1.5 U/min), and the
+            // ledger jumped 5.56 -> 8.34 U on a dose that never existed. The chase then found
+            // noPendingCommand — which the booking rules treat as "leave standing" — so the
+            // phantom never cleared, drove automaticDosingIOBLimit headroom negative, and
+            // zero-temped the rest of the night. The IOB clamp was working correctly on
+            // corrupt input; this is where the corruption entered.
+            let certainLocalRefusal = String(describing: error).contains("unfinalizedBolus")
             let uncertain: Bool
-            if case .uncertainDelivery = error { uncertain = true }
+            if certainLocalRefusal { uncertain = false }
+            else if case .uncertainDelivery = error { uncertain = true }
             else { uncertain = self.pumpManager?.podLoanPendingCommandKind != nil }
+            if certainLocalRefusal {
+                SportLog.event("ledger", "CERTAIN refusal (pod never received it) — annulling, NOT booking: \(error.map { String(describing: $0) } ?? "?")")
+            }
 
             if !uncertain {
                 // Certain failure: stock cleared its pending command; nothing delivered.

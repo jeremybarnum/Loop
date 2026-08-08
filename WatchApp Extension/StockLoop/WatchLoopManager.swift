@@ -49,6 +49,14 @@ enum WatchLoopError: Error {
     case configurationError(String)
     /// A data input is missing.
     case missingDataError(String)
+    /// #97/#98 (2026-08-08): the dose was computed but the PUMP REFUSED OR COULD NOT BE
+    /// REACHED. Previously wrapped as `.missingDataError`, which is wrong twice over: it is
+    /// not a data problem, and the cycle-verdict logger deliberately suppresses
+    /// missingDataError (it is logged separately as "NOT DOSING — prediction missing X"), so
+    /// every failed enact produced NO cycle verdict at all. Field 2026-08-08 00:36/00:41/
+    /// 00:46/00:56: four consecutive cycles whose temp enact failed podNotConnected logged
+    /// neither "cycle OK" nor "cycle ended with error" — the loop looked silent, not broken.
+    case enactFailed(String)
     /// Glucose data is too old to dose from (`LoopError.glucoseTooOld`).
     case glucoseTooOld(date: Date)
     /// Glucose data is in the future (`LoopError.invalidFutureGlucose`).
@@ -72,6 +80,10 @@ extension WatchLoopError: LocalizedError {
             return String(format: NSLocalizedString("Missing setting: %@", comment: "Watch loop error (1: setting name)"), field)
         case .missingDataError(let what):
             return String(format: NSLocalizedString("Missing data: %@", comment: "Watch loop error (1: data name)"), what)
+        case .enactFailed(let why):
+            // Say what is actually wrong: the loop decided, the POD did not take it. The old
+            // wrapping as missingDataError told the user "Missing data: podNotConnected".
+            return String(format: NSLocalizedString("The pod did not accept the dose: %@", comment: "Watch loop error (1: pump error)"), why)
         case .glucoseTooOld:
             return NSLocalizedString("Glucose is too old to dose from.", comment: "Watch loop error")
         case .invalidFutureGlucose:
@@ -1116,13 +1128,14 @@ final class WatchLoopManager {
                 SportLog.event("loop", "NOT DOSING — prediction missing \(what)")
             }
 
-            // H19 port: the loop proved ALIVE (fresh data -> effects -> prediction).
-            // Push the dead-man forward BEFORE enact: a deliberate suspend denies the
-            // enact but is not a stall. Recency failures deliberately do NOT refresh —
-            // a prolonged reading gap is exactly what the watchdog exists to catch.
-            if error == nil, self.pumpManager != nil {
-                LoopStallWatchdog.refresh()
-            }
+            // #98 (2026-08-08): the dead-man refresh MOVED to after the enact — see the
+            // verdict block below. It used to fire here, on a healthy PREDICTION alone, which
+            // is a deviation from stock: stock's finishLoop takes enactRecommendedAutomaticDose's
+            // error AS the loop's error (LoopDataManager.swift:888-905), so a cycle that cannot
+            // reach the pump is a FAILED loop and never advances lastLoopCompleted. Ours already
+            // matched stock for lastLoopCompleted/the ring; only the watchdog was wrong, and it
+            // is the one surface whose whole job is to notice. Field 2026-08-08: 25 minutes of
+            // podNotConnected enacts kept re-arming the dead-man because the prediction was fine.
 
             // Enact only when the user has closed the loop on the watch THIS session
             // (R23 as amended 2026-07-18: watch sovereign — the phone's own loop mode
@@ -1142,9 +1155,34 @@ final class WatchLoopManager {
             }
 
             self.lastLoopError = error
+
+            // #98 CYCLE VERDICT — exactly one line per cycle, always. The question "did this
+            // cycle actually dose?" had no greppable answer: a failed enact logged nothing at
+            // all (mis-typed as .missingDataError, which is suppressed below), so 25 minutes of
+            // podNotConnected looked identical to a quiet healthy night.
+            let enactVerdict: String
+            if !self._closedLoopEnabled { enactVerdict = "none(open-loop)" }
+            else if decided?.basalAdjustment == nil && decided != nil { enactVerdict = "none(no-change)" }
+            else if decided == nil { enactVerdict = "none(nothing-decided)" }
+            else if case .enactFailed(let why)? = error { enactVerdict = "FAILED \(why)" }
+            else if error != nil { enactVerdict = "not-attempted(\(error!))" }
+            else { enactVerdict = "ok" }
+            // The dead-man refreshes ONLY on a cycle that both computed AND (if it owed the pod
+            // a command) landed it — stock parity, see the note where this used to live.
+            let watchdogRefreshed = (error == nil && self.pumpManager != nil)
+            if watchdogRefreshed { LoopStallWatchdog.refresh() }
+            let sinceCompleted = self.lastLoopCompleted.map { Int(self.now().timeIntervalSince($0)) }
+            SportLog.event("loop", String(format: "CYCLE VERDICT computed=%@ enact=%@ watchdog=%@ lastCompletedAge=%@",
+                                          error == nil || (error.map { if case .enactFailed = $0 { return true } else { return false } } ?? false) ? "ok" : "FAILED",
+                                          enactVerdict,
+                                          watchdogRefreshed ? "refreshed" : "HELD",
+                                          sinceCompleted.map { "\($0)s" } ?? "never"))
+
             if let error {
                 self.log.error("Loop ended with error: %{public}@", String(describing: error))
                 // Radio defers are logged at the defer site; don't double-log those.
+                // #98: .enactFailed is NOT suppressed — that suppression is why a failed enact
+                // was invisible. Only missingDataError stays quiet (it has its own line above).
                 if case .missingDataError = error {} else {
                     SportLog.event("loop", "cycle ended with error: \(error)")
                 }
@@ -2467,7 +2505,8 @@ final class WatchLoopManager {
 
         doseEnactor.enact(recommendation: recommendationToEnact, with: pumpManager) { error in
             if let error = error {
-                enactError = .missingDataError(String(describing: error))
+                // #98: .enactFailed, NOT .missingDataError — see the case's own note.
+                enactError = .enactFailed(String(describing: error))
             }
             updateGroup.leave()
         }

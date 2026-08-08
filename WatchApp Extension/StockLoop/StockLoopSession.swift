@@ -156,7 +156,24 @@ final class StockLoopSession {
         // tagged baseline. When ON, the loan controller (which owns the OmniPumpManager)
         // does the bounded reconnect + settled re-release.
         stack.loopManager.e4ReclaimPodForDose = { [weak self] completion in
-            guard UserDefaults.standard.bool(forKey: "g7.e4ReleasePod"), let self = self else { completion(true); return }
+            guard UserDefaults.standard.bool(forKey: "g7.e4ReleasePod"), let self = self else {
+                // #97 (2026-08-08): E4-OFF assumes the pod is HELD — but if E4 was ever ON in
+                // this session, its +90s deferred release already DISARMED the standing
+                // auto-connect bid, and nothing re-arms it. Field 2026-08-08: E4 released at
+                // 00:23:28, Jeremy toggled E4 off at 00:24:22, and every enact from 00:26 to
+                // 00:56 failed podNotConnected with no reconnect ever attempted. (Contrast
+                // 23:24-23:30, E4 off with the bid still armed: two pod-initiated drops both
+                // auto-reconnected in ~2 s. E4-OFF is fine — a STRANDED BID is not.) So in
+                // E4-OFF, assert nothing: if the connection is released, re-arm it and run the
+                // real reclaim; otherwise report held, exactly as before.
+                if let self = self, self.loanController.podConnectionIsReleased {
+                    SportLog.event("loan", "E4-OFF: pod bid was RELEASED (stranded by an earlier E4 release) — re-arming and reclaiming")
+                    self.loanController.reclaimPodForDose(completion)
+                } else {
+                    completion(true)
+                }
+                return
+            }
             self.loanController.reclaimPodForDose(completion)
         }
         stack.loopManager.e4ReleasePodAfterDose = { [weak self] in
