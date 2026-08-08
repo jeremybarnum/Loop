@@ -280,7 +280,12 @@ final class PodLoanWatchController {
         // Default in the sim: run the REAL loan protocol against the phone's simulated
         // Omnipod (OmniPumpManager fakes pod comms in-sim). The watch-only fake-flow driver
         // stays available behind a flag for when no paired phone is running.
-        if UserDefaults.standard.bool(forKey: "sim.fakeLoanFlow") { simDriveStart(); return }
+        // #61 (2026-08-08): log the flag VALUE at the decision — on 2026-08-07 a fresh container
+        // with the flag absent still drove the fake path, which contradicts this gate as read;
+        // the suspect is a stale embedded binary, and this line settles it either way.
+        let simFakeFlow = UserDefaults.standard.bool(forKey: "sim.fakeLoanFlow")
+        SportLog.event("loan", "Start (sim): sim.fakeLoanFlow=\(simFakeFlow) — \(simFakeFlow ? "FAKE flow driver" : "REAL loan protocol")")
+        if simFakeFlow { simDriveStart(); return }
         #endif
         queue.async {
             guard self.phase == .idle else {
