@@ -151,6 +151,38 @@ final class WatchDataManager: NSObject {
                     if case .failure(let error) = result { completion(error) } else { completion(nil) }
                 }
             },
+            // R30 (#89): a carb the WRIST deleted during the loan. Deleting through
+            // `loopManager.deleteCarbEntry` (not carbStore directly) is deliberate — that is the
+            // same door CarbAbsorptionViewController's swipe-to-delete uses, so the phone's COB
+            // and prediction invalidate exactly as they do for a phone-side deletion.
+            //
+            // MATCHED, NOT TRUSTED. We re-read the store and match rather than reconstructing a
+            // StoredCarbEntry from the wire: syncIdentifier first (phone-originated carbs carry
+            // the phone's own, seeded through the grant), falling back to (startDate, grams)
+            // within a second. A miss is logged and dropped — deleting the WRONG carb because a
+            // key was ambiguous would be far worse than failing to delete, and the failure
+            // direction here is a carb that survives and keeps driving dosing, which is visible.
+            deleteCarb: { [weak self] gone, completion in
+                guard let self = self else { completion(nil); return }
+                let window = gone.startDate.addingTimeInterval(-.hours(1))
+                self.deviceManager.carbStore.getCarbEntries(start: window) { result in
+                    guard case .success(let entries) = result else { completion(nil); return }
+                    let match = entries.first { entry in
+                        if let id = gone.syncIdentifier, let entryID = entry.syncIdentifier { return id == entryID }
+                        return abs(entry.startDate.timeIntervalSince(gone.startDate)) < 1
+                            && abs(entry.quantity.doubleValue(for: .gram()) - gone.grams) < 0.01
+                    }
+                    guard let victim = match else {
+                        self.log.default("PODLOAN carb delete: no match for %.0f g @ %{public}@ (already gone?)",
+                                         gone.grams, String(describing: gone.startDate))
+                        completion(nil)
+                        return
+                    }
+                    self.deviceManager.loopManager.deleteCarbEntry(victim) { result in
+                        if case .failure(let error) = result { completion(error) } else { completion(nil) }
+                    }
+                }
+            },
             applyScheduleOverride: { [weak self] override in
                 // #68 part B: the watch's override lands on the phone through the SAME single
                 // door every other override uses — mutateSettings, whose didSet does the

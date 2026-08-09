@@ -2482,6 +2482,34 @@ final class WatchLoopManager {
         }
     }
 
+    /// R30 (#89): the mirror image of `addLoanCarbEntry` — remove a carb the wrist deleted and
+    /// re-predict immediately.
+    ///
+    /// The invalidate-and-loop is not optional for the same reason it is not optional on the add
+    /// path (134): `carbEffect` is invalidated only by new CGM data, because the port dropped the
+    /// stock phone loop's carb-store observer. Without this the deleted carb keeps driving the
+    /// prediction until the next reading — the user would watch the row vanish and the eventual
+    /// BG not move, which is precisely the "did that do anything?" failure the delete is meant to
+    /// resolve.
+    ///
+    /// Journaling is the CALLER's job (LoanCarbListController), so this stays a pure store+loop
+    /// operation and the journal side-effect is visible at the UI layer where the ruling lives.
+    func deleteLoanCarbEntry(_ entry: StoredCarbEntry, completion: @escaping (Bool) -> Void) {
+        let grams = entry.quantity.doubleValue(for: .gram())
+        carbStore.deleteCarbEntry(entry) { result in
+            switch result {
+            case .success:
+                SportLog.event("loan", String(format: "carb DELETED locally: %.0f g", grams))
+                self.dataAccessQueue.async { self.carbEffect = nil }
+                self.loop()
+                completion(true)
+            case .failure(let error):
+                SportLog.event("loan", "carb store delete FAILED — \(String(describing: error))")
+                completion(false)
+            }
+        }
+    }
+
     // MARK: - Enactment (mirrors enactRecommendedAutomaticDose() — :1894 — via the seam)
 
     /// Freshness and suspension gates are the phone's; delivery goes through the stock

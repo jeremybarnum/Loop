@@ -421,6 +421,13 @@
             </objects>
             <point key="canvasLocation" x="500" y="751"/>
         </scene>
+        <!--LoanCarbListController (R30/#89 Sport Mode carb list; presented, not a page)-->
+        <scene sceneID="LCs-01-scn">
+            <objects>
+                <hostingController identifier="LoanCarbListController" id="LCc-01-ctl" customClass="LoanCarbListController" customModule="WatchApp_Extension"/>
+            </objects>
+            <point key="canvasLocation" x="880" y="751"/>
+        </scene>
         <!--LoanDebugController (M5 bench page; stock pages untouched)-->
         <scene sceneID="LDs-01-scn">
             <objects>

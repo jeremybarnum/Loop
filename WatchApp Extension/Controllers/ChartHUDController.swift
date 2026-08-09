@@ -198,7 +198,19 @@ final class ChartHUDController: HUDInterfaceController, WKCrownDelegate {
             return
         }
 
-        presentController(withName: CarbEntryListController.className, context: nil)
+        // R30 (#89): same entry point, different wiring — the pattern every Sport Mode screen
+        // uses. During a loan the authoritative carb store is the LOAN stack, and the list gains
+        // swipe-to-delete; outside a loan this stays exactly stock, read-only, because there the
+        // premise is that you have the phone and editing belongs there (Jeremy 2026-08-08).
+        //
+        // The branch lives HERE rather than inside stock's controller so that backing the whole
+        // feature out is deleting LoanCarbListController.swift plus this `if` — and so stock's
+        // file is never touched.
+        if ExtensionDelegate.shared().stockLoopSession.loanController.isLoanActive {
+            presentController(withName: LoanCarbListController.className, context: nil)
+        } else {
+            presentController(withName: CarbEntryListController.className, context: nil)
+        }
     }
 
     @IBAction func didTapOnChart(_ sender: Any) {

@@ -47,6 +47,13 @@ enum LoanReconciler {
         var isFinalHandback: Bool = true
     }
 
+    /// R30 (#89): one wrist-side carb deletion, carried to the phone's store.
+    struct DeletedCarb: Equatable {
+        let syncIdentifier: String?
+        let startDate: Date
+        let grams: Double
+    }
+
     struct Outcome: Equatable {
         /// Insulin records to write (per-event deterministic syncIdentifiers).
         var doses: [DoseEntry] = []
@@ -56,6 +63,19 @@ enum LoanReconciler {
         var openEventID: UUID? = nil
         /// Carb records to write (merge-not-replace happens at the store call).
         var carbs: [NewCarbEntry] = []
+        /// R30 (#89): carbs the WRIST deleted during the loan, as (startDate, grams) natural
+        /// keys plus the phone syncIdentifier when the watch knew one.
+        ///
+        /// Two origins need two keys. A PHONE-originated carb reached the watch through the
+        /// grant carrying the phone's own syncIdentifier, so it can be named directly. A
+        /// WATCH-entered carb has no shared identity at all — `.carb` records carry none, and
+        /// CarbStore mints a fresh syncIdentifier on each side — so it is matched on
+        /// (startDate, grams), which is unique enough inside one loan.
+        ///
+        /// Add-then-delete inside a single drain is CANCELLED here rather than round-tripped:
+        /// see the `.carbDeleted` case below. Only deletes that survive that cancellation reach
+        /// the phone's store, and they are the phone-originated ones by construction.
+        var deletedCarbs: [DeletedCarb] = []
         /// Event IDs annulled by the R22 exact-size fingerprint.
         var annulledEventIDs: [UUID] = []
         /// A positive odometer remainder entered timed-late at hand-back (R6 valve).
@@ -187,6 +207,27 @@ enum LoanReconciler {
                         startDate: event.record.startDate,
                         foodType: nil,
                         absorptionTime: event.record.absorptionTime))
+                }
+            case .carbDeleted:
+                // R30 (#89): the wrist owned the carb store for the length of the loan, so the
+                // drain replays that ownership onto the phone — the same contract as
+                // `.overrideChange`, and for the same reason: without it, `ingestGrantCarbs`
+                // resurrects the deletion at the next takeover.
+                //
+                // ADD-THEN-DELETE CANCELS. A carb entered on the wrist and deleted again before
+                // hand-back must reach the phone as NOTHING, not as an add followed by a delete
+                // the phone cannot resolve (it never minted an identity for that carb, so a
+                // syncIdentifier delete would miss and the carb would survive). Seq order makes
+                // this safe: the `.carb` is always earlier in `events` than its `.carbDeleted`.
+                if let grams = event.record.amount {
+                    let start = event.record.startDate
+                    let before = outcome.carbs.count
+                    outcome.carbs.removeAll { $0.startDate == start && $0.quantity.doubleValue(for: .gram()) == grams }
+                    guard outcome.carbs.count == before else { break }   // cancelled the pair
+                    outcome.deletedCarbs.append(DeletedCarb(
+                        syncIdentifier: event.record.syncIdentifier,
+                        startDate: start,
+                        grams: grams))
                 }
             case .overrideChange:
                 // #68 part B: the wrist owned overrides for the length of the loan, so the

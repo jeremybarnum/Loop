@@ -42,6 +42,12 @@ final class PodLoanPhoneController {
         /// InsulinDeliveryStore/HealthKit — behaving exactly like real pump insulin (#69/#52).
         var addPumpEvents: ([NewPumpEvent], _ lastReconciliation: Date?, @escaping (Error?) -> Void) -> Void
         var addCarb: (NewCarbEntry, @escaping (Error?) -> Void) -> Void
+        /// R30 (#89): remove a carb the WRIST deleted during the loan. Matched on the phone's
+        /// syncIdentifier when the watch knew one (phone-originated carbs, which are the only
+        /// ones that reach here — watch-entered add/delete pairs cancel in the reconciler), and
+        /// on (startDate, grams) otherwise. Default is a no-op so tests and older wiring are
+        /// unaffected.
+        var deleteCarb: (LoanReconciler.DeletedCarb, @escaping (Error?) -> Void) -> Void = { _, done in done(nil) }
         /// #68 part B: apply a WATCH-enacted temporary schedule override to the phone's
         /// LoopSettings (nil = the wrist cleared it). Sovereignty ruling (2026-07-31): while
         /// the watch holds the pod it OWNS overrides, so this is a straight assignment — there
@@ -877,6 +883,12 @@ final class PodLoanPhoneController {
                     for carb in outcome.carbs {
                         self.deps.addCarb(carb) { _ in }  // merge-not-replace at integration
                     }
+                    // R30 (#89): deletions ride the same staleness gate as adds — a dead loan
+                    // may not mutate the carb store in either direction.
+                    for gone in outcome.deletedCarbs {
+                        self.handbackDiag(offer.epoch, String(format: "carb DELETE from wrist — %.0f g @ %@", gone.grams, String(describing: gone.startDate)))
+                        self.deps.deleteCarb(gone) { _ in }
+                    }
                 } else if !outcome.carbs.isEmpty {
                     self.handbackDiag(offer.epoch, "stale offer — \(outcome.carbs.count) carb(s) NOT committed (a dead loan cannot add carbs)")
                 }
@@ -1112,6 +1124,7 @@ final class PodLoanPhoneController {
             let outcome = LoanReconciler.reconcile(input)  // isFinalHandback defaults true → all finalized
             deps.addPumpEvents(newPumpEvents(from: outcome.doses), deps.now()) { _ in }
             for carb in outcome.carbs { deps.addCarb(carb) { _ in } }
+            for gone in outcome.deletedCarbs { deps.deleteCarb(gone) { _ in } }   // R30 (#89)
             // #66 (2026-08-04): RECORD what we just committed. This path read committedIDs in
             // the filter above but never added to it, and it sends no handbackAck — so the
             // watch's 15 s resend loop kept redelivering the same offer against an unchanged

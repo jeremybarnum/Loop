@@ -2058,6 +2058,42 @@ extension PodLoanWatchController: WatchLoanDoseRecording {
         }
     }
 
+    /// R30 (#89): journal a carb the WRIST deleted, so the deletion follows the pod home.
+    ///
+    /// This CANNOT be a local-only delete. `ingestGrantCarbs` makes the watch an authoritative
+    /// mirror of the phone at every takeover, so a deletion the phone never heard about is
+    /// resurrected at the next grant — the user deletes it, watches it vanish, and it comes back
+    /// still driving dosing. Riding the journal buys the per-loan seq, the commit cursor,
+    /// resend-until-ack and the hand-back drain, which is exactly what makes the deletion survive
+    /// a phone that is out of range for the whole session.
+    ///
+    /// `syncIdentifier` is the phone's own, when the carb came from the grant; nil for a carb
+    /// entered on this wrist, whose add/delete pair the reconciler cancels instead of
+    /// round-tripping (LoanReconciler `.carbDeleted`).
+    func loanDidDeleteCarb(syncIdentifier: String?, startDate: Date, grams: Double) {
+        queue.async {
+            guard self.phase == .active else {
+                SportLog.event("loan", String(format: "carb delete ignored (%.0f g) — no active loan to journal it against", grams))
+                return
+            }
+            let record = LoanDoseRecord(kind: .carbDeleted,
+                                        startDate: startDate,
+                                        amount: grams,
+                                        syncIdentifier: syncIdentifier)
+            guard let event = try? self.journal.mintEvent(record: record, provenance: .confirmed) else {
+                // Say it loudly: the carb is gone from the WATCH but the phone still holds it, so
+                // the next takeover will bring it back. Same failure class as a lost carb add.
+                SportLog.event("loan", String(format: "** CARB DELETE JOURNAL MINT FAILED (%.0f g) — gone on the watch but the phone still has it; the next grant will RESURRECT it **", grams))
+                return
+            }
+            SportLog.event("loan", String(format: "carb DELETE journaled %.0f g @ %@ — sync %@, seq %d, event %@",
+                                          grams, ISO8601DateFormatter().string(from: startDate),
+                                          syncIdentifier ?? "none(watch-entered)", event.seq,
+                                          String(event.id.uuidString.prefix(8))))
+            self.streamRecords()
+        }
+    }
+
     /// #68 part B: journal a WRIST-enacted override change so it follows the pod home.
     ///
     /// Rides the ordinary journal, exactly like the (currently suppressed) carb path: it

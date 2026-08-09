@@ -107,6 +107,17 @@ public struct LoanDoseRecord: Codable, Equatable {
         case suspend
         case resume
         case carb
+        /// R30 (#89): the wrist DELETED a carb entry during the loan. `syncIdentifier` names the
+        /// victim; every other payload field is nil. Not a dose — it carries no insulin and
+        /// contributes nothing to the odometer audit — but it is journal-worthy for the same
+        /// reason `.overrideChange` is: while the watch holds the pod it owns the carb store, and
+        /// the drain replays that ownership onto the phone.
+        ///
+        /// It MUST ride the journal rather than being applied locally. `ingestGrantCarbs` makes
+        /// the watch an authoritative MIRROR of the phone at every takeover, so a delete the phone
+        /// never heard about is RESURRECTED at the next grant — the user deletes it, watches it
+        /// vanish, and it comes back still driving dosing.
+        case carbDeleted
         /// A temp-change that died after its committed safe-cancel (C1/C2/C10 port).
         case plumbingCancel
         /// The phone's record-close of its running temp at the handover stamp (R2/C5).
@@ -277,7 +288,7 @@ extension LoanDoseRecord {
                              value: 0, unit: .unitsPerHour, deliveredUnits: deliveredUnits,
                              syncIdentifier: syncIdentifier, insulinType: insulinType)
         // #68 part B: .overrideChange carries no insulin — it never seeds a dose.
-        case .resume, .carb, .plumbingCancel, .modeChange, .overrideChange:
+        case .resume, .carb, .carbDeleted, .plumbingCancel, .modeChange, .overrideChange:
             return nil
         }
     }
@@ -1058,7 +1069,7 @@ extension LoanDoseRecord {
         // #68 part B: .overrideChange is a therapy-settings event, not a dose — the shadow
         // ledger never books it (it changes the SCHEDULE the ledger nets against, which the
         // override history already handles for both books).
-        case .resume, .carb, .plumbingCancel, .boundaryTruncation, .modeChange, .overrideChange:
+        case .resume, .carb, .carbDeleted, .plumbingCancel, .boundaryTruncation, .modeChange, .overrideChange:
             return nil
         }
     }
