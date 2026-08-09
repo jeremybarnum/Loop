@@ -173,9 +173,19 @@ final class WatchDataManager: NSObject {
                             && abs(entry.quantity.doubleValue(for: .gram()) - gone.grams) < 0.01
                     }
                     guard let victim = match else {
-                        self.log.default("PODLOAN carb delete: no match for %.0f g @ %{public}@ (already gone?)",
-                                         gone.grams, String(describing: gone.startDate))
-                        completion(nil)
+                        // A miss must be LOUD and carry the candidate set — "no match" without
+                        // the near-misses is how the 258/260 failures took a release each to
+                        // localize. The error surfaces through the controller's handbackDiag,
+                        // which mirrors to the phone log and echoes to the watch log.
+                        let lineup = entries.map { e in
+                            String(format: "%.0fg@%@ sync=%@", e.quantity.doubleValue(for: .gram()),
+                                   DateFormatter.localizedString(from: e.startDate, dateStyle: .none, timeStyle: .medium),
+                                   e.syncIdentifier.map { String($0.prefix(8)) } ?? "nil")
+                        }.joined(separator: " | ")
+                        self.log.default("PODLOAN carb delete: no match for %.0f g @ %{public}@ · candidates: %{public}@",
+                                         gone.grams, String(describing: gone.startDate), lineup)
+                        completion(NSError(domain: "PodLoan.carbDelete", code: 404, userInfo: [
+                            NSLocalizedDescriptionKey: "no match among \(entries.count) candidate(s): \(lineup)"]))
                         return
                     }
                     self.deviceManager.loopManager.deleteCarbEntry(victim) { result in

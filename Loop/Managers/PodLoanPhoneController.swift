@@ -886,8 +886,14 @@ final class PodLoanPhoneController {
                     // R30 (#89): deletions ride the same staleness gate as adds — a dead loan
                     // may not mutate the carb store in either direction.
                     for gone in outcome.deletedCarbs {
-                        self.handbackDiag(offer.epoch, String(format: "carb DELETE from wrist — %.0f g @ %@", gone.grams, String(describing: gone.startDate)))
-                        self.deps.deleteCarb(gone) { _ in }
+                        self.handbackDiag(offer.epoch, String(format: "carb DELETE from wrist — %.0f g @ %@ sync=%@", gone.grams, String(describing: gone.startDate), gone.syncIdentifier.map { String($0.prefix(8)) } ?? "nil"))
+                        self.deps.deleteCarb(gone) { error in
+                            // Outcome, always — a delete that silently missed is how a carb
+                            // survives to the next grant and "resurrects" on the wrist.
+                            self.handbackDiag(offer.epoch, error == nil
+                                ? String(format: "carb DELETE applied on phone — %.0f g", gone.grams)
+                                : String(format: "carb DELETE MISSED on phone — %.0f g: %@", gone.grams, String(describing: error!)))
+                        }
                     }
                 } else if !outcome.carbs.isEmpty {
                     self.handbackDiag(offer.epoch, "stale offer — \(outcome.carbs.count) carb(s) NOT committed (a dead loan cannot add carbs)")
@@ -1124,7 +1130,13 @@ final class PodLoanPhoneController {
             let outcome = LoanReconciler.reconcile(input)  // isFinalHandback defaults true → all finalized
             deps.addPumpEvents(newPumpEvents(from: outcome.doses), deps.now()) { _ in }
             for carb in outcome.carbs { deps.addCarb(carb) { _ in } }
-            for gone in outcome.deletedCarbs { deps.deleteCarb(gone) { _ in } }   // R30 (#89)
+            for gone in outcome.deletedCarbs {   // R30 (#89)
+                deps.deleteCarb(gone) { error in
+                    self.handbackDiag(self.epoch, error == nil
+                        ? String(format: "carb DELETE applied on phone (recovery) — %.0f g", gone.grams)
+                        : String(format: "carb DELETE MISSED on phone (recovery) — %.0f g: %@", gone.grams, String(describing: error!)))
+                }
+            }
             // #66 (2026-08-04): RECORD what we just committed. This path read committedIDs in
             // the filter above but never added to it, and it sends no handbackAck — so the
             // watch's 15 s resend loop kept redelivering the same offer against an unchanged

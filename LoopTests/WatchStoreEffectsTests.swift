@@ -313,6 +313,110 @@ final class WatchStoreEffectsTests: XCTestCase {
         XCTAssertEqual(first, second, accuracy: 0.01, "re-seeding the SAME carb must NOT double COB")
     }
 
+    // MARK: - R30/#89: wrist carb delete on the mirror store
+
+    // Two field failures, one release each, both authorship gates: 258 died on
+    // deleteCarbEntry's method guard ("unauthorized"), 260 died on
+    // cachedCarbObjectFromStoredCarbEntry's OWN guard + predicate ("noData") — seeded
+    // entries are createdByCurrentApp:false / uuid:nil BY DESIGN. This test replicates the
+    // production path byte-for-byte (setSyncCarbObjects seed, getCarbEntries read-back,
+    // the fork delete) so the third gate, if one exists, dies HERE and not on the wrist.
+    func testSeededCarbDeleteSkippingAuthorship_theTwoReleaseBug() {
+        let (_, carbStore) = makeStoresFixed()
+        let now = Date()
+        let obj = SyncCarbObject(
+            absorptionTime: .hours(3), createdByCurrentApp: false, foodType: nil,
+            grams: 15, startDate: now.addingTimeInterval(-.minutes(10)), uuid: nil,
+            provenanceIdentifier: "com.loopkit.Loop.phone", syncIdentifier: "carb-del-1",
+            syncVersion: nil,   // the grant may carry nil — the lookup must not require it
+            userCreatedDate: now, userUpdatedDate: nil, userDeletedDate: nil,
+            operation: .create, addedDate: nil, supercededDate: nil)
+
+        // Seed EXACTLY as ingestGrantCarbs does: wipe-then-replace.
+        let seedExp = expectation(description: "seed")
+        carbStore.setSyncCarbObjects([obj]) { error in XCTAssertNil(error); seedExp.fulfill() }
+        waitForExpectations(timeout: 10)
+
+        // Read back EXACTLY as the carb list does.
+        var entry: StoredCarbEntry?
+        let readExp = expectation(description: "read")
+        carbStore.getCarbEntries(start: now.addingTimeInterval(-.hours(6))) { result in
+            if case .success(let entries) = result { entry = entries.first }
+            readExp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+        guard let victim = entry else { return XCTFail("seeded carb did not read back") }
+        XCTAssertFalse(victim.createdByCurrentApp, "precondition: the seeded entry must be foreign-authored, or this test proves nothing")
+        XCTAssertNil(victim.uuid, "precondition: seeded entries carry no HK uuid")
+
+        // The STOCK door must still refuse — pins that the fork left it unchanged.
+        let stockExp = expectation(description: "stock refusal")
+        carbStore.deleteCarbEntry(victim) { result in
+            if case .failure(let error) = result, case .unauthorized = error {} else {
+                XCTFail("stock deleteCarbEntry must still refuse foreign-authored entries, got \(result)")
+            }
+            stockExp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+
+        // The fork door must succeed, via the syncIdentifier stage.
+        let delExp = expectation(description: "fork delete")
+        carbStore.deleteCarbEntrySkippingAuthorshipCheck(victim) { result, diag in
+            if case .failure(let error) = result {
+                XCTFail("fork delete failed (\(error)) · lookup: \(diag)")
+            }
+            XCTAssertTrue(diag.contains("syncId[carb-del"), "expected the syncIdentifier stage to match, got: \(diag)")
+            delExp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+
+        // And the store must agree it is gone — the read-back the wrist renders from.
+        let goneExp = expectation(description: "gone")
+        carbStore.getCarbEntries(start: now.addingTimeInterval(-.hours(6))) { result in
+            if case .success(let entries) = result {
+                XCTAssertTrue(entries.isEmpty, "deleted carb still reads back: \(entries)")
+            }
+            goneExp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+    }
+
+    // The watch-entered variant: no syncIdentifier reaches the wire, so the (startDate, grams)
+    // stage is load-bearing. addCarbEntry mints its own identity; delete must still land.
+    func testWatchEnteredCarbDelete_fallsBackToDateGrams() {
+        let (_, carbStore) = makeStoresFixed()
+        let now = Date()
+        let addExp = expectation(description: "add")
+        var added: StoredCarbEntry?
+        carbStore.addCarbEntry(NewCarbEntry(quantity: HKQuantity(unit: .gram(), doubleValue: 8),
+                                            startDate: now.addingTimeInterval(-.minutes(3)),
+                                            foodType: nil, absorptionTime: .hours(3))) { result in
+            if case .success(let stored) = result { added = stored }
+            addExp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+        guard var victim = added else { return XCTFail("add failed") }
+
+        // Simulate the identity gap: strip the syncIdentifier the way a grant-less entry
+        // presents at the reconciler (the wire carries none for watch-entered carbs).
+        victim = StoredCarbEntry(startDate: victim.startDate, quantity: victim.quantity,
+                                 uuid: nil, provenanceIdentifier: victim.provenanceIdentifier,
+                                 syncIdentifier: nil, syncVersion: nil,
+                                 foodType: victim.foodType, absorptionTime: victim.absorptionTime,
+                                 createdByCurrentApp: false,
+                                 userCreatedDate: victim.userCreatedDate, userUpdatedDate: nil)
+
+        let delExp = expectation(description: "delete by date+grams")
+        carbStore.deleteCarbEntrySkippingAuthorshipCheck(victim) { result, diag in
+            if case .failure(let error) = result {
+                XCTFail("date+grams delete failed (\(error)) · lookup: \(diag)")
+            }
+            XCTAssertTrue(diag.contains("date+grams"), "expected the fallback stage, got: \(diag)")
+            delExp.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+    }
+
     // MARK: - Grant insulin seeding across epochs (#53)
 
     // The insulin analog of the carb test above, and the regression guard for the

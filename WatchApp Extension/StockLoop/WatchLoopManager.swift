@@ -2496,20 +2496,43 @@ final class WatchLoopManager {
     /// operation and the journal side-effect is visible at the UI layer where the ruling lives.
     func deleteLoanCarbEntry(_ entry: StoredCarbEntry, completion: @escaping (Bool) -> Void) {
         let grams = entry.quantity.doubleValue(for: .gram())
-        // Skipping the authorship check is the FIX, not a shortcut (field 2026-08-08 22:39:
-        // "delete FAILED — unauthorized" on every phone-originated carb). Grant-seeded entries
-        // are createdByCurrentApp:false by design, and on this mirror store authorship is a
-        // seeding artifact — the phone applies the same deletion through its own guarded door
-        // when the journal drains. Fork addition; see CarbStore.deleteCarbEntrySkippingAuthorshipCheck.
-        carbStore.deleteCarbEntrySkippingAuthorshipCheck(entry) { result in
+        // IDENTITY DUMP before the attempt (field lesson, two releases deep: 258 died on the
+        // method's authorship guard, 260 died on the LOOKUP's — each time the log named the
+        // error but not the entry's identity, so the next gate was invisible). One line that
+        // says exactly what this entry carries answers "which lookup stage can even match it".
+        SportLog.event("loan", String(format: "carb delete attempt %.0f g @ %@ · uuid=%@ sync=%@ ver=%@ prov=%@ mine=%@",
+                                      grams, ISO8601DateFormatter().string(from: entry.startDate),
+                                      entry.uuid == nil ? "nil" : "set",
+                                      entry.syncIdentifier.map { String($0.prefix(8)) } ?? "nil",
+                                      entry.syncVersion.map(String.init) ?? "nil",
+                                      String(entry.provenanceIdentifier.prefix(12)),
+                                      entry.createdByCurrentApp ? "y" : "n"))
+        // Skipping the authorship check is the FIX, not a shortcut: grant-seeded entries are
+        // createdByCurrentApp:false / uuid:nil by design, and BOTH stock gates (the method
+        // guard AND the lookup) refuse them. The fork method does its own authorship-free
+        // lookup and reports which stage matched. The phone applies the same deletion through
+        // its own guarded door when the journal drains.
+        carbStore.deleteCarbEntrySkippingAuthorshipCheck(entry) { result, lookupDiag in
             switch result {
             case .success:
-                SportLog.event("loan", String(format: "carb DELETED locally: %.0f g", grams))
+                SportLog.event("loan", String(format: "carb DELETED locally: %.0f g · lookup: %@", grams, lookupDiag))
                 self.dataAccessQueue.async { self.carbEffect = nil }
                 self.loop()
+                // POST-DELETE VERIFICATION: read the store back and say what remains, so
+                // "deleted but still showing" can never again be ambiguous between a failed
+                // delete and a stale view.
+                let start = min(Calendar.current.startOfDay(for: Date()),
+                                Date(timeIntervalSinceNow: -self.carbStore.maximumAbsorptionTimeInterval))
+                self.carbStore.getCarbEntries(start: start) { readback in
+                    if case .success(let remaining) = readback {
+                        let total = remaining.reduce(0.0) { $0 + $1.quantity.doubleValue(for: .gram()) }
+                        SportLog.event("loan", String(format: "post-delete store: %d entr%@ remain, %.0f g total",
+                                                      remaining.count, remaining.count == 1 ? "y" : "ies", total))
+                    }
+                }
                 completion(true)
             case .failure(let error):
-                SportLog.event("loan", "carb store delete FAILED — \(String(describing: error))")
+                SportLog.event("loan", "carb store delete FAILED — \(String(describing: error)) · lookup: \(lookupDiag)")
                 completion(false)
             }
         }
