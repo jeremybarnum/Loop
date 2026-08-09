@@ -315,6 +315,32 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   ordered by seq exactly like `.overrideChange`, inheriting the per-loan seq,
   commit cursor, resend-until-ack and hand-back drain. #89.
 
+- **R31 — E4 retired as default; machinery deletion gated on one long OFF run**
+  (2026-08-08, Jeremy: "Okay make the change and ship it", on the A/B analysis).
+
+  The A/B (build 257, epochs 265-267, same evening/bench): G7 capture — the metric
+  E4 exists to protect, and the metric that outranks takeover (standing rule) —
+  was PERFECT in both arms: 8/8 five-minute windows E4-ON, 4/4 E4-OFF, read ages
+  3-7 s, zero sensor errors, and the pod and G7 links were verifiably simultaneous
+  in the OFF arm. E4-ON's measured costs in the same log: 5-6 s of scan+connect
+  radio per cycle placed exactly INSIDE the G7 window (backwards relative to its
+  own intent), the night's only enact failure (21:47:42 — a cancel-temp enacted
+  while the reclaim it triggered was still scanning; a failure class only E4
+  creates), an ~10 s tax on every manual bolus, and marginally slower takeovers.
+
+  Measured OFF steady state: the DASH pod drops an idle link exactly 2:55 after
+  the last command, every time; the standing auto-connect re-lands it in
+  1.3-2.1 s (4/4) — which also field-verifies the #97 re-arm fix in its natural
+  habitat. The July evidence FOR E4 (157's 44/44 overnight) predates the fixes
+  that removed its rationale: #31 window-aware comms, #54 scan-adopt, #94
+  Code=11 backoff, R26, and the #97 standing-connect re-arm.
+
+  Ruled: default `g7.e4ReleasePod` = false. The toggle stays. Deleting the E4
+  machinery (reclaim ladder, deferred-release timer, e4ReclaimPodForDose seams)
+  waits for one LONG OFF session — overnight or a full sport session — clean on
+  G7 coverage. Caveats owned: the OFF arm was 20 minutes, one evening, bench
+  topology at pod RSSI -81; on-body signal is stronger, favouring OFF further.
+
 ## Not yet ruled (do not decide without Jeremy)
 
 - Risk-register #8: any on-body session of any milestone build — per-build,

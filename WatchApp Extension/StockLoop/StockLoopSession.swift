@@ -47,13 +47,23 @@ final class StockLoopSession {
     private let log = OSLog(subsystem: "com.loopkit.Loop", category: "StockLoopSession")
 
     init() {
-        // Bench-experiment lifecycle (diagnostics-page declutter, 2026-07-24). E4
-        // (orphan-the-pod time-separation) graduated from experiment to THE production
-        // reclaim path — build 157 ran a clean overnight on it (44/44). Its flag still
-        // code-defaults to false, though, so register a true default: a fresh TestFlight
-        // install now gets the validated behavior instead of the wedge-prone
-        // always-connected baseline. An explicit setting (e.g. this watch) still wins.
-        UserDefaults.standard.register(defaults: ["g7.e4ReleasePod": true])
+        // E4 DEFAULT FLIPPED BACK TO OFF (#96, Jeremy 2026-08-08, A/B on build 257).
+        //
+        // E4 graduated to the production reclaim path on the build-157 overnight (44/44) — but
+        // that evidence predates the radio fixes that removed its reason to exist: window-aware
+        // pod comms (#31), scan-adopt (#54), the Code=11 backoff (#94), R26 priority, and the
+        // standing-connect re-arm (#97). The A/B (epochs 265-267): G7 capture PERFECT in both
+        // arms (8/8 ON, 4/4 OFF, ages 3-7s, zero sensor errors, pod+G7 links verifiably
+        // simultaneous), while E4 ON cost 5-6s of scan+connect radio per cycle placed exactly
+        // INSIDE the G7 window, produced the night's only enact failure (the 21:47:42
+        // enact-vs-reclaim race), and taxed every manual bolus ~10s (0.65 U: 11s to delivering
+        // vs 1.4s with the link held).
+        //
+        // OFF's steady state, measured: the DASH pod drops an idle link exactly 2:55 after the
+        // last command; the standing connect re-lands it in 1.3-2.1s (4/4). The toggle stays;
+        // an explicit setting on this watch still wins. Machinery deletion is gated on one LONG
+        // OFF session (overnight or full sport) confirming coverage at duration.
+        UserDefaults.standard.register(defaults: ["g7.e4ReleasePod": false])
         // FakeGlucose and E5 both substitute into the LIVE dosing/enact path; with their
         // toggles gone they must never linger enabled in a real session. Clear any
         // persisted test state at launch (both are trivially restored from git).
