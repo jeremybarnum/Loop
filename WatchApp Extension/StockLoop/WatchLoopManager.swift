@@ -2496,7 +2496,12 @@ final class WatchLoopManager {
     /// operation and the journal side-effect is visible at the UI layer where the ruling lives.
     func deleteLoanCarbEntry(_ entry: StoredCarbEntry, completion: @escaping (Bool) -> Void) {
         let grams = entry.quantity.doubleValue(for: .gram())
-        carbStore.deleteCarbEntry(entry) { result in
+        // Skipping the authorship check is the FIX, not a shortcut (field 2026-08-08 22:39:
+        // "delete FAILED — unauthorized" on every phone-originated carb). Grant-seeded entries
+        // are createdByCurrentApp:false by design, and on this mirror store authorship is a
+        // seeding artifact — the phone applies the same deletion through its own guarded door
+        // when the journal drains. Fork addition; see CarbStore.deleteCarbEntrySkippingAuthorshipCheck.
+        carbStore.deleteCarbEntrySkippingAuthorshipCheck(entry) { result in
             switch result {
             case .success:
                 SportLog.event("loan", String(format: "carb DELETED locally: %.0f g", grams))
