@@ -278,6 +278,43 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   against a bench pod — never inferred from Jeremy's field sessions. Field
   sessions validate acquisition/plumbing; simulation validates dosing limits.
 
+- **R30 — Carb deletion on the watch: sport mode only, any row, no ceremony**
+  (2026-08-08, Jeremy: "in regular mode it's read only. Which makes sense
+  because the premise is you have the phone and that's where you should do
+  editing. But in sport mode you are presumably only with the watch... no
+  crown ceremony for deletion - it's the safe direction").
+
+  The stock watch already ships the screen — `CarbEntryListController`, reached
+  by tapping active carbs on the chart HUD, rendering time + grams per row with
+  no graph and no per-row absorption. Sport mode reuses it with different
+  wiring, the same pattern as every other screen.
+
+  Three parts, all ruled:
+  1. **SCOPE: every row is deletable**, including carbs the PHONE created before
+     the loan. One rule, nothing to explain. Extends the authority the wrist
+     already has over overrides (`.overrideChange`) rather than inventing a new
+     class. The rejected alternative — watch-entered carbs only — would need
+     provenance markers to explain why one row swipes and another does not,
+     which is exactly the extra information this screen exists to avoid.
+  2. **AVAILABILITY: sport mode only.** Regular mode stays READ-ONLY and
+     unchanged, because in regular mode the premise is that you have the phone,
+     and editing belongs there. No new non-loan delete transport.
+  3. **CEREMONY: none.** Swipe reveals Delete, tap deletes. Deleting carbs
+     lowers COB, which lowers predicted glucose, which makes the loop dose
+     LESS — the conservative direction — and it is recoverable by re-entering
+     the carb. That is categorically different from carb ENTRY, whose crown
+     ceremony (R23-adjacent) exists because a mis-entered carb was
+     unrecoverable on both devices. Landing this ruling weakens that premise,
+     so the carb crown ceremony becomes revisitable.
+
+  IMPLIED, NOT OPTIONAL: deletion must propagate to the phone. `ingestGrantCarbs`
+  makes the watch an authoritative mirror at every takeover, so a loan-local
+  delete would be RESURRECTED at the next grant — the user deletes it, watches
+  it vanish, and it returns still driving dosing. Deletion therefore rides the
+  loan journal as a new `.carbDeleted` event carrying the syncIdentifier,
+  ordered by seq exactly like `.overrideChange`, inheriting the per-loan seq,
+  commit cursor, resend-until-ack and hand-back drain. #89.
+
 ## Not yet ruled (do not decide without Jeremy)
 
 - Risk-register #8: any on-body session of any milestone build — per-build,
