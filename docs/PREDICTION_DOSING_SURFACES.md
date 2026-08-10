@@ -128,10 +128,15 @@ only the insulin needed ON TOP of that.**
   `basalDosingEnd: nil` effects, temp-to-scheduled-end (`:1488-1490`). The recommendation
   struct then reports `pendingInsulin: 0` "already reflected in the prediction" (`:1569`).
 - Watch port: `recommendManualBolus` (`WatchLoopManager.swift:2237-2274`) passes
-  `includingPendingInsulin: true` **unconditionally** (`:2252`). Behaviorally identical to
-  stock's `pending > 0` gate: with no running temp and no in-flight bolus, the two effect
-  timelines coincide, so the unconditional flag changes nothing. Both flows (carbs, bolus)
-  route through it during a loan (`:718-741`).
+  `includingPendingInsulin: true` **unconditionally** (`:2252`). **CORRECTED 2026-08-10 (#44
+  audit): NOT behaviorally identical.** Stock's gate is `pendingInsulin > 0`, and
+  `getPendingInsulin` computes `max(0, remainingUnits)` — a running LOW temp contributes zero,
+  so stock predicts with the temp TRIMMED AT NOW. The watch's unconditional `true` runs the low
+  temp to its scheduled end: a negative net-basal contribution, a HIGHER predicted glucose, and
+  a LARGER recommended bolus. The divergence is confined to the running-low-temp case — which
+  is the normal state during exercise, exactly when the wrist dial is used — and errs in the
+  unsafe direction. Tracked as #44-A3; the earlier "behaviorally identical" claim on this row
+  was wrong.
 
 ### The worked example (field, 2026-08-08 tennis loan)
 
@@ -229,12 +234,13 @@ ifNecessary verdict. Then head-math vs wrist-math reconciles in one line.
 | (a) loop prediction/dosing | temp trimmed at now (`LoopDataManager:1036,1387`) | same (`WatchLoopManager:1559-1562, 2130`) | **none** |
 | (b) IOB display | untrimmed + model-delay bound (`DoseStore:1288`, `InsulinMath:34`) | ledger, same InsulinMath (`WatchLoopManager:598,1540`) | **none** in convention |
 | (b) COB display | dynamic absorption w/ ICE | same | none |
-| (c) carb-screen rec | pending-insulin prediction when temp/bolus in flight (`LoopDataManager:1196,1488`) | same, flag unconditional (`WatchLoopManager:2252`) | **none behaviorally** |
-| (d) lightning-bolt rec | same path as (c) | same | **none behaviorally** |
+| (c) carb-screen rec | pending-insulin prediction when temp/bolus in flight (`LoopDataManager:1196,1488`) | flag unconditional (`WatchLoopManager:2252`) | **DIVERGES on a running LOW temp — watch over-recommends (#44-A3)** |
+| (d) lightning-bolt rec | same path as (c) | same | **same divergence as (c) (#44-A3)** |
 
-**Verdict: there is no convention difference between stock and the watch port, and no reason to
-introduce one.** The port's one textual difference (unconditional `includingPendingInsulin:
-true`) is outcome-identical.
+**Verdict (revised 2026-08-10): surfaces (a) and (b) match stock exactly. Surfaces (c)/(d)
+match on the high-temp and no-temp cases but DIVERGE on a running low temp** — the
+unconditional `includingPendingInsulin: true` credits the low temp's future withholding,
+inflating the recommendation. Fix is to port stock's `pending > 0` gate (#44-A3).
 
 ## The real gap this investigation surfaced (UX, not algorithm)
 
