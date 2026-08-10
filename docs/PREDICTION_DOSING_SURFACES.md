@@ -150,6 +150,78 @@ continues to its scheduled end and recommends only the excess. (Option "b", not 
 
 ---
 
+## Why eventual-vs-range head-math fails — the mechanics, ranked (added 2026-08-10)
+
+Jeremy's field method: read eventual BG and the correction range off the glance, check the
+running temp against them. His challenge: "the argument that it's counting the future temp
+just doesn't make sense." **He is right, and the record should be clean: the automatic loop
+counts ZERO future temp (surface a, above). Forward-credit exists only on the bolus-rec
+surface (c/d), where it is coherent** — both the bolus AND the already-commanded temp will
+physically deliver; the loop can only claw the temp back NEXT cycle, so recommending only the
+excess is the anti-double-dosing choice. The confusion was adjacency: a glance eventual
+computed with no temp credit sits next to a REC computed with full temp credit.
+
+The real reasons the intuition fails, from `LoopKit/LoopAlgorithm/DoseMath.swift`, in order
+of how often they bite:
+
+1. **The dose is not computed from eventual at all.** `insulinCorrection` (:256-371) walks
+   EVERY predicted point within the insulin model's effect duration and takes the MINIMUM
+   over points of "units needed to bring THIS point to ITS target" (:326). Eventual is just
+   the last point. Any point on the curve that is closer to its target than eventual is to
+   the range caps the whole dose. The semantics: the largest dose that overshoots no point.
+2. **Each point's target is not the correction range.** `targetGlucoseValue` (:200-214) ramps:
+   for the first 50% of effect duration the target is the SUSPEND THRESHOLD, then rises
+   linearly to the range average. A +90 min prediction of 100 with suspendThreshold 80 has
+   20 mg/dL of headroom, not −15 against a 115 range top.
+3. **Per-point sensitivity is absorption-weighted** (:304-309): units-to-correct a point =
+   Δ ÷ (fraction of insulin absorbed by then × ISF). Only the eventual point sees ~full ISF.
+   The naive (eventual − midpoint)/ISF is exactly the eventual point's own correction — the
+   actual dose is ≤ that, bounded by every other point.
+4. **The min-BG guard** (:419-423): in `.aboveRange`, if the curve's MINIMUM point is below
+   the eventual target's lower bound, `maxBasalRate` collapses to the SCHEDULED rate — high
+   temps forbidden outright while eventual reads high. This is the "eventual 160 and it
+   won't high-temp" archetype.
+5. **Suspend threshold** (:282-285): any predicted point below it → immediate zero-temp,
+   regardless of eventual.
+6. **The IOB clamp** (:425-428): rate ≤ 2 × (automaticDosingIOBLimit headroom) + scheduled.
+7. **maxBasal + rate conversion + rounding** (`asTempBasal` :42-64): units spread over 30 min
+   (rate = units/0.5h + scheduled) then min'd with maxBasal — 0.9 U of "need" is a 2.5 U/hr
+   temp, not a max temp.
+8. **`ifNecessary` suppression** (:147-173): same rate as the running temp with >11 min left
+   → no command at all; matches-schedule → cancel. Invisible in the UI either way.
+
+### The refresh asymmetry — Jeremy's hypothesis, CONFIRMED for the stock phone
+
+Verified call graph: `loop()` — compute AND enact — has exactly one caller,
+`DeviceDataManager.checkPumpDataAndLoop()` (:571-587), which is CGM-reading-triggered.
+Dosing lives on the glucose grid. But the DISPLAYED prediction does not: any store mutation
+(carb add/edit/**delete**, dose change) invalidates effect caches and posts `.LoopDataUpdated`
+(`LoopDataManager.swift:175-220`), the status screen refetches state, and `getLoopState` runs
+`update(for: .getLoopState)` (:2188-2194) — a FULL prediction recompute, including a fresh
+recommendation it stores but does not enact. So on the stock phone, deleting a carb updates
+the chart and eventual within seconds while the enacted temp remains whatever the last
+glucose-triggered cycle commanded — up to ~5 minutes of genuine on-screen incongruity.
+The remembered "these numbers are not internally consistent" moments have this exact
+mechanism, and carb deletion is literally one of the triggers.
+
+**The sport-mode watch does NOT have this incongruity.** Glance eventual and glance temp are
+both products of the same `loop()` pass (`predictedGlucose` is cached per-cycle and read
+"only for DISPLAY", `WatchLoopManager.swift:847`; temp = `runningTempBasal()`), and store
+mutations on the watch re-run the FULL loop including enact (the 134 carb-add fix and the
+R30 delete both invalidate + `loop()`). The watch's only staleness is the 5-minute grid
+itself. During a loan the watch is more coherent than the stock phone here — a deliberate
+deviation in stock's spirit.
+
+### Consequence for #29 (the audit trail)
+
+The reconciliation a tester needs is: WHICH of the eight limiters bound this cycle. The
+existing `[dosemath]` log line prints inputs and verdict but not the binding constraint. The
+#29 design: per cycle, log the chain — naive eventual-correction units → min-over-curve units
+(naming the binding point's time and value) → min-guard state → IOB clamp → maxBasal →
+ifNecessary verdict. Then head-math vs wrist-math reconciles in one line.
+
+---
+
 ## Stock vs watch: the delta table
 
 | Surface | Stock | Watch | Delta |
