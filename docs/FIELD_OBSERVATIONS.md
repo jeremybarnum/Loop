@@ -7,7 +7,40 @@ about explicitly. Never silently dropped.
 
 ## Open
 
-_(none — OBS-1, OBS-2 and OBS-5 closed 2026-08-11; see below.)_
+- **OBS-6 (2026-08-11 18:14, build 268, epoch 10): takeoverComplete rides the QUEUED
+  channel, so the phone can be minutes behind the truth about its own pod.**
+  The watch had the pod at 18:14:22.463 ("ACTIVE — pod taken after 2 read(s) in 10.2s")
+  and told the phone one millisecond later — on the opportunistic channel:
+  `18:14:22.464 [wc] send podLoanV2 — session 2, reachable true, path queued`.
+  `LoanMessage.isInteractiveHandshake` returns FALSE for `.takeoverComplete`
+  (LoanProtocolV2.swift), so it goes by transferUserInfo, which iOS drains when it feels
+  like it.
+  PROOF it actually lagged, from this same loan: the phone's new #108 probe fired —
+  "grant unconfirmed after 20s — asking the watch whether it arrived". That probe only
+  runs while `state == .grantOffered`, so twenty seconds after the grant the phone still
+  did not know a takeover that had completed at +10 s.
+  This is odd company for the message to keep: the `isInteractiveHandshake` doc block
+  says the immediate channel is for "everything the user is watching a spinner through,
+  at the start and the end", and takeoverComplete is the end of the start. Consequence
+  is UI and state-machine lag, not therapy — the watch is dosing correctly throughout.
+  Filed as #109. Note the accident: #108's probe was built for a LOST grant and caught a
+  merely SLOW confirmation instead, cutting the phone's blind window from the 5-minute
+  T1 to 20 s on its first loan in the field.
+
+- **OBS-7 (2026-08-11 ~18:20, build 268): bolus UI appeared stuck "for quite a while",
+  but completed (Jeremy).** Log had not synced past 18:16:47 when this was written, so
+  the bolus itself is not yet in evidence — DO NOT conclude from this entry alone.
+  Recorded now so the observation is not lost to the sync lag.
+  Leading hypothesis, and it is not a defect: an Omnipod delivers a bolus at
+  `Pod.secondsPerBolusPulse = 2` × `Pod.pulseSize = 0.05` U = **1.5 U per minute**, fixed
+  in hardware. At his maxBolus of 3.00 U that is a full two minutes of genuine delivery
+  with the progress UI legitimately running the whole time.
+  Already RULED OUT by reading the code: the G7 acquisition gate is not involved —
+  `deferPodRadioWhileG7AcquisitionResolves` has exactly one caller (the cycle's
+  pump-data refresh), and the manual-bolus path (StockLoopSession → reclaimPodForDose)
+  does not pass through it. Worth checking when the log lands: how long the reclaim took
+  before the command, and whether the pod link dropped mid-delivery (E4's +12 s settle
+  vs a 40-120 s bolus) leaving the progress reporter without a source.
 
 ## Closed without a root cause (2026-08-11, Jeremy's call)
 
