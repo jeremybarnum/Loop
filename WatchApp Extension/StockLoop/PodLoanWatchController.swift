@@ -402,7 +402,8 @@ final class PodLoanWatchController {
         /// without restoring `phase`, so a rejected grant left the controller at `.requested`
         /// with no timeout pending and nothing to move it. `requestLoan` guards on
         /// `phase == .idle` (:283), so from then on Start was a silent no-op: Sport Mode
-        /// unstartable until the app was relaunched or debugReset was tapped.
+        /// unstartable until the app was relaunched (debugReset was the other escape at the
+        /// time; it was removed 2026-08-11).
         ///
         /// Cancelling here — after the phase check, before the rejections — keeps the original
         /// intent (a grant that we are going to ACT on stops the timeout) while every rejection
@@ -1998,24 +1999,15 @@ final class PodLoanWatchController {
         }
     }
 
-    /// Bench-only: force the watch controller back to idle (clears a stuck phase after
-    /// a failed attempt). Does NOT touch the pod — just local state; the phone recovers
-    /// on its own T1 or via re-enabling Closed Loop.
-    func debugReset() {
-        queue.async {
-            self.chaseWorkItem?.cancel()
-            self.resendWorkItem?.cancel()
-            self.teardownPump()
-            self.loopManager.pumpManager = nil
-            self.phase = .idle
-            self.epoch = nil
-            self.pendingUncertainEventID = nil
-            self.inFlightEventIDs = []
-            self.handbackRequested = false
-            self.finalOfferSent = false
-            SportLog.event("loan", "DEBUG RESET — watch controller forced to idle")
-        }
-    }
+    // debugReset() REMOVED 2026-08-11 (Jeremy: never used it, and simplifying toward
+    // production). Its doc comment claimed it "does NOT touch the pod — just local state;
+    // the phone recovers on its own T1", and both halves were wrong in an active loan: it
+    // called teardownPump(), and `.loaned` on the phone has no T1 (that timer only exists in
+    // `.grantOffered`). What it actually did was abandon a live loan — pod orphaned on its
+    // last command, phone still believing the watch held it, staged-but-unacked doses
+    // stranded under a cleared epoch. The recovery paths that remain are the real ones: the
+    // phone's escape hatch (reclaimNow), the hand-back flow, and an app relaunch.
+    // In git at the commit that removed it, if a genuine wedge ever needs it back.
 
     // MARK: - Internals
 

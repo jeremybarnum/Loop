@@ -46,7 +46,14 @@ So the consistent flow going forward is just: **install the build, let the watch
 relaunch, confirm the phone shows it reclaimed the pod ("Pod on Watch" clears), then
 Start a fresh Sport Mode.** No manual reclaim, no force-quit. (On ≤124 the manual
 reclaim WAS needed — that's the source of the old confusion.) If anything ever does
-look stuck, `debugReset` on the diagnostic screen is the hard nuke back to idle.
+look stuck, the recovery paths are the real ones: the phone's escape hatch (long-press
+the on-loan notification → Reclaim Pod), the normal hand-back, or an app relaunch.
+
+(`debugReset` on the diagnostic screen used to be recommended here as "the hard nuke
+back to idle". It was removed 2026-08-11: in an ACTIVE loan it abandoned the loan
+rather than resetting it — pod orphaned on its last command, phone still believing the
+watch held it, staged-but-unacked doses stranded under a cleared epoch. Reach for the
+phone's escape hatch instead; it takes the pod back properly.)
 
 ## When to test the new-sensor / warmup protocol
 

@@ -108,8 +108,19 @@ struct LoanDebugView: View {
 
                 // Request Loan / Hand Back removed 2026-07-24 — both are redundant with
                 // the glance's "Start Sport Mode" and hand-back flow (requestLoan /
-                // beginHandback still live on those paths). Read Status + Reset stay:
-                // a live pod-reachability probe and the un-wedge-the-controller valve.
+                // beginHandback still live on those paths).
+                //
+                // Reset (debug) removed 2026-08-11 (Jeremy: "I've never used it and it seems
+                // dangerous. I'm moving closer to production and want to simplify things").
+                // It was labelled as a local un-wedge but ABANDONED a live loan: it tore down
+                // the pod link and cleared the epoch without handing back, leaving the pod
+                // orphaned on its last command, the phone still believing the watch held it
+                // (`.loaned` has no timeout — the 5-minute T1 only exists in `.grantOffered`),
+                // and any staged-but-unacked doses stranded under an epoch that no longer
+                // existed. A one-tap way to strand insulin records is not a debug convenience.
+                //
+                // Read Status stays: read-only, no command, no state change — a live pod
+                // reachability ping, which is the one question this screen cannot infer.
                 Button("Read Status") {
                     lastAction = "reading…"
                     session.loanController.debugReadStatus { ok in
@@ -121,10 +132,6 @@ struct LoanDebugView: View {
                             }
                         }
                     }
-                }
-                Button("Reset (debug)") {
-                    session.loanController.debugReset()
-                    lastAction = "reset to idle"
                 }
 
                 Divider().padding(.vertical, 2)

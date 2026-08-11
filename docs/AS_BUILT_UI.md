@@ -84,7 +84,7 @@ special-casing was removed (it was unreachable — `manualSuspendEnd` is never s
 
 Readouts + a minimal button set (bench-only; the "real" UI is these Sport screens):
 - **DOSING** — `closed? · BG · eventual · COB/IOB · recommend · running · last loop · [err]` (`:50`)
-- **LOAN v2 BENCH** — readout + **Read Status** (live pod BLE ping, `debugReadStatus :993`) · **Reset (debug)** (force controller→idle, local only, `debugReset :1003`)
+- **LOAN v2 BENCH** — readout + **Read Status** (live pod BLE ping, `debugReadStatus`). *Reset (debug) removed 2026-08-11 — it abandoned a live loan rather than resetting it; RADIO STRESS removed the same day, question answered.*
 - **G7 IDENTITY** — readout + **Prewarm G7 Now** (`forcePrewarmNow`)
 - **Logs** · **Glance demo** (DEBUG)
 
