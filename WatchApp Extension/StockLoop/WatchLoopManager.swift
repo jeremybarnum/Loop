@@ -3215,8 +3215,42 @@ extension WatchLoopManager: CGMManagerDelegate {
         // threw it away on exit.
         guard manager is G7CGMManager else { return }
         let raw = manager.rawState
-        defaults.set(raw, forKey: Self.cgmStateDefaultsKey)
         let sensorID = raw["sensorID"] as? String
+
+        // #104: a nil sensorID means "unknown", NOT "forget".
+        //
+        // Stock decides a session ended when the sensor disconnects while auth is still pending
+        // (G7Sensor.swift:227) and calls scanForNewSensor(), nilling the identity. On the WATCH
+        // that fires as a matter of course after every loan: the loan releases keepalive, the app
+        // backgrounds, it can no longer hold a connection long enough to authenticate, the sensor
+        // drops it, and stock reads that as end-of-session. Field 2026-08-11, three for three
+        // (06:56:57, 10:16:59, 10:47:12), each ~2 min after the loan closed, on a sensor 8 hours
+        // into a 10-day life. Persisting that nil threw away the adoption we had just shipped two
+        // builds to keep — and after the 10:47 one the watch spent 83 minutes failing
+        // authentication with ZERO direct reads, so a forgotten identity is not merely a slow
+        // re-acquisition, it can leave the app unable to re-acquire at all.
+        //
+        // So: keep the last known-good identity rather than overwrite it with nothing. A genuine
+        // new sensor still lands, because it arrives with its OWN non-nil sensorID and takes this
+        // branch normally. The escape for a sensor that really is finished is its age — past the
+        // 10-day life plus a margin, a nil is honoured and the identity clears. (The bench
+        // "Forget Sensor" button remains the manual escape for a mid-life sensor change.)
+        if sensorID == nil,
+           let stored = defaults.dictionary(forKey: Self.cgmStateDefaultsKey),
+           let storedID = stored["sensorID"] as? String {
+            let activated = stored["activatedAt"] as? Date
+            let expired = activated.map { now().timeIntervalSince($0) > .hours(10 * 24 + 12) } ?? false
+            if !expired {
+                if lastPersistedSensorID != nil {
+                    SportLog.event("cgm", "G7 state: manager forgot sensor \(storedID) — KEEPING the persisted identity (#104: nil means unknown, not forget)")
+                    lastPersistedSensorID = nil   // log once per forget, not per state change
+                }
+                return
+            }
+            SportLog.event("cgm", "G7 state: sensor \(storedID) is past its 10-day life — honouring the clear")
+        }
+
+        defaults.set(raw, forKey: Self.cgmStateDefaultsKey)
         if sensorID != lastPersistedSensorID {
             lastPersistedSensorID = sensorID
             SportLog.event("cgm", "G7 state persisted — sensor \(sensorID ?? "none") (survives relaunch/update)")

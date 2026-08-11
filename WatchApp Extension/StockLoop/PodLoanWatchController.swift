@@ -986,11 +986,26 @@ final class PodLoanWatchController {
                                           manager.podLoanConnectionStateDescription,
                                           manager.isConnectionReleased ? "yes" : "no",
                                           idle.map { String(format: "%.0fs", $0) } ?? "unknown"))
-            guard manager.isConnectionReleased else {
+            // #106 (field 2026-08-11 12:10:50): this used to short-circuit on
+            // `isConnectionReleased == false` alone, commented "still connected — nothing to do".
+            // But that flag is the standing-connect BID, not the link. A reclaim already in flight
+            // clears it while the peripheral is still .connecting, so a second concurrent caller
+            // concluded the link was up and dosed immediately:
+            //   12:10:50.542 reclaim starting — released=yes
+            //   12:10:50.561 reclaim read 1/14 failed — pod BLE state CONNECTING, released=false
+            //   12:10:50.643 reclaim starting — released=NO   <- 2nd caller, short-circuits
+            //   12:10:50.643 enacting temp 3.55 U/hr
+            //   12:10:50.656 temp enact FAILED — podNotConnected
+            // The carb correction was lost (recovered on the next cycle). Two loop triggers ~100 ms
+            // apart is routine — a carb save recomputes while the bolus screen is open.
+            //
+            // Short-circuit only when the LINK is genuinely up; otherwise fall through to the read
+            // ladder, which is the real readiness probe and already handles a connect in progress.
+            if !manager.isConnectionReleased, manager.podLoanConnectionStateDescription == "connected" {
                 self.lastPodLinkContact = self.now()
                 completion(true)
                 return
-            }   // still connected — nothing to do
+            }
             // NO RADIO STAND-DOWN, and nothing left to stand down. #82 and R26 both existed to
             // stop OUR G7 reader from occupying the radio during the pod's ladder — #82 was
             // retired by #84 for stranding the radio when the app suspended mid-ladder, and R26's
