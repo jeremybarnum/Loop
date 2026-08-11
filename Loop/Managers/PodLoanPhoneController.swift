@@ -823,22 +823,40 @@ final class PodLoanPhoneController {
             UserDefaults.standard.set(expected, forKey: Keys.expectedUnits)
             UserDefaults.standard.set(offer.odometer?.freshenSucceeded == true, forKey: Keys.watchAuditRan)
 
-            // CAPTURE (Jeremy 2026-07-27, Step 2): the hand-back reconciliation numbers, relayed to the
-            // WATCH log via handbackDiag ([phone] …) AND os_log'd, normalized by loan length + cycles —
-            // so field loans record the real delta. `delivered` = odometer delta (floored ground truth).
-            // `cmdCont` = Σ rate×time (continuous — the biased estimate the old audit compared against).
-            // `cmdFloor` = Σ floor(rate×time to 0.05 U pulse) (UNBIASED — matches the pod's pulse model).
-            // `remFloor` is the number a future warning would key on: it should stay ~0 and NOT grow with
-            // loan length. NO user-facing action is taken on any of it (warnings + IOB valve deferred).
+            // THE AUDIT (2026-08-11, Jeremy's design): does the pod's own odometer agree with the
+            // delivery history the watch claims to have executed?
+            //
+            //   delivered = the pod's cumulative-delivered DELTA over the loan — an independent,
+            //               pulse-counted physical measurement we did not compute.
+            //   expected  = expectedInsulin(ALL staged events + the basal schedule filling every
+            //               uncovered gap) — i.e. the odometer reading implied by our own records.
+            //   residual  = delivered - expected. THIS is the number the R32 open-loop decision
+            //               keys on. Tolerance is ONE PULSE (0.05 U) plus any bolus mid-delivery:
+            //               both sides are pulse-quantized (supported rates are multiples of 0.05),
+            //               so the only genuine ambiguity is whether the pulse due at the boundary
+            //               has fired yet. That makes the threshold principled rather than guessed.
+            //
+            // WHY THIS LINE CHANGED (field 2026-08-11, twice): it used to print cmdCont/cmdFloor
+            // from `outcome.doses` — the doses committed in THIS drain — against `delivered`, which
+            // spans the WHOLE loan. After an interim drain the final offer carries no events, so the
+            // line read "delivered=6.000 cmdFloor=0.000 remFloor=+6.000" and again "delivered=1.400
+            // … remFloor=+1.400": six and one-point-four units of phantom missing insulin, pure
+            // scope mismatch. `expected` was computed correctly on the line above and written only to
+            // UserDefaults, so the audit has been running for weeks with nobody able to see its
+            // answer. The drain-scoped figures are kept, clearly labelled, because they are still
+            // useful for "what did THIS drain write".
+            //
+            // Still NO user-facing action here (R32's warning + the IOB valve remain unwired) —
+            // this is the measurement that has to come before the threshold.
             let delivered = offer.odometer.map { $0.deliveredLatest - $0.deliveredAtStart }
-            let cmdCont = outcome.doses.reduce(0.0) { $0 + $1.programmedUnits }
-            let cmdFloor = outcome.doses.reduce(0.0) { $0 + (($1.programmedUnits * 20).rounded(.down) / 20) }
+            let drainCont = outcome.doses.reduce(0.0) { $0 + $1.programmedUnits }
+            let drainFloor = outcome.doses.reduce(0.0) { $0 + (($1.programmedUnits * 20).rounded(.down) / 20) }
             let loanMin = offer.handedBackAt.timeIntervalSince(loanStart) / 60
             handbackDiag(offer.epoch, String(format:
-                "reconcile: delivered=%@ cmdCont=%.3f cmdFloor=%.3f remCont=%@ remFloor=%@ loanMin=%.0f cycles=%d fresh=%@",
-                delivered.map { String(format: "%.3f", $0) } ?? "n/a", cmdCont, cmdFloor,
-                delivered.map { String(format: "%+.3f", $0 - cmdCont) } ?? "n/a",
-                delivered.map { String(format: "%+.3f", $0 - cmdFloor) } ?? "n/a",
+                "reconcile: delivered=%@ expected=%.3f residual=%@ (tol 0.05) · thisDrain cont=%.3f floor=%.3f · loanMin=%.0f cycles=%d fresh=%@",
+                delivered.map { String(format: "%.3f", $0) } ?? "n/a", expected,
+                delivered.map { String(format: "%+.3f", $0 - expected) } ?? "n/a",
+                drainCont, drainFloor,
                 loanMin, allStagedEvents.count, offer.odometer?.freshenSucceeded == true ? "Y" : "N"))
         }
 
