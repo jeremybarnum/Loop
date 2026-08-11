@@ -1289,6 +1289,9 @@ final class PodLoanWatchController {
     private func ingestGrantCarbs(_ grant: LoanGrant) {
         let phoneCOB = grant.predictionSnapshot?.cobGrams
         let phoneCOBStr = phoneCOB.map { String(format: "%.1f", $0) } ?? "n/a"
+        // How stale the phone's COB is. The comparison below is meaningless without it: carbs
+        // decay, so a 98-second-old phone COB is legitimately a couple of grams under a fresh one.
+        let snapshotAge = grant.predictionSnapshot.map { self.now().timeIntervalSince($0.snapshotAt) }
         let carbs = grant.carbHistory ?? []
         let objects: [SyncCarbObject] = carbs.map { c in
             SyncCarbObject(
@@ -1331,10 +1334,19 @@ final class PodLoanWatchController {
             self?.loopManager.glanceCarbsOnBoard { cob in
                 let postV = cob ?? 0
                 let vsPhone = phoneCOB.map { postV - $0 }
-                SportLog.event("cob-diff", String(format: "REPLACE %@ · phoneCOB=%@ g · watch COB(post)=%.2f g · replaced %.0f g · Δ(post−phone)=%@ g%@ · [%@]",
-                                                   source, phoneCOBStr, postV, seededGrams,
+                // The ⚠ used to fire on Δ > 2 g alone, and on 2026-08-11 it cried wolf: +2.83 g
+                // on 41 g of actively-absorbing carbs against a phone snapshot that the sibling
+                // [iob-diff] line reported as 98 s old. Carbs decay; the phone's number is from
+                // the grant instant, the watch's from now. Print the age and require the snapshot
+                // to be FRESH before calling it a residual — a false alarm in the instrumentation
+                // is worse than none, because it teaches you to skip the line.
+                let ageSec = snapshotAge.map { Int($0.rounded()) }
+                let ageStr = ageSec.map { "\($0)s" } ?? "n/a"
+                let suspect = (vsPhone ?? 0) > 2.0 && (snapshotAge ?? .greatestFiniteMagnitude) < 60
+                SportLog.event("cob-diff", String(format: "REPLACE %@ · phoneCOB=%@ g (snapshot age %@) · watch COB(post)=%.2f g · replaced %.0f g · Δ(post−phone)=%@ g%@ · [%@]",
+                                                   source, phoneCOBStr, ageStr, postV, seededGrams,
                                                    vsPhone.map { String(format: "%+.2f", $0) } ?? "—",
-                                                   (vsPhone ?? 0) > 2.0 ? " ⚠ residual (wipe failed?)" : "", manifest))
+                                                   suspect ? " ⚠ residual (wipe failed?)" : "", manifest))
             }
         }
         // Carb effect is cached; force a recompute so the replaced COB reaches the first

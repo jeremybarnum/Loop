@@ -291,6 +291,17 @@ final class WatchDataManager: NSObject {
                 // R33 (2026-08-11): the pod is home and reachable; drop the temp the WATCH set.
                 guard let self = self else { return completion(nil) }
                 self.deviceManager.loopManager.cancelTempBasalAfterPodReturn(completion: completion)
+            },
+            openLoopForUncertainReconciliation: { [weak self] in
+                guard let self = self else { return }
+                // ORDER MATTERS. Clear the pre-loan capture FIRST: `setAutomaticDosingPaused(false)`
+                // at the END of the next loan restores dosingEnabled from this key, so leaving it
+                // set would silently re-close the loop R32 just opened — the user would get one
+                // loud warning and then have the machine quietly resume anyway, which is worse
+                // than never warning. With the key cleared, the next loan captures `false` and
+                // restores `false`; only the user's own settings change re-closes the loop.
+                UserDefaults.standard.removeObject(forKey: dosingKey)
+                self.deviceManager.loopManager.mutateSettings { $0.dosingEnabled = false }
             }
         ))
     }()

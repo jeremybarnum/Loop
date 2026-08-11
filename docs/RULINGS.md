@@ -501,6 +501,46 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   redesigned with a proper threshold") left open. Odometer-derived IOB injection
   remains OFF and unruled; going open is what we do instead of guessing.
 
+  **R32(b) BUILT 2026-08-11 — sign-aware, with deliberately loose bounds.**
+
+  Until this build the answer to "what happens when the odometer disagrees?" was:
+  nothing. The residual was logged and no code read it. R32 was ruled but only its
+  first trigger (records not committed) was wired.
+
+  The two directions are not the same failure and do not get the same response:
+
+  - POSITIVE (pod delivered MORE than our books) beyond **+0.5 U** → the loop goes
+    OPEN, loudly. There is insulin in the body the algorithm cannot see, so closed
+    loop would dose on top of it. That is stacking; the remedy is to stop the machine.
+  - NEGATIVE (pod delivered LESS than our books) beyond **−0.5 U** → warn, keep
+    looping. The books carry phantom IOB, so the algorithm believes more insulin is
+    working than there is and doses LESS. The error is self-limiting, decays out
+    within DIA, and R22's annulment already retires the identifiable cases. Opening
+    the loop here would worsen the actual failure — under-treatment — which makes
+    this the one direction where R32's remedy is the wrong medicine. (Jeremy
+    approved the asymmetry when it was proposed; it is a refinement of R32's
+    unconditional text, recorded here so the divergence is deliberate and visible.)
+
+  Why ±0.5 U and not something tighter: ten pulses. Quantization cannot produce it,
+  a recorded bolus cannot produce it, and the largest bias ever measured is a third
+  of it — so a trip means something real happened. It is loose ON PURPOSE, because
+  every residual available when it was chosen had been measured against the watch's
+  stale endpoint, i.e. against the wrong interval. Tightening from that data would
+  be fitting to known-bad numbers.
+
+  **TIGHTEN THIS.** `bankResidual` persists every authoritative residual and prints
+  `residual bank: n=… mean=… worst=…` at each hand-back, counting down to ten clean
+  samples and then printing `** R32 THRESHOLD REVIEW DUE **` at every subsequent
+  hand-back until someone acts. The reminder is in the log rather than in this file
+  because a doc only reminds you if you re-read it.
+
+  Implementation note: opening the loop deliberately does NOT go through
+  `setAutomaticDosingPaused(true)`. That call pairs with a `(false)` at the next
+  loan's end which would silently re-close the loop — one loud warning followed by
+  the machine quietly resuming, which is worse than never warning at all. The
+  dependency clears the pre-loan capture first, so only the user's own settings
+  change re-closes the loop.
+
 ## Not yet ruled (do not decide without Jeremy)
 
 - Risk-register #8: any on-body session of any milestone build — per-build,

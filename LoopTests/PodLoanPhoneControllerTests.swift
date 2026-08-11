@@ -44,6 +44,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// Item 1: how many times the phone enacted the R33 post-return temp cancel, and its result.
     private var cancelCalls = 0
     private var cancelError: Error?
+    /// R32(b): how many times the phone stopped automatic dosing over a reconciliation difference.
+    private var openLoopCalls = 0
     private var pump: MockPumpManager!
     private var settings: LoopSettings!
     private let lock = NSLock()
@@ -69,10 +71,12 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         diags = []
         cancelCalls = 0
         cancelError = nil
+        openLoopCalls = 0
         pump = MockPumpManager()
         MockPumpManager.testConnectionReleased = false
         MockPumpManager.testOdometer = nil
         UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.deliveredAuthoritative")
+        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.residualHistory")
 
         let timeZone = TimeZone(identifier: "GMT")!
         settings = LoopSettings(
@@ -131,6 +135,10 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 guard let self = self else { return completion(nil) }
                 self.lock.lock(); self.cancelCalls += 1; let error = self.cancelError; self.lock.unlock()
                 completion(error)
+            },
+            openLoopForUncertainReconciliation: { [weak self] in
+                guard let self = self else { return }
+                self.lock.lock(); self.openLoopCalls += 1; self.lock.unlock()
             }
         ))
     }
@@ -712,6 +720,89 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertNil(diagMatching("reconcile[AUTHORITATIVE]"), "no reading means no audit — never a fabricated one")
         XCTAssertEqual(cancelCalls, 0, "no cancel at an unreachable pod")
         XCTAssertNotNil(diagMatching("reconcile[provisional]"), "the provisional line is what stands")
+    }
+
+    // MARK: - R32(b): what a reconciliation difference DOES
+
+    /// Drives one clean loan to the authoritative audit with a chosen residual.
+    /// `expected` for an eventless loan is the basal schedule (1.0 U/hr) over the loan window,
+    /// which the helper keeps at ~0 by handing back immediately — so `delivered` IS the residual.
+    private func runLoanToAudit(_ controller: PodLoanPhoneController, deliveredDuringLoan: Double) throws {
+        let grant = establishLoan(controller)
+        MockPumpManager.testOdometer = 10.0 + deliveredDuringLoan
+        let ackSent = expectSend()
+        let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil,
+                                  odometer: LoanOdometerSnapshot(deliveredAtStart: 10.0, deliveredLatest: 10.0,
+                                                                 freshenSucceeded: true),
+                                  events: [], tombstones: [], recovered: false, released: true)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+        waitUntil(timeout: 8, "authoritative audit") { self.diagMatching("reconcile[AUTHORITATIVE]") != nil }
+    }
+
+    /// POSITIVE beyond the bound: the pod delivered insulin the books do not contain, so closed
+    /// loop would dose on top of insulin it cannot see. Stop the machine (R32).
+    func testLargePositiveResidualOpensTheLoop() throws {
+        let controller = makeController()
+        try runLoanToAudit(controller, deliveredDuringLoan: 2.0)   // vs ~0 expected
+
+        waitUntil(timeout: 5, "open-loop verdict") { self.diagMatching("R32 OPEN LOOP") != nil }
+        XCTAssertEqual(openLoopCalls, 1, "automatic dosing must be stopped exactly once")
+        XCTAssertTrue(notices.contains("Loop Opened — Unexplained Insulin"), "the user must be told, loudly")
+    }
+
+    /// NEGATIVE beyond the bound: the books carry phantom IOB, so the loop runs CAUTIOUS. Opening
+    /// it would make the real failure — under-treatment — worse. Warn, keep looping.
+    func testLargeNegativeResidualWarnsButKeepsLooping() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+
+        // The books say a 2 U bolus was delivered; the pod's odometer says nothing moved.
+        // (A bolus, not a temp: bolus units enter `expected` exactly, independent of the loan
+        // window's length, so the shortfall does not depend on wall-clock timing in the test.)
+        MockPumpManager.testOdometer = 10.0
+        let bolus = makeEvent(seq: 1, units: 2.0, at: Date())
+        let ackSent = expectSend()
+        let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: Date().addingTimeInterval(60),
+                                  finalStatus: nil,
+                                  odometer: LoanOdometerSnapshot(deliveredAtStart: 10.0, deliveredLatest: 10.0,
+                                                                 freshenSucceeded: true),
+                                  events: [bolus], tombstones: [], recovered: false, released: true)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+
+        waitUntil(timeout: 8, "warn verdict") { self.diagMatching("R32 WARN") != nil }
+        XCTAssertEqual(openLoopCalls, 0, "a shortfall must NOT open the loop — that worsens under-treatment")
+        XCTAssertTrue(notices.contains("Insulin On Board May Be High"))
+    }
+
+    /// The ordinary case — a residual inside the bounds — must be silent. If routine loans warn,
+    /// the warning stops meaning anything (#102's alarm-fatigue finding).
+    func testResidualWithinBoundsIsSilent() throws {
+        let controller = makeController()
+        try runLoanToAudit(controller, deliveredDuringLoan: 0.10)
+
+        XCTAssertEqual(openLoopCalls, 0)
+        XCTAssertNil(diagMatching("R32 OPEN LOOP"))
+        XCTAssertNil(diagMatching("R32 WARN"))
+        XCTAssertTrue(notices.isEmpty, "a normal loan must produce no notice at all, got \(notices)")
+    }
+
+    /// Every authoritative residual is banked, and the log states how many samples exist — the
+    /// mechanism that makes "tighten these bounds once we have data" self-reminding rather than
+    /// dependent on someone re-reading a doc.
+    func testResidualsAreBankedAndTheLogAsksForAThresholdReview() throws {
+        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.residualHistory")
+        let controller = makeController()
+        try runLoanToAudit(controller, deliveredDuringLoan: 0.10)
+
+        let bank = diagMatching("residual bank:")
+        XCTAssertNotNil(bank, "each audit must bank its residual and say how many exist")
+        XCTAssertTrue(bank!.contains("n=1"), "got: \(bank!)")
+        XCTAssertTrue(bank!.contains("9 more for a threshold review"), "got: \(bank!)")
+        XCTAssertEqual((UserDefaults.standard.array(forKey: "PodLoanPhoneController.residualHistory") as? [Double])?.count, 1)
     }
 
     /// Row 10: the same offer redelivered (lost ack) re-acks the same cursor and

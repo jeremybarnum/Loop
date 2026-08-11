@@ -87,6 +87,14 @@ final class PodLoanPhoneController {
         /// LoopDataManager.cancelTempBasalAfterPodReturn. Default no-op keeps the state-machine
         /// tests constructing unchanged.
         var cancelTempBasalAfterPodReturn: (@escaping (Error?) -> Void) -> Void = { $0(nil) }
+        /// R32(b) (2026-08-11): the pod's odometer disagrees with our books by more than noise —
+        /// stop automatic dosing and LEAVE it stopped until the user decides otherwise.
+        ///
+        /// Deliberately NOT `setAutomaticDosingPaused(true)`. That call pairs with a matching
+        /// `(false)` at the next loan's end, which would silently re-close the loop R32 just
+        /// opened — the implementation must also clear the pre-loan capture so no later restore
+        /// can undo this. Default no-op keeps the state-machine tests constructing unchanged.
+        var openLoopForUncertainReconciliation: () -> Void = {}
         var now: () -> Date = { Date() }
     }
 
@@ -317,6 +325,8 @@ final class PodLoanPhoneController {
                 drift.map { String(format: "%+.3f", $0) } ?? "n/a",
                 pending.watchFreshened ? "Y" : "N"))
             UserDefaults.standard.set(delivered, forKey: Keys.deliveredAuthoritative)
+            bankResidual(residual, epoch: pending.epoch)
+            applyReconciliationVerdict(residual: residual, epoch: pending.epoch)
         } else {
             handbackDiag(pending.epoch, "reconcile[AUTHORITATIVE]: pod reachable but reported no odometer — keeping the provisional line")
         }
@@ -336,6 +346,80 @@ final class PodLoanPhoneController {
             }
         }
     }
+
+    // MARK: - R32(b): what a reconciliation difference actually DOES
+
+    /// A positive residual — the pod delivered MORE than our books say — beyond this opens the
+    /// loop. Ten pulses: quantization cannot produce it, a bolus we recorded cannot produce it,
+    /// and the largest bias we have ever measured is a third of it. So a trip means something
+    /// real happened that our records do not contain.
+    ///
+    /// DELIBERATELY LOOSE, and it should not stay this loose. Every residual we had when this was
+    /// chosen was measured against the watch's stale endpoint, i.e. against the wrong interval —
+    /// which is exactly what `finishPendingHandbackAudit` now fixes. Tightening before the new
+    /// measurement has a distribution would be fitting to known-bad data. `bankResidual` counts
+    /// the clean samples and says in the log when there are enough. See RULINGS R32.
+    private static let openLoopPositiveResidual: Double = 0.5
+
+    /// A negative residual — the pod delivered LESS than our books say — beyond this warns.
+    private static let warnNegativeResidual: Double = 0.5
+
+    /// R32(b), sign-aware. The two directions are not the same failure and do not deserve the
+    /// same response:
+    ///
+    /// POSITIVE (pod delivered more than recorded) — there is insulin in the body that the
+    /// algorithm cannot see. Closed loop will dose on top of it. That is stacking, and the remedy
+    /// is to stop the machine: go open, tell the user loudly, let them look and dose by hand.
+    ///
+    /// NEGATIVE (pod delivered less than recorded) — the books carry phantom IOB. The algorithm
+    /// believes there is more insulin working than there is, so it doses LESS: the error is
+    /// self-limiting, it decays out within DIA, and R22's annulment already retires the
+    /// identifiable cases. Opening the loop here would make the actual failure (under-treatment)
+    /// worse, not better — the one direction where R32's remedy is the wrong medicine. So: warn,
+    /// keep looping.
+    ///
+    /// Warned once per event, never once per retry (#102's alarm-fatigue finding).
+    private func applyReconciliationVerdict(residual: Double, epoch: Int) {
+        if residual > Self.openLoopPositiveResidual {
+            handbackDiag(epoch, String(format:
+                "** R32 OPEN LOOP — residual %+.3f U exceeds +%.2f: the pod delivered insulin our records do not contain. Automatic dosing STOPPED. **",
+                residual, Self.openLoopPositiveResidual))
+            deps.openLoopForUncertainReconciliation()
+            deps.issueNotice("Loop Opened — Unexplained Insulin",
+                             String(format: "The pod delivered %.2f U more than the watch session's records account for. Automatic dosing is off until you turn it back on. Check your insulin on board before dosing.", residual))
+        } else if residual < -Self.warnNegativeResidual {
+            handbackDiag(epoch, String(format:
+                "** R32 WARN — residual %+.3f U beyond -%.2f: records claim more delivery than the pod made (phantom IOB). Still looping — this direction under-doses and decays out. **",
+                residual, Self.warnNegativeResidual))
+            deps.issueNotice("Insulin On Board May Be High",
+                             String(format: "The watch session's records account for %.2f U more than the pod delivered. Automatic dosing continues; expect it to run cautious until this clears.", -residual))
+        }
+    }
+
+    /// The "don't forget to tighten this" mechanism, built so it cannot be forgotten: bank every
+    /// authoritative residual and say in the log how many clean samples exist. A note in a doc
+    /// relies on someone re-reading the doc; a line that appears at every hand-back does not.
+    private func bankResidual(_ residual: Double, epoch: Int) {
+        var history = (UserDefaults.standard.array(forKey: Keys.residualHistory) as? [Double]) ?? []
+        history.append(residual)
+        if history.count > 40 { history.removeFirst(history.count - 40) }
+        UserDefaults.standard.set(history, forKey: Keys.residualHistory)
+
+        let mean = history.reduce(0, +) / Double(history.count)
+        let worst = history.map(abs).max() ?? 0
+        var line = String(format: "residual bank: n=%d mean=%+.3f worst=|%.3f| min=%+.3f max=%+.3f",
+                          history.count, mean, worst, history.min() ?? 0, history.max() ?? 0)
+        if history.count >= Self.residualSampleTarget {
+            line += String(format: " ** R32 THRESHOLD REVIEW DUE — %d authoritative samples banked; the ±%.2f U bounds were set with none **",
+                           history.count, Self.openLoopPositiveResidual)
+        } else {
+            line += String(format: " (%d more for a threshold review)", Self.residualSampleTarget - history.count)
+        }
+        handbackDiag(epoch, line)
+    }
+
+    /// How many phone-read residuals to bank before the loose bounds above are worth revisiting.
+    private static let residualSampleTarget = 10
 
     /// True whenever this phone does NOT own the pod's connection (any non-owner
     /// state — the link is released or in flux). Delivery attempts made here while
@@ -418,6 +502,8 @@ final class PodLoanPhoneController {
         static let watchAuditRan = "PodLoanPhoneController.watchAuditRan"
         /// Item 1: the last loan's delivered total measured against a PHONE-read end odometer.
         static let deliveredAuthoritative = "PodLoanPhoneController.deliveredAuthoritative"
+        /// R32(b): every authoritative residual, so the loose thresholds get tightened from data.
+        static let residualHistory = "PodLoanPhoneController.residualHistory"
     }
 
     private enum NotificationID {
