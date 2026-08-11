@@ -541,6 +541,30 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   dependency clears the pre-loan capture first, so only the user's own settings
   change re-closes the loop.
 
+- **R34 — The D2W piggyback closed two lines of inquiry. Do not reopen them.**
+  (2026-08-11, Jeremy: "#38 and #39 can both be retired. They've been rendered
+  irrelevant by the D2W piggyback.")
+
+  Both are natural ideas that a fresh reader will re-propose. They were good ideas
+  against the OLD architecture, in which the watch ran its own G7 session with its
+  own crypto. It doesn't; it rides the Dexcom watch app's session.
+
+  RETIRED — **Juggluco on Android Wear as a precedent** (was #38). Its whole value
+  was answering "is our ~77% catch rate a G7-sensor ceiling or a watchOS-specific
+  one?" by comparing against the only other standalone direct-G7-from-watch
+  implementation. We no longer run a standalone session, so the comparison is
+  against an architecture we abandoned — and the piggyback handed us a far better
+  control anyway: Dexcom's own watch app, same OS, same watch, same wrist, running
+  live. Ask what D2W shows before theorizing (that rule predates this and is why
+  the experiment is redundant, not merely stale).
+
+  RETIRED — **HealthKit as a redundant glucose source** (was #39). It was always
+  phone-present-only, i.e. useless for the countryside case that motivates the
+  whole project, and the piggyback subsumes the redundancy it offered since the
+  Dexcom watch app is on the wrist by construction. If it is ever revisited, the
+  firewall from the original note still stands: display and cross-check only, never
+  silently feeding the dosing glucose store (single-writer invariant).
+
 ## Not yet ruled (do not decide without Jeremy)
 
 - Risk-register #8: any on-body session of any milestone build — per-build,
