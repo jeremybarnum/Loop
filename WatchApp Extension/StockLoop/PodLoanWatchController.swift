@@ -1525,8 +1525,27 @@ final class PodLoanWatchController {
         // DESIGN-5: cancel the leftover LOOP temp — but a running bounded manual
         // suspend is preserved (46f16d01); the pod auto-resumes at its expiry (R3).
         let suspendActive = (self.manualSuspendEnd ?? .distantPast) > self.now()
+        // R33 hand-back half (2026-08-11): NO PROGRAM CROSSES THE BOUNDARY — the automatic
+        // controller is standing down, so its automatic temp goes with it and the pod reverts
+        // to the user's own schedule. This mirrors stock's own off-cycle idiom exactly:
+        // LoopDataManager.cancelActiveTempBasal enacts a bare `.cancel` outside loop() for
+        // automaticDosingDisabled / unreliableCGMData / maximumBasalRateChanged. Stock never
+        // SETS a rate off-cycle (that needs a fresh prediction from fresh CGM data) but it
+        // always allows CANCELLING, because cancelling can only move toward less intervention.
+        // So the phone does NOT need an off-cycle dosing trigger here; its next reading, ≤5 min
+        // away, sets the new rate, and until then the pod runs the user's baseline.
+        //
+        // THE BUG THIS FIXES: the guard was `if case .tempBasal = manager.status.basalDeliveryState`.
+        // E4 orphans the pod between doses, so by hand-back that state reads nil even though the
+        // pod is still delivering (#50 exists for exactly this). The cancel therefore never fired
+        // — field 2026-08-11, both hand-backs: zero pod commands between "drain complete —
+        // finalizing hand-back" and the release, 0.5s apart. DESIGN-5 has been dead code since E4
+        // became the default, and every loan's last temp kept running after the pod went home.
+        // Ask the loop manager instead: it falls back to the temp it last enacted, until that
+        // temp's programmed end.
+        let runningTemp = self.loopManager.runningTempBasalForHandback()
         let cancelIfNeeded: (@escaping () -> Void) -> Void = { proceed in
-            if case .tempBasal = manager.status.basalDeliveryState, !suspendActive {
+            if runningTemp != nil, !suspendActive {
                 // #73/#74 shadow ledger: the safe-cancel truncates the open temp in the ledger
                 // too — otherwise a failed-offer resume keeps a phantom full-span temp
                 // (adversarial review). Zero-length 0-temp = pure truncation marker.
@@ -1534,7 +1553,18 @@ final class PodLoanWatchController {
                 self.loopManager.ledgerRecordEnact(DoseEntry(
                     type: .tempBasal, startDate: cancelAt, endDate: cancelAt,
                     value: 0, unit: .unitsPerHour))
-                manager.enactTempBasal(unitsPerHour: 0, for: 0) { _ in proceed() }
+                SportLog.event("loan", String(format: "hand-back: cancelling our temp (%.2f U/hr until %@) — the pod reverts to the schedule (R33)",
+                                              runningTemp?.unitsPerHour ?? 0,
+                                              runningTemp.map { ISO8601DateFormatter().string(from: $0.endDate) } ?? "—"))
+                manager.enactTempBasal(unitsPerHour: 0, for: 0) { error in
+                    if let error = error {
+                        // Loud, not silent: a failed cancel means the pod goes home still running
+                        // OUR temp, which is the very thing R33 exists to prevent. The phone's next
+                        // reading supersedes it within ~5 min, so this is a diagnostic, not a stall.
+                        SportLog.event("loan", "hand-back: temp CANCEL FAILED — pod keeps our temp until the phone's next cycle · \(String(describing: error))")
+                    }
+                    proceed()
+                }
             } else {
                 proceed()
             }

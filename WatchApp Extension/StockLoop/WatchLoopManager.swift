@@ -514,6 +514,16 @@ final class WatchLoopManager {
     /// `basalDeliveryState` while the pod is connected, otherwise the temp we last enacted
     /// until its programmed end. E4 orphans the pod, so `basalDeliveryState` goes nil within
     /// seconds even though the pod keeps delivering. Read on `dataAccessQueue`.
+    /// R33 hand-back half: is a LOOP temp still executing on the pod right now? The loan
+    /// controller needs this at hand-back and cannot ask `basalDeliveryState`, because E4
+    /// has orphaned the link by then and that state reads nil — which is exactly why the
+    /// DESIGN-5 cancel in finalizeHandback had been silently dead (field 2026-08-11: no pod
+    /// command at all between "drain complete" and the release, at both hand-backs).
+    /// Thread-safe by hopping the data queue; nil when nothing is running.
+    func runningTempBasalForHandback() -> DoseEntry? {
+        return dataAccessQueue.sync { self.runningTempBasal() }
+    }
+
     private func runningTempBasal() -> DoseEntry? {
         if case .some(.tempBasal(let dose)) = pumpManager?.status.basalDeliveryState {
             return dose

@@ -60,14 +60,37 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   and mints a JOURNAL EVENT — which is the point: the loan's first program is
   ours, streamed to the phone, and inside the audit.
 
-  HAND-BACK HALF: ruled in principle, NOT yet built. The mirror gap is real (the
-  watch's last temp keeps executing after the phone's record of it is clamped),
-  but it is not symmetric in safety: at takeover we replace a program with one we
-  have just computed, whereas cancelling at hand-back would revert the pod to
-  scheduled basal with no computation behind it until the phone's first loop —
-  which is a therapy change in an uncontrolled direction. The likely correct form
-  is for the PHONE to assert its own program immediately on reclaim rather than
-  for the watch to cancel and leave a hole. To be designed.
+  HAND-BACK HALF (amended and BUILT 2026-08-11): the watch CANCELS its temp at
+  hand-back; the pod reverts to the user's schedule; the phone sets the new rate on
+  its next reading. The phone does NOT get an off-cycle dosing trigger.
+
+  My first reading of this was wrong twice over and Jeremy pushed back on both.
+  I claimed stock never acts between readings — it does: `LoopDataManager
+  .cancelActiveTempBasal` enacts a bare `.cancel` outside `loop()` for
+  `automaticDosingDisabled`, `unreliableCGMData` and `maximumBasalRateChanged`.
+  And I claimed cancelling leaves the pod "uncontrolled" — it does not; reverting
+  to the user's own scheduled basal is precisely the fallback stock chooses
+  whenever it is unsure.
+
+  The principle the Loop authors were actually being stingy about, and which we
+  now adopt explicitly: OFF-CYCLE, ONLY EVER MOVE TOWARD LESS INTERVENTION.
+  Cancelling is always safe (it falls back to the user's own schedule); SETTING a
+  new therapeutic rate requires a fresh prediction from fresh CGM data, which only
+  the reading cycle provides. Hence the deliberate asymmetry between the halves:
+  at TAKEOVER the watch REPLACES the program (safe, because it computes a fresh
+  recommendation from freshly seeded data at that instant); at HAND-BACK the watch
+  CANCELS it (safe, because cancelling always is). Neither side ever sets a rate
+  without current data behind it.
+
+  THE BUG THIS EXPOSED: the cancel already existed (DESIGN-5 in finalizeHandback)
+  but had been DEAD CODE since E4 became the default. It was gated on
+  `manager.status.basalDeliveryState == .tempBasal`, and E4 orphans the pod link
+  between doses, so by hand-back that state reads nil even though the pod is still
+  delivering — the condition #50 was opened for. Field 2026-08-11, both hand-backs:
+  zero pod commands between "drain complete — finalizing hand-back" and the pod
+  release, 0.5 s apart. Every loan's last temp has been running on after the pod
+  went home. Now gated on the loop manager's cached running temp instead, which
+  survives the orphan, and a failed cancel is logged loudly.
 - **R3 — Suspend is a bounded rate-0 temp.** Never an untimed
   suspendDelivery: the pod itself auto-resumes at expiry, so a dead watch
   can never strand delivery off (P0#5).
