@@ -37,6 +37,18 @@ final class PodLoanWatchController {
     private let loopManager: WatchLoopManager
     private let journal: LoanEventJournal
 
+    /// Test coverage plan item 2 (2026-08-11): the clock seam. Every `Date()` in this file
+    /// now reads `self.now()`, mirroring stock's own idiom (`LoopDataManager.now()`,
+    /// `CarbStore.test_currentDate`). Production behavior is unchanged — the default IS
+    /// `Date()` — but the file's timing behavior (takeover ladder budgets, hand-back resend
+    /// cadence, stuck-alert deadlines, suspend windows) becomes assertable without waiting
+    /// out real seconds, which is what made it untestable before.
+    var now: () -> Date = Date.init
+
+    /// Item 2 companion seam: `UserDefaults.standard` reads/writes go through this, so a test
+    /// can hand in a scratch suite instead of mutating the host app's real defaults.
+    var defaults: UserDefaults = .standard
+
     /// #67 follow-up (2026-08-03): is the counterpart app reachable right now
     /// (WCSession.isReachable at integration)? Injected so the controller stays testable.
     /// Default true = behave exactly as before wherever it is not wired.
@@ -293,7 +305,7 @@ final class PodLoanWatchController {
                 return
             }
             self.phase = .requested
-            self.attemptStartedAt = Date()
+            self.attemptStartedAt = self.now()
             self.lastIdleNote = nil
             SportLog.event("loan", "REQUEST sent (build \(watchBuild)) — awaiting grant")
             self.sendMessage(.request(LoanRequest(watchBuild: watchBuild)))
@@ -325,11 +337,11 @@ final class PodLoanWatchController {
             guard self.phase == .idle else { return }
             SportLog.event("sim", "SIM start — driving idle→active on timers (no pod/BLE)")
             self.lastIdleNote = nil
-            self.attemptStartedAt = Date()
+            self.attemptStartedAt = self.now()
             self.phase = .requested
             self.queue.asyncAfter(deadline: .now() + 0.8) { [weak self] in
                 guard let self, self.phase == .requested else { return }
-                self.attemptStartedAt = Date()          // reset anchor for the ~10s takeover bar
+                self.attemptStartedAt = self.now()          // reset anchor for the ~10s takeover bar
                 self.phase = .takingOver
             }
             self.queue.asyncAfter(deadline: .now() + 2.4) { [weak self] in
@@ -406,7 +418,7 @@ final class PodLoanWatchController {
             }
             phase = .idle
         }
-        guard Date() < grant.expiresAt else {
+        guard self.now() < grant.expiresAt else {
             // Row 2: a late grant self-rejects; the phone's T1 already reclaimed.
             rejectGrant("grant expired", notifyPhone: true)
             return
@@ -475,7 +487,7 @@ final class PodLoanWatchController {
         // predictable part (~5s with the scan fix) — so the determinate bar measures
         // the takeover only; the request stage renders indeterminate. This also keeps
         // a late queued grant (after the 25s timeout) from inheriting a dead anchor.
-        attemptStartedAt = Date()
+        attemptStartedAt = self.now()
         lastTakeoverReadAt = nil          // #86: fresh ladder, fresh stall measurement
         takeoverMaxReadGap = 0
         PodLoanConnectClock.reset()       // #86: connect/disconnect stamps describe THIS attempt
@@ -562,7 +574,7 @@ final class PodLoanWatchController {
         // seed) gates and parameterizes the re-arm — it corroborates that the PHONE's books
         // also believe the temp is running (guards the stale-C5-signature corner across
         // back-to-back loans), and its endDate is the only way to restore a 0 U/hr temp's span.
-        let liveTempRecord = grant.seedDoseEntries(finishedBy: Date()).live.first { $0.type == .tempBasal }
+        let liveTempRecord = grant.seedDoseEntries(finishedBy: self.now()).live.first { $0.type == .tempBasal }
         let scanning = manager.podLoanBeginTakeover(liveTempStart: liveTempRecord?.startDate,
                                                     liveTempEnd: liveTempRecord?.endDate)
         SportLog.event("loan", "pump rebuilt — \(scanning ? "scanning for the pod by address" : "no pod address!") for takeover")
@@ -656,7 +668,7 @@ final class PodLoanWatchController {
                 // T1-reclaimed the pod; flipping .active here would put TWO controllers
                 // on one pod. Re-check the lease every iteration and abort BEFORE
                 // honoring a successful read — expiry outranks a good status.
-                guard Date() < grant.expiresAt else {
+                guard self.now() < grant.expiresAt else {
                     self.teardownPump()
                     self.phase = .idle
                     self.lastIdleNote = NSLocalizedString("Sport Mode start expired before the pod answered. Tap Start to try again.", comment: "Glance: grant lease expired mid-takeover")
@@ -670,7 +682,7 @@ final class PodLoanWatchController {
                     self.loopManager.pumpManager = manager
                     self.loopManager.loanDoseRecorder = self
                     self.onLoanActiveChanged?(true)
-                    let takeoverSecs = self.attemptStartedAt.map { Date().timeIntervalSince($0) } ?? -1
+                    let takeoverSecs = self.attemptStartedAt.map { self.now().timeIntervalSince($0) } ?? -1
                     SportLog.event("loan", String(format: "ACTIVE — epoch %d, pod taken after %d read(s) in %.1fs [takeover-timing], odometer %.2f U, final read driver=%@ · %@",
                                                   grant.epoch, attempt + 1, takeoverSecs, delivered, driver, RuntimeStateLog.snapshot()))
                     self.sendMessage(.takeoverComplete(TakeoverComplete(epoch: grant.epoch, firstPodStatus: self.currentPodStatus())))
@@ -679,16 +691,23 @@ final class PodLoanWatchController {
                     // carbs at takeover instead of the stale pre-loan value until the first G7
                     // reading drives a full cycle. The seeds completed well before this point.
                     self.loopManager.refreshPredictionForGlance()
-                    // E4 STAGE 1 (task #40, 2026-07-21): time-separate the radios. The
-                    // takeover is done and the initial status is read, so the pod BLE
-                    // connection isn't needed until the next dose. Release it (orphan
-                    // the pod — it runs its last basal natively; keys/state untouched)
-                    // so G7 acquisition has the watch's radio uncontested. STAGE 1 is
-                    // OPEN-LOOP validation: no reconnect-to-dose choreography yet, so
-                    // keep the loop OPEN. If G7 catch recovers toward the standalone
-                    // 94% (E1), Stage 2 adds the per-dose reclaim→enact→release.
-                    if UserDefaults.standard.bool(forKey: "g7.e4ReleasePod") {
-                        // E4 v2 (field 2026-07-21): releasing AT takeover broke G7
+                    // Time-separate the radios. The takeover is done and the initial status
+                    // is read, so the pod BLE connection isn't needed until the next dose.
+                    // Release it (orphan the pod — it runs its last basal natively;
+                    // keys/state untouched) so G7 acquisition has the watch's radio
+                    // uncontested.
+                    //
+                    // UNCONDITIONAL since #101 phase 2 (2026-08-11). This used to be gated
+                    // on `g7.e4ReleasePod`, whose toggle and registered default were deleted
+                    // when the link policy became automatic — leaving the gate reading an
+                    // absent key, i.e. FALSE, i.e. "hold the pod link forever" on any device
+                    // where the toggle had never been switched on. That is precisely the arm
+                    // the 2026-08-10 toggle experiment disproved (0 adoptions in ~130 min of
+                    // held link). It did not show on Jeremy's watch only because his key was
+                    // persisted true from the A/B; a fresh install — his own next reinstall,
+                    // or Caitlin's first — would have silently starved G7 acquisition.
+                    do {
+                        // v2 (field 2026-07-21): releasing AT takeover broke G7
                         // entirely — a "connects-but-can't-read" loop, the pod cancel
                         // left it stuck .disconnecting and poisoned the shared BLE
                         // budget (the same watchOS teardown demon that causes the
@@ -696,11 +715,10 @@ final class PodLoanWatchController {
                         // with the pod connected (Jeremy's "first connection is always
                         // good"), then cancel a SETTLED, idle connection ~90s later,
                         // which should tear down cleaner than a fresh one.
-                        SportLog.event("loan", "E4: pod release DEFERRED +90s (v2 — release a settled connection after first reads)")
-                        let scheduledReleaseAt = Date().addingTimeInterval(90)
+                        SportLog.event("loan", "pod release DEFERRED +90s (release a settled connection after first reads)")
+                        let scheduledReleaseAt = self.now().addingTimeInterval(90)
                         self.queue.asyncAfter(deadline: .now() + 90) { [weak self] in
-                            guard let self = self, self.phase == .active, self.epoch == grant.epoch,
-                                  UserDefaults.standard.bool(forKey: "g7.e4ReleasePod") else { return }
+                            guard let self = self, self.phase == .active, self.epoch == grant.epoch else { return }
                             // Same before/after capture as the post-dose release. This is
                             // the one that fired 3m36s LATE on 2026-07-22 (app suspended),
                             // by which point the pod had self-disconnected — so we cancelled
@@ -708,13 +726,13 @@ final class PodLoanWatchController {
                             // whether the link was still alive when we pulled it, and the
                             // scheduled-vs-actual delay says whether runtime was stolen.
                             let before = manager.podLoanConnectionStateDescription
-                            let lateBy = Date().timeIntervalSince(scheduledReleaseAt)
+                            let lateBy = self.now().timeIntervalSince(scheduledReleaseAt)
                             // #72: ORPHAN, not release — E4 drops the BLE link but the watch
                             // remains the controller; the C5 record-close in releaseConnection()
                             // is handover accounting and was silently truncating the running temp
                             // at every E4 release (killing live IOB tracking ~90s in).
                             manager.podLoanOrphanConnection()
-                            self.lastPodLinkContact = Date()
+                            self.lastPodLinkContact = self.now()
                             SportLog.event("loan", String(format: "E4: pod BLE released (+90s deferred, %.0fs late) — state was %@ at cancel%@",
                                                           lateBy,
                                                           before,
@@ -733,11 +751,11 @@ final class PodLoanWatchController {
                     // #42 diagnosis: log the pod BLE state each failed read so "unreachable"
                     // shows WHY — stuck disconnected (pod not advertising / still held by the
                     // phone) vs connecting-but-no-response.
-                    let readElapsed = self.attemptStartedAt.map { Date().timeIntervalSince($0) } ?? -1
+                    let readElapsed = self.attemptStartedAt.map { self.now().timeIntervalSince($0) } ?? -1
                     // #86: measure the inter-read gap. Backstop-driven reads land ~8 s apart (event-
                     // driven reads can be much faster) — a gap well past 8 s is suspended-app time,
                     // not pod silence.
-                    let readNow = Date()
+                    let readNow = self.now()
                     if let prev = self.lastTakeoverReadAt {
                         self.takeoverMaxReadGap = max(self.takeoverMaxReadGap, readNow.timeIntervalSince(prev))
                     }
@@ -779,7 +797,7 @@ final class PodLoanWatchController {
                 } else {
                     self.teardownPump()
                     self.phase = .idle
-                    let failSecs = self.attemptStartedAt.map { Date().timeIntervalSince($0) } ?? -1
+                    let failSecs = self.attemptStartedAt.map { self.now().timeIntervalSince($0) } ?? -1
                     // #86 (2026-07-31, ORIGINAL finding): the takeover ladder ran with NO keepalive
                     // — startSoak() only fired once the loan went ACTIVE, which needs a takeover
                     // that already succeeded — so the whole connect phase was unprotected and, on
@@ -890,13 +908,13 @@ final class PodLoanWatchController {
     func reclaimPodForDose(_ completion: @escaping (Bool) -> Void) {
         queue.async {
             guard self.phase == .active, let manager = self.pumpManager else { completion(false); return }
-            let idle = self.lastPodLinkContact.map { Date().timeIntervalSince($0) }
+            let idle = self.lastPodLinkContact.map { self.now().timeIntervalSince($0) }
             SportLog.event("loan", String(format: "E4: reclaim starting — pod BLE state %@, released=%@, idle %@",
                                           manager.podLoanConnectionStateDescription,
                                           manager.isConnectionReleased ? "yes" : "no",
                                           idle.map { String(format: "%.0fs", $0) } ?? "unknown"))
             guard manager.isConnectionReleased else {
-                self.lastPodLinkContact = Date()
+                self.lastPodLinkContact = self.now()
                 completion(true)
                 return
             }   // still connected — nothing to do
@@ -950,7 +968,7 @@ final class PodLoanWatchController {
                     completion(false); return
                 }
                 if success {
-                    self.lastPodLinkContact = Date()
+                    self.lastPodLinkContact = self.now()
                     SportLog.event("loan", "E4: pod reconnected for dose (after \(attempt + 1) read(s)) — state \(manager.podLoanConnectionStateDescription)")
                     completion(true)
                 } else if attempt + 1 < maxAttempts {
@@ -988,9 +1006,11 @@ final class PodLoanWatchController {
     /// settle before releasing (mirrors the +90s deferred release at takeover).
     func releasePodAfterDose() {
         queue.asyncAfter(deadline: .now() + 12) { [weak self] in
+            // Unconditional since #101 phase 2 — see the takeover-release note above for why
+            // the `g7.e4ReleasePod` gate had to go (absent key = false = hold the link forever
+            // on a fresh install, the arm the toggle experiment disproved).
             guard let self = self, self.phase == .active, let manager = self.pumpManager,
-                  manager.isConnectionReleased == false,
-                  UserDefaults.standard.bool(forKey: "g7.e4ReleasePod") else { return }
+                  manager.isConnectionReleased == false else { return }
             // Capture the peripheral BEFORE and AFTER the cancel. The E4-v1 poisoning
             // signature is a peripheral left in .disconnecting, and on 2026-07-22 we could
             // only infer it minutes later from a central recreate. Cancelling a link the pod
@@ -1001,7 +1021,7 @@ final class PodLoanWatchController {
             // #72: ORPHAN, not release — same as the deferred takeover release: E4 keeps the
             // watch as controller, so the running temp's record must NOT close here.
             manager.podLoanOrphanConnection()
-            self.lastPodLinkContact = Date()
+            self.lastPodLinkContact = self.now()
             self.queue.asyncAfter(deadline: .now() + 3) { [weak self] in
                 guard let self = self, let manager = self.pumpManager else { return }
                 let after = manager.podLoanConnectionStateDescription
@@ -1046,7 +1066,7 @@ final class PodLoanWatchController {
         // store; the takeover's own status read refreshes it via checkPumpDataAndLoop.
         let doseStore = loopManager.doseStore
         let seamLog = OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController")
-        let seedReconciliation = Date()
+        let seedReconciliation = self.now()
         // #72 (2026-07-28, supersedes Fix 2's trim): the seed carries FINISHED history only. A
         // dose still DELIVERING at takeover (running temp, mid-flight bolus) is OMITTED — the
         // grant's podState blob already carries it, and this watch's pump manager reports it as a
@@ -1282,7 +1302,7 @@ final class PodLoanWatchController {
     private func ingestPredictionSnapshot(_ grant: LoanGrant) {
         loopManager.stashPhonePredictionSnapshot(grant.predictionSnapshot)
         guard let s = grant.predictionSnapshot else { return }
-        let now = Date()
+        let now = self.now()
         SportLog.event("snapshot", String(format:
             "RX phone@grant — eventual %.0f start %.0f@%.0fs IOB %.2f@%.0fs COB %.0f · impact mom %+.0f ins %+.0f carb %+.0f RC %+.0f · momPts %d rcDisc %d · snapAge %.0fs",
             s.eventualMgdl, s.startGlucoseMgdl, now.timeIntervalSince(s.startGlucoseDate),
@@ -1337,8 +1357,8 @@ final class PodLoanWatchController {
             // #67: bound the wait for the phone's ack. Pre-scheduled alert fires from a suspended
             // app; the resend loop resumes Sport Mode on the watch at the same deadline. Covers
             // both the interim-drain path below and the legacy single-phase finalize.
-            self.handbackDeadline = Date().addingTimeInterval(HandbackStuckAlert.interval)
-            self.handbackStartedAt = Date()
+            self.handbackDeadline = self.now().addingTimeInterval(HandbackStuckAlert.interval)
+            self.handbackStartedAt = self.now()
             HandbackStuckAlert.arm()
             guard self.phoneSupportsInterimHandback else {
                 // REAL-3 skew gate: an old phone treats ANY offer as final — go
@@ -1426,13 +1446,13 @@ final class PodLoanWatchController {
 
         // DESIGN-5: cancel the leftover LOOP temp — but a running bounded manual
         // suspend is preserved (46f16d01); the pod auto-resumes at its expiry (R3).
-        let suspendActive = (self.manualSuspendEnd ?? .distantPast) > Date()
+        let suspendActive = (self.manualSuspendEnd ?? .distantPast) > self.now()
         let cancelIfNeeded: (@escaping () -> Void) -> Void = { proceed in
             if case .tempBasal = manager.status.basalDeliveryState, !suspendActive {
                 // #73/#74 shadow ledger: the safe-cancel truncates the open temp in the ledger
                 // too — otherwise a failed-offer resume keeps a phantom full-span temp
                 // (adversarial review). Zero-length 0-temp = pure truncation marker.
-                let cancelAt = Date()
+                let cancelAt = self.now()
                 self.loopManager.ledgerRecordEnact(DoseEntry(
                     type: .tempBasal, startDate: cancelAt, endDate: cancelAt,
                     value: 0, unit: .unitsPerHour))
@@ -1481,7 +1501,7 @@ final class PodLoanWatchController {
         }
         let offer = HandbackOffer(
             epoch: epoch,
-            handedBackAt: Date(),
+            handedBackAt: self.now(),
             finalStatus: pumpManager.map { _ in currentPodStatus() },
             odometer: odometer,
             events: offerEvents,
@@ -1493,7 +1513,7 @@ final class PodLoanWatchController {
             // NON-BLOCKING mirror: this runs on `queue`, and `closedLoopEnabled` would sync
             // onto dataAccessQueue — the #64 deadlock direction.
             watchClosedLoopEnabled: loopManager.closedLoopEnabledNonBlocking)
-        if offer.released == true, finalOfferSentAt == nil { finalOfferSentAt = Date() }
+        if offer.released == true, finalOfferSentAt == nil { finalOfferSentAt = self.now() }
         handbackResendCount += 1
         // Self-documenting limbo (party finding: 97 silent minutes of 15s resends):
         // log the attempt count each minute so the wait is visible in the log.
@@ -1523,7 +1543,7 @@ final class PodLoanWatchController {
             // #67: give up after the budget and resume Sport Mode on the watch (we stayed the
             // pod's sole owner throughout). Only the LIVE hand-back (deadline set) — a
             // recovered/revoke drain has no local loan to resume, so it keeps resending.
-            if let deadline = self.handbackDeadline, Date() >= deadline,
+            if let deadline = self.handbackDeadline, self.now() >= deadline,
                self.phase == .handingBack || (self.phase == .active && self.handbackRequested) {
                 self.handbackTimedOut()
                 return
@@ -1585,13 +1605,13 @@ final class PodLoanWatchController {
         // for PERMISSION to release (the phone's ack), versus how long the release itself took.
         // The ack only rides WCSession's immediate channel while the watch is reachable, so a
         // wrist dropped after End pushes it into the queued path.
-        let ackWait = finalOfferSentAt.map { Date().timeIntervalSince($0) }
+        let ackWait = finalOfferSentAt.map { self.now().timeIntervalSince($0) }
         SportLog.event("loan", String(format: "ack RECEIVED %@ after the final offer — releasing the pod now",
                                       ackWait.map { String(format: "+%.1fs", $0) } ?? "(no offer stamp)"))
-        let releaseBegan = Date()
+        let releaseBegan = self.now()
         teardownPump()
         SportLog.event("loan", String(format: "pod BLE teardown returned in %.2fs — the phone's standing connect can land from here",
-                                      Date().timeIntervalSince(releaseBegan)))
+                                      self.now().timeIntervalSince(releaseBegan)))
         finalOfferSentAt = nil
         journal.end()
         phase = .idle
@@ -1679,17 +1699,17 @@ final class PodLoanWatchController {
     }
 
     private func currentMode() -> LoanDosingMode {
-        if (manualSuspendEnd ?? .distantPast) > Date() { return .suspended }
+        if (manualSuspendEnd ?? .distantPast) > self.now() { return .suspended }
         // closedPhoneFed/cgmViewer/pausedStale arrive with the picker integration (R20).
         return .closedDirect
     }
 
     private func currentPodStatus() -> LoanPodStatus {
         LoanPodStatus(
-            timestamp: Date(),
+            timestamp: self.now(),
             deliveredUnits: pumpManager?.podLoanInsulinDelivered,
             reservoirLevel: nil,
-            isSuspended: (manualSuspendEnd ?? .distantPast) > Date(),
+            isSuspended: (manualSuspendEnd ?? .distantPast) > self.now(),
             faultCode: pumpManager?.podLoanFaultDescription)
     }
 
@@ -1796,7 +1816,7 @@ final class PodLoanWatchController {
                 lastEventSeq: journal.lastEventSeq,
                 unackedCount: journal.unackedEvents().count,
                 pendingUncertain: pendingUncertainEventID != nil,
-                suspendEndsAt: (manualSuspendEnd ?? .distantPast) > Date() ? manualSuspendEnd : nil,
+                suspendEndsAt: (manualSuspendEnd ?? .distantPast) > self.now() ? manualSuspendEnd : nil,
                 lastIdleNote: lastIdleNote,
                 startedAt: attemptStartedAt,
                 handbackPending: handbackRequested,
@@ -2004,14 +2024,14 @@ extension PodLoanWatchController: WatchLoanDoseRecording {
     func loanWillEnactTempBasal(unitsPerHour: Double, duration: TimeInterval) -> UUID? {
         return mintIntent(record: LoanDoseRecord(
             kind: unitsPerHour == 0 && duration > 0 ? .suspend : .tempBasal,
-            startDate: Date(),
-            endDate: Date().addingTimeInterval(duration),
+            startDate: self.now(),
+            endDate: self.now().addingTimeInterval(duration),
             unitsPerHour: unitsPerHour),
             uncertainKind: .tempUncertain)
     }
 
     func loanWillEnactBolus(units: Double) -> UUID? {
-        return mintIntent(record: LoanDoseRecord(kind: .bolus, startDate: Date(), amount: units),
+        return mintIntent(record: LoanDoseRecord(kind: .bolus, startDate: self.now(), amount: units),
                           uncertainKind: .bolusUncertain)
     }
 
@@ -2166,7 +2186,7 @@ extension PodLoanWatchController: WatchLoanDoseRecording {
                 SportLog.event("override", "NOT JOURNALED (\(name)) — this phone build predates override records; the override is LIVE on the watch but will NOT follow the pod home. Update the phone app to sync overrides.")
                 return
             }
-            let record = LoanDoseRecord.overrideChange(override, at: Date(), note: name)
+            let record = LoanDoseRecord.overrideChange(override, at: self.now(), note: name)
             guard let event = try? self.journal.mintEvent(record: record, provenance: .confirmed) else {
                 SportLog.event("override", "** JOURNAL MINT FAILED for \(name) — the override is LIVE on the watch but will NOT follow the pod home **")
                 return

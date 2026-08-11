@@ -168,14 +168,17 @@ final class StockLoopSession {
         // anything, and covers the same three occupancy states the hold was added for.
         // The TAKEOVER hold (R26, above) stays: it is user-present and bounded.
 
-        // E4 Stage 2 (task #40): the loop reclaims the E4-orphaned pod to dose, then
-        // re-releases it for G7. Gated on the e4ReleasePod flag — when OFF, reclaim
-        // returns connected=true immediately so the dosing path is byte-for-byte the
-        // tagged baseline. When ON, the loan controller (which owns the OmniPumpManager)
-        // does the bounded reconnect + settled re-release.
-        // #101: unconditional. reclaimPodForDose already no-ops when the link is held
-        // (guard isConnectionReleased → completion(true)), so this single wiring subsumes
-        // both old E4 arms and can never strand a released bid (#97's failure mode).
+        // The loop reclaims the orphaned pod to dose, then re-releases it for G7 (the loan
+        // controller owns the OmniPumpManager and does the bounded reconnect + settled
+        // re-release). The closure names keep their historical `e4` prefix; the experiment
+        // they were named for is now simply the link policy.
+        //
+        // #101: unconditional on BOTH sides. reclaimPodForDose already no-ops when the link
+        // is held (guard isConnectionReleased → completion(true)), so this single wiring
+        // subsumes both old E4 arms and can never strand a released bid (#97's failure mode).
+        // The matching release gates inside PodLoanWatchController were removed on 2026-08-11
+        // — left in place they read a now-unregistered key as false and held the pod link
+        // forever on any fresh install.
         stack.loopManager.e4ReclaimPodForDose = { [weak self] completion in
             guard let self = self else { completion(false); return }
             self.loanController.reclaimPodForDose(completion)
