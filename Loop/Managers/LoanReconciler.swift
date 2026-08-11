@@ -300,7 +300,7 @@ enum LoanReconciler {
         }
 
         for seg in resolved {
-            total += seg.rate * seg.end.timeIntervalSince(seg.start) / 3600.0
+            total += pulsedInsulin(rate: seg.rate, seconds: seg.end.timeIntervalSince(seg.start))
         }
 
         // Schedule fills the uncovered gaps.
@@ -320,12 +320,48 @@ enum LoanReconciler {
         return total
     }
 
+    /// What the POD actually delivers for a basal segment — not `rate × time`.
+    ///
+    /// #107 (2026-08-11, first field residual): the pod delivers discrete 0.05 U pulses spaced
+    /// `3600 × 0.05 / rate` apart, and every SetInsulinScheduleCommand RESTARTS that clock
+    /// (`RateEntry.makeEntries` sets `delayUntilFirstPulse` to a full interval). The loop replaces
+    /// the temp about every 5 minutes, so each segment is truncated mid-interval and loses its
+    /// partial pulse — a LOSS every time, never a gain, averaging half a pulse per replacement.
+    ///
+    /// Measured: epoch 5, 45 min, 12 cycles → `delivered=2.250 expected=2.592 residual=-0.342`,
+    /// i.e. 6.8 pulses adrift against a tolerance of one. Reconstructing the ten segments with
+    /// this model predicts −5.1 pulses: same sign, same mechanism, same order. The old continuous
+    /// figure was the biased estimate, and the bias grows with the NUMBER OF TEMP CHANGES, so a
+    /// long loan accrues ~0.6 U/hour of pure artifact — enough to trip R32's open-loop decision on
+    /// a perfectly healthy loan.
+    ///
+    /// Boluses are unaffected and stay exact: they are commanded directly as a pulse count.
+    ///
+    /// Rate 0 delivers nothing. Rates are already multiples of 0.05 by the time they reach the pod
+    /// (`roundToSupportedBasalRate`), so no rounding is applied here beyond the pulse count itself.
+    private static func pulsedInsulin(rate: Double, seconds: TimeInterval) -> Double {
+        guard rate > 0, seconds > 0 else { return 0 }
+        let pulseInterval = 3600.0 * podPulseSize / rate       // seconds between pulses
+        let pulses = (seconds / pulseInterval).rounded(.down)  // the partial pulse is never delivered
+        return pulses * podPulseSize
+    }
+
+    /// The pod's delivery quantum. Mirrors OmnipodKit's `Pod.pulseSize`, restated here because
+    /// this file must not import the pump driver.
+    private static let podPulseSize: Double = 0.05
+
     private static func scheduleInsulin(_ schedule: BasalRateSchedule, from: Date, to: Date) -> Double {
+        // Same pulse model per schedule segment. A schedule-covered gap is the pod running its
+        // stored basal program, which is pulsed identically — but note the pod does NOT restart
+        // its pulse clock at our segment boundaries here (it is one continuous program), so this
+        // slightly over-penalises a gap split across schedule items. Immaterial for a flat
+        // schedule, and conservative in the direction that matters: it can only make `expected`
+        // smaller, i.e. make delivery look MORE complete rather than less.
         return schedule.between(start: from, end: to).reduce(0) { partial, item in
             let s = max(item.startDate, from)
             let e = min(item.endDate, to)
             guard e > s else { return partial }
-            return partial + item.value * e.timeIntervalSince(s) / 3600.0
+            return partial + pulsedInsulin(rate: item.value, seconds: e.timeIntervalSince(s))
         }
     }
 }

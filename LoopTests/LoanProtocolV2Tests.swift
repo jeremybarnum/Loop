@@ -179,6 +179,80 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertEqual(decoded.epoch, 7, "the rest of the payload still decodes")
     }
 
+    // MARK: - #107 pulse model
+
+    /// The pod delivers whole 0.05 U pulses spaced 3600×0.05/rate apart, and restarts that clock
+    /// on every new command — so a temp truncated before its next pulse loses it. `expectedInsulin`
+    /// must model that, or it systematically over-predicts.
+    ///
+    /// 2.15 U/hr → a pulse every 83.7 s. Over 302 s the pod fires at 83.7/167.4/251.2 s = 3 pulses
+    /// = 0.150 U, while rate×time says 0.180 U. The 0.030 U difference is the partial pulse that
+    /// never happened, and it recurs on EVERY replacement — which is what put the first field
+    /// residual 6.8 pulses adrift (epoch 5: delivered 2.250 vs expected 2.592).
+    func testExpectedInsulinModelsPodPulsesNotRateTimesTime() {
+        let start = loanStart
+        let temp = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
+                             record: LoanDoseRecord(kind: .tempBasal, startDate: start,
+                                                    endDate: start.addingTimeInterval(302),
+                                                    unitsPerHour: 2.15),
+                             loggedAt: start)
+
+        let expected = LoanReconciler.expectedInsulin(events: [temp], schedule: nil,
+                                                      from: start, to: start.addingTimeInterval(302))
+
+        XCTAssertEqual(expected, 0.150, accuracy: 0.0001,
+                       "3 whole pulses — the 4th was still 51 s away when the temp was replaced")
+        XCTAssertLessThan(expected, 2.15 * 302 / 3600,
+                          "must be strictly less than rate×time: the partial pulse is never delivered")
+    }
+
+    /// A bolus is commanded as a pulse count, so it has no partial-pulse tail and must stay exact —
+    /// otherwise the fix for basal quantization would introduce a NEW bias on boluses.
+    func testExpectedInsulinLeavesBolusesExact() {
+        let start = loanStart
+        let bolus = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
+                              record: LoanDoseRecord(kind: .bolus, startDate: start, amount: 1.60),
+                              loggedAt: start)
+
+        let expected = LoanReconciler.expectedInsulin(events: [bolus], schedule: nil,
+                                                      from: start, to: start.addingTimeInterval(60))
+        XCTAssertEqual(expected, 1.60, accuracy: 0.0001)
+    }
+
+    /// The bias is per-REPLACEMENT, which is why it grows with loan length: ten identical
+    /// five-minute segments lose ten partial pulses, where one fifty-minute segment loses one.
+    func testQuantizationLossScalesWithTheNumberOfReplacements() {
+        let start = loanStart
+        let rate = 1.15   // a pulse every 156.5 s — 300 s gives 1 whole pulse, 0.92 lost
+        var chopped: [LoanEvent] = []
+        for i in 0..<10 {
+            let segStart = start.addingTimeInterval(Double(i) * 300)
+            chopped.append(LoanEvent(id: UUID(), seq: i + 1, provenance: .confirmed,
+                                     record: LoanDoseRecord(kind: .tempBasal, startDate: segStart,
+                                                            endDate: segStart.addingTimeInterval(300),
+                                                            unitsPerHour: rate),
+                                     loggedAt: segStart))
+        }
+        let whole = [LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
+                               record: LoanDoseRecord(kind: .tempBasal, startDate: start,
+                                                      endDate: start.addingTimeInterval(3000),
+                                                      unitsPerHour: rate),
+                               loggedAt: start)]
+
+        let end = start.addingTimeInterval(3000)
+        let choppedTotal = LoanReconciler.expectedInsulin(events: chopped, schedule: nil, from: start, to: end)
+        let wholeTotal = LoanReconciler.expectedInsulin(events: whole, schedule: nil, from: start, to: end)
+
+        // 1.15 U/hr → a pulse every 156.5 s. Ten 300 s segments each fire once (10 × 0.05 = 0.50 U);
+        // one continuous 3000 s segment fires floor(3000/156.5) = 19 times (0.95 U). The chopping
+        // costs 9 pulses — and that is the whole point: the loss is per-replacement, so it grows
+        // with loan length rather than staying within any fixed tolerance.
+        XCTAssertLessThan(choppedTotal, wholeTotal,
+                          "replacing the temp every 5 min delivers strictly less than leaving it alone")
+        XCTAssertEqual(wholeTotal - choppedTotal, 0.45, accuracy: 0.0001,
+                       "10 replacements lose 9 more pulses than 1 continuous segment does")
+    }
+
     /// Recursively remove `key` wherever it appears; returns whether anything was removed.
     /// The offer's nesting inside the envelope is an encoding detail this test should not pin.
     private static func stripKey(_ key: String, from json: inout [String: Any]) -> Bool {
