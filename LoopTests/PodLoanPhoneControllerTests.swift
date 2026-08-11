@@ -20,9 +20,12 @@ import MockKit
 /// Test-only lendable conformance so the full grant path runs against MockKit's pump.
 extension MockPumpManager: PumpConnectionLendable {
     static var testConnectionReleased = false
+    /// Item 1: the odometer the PHONE reads on its reclaim round-trip. nil = pump reports none.
+    static var testOdometer: Double?
     public var isConnectionReleased: Bool { Self.testConnectionReleased }
     public func releaseConnection() { Self.testConnectionReleased = true }
     public func reclaimConnection() { Self.testConnectionReleased = false }
+    public var lentDeviceInsulinDelivered: Double? { Self.testOdometer }
 }
 
 final class PodLoanPhoneControllerTests: XCTestCase {
@@ -36,6 +39,11 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     private var notices: [String] = []
     /// #42: drives Dependencies.isConnectionReady — false = pod still returning from a reclaim.
     private var connectionReady = true
+    /// Item 1: every HANDBACK-DIAG line the controller emitted (the harness otherwise drops .diag).
+    private var diags: [String] = []
+    /// Item 1: how many times the phone enacted the R33 post-return temp cancel, and its result.
+    private var cancelCalls = 0
+    private var cancelError: Error?
     private var pump: MockPumpManager!
     private var settings: LoopSettings!
     private let lock = NSLock()
@@ -58,8 +66,13 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         pauseCalls = []
         notices = []
         connectionReady = true
+        diags = []
+        cancelCalls = 0
+        cancelError = nil
         pump = MockPumpManager()
         MockPumpManager.testConnectionReleased = false
+        MockPumpManager.testOdometer = nil
+        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.deliveredAuthoritative")
 
         let timeZone = TimeZone(identifier: "GMT")!
         settings = LoopSettings(
@@ -83,8 +96,12 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             send: { [weak self] dictionary in
                 guard let self = self else { return }
                 // #35 diagnostic breadcrumbs (.diag) aren't protocol messages the tests
-                // assert on — drop them so they don't pollute `sent` or fulfill expectations.
-                if let message = try? LoanMessage.decode(fromTransport: dictionary), case .diag = message { return }
+                // assert on — keep them out of `sent` and out of the expectations, but DO
+                // capture the text: the hand-back audit's whole output is a diag line.
+                if let message = try? LoanMessage.decode(fromTransport: dictionary), case .diag(let d) = message {
+                    self.lock.lock(); self.diags.append(d.text); self.lock.unlock()
+                    return
+                }
                 self.lock.lock()
                 if let message = try? LoanMessage.decode(fromTransport: dictionary) {
                     self.sent.append(message)
@@ -109,8 +126,18 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 guard let self = self else { return }
                 self.lock.lock(); self.notices.append(title); self.lock.unlock()
             },
-            isConnectionReady: { [weak self] in self?.connectionReady ?? true }
+            isConnectionReady: { [weak self] in self?.connectionReady ?? true },
+            cancelTempBasalAfterPodReturn: { [weak self] completion in
+                guard let self = self else { return completion(nil) }
+                self.lock.lock(); self.cancelCalls += 1; let error = self.cancelError; self.lock.unlock()
+                completion(error)
+            }
         ))
+    }
+
+    private func diagMatching(_ needle: String) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return diags.first { $0.contains(needle) }
     }
 
     /// Wait until the controller's send fires once more.
@@ -563,6 +590,130 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed at loan close")
     }
 
+    // MARK: - Item 1: the phone reads the end-of-loan odometer and cancels the inherited temp
+
+    /// The change in one assertion: the audit's end reading comes from the PHONE's reclaim
+    /// round-trip, not from the watch's offer.
+    ///
+    /// The field case this reproduces (2026-08-11, and every hand-back before it): the watch
+    /// released the pod's BLE link after its last dose window, so at hand-back it could not read
+    /// the odometer — `freshenSucceeded: false`, endpoint frozen at the last dose ~90 s earlier.
+    /// The pod kept delivering in that gap. Audit the loan against that endpoint and you are
+    /// measuring the wrong interval, which is why the residuals never quite closed.
+    func testHandbackAuditUsesThePhonesOwnOdometerNotTheWatchsStaleOne() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+
+        // The watch's endpoint: stale, and it knows it (freshenSucceeded false).
+        let handedBackAt = Date()
+        let odometer = LoanOdometerSnapshot(deliveredAtStart: 10.0, deliveredLatest: 10.400,
+                                            freshenSucceeded: false)
+        // What the pod ACTUALLY reads when the phone gets there: half a unit further on.
+        MockPumpManager.testOdometer = 10.900
+
+        let ackSent = expectSend()
+        let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: handedBackAt, finalStatus: nil,
+                                  odometer: odometer, events: [], tombstones: [],
+                                  recovered: false, released: true)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+
+        // The provisional line still prints — it is all we have if the pod never comes home.
+        XCTAssertNotNil(diagMatching("reconcile[provisional]"), "the provisional audit must still be logged")
+
+        // Then the reclaim round-trip lands and supersedes it.
+        waitUntil(timeout: 8, "authoritative audit") { self.diagMatching("reconcile[AUTHORITATIVE]") != nil }
+        let line = diagMatching("reconcile[AUTHORITATIVE]")!
+        XCTAssertTrue(line.contains("delivered=0.900"),
+                      "delivered must be phone-read latest (10.900) minus the watch's start (10.000) — got: \(line)")
+        XCTAssertTrue(line.contains("vs watch endpoint +0.500"),
+                      "the line must state how much delivery the watch's stale endpoint missed — got: \(line)")
+        let persisted = UserDefaults.standard.object(forKey: "PodLoanPhoneController.deliveredAuthoritative") as? Double
+        XCTAssertEqual(persisted ?? .nan, 0.900, accuracy: 0.0001)
+    }
+
+    /// R33, phone-enforced: the temp the WATCH programmed is cancelled once — and only once the
+    /// pod is provably reachable. The watch cannot do this itself; its link is down by then.
+    func testInheritedTempIsCancelledOnTheVerifiedReclaimRoundTrip() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+
+        connectionReady = false          // pod not back yet
+        MockPumpManager.testOdometer = 12.0
+
+        let ackSent = expectSend()
+        let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil,
+                                  odometer: LoanOdometerSnapshot(deliveredAtStart: 10, deliveredLatest: 11,
+                                                                 freshenSucceeded: true),
+                                  events: [], tombstones: [], recovered: false, released: true)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+
+        // Nothing is commanded at a pod we cannot reach — that was the whole bug.
+        XCTAssertEqual(cancelCalls, 0, "must not command a pod that is not back yet")
+
+        connectionReady = true
+        waitUntil(timeout: 8, "R33 cancel") { self.lock.lock(); defer { self.lock.unlock() }; return self.cancelCalls > 0 }
+        XCTAssertEqual(cancelCalls, 1, "cancel exactly once per loan, on the verified round-trip")
+        XCTAssertNotNil(diagMatching("R33 temp cancelled"), "the cancel's outcome must be in the log")
+
+        // The chase keeps ticking after verification; the audit must not re-fire on later ticks.
+        let settle = expectation(description: "no second cancel")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3) { settle.fulfill() }
+        wait(for: [settle], timeout: 5)
+        XCTAssertEqual(cancelCalls, 1, "one cancel per loan, not one per chase tick")
+    }
+
+    /// A failed cancel is a logged diagnostic, not a stall: the pod keeps running the watch's last
+    /// automatic rate (computed from real CGM data minutes ago) until the phone's next cycle.
+    func testFailedInheritedTempCancelIsLoggedAndDoesNotBlockTheReclaim() throws {
+        struct Boom: Error {}
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        cancelError = Boom()
+        MockPumpManager.testOdometer = 11.0
+
+        let ackSent = expectSend()
+        let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil,
+                                  odometer: LoanOdometerSnapshot(deliveredAtStart: 10, deliveredLatest: 10.5,
+                                                                 freshenSucceeded: true),
+                                  events: [], tombstones: [], recovered: false, released: true)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+
+        waitUntil(timeout: 8, "failed-cancel diag") { self.diagMatching("R33 temp cancel FAILED") != nil }
+        XCTAssertEqual(controller.state, .owner, "a failed cancel must not strand the loan state")
+        // The audit is independent of the cancel and must still have landed.
+        XCTAssertNotNil(diagMatching("reconcile[AUTHORITATIVE]"))
+    }
+
+    /// If the pod never comes home there is no authoritative reading — and no invented one. The
+    /// provisional line stands, and nothing leaks into the NEXT loan's audit.
+    func testNoAuthoritativeAuditWhenThePodNeverComesBack() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        connectionReady = false
+
+        let ackSent = expectSend()
+        let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil,
+                                  odometer: LoanOdometerSnapshot(deliveredAtStart: 10, deliveredLatest: 10.5,
+                                                                 freshenSucceeded: false),
+                                  events: [], tombstones: [], recovered: false, released: true)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+
+        let settle = expectation(description: "settle")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3) { settle.fulfill() }
+        wait(for: [settle], timeout: 5)
+        XCTAssertNil(diagMatching("reconcile[AUTHORITATIVE]"), "no reading means no audit — never a fabricated one")
+        XCTAssertEqual(cancelCalls, 0, "no cancel at an unreachable pod")
+        XCTAssertNotNil(diagMatching("reconcile[provisional]"), "the provisional line is what stands")
+    }
+
     /// Row 10: the same offer redelivered (lost ack) re-acks the same cursor and
     /// writes NOTHING new.
     func testOfferRedeliveryIsIdempotent() throws {
@@ -756,12 +907,19 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(epoch1Offer).transportDictionary())
         wait(for: [staleAck], timeout: 5)
 
-        XCTExpectFailure("#102 unfixed: the stale drain clamps epoch 2's temp to epoch 1's handedBackAt") {
-            let written = addedDoses.flatMap { $0 }
-            let inverted = written.filter { $0.endDate < $0.startDate }
-            XCTAssertTrue(inverted.isEmpty,
-                          "a stale offer must never write a dose that ends before it starts — got \(inverted.count) inverted of \(written.count)")
-        }
+        // FIXED (#102, option A): a stale offer now drains only the events it actually carried,
+        // so epoch 2's live temp is never in scope to be clamped to epoch 1's handedBackAt.
+        let written = addedDoses.flatMap { $0 }
+        let inverted = written.filter { $0.endDate < $0.startDate }
+        XCTAssertTrue(inverted.isEmpty,
+                      "a stale offer must never write a dose that ends before it starts — got \(inverted.count) inverted of \(written.count)")
+
+        // And the point of option A over a blanket clamp: the live temp is not written AT ALL by
+        // the stale drain. It stays staged for its own epoch's hand-back, where it is still open
+        // and still mutable. A guard that merely repaired the duration would have committed a
+        // truncated temp and permanently under-booked epoch 2's insulin.
+        XCTAssertFalse(written.contains { $0.startDate >= liveTempStart.addingTimeInterval(-1) },
+                       "the stale drain must not write epoch 2's live temp at all")
     }
 
     /// Recursively remove `key`; returns whether anything was removed. Mirrors the helper in

@@ -634,6 +634,38 @@ extension LoopDataManager {
         case automaticDosingDisabled
         case unreliableCGMData
         case maximumBasalRateChanged
+        /// PODLOAN R33: the pod came home from the watch still running the WATCH's temp.
+        case podReturnedFromWatch
+    }
+
+    /// PODLOAN R33 (2026-08-11): the phone has just reclaimed the pod and inherited an automatic
+    /// temp basal that the WATCH programmed, from a prediction this device never made and cannot
+    /// audit. Cancel it on exactly the idiom stock already uses when the basis for a temp no
+    /// longer holds: a bare `.cancel`, off-cycle, no new rate. The pod reverts to the user's own
+    /// basal schedule — stock's own fallback — and the next CGM reading (≤5 min, usually far less)
+    /// sets a rate from the phone's own prediction.
+    ///
+    /// Off-cycle dosing is deliberately rare in Loop, and this respects the reason for that: a
+    /// cancel can only move toward LESS intervention, which is why stock permits it off-cycle and
+    /// permits nothing else.
+    ///
+    /// WHY THE PHONE AND NOT THE WATCH: the watch cannot reach the pod at hand-back. It has
+    /// released the BLE link between dose windows, so its cancel fails in about a millisecond with
+    /// podNotConnected (field 2026-08-11, and every hand-back before it). The phone is holding a
+    /// verified pod round-trip at the moment this is called.
+    func cancelTempBasalAfterPodReturn(completion: ((Error?) -> Void)? = nil) {
+        dataAccessQueue.async {
+            // NOT guarded on `basalDeliveryState == .tempBasal` the way the internal helper is.
+            // That guard is what made the watch-side version dead code for weeks: after a loan the
+            // phone's cached delivery state is whatever it was before the loan, and the pod's real
+            // program is only knowable from the pod. A redundant cancel costs one round-trip on a
+            // link we are already holding and moves toward less intervention; a skipped cancel
+            // leaves someone else's temp running. Log what the state claimed so the field tells us
+            // whether a guard would have been safe to add later.
+            let claimed = String(describing: self.basalDeliveryState)
+            self.logger.default("PODLOAN: cancelling inherited temp after pod return (cached basalDeliveryState was %{public}@)", claimed)
+            self.cancelActiveTempBasal(for: .podReturnedFromWatch, completion: completion)
+        }
     }
     
     /// Cancel the active temp basal if it was automatically issued

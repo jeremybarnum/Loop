@@ -286,6 +286,11 @@ final class WatchDataManager: NSObject {
                 // peripheral is not actually back for ~2 min. Report the real link state so the
                 // "Reclaiming…" tile persists (and the bolus gate refuses honestly) until then.
                 (self?.deviceManager.pumpManager as? PumpConnectionLendable)?.isConnectionReady ?? true
+            },
+            cancelTempBasalAfterPodReturn: { [weak self] completion in
+                // R33 (2026-08-11): the pod is home and reachable; drop the temp the WATCH set.
+                guard let self = self else { return completion(nil) }
+                self.deviceManager.loopManager.cancelTempBasalAfterPodReturn(completion: completion)
             }
         ))
     }()

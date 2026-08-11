@@ -1559,34 +1559,39 @@ final class PodLoanWatchController {
         // Ask the loop manager instead: it falls back to the temp it last enacted, until that
         // temp's programmed end.
         let runningTemp = self.loopManager.runningTempBasalForHandback()
-        let cancelIfNeeded: (@escaping () -> Void) -> Void = { proceed in
-            if runningTemp != nil, !suspendActive {
-                // #73/#74 shadow ledger: the safe-cancel truncates the open temp in the ledger
-                // too — otherwise a failed-offer resume keeps a phantom full-span temp
-                // (adversarial review). Zero-length 0-temp = pure truncation marker.
-                let cancelAt = self.now()
-                self.loopManager.ledgerRecordEnact(DoseEntry(
-                    type: .tempBasal, startDate: cancelAt, endDate: cancelAt,
-                    value: 0, unit: .unitsPerHour))
-                SportLog.event("loan", String(format: "hand-back: cancelling our temp (%.2f U/hr until %@) — the pod reverts to the schedule (R33)",
-                                              runningTemp?.unitsPerHour ?? 0,
-                                              runningTemp.map { ISO8601DateFormatter().string(from: $0.endDate) } ?? "—"))
-                manager.enactTempBasal(unitsPerHour: 0, for: 0) { error in
-                    if let error = error {
-                        // Loud, not silent: a failed cancel means the pod goes home still running
-                        // OUR temp, which is the very thing R33 exists to prevent. The phone's next
-                        // reading supersedes it within ~5 min, so this is a diagnostic, not a stall.
-                        SportLog.event("loan", "hand-back: temp CANCEL FAILED — pod keeps our temp until the phone's next cycle · \(String(describing: error))")
-                    }
-                    proceed()
-                }
-            } else {
-                proceed()
-            }
+        // MOVED TO THE PHONE (2026-08-11, R33 amended). The watch used to enact the cancel here.
+        // It cannot. Between dose windows the watch has deliberately released the pod's BLE link,
+        // so the command fails INSTANTLY — field 15:23:37.130 "cancelling our temp (1.75 U/hr…)",
+        // 15:23:37.131 "CANCEL FAILED · podNotConnected". One millisecond: there was no round-trip
+        // to fail, there was no link. Every hand-back looked like this, and the same missing link
+        // is why the odometer freshen below also fails and every audit prints `fresh=N`. One cause,
+        // both symptoms.
+        //
+        // The phone is the device that is by definition talking to the pod at this moment — its
+        // reclaim round-trip lands within seconds. So the phone cancels (see
+        // PodLoanPhoneController.finishPendingHandbackAudit) and the pod keeps delivering OUR last
+        // temp in the meantime, which is the better failure mode anyway: continuous therapy across
+        // the boundary instead of a gap. R33's principle is unchanged — no automatic program
+        // outlives the controller that set it — only the device that enforces it moved to the one
+        // that can.
+        //
+        // The ledger truncation stays: it is watch-LOCAL bookkeeping (#73/#74), and if a failed
+        // offer resumes this session the ledger must not carry a phantom full-span temp.
+        if runningTemp != nil, !suspendActive {
+            let cancelAt = self.now()
+            self.loopManager.ledgerRecordEnact(DoseEntry(
+                type: .tempBasal, startDate: cancelAt, endDate: cancelAt,
+                value: 0, unit: .unitsPerHour))
+            SportLog.event("loan", String(format: "hand-back: our temp (%.2f U/hr until %@) stays live until the phone cancels it on reclaim (R33, phone-enforced)",
+                                          runningTemp?.unitsPerHour ?? 0,
+                                          runningTemp.map { ISO8601DateFormatter().string(from: $0.endDate) } ?? "—"))
         }
 
-        cancelIfNeeded {
-            // Freshen the odometer (OQ-5: one retry on a zero delta), then offer.
+        do {
+            // Freshen the odometer (OQ-5: one retry on a zero delta), then offer. Best-effort:
+            // when the link is down this fails instantly and the offer carries freshenSucceeded
+            // = false, which is now merely a note — the AUTHORITATIVE end-of-loan reading is the
+            // one the phone takes on its own reclaim round-trip.
             manager.podLoanReadStatus { first in
                 let finalize: (Bool) -> Void = { freshened in
                     self.queue.async {

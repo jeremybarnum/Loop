@@ -279,3 +279,47 @@ least anchored. Steady state is seconds. R24 already rules the connect UX (deter
 takeover bar + G7 ETA); what it does not cover is FIRST-RUN framing — one-time copy in
 the spirit of "first connection can take a few minutes; after that it's seconds".
 Parked as a pre-production UX item alongside R27's deferred list, not scheduled.
+
+## 2026-08-11 — the watch cannot talk to the pod at hand-back (epoch 9, build 267)
+
+A clean 17-minute loan — 4 cycles, no enact failures, no stalls — that nonetheless
+showed the whole end-of-loan problem in three consecutive log lines:
+
+```
+15:22:06.978 [loan] E4: pod re-released after dose (+12s settle) — state connected -> disconnected (+3s)
+15:23:36.514 [loan] HAND-BACK requested — draining 4 events; still in control (WS1)
+15:23:37.131 [loan] hand-back: temp CANCEL FAILED — … PodCommsError.podNotConnected
+```
+
+The cancel was attempted 1 ms after it was logged as starting. That is not a failed
+round-trip; it is the absence of a link to make one on. Eighty-nine seconds earlier the
+watch had deliberately released the pod after its last dose, which is the design.
+
+The 245 ms to the final offer says the odometer freshen failed the same way, and the
+audit duly printed `fresh=N` — as it has at every hand-back on record. **One cause, two
+symptoms**: at hand-back the watch cannot command the pod and cannot read it, because by
+then it is not connected to it. No watch-side fix reaches this. A hand-back essentially
+never coincides with a dose window.
+
+Both jobs moved to the phone, onto the reclaim round-trip it was already performing and
+already throwing away (#42's chase). See R33's hand-back half and
+`PodLoanPhoneController.finishPendingHandbackAudit`.
+
+The audit that ran: `delivered=0.400 expected=0.450 residual=-0.050 (tol 0.05)`, exactly
+one pulse, at the tolerance floor, negative (we booked marginally more than the pod
+delivered — the conservative direction). This is the first audit computed with #107's
+pulse model, and one pulse is the smallest discrepancy the model can express: it is the
+boundary pulse, ambiguous by construction. But note it was measured against an endpoint
+~90 s stale, so the number is only as good as its bracket — which is precisely what the
+change above fixes. The next loan's `reconcile[AUTHORITATIVE]` line carries a
+`vs watch endpoint` delta that says how much this mattered.
+
+Also seen, and probably a false alarm in my own instrumentation:
+`[cob-diff] REPLACE 3 entries · phoneCOB=12.0 g · watch COB(post)=14.85 g ·
+Δ(post−phone)=+2.83 g ⚠ residual (wipe failed?)`. `phoneCOB` is
+`grant.predictionSnapshot?.cobGrams` — a snapshot, and the sibling `[iob-diff]` line on
+the same grant reports `phoneIOBAge=98s`. So this compares a fresh watch COB against a
+98-second-old phone COB, over 41 g of actively absorbing carbs, with the watch value
+additionally being a pre-settle static read (the comment at the call site already says
+so). The ⚠ threshold of 2.0 g does not account for snapshot age. Not chased; noted so
+the next reader does not chase it either.

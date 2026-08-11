@@ -82,6 +82,11 @@ final class PodLoanPhoneController {
         /// True when the loaned pump's connection is truly back after a reclaim (post-hand-back).
         /// Default true so a pump lacking the capability never gets stuck in the settling tile.
         var isConnectionReady: () -> Bool = { true }
+        /// R33 (2026-08-11): cancel the temp the WATCH left running, the instant the reclaim
+        /// round-trip proves we can reach the pod. Stock's own off-cycle `.cancel` idiom — see
+        /// LoopDataManager.cancelTempBasalAfterPodReturn. Default no-op keeps the state-machine
+        /// tests constructing unchanged.
+        var cancelTempBasalAfterPodReturn: (@escaping (Error?) -> Void) -> Void = { $0(nil) }
         var now: () -> Date = { Date() }
     }
 
@@ -262,7 +267,71 @@ final class PodLoanPhoneController {
                         self.sendMessage(.diag(LoanDiag(epoch: self.epoch,
                             text: String(format: "reclaim VERIFIED — pod round-trip complete +%.0fs", elapsed))))
                         self.deps.ownershipDidChange()
+                        // The pod is provably reachable RIGHT NOW. This is the only moment in the
+                        // whole hand-back where that is true, so it is where both jobs that need
+                        // the pod happen: read the real end-of-loan odometer, and cancel the temp
+                        // the watch left running.
+                        self.finishPendingHandbackAudit(elapsed: elapsed)
                     }
+                }
+            }
+        }
+    }
+
+    /// The two things that require a live pod link at the end of a loan, done at the one instant
+    /// we know we have one: the verified reclaim round-trip (item 1, 2026-08-11).
+    ///
+    /// 1. THE AUTHORITATIVE AUDIT. `ensureCurrentPumpData` just completed a real conversation with
+    ///    the pod, so `lentDeviceInsulinDelivered` is the odometer as of seconds ago. Paired with
+    ///    `deliveredAtStart` — which still comes from the WATCH's post-takeover read, the one
+    ///    odometer reading the watch takes while it definitely holds the link — that is a clean
+    ///    measurement of the loan's whole delivery, bracketed by two fresh readings.
+    ///
+    /// 2. THE INHERITED TEMP. R33: no automatic program crosses the boundary. The watch cannot
+    ///    enforce that (no link); the phone can, and does it here with stock's bare-`.cancel`
+    ///    idiom. The pod falls back to the user's schedule until the phone's next reading.
+    ///
+    /// Audit first, then cancel: the reading must describe the loan, not the cancel. (A cancel
+    /// delivers nothing, so this is about clarity of the number rather than its value — and if the
+    /// cancel fails we still have the measurement.)
+    ///
+    /// Bounded and self-cleaning: `pendingHandbackAudit` is consumed on the first call, and if the
+    /// reclaim never verifies, the settle ceiling drops it. A loan that ends with the pod
+    /// unreachable simply keeps the provisional line — which is what we had before.
+    private func finishPendingHandbackAudit(elapsed: TimeInterval) {
+        guard let pending = pendingHandbackAudit else { return }
+        pendingHandbackAudit = nil
+
+        if let latest = (deps.pumpManager() as? PumpConnectionLendable)?.lentDeviceInsulinDelivered {
+            let delivered = latest - pending.deliveredAtStart
+            let residual = delivered - pending.expected
+            // `drift` is the whole point of the change: how much delivery the watch's stale
+            // endpoint was missing. If this is reliably ~0 the watch's reading was fine after all
+            // and this machinery can go; if it is a temp's worth, every earlier residual we
+            // puzzled over was measuring the wrong interval.
+            let drift = pending.watchLatest.map { latest - $0 }
+            handbackDiag(pending.epoch, String(format:
+                "reconcile[AUTHORITATIVE]: delivered=%.3f expected=%.3f residual=%+.3f (tol 0.05) · loanMin=%.0f cycles=%d · odometer read by PHONE +%.0fs after reclaim · vs watch endpoint %@ (watch fresh=%@)",
+                delivered, pending.expected, residual,
+                pending.loanMinutes, pending.cycles, elapsed,
+                drift.map { String(format: "%+.3f", $0) } ?? "n/a",
+                pending.watchFreshened ? "Y" : "N"))
+            UserDefaults.standard.set(delivered, forKey: Keys.deliveredAuthoritative)
+        } else {
+            handbackDiag(pending.epoch, "reconcile[AUTHORITATIVE]: pod reachable but reported no odometer — keeping the provisional line")
+        }
+
+        // R33: cancel the watch's temp now that we can actually reach the pod.
+        deps.cancelTempBasalAfterPodReturn { [weak self] error in
+            guard let self = self else { return }
+            self.queue.async {
+                if let error = error {
+                    // Diagnostic, not a stall: the phone's next reading (≤5 min) supersedes the
+                    // temp anyway, and until then the pod runs the watch's last automatic rate —
+                    // which was computed from real CGM data minutes ago, not a wild value.
+                    self.handbackDiag(pending.epoch, "R33 temp cancel FAILED — pod keeps the watch's temp until the next cycle · \(String(describing: error))")
+                } else {
+                    self.handbackDiag(pending.epoch, "R33 temp cancelled — pod reverts to the user's schedule until the phone's next reading")
                 }
             }
         }
@@ -306,6 +375,24 @@ final class PodLoanPhoneController {
     }
     /// Committed event IDs for the CURRENT epoch (secondary idempotency; the cursor
     /// is primary). Bounded: cleared when a loan fully closes.
+    /// #102: latch so a repeatedly-failing hand-back write warns ONCE, not once per 15 s resend.
+    /// Deliberately not persisted — a relaunch is a fresh chance to tell the user.
+    private var hasWarnedRecordsNotSaved = false
+
+    /// R33/item-1 (2026-08-11): everything the odometer audit needs EXCEPT the end reading, held
+    /// from the final drain until the phone's own reclaim round-trip lands (seconds later) and can
+    /// supply that reading first-hand. See `finishPendingHandbackAudit`.
+    private struct PendingHandbackAudit {
+        let epoch: Int
+        let deliveredAtStart: Double
+        let expected: Double
+        let loanMinutes: Double
+        let cycles: Int
+        let watchLatest: Double?      // the watch's own end reading, for the fresh-vs-stale delta
+        let watchFreshened: Bool
+    }
+    private var pendingHandbackAudit: PendingHandbackAudit?
+
     private var committedIDs: Set<UUID>
     /// Staged (received, not-yet-committed) events for the current epoch — persisted
     /// on every batch so a phone relaunch keeps the trap-cell defense.
@@ -329,6 +416,8 @@ final class PodLoanPhoneController {
         static let deliveredAtGrant = "PodLoanPhoneController.deliveredAtGrant"
         static let expectedUnits = "PodLoanPhoneController.expectedUnits"
         static let watchAuditRan = "PodLoanPhoneController.watchAuditRan"
+        /// Item 1: the last loan's delivered total measured against a PHONE-read end odometer.
+        static let deliveredAuthoritative = "PodLoanPhoneController.deliveredAuthoritative"
     }
 
     private enum NotificationID {
@@ -793,8 +882,26 @@ final class PodLoanPhoneController {
         // can arrive AFTER later events were acked), and it would silently discard
         // the late-classified event. committedIDs is persisted — the ID filter is
         // the true exactly-once invariant.
+        //
+        // #102 (field 2026-08-11 00:16): A MESSAGE MAY ONLY CAUSE WORK RELATED TO ITSELF.
+        //
+        // The transport guarantees delivery, not timeliness and not exactly-once — a copy of an
+        // offer can arrive an hour after the original was handled. The protocol is built for
+        // that (stable event IDs, ID-based dedup, a monotonic cursor), so a redelivered offer
+        // should be a no-op. It was not, because this filter takes EVERYTHING staged rather than
+        // what the arriving message brought, and the reconciler then clamps all of it to THAT
+        // message's handedBackAt. Harmless while the message is current; catastrophic when it is
+        // an hour old and `staged` now belongs to a different session: two already-acked epoch-1
+        // offers were redelivered while epoch 2 was live, and epoch 2's temps were written ending
+        // BEFORE they started. Core Data rejected the batch, the context was never rolled back,
+        // and every later hand-back write failed for ~20 minutes.
+        //
+        // A STALE offer may therefore speak only for its own records. Current offers are
+        // unchanged — draining the whole staged set is what interim/final drains rely on.
+        let ownEventIDs = isStale ? Set(offer.events.map(\.id)) : nil
         let events = staged.values
             .filter { !stagedTombstones.contains($0.id) && !committedIDs.contains($0.id) }
+            .filter { ownEventIDs?.contains($0.id) ?? true }
             .sorted { $0.seq < $1.seq }
         // WS1: the odometer audit must see the WHOLE loan's journal, not the tail —
         // interim-committed temps/suspends are real recorded insulin, not schedule.
@@ -853,11 +960,30 @@ final class PodLoanPhoneController {
             let drainFloor = outcome.doses.reduce(0.0) { $0 + (($1.programmedUnits * 20).rounded(.down) / 20) }
             let loanMin = offer.handedBackAt.timeIntervalSince(loanStart) / 60
             handbackDiag(offer.epoch, String(format:
-                "reconcile: delivered=%@ expected=%.3f residual=%@ (tol 0.05) · thisDrain cont=%.3f floor=%.3f · loanMin=%.0f cycles=%d fresh=%@",
+                "reconcile[provisional]: delivered=%@ expected=%.3f residual=%@ (tol 0.05) · thisDrain cont=%.3f floor=%.3f · loanMin=%.0f cycles=%d fresh=%@",
                 delivered.map { String(format: "%.3f", $0) } ?? "n/a", expected,
                 delivered.map { String(format: "%+.3f", $0 - expected) } ?? "n/a",
                 drainCont, drainFloor,
                 loanMin, allStagedEvents.count, offer.odometer?.freshenSucceeded == true ? "Y" : "N"))
+
+            // …and hold the audit open for a FIRST-HAND end reading (item 1, 2026-08-11).
+            //
+            // The line above is provisional because its end reading comes from the watch, and at
+            // hand-back the watch cannot read the pod: it released the BLE link after its last dose
+            // window, so both its cancel and its odometer freshen fail in about a millisecond. That
+            // is why `fresh=N` on every hand-back on record. The endpoint is whatever the odometer
+            // said at the last dose — up to ~5 minutes and one temp's delivery ago.
+            //
+            // The phone, meanwhile, does a real pod round-trip within seconds of reclaim to verify
+            // the pod is home (#42's chase). It was already reading the odometer and throwing the
+            // value away. Take it: same audit, same tolerance, an endpoint that is actually the end.
+            if isFinal, let start = offer.odometer?.deliveredAtStart {
+                pendingHandbackAudit = PendingHandbackAudit(
+                    epoch: offer.epoch, deliveredAtStart: start, expected: expected,
+                    loanMinutes: loanMin, cycles: allStagedEvents.count,
+                    watchLatest: offer.odometer?.deliveredLatest,
+                    watchFreshened: offer.odometer?.freshenSucceeded == true)
+            }
         }
 
         // No additional insulin is added at hand-back (Jeremy 2026-07-27): the R6 positive-remainder
@@ -878,18 +1004,41 @@ final class PodLoanPhoneController {
         // reconciling, 1 h reminder repeats (row 11) — never dose on incomplete records.
         // Loan insulin goes through addPumpEvents (PumpEvent table + stock reconciled() +
         // HealthKit); lastReconciliation = handedBackAt (the finalized-through watermark).
+        // #102 belt-and-braces: never hand the store a dose that ends before it starts.
+        //
+        // The stale-offer scoping above removes the cause we know about, but this kills the
+        // whole class — and it is the class that is dangerous, because 2026-08-11 only surfaced
+        // by luck. Those durations were so wrong that Core Data refused the batch loudly. Shift
+        // the timing slightly and the same defect yields durations that are merely WRONG, which
+        // validate fine and quietly corrupt IOB. Drop the bad rows, keep the good ones, and say
+        // exactly what was dropped — an atomic batch failure told us nothing and wedged the
+        // context for twenty minutes.
+        let sane = doses.filter { $0.endDate >= $0.startDate }
+        if sane.count != doses.count {
+            let bad = doses.filter { $0.endDate < $0.startDate }
+            handbackDiag(offer.epoch, "** DROPPED \(bad.count) impossible dose(s) (end before start) — writing \(sane.count) of \(doses.count). First: \(bad[0].type) \(bad[0].startDate) -> \(bad[0].endDate) **")
+        }
+
         let writeStart = deps.now()
-        handbackDiag(offer.epoch, "write START \(doses.count) dose(s) (final=\(isFinal))")
-        deps.addPumpEvents(newPumpEvents(from: doses), offer.handedBackAt) { [weak self] error in
+        handbackDiag(offer.epoch, "write START \(sane.count) dose(s) (final=\(isFinal))")
+        deps.addPumpEvents(newPumpEvents(from: sane), offer.handedBackAt) { [weak self] error in
             guard let self = self else { return }
             self.queue.async {
                 if let error = error {
                     self.handbackDiag(offer.epoch, "write FAILED: \(String(describing: error))")
                     os_log("Reconcile write failed: %{public}@", log: self.log, type: .fault, String(describing: error))
-                    self.deps.issueNotice("Watch Records Not Saved", "The watch session's records could not be saved. Dosing stays paused; will retry on the next hand-back attempt.")
+                    // #102: ONCE per failing state, not once per retry. Offers resend every 15 s,
+                    // so the 2026-08-11 wedge produced 10-12 identical "Watch Records Not Saved"
+                    // warnings on the wrist for a single phone-side bug. A wall of identical
+                    // alarms for one fault is how people learn to ignore alarms.
+                    if !self.hasWarnedRecordsNotSaved {
+                        self.hasWarnedRecordsNotSaved = true
+                        self.deps.issueNotice("Watch Records Not Saved", "The watch session's records could not be saved. Dosing stays paused; will retry on the next hand-back attempt.")
+                    }
                     self.armPausedReminder()
                     return
                 }
+                self.hasWarnedRecordsNotSaved = false   // recovered — a future failure is news again
 
                 // #66 (2026-08-04): gate carbs on !isStale, matching the override change below.
                 // The commit used to run unconditionally while committedIDs.formUnion sat inside
@@ -1032,7 +1181,16 @@ final class PodLoanPhoneController {
         staged = [:]
         stagedTombstones = []
         persistStaged()
-        schedulePostReclaimReAudit(recordsCommitted: true)
+        // The +90 s re-audit is GONE from this path (item 1, 2026-08-11). It existed to get a
+        // phone-read odometer after a clean hand-back, and `finishPendingHandbackAudit` now does
+        // that better: on the verified reclaim round-trip instead of a fixed 90 s guess, so the
+        // window can't fold in post-loan phone delivery, and against the same `expected` the
+        // reconciler computed rather than the biased continuous estimate. Two audits printing two
+        // different answers for one loan is worse than one right answer.
+        //
+        // It survives on the dead-watch path (reclaimNow → recordsCommitted: false), which has no
+        // offer, no deliveredAtStart, and therefore nothing for the pending audit to resolve.
+        UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
     }
 
     /// §5.3.3: the phone asks the pod the same forensic questions after reclaim,

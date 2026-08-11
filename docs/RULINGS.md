@@ -60,9 +60,35 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   and mints a JOURNAL EVENT — which is the point: the loan's first program is
   ours, streamed to the phone, and inside the audit.
 
-  HAND-BACK HALF (amended and BUILT 2026-08-11): the watch CANCELS its temp at
+  HAND-BACK HALF (amended and BUILT 2026-08-11): the automatic temp is CANCELLED at
   hand-back; the pod reverts to the user's schedule; the phone sets the new rate on
   its next reading. The phone does NOT get an off-cycle dosing trigger.
+
+  WHICH DEVICE CANCELS — corrected the same day, by the field. The first build put
+  the cancel on the watch. It cannot be there. Between dose windows the watch has
+  deliberately released the pod's BLE link, so at hand-back its cancel fails in
+  about a millisecond with `podNotConnected` — 15:23:37.130 "cancelling our temp
+  (1.75 U/hr…)", 15:23:37.131 "CANCEL FAILED". There was no round-trip to fail;
+  there was no link. The same missing link is why the watch's odometer freshen also
+  fails and why every hand-back audit on record printed `fresh=N`. One cause, both
+  symptoms — and it is a cause no watch-side fix can reach, because the released
+  link is the design.
+
+  So the PHONE cancels, on its verified reclaim round-trip (~seconds after
+  hand-back), via `LoopDataManager.cancelTempBasalAfterPodReturn` — the same bare
+  `.cancel` idiom, just issued by the device that is actually holding the pod. The
+  principle is untouched: no automatic program outlives the controller that set it.
+  Only the enforcing device moved to the one that can enforce it.
+
+  This is also strictly better therapy across the boundary. The pod keeps running
+  the watch's last automatic rate — a real recommendation from real CGM data,
+  minutes old — until the phone can reach it, instead of dropping to schedule at an
+  instant when nobody can command anything. Continuous, not gapped.
+
+  And the same round-trip supplies the audit's end reading, which is the deeper
+  point: the phone was already talking to the pod there (#42's reclaim chase) and
+  throwing the odometer away. See `PodLoanPhoneController.finishPendingHandbackAudit`
+  — one conversation, both jobs, no new machinery.
 
   My first reading of this was wrong twice over and Jeremy pushed back on both.
   I claimed stock never acts between readings — it does: `LoopDataManager
@@ -89,8 +115,17 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   delivering — the condition #50 was opened for. Field 2026-08-11, both hand-backs:
   zero pod commands between "drain complete — finalizing hand-back" and the pod
   release, 0.5 s apart. Every loan's last temp has been running on after the pod
-  went home. Now gated on the loop manager's cached running temp instead, which
-  survives the orphan, and a failed cancel is logged loudly.
+  went home. Fixing the gate was necessary but not sufficient: with the gate fixed
+  the cancel fired and then failed on the dead link (above), which is how the real
+  cause surfaced. Two layers, found one after the other, same afternoon.
+
+  Note for the next reader: the phone's cancel is deliberately NOT gated on
+  `basalDeliveryState == .tempBasal`. That gate is exactly what made the watch's
+  version dead code, and after a loan the phone's cached delivery state describes
+  the world before the loan. A redundant cancel costs one round-trip on a link we
+  already hold and moves toward less intervention; a skipped one leaves someone
+  else's temp running. The cached state is logged at each cancel so we can decide
+  later, from data, whether a guard would have been safe.
 - **R3 — Suspend is a bounded rate-0 temp.** Never an untimed
   suspendDelivery: the pod itself auto-resumes at expiry, so a dead watch
   can never strand delivery off (P0#5).
