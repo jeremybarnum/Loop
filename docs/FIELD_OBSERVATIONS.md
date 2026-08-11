@@ -7,6 +7,29 @@ about explicitly. Never silently dropped.
 
 ## Open
 
+- **OBS-9 (2026-08-11 19:12-19:34): THE LOG MIRROR CAN STALL WHILE THE WATCH IS FINE.
+  Do not read the iCloud file cadence as proof of app execution.** Cost: a wrong
+  safety-class diagnosis, stated confidently, corrected only when Jeremy pushed the log
+  by hand.
+  What I saw: `g7watch-latest.log` frozen at 19:11:49 for 20+ minutes, and — the part
+  that convinced me — the per-snapshot files in the iCloud container stopping dead at
+  `g7watch-20260811-191201.log` when they had been arriving every 2-3 min. I reasoned
+  that if the app were merely backgrounded the snapshots would still be GENERATED and
+  arrive in a burst, so no new files meant no execution. I called it a reproduction of
+  #85 under Theatre Mode alone.
+  What was true: the watch ran ~8 consecutive clean cycles across the whole window
+  (19:16:54, 19:21:53, 19:26:54 all `computed=ok`, two temps ACCEPTED) and shipped
+  snapshots at 19:15:11, 19:20:12, 19:25:12, 19:30:11 — dead on cadence. The
+  phone->iCloud->Mac leg stopped delivering; nothing upstream was wrong.
+  THE RULE: the file cadence in the Mac's container measures DELIVERY TO ME, not
+  execution on the wrist. It is an instrument, and instruments fail. Before concluding
+  the app stopped, get the log by another route (Jeremy can push it from the watch) —
+  and treat "no alerts fired" as evidence AGAINST an app failure, not as a second
+  failure. Both dead-men were silent here because nothing was wrong.
+  Sibling lesson, same day, opposite direction: the hand-back residual (see the item-1
+  validation) was an instrument error that invented a discrepancy. This was an
+  instrument error that invented an outage.
+
 - **OBS-6 (2026-08-11 18:14, build 268, epoch 10): takeoverComplete rides the QUEUED
   channel, so the phone can be minutes behind the truth about its own pod.**
   The watch had the pod at 18:14:22.463 ("ACTIVE — pod taken after 2 read(s) in 10.2s")
