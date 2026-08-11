@@ -27,20 +27,39 @@ about explicitly. Never silently dropped.
   merely SLOW confirmation instead, cutting the phone's blind window from the 5-minute
   T1 to 20 s on its first loan in the field.
 
-- **OBS-7 (2026-08-11 ~18:20, build 268): bolus UI appeared stuck "for quite a while",
-  but completed (Jeremy).** Log had not synced past 18:16:47 when this was written, so
-  the bolus itself is not yet in evidence — DO NOT conclude from this entry alone.
-  Recorded now so the observation is not lost to the sync lag.
-  Leading hypothesis, and it is not a defect: an Omnipod delivers a bolus at
-  `Pod.secondsPerBolusPulse = 2` × `Pod.pulseSize = 0.05` U = **1.5 U per minute**, fixed
-  in hardware. At his maxBolus of 3.00 U that is a full two minutes of genuine delivery
-  with the progress UI legitimately running the whole time.
-  Already RULED OUT by reading the code: the G7 acquisition gate is not involved —
-  `deferPodRadioWhileG7AcquisitionResolves` has exactly one caller (the cycle's
-  pump-data refresh), and the manual-bolus path (StockLoopSession → reclaimPodForDose)
-  does not pass through it. Worth checking when the log lands: how long the reclaim took
-  before the command, and whether the pod link dropped mid-delivery (E4's +12 s settle
-  vs a 40-120 s bolus) leaving the progress reporter without a source.
+- **OBS-8 (2026-08-11 18:51, build 268, epoch 10): the watch keeps running loop cycles
+  AFTER hand-back and logging FAILED verdicts.** 43 s after the loan closed:
+  `18:51:52 [loop] CYCLE VERDICT computed=FAILED enact=not-attempted(pumpManagerUnconnected)
+  watchdog=HELD lastCompletedAge=296s`. The refusal to enact is CORRECT — `pumpManager`
+  is nil'd at hand-back and the watch must not dose. But the G7 keeps delivering, each
+  reading triggers a cycle, and each cycle books a FAILED verdict. Two things to check:
+  the log noise (every 5 min after every loan, forever), and `watchdog=HELD` — whether
+  the stall watchdog stays armed for a device that has legitimately stopped dosing, and
+  can therefore fire a spurious alert post-loan. Not investigated yet.
+
+## Resolved 2026-08-11 — OBS-7, the bolus that looked stuck
+
+Jeremy: "the UI seems got stuck for quite a while on the bolusing, but it did complete."
+The log answered it exactly, and it is not a defect:
+
+```
+18:18:29.862 [bolus-ui] flow open · ON LOAN · dial max 3.00 U (grant)
+18:18:31.722 [bolus-ui] REC carb 15g (watch-local): 2.10 U
+18:18:43.983 [loan] MANUAL BOLUS queued 4s behind the dosing queue (automatic cycle in flight)
+18:18:43.983 [loan] MANUAL BOLUS 1.10 U — enacting on the watch pump
+18:18:45.396 [loan] MANUAL BOLUS delivering 1.10 U — estimated done in 44s
+```
+
+1.10 U at the pod's hardware rate (`secondsPerBolusPulse` 2 x `pulseSize` 0.05 =
+1.5 U/min) is 44 s, plus 4 s waiting behind an in-flight automatic cycle. ~48 s of
+entirely legitimate waiting, and the hypothesis recorded before the data arrived was
+right on the mechanism and the arithmetic.
+
+THE ACTUAL FINDING IS A UX ONE. The app COMPUTED "estimated done in 44s" and wrote it
+to the log — but Jeremy, watching the screen, read the wait as stuck. The information
+that would have made it legible existed and was not on the wrist. A determinate bar or
+a "≈44s" label turns "is this broken?" into "it's working". Filed with the UI
+subtleties (#93 class), not as a bug.
 
 ## Closed without a root cause (2026-08-11, Jeremy's call)
 
