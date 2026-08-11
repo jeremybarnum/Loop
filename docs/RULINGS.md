@@ -366,6 +366,35 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   relaunch. The "one long OFF run" deletion gate is moot; the E4 machinery is
   now simply the link policy's implementation.
 
+- **R32 — Uncertain hand-back ⇒ the phone loop goes OPEN, plus a loud warning**
+  (2026-08-11, Jeremy: "when the redelivery is uncertain, the phone loop should go
+  open… that plus a loud failure warning", confirmed on request).
+
+  When a hand-back cannot be established as complete — records not committed, or
+  committed but failing their reconciliation against the pod — the phone does NOT
+  resume closed-loop dosing. It goes OPEN: glucose still displays, manual control is
+  unaffected, and the algorithm enacts nothing automatically. The user is told
+  loudly and once (not once per retry — see #102's alarm-fatigue finding: 10-12
+  identical warnings for a single benign-to-dosing bug).
+
+  Rationale, in Jeremy's terms: your blood sugar is what it is, but your IOB and your
+  carbs might be wrong, so do it the field-fashion way — look, decide, dose by hand.
+  This is the standard response to uncertain delivery (an occluded pod, a lost pump
+  session), so it is stock-shaped rather than invented, and it is strictly
+  conservative: the failure mode of going open is under-treatment you can see and
+  correct, not silent over-delivery.
+
+  Note this is a DIFFERENT state from the common case, where a hand-back simply has
+  not finished: there the watch still holds the pod and keeps dosing, so there is no
+  therapy gap and no open-loop decision to make (field 2026-08-11: 57 clean watch
+  cycles while the phone was wedged). R32 governs the case where the pod has come
+  home and the books are untrustworthy.
+
+  Supersedes nothing, but it is the safety half of the reconciliation redesign that
+  the 2026-07-27 odometer ruling ("re-enable if/when the reconciliation warning is
+  redesigned with a proper threshold") left open. Odometer-derived IOB injection
+  remains OFF and unruled; going open is what we do instead of guessing.
+
 ## Not yet ruled (do not decide without Jeremy)
 
 - Risk-register #8: any on-body session of any milestone build — per-build,
