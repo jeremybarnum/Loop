@@ -184,6 +184,7 @@
 		43CB2B2B1D924D450079823D /* WCSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43CB2B2A1D924D450079823D /* WCSession.swift */; };
 		43CE7CDE1CA8B63E003CC1B0 /* Data.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43CE7CDD1CA8B63E003CC1B0 /* Data.swift */; };
 		43D0E4A22F1A000100000002 /* LoanProtocolV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */; };
+C0FFEE000000000000000010 /* LoanEventJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000013 /* LoanEventJournal.swift */; };
 		43D0E4A32F1A000100000003 /* LoanProtocolV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */; };
 		43D0E4B22F1A000100000012 /* SessionInsulinLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4B12F1A000100000011 /* SessionInsulinLedger.swift */; };
 		43D0E4B32F1A000100000013 /* SessionInsulinLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4B12F1A000100000011 /* SessionInsulinLedger.swift */; };
@@ -195,6 +196,7 @@
 		43D0E4B72F1A000100000017 /* LoanBooksHarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4B82F1A000100000018 /* LoanBooksHarnessTests.swift */; };
 		49B8A19F8BBE91531BBE4A2E /* WatchDosingLimitsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 253FAE509D95209395E23A42 /* WatchDosingLimitsTests.swift */; };
 		43D0E4AB2F1A00010000000B /* PodLoanPhoneControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4AA2F1A00010000000A /* PodLoanPhoneControllerTests.swift */; };
+C0FFEE000000000000000012 /* LoanEventJournalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE000000000000000011 /* LoanEventJournalTests.swift */; };
 		43D381621EBD9759007F8C8F /* HeaderValuesTableViewCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D381611EBD9759007F8C8F /* HeaderValuesTableViewCell.swift */; };
 		43D9001E21EB209400AF44BF /* LoopCore.h in Headers */ = {isa = PBXBuildFile; fileRef = 43D9FFD121EAE05D00AF44BF /* LoopCore.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		43D9002021EB209400AF44BF /* NSTimeInterval.swift in Sources */ = {isa = PBXBuildFile; fileRef = 439897341CD2F7DE00223065 /* NSTimeInterval.swift */; };
@@ -977,6 +979,7 @@
 		43D0E4B82F1A000100000018 /* LoanBooksHarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanBooksHarnessTests.swift; sourceTree = "<group>"; };
 		253FAE509D95209395E23A42 /* WatchDosingLimitsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchDosingLimitsTests.swift; sourceTree = "<group>"; };
 		43D0E4AA2F1A00010000000A /* PodLoanPhoneControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanPhoneControllerTests.swift; sourceTree = "<group>"; };
+C0FFEE000000000000000011 /* LoanEventJournalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanEventJournalTests.swift; sourceTree = "<group>"; };
 		43D381611EBD9759007F8C8F /* HeaderValuesTableViewCell.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = HeaderValuesTableViewCell.swift; sourceTree = "<group>"; };
 		43D533BB1CFD1DD7009E3085 /* WatchApp Extension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = "WatchApp Extension.entitlements"; sourceTree = "<group>"; };
 		43D848AF1E7DCBE100DADCBC /* Result.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Result.swift; sourceTree = "<group>"; };
@@ -2138,6 +2141,7 @@
 				43D0E4B82F1A000100000018 /* LoanBooksHarnessTests.swift */,
 				253FAE509D95209395E23A42 /* WatchDosingLimitsTests.swift */,
 				43D0E4AA2F1A00010000000A /* PodLoanPhoneControllerTests.swift */,
+				C0FFEE000000000000000011 /* LoanEventJournalTests.swift */,
 				E93E86AC24DDE02C00FF40C8 /* Mock Stores */,
 			);
 			path = LoopTests;
@@ -3493,6 +3497,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C0FFEE000000000000000010 /* LoanEventJournal.swift in Sources */,
 				C17824A51E1AD4D100D9D25C /* ManualBolusRecommendation.swift in Sources */,
 				897A5A9624C2175B00C4E71D /* BolusEntryView.swift in Sources */,
 				4F70C2131DE90339006380B7 /* StatusExtensionContext.swift in Sources */,
@@ -3878,6 +3883,7 @@
 				43D0E4B72F1A000100000017 /* LoanBooksHarnessTests.swift in Sources */,
 				49B8A19F8BBE91531BBE4A2E /* WatchDosingLimitsTests.swift in Sources */,
 				43D0E4AB2F1A00010000000B /* PodLoanPhoneControllerTests.swift in Sources */,
+				C0FFEE000000000000000012 /* LoanEventJournalTests.swift in Sources */,
 				A9BD28E7272226B40071DF15 /* TestLocalizedError.swift in Sources */,
 				A9F5F1F5251050EC00E7C8A4 /* ZipArchiveTests.swift in Sources */,
 				E9B3552D293592B40076AB04 /* MealDetectionManagerTests.swift in Sources */,
