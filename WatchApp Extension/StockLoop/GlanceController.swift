@@ -970,6 +970,20 @@ struct GlanceView: View {
             let duration = delivery.endsAt.timeIntervalSince(delivery.startedAt)
             let elapsed = timeline.date.timeIntervalSince(delivery.startedAt)
             let fraction = duration > 0 ? min(max(elapsed / duration, 0), 1) : 1
+            // FIELD 2026-08-11 (Jeremy): "the progress bar got stuck near 100% — that's
+            // something stock doesn't do."
+            //
+            // It was. `fraction` is clamped to 1, so at `endsAt` the bar pins full and STAYS
+            // there until something clears the block — and what clears it is
+            // `manualBolusDelivery`'s `endsAt > now()` guard, which is only evaluated when the
+            // glance rebuilds its MODEL. That rebuild is the 2 s poll (or a mirror update, up to
+            // a cycle away), and during a bolus the poll is exactly what queues behind pod BLE
+            // work. So the bar's disappearance depended on a rebuild that a bolus itself delays.
+            //
+            // Now it expires on its own clock, which is the same clock that fills it. Stock's
+            // phone row vanishes at completion; so does this. Note this ALSO removes the block's
+            // dependency on the poll — one fewer thing tying live UI to a model rebuild (#87).
+            if timeline.date < delivery.endsAt {
             // Rounded to the pod's pulse so the number only ever shows a deliverable volume —
             // 0.05 U steps, never 0.37 U. Same rounding stock applies via
             // roundToSupportedBolusVolume.
@@ -991,6 +1005,7 @@ struct GlanceView: View {
                 }
                 .frame(height: 3)
                 .frame(maxWidth: 120)
+            }
             }
         }
     }
