@@ -65,7 +65,22 @@ enum StockLoopStack {
         )
 
         // Stock, delegate-wired: the manager's CGMManagerDelegate output is the loop's input.
-        let cgmManager = G7CGMManager()
+        //
+        // #101 phase 2: restore persisted state (the stock phone pattern — DeviceDataManager
+        // rebuilds its CGM manager from rawState). The bare init here meant every launch and
+        // every app update forgot the adopted sensor and reran the acquisition lottery against
+        // D2W's ~15s ride windows — three sessions on 2026-08-10 were relay-covered for
+        // 10-25 minutes each for exactly this reason. WatchLoopManager persists rawState on
+        // cgmManagerDidUpdateState; a corrupt or absent blob falls back to the bare init.
+        let cgmManager: G7CGMManager
+        if let raw = UserDefaults.standard.dictionary(forKey: WatchLoopManager.cgmStateDefaultsKey),
+           let restored = G7CGMManager(rawState: raw) {
+            cgmManager = restored
+            SportLog.event("cgm", "G7 state RESTORED — sensor \(restored.sensorName ?? "none"), activated \(restored.sensorActivatedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "unknown")")
+        } else {
+            cgmManager = G7CGMManager()
+            SportLog.event("cgm", "G7 state fresh — no persisted sensor; acquisition will run (new install or pre-#101 build)")
+        }
         cgmManager.delegateQueue = loopManager.deviceQueue
         cgmManager.cgmManagerDelegate = loopManager
 

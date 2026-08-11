@@ -341,6 +341,31 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   G7 coverage. Caveats owned: the OFF arm was 20 minutes, one evening, bench
   topology at pod RSSI -81; on-body signal is stronger, favouring OFF further.
 
+  **AMENDED 2026-08-10/11 (#101 phase 2, Jeremy: "let's make sure we understand
+  what's actually going on with E4 and implement it coherently not as a toggle
+  in the diagnostic screen").** The A/B above measured only STEADY STATE — both
+  arms are indeed equivalent there. What it could not see is ACQUISITION, and
+  there the two arms fail in opposite ways, proven the same evening by the toggle
+  experiment plus the build-263 radio census:
+
+  - OFF (held pod link) starves the acquisition scan: 0 adoptions across ~130
+    minutes of held-link windows; adoption within 7-10 minutes of each of the
+    two releases. A session that never adopts never reaches the steady state
+    the A/B measured.
+  - ON collides by construction while un-adopted: the per-cycle reclaim fires
+    ~100 ms after the relay reading — the same grid instant the D2W ride
+    appears — and the pod scan kills the G7 connect mid-establishment (census
+    23:31:48). Post-adoption the collision is harmless because the DIRECT read
+    triggers the cycle and has already completed (23:36/23:41/23:46 coexistence).
+
+  Ruled (supersedes "default false; the toggle stays"): the toggle is REMOVED.
+  Link policy is automatic — orphan between doses with per-cycle reclaim (the
+  most-validated rhythm: E5 84/84, 157 44/44, 263 3/3), the reclaim gated on
+  G7 acquisition state while un-adopted, and G7 sensor identity persisted
+  across launches so the un-adopted phase is once per sensor, not once per
+  relaunch. The "one long OFF run" deletion gate is moot; the E4 machinery is
+  now simply the link policy's implementation.
+
 ## Not yet ruled (do not decide without Jeremy)
 
 - Risk-register #8: any on-body session of any milestone build — per-build,

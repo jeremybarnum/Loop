@@ -858,6 +858,9 @@ final class WatchLoopManager {
     private let bgSourceLock = NSLock()
     private var _lastDirectG7At: Date?
     private var _lastPhoneRelayAt: Date?
+    /// #101 phase 2: last sensorID written by cgmManagerDidUpdateState (extension can't hold
+    /// storage) — the persist itself runs every state change; this only rate-limits the log line.
+    var lastPersistedSensorID: String?
     private func noteGlucoseSource(directG7: Bool) {
         bgSourceLock.lock()
         if directG7 { _lastDirectG7At = Date() } else { _lastPhoneRelayAt = Date() }
@@ -1125,6 +1128,16 @@ final class WatchLoopManager {
         }
 
         SportLog.event("loan", String(format: "pump data %.0f min old — reclaiming pod to refresh status before the cycle", age / 60))
+        // #101 phase 2: this reclaim fires ~100ms after reading arrival — while un-adopted
+        // that is the exact moment the D2W ride appears, and the pod scan kills the G7
+        // connect (2026-08-10 23:31:48). Hold the pod radio until the ride resolves.
+        // Steady state (fresh direct G7) passes straight through.
+        deferPodRadioWhileG7AcquisitionResolves {
+            self.reclaimForRefresh(reclaim, assertThenLoop: assertThenLoop)
+        }
+    }
+
+    private func reclaimForRefresh(_ reclaim: (@escaping (Bool) -> Void) -> Void, assertThenLoop: @escaping (@escaping () -> Void) -> Void) {
         reclaim { ok in
             if !ok {
                 SportLog.event("loan", "pump-data refresh: pod didn't reconnect — cycle will still gate on stale pump data")
@@ -1136,6 +1149,52 @@ final class WatchLoopManager {
                 self.e4ReleasePodAfterDose?()
             }
         }
+    }
+
+    /// #101 phase 2 acquisition gate (census build 263, 2026-08-10). The fragile phase is
+    /// the G7 CONNECT/AUTH ESTABLISHMENT, ~1.5s straddling the grid point — an established
+    /// link coexists with pod traffic (23:36/23:41/23:46: backfill and a live read landed
+    /// DURING pod handshake), and #81's forensics say the same from the pod's side. So the
+    /// gate keys on live acquisition state, not the clock:
+    ///
+    /// - Direct G7 fresh (< 6.5 min): the read that triggered this cycle already completed —
+    ///   proceed immediately. Steady state pays nothing.
+    /// - Otherwise hold the pod radio until: a direct read LANDS (ride succeeded), or the G7
+    ///   falls idle (no pending connect + no ride signal for 3s — checked only after a 2.5s
+    ///   minimum hold, because the ride can announce up to ~1s AFTER the relay reading that
+    ///   triggered us: ad at :48.197 vs INGEST at :48.050), or 20s timeout.
+    ///
+    /// Worst case: the cycle's pod work starts 20s late and the dose enacts 20s late —
+    /// clinically nil. A lost ride costs the session's entire direct-G7 coverage.
+    private func deferPodRadioWhileG7AcquisitionResolves(_ proceed: @escaping () -> Void) {
+        let directAge = lastGlucoseSourceStamps.direct.map { Date().timeIntervalSince($0) }
+        if let age = directAge, age < .minutes(6.5) {
+            proceed()
+            return
+        }
+        let start = Date()
+        SportLog.event("loan", "acquisition gate: direct G7 not fresh (\(directAge.map { "\(Int($0))s ago" } ?? "never")) — holding pod radio for the G7 ride")
+        func poll() {
+            let elapsed = Date().timeIntervalSince(start)
+            if let d = self.lastGlucoseSourceStamps.direct, d > start {
+                SportLog.event("loan", String(format: "acquisition gate: released after %.1fs — direct read LANDED", elapsed))
+                proceed(); return
+            }
+            let pendingSince = G7RadioCensus.connectPendingSince
+            let rideAge = G7RadioCensus.lastRideSignalAt.map { Date().timeIntervalSince($0) }
+            if elapsed >= 2.5, pendingSince == nil, (rideAge ?? .infinity) > 3 {
+                SportLog.event("loan", String(format: "acquisition gate: released after %.1fs — G7 idle, no ride in sight", elapsed))
+                proceed(); return
+            }
+            if elapsed >= 20 {
+                SportLog.event("loan", String(format: "acquisition gate: TIMEOUT after %.1fs — proceeding (connectPending=%@ · lastRideSignal %@)",
+                                              elapsed, pendingSince == nil ? "no" : "yes",
+                                              rideAge.map { String(format: "%.1fs ago", $0) } ?? "never"))
+                proceed(); return
+            }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.5) { poll() }
+        }
+        DispatchQueue.global(qos: .userInitiated).async { poll() }
     }
 
     func loop() {
@@ -3119,10 +3178,23 @@ extension WatchLoopManager: CGMManagerDelegate {
         log.default("CGM manager requested deletion (ignored on watch)")
     }
 
+    /// #101 phase 2: where the persisted G7 state lives. StockLoopStack.assemble reads it
+    /// back at construction (`G7CGMManager(rawState:)` — the stock phone pattern).
+    static let cgmStateDefaultsKey = "g7.cgmManagerRawState"
+
     func cgmManagerDidUpdateState(_ manager: CGMManager) {
-        // Stock managers persist via rawValue on this callback. Wiring the persisted CGM
-        // state into the watch app's storage is part of M5 integration (the manager
-        // reconstructs from its transport today).
+        // #101 phase 2: persist exactly as the stock phone does on this callback. The old
+        // no-op here ("part of M5 integration") is why every launch constructed a blank
+        // G7CGMManager and reran the acquisition lottery — the watch had the adoption and
+        // threw it away on exit.
+        guard manager is G7CGMManager else { return }
+        let raw = manager.rawState
+        UserDefaults.standard.set(raw, forKey: Self.cgmStateDefaultsKey)
+        let sensorID = raw["sensorID"] as? String
+        if sensorID != lastPersistedSensorID {
+            lastPersistedSensorID = sensorID
+            SportLog.event("cgm", "G7 state persisted — sensor \(sensorID ?? "none") (survives relaunch/update)")
+        }
     }
 
     func credentialStoragePrefix(for manager: CGMManager) -> String {

@@ -48,23 +48,23 @@ final class StockLoopSession {
     private let log = OSLog(subsystem: "com.loopkit.Loop", category: "StockLoopSession")
 
     init() {
-        // E4 DEFAULT FLIPPED BACK TO OFF (#96, Jeremy 2026-08-08, A/B on build 257).
+        // LINK POLICY IS AUTOMATIC (#101 phase 2, Jeremy 2026-08-10: "implement it coherently
+        // not as a toggle in the diagnostic screen"). The E4 toggle is GONE — both of its arms
+        // were wrong for acquisition and indistinguishable in steady state:
         //
-        // E4 graduated to the production reclaim path on the build-157 overnight (44/44) — but
-        // that evidence predates the radio fixes that removed its reason to exist: window-aware
-        // pod comms (#31), scan-adopt (#54), the Code=11 backoff (#94), R26 priority, and the
-        // standing-connect re-arm (#97). The A/B (epochs 265-267): G7 capture PERFECT in both
-        // arms (8/8 ON, 4/4 OFF, ages 3-7s, zero sensor errors, pod+G7 links verifiably
-        // simultaneous), while E4 ON cost 5-6s of scan+connect radio per cycle placed exactly
-        // INSIDE the G7 window, produced the night's only enact failure (the 21:47:42
-        // enact-vs-reclaim race), and taxed every manual bolus ~10s (0.65 U: 11s to delivering
-        // vs 1.4s with the link held).
+        // - OFF (hold the pod link) starved the acquisition scan: 0 adoptions across ~130 min
+        //   of held-link windows on 2026-08-10, versus adoption within 7-10 min of each of the
+        //   two releases. Steady state was immune — but a session that never adopts never
+        //   reaches steady state on the direct path.
+        // - ON (orphan + reclaim per cycle) collided by construction while un-adopted: the
+        //   reclaim fires ~100ms after the relay reading, exactly when the D2W ride appears
+        //   (census 23:31:48 — pod scan :48.089, G7 ad :48.197, connect never completed).
         //
-        // OFF's steady state, measured: the DASH pod drops an idle link exactly 2:55 after the
-        // last command; the standing connect re-lands it in 1.3-2.1s (4/4). The toggle stays;
-        // an explicit setting on this watch still wins. Machinery deletion is gated on one LONG
-        // OFF session (overnight or full sport) confirming coverage at duration.
-        UserDefaults.standard.register(defaults: ["g7.e4ReleasePod": false])
+        // The policy now: orphan between doses, reclaim every cycle (the most-validated radio
+        // rhythm we have — E5 84/84, build 157 44/44, census build 263 3/3), with the reclaim
+        // GATED on G7 acquisition state while un-adopted (WatchLoopManager's acquisition gate).
+        // Persisted sensor identity (StockLoopStack) makes the un-adopted phase rare. The old
+        // "g7.e4ReleasePod" default is no longer read anywhere. R31 amended accordingly.
         // FakeGlucose and E5 both substitute into the LIVE dosing/enact path; with their
         // toggles gone they must never linger enabled in a real session. Clear any
         // persisted test state at launch (both are trivially restored from git).
@@ -173,30 +173,15 @@ final class StockLoopSession {
         // returns connected=true immediately so the dosing path is byte-for-byte the
         // tagged baseline. When ON, the loan controller (which owns the OmniPumpManager)
         // does the bounded reconnect + settled re-release.
+        // #101: unconditional. reclaimPodForDose already no-ops when the link is held
+        // (guard isConnectionReleased → completion(true)), so this single wiring subsumes
+        // both old E4 arms and can never strand a released bid (#97's failure mode).
         stack.loopManager.e4ReclaimPodForDose = { [weak self] completion in
-            guard UserDefaults.standard.bool(forKey: "g7.e4ReleasePod"), let self = self else {
-                // #97 (2026-08-08): E4-OFF assumes the pod is HELD — but if E4 was ever ON in
-                // this session, its +90s deferred release already DISARMED the standing
-                // auto-connect bid, and nothing re-arms it. Field 2026-08-08: E4 released at
-                // 00:23:28, Jeremy toggled E4 off at 00:24:22, and every enact from 00:26 to
-                // 00:56 failed podNotConnected with no reconnect ever attempted. (Contrast
-                // 23:24-23:30, E4 off with the bid still armed: two pod-initiated drops both
-                // auto-reconnected in ~2 s. E4-OFF is fine — a STRANDED BID is not.) So in
-                // E4-OFF, assert nothing: if the connection is released, re-arm it and run the
-                // real reclaim; otherwise report held, exactly as before.
-                if let self = self, self.loanController.podConnectionIsReleased {
-                    SportLog.event("loan", "E4-OFF: pod bid was RELEASED (stranded by an earlier E4 release) — re-arming and reclaiming")
-                    self.loanController.reclaimPodForDose(completion)
-                } else {
-                    completion(true)
-                }
-                return
-            }
+            guard let self = self else { completion(false); return }
             self.loanController.reclaimPodForDose(completion)
         }
         stack.loopManager.e4ReleasePodAfterDose = { [weak self] in
-            guard UserDefaults.standard.bool(forKey: "g7.e4ReleasePod"), let self = self else { return }
-            self.loanController.releasePodAfterDose()
+            self?.loanController.releasePodAfterDose()
         }
 
         loanController.onLoanActiveChanged = { [weak self] active in
@@ -242,12 +227,9 @@ final class StockLoopSession {
 
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         SportLog.event("session", "Sport Mode ready — build \(build); tap Start to request a loan")
-        // Name the E4 mode at launch. A log that does not say which arm produced it cannot be
-        // compared against the other — the mistake that let a whole day of readings be credited
-        // to the wrong component.
-        SportLog.event("e4", UserDefaults.standard.bool(forKey: "g7.e4ReleasePod")
-            ? "E4 ON — pod orphaned between doses (takeover starts cold; baseline 16.8s)"
-            : "E4 OFF — pod held connected between doses (takeover should be fast; watch CGM capture)")
+        // Name the policy at launch, same discipline as the old E4 arm line: a log that does
+        // not say which policy produced it cannot be compared across builds.
+        SportLog.event("policy", "link policy AUTOMATIC (#101): pod orphaned between doses, reclaim per cycle, acquisition-gated while un-adopted")
     }
 
     // MARK: Log pipeline v4 — event snapshots + loan pulse (2026-07-20)
