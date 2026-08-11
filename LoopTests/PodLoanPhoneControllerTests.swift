@@ -712,6 +712,58 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed on the empty close")
     }
 
+    // MARK: - Field incident 2026-08-11 (#102): stale offer clamps a LATER epoch's doses
+
+    /// FIELD (2026-08-11, 00:16:15): WCSession redelivered two already-acked epoch-1 final
+    /// offers after a BT-off window. The phone correctly flagged them stale — but the stale
+    /// drain reconciles the SHARED staged map, which by then held epoch-2 temps streamed
+    /// during the loan, against the STALE offer's `handedBackAt`. Every epoch-2 temp was
+    /// clamped to a moment BEFORE it started, producing negative durations; Core Data
+    /// rejected the whole batch (Code=1620 "duration is too small"), so the write failed and
+    /// no ack was sent. Jeremy then ended the loan and the genuine epoch-2 hand-back hit the
+    /// same poisoned objects and failed too, every 15 s, through hand-back attempt 16+ —
+    /// the "painful reclaim". See task #102.
+    ///
+    /// This is item 6's standing practice: the incident becomes a harness test while the log
+    /// is fresh. It is written as the DESIRED contract (no dose may end before it starts) and
+    /// is expected to fail until #102 is ruled and fixed — XCTExpectFailure keeps the suite,
+    /// and therefore the ship gate, honest and green in the meantime. Delete the
+    /// XCTExpectFailure when the fix lands; if the test then passes, the fix is real.
+    func testStaleOfferMustNotClampALaterEpochsDosesToItsOwnHandbackTime() throws {
+        let controller = makeController()
+        let grant1 = establishLoan(controller)
+        let epoch1HandedBackAt = Date().addingTimeInterval(-.minutes(30))
+
+        // Close loan 1 cleanly (this is the offer that gets redelivered later).
+        let closeAck = expectSend()
+        let epoch1Offer = HandbackOffer(epoch: grant1.epoch, handedBackAt: epoch1HandedBackAt,
+                                        finalStatus: nil, odometer: nil, events: [],
+                                        tombstones: [], recovered: false, released: true)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(epoch1Offer).transportDictionary())
+        wait(for: [closeAck], timeout: 5)
+        waitForState(controller, .owner)
+
+        // Loan 2 starts and streams a temp that is still running NOW — i.e. it both starts
+        // and ends well AFTER epoch 1's hand-back instant.
+        let grant2 = establishLoan(controller)
+        let liveTempStart = Date().addingTimeInterval(-.minutes(2))
+        let liveTemp = tempEvent(seq: 1, rate: 1.3, start: liveTempStart, durationMinutes: 30)
+        controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
+            DoseRecordBatch(epoch: grant2.epoch, events: [liveTemp], tombstones: [])).transportDictionary())
+
+        // The stale epoch-1 offer is redelivered by the transport.
+        let staleAck = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(epoch1Offer).transportDictionary())
+        wait(for: [staleAck], timeout: 5)
+
+        XCTExpectFailure("#102 unfixed: the stale drain clamps epoch 2's temp to epoch 1's handedBackAt") {
+            let written = addedDoses.flatMap { $0 }
+            let inverted = written.filter { $0.endDate < $0.startDate }
+            XCTAssertTrue(inverted.isEmpty,
+                          "a stale offer must never write a dose that ends before it starts — got \(inverted.count) inverted of \(written.count)")
+        }
+    }
+
     /// Recursively remove `key`; returns whether anything was removed. Mirrors the helper in
     /// LoanProtocolV2Tests so neither test pins the envelope's nesting.
     private static func stripKey(_ key: String, from json: inout [String: Any]) -> Bool {
