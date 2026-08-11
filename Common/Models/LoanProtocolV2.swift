@@ -820,15 +820,25 @@ public struct StatusReport: Codable, Equatable {
     public let lastEventSeq: Int
     public let podFault: String?
     public let holdsPod: Bool
+    /// #108: does this watch know about the epoch it was asked about?
+    ///
+    /// `holdsPod: false` is ambiguous on its own — it is equally true of a watch that never
+    /// received the grant and of a watch that received it and is thirty seconds into taking the
+    /// pod. Those need opposite responses, so the difference has to be said out loud.
+    ///
+    /// Optional because it is an added field: `nil` means an older build that could not answer,
+    /// which the phone must read as "no information", never as "no".
+    public let knowsGrant: Bool?
 
     public init(epoch: Int, mode: LoanDosingMode, lastDirectGlucoseAge: TimeInterval?,
-                lastEventSeq: Int, podFault: String?, holdsPod: Bool) {
+                lastEventSeq: Int, podFault: String?, holdsPod: Bool, knowsGrant: Bool? = nil) {
         self.epoch = epoch
         self.mode = mode
         self.lastDirectGlucoseAge = lastDirectGlucoseAge
         self.lastEventSeq = lastEventSeq
         self.podFault = podFault
         self.holdsPod = holdsPod
+        self.knowsGrant = knowsGrant
     }
 }
 

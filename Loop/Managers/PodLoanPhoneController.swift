@@ -833,7 +833,38 @@ final class PodLoanPhoneController {
     /// T1 (R8): 5 min start-confirmation, cancelled by TakeoverComplete. Row 4:
     /// query-before-reclaim — a watch whose TakeoverComplete was lost gets one chance
     /// to prove it holds the pod before auto-reclaim.
+    /// #108: how long to wait before ASKING whether the hand-over arrived. Not how long to wait
+    /// before acting — those got conflated, and only the acting needed to be patient.
+    ///
+    /// A normal takeover completes in ~13 s (field 2026-08-11), so by 20 s a healthy loan has
+    /// already left `.grantOffered` and this never fires. A slow-but-fine takeover answers
+    /// "yes I have the grant" and nothing happens. Only an explicit "I never got it" acts.
+    private static let grantLostProbeDelay: TimeInterval = 20
+
+    /// #108: probe once, early, for a hand-over that never landed.
+    ///
+    /// The failure it catches: the phone has already stopped dosing and already released the pod
+    /// (it must, so the watch can take it) when the grant is lost in transit. Nobody then holds
+    /// the pod. It keeps delivering its last program on its own — no hazard — but no loop is
+    /// adjusting anything on either device, and until 2026-08-11 that lasted 5 min 15 s.
+    ///
+    /// Jeremy hit it installing build 267 (Start tapped ~4 s after install, before the watch
+    /// messaging channel had finished waking); he force-quit rather than wait it out.
+    ///
+    /// SILENCE IS NOT "NO". An unreachable watch that is perfectly fine and mid-takeover looks
+    /// identical, from here, to a watch that never heard anything. So this only sends a question;
+    /// the answer path (handleStatusReport) acts on an explicit `knowsGrant == false` and nothing
+    /// else. No answer ⇒ the original 5-minute timer runs exactly as before.
+    private func armGrantLostProbe(for grantEpoch: Int) {
+        queue.asyncAfter(deadline: .now() + Self.grantLostProbeDelay) { [weak self] in
+            guard let self = self, self.state == .grantOffered, self.epoch == grantEpoch else { return }
+            self.handbackDiag(grantEpoch, String(format: "grant unconfirmed after %.0fs — asking the watch whether it arrived (#108)", Self.grantLostProbeDelay))
+            self.sendMessage(.statusQuery(StatusQuery(epoch: grantEpoch)))
+        }
+    }
+
     private func armT1(for grantEpoch: Int) {
+        armGrantLostProbe(for: grantEpoch)
         scheduleNotification(id: NotificationID.t1, title: "Watch Loan Not Confirmed",
                              body: "The watch never confirmed taking the pod. The phone reclaimed it.",
                              delay: .minutes(5), repeats: false)
@@ -882,6 +913,19 @@ final class PodLoanPhoneController {
         // Row 4: the query-before-reclaim answer.
         if state == .grantOffered, report.holdsPod {
             handleTakeoverComplete(TakeoverComplete(epoch: report.epoch, firstPodStatus: LoanPodStatus(timestamp: deps.now(), deliveredUnits: nil, reservoirLevel: nil, isSuspended: false, faultCode: report.podFault)))
+        }
+        // #108: the watch says outright that the hand-over never reached it. Take the pod back
+        // now rather than in five more minutes — the phone released it for a takeover that is
+        // never going to start, so every second after this answer is time nobody is looping.
+        //
+        // `== false` deliberately, not `!= true`: nil is an older build that could not answer, and
+        // must fall through to the 5-minute timer. Only an explicit denial acts.
+        if state == .grantOffered, report.knowsGrant == false, !report.holdsPod {
+            handbackDiag(report.epoch, "grant CONFIRMED LOST by the watch — reclaiming now instead of waiting out the 5-minute timer (#108)")
+            t1WorkItem?.cancel()
+            cancelNotification(id: NotificationID.t1)
+            reclaimToOwner(alert: ("Sport Mode Didn't Start",
+                                   "The watch never received the hand-over, so the phone kept the pod and is still looping. Tap Start again."))
         }
         if let fault = report.podFault {
             deps.issueNotice("Pod Fault During Loan", "The pod reported a fault while on the watch: \(fault). Check the pod.")

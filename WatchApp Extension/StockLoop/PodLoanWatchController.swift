@@ -1827,14 +1827,38 @@ final class PodLoanWatchController {
     // MARK: - Status (§2.8)
 
     private func handleStatusQuery(_ query: StatusQuery) {
-        guard let current = epoch, query.epoch == current else { return }
+        guard let current = epoch, query.epoch == current else {
+            // #108: ANSWER, don't go quiet. Silence here was the whole bug — the one case the
+            // phone most needs to hear about (its hand-over never arrived, so it is sitting there
+            // having already let go of the pod) was the one case this returned without a word.
+            //
+            // Two guards on saying "I don't have it", because a wrong "no" makes the phone snatch
+            // the pod back mid-takeover:
+            //   phase != .active   — never claim ignorance while actually holding the pod.
+            //   epoch < query.epoch — we are BEHIND the phone, i.e. this grant genuinely never
+            //                         landed. A query for an epoch older than ours is a stale
+            //                         message and gets the silence it deserves.
+            if phase != .active, (epoch ?? Int.min) < query.epoch {
+                SportLog.event("loan", "status query for epoch \(query.epoch) — we have \(epoch.map(String.init) ?? "none") and hold no pod: the grant never reached us (#108)")
+                sendMessage(.statusReport(StatusReport(
+                    epoch: query.epoch,
+                    mode: currentMode(),
+                    lastDirectGlucoseAge: nil,
+                    lastEventSeq: 0,
+                    podFault: nil,
+                    holdsPod: false,
+                    knowsGrant: false)))
+            }
+            return
+        }
         let report = StatusReport(
             epoch: current,
             mode: currentMode(),
             lastDirectGlucoseAge: loopManager.latestGlucoseAge,  // WS4c sovereignty signal
             lastEventSeq: journal.lastEventSeq,
             podFault: pumpManager?.podLoanFaultDescription,
-            holdsPod: phase == .active)
+            holdsPod: phase == .active,
+            knowsGrant: true)
         sendMessage(.statusReport(report))
     }
 

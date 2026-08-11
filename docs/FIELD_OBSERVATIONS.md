@@ -323,3 +323,39 @@ the same grant reports `phoneIOBAge=98s`. So this compares a fresh watch COB aga
 additionally being a pre-settle static read (the comment at the call site already says
 so). The ⚠ threshold of 2.0 g does not account for snapshot age. Not chased; noted so
 the next reader does not chase it either.
+
+## 2026-08-11 — #108 fixed: the lost hand-over now takes ~20 s to detect, not 5m15s
+
+The failure Jeremy hit installing 267 (Start tapped ~4 s after install): the phone agrees
+to the loan, stops its own dosing, releases the pod's BLE link — it must, the pod talks to
+one device at a time — and then the grant is lost in transit. Nobody holds the pod. It
+keeps delivering its last program autonomously, so there is no hazard, but no loop is
+adjusting anything on either device.
+
+Recovery was `armT1`: wait 5 minutes, ask the watch, wait 15 more seconds, reclaim. A
+message lost in the first second cost 5m15s, and a re-Start inside that window is
+correctly refused ("pod still returning"), which reads as the app being stuck. Jeremy
+force-quit rather than wait.
+
+WHAT THE FIX HAD TO CREATE FIRST. The plan was "ask early, act only on a definitive no."
+But there was no definitive no to act on: `handleStatusQuery` opened with
+`guard let current = epoch, query.epoch == current else { return }` — a watch that never
+received the grant has no epoch, so it answered **nothing**. The single case the phone most
+needed to hear about was the one case the protocol was silent in.
+
+So the watch now answers, with `StatusReport.knowsGrant` (optional; nil = an older build
+that could not say). Two guards before it claims ignorance, because a wrong "no" makes the
+phone snatch the pod back mid-takeover:
+  - `phase != .active` — never claim ignorance while actually holding the pod
+  - `epoch < query.epoch` — only when we are BEHIND the phone; a query for an epoch older
+    than ours is a stale message and still gets silence
+
+The phone probes once at 20 s and acts on `knowsGrant == false` only. Written `== false`
+and not `!= true` on purpose: nil is "could not answer", and must fall through to the
+unchanged 5-minute timer. Silence is still not a denial.
+
+Note the asymmetry that made this cheap: being generous with a TIMER and being slow to ask
+a QUESTION had been conflated. Only the timer needed to be generous.
+
+Not yet field-proven — reproducing it needs an install-then-immediately-Start, which is
+exactly the sequence that produced it once.

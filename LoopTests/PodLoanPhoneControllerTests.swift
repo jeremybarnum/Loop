@@ -722,6 +722,96 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertNotNil(diagMatching("reconcile[provisional]"), "the provisional line is what stands")
     }
 
+    // MARK: - #108: a hand-over lost in transit
+
+    /// Drives a controller into `.grantOffered` (grant sent, watch has not confirmed).
+    private func offerGrant(_ controller: PodLoanPhoneController) -> LoanGrant {
+        let grantSent = expectSend()
+        controller.handleIncoming(userInfo: try! LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
+        wait(for: [grantSent], timeout: 5)
+        guard case .grant(let grant)? = lastSent() else {
+            XCTFail("expected a grant, got \(String(describing: lastSent()))")
+            fatalError()
+        }
+        return grant
+    }
+
+    /// The fix: an explicit "I never got it" reclaims immediately instead of after 5 min 15 s.
+    func testExplicitGrantLostReportReclaimsImmediately() throws {
+        let controller = makeController()
+        let grant = offerGrant(controller)
+        XCTAssertTrue(MockPumpManager.testConnectionReleased, "the phone releases the pod to hand over")
+
+        let report = StatusReport(epoch: grant.epoch, mode: .closedDirect, lastDirectGlucoseAge: nil,
+                                  lastEventSeq: 0, podFault: nil, holdsPod: false, knowsGrant: false)
+        controller.handleIncoming(userInfo: try LoanMessage.statusReport(report).transportDictionary())
+
+        waitForState(controller, .owner)
+        XCTAssertFalse(MockPumpManager.testConnectionReleased, "the pod comes straight back")
+        XCTAssertEqual(pauseCalls.last, false, "and the phone resumes its own dosing")
+    }
+
+    /// The dangerous mistake this must NOT make. A watch that HAS the grant and is partway
+    /// through taking the pod also reports `holdsPod: false` — reading that as "the grant was
+    /// lost" would snatch the pod back mid-takeover, which is worse than the bug being fixed.
+    func testMidTakeoverReportIsNotMistakenForALostGrant() throws {
+        let controller = makeController()
+        let grant = offerGrant(controller)
+
+        let report = StatusReport(epoch: grant.epoch, mode: .closedDirect, lastDirectGlucoseAge: nil,
+                                  lastEventSeq: 0, podFault: nil, holdsPod: false, knowsGrant: true)
+        controller.handleIncoming(userInfo: try LoanMessage.statusReport(report).transportDictionary())
+
+        let settle = expectation(description: "settle")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2) { settle.fulfill() }
+        wait(for: [settle], timeout: 5)
+        XCTAssertEqual(controller.state, .grantOffered, "a watch that HAS the grant must be left alone")
+        XCTAssertTrue(MockPumpManager.testConnectionReleased, "the pod stays released for the takeover")
+    }
+
+    /// Silence is not "no", and neither is an older build's blank. `knowsGrant == nil` means the
+    /// watch could not answer the question — that must fall through to the original 5-minute
+    /// timer, never be read as a denial.
+    func testUnansweredKnowsGrantDoesNotReclaim() throws {
+        let controller = makeController()
+        let grant = offerGrant(controller)
+
+        let report = StatusReport(epoch: grant.epoch, mode: .closedDirect, lastDirectGlucoseAge: nil,
+                                  lastEventSeq: 0, podFault: nil, holdsPod: false)   // knowsGrant nil
+        controller.handleIncoming(userInfo: try LoanMessage.statusReport(report).transportDictionary())
+
+        let settle = expectation(description: "settle")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2) { settle.fulfill() }
+        wait(for: [settle], timeout: 5)
+        XCTAssertEqual(controller.state, .grantOffered, "no information is not a denial")
+    }
+
+    /// The added field must survive a round trip, and its absence must decode as "no answer"
+    /// rather than failing the whole message.
+    func testKnowsGrantRoundTripsAndIsOptionalOnDecode() throws {
+        let report = StatusReport(epoch: 7, mode: .closedDirect, lastDirectGlucoseAge: 30,
+                                  lastEventSeq: 3, podFault: nil, holdsPod: true, knowsGrant: true)
+        var transport = try LoanMessage.statusReport(report).transportDictionary()
+        guard case .statusReport(let decoded)? = try? LoanMessage.decode(fromTransport: transport) else {
+            return XCTFail("round trip failed")
+        }
+        XCTAssertEqual(decoded.knowsGrant, true)
+
+        // The envelope rides as an encoded Data blob, so strip inside it, not in the outer dict.
+        guard let data = transport[LoanProtocol.userInfoKey] as? Data,
+              var json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return XCTFail("expected an encoded envelope")
+        }
+        XCTAssertTrue(Self.stripKey("knowsGrant", from: &json), "expected the key to be present to strip")
+        transport[LoanProtocol.userInfoKey] = try JSONSerialization.data(withJSONObject: json)
+
+        guard case .statusReport(let old)? = try? LoanMessage.decode(fromTransport: transport) else {
+            return XCTFail("a report without knowsGrant must still decode")
+        }
+        XCTAssertNil(old.knowsGrant, "absent must mean 'could not answer', not false")
+        XCTAssertTrue(old.holdsPod, "the rest of the report must be unaffected")
+    }
+
     // MARK: - R32(b): what a reconciliation difference DOES
 
     /// Drives one clean loan to the authoritative audit with a chosen residual.
