@@ -7,6 +7,26 @@ about explicitly. Never silently dropped.
 
 ## Open
 
+_(none — OBS-1, OBS-2 and OBS-5 closed 2026-08-11; see below.)_
+
+## Closed without a root cause (2026-08-11, Jeremy's call)
+
+All three were observed in the July 119-129 build era and none has recurred across
+the many builds since — a stretch that included the connect-storm backoff (#94), the
+E4-default-OFF ruling (R31), the automatic link policy and persisted sensor identity
+(#101/#104), and the acquisition gate. They are being retired as no-longer-actionable
+rather than as explained: nobody found the mechanism, the code they were observed
+against has largely been replaced, and re-deriving them from logs that old would tell
+us about a system we no longer run.
+
+Per the standing practice at the top of this file, this is the "asked about
+explicitly" path, not a silent drop. **If any of these patterns appears again it comes
+back as a NEW observation with current-build evidence** — do not treat these entries
+as prior art establishing that the behavior is benign.
+
+The retired text, kept verbatim so a recurrence can be compared against it:
+
+
 - **OBS-1 (2026-07-19 22:39): epoch 21 takeover vanished without a verdict.**
   GRANT epoch 21 received 22:39:36; the log shows NEITHER "ACTIVE" nor "TAKEOVER
   FAILED" for it before the next REQUEST at 22:41:00 (epoch 22, which succeeded in
@@ -36,6 +56,7 @@ about explicitly. Never silently dropped.
   churn→issue pattern repeats on a healthy sensor, consider gentler retry behavior.
   Practical rule meanwhile: a sensor-issue window makes acquisition-cadence data
   UNINTERPRETABLE — don't count such sessions for or against a build.
+
 
 ## Resolved
 
