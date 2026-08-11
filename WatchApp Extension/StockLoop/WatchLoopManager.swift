@@ -909,6 +909,10 @@ final class WatchLoopManager {
         bgSourceLock.lock(); defer { bgSourceLock.unlock() }
         return (_lastDirectG7At, _lastPhoneRelayAt)
     }
+    /// #29: the last cycle's binding-constraint summary, for the diagnostic screen. Our screen
+    /// only — never annotated onto a stock surface (the stock-parity ruling).
+    private(set) var lastDosingDerivation: String?
+
     /// #74 cutover: the store's IOB kept as the SHADOW series while the ledger drives.
     private var storeIOBShadow: Double?
     /// #50: the temp basal we last successfully enacted, cached so the watch knows what the
@@ -2274,6 +2278,7 @@ final class WatchLoopManager {
                 // — the only configured limit, exactly as on the phone. No watch-side
                 // companion cap; stock DoseMath clamp + driver rounding + pod ceiling are
                 // the layers.
+                var derivation: TempBasalDerivation?
                 let temp = predictedGlucose.recommendedTempBasal(
                     to: glucoseTargetRange,
                     at: predictedGlucose[0].startDate,
@@ -2285,7 +2290,8 @@ final class WatchLoopManager {
                     additionalActiveInsulinClamp: iobHeadroom,
                     lastTempBasal: lastTempBasal,
                     rateRounder: rateRounder,
-                    isBasalRateScheduleOverrideActive: settings.scheduleOverride?.isBasalRateScheduleOverriden(at: startDate) == true
+                    isBasalRateScheduleOverrideActive: settings.scheduleOverride?.isBasalRateScheduleOverriden(at: startDate) == true,
+                    derivation: &derivation
                 )
                 dosingRecommendation = AutomaticDoseRecommendation(basalAdjustment: temp)
 
@@ -2311,6 +2317,21 @@ final class WatchLoopManager {
                     iobHeadroom,
                     settings.suspendThreshold?.quantity.doubleValue(for: mgdl).description ?? "none",
                     temp.map { String(format: "temp %.2f U/hr x %.0f min", $0.unitsPerHour, $0.duration / 60) } ?? "NO CHANGE"))
+
+                // #29 THE BINDING CONSTRAINT. The line above says what DoseMath saw and what it
+                // decided; this says WHICH LIMIT actually produced that number — the piece that
+                // was missing every time a rate had to be reconciled by hand. Six answers:
+                // inRange / aboveRange / entirelyBelowRange / suspend on the correction axis, and
+                // minGuard / iobClamp / maxBasal on the ceiling axis, plus the ifNecessary
+                // suppression that turns a real recommendation into no pod command at all.
+                //
+                // `bindingPoint` is the prediction point the correction was computed against —
+                // the min over the curve, NOT `eventual`. Mistaking one for the other is the
+                // single commonest way the head-math disagrees with the wrist.
+                if let d = derivation {
+                    SportLog.event("dosemath-why", d.summary)
+                    lastDosingDerivation = d.summary
+                }
             }
 
             if let dosingRecommendation = dosingRecommendation {
