@@ -695,7 +695,36 @@ final class PodLoanWatchController {
                     // glucose NOW (display-only, no enact) so the prediction reflects the seeded
                     // carbs at takeover instead of the stale pre-loan value until the first G7
                     // reading drives a full cycle. The seeds completed well before this point.
-                    self.loopManager.refreshPredictionForGlance()
+                    // R2 OVERTURNED (2026-08-11, Jeremy: "cancel any running temp as part of
+                    // takeover, run a fresh loop/prediction at takeover, and enact a new temp…
+                    // it clarifies things"). THE WATCH ASSERTS ITS OWN PROGRAM AT TAKEOVER — no
+                    // program crosses the boundary.
+                    //
+                    // R2 said the phone does NOT cancel its running temp, the pod keeps executing
+                    // it until our first command supersedes, and "the grant→first-enact gap is
+                    // covered by the odometer audit". That last clause was the load-bearing one,
+                    // and on 2026-08-11 we found the audit has never printed a usable number (it
+                    // compared whole-loan delivered against one drain's doses). So the ruling was
+                    // resting on a net that was not reporting.
+                    //
+                    // Inheriting a running temp is the root of a whole family: #72 (unbooked tail),
+                    // #76 (re-arm copy divergence), the C5 record-close that silently truncated the
+                    // running temp at every release, and a systematic audit bias — expectedInsulin
+                    // predicts the SCHEDULE across a gap it has no journal segment for, so an
+                    // inherited 0.90 U/hr against a 0.70 schedule accrues ~0.20 U/hr of unexplained
+                    // delivery. Two controllers sharing one program is the defect; a clean boundary
+                    // removes it rather than accounting around it.
+                    //
+                    // A full loop() rather than a bespoke enact, deliberately: it reuses every gate
+                    // (closed-loop mode inherited from the grant, glucose recency, pump-data
+                    // freshness, DoseMath limits, the IOB clamp), records a CYCLE VERDICT like any
+                    // other cycle, and — the point — MINTS A JOURNAL EVENT, so the loan's first
+                    // program is ours, streamed to the phone, and inside the audit. The pod link is
+                    // already up here, so the enactor's reclaim is a no-op and this costs one extra
+                    // command in a session we are already holding. Nothing is lost: the new temp
+                    // supersedes the old in the same breath, so there is no gap in delivery.
+                    SportLog.event("loan", "takeover: asserting our own program (R2 overturned — no inherited temp crosses the boundary)")
+                    self.loopManager.loop()
                     // Time-separate the radios. The takeover is done and the initial status
                     // is read, so the pod BLE connection isn't needed until the next dose.
                     // Release it (orphan the pod — it runs its last basal natively;

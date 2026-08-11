@@ -15,11 +15,59 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   window and should deny/block rather than invent numbers. Ruled when the
   original bench caps were removed ("remove any sport-mode specific caps.
   Use phone therapy settings for all safety").
-- **R2 — Handoff keeps the running temp.** At loan grant the phone does NOT
+- **R2 — Handoff keeps the running temp.** ~~At loan grant the phone does NOT
   cancel its running temp (pod keeps executing it until the watch's first
   command supersedes); the phone's RECORD of that temp closes at the
   handover stamp (C5), and the grant→first-enact gap is covered by the
-  odometer audit.
+  odometer audit.~~
+  **OVERTURNED 2026-08-11 by R33 — see below.**
+
+- **R33 — Clean boundary: each controller asserts its own program**
+  (2026-08-11, Jeremy: "what about simply canceling any running temp as part of
+  takeover, running a fresh loop/prediction at takeover, and enacting a new temp?
+  we don't lose more than 5 minutes of dosing and it clarifies things" — and
+  "I think we should do it on handback, as well").
+
+  NO PROGRAM CROSSES THE BOUNDARY. At takeover the watch immediately runs a full
+  cycle and enacts its own temp, superseding whatever the phone had running.
+  Supersedes R2.
+
+  Why R2 fell: its own text delegated the grant→first-enact gap to "the odometer
+  audit" — and on 2026-08-11 that audit was found never to have printed a usable
+  number (it compared the whole-loan odometer delta against a single drain's
+  doses, so a clean loan read as 6.000 U missing). The ruling was resting on a
+  net that was not reporting.
+
+  What the inherited temp actually cost: it is the shared root of #72 (unbooked
+  post-takeover tail), #76 (re-arm copy divergence), the C5 record-close that
+  silently truncated the running temp at every release, and a systematic audit
+  bias — `expectedInsulin` predicts the SCHEDULE across any window it has no
+  journal segment for, so an inherited 0.90 U/hr against a 0.70 schedule accrues
+  ~0.20 U/hr of unexplained delivery, about two pulses on a 27-minute tail, i.e.
+  bias sitting on top of a one-pulse tolerance. Two controllers sharing one
+  program is the defect; a clean boundary removes it instead of accounting
+  around it.
+
+  Cost, measured: none in delivery — the new temp supersedes the old in the same
+  command, so there is no gap. One extra pod command inside a BLE session we are
+  already holding. The takeover prediction is trustworthy at that instant: field
+  2026-08-11 reconciled IOB to the phone within 0.05 U and eventual BG within
+  12 mg/dL, because the grant seeds the phone's own history and snapshot.
+
+  Implementation: a full `loop()` at takeover rather than a bespoke enact, so it
+  inherits every existing gate (inherited closed-loop mode, glucose recency,
+  pump-data freshness, DoseMath limits, IOB clamp), logs a normal CYCLE VERDICT,
+  and mints a JOURNAL EVENT — which is the point: the loan's first program is
+  ours, streamed to the phone, and inside the audit.
+
+  HAND-BACK HALF: ruled in principle, NOT yet built. The mirror gap is real (the
+  watch's last temp keeps executing after the phone's record of it is clamped),
+  but it is not symmetric in safety: at takeover we replace a program with one we
+  have just computed, whereas cancelling at hand-back would revert the pod to
+  scheduled basal with no computation behind it until the phone's first loop —
+  which is a therapy change in an uncontrolled direction. The likely correct form
+  is for the PHONE to assert its own program immediately on reclaim rather than
+  for the watch to cancel and leave a hole. To be designed.
 - **R3 — Suspend is a bounded rate-0 temp.** Never an untimed
   suspendDelivery: the pod itself auto-resumes at expiry, so a dead watch
   can never strand delivery off (P0#5).
