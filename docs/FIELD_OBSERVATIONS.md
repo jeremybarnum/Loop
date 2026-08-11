@@ -256,3 +256,26 @@ about explicitly. Never silently dropped.
   in insulin colour under the dial, and `handleNewBolusRecommendation` (:336) pre-fills the dial
   when the user has not started dialling. Sport mode uses stock's flow unmodified; only the data
   source differs. So a fix at the data layer lights the whole screen with no view work.
+
+## 2026-08-11 — first-connection-after-install vs steady-state (Jeremy, build 267)
+
+Jeremy: "I do wonder whether potential users will need to have their expectations
+managed about the first connection after install versus later ones."
+
+The two sessions four minutes apart that prompted it:
+- Start tapped ~4 s after the 267 install: the GRANT was lost in transit (the reply
+  raced the relaunched app's WCSession activation — #108), the request timed out at
+  25 s, and the retry was correctly DENIED ("pod still returning"). Felt sluggish;
+  needed a second Start.
+- After a force-quit and a settled relaunch: grant 15:06:24 → pod taken in 13.5 s →
+  R33's own temp ACCEPTED at 15:06:40 → first direct-G7 reading 15:06:46. Sixteen
+  seconds from grant to dosing, glucose at twenty-two, because the persisted sensor
+  identity (#101/#104) skipped the acquisition lottery.
+
+The product point: a real user's FIRST experience compounds every cold path at once —
+no persisted sensor (acquisition can take minutes against D2W's ride windows),
+HealthKit prompts, WCSession's first activation — exactly when their expectations are
+least anchored. Steady state is seconds. R24 already rules the connect UX (determinate
+takeover bar + G7 ETA); what it does not cover is FIRST-RUN framing — one-time copy in
+the spirit of "first connection can take a few minutes; after that it's seconds".
+Parked as a pre-production UX item alongside R27's deferred list, not scheduled.
