@@ -1,8 +1,52 @@
 # Test coverage plan — the net under the Loop-idiomatic refactor
 
-**Status: APPROVED (Jeremy 2026-08-10), execution GATED.** Do not start until the
-fresh-sensor G7 check passes (see "The gate" at the bottom). Jeremy is reading the Sport Mode
-code and will produce a list of files he wants rewritten; item 3 is scoped to that list.
+**Status: APPROVED (Jeremy 2026-08-10). GATE CLEARED and EXECUTION STARTED 2026-08-11.**
+The G7 gate passed on build 264 (adoption in one ride, sensor identity persisted across
+relaunch, clean loop cycles, carbs + bolus field-tested). Item 3 still waits on Jeremy's
+rewrite-target list.
+
+## Execution log (2026-08-11, overnight)
+
+| Item | State | Notes |
+|---|---|---|
+| 1. Ship-script test gate | **DONE** | In `Scripts/testflight.sh`, exit 67 on failure. Sabotage-verified. |
+| 2. Clock + defaults injection | **DONE** | 38+20 clock sites, 11 defaults sites, 3 seams. Pure mechanical commit. |
+| 3. Characterization | BLOCKED | Needs Jeremy's rewrite-target list. |
+| 4. Sabotage check | **DONE for what exists** | Ran against the gate, the reconciler, and the new §16 tests. Findings below. |
+| 5. Two-sided contract test | **PARTIAL** | 3 of 6 §16 items closed; 3 blocked — see the correction below. |
+| 6. Fault variants | not started | |
+
+### Corrections to this plan, found by executing it
+
+**Item 5's premise was false.** The plan says "LoopTests already compiles the watch-side
+files into the iOS test host (that is how the books harness works)." It does not.
+`PodLoanWatchController`, `WatchLoopManager`, and `LoanEventJournal` are members of the
+**`WatchApp Extension` target only**; `LoopTests` cannot see them. `LoanBooksHarnessTests`
+works because `LoanProtocolV2` is in BOTH targets and the harness hand-rolls its own driver.
+
+Consequence: a genuine two-sided test needs one of
+(a) adding the watch files to `LoopTests` — they are `WCSession`/`SportLog`/watch-alert
+    coupled, so this cascades and may not compile for iOS;
+(b) a watchOS unit-test target (clean, but new infrastructure); or
+(c) keep testing the phone + protocol halves and hand-roll the watch half, as the books
+    harness already does.
+§16's three watch-side items (cancel mid-drain, revoke-during-drain, seq-gap cursor cap)
+are blocked behind that choice. The cursor cap IS implemented — `PodLoanWatchController`'s
+`handleAck` caps the applied cursor below the lowest withheld seq — so this is test debt
+against working code, not a missing guard.
+
+**Sabotage findings (item 4), all real:**
+- The gate I wrote failed *silently*: under `set -e` a non-matching diagnostic grep aborted
+  the failure block before `exit 67`. Every such grep now ends in `|| true`.
+- A failing test can surface as "the test runner hung before establishing connection"
+  (~343-381 s vs 6 s green) rather than as an assertion. The gate now distinguishes the two
+  and says which, because a flake that reads as a code failure gets the gate switched off.
+- Removing `LoanReconciler`'s final-handback clamp — the line implicated in the 2026-08-11
+  hand-back wedge — is caught by the FULL suite (3 failures) but NOT by
+  `LoanBooksHarnessTests` + `PodLoanPhoneControllerTests` alone. Scope the gate to all five
+  suites, never a subset.
+- The suite has a real shared-state flake (`testDuplicateBolusTwinDetection`, tracked
+  separately). Test isolation is a prerequisite for trusting the gate, not a nicety.
 
 **Why this exists.** Coverage is inverted relative to risk. The loan state machine —
 `PodLoanWatchController.swift` (2,398 loc) and `WatchLoopManager.swift` (3,225 loc) — has no

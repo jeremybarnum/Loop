@@ -92,7 +92,22 @@ don't get lost; revisit opportunistically or when a symptom matches.
     pre-WS1 behavior.
 15. **COSMETIC — crash-relaunch into recoveredDrain keeps a delivered
     repeating blackout notification firing until the drain completes.**
-16. **TEST DEBT — WS1 surface untested:** released-flag decode (absent key),
-    interim no-state-change commit, finalize-on-empty-drain, cancel mid-drain,
-    revoke-during-drain, seq-gap cursor cap. The five verify rounds stand in
-    for these until written.
+16. **TEST DEBT — WS1 surface untested.** PARTIALLY BURNED DOWN 2026-08-11
+    (coverage plan item 5):
+    - DONE released-flag decode (absent key) — `LoanProtocolV2Tests.testLegacy\
+      OfferWithoutReleasedKeyDecodesAsNil` strips the key from the encoded JSON
+      (Swift `released: nil` is a different wire shape), plus `PodLoanPhone\
+      ControllerTests.testLegacyOfferWithoutReleasedKeyFinalizesTheLoan` for the
+      consequence.
+    - DONE finalize-on-empty-drain — `testFinalOfferWithNoEventsStillAcksAnd\
+      ReturnsToOwner`.
+    - ALREADY COVERED interim no-state-change commit — `testInterimDrainAcks\
+      OpenTempButDefersWriteToFinal` asserts state stays `.loaned`.
+    - BLOCKED cancel mid-drain, revoke-during-drain, seq-gap cursor cap — all
+      three are WATCH-side, and `PodLoanWatchController`/`WatchLoopManager`/
+      `LoanEventJournal` are in the `WatchApp Extension` target only, so
+      `LoopTests` cannot reach them. See TEST_COVERAGE_PLAN.md "Corrections"
+      for the three unblocking options. The cursor cap itself IS implemented
+      (`handleAck` caps below the lowest withheld seq); this is debt against
+      working code.
+    The five verify rounds stand in for the blocked three until written.
