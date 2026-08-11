@@ -64,8 +64,6 @@ struct LoanDebugView: View {
     @State private var dosing: WatchLoopManager.GlanceData?
     @State private var cobText: String = "—"
 
-    @State private var radioStressOn = UserDefaults.standard.bool(forKey: "g7.radioStressAlwaysEnact")
-
     private let refresh = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     private var session: StockLoopSession {
@@ -167,25 +165,11 @@ struct LoanDebugView: View {
                     lastAction = "G7 re-acquire started"
                 }
 
-                Divider().padding(.vertical, 2)
-
-                // *** RADIO STRESS (BENCH) *** #83 (2026-07-30): force a distinct pod
-                // command on cycles DoseMath would leave alone, so every 5-min cycle
-                // exercises reading + enact — the gold-standard contention load. Timing
-                // seams untouched (that is why E5 is the wrong instrument: it fires +8s,
-                // clear of the teardown window where contention actually lives).
-                Text("RADIO STRESS (BENCH)").font(.footnote).foregroundColor(.secondary)
-                row("always enact", radioStressOn ? "ON — nudges no-change cycles" : "off")
-                Button("Radio Stress: \(radioStressOn ? "ON" : "OFF")") {
-                    let enable = !UserDefaults.standard.bool(forKey: "g7.radioStressAlwaysEnact")
-                    UserDefaults.standard.set(enable, forKey: "g7.radioStressAlwaysEnact")
-                    radioStressOn = enable
-                    SportLog.event("radio-stress", enable
-                        ? "*** RADIO STRESS ENABLED *** — no-change cycles will force a pulse-step temp so every cycle hits the pod"
-                        : "radio stress disabled — no-change cycles go quiet again")
-                    lastAction = enable ? "radio stress ON" : "radio stress OFF"
-                }
-                .foregroundColor(radioStressOn ? Color.red : nil)
+                // RADIO STRESS (#83) RETIRED 2026-08-11 (Jeremy): the question it existed to
+                // answer — does a pod command every single cycle disturb the CGM? — came back
+                // negative, repeatedly. Contention lives in CONNECT ESTABLISHMENT, not in
+                // dosing traffic against an established link, and that is handled by the
+                // acquisition gate rather than by anything on this screen.
 
                 Divider().padding(.vertical, 2)
 

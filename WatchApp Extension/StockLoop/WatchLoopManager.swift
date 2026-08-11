@@ -909,8 +909,6 @@ final class WatchLoopManager {
         bgSourceLock.lock(); defer { bgSourceLock.unlock() }
         return (_lastDirectG7At, _lastPhoneRelayAt)
     }
-    /// *** RADIO STRESS (BENCH) *** #83 — alternator so forced commands always differ.
-    private var radioStressJitterStep = 0
     /// #74 cutover: the store's IOB kept as the SHADOW series while the ledger drives.
     private var storeIOBShadow: Double?
     /// #50: the temp basal we last successfully enacted, cached so the watch knows what the
@@ -2648,36 +2646,19 @@ final class WatchLoopManager {
         updateGroup.enter()
         var enactError: WatchLoopError?
 
-        // *** RADIO STRESS (BENCH) *** — REMOVE BEFORE PRODUCTION.
-        // #83 (Jeremy 2026-07-30): the gold-standard radio test is "every 5-min cycle gets a
-        // fresh sensor reading AND lands a distinct pod command". Today half the cycles go
-        // quiet because DoseMath returns no change — we sit pinned at max or zero, where
-        // consecutive cycles agree. Real-world dosing is seldom saturated, so a command per
-        // cycle is the REALISTIC load, not an exaggerated one.
+        // RADIO STRESS (#83) REMOVED 2026-08-11 (Jeremy): "we've thoroughly established that
+        // there is no radio contention when dosing happens." It forced a pulse-step temp on
+        // cycles DoseMath would have left alone, so every 5-min cycle exercised reading +
+        // enact — the heaviest realistic contention load we could apply. It did its job and
+        // the answer came back negative, repeatedly.
         //
-        // E5 (the random-temp generator) is the wrong instrument for it: it fires 8s after
-        // the reading, deliberately clear of the G7 teardown and observer-scan arming — the
-        // exact window where contention lives. The real path reclaims ~0.2s after the value.
-        // So substitute only the RECOMMENDATION and leave every timing seam untouched:
-        // same trigger, same prediction pipeline, same reclaim geometry.
+        // What survived it, and must NOT be mistaken for this: contention is real during
+        // CONNECT ESTABLISHMENT, which is why `deferPodRadioWhileG7AcquisitionResolves`
+        // exists. An ESTABLISHED G7 link coexists with pod traffic (the 263 census); an
+        // in-flight acquisition does not. Removing the stress tool does not weaken that gate.
         //
-        // Nudge one pulse step off the running rate, alternating so consecutive commands
-        // always differ (a repeat would be suppressed downstream and cost the cycle).
-        // Dosing impact is negligible — 0.05 U/hr for 5 min is 0.004 U — and the bench pod
-        // is water. Clamped to [0, maxBasal] and pulse-rounded by the driver as usual.
-        var recommendationToEnact = recommendedDose.recommendation
-        if defaults.bool(forKey: "g7.radioStressAlwaysEnact"),
-           recommendationToEnact.basalAdjustment == nil,
-           let scheduled = settings.basalRateSchedule?.value(at: now()) {
-            radioStressJitterStep = (radioStressJitterStep + 1) % 2
-            let nudged = max(0, min(scheduled + (radioStressJitterStep == 0 ? 0.05 : 0.10),
-                                    settings.maximumBasalRatePerHour ?? scheduled))
-            recommendationToEnact = AutomaticDoseRecommendation(
-                basalAdjustment: TempBasalRecommendation(unitsPerHour: nudged, duration: .minutes(30)))
-            SportLog.event("radio-stress", String(format: "no-change cycle → forcing %.2f U/hr (sched %.2f) so the cycle exercises the pod radio", nudged, scheduled))
-        }
-
-        doseEnactor.enact(recommendation: recommendationToEnact, with: pumpManager) { error in
+        // In git: the tool, its jitter alternator, and its debug toggle are at 37d7219d.
+        doseEnactor.enact(recommendation: recommendedDose.recommendation, with: pumpManager) { error in
             if let error = error {
                 // #98: .enactFailed, NOT .missingDataError — see the case's own note.
                 enactError = .enactFailed(String(describing: error))
