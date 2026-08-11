@@ -195,6 +195,34 @@ of how often they bite:
 8. **`ifNecessary` suppression** (:147-173): same rate as the running temp with >11 min left
    → no command at all; matches-schedule → cancel. Invisible in the UI either way.
 
+### The 2026-08-10 field validation — one screenshot, both curves, exact reproduction
+
+Jeremy's screenshot (7:59 PM): chart dipping to ~85 mg/dL, eventual 183, correction range
+100-115 — **with a +1.4 U/hr net high temp running**. Head-math says the min-guard should have
+forbidden that temp. Resolution, proven by exact numeric replication from his issue report:
+
+- The CHART draws `predictedGlucoseIncludingPendingInsulin`
+  (`StatusTableViewController.swift:445`) — the running temp credited to its scheduled end,
+  which pushes the curve DOWN. Its min: **85.5**.
+- The DOSING curve trims the temp at now. Reconstructed by adding the temp's remaining
+  0.61 U back: min **109.6** — ABOVE the 100 floor, guard clear.
+- Exact algorithm on the reconstructed curve: binding point 112.3 mg/dL @ +163 min (ramped
+  target 80), 0.661 U → 0.661/0.5h + 0.7 scheduled → **2.00 U/hr after pod rounding — the
+  phone's recommendation to the digit.** Notably the binding was min-over-curve, NOT eventual:
+  the naive eventual-only calculation gives 2.45.
+
+So the screen was simultaneously showing a below-range dip AND a correct high temp: the dip
+exists only on the display curve. The paradox IS the surfaces gap, photographed.
+
+**Issue-report gotcha (verified):** the Loop Report section labeled `predictedGlucose:` prints
+`state.predictedGlucoseIncludingPendingInsulin` (`LoopDataManager.swift:2290-2292`) — the
+DISPLAY curve, not the dosing curve. Every future report read must add the pending insulin
+back before reasoning about guard/dosing behavior.
+
+**Method note (Jeremy's rule, adopted):** "byte-identical DoseMath" pins only the calculator.
+The dosing behavior is DETERMINED in the caller — LoopDataManager — which chooses the curve,
+the parameters, and the timing. Dosing questions start there, then descend into LoopKit.
+
 ### The refresh asymmetry — Jeremy's hypothesis, CONFIRMED for the stock phone
 
 Verified call graph: `loop()` — compute AND enact — has exactly one caller,
