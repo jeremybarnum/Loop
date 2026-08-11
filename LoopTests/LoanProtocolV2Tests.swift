@@ -156,6 +156,42 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertThrowsError(try LoanMessage.decode(fromTransport: dict))
     }
 
+    /// KNOWN_RESIDUALS §16 (test debt): released-flag decode with the key ABSENT.
+    ///
+    /// A pre-WS1 watch only ever offered after it had stopped dosing and released the pod,
+    /// so its payload carries no `released` key at all. Passing `released: nil` in Swift is
+    /// NOT the same wire shape — the encoder can still emit an explicit null — so this test
+    /// strips the key from the encoded JSON to produce the genuine legacy payload. `nil`
+    /// must mean FINAL; reading it as "interim" would leave such a watch's loan stranded in
+    /// .loaned forever, since a legacy sender never sends anything more definitive.
+    func testLegacyOfferWithoutReleasedKeyDecodesAsNil() throws {
+        let offer = HandbackOffer(epoch: 7, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                                  events: [], tombstones: [], recovered: false, released: true)
+        var dict = try LoanMessage.handbackOffer(offer).transportDictionary()
+        var json = try JSONSerialization.jsonObject(with: dict[LoanProtocol.userInfoKey] as! Data) as! [String: Any]
+        XCTAssertTrue(Self.stripKey("released", from: &json), "fixture must actually contain a released key to strip")
+        dict[LoanProtocol.userInfoKey] = try JSONSerialization.data(withJSONObject: json)
+
+        guard case .handbackOffer(let decoded) = try LoanMessage.decode(fromTransport: dict) else {
+            return XCTFail("expected a handbackOffer")
+        }
+        XCTAssertNil(decoded.released, "an absent key decodes as nil, not as false")
+        XCTAssertEqual(decoded.epoch, 7, "the rest of the payload still decodes")
+    }
+
+    /// Recursively remove `key` wherever it appears; returns whether anything was removed.
+    /// The offer's nesting inside the envelope is an encoding detail this test should not pin.
+    private static func stripKey(_ key: String, from json: inout [String: Any]) -> Bool {
+        var removed = false
+        if json.removeValue(forKey: key) != nil { removed = true }
+        for (k, v) in json {
+            if var child = v as? [String: Any] {
+                if stripKey(key, from: &child) { json[k] = child; removed = true }
+            }
+        }
+        return removed
+    }
+
     // MARK: - R22 allocation fixtures
 
     private let loanStart = Date(timeIntervalSinceReferenceDate: 700_000_000)

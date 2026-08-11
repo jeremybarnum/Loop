@@ -657,4 +657,71 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertEqual(addedDoses.flatMap { $0 }.count, 1, "the withheld open temp is written on the final drain")
         waitForState(controller, .owner)
     }
+
+    // MARK: - KNOWN_RESIDUALS §16 (WS1 test debt)
+
+    /// §16: released-flag decode, key ABSENT — the pre-WS1 watch's wire shape.
+    ///
+    /// The companion decode test lives in LoanProtocolV2Tests; this pins the CONSEQUENCE,
+    /// which is what actually matters: a legacy offer must finalize the loan. Such a watch
+    /// only ever offers after it has stopped and released the pod, and it will never send
+    /// anything more definitive — so treating nil as "interim" would strand the phone in
+    /// .loaned with dosing paused indefinitely.
+    func testLegacyOfferWithoutReleasedKeyFinalizesTheLoan() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        let event = makeEvent(seq: 1, units: 1.0, at: Date())
+
+        var dict = try LoanMessage.handbackOffer(HandbackOffer(
+            epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+            events: [event], tombstones: [], recovered: false, released: true)).transportDictionary()
+        var json = try JSONSerialization.jsonObject(with: dict[LoanProtocol.userInfoKey] as! Data) as! [String: Any]
+        XCTAssertTrue(Self.stripKey("released", from: &json), "fixture must contain a released key to strip")
+        dict[LoanProtocol.userInfoKey] = try JSONSerialization.data(withJSONObject: json)
+
+        let ackSent = expectSend()
+        controller.handleIncoming(userInfo: dict)
+        wait(for: [ackSent], timeout: 5)
+
+        XCTAssertEqual(addedDoses.flatMap { $0 }.count, 1, "the legacy offer's records are committed")
+        waitForState(controller, .owner)
+        XCTAssertEqual(pauseCalls, [true, false], "dosing is restored — the loan is not left open")
+    }
+
+    /// §16: finalize-on-empty-drain. A final offer carrying NO events (everything already
+    /// acked during interim drains) must still ack and close the loan. Asserted explicitly
+    /// here rather than as a side effect of the interim test, because the failure mode —
+    /// "nothing to write, so nothing happens" — leaves the pod on the watch with the phone
+    /// paused, and would be invisible in a test that only counts store writes.
+    func testFinalOfferWithNoEventsStillAcksAndReturnsToOwner() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+
+        let ackSent = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(HandbackOffer(
+            epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+            events: [], tombstones: [], recovered: false, released: true)).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+
+        guard case .handbackAck(let ack)? = lastSent() else { return XCTFail("expected ack") }
+        XCTAssertEqual(ack.committedCursor, 0, "an empty drain acks cursor 0 (finding :948)")
+        XCTAssertFalse(ack.stale)
+        XCTAssertEqual(addedDoses.flatMap { $0 }.count, 0, "nothing to write")
+        waitForState(controller, .owner)
+        XCTAssertEqual(pauseCalls, [true, false], "the loan still closes and dosing resumes")
+        XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed on the empty close")
+    }
+
+    /// Recursively remove `key`; returns whether anything was removed. Mirrors the helper in
+    /// LoanProtocolV2Tests so neither test pins the envelope's nesting.
+    private static func stripKey(_ key: String, from json: inout [String: Any]) -> Bool {
+        var removed = false
+        if json.removeValue(forKey: key) != nil { removed = true }
+        for (k, v) in json {
+            if var child = v as? [String: Any] {
+                if stripKey(key, from: &child) { json[k] = child; removed = true }
+            }
+        }
+        return removed
+    }
 }
