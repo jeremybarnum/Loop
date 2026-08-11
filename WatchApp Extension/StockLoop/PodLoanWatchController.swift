@@ -723,30 +723,8 @@ final class PodLoanWatchController {
                         SportLog.event("loan", "pod release DEFERRED +90s (release a settled connection after first reads)")
                         let scheduledReleaseAt = self.now().addingTimeInterval(90)
                         self.queue.asyncAfter(deadline: .now() + 90) { [weak self] in
-                            guard let self = self, self.phase == .active, self.epoch == grant.epoch else { return }
-                            // Same before/after capture as the post-dose release. This is
-                            // the one that fired 3m36s LATE on 2026-07-22 (app suspended),
-                            // by which point the pod had self-disconnected — so we cancelled
-                            // nothing and wedged the peripheral. `before` says outright
-                            // whether the link was still alive when we pulled it, and the
-                            // scheduled-vs-actual delay says whether runtime was stolen.
-                            let before = manager.podLoanConnectionStateDescription
-                            let lateBy = self.now().timeIntervalSince(scheduledReleaseAt)
-                            // #72: ORPHAN, not release — E4 drops the BLE link but the watch
-                            // remains the controller; the C5 record-close in releaseConnection()
-                            // is handover accounting and was silently truncating the running temp
-                            // at every E4 release (killing live IOB tracking ~90s in).
-                            manager.podLoanOrphanConnection()
-                            self.lastPodLinkContact = self.now()
-                            SportLog.event("loan", String(format: "E4: pod BLE released (+90s deferred, %.0fs late) — state was %@ at cancel%@",
-                                                          lateBy,
-                                                          before,
-                                                          before == "connected" ? "" : " ** cancelled a link that was ALREADY GONE **"))
-                            self.queue.asyncAfter(deadline: .now() + 3) { [weak self] in
-                                guard let self = self, let manager = self.pumpManager else { return }
-                                let after = manager.podLoanConnectionStateDescription
-                                SportLog.event("loan", "E4: post-release pod state \(after)\(after.hasPrefix("DISCONNECTING") ? " ** WEDGED — poisoning signature **" : "")")
-                            }
+                            self?.performDeferredTakeoverRelease(epoch: grant.epoch, manager: manager,
+                                                                scheduledAt: scheduledReleaseAt)
                         }
                     }
                 } else if attempt + 1 < maxAttempts {
@@ -910,9 +888,70 @@ final class PodLoanWatchController {
         return pumpManager?.isConnectionReleased ?? false
     }
 
+    /// #105: while this is in the future, a pod COMMAND is in flight and the link must not be
+    /// pulled. Opened by every reclaim-to-dose, closed by the matching release. It is a
+    /// deadline rather than a bool so a dose path that dies without releasing cannot strand
+    /// the link held forever — the window simply expires.
+    ///
+    /// Field 2026-08-11 07:56:48: the takeover's +90 s deferred release fired 1.1 s into a
+    /// temp-basal enact, between the command's two writes, and disconnected the pod
+    /// mid-command; the write timed out and the loan's FIRST dose was lost. The release
+    /// closure guarded only on phase and epoch — it had no idea a command was in flight.
+    /// Touched only on `queue`, which is where all three of reclaim, release and the deferred
+    /// release run.
+    private var doseWindowUntil: Date?
+
+    /// The takeover's deferred pod-link release, extracted so it can re-defer itself.
+    ///
+    /// #105 (field 2026-08-11 07:56:48): this fired 1.1 s into the loan's first temp-basal
+    /// enact — between the command's two writes — and disconnected the pod mid-command. The
+    /// write timed out and the dose was lost. The +90 s mark lands at a uniformly random point
+    /// on the 5-minute reading grid, so roughly one loan in a hundred hits the ~2-3 s overlap,
+    /// and it always costs the FIRST dose.
+    ///
+    /// Re-defers in 10 s steps while a pod command is in flight. Self-limiting: `doseWindowUntil`
+    /// is a deadline, so even a dose path that dies without releasing lets this proceed once the
+    /// window expires — it can never hold the link open indefinitely.
+    private func performDeferredTakeoverRelease(epoch grantEpoch: Int, manager: OmniPumpManager, scheduledAt: Date) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard phase == .active, epoch == grantEpoch else { return }
+
+        if let busyUntil = doseWindowUntil, busyUntil > now() {
+            SportLog.event("loan", String(format: "pod release DEFERRED again — dose in flight (retry in 10s, window closes in %.0fs)",
+                                          busyUntil.timeIntervalSince(now())))
+            queue.asyncAfter(deadline: .now() + 10) { [weak self] in
+                self?.performDeferredTakeoverRelease(epoch: grantEpoch, manager: manager, scheduledAt: scheduledAt)
+            }
+            return
+        }
+
+        // Same before/after capture as the post-dose release. This is the one that fired
+        // 3m36s LATE on 2026-07-22 (app suspended), by which point the pod had
+        // self-disconnected — so we cancelled nothing and wedged the peripheral. `before`
+        // says outright whether the link was still alive when we pulled it, and the
+        // scheduled-vs-actual delay says whether runtime was stolen.
+        let before = manager.podLoanConnectionStateDescription
+        let lateBy = now().timeIntervalSince(scheduledAt)
+        // #72: ORPHAN, not release — dropping the BLE link keeps the watch as controller;
+        // the C5 record-close in releaseConnection() is handover accounting and was silently
+        // truncating the running temp at every release (killing live IOB tracking ~90s in).
+        manager.podLoanOrphanConnection()
+        lastPodLinkContact = now()
+        SportLog.event("loan", String(format: "E4: pod BLE released (+90s deferred, %.0fs late) — state was %@ at cancel%@",
+                                      lateBy, before,
+                                      before == "connected" ? "" : " ** cancelled a link that was ALREADY GONE **"))
+        queue.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self = self, let manager = self.pumpManager else { return }
+            let after = manager.podLoanConnectionStateDescription
+            SportLog.event("loan", "E4: post-release pod state \(after)\(after.hasPrefix("DISCONNECTING") ? " ** WEDGED — poisoning signature **" : "")")
+        }
+    }
+
     func reclaimPodForDose(_ completion: @escaping (Bool) -> Void) {
         queue.async {
             guard self.phase == .active, let manager = self.pumpManager else { completion(false); return }
+            // Bounded generously: the reclaim ladder alone budgets ~40 s, plus the command.
+            self.doseWindowUntil = self.now().addingTimeInterval(75)
             let idle = self.lastPodLinkContact.map { self.now().timeIntervalSince($0) }
             SportLog.event("loan", String(format: "E4: reclaim starting — pod BLE state %@, released=%@, idle %@",
                                           manager.podLoanConnectionStateDescription,
@@ -1010,6 +1049,11 @@ final class PodLoanWatchController {
     /// the connection has only been up for the dose (~seconds), so give it a moment to
     /// settle before releasing (mirrors the +90s deferred release at takeover).
     func releasePodAfterDose() {
+        // #105: the dose is done — close the in-flight window NOW, not after the 12 s settle,
+        // so a deferred release that has been waiting on us can proceed promptly. Enqueued
+        // rather than set inline because `doseWindowUntil` is queue-confined and this is
+        // called from the enactor's own queue.
+        queue.async { [weak self] in self?.doseWindowUntil = nil }
         queue.asyncAfter(deadline: .now() + 12) { [weak self] in
             // Unconditional since #101 phase 2 — see the takeover-release note above for why
             // the `g7.e4ReleasePod` gate had to go (absent key = false = hold the link forever
