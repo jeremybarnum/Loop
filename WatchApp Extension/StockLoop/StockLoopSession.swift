@@ -10,7 +10,8 @@
 //
 
 import Foundation
-import OmnipodKit        // #86: PodLoanConnectClock.podLoanLogSink (pod BLE layer -> watch log)
+import OmnipodKit
+import G7SensorKit        // #86: PodLoanConnectClock.podLoanLogSink (pod BLE layer -> watch log)
 import WatchConnectivity
 import os.log
 
@@ -79,6 +80,13 @@ final class StockLoopSession {
         // zero visible lines for exactly that reason. Wired here (watch only; the phone leaves
         // the sink nil and keeps os_log).
         PodLoanConnectClock.podLoanLogSink = { line in SportLog.event("pod-ble", line) }
+
+        // #101 (2026-08-10): the G7 radio census — the acquisition mechanism was INFERRED from
+        // a held-link/release toggle experiment; this makes it OBSERVED. Names which of the
+        // three acquisition triggers fires (system-connected piggyback / connection event /
+        // ad scan), D2W's connection rhythm, connect verdicts, and the GATT inventory at
+        // unknownCharacteristic failures. Watch only, same rationale as the pod sink above.
+        G7RadioCensus.sink = { line in SportLog.event("g7-ble", line) }
 
         // Main-thread stall detector (2026-08-07). Started at LAUNCH and never stopped, unlike
         // the loan-scoped heartbeat below: the two UI freezes on 2026-08-07 were invisible to

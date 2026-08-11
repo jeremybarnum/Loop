@@ -180,6 +180,20 @@ struct LoanDebugView: View {
                     lastAction = enable ? "E4 ON (orphan)" : "E4 OFF (hold pod)"
                 }
 
+                // *** RE-ACQUIRE (BENCH) *** #101 (2026-08-10): forget the adopted sensor and
+                // run a full COLD acquisition against the CURRENT sensor — scan, connect,
+                // service discovery, auth subscribe, adoption. This is the contested phase of
+                // the held-pod-link finding, and without this button it is testable only once
+                // per 10-day sensor. With it + the g7-ble radio census, held-vs-released link
+                // experiments are on demand. Ladybug-class: REMOVE PRE-PRODUCTION (#62 list).
+                // Safe: worst case is a re-adoption delay while the relay covers, same as any
+                // new-sensor day; no therapy state is touched.
+                Button("Forget Sensor (re-acquire)") {
+                    SportLog.event("g7-ble", "*** BENCH RE-ACQUIRE *** forgetting adopted sensor — cold acquisition starts now")
+                    ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.scanForNewSensor()
+                    lastAction = "G7 re-acquire started"
+                }
+
                 Divider().padding(.vertical, 2)
 
                 // *** RADIO STRESS (BENCH) *** #83 (2026-07-30): force a distinct pod
