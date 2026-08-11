@@ -88,7 +88,7 @@ final class PodLoanWatchController {
 
     private(set) var phase: Phase {
         didSet {
-            UserDefaults.standard.set(phase.rawValue, forKey: Keys.phase)
+            defaults.set(phase.rawValue, forKey: Keys.phase)
             loanActiveMirrorLock.lock()
             _loanActiveMirror = (phase == .active)
             loanActiveMirrorLock.unlock()
@@ -105,7 +105,7 @@ final class PodLoanWatchController {
         }
     }
     private var epoch: Int? {
-        didSet { UserDefaults.standard.set(epoch, forKey: Keys.epoch) }
+        didSet { defaults.set(epoch, forKey: Keys.epoch) }
     }
 
     private var pumpManager: OmniPumpManager?
@@ -194,11 +194,16 @@ final class PodLoanWatchController {
         static let pumpRawValue = "PodLoanWatchController.pumpManagerRawValue"
     }
 
-    init(loopManager: WatchLoopManager, journal: LoanEventJournal = LoanEventJournal()) {
+    /// `defaults` is an init parameter, not just a settable property, because the relaunch
+    /// restore below reads it before `self` is fully initialized — which is exactly the path
+    /// a test most wants to drive (phase/epoch recovery after a crash or force-quit).
+    init(loopManager: WatchLoopManager, journal: LoanEventJournal = LoanEventJournal(),
+         defaults: UserDefaults = .standard) {
         self.loopManager = loopManager
         self.journal = journal
-        self.phase = Phase(rawValue: UserDefaults.standard.string(forKey: Keys.phase) ?? "") ?? .idle
-        self.epoch = UserDefaults.standard.object(forKey: Keys.epoch) as? Int
+        self.defaults = defaults
+        self.phase = Phase(rawValue: defaults.string(forKey: Keys.phase) ?? "") ?? .idle
+        self.epoch = defaults.object(forKey: Keys.epoch) as? Int
 
         // RELAUNCH (spec §3.2): never resurrect the pod session. Undrained records go
         // out as a recovered hand-back; persisted pump state is retained ONLY as data
@@ -295,7 +300,7 @@ final class PodLoanWatchController {
         // #61 (2026-08-08): log the flag VALUE at the decision — on 2026-08-07 a fresh container
         // with the flag absent still drove the fake path, which contradicts this gate as read;
         // the suspect is a stale embedded binary, and this line settles it either way.
-        let simFakeFlow = UserDefaults.standard.bool(forKey: "sim.fakeLoanFlow")
+        let simFakeFlow = defaults.bool(forKey: "sim.fakeLoanFlow")
         SportLog.event("loan", "Start (sim): sim.fakeLoanFlow=\(simFakeFlow) — \(simFakeFlow ? "FAKE flow driver" : "REAL loan protocol")")
         if simFakeFlow { simDriveStart(); return }
         #endif
@@ -1347,7 +1352,7 @@ final class PodLoanWatchController {
     /// sends the final offer. Cancelable until then.
     func beginHandback() {
         #if targetEnvironment(simulator)
-        if UserDefaults.standard.bool(forKey: "sim.fakeLoanFlow") { simDriveHandback(); return }
+        if defaults.bool(forKey: "sim.fakeLoanFlow") { simDriveHandback(); return }
         #endif
         queue.async {
             guard self.phase == .active, self.pumpManager != nil else { return }
@@ -1872,7 +1877,7 @@ final class PodLoanWatchController {
         guard let manager = pumpManager else { return }
         // Same {managerIdentifier, state} shape the phone persists (Common/Models/
         // PumpManager.swift rawValue — that file is phone-target-only, so built here).
-        UserDefaults.standard.set(["managerIdentifier": "Omnipod", "state": manager.rawState], forKey: Keys.pumpRawValue)
+        defaults.set(["managerIdentifier": "Omnipod", "state": manager.rawState], forKey: Keys.pumpRawValue)
     }
 
     private func teardownPump() {
@@ -1900,7 +1905,7 @@ final class PodLoanWatchController {
         pumpManager?.podLoanOrphanConnection()
         pumpManager?.pumpManagerDelegate = nil
         pumpManager = nil
-        UserDefaults.standard.removeObject(forKey: Keys.pumpRawValue)
+        defaults.removeObject(forKey: Keys.pumpRawValue)
         // #73/#74: the session ledger ends with the session.
         loopManager.ledgerClear()
     }

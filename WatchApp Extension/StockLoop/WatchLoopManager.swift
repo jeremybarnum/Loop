@@ -278,7 +278,7 @@ final class WatchLoopManager {
     fileprivate func setManualBolusInFlight(_ inFlight: Bool, units: Double? = nil) {
         manualBolusLock.lock()
         _manualBolusInFlight = inFlight
-        _manualBolusStartedAt = inFlight ? Date() : nil
+        _manualBolusStartedAt = inFlight ? self.now() : nil
         _manualBolusPendingUnits = inFlight ? units : nil
         manualBolusLock.unlock()
     }
@@ -298,7 +298,7 @@ final class WatchLoopManager {
     /// nil once the estimated window has elapsed, so the glance clears itself with no timer.
     var manualBolusDelivery: (units: Double, startedAt: Date, endsAt: Date)? {
         manualBolusLock.lock(); defer { manualBolusLock.unlock() }
-        guard let d = _manualBolusDelivery, d.endsAt > Date() else { return nil }
+        guard let d = _manualBolusDelivery, d.endsAt > self.now() else { return nil }
         return d
     }
     fileprivate func setManualBolusDelivering(units: Double, from startedAt: Date, to endsAt: Date) {
@@ -791,7 +791,18 @@ final class WatchLoopManager {
     private let log = OSLog(category: "WatchLoopManager")
 
     /// Test seam, same shape as the phone's `now()`.
-    var now: () -> Date = { Date() }
+    ///
+    /// Item 2 (2026-08-11): propagates to the dose enactor, which keeps its own clock
+    /// (separate type, can't reach this one). Without the didSet, a test that set this
+    /// would still get wall-clock timestamps on every dose the enactor records into the
+    /// ledger — the exact values such a test is usually asserting on.
+    var now: () -> Date = { Date() } {
+        didSet { doseEnactor.now = now }
+    }
+
+    /// Item 2 companion seam: bench flags and persisted CGM state read/write through this,
+    /// so a test can hand in a scratch suite instead of the host app's real defaults.
+    var defaults: UserDefaults = .standard
 
     init(doseStore: DoseStore, glucoseStore: GlucoseStore, carbStore: CarbStore,
          overrideHistory: TemporaryScheduleOverrideHistory = TemporaryScheduleOverrideHistory(),
@@ -863,7 +874,7 @@ final class WatchLoopManager {
     var lastPersistedSensorID: String?
     private func noteGlucoseSource(directG7: Bool) {
         bgSourceLock.lock()
-        if directG7 { _lastDirectG7At = Date() } else { _lastPhoneRelayAt = Date() }
+        if directG7 { _lastDirectG7At = self.now() } else { _lastPhoneRelayAt = self.now() }
         bgSourceLock.unlock()
     }
 
@@ -1013,7 +1024,7 @@ final class WatchLoopManager {
         // DEFAULT ON since build 189 (Jeremy 2026-07-29: "yes, flip the default" — the
         // side-by-sides proved the ledger against the phone at every seam). The key now
         // exists only as the one-line REVERT switch back to the store path.
-        UserDefaults.standard.object(forKey: "g7.ledgerCutover") as? Bool ?? true
+        defaults.object(forKey: "g7.ledgerCutover") as? Bool ?? true
     }
 
     /// #84: the ledger's counterpart to the phone's `clearCachedInsulinEffects()`
@@ -1167,21 +1178,21 @@ final class WatchLoopManager {
     /// Worst case: the cycle's pod work starts 20s late and the dose enacts 20s late —
     /// clinically nil. A lost ride costs the session's entire direct-G7 coverage.
     private func deferPodRadioWhileG7AcquisitionResolves(_ proceed: @escaping () -> Void) {
-        let directAge = lastGlucoseSourceStamps.direct.map { Date().timeIntervalSince($0) }
+        let directAge = lastGlucoseSourceStamps.direct.map { self.now().timeIntervalSince($0) }
         if let age = directAge, age < .minutes(6.5) {
             proceed()
             return
         }
-        let start = Date()
+        let start = self.now()
         SportLog.event("loan", "acquisition gate: direct G7 not fresh (\(directAge.map { "\(Int($0))s ago" } ?? "never")) — holding pod radio for the G7 ride")
         func poll() {
-            let elapsed = Date().timeIntervalSince(start)
+            let elapsed = self.now().timeIntervalSince(start)
             if let d = self.lastGlucoseSourceStamps.direct, d > start {
                 SportLog.event("loan", String(format: "acquisition gate: released after %.1fs — direct read LANDED", elapsed))
                 proceed(); return
             }
             let pendingSince = G7RadioCensus.connectPendingSince
-            let rideAge = G7RadioCensus.lastRideSignalAt.map { Date().timeIntervalSince($0) }
+            let rideAge = G7RadioCensus.lastRideSignalAt.map { self.now().timeIntervalSince($0) }
             if elapsed >= 2.5, pendingSince == nil, (rideAge ?? .infinity) > 3 {
                 SportLog.event("loan", String(format: "acquisition gate: released after %.1fs — G7 idle, no ride in sight", elapsed))
                 proceed(); return
@@ -2405,7 +2416,7 @@ final class WatchLoopManager {
                         SportLog.event("loan", "MANUAL BOLUS FAILED — \(String(describing: error))")
                     } else {
                         // #73/#74 shadow ledger: point-ish event; DASH delivers ~1.5 U/min.
-                        let acceptedAt = Date()
+                        let acceptedAt = self.now()
                         let deliveryEndsAt = acceptedAt.addingTimeInterval(rounded / 1.5 * 60)
                         SportLog.event("loan", String(format: "MANUAL BOLUS delivering %.2f U — estimated done in %.0fs",
                                                       rounded, deliveryEndsAt.timeIntervalSince(acceptedAt)))
@@ -2449,12 +2460,12 @@ final class WatchLoopManager {
                         // (.async is load-bearing: with E4 off, the reclaim closure
                         // completes SYNCHRONOUSLY on dataAccessQueue — a .sync hop would
                         // deadlock on itself. Adversarial-review verified.)
-                        let hopStart = Date()
+                        let hopStart = self.now()
                         self.dataAccessQueue.async {
                             // Visibility: a manual bolus queued behind a full automatic
                             // enact (updateGroup.wait holds this queue ~15-45s) is loud
                             // in the log, not a silent delay (adversarial review).
-                            let waited = Date().timeIntervalSince(hopStart)
+                            let waited = self.now().timeIntervalSince(hopStart)
                             if waited > 2.0 {
                                 SportLog.event("loan", String(format: "MANUAL BOLUS queued %.0fs behind the dosing queue (automatic cycle in flight)", waited))
                             }
@@ -2580,7 +2591,7 @@ final class WatchLoopManager {
                 // POST-DELETE VERIFICATION: read the store back and say what remains, so
                 // "deleted but still showing" can never again be ambiguous between a failed
                 // delete and a stale view.
-                let start = min(Calendar.current.startOfDay(for: Date()),
+                let start = min(Calendar.current.startOfDay(for: self.now()),
                                 Date(timeIntervalSinceNow: -self.carbStore.maximumAbsorptionTimeInterval))
                 self.carbStore.getCarbEntries(start: start) { readback in
                     if case .success(let remaining) = readback {
@@ -2645,7 +2656,7 @@ final class WatchLoopManager {
         // Dosing impact is negligible — 0.05 U/hr for 5 min is 0.004 U — and the bench pod
         // is water. Clamped to [0, maxBasal] and pulse-rounded by the driver as usual.
         var recommendationToEnact = recommendedDose.recommendation
-        if UserDefaults.standard.bool(forKey: "g7.radioStressAlwaysEnact"),
+        if defaults.bool(forKey: "g7.radioStressAlwaysEnact"),
            recommendationToEnact.basalAdjustment == nil,
            let scheduled = settings.basalRateSchedule?.value(at: now()) {
             radioStressJitterStep = (radioStressJitterStep + 1) % 2
@@ -2685,7 +2696,7 @@ final class WatchLoopManager {
     /// stalled session decays back to schedule. Doses journal through the same
     /// loanRecorder hooks as real ones — they ARE real pod deliveries.
     func e5FireRandomTempIfEnabled() {
-        guard UserDefaults.standard.bool(forKey: "g7.e5RandomTemp") else { return }
+        guard defaults.bool(forKey: "g7.e5RandomTemp") else { return }
         // +8s: field 2026-07-21 23:32 (144, first firing) — E5 fired 25ms after the
         // VALUE, while the G7 link was still up (disconnect lands ~60ms post-value),
         // so the radio arbiter deferred it EVERY cycle and E5 never dosed. The real
@@ -2706,7 +2717,7 @@ final class WatchLoopManager {
             if let cap = self.settings.maximumBasalRatePerHour { rate = min(rate, cap) }
             rate = pumpManager.roundToSupportedBasalRate(unitsPerHour: rate)
             let clock = DateFormatter(); clock.dateFormat = "HH:mm"
-            UserDefaults.standard.set(String(format: "%+.2f @ %@", rate, clock.string(from: self.now())), forKey: "g7.e5LastCmd")
+            self.defaults.set(String(format: "%+.2f @ %@", rate, clock.string(from: self.now())), forKey: "g7.e5LastCmd")
             SportLog.event("e5", String(format: "E5 random temp %.2f U/hr × 30 min (sched %.2f) — enacting", rate, scheduled))
             let recommendation = AutomaticDoseRecommendation(basalAdjustment: TempBasalRecommendation(unitsPerHour: rate, duration: .minutes(30)))
             self.doseEnactor.enact(recommendation: recommendation, with: pumpManager) { error in
@@ -2742,6 +2753,11 @@ extension TemporaryScheduleOverride.Context {
 /// snapping, cancel-before-program, busy handling, and uncertain-delivery classification are
 /// the stock driver's (OmniPumpManager, M2), not ours.
 final class WatchDoseEnactor {
+
+    /// Test coverage plan item 2: this class records dose timestamps into the ledger, so it
+    /// needs its own clock seam — it is a separate type from WatchLoopManager and cannot
+    /// reach that one. WatchLoopManager keeps the two in sync when it builds the enactor.
+    var now: () -> Date = Date.init
 
     private let dosingQueue = DispatchQueue(label: "com.loopkit.Loop.WatchDoseEnactor", qos: .utility)
 
@@ -2826,7 +2842,7 @@ final class WatchDoseEnactor {
                         self.onTempBasalEnacted?(basalAdjustment.unitsPerHour, basalAdjustment.duration)
                         // #73/#74 shadow ledger: the accepted temp enters the single-owner
                         // timeline (truncating its open predecessor — the journal's rule).
-                        let acceptedAt = Date()
+                        let acceptedAt = self.now()
                         self.ledgerRecord?(DoseEntry(
                             type: .tempBasal, startDate: acceptedAt,
                             endDate: acceptedAt.addingTimeInterval(basalAdjustment.duration),
@@ -2858,7 +2874,7 @@ final class WatchDoseEnactor {
                         bolusError = error
                     } else {
                         // #73/#74 shadow ledger: point-ish event; DASH delivers ~1.5 U/min.
-                        let acceptedAt = Date()
+                        let acceptedAt = self.now()
                         self.ledgerRecord?(DoseEntry(
                             type: .bolus, startDate: acceptedAt,
                             endDate: acceptedAt.addingTimeInterval(bolusUnits / 1.5 * 60),
@@ -2889,7 +2905,7 @@ extension WatchLoopManager: CGMManagerDelegate {
         dispatchPrecondition(condition: .onQueue(deviceQueue))
         log.default("CGMManager:%{public}@ did update with %{public}@", String(describing: type(of: manager)), String(describing: readingResult))
         processCGMReadingResult(manager, readingResult: readingResult) {
-            let now = Date()
+            let now = self.now()
             // Same 4.2-minute trigger gate as the phone (:1006) — under the G7's 5-minute
             // cadence this loops once per reading without double-firing on backfill.
             if case .newData = readingResult, now.timeIntervalSince(self.lastCGMLoopTrigger) > .minutes(4.2) {
@@ -2923,7 +2939,7 @@ extension WatchLoopManager: CGMManagerDelegate {
     /// WS4c sovereignty signal: age of the newest stored glucose (direct-only during
     /// a loan — R18/R19), nil before any reading.
     var latestGlucoseAge: TimeInterval? {
-        return glucoseStore.latestGlucose.map { Date().timeIntervalSince($0.startDate) }
+        return glucoseStore.latestGlucose.map { self.now().timeIntervalSince($0.startDate) }
     }
 
     /// Queue the on-device log to the phone, at most once per 5 minutes — the
@@ -2974,7 +2990,7 @@ extension WatchLoopManager: CGMManagerDelegate {
             let latestDesc: String = {
                 guard let s = latest else { return "none" }
                 let mgdl = Int(s.quantity.doubleValue(for: .milligramsPerDeciliter).rounded())
-                return "\(mgdl) mg/dL age \(Int(Date().timeIntervalSince(s.date)))s"
+                return "\(mgdl) mg/dL age \(Int(self.now().timeIntervalSince(s.date)))s"
             }()
             let batchTag = deliveredCount > 1 ? " BATCH(backfill+live)" : ""
             // Stamp on ARRIVAL even when kept.isEmpty — a direct read the phone's copy beat to
@@ -3058,9 +3074,9 @@ extension WatchLoopManager: CGMManagerDelegate {
                 let mgdl = Int(sample.quantity.doubleValue(for: .milligramsPerDeciliter))
                 self.noteGlucoseSource(directG7: false)
                 SportLog.event("glucose",
-                    "INGEST src=phone-relay stored=1/1 · latest \(mgdl) mg/dL age \(Int(Date().timeIntervalSince(sample.date)))s (direct-G7 gap)")
+                    "INGEST src=phone-relay stored=1/1 · latest \(mgdl) mg/dL age \(Int(self.now().timeIntervalSince(sample.date)))s (direct-G7 gap)")
                 SportLog.event("loan", "phone-BG fallback: ingested \(mgdl) mg/dL syncId=\(sample.syncIdentifier ?? "?") (direct-G7 gap) — triggering loop")
-                let now = Date()
+                let now = self.now()
                 if now.timeIntervalSince(self.lastCGMLoopTrigger) > .minutes(4.2) {
                     self.lastCGMLoopTrigger = now
                     self.checkPumpDataAndLoop()
@@ -3115,7 +3131,7 @@ extension WatchLoopManager: CGMManagerDelegate {
         guard !wanted.isEmpty else { completion(samples); return }
         // The stamp is unique per reading, so a short window is plenty; this only has to cover the
         // seconds between the relay and the direct read for the same grid point.
-        let since = Date().addingTimeInterval(-.minutes(30))
+        let since = self.now().addingTimeInterval(-.minutes(30))
         glucoseStore.getGlucoseSamples(start: since, end: nil) { result in
             guard case .success(let stored) = result else {
                 completion(samples)   // fail open
@@ -3163,7 +3179,7 @@ extension WatchLoopManager: CGMManagerDelegate {
                     self.log.error("SIM glucose add failed: %{public}@", String(describing: error))
                 }
                 self.dataAccessQueue.async { self.glucoseMomentumEffect = nil }   // #51 parity
-                let now = Date()
+                let now = self.now()
                 if now.timeIntervalSince(self.lastCGMLoopTrigger) > .minutes(4.2) {
                     self.lastCGMLoopTrigger = now
                     SportLog.event("sim", "SIM CGM \(Int(quantity.doubleValue(for: .milligramsPerDeciliter))) mg/dL (phone sim) — triggering real loop")
@@ -3189,7 +3205,7 @@ extension WatchLoopManager: CGMManagerDelegate {
         // threw it away on exit.
         guard manager is G7CGMManager else { return }
         let raw = manager.rawState
-        UserDefaults.standard.set(raw, forKey: Self.cgmStateDefaultsKey)
+        defaults.set(raw, forKey: Self.cgmStateDefaultsKey)
         let sensorID = raw["sensorID"] as? String
         if sensorID != lastPersistedSensorID {
             lastPersistedSensorID = sensorID
@@ -3236,7 +3252,7 @@ extension WatchLoopManager: CGMManagerDelegate {
         // through untouched.
         deviceLogDedupeLock.lock()
         let line = "\(type) \(deviceIdentifier ?? "—"): \(message)"
-        let now = Date()
+        let now = self.now()
         if line == lastDeviceLogLine, now.timeIntervalSince(lastDeviceLogAt) < 2.0 {
             suppressedDeviceLogCount += 1
             lastDeviceLogAt = now
