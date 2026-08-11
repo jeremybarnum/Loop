@@ -100,11 +100,15 @@ supervised session *if* that session is short and watched. Jeremy sets the final
 
 ## Tier C — The everyday flows she'll actually use
 
-- **C1. Carb + bolus during a loan.** (#30 + #47 + #49)
-  #30: carb-entry glitches (stock COB blank, Continue button clipped).
-  #47: recommended bolus is blank during a loan (wire the stock flow to the WATCH's
-  prediction). #49: carbs never travel phone→watch (grant carries insulin history but
-  no carb history — no COB).
+- **C1. Carb + bolus during a loan.** ✅ CLEARED 2026-08-11 (Jeremy: "that flow has been
+  proven multiple times and is fine"). #47 (blank recommended bolus — wired to the
+  WATCH's prediction) and #49 (carbs never travelled phone→watch) were fixed and
+  field-run; #30's cosmetic glitches (stock COB blank, Continue button clipped) and #27's
+  deferred flow nuances are retired on the field verdict rather than a code change —
+  repeated real use is the evidence.
+  Still open in this family, and NOT covered by that verdict: **#66**, the phone-side
+  carb-duplicate fix, which is built but has never met its scenario (carbs entered while
+  the watch is unreachable). Different failure, different path, still needs its test.
 - **C2. Loop-close crown ceremony.** (#22, partial)
   Start-unconfirmed is done; the deliberate crown-confirmed close is still pending
   (interim confirm-alert works as a stopgap).
