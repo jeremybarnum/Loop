@@ -105,3 +105,86 @@ today none of it is resolvable without the rulings register open.
 - **Phase 3: `PodLoanWatchController`** — 2,475 lines, no stock ancestor, no direct tests. A
   different question: not "does this match stock" but "is this the simplest state machine that
   satisfies the rulings."
+
+---
+
+# Phase 2 — semantic diff of the mirrored methods (2026-08-12)
+
+**Result: no dosing defects. Zero dropped stock calls of the #44 class on the mirrored
+surface.** Every candidate resolves as conscious, justified, or structurally moot — each for
+a reason that was verified in the source, not inferred from a comment.
+
+## Method
+
+Rather than read 10 methods hoping to notice an omission, extract the set of called
+identifiers from each stock method and its watch counterpart and diff them. Calls present in
+stock and absent in ours are exactly the #44 failure shape (the `ensureCurrentPumpData` bug:
+a stock call the port silently dropped). That produced 54 raw candidates across 7 method
+pairs; triaging away type names, logging, and phone-only persistence (`StoredDosingDecision`,
+`appendError`/`appendWarning`, `finishLoop`, notification `post`) left five worth verifying.
+
+## The five, and how each resolves
+
+**1. Dosing application factor — MOOT (verified).** Stock has `ConstantApplicationFactor\
+Strategy`, `GlucoseBasedApplicationFactorStrategy`, `calculateDosingFactor`, and
+`timeBasedDoseApplicationFactor` (`min(1, timeSinceLastLoop/5min)`); the watch has none of
+them. This looked like the most dangerous finding available — a missing partial-application
+factor means delivering the full recommendation where stock delivers a fraction.
+
+It is moot, and the proof is at `LoopDataManager:1882`: `partialApplicationFactor` is passed
+**only** to `recommendedAutomaticDose(...)`, the `.automaticBolus` branch. The `.tempBasalOnly`
+branch immediately below takes no factor at all. The watch refuses `automaticBolus` outright
+(`WatchLoopManager:2284-2292`, R16 — it returns a `configurationError` so a phone-pushed
+setting is surfaced rather than silently downgraded), so it only ever runs the temp-basal
+path, where stock applies no factor either.
+
+Note `timeBasedDoseApplicationFactor` was NOT in the first candidate list — the initial grep
+searched `calculateDosingFactor|ApplicationFactorStrategy|dosingFactor` and this identifier
+matches none of them. It surfaced only when reading stock's `loopInternal()` for an unrelated
+reason. A call-set diff finds dropped *calls*; it does not find dropped *multiplications*.
+
+**2. Recency guards — PRESENT (verified, not trusted).** `glucoseTooOld`,
+`invalidFutureGlucose` and `pumpDataTooOld` are thrown at `WatchLoopManager:1932/1936/1952`,
+inside `predictGlucose`. Stock throws them at two sites — `predictGlucose` (:1282) and
+`recommendBolusValidatingDataRecency` (:1542) — so the watch has one guard where stock has
+two, and a comment in `recommendManualBolus` asserts the shared path covers it.
+
+That assertion was checked rather than believed: `recommendManualBolus` does call
+`try self.predictGlucose(...)`, so the guard fires on the manual path. Equivalent coverage,
+one site instead of two.
+
+**3. Suspend insulin-delivery effect — ABSORBED BY THE LEDGER (verified).** Stock maintains
+`suspendInsulinDeliveryEffect` (:392), refreshes it (:1182), computes it (:1667-1716) and
+appends it to the prediction (:1387). The watch has no equivalent, which initially reads as a
+missing effect that would make the forecast run low.
+
+It is structural. `SessionInsulinLedger:123-124` states the enactor models suspends as
+**0 U/hr temps**, and `PodLoanWatchController:2075` confirms it — a zero-rate dose with a
+duration is recorded as `.suspend` kind but delivered as a temp. Because the ledger nets temps
+against the basal schedule (the whole subject of #112), a 0 U/hr temp already expresses the
+withheld basal as negative delivery. Stock needs a separate effect precisely because its
+DoseStore insulin effect is ABSOLUTE and a true pump suspend leaves no dose to net against;
+the watch's book is basal-relative by construction and never issues a true suspend.
+
+**4. `roundBasalRate` / `roundBolusVolume` — PRESENT.** Not dropped, just spelled differently:
+the watch builds `rateRounder` (:2267) and `volumeRounder` (:2430) closures and passes them
+into the same DoseMath entry points (:2309, :2442).
+
+**5. `trustedTimeOffset` — MOOT, with a cosmetic residue.** Stock uses it at exactly one site
+(`LoopDataManager:899`) to repair a `lastLoopCompleted` stranded in the future after a clock
+jump, because a future value would otherwise block looping. The watch keeps
+`lastLoopCompleted` (:1050) but only for the glance and diagnostics — it does not gate looping
+on it. So the omission cannot stop the watch dosing. The residue is display-only: after a
+forward clock jump the glance would show a nonsense "last loop" age until real time catches
+up. Not worth a fix; recorded so it is not rediscovered as a bug.
+
+## What phase 2 does and does not license
+
+It licenses: *the mirrored dosing surface has not silently lost a stock behavior.* Combined
+with phase 1's finding that the same surface is 0.91x stock's size, the dosing core is in good
+shape and is **not** where a refactor should start.
+
+It does not license any claim about the other 74 methods, about `PodLoanWatchController`, or
+about behavior under concurrency. And note the method's own blind spot, demonstrated by
+finding #1: a call-set diff cannot see a dropped arithmetic factor, only a dropped call. The
+remaining phase-3 work needs reading, not grepping.
