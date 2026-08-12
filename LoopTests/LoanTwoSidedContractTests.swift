@@ -92,6 +92,14 @@ private final class WatchDrainDriver {
         journal.confirm(id: event.id)
     }
 
+    /// The pod REFUTED an assumed command (#99): drop the event and tombstone its ID, so an
+    /// already-streamed copy is unwound phone-side. Stops being withheld either way — there is
+    /// nothing left to withhold.
+    func refute(_ event: LoanEvent) {
+        withheld.remove(event.id)
+        journal.annul(id: event.id)
+    }
+
     /// Streams everything unacked EXCEPT the withheld set — the controller's `streamRecords`
     /// shape. `released: false` is WS1's interim drain (still dosing, still holding the pod).
     func sendOffer(released: Bool, recovered: Bool = false, at date: Date) {
@@ -108,6 +116,17 @@ private final class WatchDrainDriver {
                                   released: released,
                                   watchClosedLoopEnabled: true)
         send?(try! LoanMessage.handbackOffer(offer).transportDictionary())
+    }
+
+    /// §2.4 streaming: records flow to the phone DURING the loan and are STAGED there, not
+    /// committed. This is the path that leaves the phone holding uncommitted records when the
+    /// wrist goes quiet, which is the precondition for #66.
+    func streamRecords(at date: Date) {
+        guard let epoch = epoch else { return }
+        let streamable = journal.unackedEvents().filter { !withheld.contains($0.id) }
+        send?(try! LoanMessage.doseRecordBatch(
+            DoseRecordBatch(epoch: epoch, events: streamable, tombstones: journal.pendingTombstones())
+        ).transportDictionary())
     }
 
     /// The phone→watch direction. Mirrors `handleAck`'s epoch guard and the withholding cap.
@@ -257,6 +276,15 @@ final class LoanTwoSidedContractTests: XCTestCase {
     /// crash log in hand). A test that crashes the runner is worse than a test that fails: the
     /// gate can no longer tell "your code is broken" from "the environment is broken", which is
     /// the exact confusion that gets gates switched off.
+    /// Let the controller's serial queue drain. Same idiom as PodLoanPhoneControllerTests —
+    /// needed where the phone's reaction produces NO observable output (a streamed batch just
+    /// stages, silently), so there is nothing to poll on.
+    private func settle(_ seconds: TimeInterval = 0.6) {
+        let e = expectation(description: "queue settled")
+        DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { e.fulfill() }
+        wait(for: [e], timeout: seconds + 2)
+    }
+
     private func waitUntil(_ description: String, timeout: TimeInterval = 5, _ condition: @escaping () -> Bool) {
         let e = expectation(description: description)
         let deadline = Date().addingTimeInterval(timeout + 1)
@@ -508,5 +536,134 @@ final class LoanTwoSidedContractTests: XCTestCase {
         // The actual safety property, and the one #102 was about: a dead epoch may drain its own
         // records and must touch nothing else.
         XCTAssertEqual(phone.state, .loaned, "a stale offer must not end the loan that is actually running")
+    }
+
+    // MARK: - 6. Fault variants (coverage plan item 6)
+
+    /// CERTAIN REFUSAL (#99), end to end. A bolus goes out, the pod's verdict refutes it, and
+    /// the phantom-IOB guarantee is that those units are never booked ANYWHERE.
+    ///
+    /// The interesting part is that two mechanisms have to line up. Withholding keeps the
+    /// unclassified command off the wire, so the phone never sees it; annulment then removes it
+    /// from the journal and tombstones the ID. Neither alone is sufficient — without
+    /// withholding the phone would have committed it and there is no unwind path on the phone
+    /// (the commit filter skips tombstoned events, it does not delete written doses), and
+    /// without annulment the watch would stream it once it classified.
+    func testRefutedCommandIsNeverBookedOnEitherSide() throws {
+        let now = Date()
+        try establishLoan(at: now)
+
+        let doomed = try watch.mint(bolus(4.0, at: now.addingTimeInterval(-300)),
+                                    provenance: .assumed(.bolusUncertain),
+                                    withhold: true,
+                                    at: now.addingTimeInterval(-300))
+        let real = try watch.mint(bolus(0.6, at: now.addingTimeInterval(-120)), at: now.addingTimeInterval(-120))
+
+        watch.sendOffer(released: false, at: now)
+        waitUntil("first ack") { [weak self] in (self?.watch.acks.count ?? 0) >= 1 }
+        XCTAssertEqual(doses().count, 1, "only the confirmed bolus was ever shown to the phone")
+
+        // The pod says it never happened.
+        watch.refute(doomed)
+        watch.sendOffer(released: true, at: now)
+        waitUntil("owner") { [weak self] in self?.phone?.state == .owner }
+
+        let booked = doses().filter { $0.type == .bolus }
+        XCTAssertEqual(booked.count, 1, "the refuted bolus must not appear")
+        XCTAssertEqual(booked.first?.unitsInDeliverableIncrements, 0.6)
+        XCTAssertFalse(booked.contains { ($0.unitsInDeliverableIncrements ?? 0) > 3.0 },
+                       "4 U of phantom insulin would be the #99 failure")
+        XCTAssertTrue(watch.isDrained, "the tombstone clears with the ack")
+    }
+
+    /// UNREACHABLE PHONE. The watch's resend loop reoffers every 15 s while it cannot hear an
+    /// ack, so the phone receives the SAME records several times over. #35's field shape: 28
+    /// offers, one loan. Nothing may accumulate.
+    func testRepeatedRedeliveryWhileTheAckIsUnheardCommitsOnce() throws {
+        let now = Date()
+        try establishLoan(at: now)
+
+        try watch.mint(bolus(1.0, at: now.addingTimeInterval(-600)), at: now.addingTimeInterval(-600))
+        // FINISHED temp, deliberately: an interim drain acks an OPEN temp but defers its write to
+        // the final offer (PodLoanPhoneControllerTests.testInterimDrainAcksOpenTempButDefersWrite\
+        // ToFinal), so a still-running temp would never appear here and the redelivery count
+        // would be measuring the wrong thing.
+        try watch.mint(temp(1.4, at: now.addingTimeInterval(-500), minutes: 5), at: now.addingTimeInterval(-500))
+        try watch.mint(carb(18, at: now.addingTimeInterval(-400)), at: now.addingTimeInterval(-400))
+
+        lock.lock(); acksToDrop = 3; lock.unlock()
+        for _ in 0..<3 {
+            watch.sendOffer(released: false, at: now)
+            waitUntil("commit attempt") { [weak self] in (self?.doses().count ?? 0) >= 2 }
+        }
+        XCTAssertTrue(watch.acks.isEmpty, "the watch heard nothing, so it kept offering")
+
+        watch.sendOffer(released: false, at: now)
+        waitUntil("ack finally heard") { [weak self] in (self?.watch.acks.count ?? 0) >= 1 }
+
+        XCTAssertEqual(doses().filter { $0.type == .bolus }.count, 1, "one bolus after four deliveries")
+        XCTAssertEqual(doses().filter { $0.type == .tempBasal }.count, 1, "one temp after four deliveries")
+        XCTAssertEqual(carbs().count, 1, "one carb after four deliveries — carbs have no store-level net")
+        XCTAssertTrue(watch.isDrained)
+    }
+
+    /// #66, END TO END, and the reason it needs the STREAMING path to mean anything.
+    ///
+    /// Records reach the phone two ways. An OFFER commits them immediately (and records the IDs
+    /// at :1215). A STREAM only STAGES them. #66's fix — the `committedIDs.formUnion` inside
+    /// `forceReclaimToOwner` — exists for the second case: records that were staged, never
+    /// committed through an offer, and then written by the force-reclaim itself. Build this on
+    /// an offer instead and the test passes no matter what, because :1215 already deduped it;
+    /// that is exactly what the first version of this test did, and sabotaging the #66 fix left
+    /// it green.
+    ///
+    /// Carbs are the point. `NewPumpEvent` carries `raw` and the DoseStore dedups on it, so
+    /// insulin has a net underneath. `NewCarbEntry` has no identity field and CarbStore mints a
+    /// fresh syncIdentifier per add, so committedIDs is the ONLY guard — and a duplicate here
+    /// mirrors into every later grant through wipe-then-replace, which is #65's phantom COB with
+    /// the phone as the source.
+    func testForceReclaimThenWatchReofferDoesNotDoubleTheCarb() throws {
+        let now = Date()
+        try establishLoan(at: now)
+
+        try watch.mint(carb(42, at: now.addingTimeInterval(-700)), at: now.addingTimeInterval(-700))
+        try watch.mint(bolus(2.2, at: now.addingTimeInterval(-690)), at: now.addingTimeInterval(-690))
+
+        // Streamed, not offered: the phone stages these and commits nothing. Staging is silent,
+        // so there is nothing to poll — settle the queue instead.
+        watch.streamRecords(at: now)
+        settle()
+        XCTAssertEqual(carbs().count, 0, "streaming stages; it must not commit")
+        XCTAssertEqual(doses().count, 0, "streaming stages; it must not commit")
+
+        // The wrist goes quiet — 45 s reachability timeout, or a stranded relaunch. The phone
+        // abandons the loan, and writes the staged records first: never understate IOB.
+        phone.forceReclaimToOwner(reason: "watch unreachable (test)")
+        waitUntil("owner") { [weak self] in self?.phone?.state == .owner }
+        XCTAssertEqual(carbs().count, 1, "force-reclaim preserves the staged carb")
+        XCTAssertEqual(doses().count, 1, "and the staged bolus")
+
+        // The wrist comes back and does exactly what the protocol says: it never heard an ack,
+        // so it resends. Same event IDs.
+        watch.sendOffer(released: true, recovered: true, at: now)
+        waitUntil("reoffer acked") { [weak self] in (self?.watch.acks.count ?? 0) >= 1 }
+
+        XCTAssertEqual(carbs().count, 1,
+                       "THE #66 INVARIANT: the re-offer must not re-book the carb (got \(carbs().count))")
+        XCTAssertEqual(doses().count, 1, "nor the bolus")
+        // LIVENESS GAP FOUND HERE (2026-08-12), recorded rather than asserted so that fixing it
+        // does not turn this test red. Measured: the phone acks `committedCursor = 0`, stale=false,
+        // and the watch's journal still holds seq [1, 2].
+        //
+        // The cause is visible in the code: forceReclaimToOwner writes the staged records and adds
+        // their IDs to committedIDs, but never advances `committedCursor`. The re-offer's event
+        // filter then yields nothing (all committed), so no commit runs, and the ack carries the
+        // unchanged cursor 0. The watch's handleAck only closes the loan when unackedEvents() is
+        // empty — which cursor 0 can never make true — so its 15 s resend loop runs forever.
+        //
+        // NO INSULIN IS AT RISK: every assertion above shows the dedup holding. This is liveness,
+        // and it is #35's "28 offers" signature with the phone ACKING rather than ignoring, so the
+        // existing diagnosis ("phone silently drops offers") would not match it in a log.
+        XCTAssertTrue(watch.acks.count >= 1, "the phone does reply — this is not the silent-drop shape of #35")
     }
 }

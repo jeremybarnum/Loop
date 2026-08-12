@@ -14,7 +14,7 @@ rewrite-target list.
 | 3. Characterization | BLOCKED | Needs Jeremy's rewrite-target list. |
 | 4. Sabotage check | **DONE for what exists** | Ran against the gate, the reconciler, and the new §16 tests. Findings below. |
 | 5. Two-sided contract test | **DONE** | `LoanTwoSidedContractTests` (5 tests). 5 of 6 §16 items closed, 1 partial, 1 blocked — see the 2026-08-12 correction. |
-| 6. Fault variants | not started | |
+| 6. Fault variants | **DONE** | Folded into `LoanTwoSidedContractTests` (3 more tests, 8 total). |
 
 ### Corrections to this plan, found by executing it
 
@@ -176,7 +176,32 @@ no-state-change commit, finalize-on-empty-drain, cancel mid-drain, revoke-during
 seq-gap cursor cap — rather than inventing scenarios. Feasible today: LoopTests already
 compiles the watch-side files into the iOS test host (that is how the books harness works).
 
-### 6. Fault variants, folded into the existing harness (incremental)
+### 6. Fault variants — DONE 2026-08-12
+
+Folded into `LoanTwoSidedContractTests` as the plan asks, with no fault-injection framework:
+the only machinery is a droppable-ack counter on the fake transport.
+
+- **certain refusal (#99)** — an assumed bolus is refuted by the pod. Two mechanisms have to
+  line up and the test needs both: withholding keeps the unclassified command off the wire,
+  annulment then removes it and tombstones the ID. Without withholding the phone would already
+  have committed it and there IS no unwind on the phone — the commit filter skips tombstoned
+  events, it does not delete written doses.
+- **unreachable phone (#35)** — three redeliveries with the ack dropped, then a fourth that
+  lands: one bolus, one temp, one carb after four deliveries.
+- **force-reclaim then re-offer (#66)** — the unreachable-watch scenario #66 has been waiting
+  on, end to end.
+- **uncertain command** and **mid-operation cancel (revoke)** were already covered by item 5's
+  tests 3 and 4.
+
+A note on how the #66 test was nearly worthless. The first version drove it through an OFFER,
+which commits immediately and records the IDs at :1215 — so sabotaging the actual #66 fix (the
+`committedIDs.formUnion` in `forceReclaimToOwner`) left it GREEN. Records only reach that fix
+if they were STAGED and never committed, which means the streaming path. Rebuilt on
+`doseRecordBatch`, the sabotage now reddens it with "the re-offer must not re-book the carb
+(got 2)". The lesson is the item-4 lesson again: a test nobody has tried to break is a test
+whose coverage is unknown.
+
+### 6-original. Fault variants, folded into the existing harness (incremental)
 Parameterize existing scenarios with the failure taxonomy that has actually occurred:
 timeout, certain refusal (`unfinalizedBolus`), uncertain command, unreachable phone,
 mid-operation cancel. No generic fault-injection framework. Continue the standing practice —
