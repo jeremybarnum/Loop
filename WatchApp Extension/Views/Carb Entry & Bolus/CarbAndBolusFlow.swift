@@ -45,6 +45,9 @@ struct CarbAndBolusFlow: View {
     // MARK: - State: Bolus Entry
     @State private var bolusAmount: Double = 0
     @State private var receivedInitialBolusRecommendation = false
+    /// #116: the last value WE wrote into the dial, so a fresh recommendation can replace our
+    /// own stale pre-fill without ever touching a user-dialled amount.
+    @State private var programmaticBolusPrefill: Double?
     @State private var activeAlert: AlertState?
 
     // MARK: - State: Bolus Confirmation
@@ -353,10 +356,21 @@ extension CarbAndBolusFlow {
             receivedInitialBolusRecommendation = true
 
             // If the user hasn't started to dial a bolus amount, update to the recommended amount.
-            // The `bolusAmount == 0` test still guards a priming publish that lands late: once the
-            // user has dialled something, that is theirs and we do not overwrite it.
-            if flowState == .bolusEntry, bolusAmount == 0, let recommendedBolus = recommendedBolus {
+            //
+            // #116 (field 2026-08-11 22:34): `bolusAmount == 0` alone could not tell a USER-dialled
+            // value from OUR OWN earlier pre-fill. The screen opens seeded with the last cycle's
+            // published REC (1.10, computed before Jeremy re-enabled his override), that seed
+            // pre-fills the dial, and when the on-open refresh landed with the override-correct
+            // 0.55 the guard protected the stale 1.10 as if the user had chosen it. REC label and
+            // dial disagreed by 2x on the same screen. So: remember what WE wrote — a value the
+            // user has not touched is ours to replace; one they dialled is theirs, always.
+            if flowState == .bolusEntry, let recommendedBolus = recommendedBolus,
+               bolusAmount == 0 || bolusAmount == programmaticBolusPrefill {
+                if bolusAmount != 0, bolusAmount != recommendedBolus {
+                    SportLog.event("bolus-ui", String(format: "pre-fill re-seeded %.2f -> %.2f U (fresh REC replaced our stale seed; dial untouched by user)", bolusAmount, recommendedBolus))
+                }
                 bolusAmount = recommendedBolus
+                programmaticBolusPrefill = recommendedBolus
             }
         } else {
             // Boot the user out of bolus confirmation to acknowledge the updated recommendation.
