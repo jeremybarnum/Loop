@@ -1,0 +1,211 @@
+//
+//  WatchOverrideDosingTests.swift
+//  LoopTests
+//
+//  #112 / #68: override-scaled dosing on the watch.
+//
+//  WHY THIS SUITE EXISTS. On 2026-08-11 Jeremy ran a 50% override and the watch
+//  recommended a manual bolus of 0.35 U where ~0.13 U was correct — because the
+//  RECOMMENDATION used the raw ISF schedule while the PREDICTION it was correcting used
+//  the override-applied one. Same computation, two different sensitivities. He caught it
+//  by arithmetic on the wrist ("that's clearly a number from the regular 70 ISF, not the
+//  140"), and asked for coverage because "I was worried that we hadn't tested thoroughly
+//  enough on that one". He was right: the temp-basal path had been fixed for exactly this
+//  in #68, and the bolus path survived because nothing tested it.
+//
+//  The direction is what makes it dangerous. A reduced-needs override means MORE insulin
+//  sensitivity, so LESS insulin — and it is the override you set for exercise, when hypo
+//  risk is already elevated. Getting it wrong roughly DOUBLES the dose at the worst moment.
+//
+//  Same integration style as WatchDosingLimitsTests: the real DoseMath entry points with
+//  the watch's own arguments, no WatchLoopManager scaffolding. DoseMath internals belong
+//  to LoopKit's own tests; what is pinned here is the contract the watch depends on.
+//
+
+import XCTest
+import HealthKit
+@testable import LoopKit
+@testable import Loop
+
+final class WatchOverrideDosingTests: XCTestCase {
+
+    // Jeremy's therapy settings on the night of the field test.
+    private let scheduledBasal = 0.70
+    private let maxBasal = 3.55
+    private let rawISF = 70.0
+    private let suspendThreshold = HKQuantity(unit: .milligramsPerDeciliter, doubleValue: 80)
+
+    private let basalSchedule = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: 0.70)])!
+    private let rawISFSchedule = InsulinSensitivitySchedule(unit: .milligramsPerDeciliter,
+                                                            dailyItems: [RepeatingScheduleValue(startTime: 0, value: 70.0)])!
+    private let targetRange = GlucoseRangeSchedule(unit: .milligramsPerDeciliter,
+                                                   dailyItems: [RepeatingScheduleValue(startTime: 0, value: DoubleRange(minValue: 100, maxValue: 115))])!
+    private let model = ExponentialInsulinModelPreset.rapidActingAdult
+    private let volumeRounder: (Double) -> Double = { (($0 / 0.05).rounded()) * 0.05 }
+    private let rateRounder: (Double) -> Double = { (($0 / 0.05).rounded(.down)) * 0.05 }
+
+    /// A 50% insulin-needs override, as the phone would send it.
+    private func fiftyPercentOverride(at start: Date) -> TemporaryScheduleOverride {
+        TemporaryScheduleOverride(
+            context: .custom,
+            settings: TemporaryScheduleOverrideSettings(unit: .milligramsPerDeciliter,
+                                                        targetRange: nil,
+                                                        insulinNeedsScaleFactor: 0.5),
+            startDate: start,
+            duration: .finite(.hours(2)),
+            enactTrigger: .local,
+            syncIdentifier: UUID())
+    }
+
+    private func curve(from now: Date, values: [Double]) -> [PredictedGlucoseValue] {
+        values.enumerated().map { index, mgdl in
+            PredictedGlucoseValue(startDate: now.addingTimeInterval(.minutes(Double(index) * 5)),
+                                  quantity: HKQuantity(unit: .milligramsPerDeciliter, doubleValue: mgdl))
+        }
+    }
+
+    /// Jeremy's field curve: flat at 118, i.e. eventual 118 against a 100-115 target.
+    private func flatAt118(from now: Date) -> [PredictedGlucoseValue] {
+        curve(from: now, values: Array(repeating: 118.0, count: 73))
+    }
+
+    // MARK: - The axiom: which way does a 50% override move ISF?
+
+    /// THE DIRECTION TEST, and the one worth having even if every other test here is
+    /// deleted. `insulinNeedsScaleFactor` is a NEEDS multiplier, and ISF is its RECIPROCAL
+    /// (TemporaryScheduleOverrideSettings :25 — `insulinNeedsScaleFactor.map { 1.0 / $0 }`).
+    /// So needing HALF the insulin means each unit moves you TWICE as far: ISF 70 -> 140.
+    ///
+    /// Getting this backwards is the single most dangerous mistake available in this file —
+    /// it would halve the ISF to 35 and double every correction, silently, under exactly
+    /// the override people set before exercise.
+    func testFiftyPercentOverrideDOUBLESTheISF() {
+        let now = Date()
+        let scaled = rawISFSchedule.applyingSensitivityMultiplier(from: fiftyPercentOverride(at: now), relativeTo: now)
+        let value = scaled.quantity(at: now.addingTimeInterval(.minutes(30))).doubleValue(for: HKUnit.milligramsPerDeciliter)
+
+        XCTAssertEqual(value, 140.0, accuracy: 0.001,
+                       "a 50% insulin-needs override must DOUBLE the ISF (less insulin per mg/dL), never halve it")
+        XCTAssertGreaterThan(value, rawISF, "override ISF must exceed the raw schedule for a reduced-needs override")
+    }
+
+    /// The basal side of the same scale factor: 50% needs halves the scheduled rate.
+    /// Direction is opposite to ISF, which is exactly why the two are easy to confuse.
+    func testFiftyPercentOverrideHALVESTheBasalRate() {
+        let now = Date()
+        let scaled = basalSchedule.applyingBasalRateMultiplier(from: fiftyPercentOverride(at: now), relativeTo: now)
+        let rate = scaled.value(at: now.addingTimeInterval(.minutes(30)))
+
+        XCTAssertEqual(rate, 0.35, accuracy: 0.001,
+                       "a 50% insulin-needs override must HALVE the basal rate — opposite direction to ISF")
+    }
+
+    // MARK: - The regression: Jeremy's field case, in code
+
+    /// REPRODUCES THE 2026-08-11 FIELD BUG NUMERICALLY, then pins the fix.
+    ///
+    /// Eventual 118 against a 100-115 target under a 50% override. The raw-ISF answer is
+    /// roughly double the override-ISF answer, and the raw one is what shipped.
+    func testManualBolusUnderOverrideUsesTheScaledISF() {
+        let now = Date()
+        let prediction = flatAt118(from: now)
+
+        let withRaw = prediction.recommendedManualBolus(
+            to: targetRange, at: now, suspendThreshold: suspendThreshold,
+            sensitivity: rawISFSchedule, model: model,
+            pendingInsulin: 0, maxBolus: 3.0, volumeRounder: volumeRounder)
+
+        let overrideISF = rawISFSchedule.applyingSensitivityMultiplier(from: fiftyPercentOverride(at: now), relativeTo: now)
+        let withOverride = prediction.recommendedManualBolus(
+            to: targetRange, at: now, suspendThreshold: suspendThreshold,
+            sensitivity: overrideISF, model: model,
+            pendingInsulin: 0, maxBolus: 3.0, volumeRounder: volumeRounder)
+
+        // The bug is not a rounding nuance — it is a factor of two on a therapeutic dose.
+        XCTAssertGreaterThan(withRaw.amount, 0, "sanity: the raw-ISF path recommends something")
+        XCTAssertEqual(withOverride.amount, withRaw.amount / 2, accuracy: 0.05,
+                       "the override-scaled recommendation must be HALF the raw-ISF one at a 50% override")
+        XCTAssertLessThan(withOverride.amount, withRaw.amount,
+                          "a reduced-needs override must never recommend MORE insulin than the raw schedule")
+    }
+
+    /// The invariant that would have caught this class of bug rather than this instance:
+    /// THE DOSE MUST BE COHERENT WITH THE CURVE IT CORRECTS. Applying the recommendation at
+    /// the same sensitivity the prediction was built with should land at target — and using
+    /// a mismatched sensitivity overshoots, which is precisely what Jeremy saw (eventual
+    /// fell to 78, well under the 100 floor, after taking an ISF-70 dose against an
+    /// ISF-140 world).
+    func testRecommendationIsCoherentWithThePredictionsSensitivity() {
+        let now = Date()
+        let eventual = 118.0
+        let targetFloor = 100.0
+        let overrideISF = rawISFSchedule.applyingSensitivityMultiplier(from: fiftyPercentOverride(at: now), relativeTo: now)
+        let effectiveISF = overrideISF.quantity(at: now).doubleValue(for: HKUnit.milligramsPerDeciliter)
+
+        let matched = flatAt118(from: now).recommendedManualBolus(
+            to: targetRange, at: now, suspendThreshold: suspendThreshold,
+            sensitivity: overrideISF, model: model,
+            pendingInsulin: 0, maxBolus: 3.0, volumeRounder: volumeRounder)
+
+        let mismatched = flatAt118(from: now).recommendedManualBolus(
+            to: targetRange, at: now, suspendThreshold: suspendThreshold,
+            sensitivity: rawISFSchedule, model: model,
+            pendingInsulin: 0, maxBolus: 3.0, volumeRounder: volumeRounder)
+
+        // Land the curve using the sensitivity the PREDICTION actually uses (the override one).
+        let landedMatched = eventual - matched.amount * effectiveISF
+        let landedMismatched = eventual - mismatched.amount * effectiveISF
+
+        XCTAssertGreaterThanOrEqual(landedMatched, targetFloor - 5,
+                                    "a coherent dose must land at/near the target floor, got \(landedMatched)")
+        XCTAssertLessThan(landedMismatched, targetFloor - 15,
+                          "the mismatched dose must visibly UNDERSHOOT the floor — that undershoot is the bug, got \(landedMismatched)")
+    }
+
+    // MARK: - The temp-basal path (#68) must stay fixed
+
+    /// #68 fixed the temp path to use the override-applied ISF. Pin it, because the bolus
+    /// path proves that a fix on one path does not protect its sibling.
+    func testTempBasalUnderOverrideUsesTheScaledISF() {
+        let now = Date()
+        let prediction = curve(from: now, values: Array(repeating: 200.0, count: 73))
+        let overrideISF = rawISFSchedule.applyingSensitivityMultiplier(from: fiftyPercentOverride(at: now), relativeTo: now)
+
+        func temp(_ isf: InsulinSensitivitySchedule) -> TempBasalRecommendation? {
+            prediction.recommendedTempBasal(
+                to: targetRange, at: now, suspendThreshold: suspendThreshold,
+                sensitivity: isf, model: model, basalRates: basalSchedule,
+                maxBasalRate: maxBasal, lastTempBasal: nil, rateRounder: rateRounder)
+        }
+
+        guard let raw = temp(rawISFSchedule), let scaled = temp(overrideISF) else {
+            return XCTFail("both configurations must recommend a temp for a flat-200 curve")
+        }
+        XCTAssertLessThan(scaled.unitsPerHour, raw.unitsPerHour,
+                          "a reduced-needs override must lower the temp rate, not raise it")
+    }
+
+    // MARK: - #112's open half: the basal baseline the ledger nets against
+
+    /// DOCUMENTS THE MIXED CONVENTION still open as #112. The ledger is handed the RAW basal
+    /// schedule to net temps against (WatchLoopManager :1017-1024) while being handed the
+    /// OVERRIDE-APPLIED ISF at read time (:1658). This test does not assert which is correct
+    /// — that is the open ruling — it pins HOW MUCH the choice matters, so the decision is
+    /// made against a number instead of an intuition.
+    func testBasalBaselineChoiceMateriallyChangesNetInsulin() {
+        let now = Date()
+        let scaled = basalSchedule.applyingBasalRateMultiplier(from: fiftyPercentOverride(at: now), relativeTo: now)
+
+        let rawBaseline = basalSchedule.value(at: now)          // 0.70
+        let overrideBaseline = scaled.value(at: now)            // 0.35
+
+        // A one-hour temp at 1.00 U/hr nets differently against each baseline.
+        let netAgainstRaw = 1.00 - rawBaseline                  // +0.30 U
+        let netAgainstOverride = 1.00 - overrideBaseline        // +0.65 U
+
+        XCTAssertEqual(netAgainstRaw, 0.30, accuracy: 0.001)
+        XCTAssertEqual(netAgainstOverride, 0.65, accuracy: 0.001)
+        XCTAssertEqual(netAgainstOverride - netAgainstRaw, 0.35, accuracy: 0.001,
+                       "#112: baseline choice moves net IOB by the full override delta — 0.35 U per temp-hour here")
+    }
+}

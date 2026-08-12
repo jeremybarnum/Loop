@@ -60,6 +60,28 @@ about explicitly. Never silently dropped.
   the stall watchdog stays armed for a device that has legitimately stopped dosing, and
   can therefore fire a spurious alert post-loan. Not investigated yet.
 
+## Resolved 2026-08-11 — #85 Focus modes are a NON-ISSUE
+
+Jeremy: "Theatre mode and Focus modes are a nonissue."
+
+Two arms run on build 268, both clean:
+- Theatre Mode alone, ~36 min: cycles every 5 min, all computed=ok.
+- Theatre Mode + Do Not Disturb, 70 min (18:55->20:04): cycles at 19:36:52, 19:41:56,
+  19:46:51, 19:51:53, 19:56:54, 20:01:54 — every one computed=ok, watchdog=refreshed,
+  and `lastCompletedAge` pinned at ~300 s throughout, which is the number that proves no
+  cycle was skipped. Snapshots every 5 min. Both well past the ~35 min at which the
+  2026-08-08 event died.
+
+WHAT THE 08-08 EVENT PROBABLY WAS, since it was not this: it happened on build 255, and
+#94 (the Code=11 connect storm behind the freezes) and #95 (carb-save -> glance ->
+main-thread wedge -> watchdog kill) have both been fixed since. Either is a better
+mechanistic account of a 7-hour dead app than a Focus mode. The Focus-mode correlation
+was what got noticed at the time, not what caused it.
+
+METHOD NOTE worth keeping: the first attempt to test this produced a WRONG conclusion
+(see OBS-9) because the iCloud mirror stalled and I read the frozen file as a suspended
+app. The arm-2 result above stands on a hand-pushed log, not the mirror.
+
 ## Resolved 2026-08-11 — OBS-7, the bolus that looked stuck
 
 Jeremy: "the UI seems got stuck for quite a while on the bolusing, but it did complete."

@@ -2387,7 +2387,24 @@ final class WatchLoopManager {
                 guard let glucoseTargetRange = self.settings.effectiveGlucoseTargetRangeSchedule(presumingMealEntry: potentialCarbEntry != nil) else {
                     throw WatchLoopError.configurationError("glucoseTargetRangeSchedule")
                 }
-                guard let insulinSensitivity = self.settings.insulinSensitivitySchedule else {
+                // #112 FIELD-CONFIRMED 2026-08-11 (Jeremy, 50% override): this used the RAW
+                // schedule — `settings.insulinSensitivitySchedule` — while the prediction it
+                // corrects was built with the OVERRIDE-APPLIED one (:1691). One computation,
+                // two different sensitivities.
+                //
+                // The measurement: ISF 70, 50% override ⇒ effective 140. Eventual 118 against a
+                // 100 target is an 18 mg/dL drop, which at 140 is ~0.13 U. It recommended 0.35 —
+                // an ISF-70 number. Delivering it took the predicted eventual to 78, because the
+                // PREDICTION correctly used 140 and so showed the overshoot the recommendation
+                // had just caused.
+                //
+                // Direction matters: a reduced-needs override means MORE sensitivity, so LESS
+                // insulin. Recommending off the raw schedule roughly DOUBLES the dose, and does
+                // so precisely when an exercise override is active — when hypo risk is already
+                // elevated. This is the same defect #68 fixed for temp basals (:2223); it
+                // survived on the bolus path because nothing tested it.
+                guard let insulinSensitivity = self.doseStore.insulinSensitivityScheduleApplyingOverrideHistory
+                        ?? self.settings.insulinSensitivitySchedule else {
                     throw WatchLoopError.configurationError("insulinSensitivitySchedule")
                 }
                 guard let maxBolus = self.settings.maximumBolus else {
