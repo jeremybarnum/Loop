@@ -2,7 +2,8 @@
 
 **Purpose.** Answer, mechanically rather than by impression, the question behind the refactor:
 *how far has the watch port drifted from stock, and is every deviation conscious?* Started
-2026-08-12. Phase 1 (`WatchLoopManager`, quantitative) is complete; phases 2 and 3 are not.
+2026-08-12. Phase 1 (quantitative) and phase 2 (semantic, dosing surface) are complete;
+phase 3 (`PodLoanWatchController`) is not.
 
 **Baseline.** The phone's `Loop/Managers/LoopDataManager.swift` is upstream through
 `7bf62f56` (Bastiaan Verhaar, 2025-11-22) with exactly two of our commits on top
@@ -97,11 +98,7 @@ today none of it is resolvable without the rulings register open.
 
 ## Not yet done
 
-- **Phase 2: semantic diff of the 10 mirrored methods.** The line counts say the shapes match;
-  they do NOT say the behavior matches. Each mirrored method still needs a read-through against
-  its stock counterpart, classifying every delta as *conscious and justified*, *conscious but
-  stale*, or *drift*. This is where a dropped stock call of the `ensureCurrentPumpData` class
-  (#44) would surface.
+- **Phase 2 — DONE, see below.** No dosing defects found.
 - **Phase 3: `PodLoanWatchController`** — 2,475 lines, no stock ancestor, no direct tests. A
   different question: not "does this match stock" but "is this the simplest state machine that
   satisfies the rulings."
