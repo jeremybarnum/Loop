@@ -1020,6 +1020,26 @@ extension LoanMessage {
     /// learning the truth became user-visible, and a queued `.takeoverComplete` would leave a
     /// progress label sitting there for minutes after a takeover that had already finished.
     /// The honest tile REQUIRES this channel; do not move it back without reverting that.
+    /// Wire-kind name for logs (#113). Matches the envelope's `kind` string, so a watch RX line
+    /// and a phone SEND line for the same message read the same.
+    public var kindLabel: String {
+        switch self {
+        case .request:          return "request"
+        case .grant:            return "grant"
+        case .takeoverComplete: return "takeoverComplete"
+        case .takeoverFailed:   return "takeoverFailed"
+        case .doseRecordBatch:  return "doseRecordBatch"
+        case .handbackOffer:    return "handbackOffer"
+        case .handbackAck:      return "handbackAck"
+        case .revoke:           return "revoke"
+        case .statusQuery:      return "statusQuery"
+        case .statusReport:     return "statusReport"
+        case .nack:             return "nack"
+        case .denied:           return "denied"
+        case .diag:             return "diag"
+        }
+    }
+
     public var isInteractiveHandshake: Bool {
         switch self {
         case .request, .grant, .denied, .nack, .revoke, .handbackOffer, .handbackAck,

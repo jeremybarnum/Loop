@@ -247,11 +247,11 @@ final class PodLoanWatchController {
 
     // MARK: - Incoming (wired from the WCSession delegate at integration)
 
-    func handleIncoming(userInfo: [String: Any]) {
-        queue.async { self.handleIncomingOnQueue(userInfo: userInfo) }
+    func handleIncoming(userInfo: [String: Any], channel: LoanTransportChannel) {
+        queue.async { self.handleIncomingOnQueue(userInfo: userInfo, channel: channel) }
     }
 
-    private func handleIncomingOnQueue(userInfo: [String: Any]) {
+    private func handleIncomingOnQueue(userInfo: [String: Any], channel: LoanTransportChannel) {
         let message: LoanMessage?
         do {
             message = try LoanMessage.decode(fromTransport: userInfo)
@@ -263,6 +263,24 @@ final class PodLoanWatchController {
             return
         }
         guard let message = message else { return }  // not a v2 payload
+
+        // #113 (2026-08-12): LOG EVERY ARRIVAL, BEFORE ANY GUARD.
+        //
+        // This line did not exist, and its absence is why #113 has survived two occurrences
+        // with no mechanism. On 2026-08-11 the phone acked a hand-back eight times and the
+        // watch acted on none of them — but "the ack never arrived" and "the ack arrived and a
+        // guard dropped it" produced BYTE-IDENTICAL logs, because nothing recorded receipt and
+        // `handleAck`'s epoch guard returned in silence. An instrument that cannot separate
+        // "not delivered" from "delivered and discarded" cannot diagnose a delivery bug.
+        //
+        // `channel` is the discriminator that makes the next occurrence answerable in one read.
+        // Interactive kinds (grant/revoke/ack) ride sendMessage = .urgent; bookkeeping and diags
+        // ride transferUserInfo = .queued (see LoanMessage.isInteractiveHandshake). During the
+        // 2026-08-11 wedge the phone was emitting BOTH — acks on urgent, handbackDiag on queued.
+        // So: diags present and acks absent => only the immediate channel is wedged. Neither
+        // present => the watch's whole inbound path is dead. Those are different bugs with
+        // different fixes, and today we cannot tell them apart.
+        SportLog.event("loan", "RX \(message.kindLabel) ch=\(channel.rawValue) — ours ev=\(epoch.map(String.init) ?? "nil") phase=\(phase.rawValue)")
 
         switch message {
         case .grant(let grant):
@@ -1606,7 +1624,13 @@ final class PodLoanWatchController {
     }
 
     private func handleAck(_ ack: HandbackAck) {
-        guard let current = epoch ?? journal.activeEpoch, ack.epoch == current else { return }
+        // #113: was a silent `return`. An ack for the wrong epoch is a real and expected event
+        // (a stale redelivery), but it is ALSO what a mis-paired session would look like, so it
+        // must be distinguishable from "no ack arrived" in the log rather than inferred.
+        guard let current = epoch ?? journal.activeEpoch, ack.epoch == current else {
+            SportLog.event("loan", "ack IGNORED ev=\(ack.epoch) — ours ev=\(epoch.map(String.init) ?? "nil") journal ev=\(journal.activeEpoch.map(String.init) ?? "nil"); stale redelivery or epoch mismatch")
+            return
+        }
         // Round-4 fix: the phone acks MAX-seq, but withholding (in-flight /
         // chase-pending events) creates seq GAPS a max-seq cursor can't represent —
         // an ack covering a later carb would skip a withheld command forever. The cap
@@ -2356,6 +2380,14 @@ extension PodLoanWatchController: WatchLoanDoseRecording {
             self.scheduleChase()
         }
     }
+}
+
+/// Which WCSession channel a message arrived on (#113). `sendMessage` wakes the counterpart
+/// immediately; `transferUserInfo` is queued but guaranteed and relaunch-surviving. They fail
+/// independently, which is the whole reason this is recorded.
+enum LoanTransportChannel: String {
+    case urgent    // WCSession.sendMessage -> session(_:didReceiveMessage:)
+    case queued    // WCSession.transferUserInfo -> session(_:didReceiveUserInfo:)
 }
 
 // MARK: - PumpManagerDelegate (the host duties; alert family forwards to WatchLoopManager's

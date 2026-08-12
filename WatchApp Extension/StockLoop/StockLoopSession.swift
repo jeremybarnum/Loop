@@ -300,9 +300,9 @@ final class StockLoopSession {
 
     /// Route a WC userInfo payload. Returns true when it was a v2 protocol message
     /// (consumed here); false lets the stock dispatch continue.
-    func handleIncomingIfLoanMessage(_ userInfo: [String: Any]) -> Bool {
+    func handleIncomingIfLoanMessage(_ userInfo: [String: Any], channel: LoanTransportChannel) -> Bool {
         guard userInfo[LoanProtocol.userInfoKey] != nil else { return false }
-        loanController.handleIncoming(userInfo: userInfo)
+        loanController.handleIncoming(userInfo: userInfo, channel: channel)
         return true
     }
 

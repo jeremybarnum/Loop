@@ -279,7 +279,7 @@ extension ExtensionDelegate: WCSessionDelegate {
     /// didReceiveUserInfo — without this method the interactive loan handshake would be
     /// dropped on the floor. Loan payloads only; anything else on this path is unexpected.
     func session(_ session: WCSession, didReceiveMessage message: [String : Any]) {
-        if stockLoopSession.handleIncomingIfLoanMessage(message) {
+        if stockLoopSession.handleIncomingIfLoanMessage(message, channel: .urgent) {
             return
         }
         log.default("Ignoring unexpected sendMessage: %{public}@", String(describing: message.keys))
@@ -289,7 +289,7 @@ extension ExtensionDelegate: WCSessionDelegate {
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any] = [:]) {
         // M5: loan protocol v2 rides its own single key; consumed entirely by the
         // loan controller (undecodable v2 payloads Nack there — never dropped).
-        if stockLoopSession.handleIncomingIfLoanMessage(userInfo) {
+        if stockLoopSession.handleIncomingIfLoanMessage(userInfo, channel: .queued) {
             return
         }
 
