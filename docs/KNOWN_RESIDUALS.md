@@ -103,11 +103,30 @@ don't get lost; revisit opportunistically or when a symptom matches.
       ReturnsToOwner`.
     - ALREADY COVERED interim no-state-change commit — `testInterimDrainAcks\
       OpenTempButDefersWriteToFinal` asserts state stays `.loaned`.
-    - BLOCKED cancel mid-drain, revoke-during-drain, seq-gap cursor cap — all
-      three are WATCH-side, and `PodLoanWatchController`/`WatchLoopManager`/
-      `LoanEventJournal` are in the `WatchApp Extension` target only, so
-      `LoopTests` cannot reach them. See TEST_COVERAGE_PLAN.md "Corrections"
-      for the three unblocking options. The cursor cap itself IS implemented
-      (`handleAck` caps below the lowest withheld seq); this is debt against
-      working code.
-    The five verify rounds stand in for the blocked three until written.
+    - DONE seq-gap cursor cap (2026-08-12) — unblocked by MOVING the cap out of
+      `PodLoanWatchController.handleAck` and into
+      `LoanEventJournal.applyAck(committedCursor:withholding:)`, which is in
+      both targets. Covered three ways: the arithmetic in
+      `LoanEventJournalTests` (3 tests), and the COMPOSITION with the phone's
+      ID dedup in `LoanTwoSidedContractTests.testWithheldEventSurvives\
+      TheGapAndCommitsOnceWhenItClassifies` — the property neither side's own
+      tests can reach. Sabotage-verified in both directions: delete the cap and
+      2 journal tests go red; delete the phone's ID dedup and 3 two-sided tests
+      go red.
+    - PARTIAL revoke-during-drain — the PHONE half is covered
+      (`testRevokeMidLoanStillDrainsTheWatchsRecords`: records minted before a
+      `reclaimNow` still reach the phone, and the loan lands in `.owner`). The
+      watch's own `handleRevoke` transition is not.
+    - BLOCKED cancel mid-drain, and the watch half of revoke-during-drain. Both
+      live in `PodLoanWatchController`, whose transitive closure was MEASURED on
+      2026-08-12: it reaches `ExtensionDelegate`, `ChartHUDController`,
+      `HUDInterfaceController` and `WKExtension`, so option (a) — adding it to
+      `LoopTests` — is genuinely out, not merely awkward. Note the earlier
+      correction overstated the coupling reason: the file itself uses WatchKit
+      in exactly 2 places (haptics) and `WatchLoopManager` uses none. What
+      blocks it is the `WatchLoopManager` stored property and ITS closure, not
+      WatchKit. The honest unblock is a watchOS unit-test target (option b),
+      which is real infrastructure: a new PBXNativeTarget, scheme wiring, and a
+      second `xcodebuild` destination in the ship gate. Not built; deliberately
+      not hand-edited into the pbxproj alongside other work.
+    The five verify rounds stand in for the blocked two until written.

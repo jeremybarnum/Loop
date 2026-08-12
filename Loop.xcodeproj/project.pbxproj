@@ -198,6 +198,7 @@ C0FFEE000000000000000010 /* LoanEventJournal.swift in Sources */ = {isa = PBXBui
 		43D0E4B72F1A000100000017 /* LoanBooksHarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4B82F1A000100000018 /* LoanBooksHarnessTests.swift */; };
 		49B8A19F8BBE91531BBE4A2E /* WatchDosingLimitsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 253FAE509D95209395E23A42 /* WatchDosingLimitsTests.swift */; };
 		49B8A19F8BBE91532BBE4A2E /* WatchOverrideDosingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 253FAE509D95209395E23A43 /* WatchOverrideDosingTests.swift */; };
+		43D0E5A29F2C4B7E88110002 /* LoanTwoSidedContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E5A19F2C4B7E88110001 /* LoanTwoSidedContractTests.swift */; };
 		43D0E4AB2F1A00010000000B /* PodLoanPhoneControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4AA2F1A00010000000A /* PodLoanPhoneControllerTests.swift */; };
 C0FFEE000000000000000012 /* LoanEventJournalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE000000000000000011 /* LoanEventJournalTests.swift */; };
 		43D381621EBD9759007F8C8F /* HeaderValuesTableViewCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D381611EBD9759007F8C8F /* HeaderValuesTableViewCell.swift */; };
@@ -983,6 +984,7 @@ C0FFEE000000000000000012 /* LoanEventJournalTests.swift in Sources */ = {isa = P
 		43D0E4B82F1A000100000018 /* LoanBooksHarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanBooksHarnessTests.swift; sourceTree = "<group>"; };
 		253FAE509D95209395E23A42 /* WatchDosingLimitsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchDosingLimitsTests.swift; sourceTree = "<group>"; };
 		253FAE509D95209395E23A43 /* WatchOverrideDosingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchOverrideDosingTests.swift; sourceTree = "<group>"; };
+		43D0E5A19F2C4B7E88110001 /* LoanTwoSidedContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanTwoSidedContractTests.swift; sourceTree = "<group>"; };
 		43D0E4AA2F1A00010000000A /* PodLoanPhoneControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanPhoneControllerTests.swift; sourceTree = "<group>"; };
 C0FFEE000000000000000011 /* LoanEventJournalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanEventJournalTests.swift; sourceTree = "<group>"; };
 		43D381611EBD9759007F8C8F /* HeaderValuesTableViewCell.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = HeaderValuesTableViewCell.swift; sourceTree = "<group>"; };
@@ -2146,6 +2148,7 @@ C0FFEE000000000000000011 /* LoanEventJournalTests.swift */ = {isa = PBXFileRefer
 				43D0E4B82F1A000100000018 /* LoanBooksHarnessTests.swift */,
 				253FAE509D95209395E23A42 /* WatchDosingLimitsTests.swift */,
 				253FAE509D95209395E23A43 /* WatchOverrideDosingTests.swift */,
+				43D0E5A19F2C4B7E88110001 /* LoanTwoSidedContractTests.swift */,
 				43D0E4AA2F1A00010000000A /* PodLoanPhoneControllerTests.swift */,
 				C0FFEE000000000000000011 /* LoanEventJournalTests.swift */,
 				E93E86AC24DDE02C00FF40C8 /* Mock Stores */,
@@ -3892,6 +3895,7 @@ C0FFEE000000000000000011 /* LoanEventJournalTests.swift */ = {isa = PBXFileRefer
 				43D0E4B72F1A000100000017 /* LoanBooksHarnessTests.swift in Sources */,
 				49B8A19F8BBE91531BBE4A2E /* WatchDosingLimitsTests.swift in Sources */,
 				49B8A19F8BBE91532BBE4A2E /* WatchOverrideDosingTests.swift in Sources */,
+				43D0E5A29F2C4B7E88110002 /* LoanTwoSidedContractTests.swift in Sources */,
 				43D0E4AB2F1A00010000000B /* PodLoanPhoneControllerTests.swift in Sources */,
 				C0FFEE000000000000000012 /* LoanEventJournalTests.swift in Sources */,
 				A9BD28E7272226B40071DF15 /* TestLocalizedError.swift in Sources */,

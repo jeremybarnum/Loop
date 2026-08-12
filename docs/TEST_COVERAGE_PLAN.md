@@ -13,27 +13,69 @@ rewrite-target list.
 | 2. Clock + defaults injection | **DONE** | 38+20 clock sites, 11 defaults sites, 3 seams. Pure mechanical commit. |
 | 3. Characterization | BLOCKED | Needs Jeremy's rewrite-target list. |
 | 4. Sabotage check | **DONE for what exists** | Ran against the gate, the reconciler, and the new §16 tests. Findings below. |
-| 5. Two-sided contract test | **PARTIAL** | 3 of 6 §16 items closed; 3 blocked — see the correction below. |
+| 5. Two-sided contract test | **DONE** | `LoanTwoSidedContractTests` (5 tests). 5 of 6 §16 items closed, 1 partial, 1 blocked — see the 2026-08-12 correction. |
 | 6. Fault variants | not started | |
 
 ### Corrections to this plan, found by executing it
 
 **Item 5's premise was false.** The plan says "LoopTests already compiles the watch-side
 files into the iOS test host (that is how the books harness works)." It does not.
-`PodLoanWatchController`, `WatchLoopManager`, and `LoanEventJournal` are members of the
-**`WatchApp Extension` target only**; `LoopTests` cannot see them. `LoanBooksHarnessTests`
-works because `LoanProtocolV2` is in BOTH targets and the harness hand-rolls its own driver.
+`PodLoanWatchController` and `WatchLoopManager` are members of the **`WatchApp Extension`
+target only**; `LoopTests` cannot see them. `LoanBooksHarnessTests` works because
+`LoanProtocolV2` is in BOTH targets and the harness hand-rolls its own driver.
 
 Consequence: a genuine two-sided test needs one of
-(a) adding the watch files to `LoopTests` — they are `WCSession`/`SportLog`/watch-alert
-    coupled, so this cascades and may not compile for iOS;
+(a) adding the watch files to `LoopTests`;
 (b) a watchOS unit-test target (clean, but new infrastructure); or
 (c) keep testing the phone + protocol halves and hand-roll the watch half, as the books
     harness already does.
-§16's three watch-side items (cancel mid-drain, revoke-during-drain, seq-gap cursor cap)
-are blocked behind that choice. The cursor cap IS implemented — `PodLoanWatchController`'s
-`handleAck` caps the applied cursor below the lowest withheld seq — so this is test debt
-against working code, not a missing guard.
+
+### Item 5 resolution (2026-08-12)
+
+Built as **(c) plus one extraction**, after MEASURING option (a) rather than guessing at it.
+
+The measurement corrects this plan's own earlier reasoning. The claim was that the watch
+files are "`WCSession`/`SportLog`/watch-alert coupled, so this cascades and may not compile
+for iOS". The coupling is real but that is the wrong account of it:
+`PodLoanWatchController` touches WatchKit in exactly **2** places (haptics) and
+`WatchLoopManager` in **none**. What actually blocks (a) is the `WatchLoopManager` stored
+property and its transitive closure, which reaches `ExtensionDelegate`,
+`ChartHUDController`, `HUDInterfaceController` and `WKExtension`. So (a) is genuinely out —
+for a different reason than recorded, and worth correcting because "it won't compile for
+iOS" invites someone to try to fix the wrong thing.
+
+What was built:
+
+1. **The seq-gap cursor cap MOVED** from `PodLoanWatchController.handleAck` into
+   `LoanEventJournal.applyAck(committedCursor:withholding:)`. The journal imports only
+   Foundation + os.log and is already in both targets, so the cap became executable from
+   LoopTests. This was not a workaround dressed as a refactor: the controller was reaching
+   through `unackedEvents()` to recompute a seq→ID mapping the journal already owns. It also
+   fixed a test that could not fail — the old
+   `testCursorIsAWatermarkSoAGapMustBeCappedByTheCaller` computed `min(later.seq,
+   withheld.seq - 1)` in its own body and asserted on its own arithmetic.
+
+2. **`LoanTwoSidedContractTests`** — real `PodLoanPhoneController`, real `LoanEventJournal`,
+   real wire encode/decode on every hop, joined by a fake transport with a controllable
+   ack-drop fault. The watch's PHASE MACHINE is modeled (deliberately small); everything
+   else is production code. Five tests: full round trip, exactly-once under a lost ack, the
+   cap × dedup composition, revoke mid-loan, and the #102 stale-epoch offer.
+
+The composition test is the point of the file. The watch's cursor cap and the phone's ID
+dedup are each correct under their own tests and could still lose or double-book insulin
+between them: drop the cap and the withheld dose is buried forever; drop the dedup and
+everything above the gap is booked twice. Both failures are silent, and both are insulin.
+
+Sabotage-verified in both directions (item 4 discipline): deleting the cap reddens 2 journal
+tests; deleting the phone's ID dedup reddens 3 two-sided tests while leaving revoke and
+stale-epoch green — the tests discriminate rather than all firing on everything.
+
+**What this still does NOT cover, stated plainly:** the watch's phase transitions —
+`cancelHandback`, the finalize gates, the `.handingBack`/`.revoked` guards. §16's
+cancel-mid-drain stays blocked and revoke-during-drain is covered only on the phone side.
+The honest unblock is (b), a watchOS unit-test target: a new PBXNativeTarget, scheme wiring,
+and a second destination in the ship gate. Sized, not built — hand-editing a new native
+target into the pbxproj is not something to do alongside other work.
 
 **Sabotage findings (item 4), all real:**
 - The gate I wrote failed *silently*: under `set -e` a non-matching diagnostic grep aborted
