@@ -188,6 +188,8 @@ C0FFEE000000000000000010 /* LoanEventJournal.swift in Sources */ = {isa = PBXBui
 		43D0E4A32F1A000100000003 /* LoanProtocolV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */; };
 		43D0E4B22F1A000100000012 /* SessionInsulinLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4B12F1A000100000011 /* SessionInsulinLedger.swift */; };
 		43D0E4B32F1A000100000013 /* SessionInsulinLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4B12F1A000100000011 /* SessionInsulinLedger.swift */; };
+		43D0E4C22F1A000100000022 /* BolusNoticeWristText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4C12F1A000100000021 /* BolusNoticeWristText.swift */; };
+		43D0E4C32F1A000100000023 /* BolusNoticeWristText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4C12F1A000100000021 /* BolusNoticeWristText.swift */; };
 		43D0E4A62F1A000100000006 /* LoanReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A42F1A000100000004 /* LoanReconciler.swift */; };
 		43D0E4A72F1A000100000007 /* PodLoanPhoneController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A52F1A000100000005 /* PodLoanPhoneController.swift */; };
 		43D0E5A12F1B00010000010A /* PhoneLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E5A02F1B000100000109 /* PhoneLog.swift */; };
@@ -972,6 +974,7 @@ C0FFEE000000000000000012 /* LoanEventJournalTests.swift in Sources */ = {isa = P
 		43CE7CDD1CA8B63E003CC1B0 /* Data.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Data.swift; sourceTree = "<group>"; };
 		43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanProtocolV2.swift; sourceTree = "<group>"; };
 		43D0E4B12F1A000100000011 /* SessionInsulinLedger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionInsulinLedger.swift; sourceTree = "<group>"; };
+		43D0E4C12F1A000100000021 /* BolusNoticeWristText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BolusNoticeWristText.swift; sourceTree = "<group>"; };
 		43D0E4A42F1A000100000004 /* LoanReconciler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanReconciler.swift; sourceTree = "<group>"; };
 		43D0E4A52F1A000100000005 /* PodLoanPhoneController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanPhoneController.swift; sourceTree = "<group>"; };
 		43D0E5A02F1B000100000109 /* PhoneLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneLog.swift; sourceTree = "<group>"; };
@@ -2272,6 +2275,7 @@ C0FFEE000000000000000011 /* LoanEventJournalTests.swift */ = {isa = PBXFileRefer
 				4372E48F213CFCE70068E043 /* LoopSettingsUserInfo.swift */,
 				43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */,
 				43D0E4B12F1A000100000011 /* SessionInsulinLedger.swift */,
+				43D0E4C12F1A000100000021 /* BolusNoticeWristText.swift */,
 				43C3B6F620BBCAA30026CAFA /* PumpManager.swift */,
 				C1FB428E217921D600FAB378 /* PumpManagerUI.swift */,
 				435400331C9F878D00D5819C /* SetBolusUserInfo.swift */,
@@ -3666,6 +3670,7 @@ C0FFEE000000000000000011 /* LoanEventJournalTests.swift */ = {isa = PBXFileRefer
 				4372E490213CFCE70068E043 /* LoopSettingsUserInfo.swift in Sources */,
 				43D0E4A22F1A000100000002 /* LoanProtocolV2.swift in Sources */,
 				43D0E4B22F1A000100000012 /* SessionInsulinLedger.swift in Sources */,
+				43D0E4C22F1A000100000022 /* BolusNoticeWristText.swift in Sources */,
 				C174233C259BEB0F00399C9D /* ManualEntryDoseViewModel.swift in Sources */,
 				89CA2B3D226E6B13004D9350 /* LocalTestingScenariosManager.swift in Sources */,
 				1D05219B2469E9DF000EBBDE /* StoredAlert.swift in Sources */,
@@ -3801,6 +3806,7 @@ C0FFEE000000000000000011 /* LoanEventJournalTests.swift */ = {isa = PBXFileRefer
 				4372E491213D05F90068E043 /* LoopSettingsUserInfo.swift in Sources */,
 				43D0E4A32F1A000100000003 /* LoanProtocolV2.swift in Sources */,
 				43D0E4B32F1A000100000013 /* SessionInsulinLedger.swift in Sources */,
+				43D0E4C32F1A000100000023 /* BolusNoticeWristText.swift in Sources */,
 				4345E40421F68AD9009E00E5 /* TextRowController.swift in Sources */,
 				43BFF0B51E45C1E700FF19A9 /* NumberFormatter.swift in Sources */,
 				C1201E2D23ECDF3D002DA84A /* WatchContextRequestUserInfo.swift in Sources */,

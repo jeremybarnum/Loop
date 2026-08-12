@@ -15,6 +15,8 @@ struct BolusInput: View {
     @Binding var amount: Double
     var isComputingRecommendedAmount: Bool
     var recommendedAmount: Double?
+    /// #117: stock's BolusRecommendationNotice, wrist-sized. nil for an ordinary correction.
+    var recommendationNotice: String?
     var pickerValues: BolusPickerValues
     var isEditable: Bool
 
@@ -69,6 +71,13 @@ struct BolusInput: View {
             return Text("REC: Calculating...", comment: "Indicator that recommended bolus computation is in progress on Apple Watch")
         } else {
             let valueString = recommendedAmount.map { value in Self.recommendedAmountFormatter.string(from: value) ?? String(value) } ?? "–"
+            // #117: append stock's own reason when there is one. A bare "REC: 0 U" while the loop
+            // corrects at maxBasal is indistinguishable from a broken screen (field 2026-08-11):
+            // the number was right and the wrist had no way to know why. Stock computes this
+            // notice on every recommendation; the watch was discarding it.
+            if let notice = recommendationNotice {
+                return Text("REC: \(valueString) U — \(notice)", comment: "Recommended bolus amount label with the reason for it, on Apple Watch")
+            }
             return Text("REC: \(valueString) U", comment: "Recommended bolus amount label on Apple Watch")
         }
     }

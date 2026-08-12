@@ -25,6 +25,12 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
     // MARK: - Published state
     @Published var isComputingRecommendedBolus = false
     @Published var recommendedBolusAmount: Double?
+    /// #117: WHY the recommendation is what it is — stock computes this on every manual-bolus
+    /// recommendation (`ManualBolusRecommendation.notice`) and the watch was discarding it.
+    /// A bare "REC: 0 U" while the loop corrects at maxBasal is indistinguishable from a broken
+    /// screen; the notice is the sentence that makes a zero legible (field 2026-08-11 23:04).
+    /// Loan path only — the phone-fed context does not carry a notice.
+    @Published var recommendationNotice: String?
     @Published var bolusPickerValues: BolusPickerValues
     @Published var error: Error?
 
@@ -71,6 +77,13 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
     }
 
     /// The single seam through which the loan paths publish a computed recommendation.
+    /// #117: forwards to `BolusRecommendationNotice.wristDescription` (Common/Models, so it is
+    /// testable — the watch's view models are not in the test host). Nil for "nothing worth
+    /// saying": the ordinary above-range correction.
+    static func noticeText(for notice: BolusRecommendationNotice?) -> String? {
+        notice?.wristDescription
+    }
+
     private func publishComputedRecommendation(_ amount: Double?) {
         let isFirst = !hasPublishedComputedRecommendation
         hasPublishedComputedRecommendation = true
@@ -237,6 +250,7 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
                 self.contextDate = activeContext?.creationDate
                 if self.recommendedBolusAmount != activeContext?.recommendedBolusDose {
                     self.recommendedBolusAmount = activeContext?.recommendedBolusDose
+                    self.recommendationNotice = nil   // #117: phone context carries no notice
                 }
             }
         }
@@ -379,7 +393,10 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
                 self.isComputingRecommendedBolus = false
                 switch result {
                 case .success(let recommendation):
-                    SportLog.event("bolus-ui", String(format: "REC refreshed on open: %.2f U", recommendation.amount))
+                    let noticeText = Self.noticeText(for: recommendation.notice)
+                    SportLog.event("bolus-ui", String(format: "REC refreshed on open: %.2f U%@", recommendation.amount,
+                                                      noticeText.map { " · \($0)" } ?? ""))
+                    self.recommendationNotice = noticeText
                     self.publishComputedRecommendation(recommendation.amount)
                 case .failure(let error):
                     // Leave whatever the context seeded rather than blanking a usable number:
@@ -410,8 +427,11 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
 
                 switch result {
                 case .success(let recommendation):
-                    SportLog.event("bolus-ui", String(format: "REC carb %.0fg (watch-local): %.2f U",
-                                                      entry.quantity.doubleValue(for: .gram()), recommendation.amount))
+                    let noticeText = Self.noticeText(for: recommendation.notice)
+                    SportLog.event("bolus-ui", String(format: "REC carb %.0fg (watch-local): %.2f U%@",
+                                                      entry.quantity.doubleValue(for: .gram()), recommendation.amount,
+                                                      noticeText.map { " · \($0)" } ?? ""))
+                    self.recommendationNotice = noticeText
                     self.publishComputedRecommendation(recommendation.amount)
                 case .failure(let error):
                     // Leave it nil and SAY so. nil means the dial sits at 0 and the action button

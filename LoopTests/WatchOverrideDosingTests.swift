@@ -189,6 +189,40 @@ final class WatchOverrideDosingTests: XCTestCase {
                           "a reduced-needs override must lower the temp rate, not raise it")
     }
 
+    // MARK: - #117: the recommendation's REASON reaches the wrist
+
+    /// A bare "REC: 0 U" is indistinguishable from a broken screen — which is exactly how it
+    /// read in the field on 2026-08-11 while the loop was correcting at maxBasal and zero was
+    /// the CORRECT answer. Stock computes a notice for every such case; the watch was throwing
+    /// it away. These strings are safety-relevant at a glance: "predicted in range" and "below
+    /// suspend threshold" both produce a small or zero recommendation for opposite reasons —
+    /// one is nothing to do, the other is a warning. They must never be confused or blank.
+    func testEveryBolusNoticeReachesTheWristWithADistinctSentence() {
+        let low = SimpleGlucoseValue(startDate: Date(),
+                                     quantity: HKQuantity(unit: .milligramsPerDeciliter, doubleValue: 65))
+        let cases: [BolusRecommendationNotice] = [
+            .predictedGlucoseInRange,
+            .glucoseBelowSuspendThreshold(minGlucose: low),
+            .currentGlucoseBelowTarget(glucose: low),
+            .predictedGlucoseBelowTarget(minGlucose: low),
+            .allGlucoseBelowTarget(minGlucose: low),
+        ]
+
+        var seen = Set<String>()
+        for notice in cases {
+            let text = notice.wristDescription
+            if text.isEmpty {
+                return XCTFail("every notice must produce a sentence — \(notice) produced none")
+            }
+            XCTAssertFalse(text.isEmpty)
+            XCTAssertTrue(seen.insert(text).inserted,
+                          "notices must be DISTINGUISHABLE on the wrist — \"\(text)\" was already used by another case")
+        }
+
+        // No notice is the ordinary above-range correction: say nothing rather than pad the label.
+        XCTAssertNil(Optional<BolusRecommendationNotice>.none?.wristDescription)
+    }
+
     // MARK: - #112's ledger half (CLOSED by R35 build): per-read override-applied netting
 
     /// The ledger half of the #112 family, through the REAL ledger. Since the R35 build the

@@ -115,6 +115,7 @@ extension CarbAndBolusFlow {
                     amount: $bolusAmount,
                     isComputingRecommendedAmount: viewModel.isComputingRecommendedBolus,
                     recommendedAmount: viewModel.recommendedBolusAmount,
+                    recommendationNotice: viewModel.recommendationNotice,
                     pickerValues: viewModel.bolusPickerValues,
                     isEditable: flowState == .bolusEntry
                 )
