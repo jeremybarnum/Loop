@@ -56,6 +56,11 @@ final class PodLoanWatchController {
     /// Last reachability logged during a hand-back, so the log records TRANSITIONS rather
     /// than repeating the same line every 15 s resend.
     private var lastHandbackReachable: Bool?
+    /// #113: did this hand-back EVER see the phone unreachable? Distinguishes the ordinary
+    /// "phone was away" hang — which resolves itself the moment it returns — from the transport
+    /// wedge, where every offer went out with reachable=true and none was ever acked. Only the
+    /// second one is fixed by restarting the watch app, so only the second one should say so.
+    private var handbackSawUnreachable = false
 
     /// Injected transport: dictionary -> WCSession.transferUserInfo (integration step).
     var send: (([String: Any]) -> Void)?
@@ -1385,6 +1390,7 @@ final class PodLoanWatchController {
             guard !self.handbackRequested else { return }
             self.handbackRequested = true
             self.handbackResendCount = 0
+            self.handbackSawUnreachable = false   // #113
             // #67: bound the wait for the phone's ack. Pre-scheduled alert fires from a suspended
             // app; the resend loop resumes Sport Mode on the watch at the same deadline. Covers
             // both the interim-drain path below and the legacy single-phase finalize.
@@ -1430,6 +1436,13 @@ final class PodLoanWatchController {
         handbackDeadline = nil
         handbackStartedAt = nil
         let wasFinal = (phase == .handingBack)
+        // #113 signature: several offers went out, the phone was reachable for EVERY one of them,
+        // and not a single ack came back. An unreachable phone explains a hang innocently and
+        // heals itself; sustained reachability with total silence is the transport wedge.
+        let wedgeSuspected = handbackResendCount >= 3 && !handbackSawUnreachable && isPhoneReachable()
+        let wedgeSuffix = wedgeSuspected
+            ? " · ** \(handbackResendCount) offers, phone REACHABLE throughout, zero acks — transport wedge (#113); restarting the WATCH app is the known recovery **"
+            : ""
         handbackRequested = false
         finalOfferSent = false
         if wasFinal, let manager = pumpManager {
@@ -1440,11 +1453,18 @@ final class PodLoanWatchController {
             loopManager.loanDoseRecorder = self
             SensorBlackoutAlert.refresh()   // dosing resumes → re-arm the blackout dead-man
             onLoanActiveChanged?(true)
-            SportLog.event("loan", "HAND-BACK timed out (final, \(Int(HandbackStuckAlert.interval))s) — iPhone never acked; resumed Sport Mode on the watch (still holding the pod)")
+            SportLog.event("loan", "HAND-BACK timed out (final, \(Int(HandbackStuckAlert.interval))s) — iPhone never acked; resumed Sport Mode on the watch (still holding the pod)\(wedgeSuffix)")
             loopManager.checkPumpDataAndLoop()   // re-establish a temp this cycle
         } else {
             // Interim hang: never stopped dosing; phase already .active. Just abort the drain.
-            SportLog.event("loan", "HAND-BACK timed out (interim, \(Int(HandbackStuckAlert.interval))s) — iPhone never acked; Sport Mode continues on the watch")
+            SportLog.event("loan", "HAND-BACK timed out (interim, \(Int(HandbackStuckAlert.interval))s) — iPhone never acked; Sport Mode continues on the watch\(wedgeSuffix)")
+        }
+        if wedgeSuspected {
+            // #113: tell the user the ONE thing that fixes it. On 2026-08-11 the phone acked
+            // eight times, the watch saw none, and the only recovery was force-quitting the WATCH
+            // app — which nothing on screen suggested. The generic "iPhone never acked" points at
+            // the phone, which is exactly the wrong device to go poke at.
+            issueProtocolAlert(body: "The iPhone is reachable but its replies are not arriving. Force-quit and reopen the Watch app to restore the connection. The pod is still safe on the watch.")
         }
         // HandbackStuckAlert is intentionally NOT disarmed here — its pre-scheduled notification
         // is the user's signal that End didn't complete. It self-expires; a later successful
@@ -1594,6 +1614,7 @@ final class PodLoanWatchController {
         // reachability flaps, and the queued offer lands the moment the phone returns (that
         // night: ack in 47 ms once reachable). Fast feedback, slow abort.
         let reachableNow = isPhoneReachable()
+        if !reachableNow { handbackSawUnreachable = true }   // #113
         if lastHandbackReachable != reachableNow {
             SportLog.event("loan", reachableNow
                 ? "hand-back: iPhone reachable — offer should ack shortly"
