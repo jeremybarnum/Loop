@@ -7,6 +7,20 @@ about explicitly. Never silently dropped.
 
 ## Open
 
+- **OBS-10 (2026-08-11 ~22:20, build 269 loan): relay-first ingests while D2W is live —
+  Jeremy: "it seems as if it's getting the BGs from the phone even while D2W is live.
+  I hope this is not a regression."** NOT new in 269: build 268 logs from the same evening
+  show the identical pattern at 19:11:49, 19:16:47, 19:26:48, 19:31:48 and 21:56:52 —
+  `INGEST src=phone-relay … (direct-G7 gap)` followed 1-9 s later by the DIRECT read
+  arriving and being deduped (`#83 dedup … same sensor stamp`). So: same physical sample,
+  direct link demonstrably alive in the same window, relay simply winning the race when
+  the watch's BLE connect lands late against the grid (direct age drifting 7-20 s vs the
+  relay's ~4-5 s). Phone-absent posture unaffected (no phone → no race).
+  WHAT WOULD BE REAL: direct reads stopping entirely — no didRead, no dedup line. Check
+  the ratio of src=direct-G7 stored=1 vs src=phone-relay + dedup across the next pushed
+  loan; a drift toward 100% relay-first is worth understanding (connect-timing drift
+  across the session?), but it is a race outcome, not a coverage loss.
+
 - **OBS-9 (2026-08-11 19:12-19:34): THE LOG MIRROR CAN STALL WHILE THE WATCH IS FINE.
   Do not read the iCloud file cadence as proof of app execution.** Cost: a wrong
   safety-class diagnosis, stated confidently, corrected only when Jeremy pushed the log
