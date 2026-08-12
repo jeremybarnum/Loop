@@ -1138,9 +1138,17 @@ final class PodLoanWatchController {
         // the SEED-IN store read all leave with it. The LEDGER is the book: born per epoch (a
         // new ledger IS the wipe — nothing to leak), seeded from the same grant split.
         //
-        // #72 unchanged: FINISHED history seeds; a dose still DELIVERING at takeover is omitted
-        // — the grant's podState blob carries it and the pump manager reports it as a live
-        // mutable dose, so IOB tracks its delivery in real time.
+        // #72: FINISHED history seeds as fixed records; a dose still DELIVERING at takeover is
+        // seeded LIVE instead — `ledgerSeed(finished:live:)` takes both. The live one carries no
+        // settled delivered amount (it logs `del=nil`), because the grant's podState blob owns it
+        // and the pump manager reports it as a mutable dose, so IOB tracks delivery in real time.
+        //
+        // It is NOT omitted. It was, before R35, when the finished set went to the DoseStore and
+        // the live dose was deliberately withheld from it — and the log line below went on saying
+        // "omitted" for a build after that stopped being true. Field log 2026-08-12 18:08:00 had
+        // the two adjacent lines contradicting each other: `[ledger] seeded — 123 doses
+        // (122 finished + 1 live)` immediately under "1 live dose(s) omitted". Both the count and
+        // the verb are fixed below; the decomposition (n=123) was right all along.
         let seedReconciliation = self.now()
         let (entries, liveDoses) = grant.seedDoseEntries(finishedBy: seedReconciliation)
         loopManager.ledgerSeed(finished: entries, live: liveDoses)
@@ -1150,10 +1158,10 @@ final class PodLoanWatchController {
         loopManager.notePumpDataReceived(at: seedReconciliation)
         let grossImpliedSum = entries.reduce(0.0) { $0 + $1.programmedUnits }
         let liveNote = liveDoses.isEmpty ? "" :
-            String(format: "; %d live dose(s) omitted — pod state owns them (#72), latest ends +%.0fm",
+            String(format: "; %d live — delivery tracked from pod state (#72), latest ends +%.0fm",
                    liveDoses.count, (liveDoses.map { $0.endDate }.max()!.timeIntervalSince(seedReconciliation)) / 60)
-        SportLog.event("loan", String(format: "insulin books rebuilt from grant — %d records (ledger seed, R35) · grossImpliedΣ=%.2fU%@",
-                                       entries.count, grossImpliedSum, liveNote))
+        SportLog.event("loan", String(format: "insulin books rebuilt from grant — %d records (ledger seed, R35: %d finished%@) · grossImpliedΣ=%.2fU",
+                                       entries.count + liveDoses.count, entries.count, liveNote, grossImpliedSum))
         loopManager.invalidateInsulinEffect()
         // SEED-IN IOB anchor (#1) — from the LEDGER, the only book. Primes the glance/HUD so
         // IOB shows at takeover instead of blank until the first cycle, and records the anchors
@@ -1163,7 +1171,8 @@ final class PodLoanWatchController {
                 SportLog.event("loan", "SEED-IN IOB unavailable (no schedule yet) — [iob-diff] anchors skipped this loan")
                 return
             }
-            SportLog.event("loan", String(format: "SEED-IN IOB=%.2fU @ takeover (%d seeded doses%@)", iob, entries.count, liveNote))
+            SportLog.event("loan", String(format: "SEED-IN IOB=%.2fU @ takeover (%d seeded doses: %d finished%@)",
+                                          iob, entries.count + liveDoses.count, entries.count, liveNote))
             self.loopManager.recordTakeoverIOBAnchors(
                 phone: grant.predictionSnapshot?.iobUnits,
                 phoneDate: grant.predictionSnapshot?.iobDate,
