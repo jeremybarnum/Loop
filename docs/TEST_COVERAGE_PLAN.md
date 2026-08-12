@@ -226,3 +226,43 @@ this plan.
 Deps struct at PodLoanPhoneController.swift:44-; state-builders MARK in GlanceController;
 WS1 debt list in KNOWN_RESIDUALS.md §16; incident-replay method in LoanBooksHarnessTests
 header. Line numbers drift; the names are the stable anchors.*
+
+## #103 is NOT closed (2026-08-12) — reduced, not eliminated
+
+The unlink fix was real: removing the synchronous `removeItem` from the tearDowns of
+`LoanBooksHarnessTests`, `LoanOverrideTests` and `WatchStoreEffectsTests` removed the
+`Failed to stat path …/Model.sqlite` noise from the logs entirely, and three consecutive
+gate runs went green. **That was not enough evidence, and the claim that #103 was fixed was
+premature.** Against a flake that fires roughly 1 run in 5, three green runs is a coin
+landing heads three times.
+
+It reproduced on the 8-suite gate with a DIFFERENT test and a different suite:
+
+```
+WatchStoreEffectsTests.testLedgerMatchesDoseStoreIOB
+  XCTAssertEqualWithAccuracy failed: ("1.8260779112853762") is not equal to ("0.0")
+```
+
+Same signature as always: **the store answers with zero rows.** What is now known about it,
+and worth writing down because it rules things out:
+
+- The read SUCCEEDED. `iob(_:at:)` initializes to `-1.0` and assigns only on `.success`, so
+  0.0 is not a failed query — `insulinOnBoard` genuinely computed zero.
+- The write reported NO error: the test's `XCTAssertNil(error)` on `addPumpEvents` passed in
+  the same run.
+- It is not the async-init race for WRITES. `PersistenceController.initializeStack` attaches
+  the coordinator inside `managedObjectContext.perform`, so every later context block is
+  serialized behind it. A write cannot outrun the store attaching.
+
+So the mechanism is still unknown, and the two obvious hypotheses are eliminated. Do not
+close this again on green runs alone; closing it needs the mechanism.
+
+Rate, measured today: 1 failure in 6 runs of the 8-suite gate (113 tests), versus roughly
+2 in 5 before the unlink fix.
+
+**Operational consequence, which is the part that matters.** This failure produces a real
+assertion, so the ship gate's retry logic does NOT absorb it: that retry only fires when a
+run produces zero assertion failures (the "runner never started" environment flake). A ~17%
+chance of refusing to archive a good build is a gate that will get switched off — the exact
+outcome the sabotage findings above warn about. Either the mechanism gets found, or the
+gate needs an explicit, logged retry-on-this-signature.
