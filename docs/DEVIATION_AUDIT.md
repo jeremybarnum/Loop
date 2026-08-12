@@ -185,3 +185,63 @@ It does not license any claim about the other 74 methods, about `PodLoanWatchCon
 about behavior under concurrency. And note the method's own blind spot, demonstrated by
 finding #1: a call-set diff cannot see a dropped arithmetic factor, only a dropped call. The
 remaining phase-3 work needs reading, not grepping.
+
+---
+
+# Phase 3 — `PodLoanWatchController` (2026-08-12, PARTIAL)
+
+2,476 lines, 74 functions, no stock ancestor, no direct tests. The question here is not "does
+this match stock" but "is this the simplest state machine that satisfies the rulings."
+
+## No cross-loan state leak (checked, negative result)
+
+The controller carries **28 assignable instance vars across 6 phases** (`idle`, `requested`,
+`takingOver`, `active`, `handingBack`, `revoked`). That is a large state space, and this
+project has already been bitten twice by state surviving a loan boundary — the Round-3 fix
+("chase/in-flight residue must not cross loan boundaries") and the `lastRevokedEpoch`
+split-brain guard. So: which vars are never cleared when a loan ends?
+
+Mechanically, 18 are not reset on any loan-ENDING path. Checking the risky ones individually,
+they are all reset at loan START instead:
+
+| var | reset at | why it would have mattered |
+|---|---|---|
+| `finalOfferSent` | `:490` (handleGrant) | a stale `true` would let a duplicate interim ack close the NEXT loan early — the Round-2 bug shape |
+| `phoneSupportsInterimHandback` | `:484` (from the grant) | a phone downgrade would go undetected |
+| `handbackResendCount` | `:1360` (hand-back start) | the resend ladder would start mid-way |
+| `pendingInterruptedTakeoverEpoch` | `:1712` (on drain) | a stale relaunch-recovery epoch |
+
+`chaseWorkItem`/`resendWorkItem` appear in the mechanical list only because they are
+`.cancel()`ed rather than reassigned.
+
+**So the invariant is: loan-scoped state is INITIALIZED AT GRANT, not cleared at close.** That
+is legitimate and it is applied consistently. It is worth writing down because it is invisible
+in the code — nothing names it — and the natural instinct (mine, an hour ago) is to look for
+cleanup at the close path and conclude it is missing. Its one structural weakness: any path
+that reads loan state WITHOUT a preceding grant sees defaults rather than stale values, which
+is why `drainRecoveredIfNeeded` exists for the relaunch case.
+
+## Where the accidental complexity actually is
+
+| signal | count |
+|---|---:|
+| `queue.asyncAfter` | 14 |
+| `DispatchWorkItem` | 9 |
+| phases | 6 |
+| assignable instance vars | 28 |
+
+Two functions dominate: `attemptTakeoverRead` (226 lines, `:656`) and `handleGrant` (207
+lines, `:397`). Next are `finalizeHandback` (91) and `sendHandbackOffer` (75).
+
+**23 concurrent timing primitives in one class is the complexity, not the line count.** Every
+watchdog, ladder rung, resend, chase, and backstop is an independent scheduled closure mutating
+shared state on one queue. That is the part no test currently reaches (the phase machine is
+untestable from `LoopTests`, per phase 1), and it is where the remaining WS1 debt lives
+(cancel-mid-drain, revoke-during-drain).
+
+## Not done
+
+The design half — "is this the simplest state machine that satisfies the rulings" — needs
+reading and judgment, not measurement, and it should be an ADVERSARIAL review rather than the
+author's own. `/code-review ultra` is the right instrument. The two 200-line functions and the
+timer set are where to point it.
