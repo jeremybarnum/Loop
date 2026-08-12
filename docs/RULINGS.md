@@ -565,6 +565,46 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   firewall from the original note still stands: display and cross-check only, never
   silently feeding the dosing glucose store (single-writer invariant).
 
+- **R35 — The watch DoseStore is CONFIG ONLY. No dose data, and no dosing fallback.**
+  (2026-08-11, Jeremy: "for dose store the answer is stop pretending. Use it for
+  settings or whatever and that's it. No fallback at all.")
+
+  The watch keeps a LoopKit DoseStore solely as a carrier for configuration the stock
+  math needs — basal schedule and its override-applied variant, ISF and its
+  override-applied variant, insulin model provider, longest effect duration. It is NOT
+  a book of record, NOT seeded with dose history, and NOT a dosing source of any kind.
+  `SessionInsulinLedger` is the only insulin book on the watch.
+
+  NO FALLBACK is the operative half. Today the cutover is guarded by three conditions
+  (flag on, ledger non-nil, override-ISF accessor non-nil) and any miss SILENTLY reverts
+  that cycle's insulin effects and IOB to the store — with no marker on the log line to
+  say so. A dosing path that can change its source of truth without announcing it is
+  worse than one that refuses. So: **if the ledger is unavailable, the watch does not
+  dose.** It fails the cycle loudly, the same shape as any other missing-data refusal.
+
+  Why the store was never worth trusting for this anyway (#111, verified 2026-08-11):
+  the watch's PersistenceController runs `isReadOnly = true` — the appex heuristic from
+  LoopCore misclassifies the watch extension, which is the OWNER process, not an iOS
+  sidecar — so every save silently no-ops and the store's dose rows have never reached
+  SQLite. They are pending inserts in one long-lived context, invisible to the
+  NSBatchDeleteRequest purges, which is why #110's wipe leak was unclearable. We were
+  falling back to a book that does not persist.
+
+  Consequences, all deletions: the wipe-then-seed apparatus, the wipe-audit and its
+  force-repurge, and the seed identity machinery all go. #110 and #111 stop being bugs
+  to fix and become code to remove.
+
+  THE SECOND BOOK MOVES, it does not disappear. The value of `[ledger-diff]` was never
+  the DoseStore — it was having two independently-derived numbers that must agree. That
+  role now belongs to the POD'S OWN ODOMETER via the hand-back audit, which is a
+  physical pulse count rather than a derived shadow, and which became trustworthy on
+  2026-08-11 when the phone started reading it first-hand (item 1). A better instrument
+  replaced a worse one; the principle is unchanged.
+
+  Load-bearing detail not to lose in the deletion: `doseStore.lastAddedPumpData` is
+  currently the pump-data recency clock that gates dosing (`pumpDataTooOld`) and the
+  per-cycle reclaim cadence. It must be owned directly rather than read off the store.
+
 ## Not yet ruled (do not decide without Jeremy)
 
 - Risk-register #8: any on-body session of any milestone build — per-build,
