@@ -115,6 +115,7 @@ private struct SimGlucoseSample: GlucoseSampleValue {
 private final class LoanBooksDriver {
 
     let store: DoseStore
+    let schedule: BasalRateSchedule
     private(set) var ledger: SessionInsulinLedger
 
     private unowned let host: XCTestCase
@@ -151,8 +152,9 @@ private final class LoanBooksDriver {
         // The WatchLoopManager.settings didSet path: schedule applied via the setter.
         doseStore.basalProfile = schedule
         self.store = doseStore
+        self.schedule = schedule
+        // #112: the ledger no longer owns a schedule — reads take it per call, as production does.
         self.ledger = SessionInsulinLedger(
-            basalSchedule: schedule,
             insulinModelProvider: PresetInsulinModelProvider(defaultRapidActingModel: nil),
             longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration)
     }
@@ -239,7 +241,7 @@ private final class LoanBooksDriver {
     /// lands if the script wants the pre-enact view (the store is one Core Data table;
     /// once a row is in, every evaluation sees it).
     func tick(at instant: Date) -> (store: Double, ledger: Double) {
-        return (storeIOB(at: instant), ledger.insulinOnBoard(at: instant))
+        return (storeIOB(at: instant), ledger.insulinOnBoard(at: instant, basalSchedule: schedule))
     }
 
     /// Hand-back: cancel/finalize the running temp at `instant` (same raw, truncated
@@ -561,7 +563,7 @@ final class LoanBooksHarnessTests: XCTestCase {
         epoch1.enactTemp(rate: 1.05, at: s.addingTimeInterval(.minutes(20)), duration: .minutes(30)) // runs to natural expiry at h
 
         let nextGrantRecords = epoch1.handbackFold(at: h)
-        let ledger1 = epoch1.ledger.insulinOnBoard(at: h)
+        let ledger1 = epoch1.ledger.insulinOnBoard(at: h, basalSchedule: epoch1.schedule)
 
         // Epoch 2: fresh store + fresh ledger, seeded from the folded records — the real
         // split runs again, hex syncIds decode back to the same pod-native raws.
@@ -978,9 +980,11 @@ final class LoanWireQuantizationTests: XCTestCase {
 /// IOB UNDER-counted — anti-conservative, since the pod was still delivering above it.
 final class LedgerRefuteRestoreTests: XCTestCase {
 
+    private func scheduleOf(_ rate: Double) -> BasalRateSchedule {
+        BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: rate)])!
+    }
     private func makeLedger(basalRate: Double = 0.70) -> SessionInsulinLedger {
         SessionInsulinLedger(
-            basalSchedule: BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: basalRate)])!,
             insulinModelProvider: PresetInsulinModelProvider(defaultRapidActingModel: nil),
             longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration)
     }
@@ -994,7 +998,7 @@ final class LedgerRefuteRestoreTests: XCTestCase {
         // A 3.00 U/hr temp is running (well above the 0.70 schedule).
         ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: runningStart, endDate: runningEnd,
                                      value: 3.00, unit: .unitsPerHour, syncIdentifier: "running"))
-        let iobWithRunningTempIntact = ledger.insulinOnBoard(at: now.addingTimeInterval(.minutes(15)))
+        let iobWithRunningTempIntact = ledger.insulinOnBoard(at: now.addingTimeInterval(.minutes(15)), basalSchedule: scheduleOf(0.70))
 
         // An uncertain enact books an assumed 4.00 U/hr dose, truncating the running temp.
         let assumedStart = now
@@ -1014,7 +1018,7 @@ final class LedgerRefuteRestoreTests: XCTestCase {
                        "the refuted command never ran, so the predecessor's programmed tail must return")
 
         // And the IOB must match the never-interrupted world, not a schedule-filled gap.
-        XCTAssertEqual(ledger.insulinOnBoard(at: now.addingTimeInterval(.minutes(15))),
+        XCTAssertEqual(ledger.insulinOnBoard(at: now.addingTimeInterval(.minutes(15)), basalSchedule: scheduleOf(0.70)),
                        iobWithRunningTempIntact, accuracy: 0.001,
                        "post-refute IOB must equal the world where the uncertain command never happened")
     }

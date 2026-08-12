@@ -791,9 +791,11 @@ final class WatchStoreEffectsTests: XCTestCase {
 
     // MARK: - #73/#74 SessionInsulinLedger — the single-owner timeline
 
+    private func flatSchedule(_ rate: Double = 1.0) -> BasalRateSchedule {
+        BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: rate)])!
+    }
     private func makeLedger(basalRate: Double = 1.0) -> SessionInsulinLedger {
         SessionInsulinLedger(
-            basalSchedule: BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: basalRate)])!,
             insulinModelProvider: PresetInsulinModelProvider(defaultRapidActingModel: nil),
             longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration)
     }
@@ -830,7 +832,7 @@ final class WatchStoreEffectsTests: XCTestCase {
 
         var ledger = makeLedger()
         ledger.seed(finished: doses, live: [])
-        let ledgerIOB = ledger.insulinOnBoard(at: now)
+        let ledgerIOB = ledger.insulinOnBoard(at: now, basalSchedule: flatSchedule())
 
         XCTAssertEqual(ledgerIOB, storeIOB, accuracy: 0.03,
                        "same doses, same math — the ledger replaces storage, not InsulinMath")
@@ -857,7 +859,7 @@ final class WatchStoreEffectsTests: XCTestCase {
         // 0.167 delivered-so-far) ≈ 0.5, PLUS the running temp's ~10-min model-delay lookahead
         // (stock counts not-yet-acting insulin at 100% remaining: ≈ +0.167) minus early decay —
         // the same delivered-plus-lookahead semantics as the phone's own mutable row.
-        let iobNow = ledger.insulinOnBoard(at: now)
+        let iobNow = ledger.insulinOnBoard(at: now, basalSchedule: flatSchedule())
         XCTAssertEqual(iobNow, 0.67, accuracy: 0.15, "delivered-so-far + delay lookahead, decayed")
     }
 
@@ -871,8 +873,8 @@ final class WatchStoreEffectsTests: XCTestCase {
                       endDate: start.addingTimeInterval(.minutes(30)),
                       value: 2.0, unit: .unitsPerHour)   // net +1.0 U/hr
         ])
-        let iobAt5 = ledger.insulinOnBoard(at: start.addingTimeInterval(.minutes(5)))
-        let iobAt10 = ledger.insulinOnBoard(at: start.addingTimeInterval(.minutes(10)))
+        let iobAt5 = ledger.insulinOnBoard(at: start.addingTimeInterval(.minutes(5)), basalSchedule: flatSchedule())
+        let iobAt10 = ledger.insulinOnBoard(at: start.addingTimeInterval(.minutes(10)), basalSchedule: flatSchedule())
         XCTAssertGreaterThan(iobAt10, iobAt5, "IOB grows while the live temp delivers")
         XCTAssertEqual(iobAt10 - iobAt5, 0.083, accuracy: 0.04,
                        "~0.08 U per 5 min of a +1.0 U/hr net temp — reality-tracking by construction")

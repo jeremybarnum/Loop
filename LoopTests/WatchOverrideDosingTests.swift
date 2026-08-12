@@ -189,6 +189,32 @@ final class WatchOverrideDosingTests: XCTestCase {
                           "a reduced-needs override must lower the temp rate, not raise it")
     }
 
+    // MARK: - #112's ledger half (CLOSED by R35 build): per-read override-applied netting
+
+    /// The ledger half of the #112 family, through the REAL ledger. Since the R35 build the
+    /// ledger takes its basal schedule per READ (symmetric with ISF) and the caller passes the
+    /// override-applied accessor. This pins the netting arithmetic that motivated the change:
+    /// the same 1.00 U/hr temp carries MORE net insulin against a 50%-override baseline (0.35)
+    /// than against the raw one (0.70) — the under-count the frozen raw schedule caused.
+    func testLedgerNetsTempsAgainstTheScheduleItIsHanded() {
+        var ledger = SessionInsulinLedger(
+            insulinModelProvider: PresetInsulinModelProvider(defaultRapidActingModel: nil),
+            longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration)
+        let now = Date()
+        ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: now.addingTimeInterval(-3600),
+                                     endDate: now, value: 1.00, unit: .unitsPerHour,
+                                     syncIdentifier: "ledger-baseline-temp"))
+
+        let scaled = basalSchedule.applyingBasalRateMultiplier(
+            from: fiftyPercentOverride(at: now.addingTimeInterval(-3600)), relativeTo: now)
+
+        let iobAgainstRaw = ledger.insulinOnBoard(at: now, basalSchedule: basalSchedule)
+        let iobAgainstScaled = ledger.insulinOnBoard(at: now, basalSchedule: scaled)
+
+        XCTAssertGreaterThan(iobAgainstScaled, iobAgainstRaw + 0.1,
+                             "netting against the override-halved baseline must book materially MORE IOB for the same temp — the raw baseline was under-counting it")
+    }
+
     // MARK: - #112's open half: the basal baseline the ledger nets against
 
     /// DOCUMENTS THE MIXED CONVENTION still open as #112. The ledger is handed the RAW basal

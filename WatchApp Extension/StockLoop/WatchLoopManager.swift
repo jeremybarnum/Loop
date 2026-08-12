@@ -637,8 +637,9 @@ final class WatchLoopManager {
             // can. Same on-demand shape as glanceCarbsOnBoard — which is exactly why COB kept
             // decaying through that same outage while IOB sat still. Pre-cutover, or before the
             // ledger is seeded, the cached value remains the only source.
-            let liveIOB: Double? = (ledgerCutoverActive ? sessionLedger?.insulinOnBoard(at: now()) : nil)
-                ?? insulinOnBoard?.value
+            let liveIOB: Double? = basalRateScheduleApplyingOverrideHistory.flatMap { sched in
+                sessionLedger?.insulinOnBoard(at: now(), basalSchedule: sched)
+            } ?? insulinOnBoard?.value
             return GlanceData(
                 glucose: latest?.quantity,
                 glucoseDate: latest?.startDate,
@@ -944,8 +945,29 @@ final class WatchLoopManager {
         return carbStore.insulinSensitivityScheduleApplyingOverrideHistory
     }
 
-    /// #74 cutover: the store's IOB kept as the SHADOW series while the ledger drives.
-    private var storeIOBShadow: Double?
+    /// R35: refuse loudly, once per distinct reason — not once per glance tick, and never by
+    /// silently switching the dosing source (that silent switch is precisely what R35 bans).
+    private func logLedgerRefusal(_ what: String) {
+        let reason = "\(what): ledger=\(sessionLedger != nil ? "ok" : "NIL") isf=\(insulinSensitivityScheduleApplyingOverrideHistory != nil ? "ok" : "NIL") basal=\(basalRateScheduleApplyingOverrideHistory != nil ? "ok" : "NIL")"
+        guard reason != lastLedgerRefusalLogged else { return }
+        lastLedgerRefusalLogged = reason
+        SportLog.event("ledger", "REFUSED \(reason) — R35: no store fallback; the cycle fails loudly")
+    }
+
+    /// R35: the pump-data recency clock, owned directly. It was `doseStore.lastAddedPumpData`,
+    /// which advanced as a side effect of writing dose rows into a store that never persists
+    /// them (#111). Same lock idiom as the glucose source stamps.
+    private let pumpDataLock = NSLock()
+    private var _lastPumpDataDate: Date?
+    var lastPumpDataDate: Date? {
+        pumpDataLock.lock(); defer { pumpDataLock.unlock() }
+        return _lastPumpDataDate
+    }
+    func notePumpDataReceived(at date: Date) {
+        pumpDataLock.lock(); defer { pumpDataLock.unlock() }
+        if (_lastPumpDataDate ?? .distantPast) < date { _lastPumpDataDate = date }
+    }
+
     /// #50: the temp basal we last successfully enacted, cached so the watch knows what the
     /// pod is running without querying it. E4 orphans the pod after each dose, so
     /// `pumpManager.status.basalDeliveryState` reverts to nil within seconds even though the
@@ -1036,7 +1058,7 @@ final class WatchLoopManager {
     // MARK: - #73/#74 SessionInsulinLedger (SHADOW MODE)
 
     /// The single-owner session dose timeline (see SessionInsulinLedger.swift for the full
-    /// rationale). dataAccessQueue-confined; in shadow mode it only feeds [ledger-diff] —
+    /// rationale). dataAccessQueue-confined; since R35 it is the ONLY insulin book —
     /// dosing and display still read the DoseStore. Reverting = delete these hooks.
     private var sessionLedger: SessionInsulinLedger?
 
@@ -1045,12 +1067,11 @@ final class WatchLoopManager {
     /// diff isolates STORAGE behavior, not math.
     func ledgerSeed(finished: [DoseEntry], live: [DoseEntry]) {
         dataAccessQueue.async {
-            guard let schedule = self.doseStore.basalProfile else {
-                SportLog.event("ledger", "seed SKIPPED — no basal profile yet")
-                return
-            }
+            // #112: the ledger no longer freezes a schedule at seed — both schedules are
+            // resolved override-applied at READ time, so the old "no basal profile yet →
+            // seed SKIPPED" failure (which silently left the STORE driving dosing) is gone.
+            // A missing schedule now surfaces at read as an R35 refusal instead.
             var ledger = SessionInsulinLedger(
-                basalSchedule: schedule,
                 insulinModelProvider: self.doseStore.insulinModelProvider,
                 longestEffectDuration: self.doseStore.longestEffectDuration)
             ledger.seed(finished: finished, live: live)
@@ -1059,16 +1080,14 @@ final class WatchLoopManager {
         }
     }
 
-    /// #74 CUTOVER FLAG: when true (g7.ledgerCutover, default false) AND a session ledger
-    /// exists (loan active), the ledger drives IOB display and insulin effects; the store
-    /// keeps running untouched and the [ledger-diff] line flips to shadowing the STORE.
-    /// Revert = flip the flag back — no data migration in either direction.
-    private var ledgerCutoverActive: Bool {
-        // DEFAULT ON since build 189 (Jeremy 2026-07-29: "yes, flip the default" — the
-        // side-by-sides proved the ledger against the phone at every seam). The key now
-        // exists only as the one-line REVERT switch back to the store path.
-        defaults.object(forKey: "g7.ledgerCutover") as? Bool ?? true
-    }
+    // g7.ledgerCutover DELETED (R35, 2026-08-11). The flag was the one-line revert to the
+    // store dosing path — and #111 established that path was never trustworthy on the watch
+    // (isReadOnly store: saves silently no-op, purges can't clear). Jeremy: "no fallback at
+    // all." A missing ledger input now refuses the cycle loudly; the rollback is the previous
+    // TestFlight build, not a hidden second book.
+
+    /// R35: one refusal log per distinct reason, not one per 2s glance tick.
+    private var lastLedgerRefusalLogged: String?
 
     /// #84: the ledger's counterpart to the phone's `clearCachedInsulinEffects()`
     /// (LoopDataManager.swift:472). Stock reaches it through a DoseStore notification observer
@@ -1165,7 +1184,7 @@ final class WatchLoopManager {
             }
         }
 
-        let age = now().timeIntervalSince(doseStore.lastAddedPumpData)
+        let age = now().timeIntervalSince(lastPumpDataDate ?? .distantPast)   // R35: owned stamp
         // WARM CADENCE (157, E5 parity). E5's overnight proof — 84/84 reclaims, 2-4 reads
         // each — touched the pod EVERY cycle (an enact every reading). This threshold was
         // inputDataRecencyInterval/2 (7.5 min), so any quiet cycle (NO CHANGE verdict, data
@@ -1452,7 +1471,7 @@ final class WatchLoopManager {
         let startV = glucoseStore.latestGlucose?.quantity.doubleValue(for: mgdl)
         let glucoseDate = glucoseStore.latestGlucose?.startDate
         let glucoseAge = glucoseDate.map { now().timeIntervalSince($0) }
-        let pumpAge = now().timeIntervalSince(doseStore.lastAddedPumpData)
+        let pumpAge = now().timeIntervalSince(lastPumpDataDate ?? .distantPast)   // R35: owned stamp
 
         SportLog.event("predict-snapshot", String(format:
             "start=%@@%@s eventual=%@ | impact[loo]: mom %@ ins %@ carb %@ RC %@ | IOB=%@ | momPts=%d rcDisc=%d | pumpAge=%.0fs",
@@ -1553,13 +1572,12 @@ final class WatchLoopManager {
         let leg2 = cycle1.map { String(format: "%+.2f", $0 - anchors.seed) } ?? "—"
         let dt = now().timeIntervalSince(anchors.at)
         let phoneAge = anchors.phoneDate.map { String(format: "%.0f", now().timeIntervalSince($0)) } ?? "—"
-        let lastReconAge = doseStore.lastPumpEventsReconciliation.map { String(format: "%.0fs", now().timeIntervalSince($0)) } ?? "nil"
-        let lastPumpAge = String(format: "%.0fs", now().timeIntervalSince(doseStore.lastAddedPumpData))
+        let lastPumpAge = lastPumpDataDate.map { String(format: "%.0fs", now().timeIntervalSince($0)) } ?? "nil"   // R35: owned stamp; lastReconAge dropped with the store book
         SportLog.event("iob-diff", String(format:
-            "phoneIOB=%@ seedIOB=%.2f cycle1=%@ · Δ(seed−phone)=%@[wire] · Δ(cycle1−seed)=%@[reconcile] · dt(seed→cycle1)=%.0fs · phoneIOBAge=%@s · lastReconAge=%@ lastPumpAge=%@",
+            "phoneIOB=%@ seedIOB=%.2f cycle1=%@ · Δ(seed−phone)=%@[wire] · Δ(cycle1−seed)=%@[reconcile] · dt(seed→cycle1)=%.0fs · phoneIOBAge=%@s · lastPumpAge=%@",
             anchors.phone.map { String(format: "%.2f", $0) } ?? "—", anchors.seed,
             cycle1.map { String(format: "%.2f", $0) } ?? "—",
-            leg1, leg2, dt, phoneAge, lastReconAge, lastPumpAge))
+            leg1, leg2, dt, phoneAge, lastPumpAge))
     }
 
     /// INSTRUMENTATION ONLY (#69): per-dose IOB decomposition at a labeled instant (SEED-IN vs
@@ -1569,12 +1587,15 @@ final class WatchLoopManager {
     /// net between labels is the scheduled-basal-netting signature (H2); a re-timed/added row is H1.
     func dumpIOBDecomp(_ label: String, at t: Date) {
         dataAccessQueue.async {
-            let start = t.addingTimeInterval(-Swift.min(self.doseStore.longestEffectDuration, .hours(8)))
-            self.doseStore.getNormalizedDoseEntries(start: start, end: t) { result in
-                guard case .success(let doses) = result else {
-                    SportLog.event("iob-decomp", "@\(label) — dose fetch failed")
-                    return
-                }
+            // R35: the decomp reads the LEDGER — the only book that holds doses now. Annotated
+            // with the override-applied schedule, so the rows show the same netting dosing uses.
+            guard let ledger = self.sessionLedger,
+                  let basal = self.basalRateScheduleApplyingOverrideHistory else {
+                SportLog.event("iob-decomp", "@\(label) — no ledger/schedule (R35: store holds no doses)")
+                return
+            }
+            do {
+                let doses = ledger.doses.annotated(with: basal)
                 let uhr = HKUnit.internationalUnit().unitDivided(by: .hour())
                 let tf = DateFormatter()
                 tf.dateFormat = "HH:mm:ss"
@@ -1681,12 +1702,15 @@ final class WatchLoopManager {
         }
 
         if insulinEffect == nil || insulinEffect?.first?.startDate ?? .distantFuture > insulinEffectStartDate {
-            // #74 CUTOVER: behind g7.ledgerCutover, the session ledger drives the insulin
-            // effects — same public InsulinMath, same basalDosingEnd trim-at-now contract
-            // (canon: no forward credit for temps in the prediction). Fail-safe: any
-            // missing ledger precondition falls back to the store path, never to nil.
-            if ledgerCutoverActive, let ledger = sessionLedger,
-               let isf = doseStore.insulinSensitivityScheduleApplyingOverrideHistory {
+            // R35 + #112: the session ledger IS the insulin book — same public InsulinMath,
+            // same basalDosingEnd trim-at-now contract (canon: no forward credit for temps).
+            // BOTH schedules are override-applied and resolved per read (stock's DoseStore
+            // behavior); the store fallback that used to sit in the else branch is GONE —
+            // #111 proved it was never a trustworthy book on the watch, and R35 rules that a
+            // missing input refuses loudly rather than silently switching source of truth.
+            if let ledger = sessionLedger,
+               let isf = insulinSensitivityScheduleApplyingOverrideHistory,
+               let basal = basalRateScheduleApplyingOverrideHistory {
                 // filterDateRange mirrors the store path exactly; keep it.
                 //
                 // #84 CORRECTION (2026-07-31): the comment that stood here claimed this call
@@ -1701,41 +1725,23 @@ final class WatchLoopManager {
                 // clearCachedInsulinEffects() on every ledger mutation (see ledgerRecordEnact) —
                 // the ledger's stand-in for the DoseStore notification stock relies on. Do not
                 // re-derive freshness from this gate.
-                self.insulinEffect = ledger.glucoseEffects(insulinSensitivity: isf, basalDosingEnd: now(), from: insulinEffectStartDate, to: nil).filterDateRange(insulinEffectStartDate, nil)
+                self.insulinEffect = ledger.glucoseEffects(insulinSensitivity: isf, basalSchedule: basal, basalDosingEnd: now(), from: insulinEffectStartDate, to: nil).filterDateRange(insulinEffectStartDate, nil)
             } else {
-                updateGroup.enter()
-                doseStore.getGlucoseEffects(start: insulinEffectStartDate, end: nil, basalDosingEnd: now()) { result in
-                    switch result {
-                    case .failure(let error):
-                        self.log.error("Could not fetch insulin effects: %{public}@", String(describing: error))
-                        self.insulinEffect = nil
-                    case .success(let effects):
-                        self.insulinEffect = effects
-                    }
-                    updateGroup.leave()
-                }
+                self.insulinEffect = nil
+                logLedgerRefusal("insulin effects")
             }
         }
 
         if insulinEffectIncludingPendingInsulin == nil {
-            if ledgerCutoverActive, let ledger = sessionLedger,
-               let isf = doseStore.insulinSensitivityScheduleApplyingOverrideHistory {
-                self.insulinEffectIncludingPendingInsulin = ledger.glucoseEffects(insulinSensitivity: isf, basalDosingEnd: nil, from: insulinEffectStartDate, to: nil).filterDateRange(insulinEffectStartDate, nil)
+            if let ledger = sessionLedger,
+               let isf = insulinSensitivityScheduleApplyingOverrideHistory,
+               let basal = basalRateScheduleApplyingOverrideHistory {
+                self.insulinEffectIncludingPendingInsulin = ledger.glucoseEffects(insulinSensitivity: isf, basalSchedule: basal, basalDosingEnd: nil, from: insulinEffectStartDate, to: nil).filterDateRange(insulinEffectStartDate, nil)
             } else {
-                updateGroup.enter()
-                doseStore.getGlucoseEffects(start: insulinEffectStartDate, end: nil, basalDosingEnd: nil) { result in
-                    switch result {
-                    case .failure(let error):
-                        self.log.error("Could not fetch insulin effects including pending: %{public}@", String(describing: error))
-                        self.insulinEffectIncludingPendingInsulin = nil
-                    case .success(let effects):
-                        self.insulinEffectIncludingPendingInsulin = effects
-                    }
-                    updateGroup.leave()
-                }
+                self.insulinEffectIncludingPendingInsulin = nil
+                logLedgerRefusal("pending insulin effects")
             }
         }
-
         _ = updateGroup.wait(timeout: .distantFuture)
 
         if nextCounteractionEffectDate < lastGlucoseDate, let insulinEffect = insulinEffect {
@@ -1775,44 +1781,20 @@ final class WatchLoopManager {
             }
         }
 
-        // The store IOB is fetched EITHER WAY: as the live number (shadow mode) or as the
-        // shadow series for [ledger-diff] (cutover mode — the comparison must not collapse
-        // to ledger-vs-ledger).
-        let cutover = ledgerCutoverActive && sessionLedger != nil
-        updateGroup.enter()
-        doseStore.insulinOnBoard(at: now()) { result in
-            switch result {
-            case .failure(let error):
-                self.log.error("Failure getting insulin on board: %{public}@", String(describing: error))
-                if cutover { self.storeIOBShadow = nil } else { self.insulinOnBoard = nil }
-            case .success(let insulinValue):
-                if cutover { self.storeIOBShadow = insulinValue.value } else { self.insulinOnBoard = insulinValue }
-            }
-            updateGroup.leave()
-        }
-        if cutover, let ledger = sessionLedger {
-            // #74 CUTOVER: displayed + dosing IOB from the single-owner timeline.
-            self.insulinOnBoard = InsulinValue(startDate: now(), value: ledger.insulinOnBoard(at: now()))
+        // R35: dosing + display IOB from the ledger, or nothing. The store fetch, the
+        // storeIOBShadow, and the [ledger-diff] line are DELETED (Jeremy: "drop ledger-diff,
+        // the odometer audit is better") — the independent check on the books is now the
+        // pod's own pulse counter, read first-hand by the phone at hand-back
+        // (reconcile[AUTHORITATIVE]), a physical measurement instead of a derived shadow
+        // that #111 showed was corrupted by a store that never persists.
+        if let ledger = sessionLedger, let basal = basalRateScheduleApplyingOverrideHistory {
+            self.insulinOnBoard = InsulinValue(startDate: now(), value: ledger.insulinOnBoard(at: now(), basalSchedule: basal))
+        } else {
+            self.insulinOnBoard = nil
+            logLedgerRefusal("IOB")
         }
 
         _ = updateGroup.wait(timeout: .distantFuture)
-
-        // #73/#74 SHADOW: the ledger's IOB next to the store's, every cycle. Δ attribution is
-        // TWO-SIDED (adversarial review): a step-drop in STORE is the cliff class (store losing
-        // doses); a persistent ledger<store after an UNCERTAIN enact is the LEDGER's known gap
-        // (uncertain-command cluster unledgered); a one-cycle ledger>store spike at a MANUAL
-        // bolus is expected FIFO timing (ledger records at accept, store at the pod report).
-        // Cutover only after field diffs prove out with these signatures accounted.
-        if let ledger = sessionLedger {
-            let ledgerIOB = ledger.insulinOnBoard(at: now())
-            let storeIOB = ledgerCutoverActive ? storeIOBShadow : insulinOnBoard?.value
-            SportLog.event("ledger-diff", String(format: "store=%@ ledger=%.2f Δ=%@ · %@%@",
-                                                 storeIOB.map { String(format: "%.2f", $0) } ?? "—",
-                                                 ledgerIOB,
-                                                 storeIOB.map { String(format: "%+.2f", $0 - ledgerIOB) } ?? "—",
-                                                 ledger.summary,
-                                                 ledgerCutoverActive ? " · CUTOVER (ledger drives; store is shadow)" : ""))
-        }
 
         // INSTRUMENTATION ONLY (#69): the FIRST post-takeover cycle — now that this cycle's IOB is
         // computed, reconcile phone-IOB (grant snapshot) vs SEED-IN anchor vs cycle-1 computed, and
@@ -1942,7 +1924,7 @@ final class WatchLoopManager {
             throw WatchLoopError.missingDataError("glucose")
         }
 
-        let pumpStatusDate = doseStore.lastAddedPumpData
+        let pumpStatusDate = lastPumpDataDate ?? .distantPast   // R35: owned stamp, not the store's
         let lastGlucoseDate = glucose.startDate
 
         // Recency gating, same constants as the phone (LoopCoreConstants).
@@ -2609,6 +2591,20 @@ final class WatchLoopManager {
     /// fully-reconciled value (e.g. after the first pod-status read trims the seeded open temp).
     func primeInsulinOnBoard(_ value: InsulinValue?) {
         dataAccessQueue.async { self.insulinOnBoard = value }
+    }
+
+    /// R35: the takeover SEED-IN anchor comes from the LEDGER (the store no longer holds
+    /// doses). Completion reports the primed value for the [iob-diff] anchors + SEED-IN log.
+    func primeIOBFromLedger(at date: Date, _ completion: @escaping (Double?) -> Void) {
+        dataAccessQueue.async {
+            guard let ledger = self.sessionLedger,
+                  let basal = self.basalRateScheduleApplyingOverrideHistory else {
+                completion(nil); return
+            }
+            let iob = ledger.insulinOnBoard(at: date, basalSchedule: basal)
+            self.insulinOnBoard = InsulinValue(startDate: date, value: iob)
+            completion(iob)
+        }
     }
 
     func addLoanCarbEntry(_ entry: NewCarbEntry) {

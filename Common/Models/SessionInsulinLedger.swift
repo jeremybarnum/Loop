@@ -28,9 +28,9 @@
 //  PARITY GOAL (honest scope, per the 2026-07-29 adversarial review): the ledger folds the
 //  MAIN inputs the hand-back journal carries (enacts, predecessors truncated at supersede),
 //  aiming for hand-back parity by derivation. KNOWN GAPS, all deliberate for shadow mode and
-//  all cutover-blockers until closed: (1) the uncertain-command cluster — an enact that errors
-//  uncertainly but is later chase-CONFIRMED (or stands as .assumed under R22) is journaled but
-//  NOT ledgered, so a persistent ledger<store Δ after an uncertain enact is the LEDGER's gap;
+//  all cutover-blockers until closed: (1) CLOSED (5cf065d4 + 07e72789: uncertain enacts book
+//  direction-aware .assumed doses with refute-restore — this header previously said otherwise
+//  and misled the 2026-08-11 audit, hence the correction);
 //  (2) dose timestamps are stamped at pod-ACCEPT with programmed values (the journal mints at
 //  will-enact; the pod's actual start precedes accept by the BLE round-trip — supersede
 //  boundaries shift late by seconds); (3) pod-actual reconciliation (pulse quantization,
@@ -47,9 +47,15 @@ import LoopKit
 /// NOT thread-safe by design: the owner (WatchLoopManager) confines every access to its
 /// serial `dataAccessQueue`. There is deliberately no locking to get wrong.
 public struct SessionInsulinLedger {
-    /// The frozen grant basal schedule — temps net against this for the whole loan
-    /// (delivery-time netting, same rule as the seeded store path).
-    public let basalSchedule: BasalRateSchedule
+    // #112 (2026-08-11): the ledger no longer OWNS a basal schedule. It used to freeze the
+    // raw grant schedule at seed and net every temp against it for the whole loan — while the
+    // ISF handed to glucoseEffects() was override-APPLIED at read time. Mixed conventions in
+    // one computation, and the same defect family as the manual-bolus ISF bug Jeremy
+    // field-confirmed at a 50% override. Stock's DoseStore resolves the override-applied
+    // schedule per READ (DoseStore.swift :1103/:1200); the ledger now does the same by taking
+    // the schedule as a read parameter, symmetric with the ISF. Frozen-at-seed also meant an
+    // override starting or ending MID-LOAN was invisible to netting; per-read resolution picks
+    // it up the cycle it happens, exactly like stock.
     public let insulinModelProvider: InsulinModelProvider
     public let longestEffectDuration: TimeInterval
 
@@ -67,10 +73,8 @@ public struct SessionInsulinLedger {
     }
     private var truncations: [Truncation] = []
 
-    public init(basalSchedule: BasalRateSchedule,
-                insulinModelProvider: InsulinModelProvider,
+    public init(insulinModelProvider: InsulinModelProvider,
                 longestEffectDuration: TimeInterval) {
-        self.basalSchedule = basalSchedule
         self.insulinModelProvider = insulinModelProvider
         self.longestEffectDuration = longestEffectDuration
     }
@@ -208,7 +212,7 @@ public struct SessionInsulinLedger {
     /// `DoseStore.insulinOnBoard(at:)`: of the two 5-min-grid values adjacent to `date`,
     /// take the larger (stock's bolus-scheduled-between-samples convention). Byte-for-byte
     /// parity with the store on identical doses is pinned by testLedgerMatchesDoseStoreIOB.
-    public func insulinOnBoard(at date: Date) -> Double {
+    public func insulinOnBoard(at date: Date, basalSchedule: BasalRateSchedule) -> Double {
         guard !doses.isEmpty else { return 0 }
         let timeline = doses
             .annotated(with: basalSchedule)
@@ -228,6 +232,7 @@ public struct SessionInsulinLedger {
     /// cancellability); pass nil for the includingPendingInsulin series (cutover API parity —
     /// adversarial review).
     public func glucoseEffects(insulinSensitivity: InsulinSensitivitySchedule,
+                               basalSchedule: BasalRateSchedule,
                                basalDosingEnd: Date? = nil,
                                from start: Date? = nil,
                                to end: Date? = nil) -> [GlucoseEffect] {
