@@ -1466,6 +1466,29 @@ final class PodLoanPhoneController {
             // a stranded-state relaunch, or a fresh request while still loaned.
             committedIDs.formUnion(events.map(\.id))
             persistCommittedIDs()
+            // LIVELOCK FIX (2026-08-12). This used to record the IDs and stop, leaving
+            // `committedCursor` where it was — usually 0, because a force-reclaim happens when
+            // the watch went quiet and no offer ever completed.
+            //
+            // The consequence is not lost insulin (the ID filter holds; nothing double-books) —
+            // it is that the loan NEVER CLOSES ON THE WRIST. A returning watch re-offers, this
+            // phone commits nothing (every event is already in committedIDs), and acks the
+            // unchanged cursor 0. `PodLoanWatchController.handleAck` only closes when
+            // `journal.unackedEvents()` is empty, which cursor 0 can never make true, so the
+            // 15 s resend loop runs forever: battery, log noise, a loan the wrist cannot end,
+            // and possibly a spurious #67 stuck-hand-back alert.
+            //
+            // Measured before the fix (LoanTwoSidedContractTests): ack cursor 0, stale=false,
+            // watch journal still holding seq [1,2].
+            //
+            // Advancing to the max committed seq is safe against the withheld-seq gap, and the
+            // safety lives on the WATCH, not here: `applyAck(committedCursor:withholding:)` caps
+            // whatever we send to below its own lowest withheld seq. So an over-eager cursor from
+            // this side cannot bury an unclassified command. Same arithmetic as the normal commit
+            // path (:1220-1222), which is the point — this path had simply never learned it.
+            if let newCursor = events.map(\.seq).max() {
+                committedCursor = max(committedCursor, newCursor)
+            }
             deps.issueNotice("Sport Mode Reset", "A previous watch loan was ended without a clean hand-back; its records were saved. Check Event History and the pod.")
         }
 

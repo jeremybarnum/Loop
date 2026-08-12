@@ -651,19 +651,18 @@ final class LoanTwoSidedContractTests: XCTestCase {
         XCTAssertEqual(carbs().count, 1,
                        "THE #66 INVARIANT: the re-offer must not re-book the carb (got \(carbs().count))")
         XCTAssertEqual(doses().count, 1, "nor the bolus")
-        // LIVENESS GAP FOUND HERE (2026-08-12), recorded rather than asserted so that fixing it
-        // does not turn this test red. Measured: the phone acks `committedCursor = 0`, stale=false,
-        // and the watch's journal still holds seq [1, 2].
+        // THE LIVELOCK (found here 2026-08-12, fixed the same day). Before the fix the phone acked
+        // `committedCursor = 0` — forceReclaimToOwner recorded the committed IDs but never advanced
+        // the cursor — so the watch's journal kept seq [1, 2] forever, `handleAck` never saw an
+        // empty unacked set, and its 15 s resend loop ran indefinitely. No insulin was at risk (the
+        // assertions above show the dedup holding); the loan simply never closed on the wrist.
         //
-        // The cause is visible in the code: forceReclaimToOwner writes the staged records and adds
-        // their IDs to committedIDs, but never advances `committedCursor`. The re-offer's event
-        // filter then yields nothing (all committed), so no commit runs, and the ack carries the
-        // unchanged cursor 0. The watch's handleAck only closes the loan when unackedEvents() is
-        // empty — which cursor 0 can never make true — so its 15 s resend loop runs forever.
-        //
-        // NO INSULIN IS AT RISK: every assertion above shows the dedup holding. This is liveness,
-        // and it is #35's "28 offers" signature with the phone ACKING rather than ignoring, so the
-        // existing diagnosis ("phone silently drops offers") would not match it in a log.
-        XCTAssertTrue(watch.acks.count >= 1, "the phone does reply — this is not the silent-drop shape of #35")
+        // Worth knowing when reading a log: it presents as #35's "28 offers" signature but with the
+        // phone ACKING rather than silently dropping, so the #35 diagnosis does not match it.
+        XCTAssertTrue(watch.acks.count >= 1, "the phone replies")
+        XCTAssertEqual(watch.acks.last?.committedCursor, 2,
+                       "the ack must carry the max committed seq, not the stale 0")
+        XCTAssertTrue(watch.isDrained,
+                      "THE FIX: an advanced cursor lets the returning watch finally drain and close the loan")
     }
 }
