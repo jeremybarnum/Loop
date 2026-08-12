@@ -1006,11 +1006,26 @@ extension LoanMessage {
     /// Every urgent kind here is idempotent under those same cursor/ID rules (a redelivered
     /// offer re-acks the same cursor; a repeat request is exactly a double-tap of Start), so
     /// the rare delivered-but-reported-failed duplicate from the fallback is harmless.
+    ///
+    /// #109 (2026-08-12): `.takeoverComplete` MOVED here from the queued side. It is the end of
+    /// the start — the moment the watch actually has the pod — and by the rule above it always
+    /// belonged on the immediate channel. Measured on build 268 epoch 10: the watch had the pod
+    /// at +10.2 s and said so 1 ms later, but on `transferUserInfo`; at +20 s the phone was
+    /// still in `.grantOffered` and fired the #108 "did the grant arrive?" probe at a takeover
+    /// that had already succeeded.
+    ///
+    /// This was invisible until now, because the pump tile treated `.grantOffered` and
+    /// `.loaned` identically ("Pod on Watch" from the instant the grant was SENT). The tile now
+    /// distinguishes them — "Taking over…" then "Pod on Watch" — so the phone's promptness in
+    /// learning the truth became user-visible, and a queued `.takeoverComplete` would leave a
+    /// progress label sitting there for minutes after a takeover that had already finished.
+    /// The honest tile REQUIRES this channel; do not move it back without reverting that.
     public var isInteractiveHandshake: Bool {
         switch self {
-        case .request, .grant, .denied, .nack, .revoke, .handbackOffer, .handbackAck:
+        case .request, .grant, .denied, .nack, .revoke, .handbackOffer, .handbackAck,
+             .takeoverComplete:
             return true
-        case .takeoverComplete, .takeoverFailed, .doseRecordBatch, .statusQuery,
+        case .takeoverFailed, .doseRecordBatch, .statusQuery,
              .statusReport, .diag:
             return false
         }

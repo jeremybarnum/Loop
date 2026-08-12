@@ -1115,4 +1115,30 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         }
         return removed
     }
+
+    // MARK: - #92 the outbound handover is two states, not one
+
+    /// The tile used to say "Pod on Watch" from the instant the grant was SENT, because
+    /// `podIsOnLoan` is already true in `.grantOffered` — asserting a handover that had not
+    /// happened. `isPodTakeoverInProgress` separates the two so the tile can show "Taking over…"
+    /// first, and it must flip exactly when the watch confirms.
+    func testTakeoverInProgressIsTrueOnlyBetweenGrantAndConfirmation() throws {
+        let controller = makeController()
+        XCTAssertFalse(controller.isPodTakeoverInProgress, "no loan, no handover")
+
+        let grantSent = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
+        wait(for: [grantSent], timeout: 5)
+        guard case .grant(let grant)? = lastSent() else { return XCTFail("expected a grant") }
+
+        XCTAssertTrue(controller.isPodTakeoverInProgress, "grant is out, watch has not confirmed — 'Taking over…'")
+        XCTAssertTrue(controller.podIsOnLoan, "still true here, which is exactly why the tile needed a second predicate")
+
+        let status = LoanPodStatus(timestamp: Date(), deliveredUnits: 10, reservoirLevel: nil, isSuspended: false, faultCode: nil)
+        controller.handleIncoming(userInfo: try LoanMessage.takeoverComplete(TakeoverComplete(epoch: grant.epoch, firstPodStatus: status)).transportDictionary())
+        waitForState(controller, .loaned)
+
+        XCTAssertFalse(controller.isPodTakeoverInProgress, "confirmed — the tile may now say 'Pod on Watch'")
+        XCTAssertTrue(controller.podIsOnLoan)
+    }
 }

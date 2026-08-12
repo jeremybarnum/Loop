@@ -511,4 +511,26 @@ final class LoanProtocolV2Tests: XCTestCase {
         // The split is a partition of the unfiltered seed set.
         XCTAssertEqual(seed.count + live.count, grant.seedDoseEntries().count)
     }
+
+    // MARK: - #109 channel classification
+
+    /// `.takeoverComplete` MUST ride the immediate channel. It moved there on 2026-08-12 because
+    /// the pump tile now shows "Taking over…" until it arrives — on `transferUserInfo` that label
+    /// outlives the takeover by tens of seconds to minutes and reads as a hang. Measured on build
+    /// 268 epoch 10: pod taken at +10.2 s, phone still in `.grantOffered` at +20 s.
+    ///
+    /// This test exists so that a future "tidy up the switch" cannot quietly revert the UI.
+    func testTakeoverCompleteRidesTheImmediateChannel() {
+        let status = LoanPodStatus(timestamp: Date(), deliveredUnits: 1, reservoirLevel: nil, isSuspended: false, faultCode: nil)
+        XCTAssertTrue(LoanMessage.takeoverComplete(TakeoverComplete(epoch: 1, firstPodStatus: status)).isInteractiveHandshake,
+                      "the tile's 'Taking over…' state depends on this arriving promptly (#109/#92)")
+    }
+
+    /// The other side of the rule, so the fix cannot be over-applied: background bookkeeping stays
+    /// on the guaranteed, relaunch-surviving queue that the cursor/ID machinery is built around.
+    func testBackgroundBookkeepingStaysOnTheQueuedChannel() {
+        XCTAssertFalse(LoanMessage.doseRecordBatch(DoseRecordBatch(epoch: 1, events: [], tombstones: [])).isInteractiveHandshake)
+        XCTAssertFalse(LoanMessage.statusQuery(StatusQuery(epoch: 1)).isInteractiveHandshake)
+        XCTAssertFalse(LoanMessage.diag(LoanDiag(epoch: 1, text: "x")).isInteractiveHandshake)
+    }
 }

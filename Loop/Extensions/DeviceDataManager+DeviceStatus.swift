@@ -45,6 +45,12 @@ extension DeviceDataManager {
             // a few seconds; show movement, not a frozen "on watch" (2026-07-18: the
             // ~5s frozen tile during hand-back read as ownership ambiguity).
             return DeviceDataManager.podReclaimingStatusHighlight
+        } else if isPodTakingOver {
+            // PODLOAN #92 (2026-08-12): the grant is out but the watch has NOT confirmed it has
+            // the pod. This branch MUST precede the one below: the grant releases the pod's BLE
+            // immediately, so `isConnectionReleased` is already true here and would otherwise
+            // claim "Pod on Watch" for a handover still in flight.
+            return DeviceDataManager.podTakingOverStatusHighlight
         } else if (pumpManager as? PumpConnectionLendable)?.isConnectionReleased == true || isPodLoanedToWatch {
             // PODLOAN (ported from the crude branch's "instant status update"): while
             // the pod is loaned to the watch, keying on the persisted release flag
@@ -63,6 +69,19 @@ extension DeviceDataManager {
     struct PodOnWatchStatusHighlight: DeviceStatusHighlight {
         var localizedMessage: String = NSLocalizedString("Pod on Watch", comment: "Title text for the pump tile while the pod is loaned to the watch")
         var imageName: String = "applewatch"
+        var state: DeviceStatusHighlightState = .normalPump
+    }
+
+    static var podTakingOverStatusHighlight: PodTakingOverStatusHighlight {
+        return PodTakingOverStatusHighlight()
+    }
+
+    /// The outbound twin of `PodReclaimingStatusHighlight` — same in-transit idiom, same symbol,
+    /// opposite direction. Requires `.takeoverComplete` on the immediate channel (#109): on the
+    /// queued channel this label would outlive the takeover by minutes and read as a hang.
+    struct PodTakingOverStatusHighlight: DeviceStatusHighlight {
+        var localizedMessage: String = NSLocalizedString("Taking over…", comment: "Title text for the pump tile while the watch is taking over the pod")
+        var imageName: String = "arrow.triangle.2.circlepath"
         var state: DeviceStatusHighlightState = .normalPump
     }
 
