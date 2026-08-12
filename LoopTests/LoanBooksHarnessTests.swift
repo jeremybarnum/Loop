@@ -344,10 +344,29 @@ final class LoanBooksHarnessTests: XCTestCase {
     /// Core Data table (test 3 and 4 run a watch store and a phone store side by side).
     private var cacheDirs: [URL] = []
 
+    /// #103 FIX (2026-08-12). This tearDown used to `removeItem(at:)` every directory, and
+    /// that synchronous delete was the flake.
+    ///
+    /// The mechanism was already written down by LoanOverrideTests in this same file (see its
+    /// `cacheStore` comment): `PersistenceController` brings its Core Data stack up
+    /// ASYNCHRONOUSLY, so deleting the directory at test end is a "vnode unlinked while in
+    /// use" race against a stack that may still be initializing — and the way that race
+    /// presents is **a store that answers with zero rows**. That is #103's exact symptom, and
+    /// it is not confined to the test that loses the race: the noise lands on whichever suite
+    /// is running in the same process when the unlink hits, which is why the false alarm moved
+    /// between `testDuplicateBolusTwinDetection` and `testHandbackSeamCloses` on different
+    /// runs, and why both passed in isolation.
+    ///
+    /// COST OF THE FLAKE, measured: it cost three gate runs and a real scare on 2026-08-11 —
+    /// the ship gate refused to archive a DOSING build over a phantom 1 U hand-back-seam
+    /// discrepancy, on the one build where a real seam regression was most plausible. A gate
+    /// that cannot tell a flake from a regression fails in both directions.
+    ///
+    /// THE FIX IS TO NOT DELETE. Each directory is a fresh UUID under the OS temp directory,
+    /// so nothing collides across tests or runs, the contents are an empty-to-tiny SQLite
+    /// store, and the OS reclaims temp itself. Racing an async stack to reclaim a few KB was
+    /// never a good trade.
     override func tearDown() {
-        for dir in cacheDirs {
-            try? FileManager.default.removeItem(at: dir)
-        }
         cacheDirs = []
         super.tearDown()
     }
@@ -1094,8 +1113,10 @@ final class LoanOverrideTests: XCTestCase {
     private let baseCR = CarbRatioSchedule(unit: .gram(), dailyItems: [RepeatingScheduleValue(startTime: 0, value: 10.0)])!
 
     override func tearDown() {
+        // #103: same reasoning as LoanBooksHarnessTests above — do not race the async Core Data
+        // stack to unlink a temp directory. Lazy creation already limited the blast radius here;
+        // dropping the delete removes the race outright.
         _cacheStore = nil
-        if let dir = cacheDir { try? FileManager.default.removeItem(at: dir) }
         cacheDir = nil
         super.tearDown()
     }

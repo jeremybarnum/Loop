@@ -60,7 +60,10 @@ final class WatchStoreEffectsTests: XCTestCase {
 
     override func tearDown() {
         cacheStore = nil
-        try? FileManager.default.removeItem(at: cacheDir)
+        // #103: never unlink a temp store directory synchronously — PersistenceController's
+        // Core Data stack comes up ASYNCHRONOUSLY, and the unlink race presents as a store that
+        // answers with zero rows, in whichever suite happens to be running. The OS reclaims temp.
+        _ = cacheDir
         super.tearDown()
     }
 
