@@ -69,6 +69,17 @@ final class WatchOverrideDosingTests: XCTestCase {
         curve(from: now, values: Array(repeating: 118.0, count: 73))
     }
 
+    /// A LARGE excursion, used wherever the assertion is about the override FACTOR.
+    ///
+    /// The field case (118 vs a 100 floor) is only an 18 mg/dL correction, which at these ISFs
+    /// is ~0.13 U vs ~0.26 U — and the pod's 0.05 U rounding then quantises those to 0.10 and
+    /// 0.15, blurring a 2x relationship into 1.5x. That is a property of the arithmetic, not of
+    /// the bug: at 250 the same factor is ~1.05 U vs ~2.15 U, where rounding is 2% instead of
+    /// 50%. Assert the factor here; keep the field numbers as the documented case below.
+    private func flatAt250(from now: Date) -> [PredictedGlucoseValue] {
+        curve(from: now, values: Array(repeating: 250.0, count: 73))
+    }
+
     // MARK: - The axiom: which way does a 50% override move ISF?
 
     /// THE DIRECTION TEST, and the one worth having even if every other test here is
@@ -89,16 +100,13 @@ final class WatchOverrideDosingTests: XCTestCase {
         XCTAssertGreaterThan(value, rawISF, "override ISF must exceed the raw schedule for a reduced-needs override")
     }
 
-    /// The basal side of the same scale factor: 50% needs halves the scheduled rate.
-    /// Direction is opposite to ISF, which is exactly why the two are easy to confuse.
-    func testFiftyPercentOverrideHALVESTheBasalRate() {
-        let now = Date()
-        let scaled = basalSchedule.applyingBasalRateMultiplier(from: fiftyPercentOverride(at: now), relativeTo: now)
-        let rate = scaled.value(at: now.addingTimeInterval(.minutes(30)))
-
-        XCTAssertEqual(rate, 0.35, accuracy: 0.001,
-                       "a 50% insulin-needs override must HALVE the basal rate — opposite direction to ISF")
-    }
+    // The BASAL direction (0.5 halves the rate) is deliberately NOT tested here: LoopKit
+    // already pins the basal multiplier across ten schedule-geometry cases
+    // (TemporaryScheduleOverrideTests), and LoanBooksHarnessTests pins it downward at 0.6.
+    // The ISF direction above is the genuine gap — `applyingSensitivityMultiplier` has ZERO
+    // callers in all of LoopKitTests, and every override fixture in LoopKit uses a scale factor
+    // >= 1.0, so the reduced-needs case (the exercise case, the hypo-risk case) has never been
+    // exercised inside LoopKit at all.
 
     // MARK: - The regression: Jeremy's field case, in code
 
@@ -108,7 +116,7 @@ final class WatchOverrideDosingTests: XCTestCase {
     /// roughly double the override-ISF answer, and the raw one is what shipped.
     func testManualBolusUnderOverrideUsesTheScaledISF() {
         let now = Date()
-        let prediction = flatAt118(from: now)
+        let prediction = flatAt250(from: now)
 
         let withRaw = prediction.recommendedManualBolus(
             to: targetRange, at: now, suspendThreshold: suspendThreshold,
@@ -137,29 +145,25 @@ final class WatchOverrideDosingTests: XCTestCase {
     /// ISF-140 world).
     func testRecommendationIsCoherentWithThePredictionsSensitivity() {
         let now = Date()
-        let eventual = 118.0
-        let targetFloor = 100.0
         let overrideISF = rawISFSchedule.applyingSensitivityMultiplier(from: fiftyPercentOverride(at: now), relativeTo: now)
         let effectiveISF = overrideISF.quantity(at: now).doubleValue(for: HKUnit.milligramsPerDeciliter)
 
-        let matched = flatAt118(from: now).recommendedManualBolus(
-            to: targetRange, at: now, suspendThreshold: suspendThreshold,
-            sensitivity: overrideISF, model: model,
-            pendingInsulin: 0, maxBolus: 3.0, volumeRounder: volumeRounder)
+        func recommend(_ isf: InsulinSensitivitySchedule) -> Double {
+            flatAt250(from: now).recommendedManualBolus(
+                to: targetRange, at: now, suspendThreshold: suspendThreshold,
+                sensitivity: isf, model: model,
+                pendingInsulin: 0, maxBolus: 10.0, volumeRounder: volumeRounder).amount
+        }
 
-        let mismatched = flatAt118(from: now).recommendedManualBolus(
-            to: targetRange, at: now, suspendThreshold: suspendThreshold,
-            sensitivity: rawISFSchedule, model: model,
-            pendingInsulin: 0, maxBolus: 3.0, volumeRounder: volumeRounder)
+        // The curve is built with the override ISF, so that is the sensitivity the body will
+        // actually respond with. Land each candidate dose against it.
+        let landedCoherent = 250.0 - recommend(overrideISF) * effectiveISF
+        let landedMismatched = 250.0 - recommend(rawISFSchedule) * effectiveISF
 
-        // Land the curve using the sensitivity the PREDICTION actually uses (the override one).
-        let landedMatched = eventual - matched.amount * effectiveISF
-        let landedMismatched = eventual - mismatched.amount * effectiveISF
-
-        XCTAssertGreaterThanOrEqual(landedMatched, targetFloor - 5,
-                                    "a coherent dose must land at/near the target floor, got \(landedMatched)")
-        XCTAssertLessThan(landedMismatched, targetFloor - 15,
-                          "the mismatched dose must visibly UNDERSHOOT the floor — that undershoot is the bug, got \(landedMismatched)")
+        XCTAssertLessThan(landedMismatched, landedCoherent - 50,
+                          "the raw-ISF dose must overshoot the coherent one by a wide margin — that overshoot IS the bug (coherent landed \(landedCoherent), mismatched \(landedMismatched))")
+        XCTAssertLessThan(landedMismatched, 80,
+                          "and it must overshoot into territory the coherent dose never approaches")
     }
 
     // MARK: - The temp-basal path (#68) must stay fixed

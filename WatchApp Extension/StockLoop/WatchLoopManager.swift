@@ -913,6 +913,37 @@ final class WatchLoopManager {
     /// only — never annotated onto a stock surface (the stock-parity ruling).
     private(set) var lastDosingDerivation: String?
 
+    // MARK: - Override-applied schedules (stock parity, #112)
+    //
+    // Copied verbatim from LoopDataManager :561-573, including WHICH STORE each one reads.
+    // The split looks arbitrary and isn't ours to redesign: DoseStoreProtocol exposes only
+    // the basal accessor, CarbStoreProtocol exposes ISF and carb ratio. Both stores are handed
+    // the SAME TemporaryScheduleOverrideHistory instance (StockLoopStack :122 -> :131, :148 —
+    // verified shared, a public final class), so either store resolves to the same answer;
+    // matching the phone's choice keeps a future reader from having to re-derive that.
+    //
+    // WHY THESE EXIST AT ALL. The watch had no manager-level accessor and instead inlined
+    // `doseStore.<accessor> ?? settings.<raw>` at seven call sites — our own dialect, with a
+    // fallback the phone does not have anywhere. That dialect is what let #112 through: the
+    // manual-bolus path simply read `settings.insulinSensitivitySchedule` and nobody noticed it
+    // was the odd one out, because there was no single place where "the schedule dosing uses"
+    // was defined. One accessor per schedule, used everywhere, makes the next omission visible.
+
+    /// The basal rate schedule, applying recent overrides relative to the current moment in time.
+    var basalRateScheduleApplyingOverrideHistory: BasalRateSchedule? {
+        return doseStore.basalProfileApplyingOverrideHistory
+    }
+
+    /// The carb ratio schedule, applying recent overrides relative to the current moment in time.
+    var carbRatioScheduleApplyingOverrideHistory: CarbRatioSchedule? {
+        return carbStore.carbRatioScheduleApplyingOverrideHistory
+    }
+
+    /// The insulin sensitivity schedule, applying recent overrides relative to the current moment in time.
+    var insulinSensitivityScheduleApplyingOverrideHistory: InsulinSensitivitySchedule? {
+        return carbStore.insulinSensitivityScheduleApplyingOverrideHistory
+    }
+
     /// #74 cutover: the store's IOB kept as the SHADOW series while the ledger drives.
     private var storeIOBShadow: Double?
     /// #50: the temp basal we last successfully enacted, cached so the watch knows what the
@@ -2214,16 +2245,20 @@ final class WatchLoopManager {
         // same locals, so with this fix the wrist telemetry shows the applied values — scheduled
         // 0.42 / ISF 117 under the 60% preset — which is the field verification.
         //
-        // Fallback to the raw settings schedule only when the override-history accessor itself is
-        // nil (no overrideHistory wired — pre-#68 grants), mirroring the :1607 pattern; never nil
-        // out dosing because override plumbing is absent.
-        guard let basalRateSchedule = doseStore.basalProfileApplyingOverrideHistory ?? settings.basalRateSchedule else {
+        // STOCK PARITY (#112, 2026-08-11). Was `<applied> ?? settings.<raw>` on all three. The
+        // phone has no such fallback anywhere — LoopDataManager :1763-1775 treats a nil applied
+        // schedule as a configurationError and short-circuits the whole recommendation. Falling
+        // back to the RAW schedule is the more dangerous option precisely when it fires: under an
+        // active override the raw schedule is the wrong one, so the fallback silently doses from
+        // settings the user has overridden. R35 says the same thing from the other direction —
+        // refuse rather than substitute.
+        guard let basalRateSchedule = basalRateScheduleApplyingOverrideHistory else {
             return .configurationError("basalRateSchedule")
         }
-        guard let insulinSensitivity = doseStore.insulinSensitivityScheduleApplyingOverrideHistory ?? settings.insulinSensitivitySchedule else {
+        guard let insulinSensitivity = insulinSensitivityScheduleApplyingOverrideHistory else {
             return .configurationError("insulinSensitivitySchedule")
         }
-        guard (carbStore.carbRatioScheduleApplyingOverrideHistory ?? settings.carbRatioSchedule) != nil else {
+        guard carbRatioScheduleApplyingOverrideHistory != nil else {
             return .configurationError("carbRatioSchedule")
         }
         guard let maxBasal = settings.maximumBasalRatePerHour else {
@@ -2403,8 +2438,7 @@ final class WatchLoopManager {
                 // so precisely when an exercise override is active — when hypo risk is already
                 // elevated. This is the same defect #68 fixed for temp basals (:2223); it
                 // survived on the bolus path because nothing tested it.
-                guard let insulinSensitivity = self.doseStore.insulinSensitivityScheduleApplyingOverrideHistory
-                        ?? self.settings.insulinSensitivitySchedule else {
+                guard let insulinSensitivity = self.insulinSensitivityScheduleApplyingOverrideHistory else {
                     throw WatchLoopError.configurationError("insulinSensitivitySchedule")
                 }
                 guard let maxBolus = self.settings.maximumBolus else {
