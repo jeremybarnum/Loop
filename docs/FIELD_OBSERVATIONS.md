@@ -491,3 +491,41 @@ a QUESTION had been conflated. Only the timer needed to be generous.
 
 Not yet field-proven — reproducing it needs an install-then-immediately-Start, which is
 exactly the sequence that produced it once.
+
+## 2026-08-11 (build 269) — e15 is the loan the item-1 redesign was built for
+
+Three loans on 269, all clean, but only the third one is interesting.
+
+```
+e13  reconcile[provisional]:   delivered=0.950 expected=0.950 residual=-0.000
+     reconcile[AUTHORITATIVE]: delivered=0.950 expected=0.950 residual=-0.000 · vs watch endpoint +0.000
+e14  reconcile[provisional]:   delivered=0.000 expected=0.000 residual=+0.000
+     reconcile[AUTHORITATIVE]: delivered=0.000 expected=0.000 residual=+0.000 · vs watch endpoint +0.000
+e15  reconcile[provisional]:   delivered=0.300 expected=0.800 residual=-0.500
+     reconcile[AUTHORITATIVE]: delivered=0.800 expected=0.800 residual=+0.000 · vs watch endpoint +0.500
+```
+
+e15's two lines disagree by half a unit, and the provisional one is wrong. At drain time
+the watch's last odometer read was `fresh=N` — stale, as it is at every hand-back, for the
+reason documented above (no link to read the pod on). The phone's own read, +3 s after the
+reclaim round-trip, saw the full 0.800.
+
+**Had the provisional number been the verdict, R32(b) would have fired.** −0.500 sits
+exactly at `warnNegativeResidual`, so the loan would have ended with a "we may have booked
+more than the pod delivered" warning on a hand-back that was in fact perfect. The residual
+bank would have recorded −0.500 as its worst sample, and the n=10 threshold review would
+have been calibrated against an artifact of measurement lag.
+
+This is the second occurrence (the first was `-0.050`, one pulse, at the tolerance floor —
+same direction, small enough to look like quantization). The direction is not random: a
+stale endpoint can only ever *undercount* delivery, so the provisional number is
+**biased negative**, and the bias scales with how much was delivered late in the loan. e13
+and e14 agree to +0.000 only because neither had a dose near the end.
+
+The bank stores the authoritative value, so it is uncontaminated: n=5, mean −0.040, worst
+|0.200|. Keep it that way — if the provisional line is ever promoted to a verdict, this
+entry is the counterexample.
+
+Also on e15, and not a defect: `[override] SKIPPED (already applied) 🕺 crashy`. The phone
+already had that override on, so the resume had nothing to do. Worth knowing the line is
+the healthy path, not a dropped write.
