@@ -153,9 +153,33 @@ final class LoanEventJournal {
 
     /// Applies a HandbackAck: advances the cursor (monotonic — a stale/replayed ack can
     /// never move it backward) and drops tombstones, which the ack's commit covers.
-    func applyAck(committedCursor: Int) {
+    ///
+    /// `withholding` is the caller's set of event IDs that have NOT been streamed to the
+    /// phone — in-flight commands and verdict-chase-pending ones (§1.3). It matters because
+    /// the phone acks a MAX seq, and a max-seq watermark **cannot represent a gap**: an ack
+    /// covering a later event would bury an earlier withheld one forever, silently losing
+    /// that insulin record. So the cursor is capped below the lowest still-unacked withheld
+    /// seq, leaving those events streamable once they classify. The phone dedups commits by
+    /// event ID, so the later out-of-order arrival still commits exactly once.
+    ///
+    /// This arithmetic lived in `PodLoanWatchController.handleAck` until 2026-08-12. It moved
+    /// here unchanged, for two reasons. It is the journal's own data — the caller was reaching
+    /// through `unackedEvents()` to recompute a seq→ID mapping this type already owns. And the
+    /// controller is in the `WatchApp Extension` target only, so while the cap lived there the
+    /// test for it could only MIRROR the arithmetic rather than execute it, which is no test at
+    /// all: `testCursorIsAWatermarkSoAGapMustBeCappedByTheCaller` used to compute
+    /// `min(later.seq, withheld.seq - 1)` in the test body and assert on its own math. Now the
+    /// production line is the line under test.
+    func applyAck(committedCursor: Int, withholding withheld: Set<UUID> = []) {
         mutate { s in
-            s.ackedCursor = max(s.ackedCursor, committedCursor)
+            var cursor = committedCursor
+            if !withheld.isEmpty,
+               let minWithheldSeq = s.events
+                   .filter({ $0.seq > s.ackedCursor && withheld.contains($0.id) })
+                   .map(\.seq).min() {
+                cursor = min(cursor, minWithheldSeq - 1)
+            }
+            s.ackedCursor = max(s.ackedCursor, cursor)
             s.tombstones.removeAll()
         }
     }

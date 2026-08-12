@@ -101,19 +101,76 @@ final class LoanEventJournalTests: XCTestCase {
         let later = try journal.mintEvent(record: bolus(2.0), provenance: .confirmed)
 
         // The phone only ever saw `later` (the uncertain one was withheld), so it acks 2.
-        // Applied raw, that buries the withheld event forever:
+        // Applied raw — no `withholding` — that buries the withheld event forever. This is
+        // the trap, and it is still reachable, because a caller with nothing withheld is the
+        // common case and must stay cheap.
         journal.applyAck(committedCursor: later.seq)
         XCTAssertFalse(journal.unackedEvents().contains { $0.id == withheld.id },
-                       "raw max-seq ack buries the withheld event — this is the trap the caller must avoid")
+                       "raw max-seq ack buries the withheld event — this is what `withholding:` exists to prevent")
 
-        // The controller's contract instead: cap to (lowest withheld seq - 1).
+        // Now the production path. The caller names the withheld ID; the JOURNAL computes the
+        // cap. Before 2026-08-12 this line read `applyAck(committedCursor: min(later2.seq,
+        // withheld2.seq - 1))` — the test doing the controller's arithmetic for it, so no
+        // change to `handleAck` could ever turn this red. The cap now lives in the journal and
+        // this exercises it.
         let capped = makeJournal()
         try capped.begin(epoch: 1)
         let withheld2 = try capped.mintEvent(record: bolus(1.0), provenance: .assumed(.bolusUncertain))
         let later2 = try capped.mintEvent(record: bolus(2.0), provenance: .confirmed)
-        capped.applyAck(committedCursor: min(later2.seq, withheld2.seq - 1))
+        capped.applyAck(committedCursor: later2.seq, withholding: [withheld2.id])
+
         XCTAssertTrue(capped.unackedEvents().contains { $0.id == withheld2.id },
                       "capped ack keeps the withheld event streamable once it classifies")
+        XCTAssertTrue(capped.unackedEvents().contains { $0.id == later2.id },
+                      "the LATER event is withheld too — a max-seq cursor cannot commit seq 2 while seq 1 is open, so it re-streams and the phone dedups it by ID")
+    }
+
+    /// The cap must bite ONLY on the withheld events, and only while they are still unacked.
+    /// Two failure modes this pins, both of which would look like "the loan never drains":
+    /// a cap computed from an already-acked event would freeze the cursor forever, and a cap
+    /// applied when the withheld ID is not in the journal at all (annulled mid-drain — the
+    /// certain-refusal path, #99) would do the same.
+    func testCapIgnoresWithheldEventsThatAreAlreadyAckedOrGone() throws {
+        let journal = makeJournal()
+        try journal.begin(epoch: 1)
+        let first = try journal.mintEvent(record: bolus(1.0), provenance: .confirmed)
+        let second = try journal.mintEvent(record: bolus(2.0), provenance: .confirmed)
+
+        // `first` is committed and acked normally.
+        journal.applyAck(committedCursor: first.seq)
+        XCTAssertEqual(journal.unackedEvents().map(\.seq), [second.seq])
+
+        // A later ack still naming `first` as withheld must NOT drag the cursor back to 0.
+        // (`applyAck` is monotonic, so the regression would surface as a stuck cursor rather
+        // than a rewind — either way the loan stops draining.)
+        journal.applyAck(committedCursor: second.seq, withholding: [first.id])
+        XCTAssertTrue(journal.unackedEvents().isEmpty,
+                      "an already-acked event must not cap the cursor — the loan would never drain")
+
+        // An ID the journal has never heard of (annulled, or from a prior epoch) is inert.
+        let other = makeJournal()
+        try other.begin(epoch: 2)
+        let only = try other.mintEvent(record: bolus(3.0), provenance: .confirmed)
+        other.applyAck(committedCursor: only.seq, withholding: [UUID()])
+        XCTAssertTrue(other.unackedEvents().isEmpty,
+                      "an unknown withheld ID must not cap the cursor")
+    }
+
+    /// The gap case with THREE events, which is where an off-by-one shows itself: withholding
+    /// the middle one must commit everything below it and nothing at or above it.
+    func testCapCommitsBelowTheGapAndNothingAtOrAboveIt() throws {
+        let journal = makeJournal()
+        try journal.begin(epoch: 1)
+        let below = try journal.mintEvent(record: bolus(1.0), provenance: .confirmed)
+        let gap = try journal.mintEvent(record: bolus(2.0), provenance: .assumed(.bolusUncertain))
+        let above = try journal.mintEvent(record: bolus(3.0), provenance: .confirmed)
+
+        journal.applyAck(committedCursor: above.seq, withholding: [gap.id])
+
+        let stillOpen = Set(journal.unackedEvents().map(\.id))
+        XCTAssertFalse(stillOpen.contains(below.id), "seq below the gap is safely committed")
+        XCTAssertTrue(stillOpen.contains(gap.id), "the withheld event stays open")
+        XCTAssertTrue(stillOpen.contains(above.id), "seq above the gap re-streams; the phone dedups by ID")
     }
 
     // MARK: - Relaunch recovery

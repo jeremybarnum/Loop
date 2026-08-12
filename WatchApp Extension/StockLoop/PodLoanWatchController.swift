@@ -1600,18 +1600,13 @@ final class PodLoanWatchController {
         guard let current = epoch ?? journal.activeEpoch, ack.epoch == current else { return }
         // Round-4 fix: the phone acks MAX-seq, but withholding (in-flight /
         // chase-pending events) creates seq GAPS a max-seq cursor can't represent —
-        // an ack covering a later carb would skip a withheld command forever. Cap
-        // the applied cursor below the lowest withheld seq so those events stay
-        // unacked and drain once classified (the phone dedups commits by event ID,
-        // so the later out-of-order stream still commits exactly once).
+        // an ack covering a later carb would skip a withheld command forever. The cap
+        // itself now lives in the journal (see `applyAck(committedCursor:withholding:)`,
+        // moved 2026-08-12 so it is reachable from LoopTests); this side just says WHICH
+        // events are withheld, which is the only part the controller actually knows.
         var withheld = inFlightEventIDs
         if let pending = pendingUncertainEventID { withheld.insert(pending) }
-        var cursorToApply = ack.committedCursor
-        if !withheld.isEmpty,
-           let minWithheldSeq = journal.unackedEvents().filter({ withheld.contains($0.id) }).map(\.seq).min() {
-            cursorToApply = min(cursorToApply, minWithheldSeq - 1)
-        }
-        journal.applyAck(committedCursor: cursorToApply)
+        journal.applyAck(committedCursor: ack.committedCursor, withholding: withheld)
         guard journal.unackedEvents().isEmpty else { return }
 
         // WS1: the drain completed while STILL DOSING — now stop the loop's pod,
