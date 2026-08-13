@@ -385,3 +385,25 @@ away the adoption two builds had just shipped to keep; after the 10:47 occurrenc
 23:36/23:41/23:46 — backfill and a live read landing DURING a pod handshake. The gate's tuning
 constants and the ad-vs-INGEST timing that justifies the 2.5 s minimum hold stay in the code:
 they are the non-obvious part, not the narrative.
+
+## Fourth batch — GlanceController
+
+**The stale-glance fix (2026-08-05).** Field symptom: a 6-hour-frozen frame on a healthy loop.
+Proven from the overnight log — between 00:32 and 07:00 there were 51 ACTIVE/RESIGN ACTIVE pairs
+and ZERO true BACKGROUND, i.e. 51 wrist-raises, none of which refreshed the screen. The frame
+held its ~00:32 values (IOB 3.02 → "3.0", COB 24.4 → "24") until the night's first real
+background→foreground at 07:00:02/07:00:56 finally fired `didAppear`.
+`startRefreshing()`/`stopRefreshing()` had exactly one caller each.
+
+**The mirror observer's no-re-kick rule.** Build 247 called plain refresh() in the observer,
+making it self-perpetuating. Field 2026-08-07 (build 248, whose own diff was innocent of it):
+"it does respond, but it gives no feedback and is very delayed." The one-tick staleness it fixes
+was observed at 14 min on a wrist-raise (2026-08-06); the half-second flash Jeremy reported
+2026-08-07 is the same defect at tick scale.
+
+**The provenance line.** Jeremy 2026-07-20: "the UI doesn't make it clear if it's dexcom direct
+or not." The line used to read "the sport store is direct-only by construction, so a fresh number
+here is ALWAYS the watch's own radio — say so" and printed "G7 direct" unconditionally. That
+premise was false, and the field logs showed it directly:
+`INGEST src=phone-relay stored=1/1 … (direct-G7 gap)`. It claimed a direct sensor read for
+numbers the phone had supplied — the confusion Jeremy flagged again on 2026-08-05.

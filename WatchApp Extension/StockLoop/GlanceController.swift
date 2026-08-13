@@ -191,23 +191,14 @@ final class GlanceViewModel: ObservableObject {
         observeAppState()
     }
 
-    /// THE STALE-GLANCE FIX (2026-08-05, field: a 6-hour-frozen frame on a healthy loop).
+    /// The refresh tick must NOT be driven by WKInterfaceController appearance alone. On watchOS
+    /// a bare screen DIM delivers `didDeactivate` but a bare UNDIM does NOT deliver `didAppear` —
+    /// and since `refresh()` is the only writer of `state`, the first dim kills the timer and
+    /// nothing restarts it until a genuine appearance transition. A wrist-raise is not one, so
+    /// the frame can sit frozen for hours on a perfectly healthy loop.
     ///
-    /// `startRefreshing()`/`stopRefreshing()` had exactly one caller each — `didAppear()` and
-    /// `didDeactivate()` (:58/:63) — and `refresh()` is the ONLY writer of `state`. On watchOS a
-    /// bare screen DIM delivers `didDeactivate` but a bare UNDIM does NOT deliver `didAppear`, so
-    /// the first dim killed the timer and nothing could ever restart it. The display then had no
-    /// writer at all until a genuine appearance transition.
-    ///
-    /// Proven from the overnight log: between 00:32 and 07:00 there are 51 ACTIVE/RESIGN ACTIVE
-    /// pairs and ZERO true BACKGROUND — i.e. 51 wrist-raises, none of which refreshed the screen.
-    /// The frame stayed at its ~00:32 values (IOB 3.02 -> "3.0", COB 24.4 -> "24") until the
-    /// night's first real background->foreground at 07:00:02/07:00:56 finally fired `didAppear`.
-    ///
-    /// So drive the tick from the notifications the log PROVES fire on exactly those transitions
-    /// (ExtensionDelegate.swift:109/:120 — they are what emitted all 51 `[app]` lines) instead of
-    /// relying on WKInterfaceController appearance semantics. `didAppear`/`didDeactivate` stay
-    /// wired too; both paths are idempotent.
+    /// Drive it from the ExtensionDelegate notifications instead (:109/:120), which do fire on
+    /// those transitions. `didAppear`/`didDeactivate` stay wired too; both paths are idempotent.
     private func observeAppState() {
         let center = NotificationCenter.default
         appStateObservers = [
@@ -223,26 +214,22 @@ final class GlanceViewModel: ObservableObject {
     }
 
     /// Begin the on-screen refresh tick. Idempotent.
-    /// Re-render the moment a fresh mirror lands, rather than waiting for the next 2s tick.
+    /// Re-render the moment a fresh mirror lands, rather than waiting for the next 2 s tick.
     ///
     /// refresh() kicks refreshGlanceData() and then reads mirroredGlanceData on the NEXT line, so
     /// without this every frame renders the PREVIOUS mirror — one tick stale by construction, and
-    /// on a wrist-raise as stale as whatever was cached before the screen slept (14 min, observed
-    /// 2026-08-06; the half-second flash Jeremy reported 2026-08-07 is the same defect at tick
-    /// scale). Scoped to the on-screen lifetime like the timer, for the same reason: off screen
-    /// nobody is reading, and each render takes the loan controller's queue.
+    /// on a wrist-raise as stale as whatever was cached before the screen slept. Scoped to the
+    /// on-screen lifetime like the timer: off screen nobody is reading, and each render takes the
+    /// loan controller's queue.
     ///
-    /// THE OBSERVER MUST NOT RE-KICK THE MIRROR (`kickMirror: false`). Build 247 called plain
-    /// refresh() here, which made the notification self-perpetuating: refresh -> refreshGlanceData
-    /// -> mirror lands -> post -> observer -> refresh -> … The `_glanceRefreshPending` coalescing
-    /// guard does NOT stop it, because it is cleared BEFORE the post, so the next kick always gets
-    /// through. That is an unbounded loop running as fast as buildGlanceData() can turn over —
-    /// saturating dataAccessQueue with rebuilds and MAIN with re-renders, and taking the loan
-    /// controller's queue on every pass. Field 2026-08-07 (build 248, whose own diff is innocent
-    /// of this): "it does respond, but it gives no feedback and is very delayed."
-    ///
-    /// Only the .active phase kicks the mirror, so the loop only ran during a loan — which is
-    /// exactly when the watch is dosing and can least afford a saturated main thread.
+    /// THE OBSERVER MUST NOT RE-KICK THE MIRROR (`kickMirror: false`). A plain refresh() here is
+    /// self-perpetuating — refresh -> refreshGlanceData -> mirror lands -> post -> observer ->
+    /// refresh -> … — and the `_glanceRefreshPending` coalescing guard does NOT stop it, because
+    /// it is cleared BEFORE the post, so the next kick always gets through. The result is an
+    /// unbounded loop running as fast as buildGlanceData() can turn over, saturating
+    /// dataAccessQueue with rebuilds and MAIN with re-renders and taking the loan controller's
+    /// queue on every pass. Only the .active phase kicks the mirror, so it would run only during
+    /// a loan — exactly when the watch is dosing and can least afford a saturated main thread.
     private var mirrorObserver: NSObjectProtocol?
 
     func startRefreshing() {
@@ -650,20 +637,16 @@ final class GlanceViewModel: ObservableObject {
         } else if let eventual = data.eventual {
             s.eventualText = String(format: "%.0f", eventual.doubleValue(for: .milligramsPerDeciliter))
         }
-        // PROVENANCE (Jeremy 2026-07-20: "the UI doesn't make it clear if it's dexcom direct
-        // or not"). This used to read "the sport store is direct-only by construction, so a
-        // fresh number here is ALWAYS the watch's own radio — say so", and printed "G7 direct"
-        // unconditionally. THAT PREMISE IS FALSE: the phone-BG fallback
-        // (ingestPhoneGlucoseFromContext) writes relayed readings into the very same
-        // glucoseStore — `INGEST src=phone-relay stored=1/1 … (direct-G7 gap)` in the field
-        // logs. So the line claimed a direct sensor read for numbers the phone had supplied,
-        // which is exactly the confusion Jeremy flagged on 2026-08-05.
+        // PROVENANCE. The glucose store is NOT direct-only, so a fresh number here does not
+        // imply the watch's own radio: the phone-BG fallback (ingestPhoneGlucoseFromContext)
+        // writes relayed readings into the very same store. Labelling by store freshness would
+        // claim a direct sensor read for numbers the phone supplied.
         //
-        // Now driven by bgSource, which tracks the direct-G7 LINK (stamped on arrival, before
-        // the store's first-writer-wins dedup can discard the direct copy in favour of the
-        // phone's ~7s-earlier relay). So it says "G7 direct" when the watch's own radio is
-        // genuinely delivering, even when the phone also is — and "via iPhone" when the phone
-        // is carrying it alone.
+        // Driven by bgSource instead, which tracks the direct-G7 LINK — stamped on arrival,
+        // before the store's first-writer-wins dedup can discard the direct copy in favour of
+        // the phone's ~7 s earlier relay. So it says "G7 direct" when the watch's own radio is
+        // genuinely delivering, even when the phone also is, and "via iPhone" when the phone is
+        // carrying it alone.
         if !isStale, let age = age {
             switch s.bgSource {
             case .directG7:
