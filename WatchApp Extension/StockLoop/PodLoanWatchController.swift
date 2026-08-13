@@ -60,14 +60,29 @@ final class PodLoanWatchController {
     /// what poisons the BLE stack — and an armed-epoch that differs from the firing epoch is
     /// the cross-loan-residue signature. Both were previously inferable only from clustered
     /// timestamps; now each firing carries its own evidence.
-    private func schedule(after delay: TimeInterval, label: String, execute work: DispatchWorkItem) {
+    /// `epochScoped` timers refuse to fire into a loan they were not armed for. Opt-in rather
+    /// than blanket, for two reasons. A timer armed before any grant has no epoch — the request
+    /// timeout is armed while `epoch` is still nil, and blanket scoping would suppress the very
+    /// timeout that rescues a hung request. And some timers SHOULD outlive their loan: the
+    /// hand-back resend exists precisely to keep pushing records after the loan is over.
+    ///
+    /// The seam already knew the arming epoch and was only reporting a mismatch. This makes it
+    /// enforce one where the audit found firing into a later loan does damage.
+    private func schedule(after delay: TimeInterval, label: String, epochScoped: Bool = false, execute work: DispatchWorkItem) {
         let armedEpoch = epoch
         let armedAt = now()
-        SportLog.event("timer", "armed \(label) +\(fmtDelay(delay)) e=\(armedEpoch.map(String.init) ?? "-")")
+        SportLog.event("timer", "armed \(label) +\(fmtDelay(delay)) e=\(armedEpoch.map(String.init) ?? "-")\(epochScoped ? " scoped" : "")")
         let wrapper = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             if work.isCancelled {
                 SportLog.event("timer", "skipped \(label) — cancelled before its deadline")
+                return
+            }
+            // Skip LOUDLY. A silent drop here would be the #113 mistake again: "never armed",
+            // "fired and did nothing" and "refused to fire" have to stay distinguishable in
+            // the log, or the next investigation has no way to tell them apart.
+            if epochScoped, let armed = armedEpoch, armed != self.epoch {
+                SportLog.event("timer", "REFUSED \(label) — armed e=\(armed), now e=\(self.epoch.map(String.init) ?? "-") · a different loan owns the pod")
                 return
             }
             let late = self.now().timeIntervalSince(armedAt) - delay
@@ -85,8 +100,8 @@ final class PodLoanWatchController {
         }
     }
 
-    private func schedule(after delay: TimeInterval, label: String, execute body: @escaping () -> Void) {
-        schedule(after: delay, label: label, execute: DispatchWorkItem(block: body))
+    private func schedule(after delay: TimeInterval, label: String, epochScoped: Bool = false, execute body: @escaping () -> Void) {
+        schedule(after: delay, label: label, epochScoped: epochScoped, execute: DispatchWorkItem(block: body))
     }
 
     private func fmtDelay(_ d: TimeInterval) -> String {
@@ -1181,7 +1196,13 @@ final class PodLoanWatchController {
         // rather than set inline because `doseWindowUntil` is queue-confined and this is
         // called from the enactor's own queue.
         queue.async { [weak self] in self?.doseWindowUntil = nil }
-        schedule(after: 12, label: "post-dose-release") { [weak self] in
+        // epochScoped: this is the one timer in the file that ACTS on the pod link across a
+        // window long enough to outlive its loan. Its `.active` guard is not sufficient alone,
+        // because a LATER loan is also `.active` — a hand-back and re-grant inside 12 s would
+        // let this drop the BLE link out from under the loan that now owns the pod. The field
+        // margin is real but thin: e34 ended 01:56:31 with e35 active by 01:56:54, and the
+        // fast takeovers in that same session ran 6.8-7.2 s.
+        schedule(after: 12, label: "post-dose-release", epochScoped: true) { [weak self] in
             // Unconditional since #101 phase 2 — see the takeover-release note above for why
             // the `g7.e4ReleasePod` gate had to go (absent key = false = hold the link forever
             // on a fresh install, the arm the toggle experiment disproved).
