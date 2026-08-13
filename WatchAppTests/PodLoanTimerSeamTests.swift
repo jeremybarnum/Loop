@@ -86,15 +86,16 @@ final class PodLoanTimerSeamTests: XCTestCase {
 
         // Fulfill on the SCHEDULER, not the send: both happen in one queue block, send first,
         // and a wait keyed on the send can return in the gap between them.
-        var captured: [TimeInterval] = []
+        var captured: [(TimeInterval, String)] = []
         let timerArmed = expectation(description: "timeout armed")
-        controller.scheduler = { delay, _ in captured.append(delay); timerArmed.fulfill() }
+        controller.scheduler = { delay, label, _ in captured.append((delay, label)); timerArmed.fulfill() }
 
         controller.requestLoan(watchBuild: "seam-test")
         wait(for: [timerArmed], timeout: 5)
 
         XCTAssertEqual(sent, 1)
-        XCTAssertEqual(captured, [25], "the request timeout is the only timer a bare request arms")
+        XCTAssertEqual(captured.map(\.0), [25], "the request timeout is the only timer a bare request arms")
+        XCTAssertEqual(captured.map(\.1), ["request-timeout"], "and it is the one we think it is")
     }
 
     /// Virtual time: fire the timeout inline (we are on the controller's queue at schedule
@@ -109,7 +110,7 @@ final class PodLoanTimerSeamTests: XCTestCase {
         controller.send = { _ in sends += 1; secondSend.fulfill() }
 
         // Jump every one-shot timer to its deadline the moment it is armed.
-        controller.scheduler = { _, work in work.perform() }
+        controller.scheduler = { _, _, work in work.perform() }
 
         controller.requestLoan(watchBuild: "seam-test")   // request → inline timeout → idle
         controller.requestLoan(watchBuild: "seam-test")   // must be accepted again
@@ -141,7 +142,7 @@ final class PodLoanTimerSeamTests: XCTestCase {
         var sends = 0
         let firstSend = expectation(description: "first request sent")
         controller.send = { _ in sends += 1; if sends == 1 { firstSend.fulfill() } }
-        controller.scheduler = { _, _ in }   // time never advances
+        controller.scheduler = { _, _, _ in }   // time never advances
 
         controller.requestLoan(watchBuild: "seam-test")
         wait(for: [firstSend], timeout: 5)
@@ -149,7 +150,7 @@ final class PodLoanTimerSeamTests: XCTestCase {
 
         // Drain the controller's queue: a third call's guard runs after the second's.
         let drained = expectation(description: "queue drained")
-        controller.scheduler = { _, _ in }
+        controller.scheduler = { _, _, _ in }
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { drained.fulfill() }
         wait(for: [drained], timeout: 5)
 

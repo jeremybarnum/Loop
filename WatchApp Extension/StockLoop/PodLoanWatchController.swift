@@ -50,7 +50,10 @@ final class PodLoanWatchController {
     /// resends and deferred releases deterministically. nil (production) preserves the exact
     /// prior behavior — same queue, same deadline arithmetic — and the DispatchWorkItem
     /// crosses the seam intact, so cancellation works identically in both worlds.
-    var scheduler: ((_ delay: TimeInterval, _ work: DispatchWorkItem) -> Void)?
+    /// The label crosses too: it is what lets a test assert WHICH timers a transition arms,
+    /// not merely how many. "a request arms exactly [request-timeout]" is a claim about
+    /// behavior; "a request arms exactly one timer" is a claim about arithmetic.
+    var scheduler: ((_ delay: TimeInterval, _ label: String, _ work: DispatchWorkItem) -> Void)?
 
     /// Every timer logs armed / fired / skipped, with its lateness and the epoch it was armed
     /// under. Lateness is the suspension signature — a deferred release firing minutes late is
@@ -76,7 +79,7 @@ final class PodLoanWatchController {
             work.perform()
         }
         if let scheduler = scheduler {
-            scheduler(delay, wrapper)
+            scheduler(delay, label, wrapper)
         } else {
             queue.asyncAfter(deadline: .now() + delay, execute: wrapper)
         }
