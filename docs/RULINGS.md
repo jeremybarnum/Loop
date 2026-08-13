@@ -509,10 +509,10 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
 
   The two directions are not the same failure and do not get the same response:
 
-  - POSITIVE (pod delivered MORE than our books) beyond **+0.5 U** → the loop goes
+  - POSITIVE (pod delivered MORE than our books) beyond **+0.20 U** → the loop goes
     OPEN, loudly. There is insulin in the body the algorithm cannot see, so closed
     loop would dose on top of it. That is stacking; the remedy is to stop the machine.
-  - NEGATIVE (pod delivered LESS than our books) beyond **−0.5 U** → warn, keep
+  - NEGATIVE (pod delivered LESS than our books) beyond **−0.20 U** → warn, keep
     looping. The books carry phantom IOB, so the algorithm believes more insulin is
     working than there is and doses LESS. The error is self-limiting, decays out
     within DIA, and R22's annulment already retires the identifiable cases. Opening
@@ -521,18 +521,48 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
     approved the asymmetry when it was proposed; it is a refinement of R32's
     unconditional text, recorded here so the divergence is deliberate and visible.)
 
-  Why ±0.5 U and not something tighter: ten pulses. Quantization cannot produce it,
-  a recorded bolus cannot produce it, and the largest bias ever measured is a third
-  of it — so a trip means something real happened. It is loose ON PURPOSE, because
-  every residual available when it was chosen had been measured against the watch's
-  stale endpoint, i.e. against the wrong interval. Tightening from that data would
-  be fitting to known-bad numbers.
+  **R32(c) TIGHTENED 2026-08-13 — ±0.5 U → ±0.20 U, from the bank.** (Jeremy: "make
+  it warn and open loop asymmetrically as we discussed when the difference is more
+  than .20 units".) The ±0.5 U above was loose ON PURPOSE — ten pulses, chosen when
+  every residual available had been measured against the watch's stale endpoint, i.e.
+  against the wrong interval, so tightening from it would have been fitting to
+  known-bad numbers. `finishPendingHandbackAudit` fixed the interval, the bank filled
+  with clean phone-read samples, and the review the log had been demanding is now done.
 
-  **TIGHTEN THIS.** `bankResidual` persists every authoritative residual and prints
-  `residual bank: n=… mean=… worst=…` at each hand-back, counting down to ten clean
-  samples and then printing `** R32 THRESHOLD REVIEW DUE **` at every subsequent
-  hand-back until someone acts. The reminder is in the log rather than in this file
-  because a doc only reminds you if you re-read it.
+  The distribution it was set from: **n=13, mean −0.031, worst |0.200|, min −0.200,
+  max +0.000.**
+
+  What that distribution says, and it is the whole reason this is a safe change: the
+  residual is systematically NEGATIVE. Every one of the thirteen samples is at or below
+  zero, and the open-loop direction has never once been observed. So the bound that can
+  stop the machine is being tightened into territory the field has never entered — it
+  costs nothing in false trips against the measured data while catching a real
+  over-delivery six pulses sooner than before. 0.20 U is still four pulses, well clear
+  of the quantization artifact #107 measured at roughly half a pulse per temp
+  replacement.
+
+  The negative bound is the one that now sits ON the data: the worst banked sample is
+  exactly −0.200, so a loan marginally worse than anything yet seen will warn. Deliberate.
+  That direction never opens the loop, so a trip costs a notice rather than a therapy gap,
+  and under-delivery is exactly where early visibility is wanted while the distribution
+  fills in. If routine loans start warning, that is information — either the books are
+  drifting or the bound wants to be −0.25.
+
+  Note what was NOT built: the cycle-count-scaled threshold sketched during the review.
+  A flat bound is what was ruled, and the data supports it — the residual does not visibly
+  grow with loan length across the banked samples (28-, 54- and 56-minute loans all land
+  inside ±0.20). Revisit only if a multi-hour session shows accumulation; the samples are
+  short-loan-heavy, which is this ruling's main evidentiary weakness.
+
+  **The self-reminding mechanism, re-armed.** `bankResidual` persists every authoritative
+  residual and prints `residual bank: n=… mean=… worst=…` at each hand-back. It used to
+  count to ten and then print `** R32 THRESHOLD REVIEW DUE — … the ±0.50 U bounds were set
+  with none **` at every hand-back until someone acted. Someone has now acted, so that text
+  would print a falsehood forever — the same cry-wolf failure OBS-8 was about. It now states
+  the bounds' provenance and counts toward a RE-review at 40 samples, which is the ring
+  capacity, so it trips exactly when the entire window is fresh evidence gathered under the
+  tightened bounds. The reminder stays in the log rather than in this file because a doc only
+  reminds you if you re-read it.
 
   Implementation note: opening the loop deliberately does NOT go through
   `setAutomaticDosingPaused(true)`. That call pairs with a `(false)` at the next

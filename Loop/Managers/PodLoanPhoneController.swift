@@ -352,19 +352,28 @@ final class PodLoanPhoneController {
     // MARK: - R32(b): what a reconciliation difference actually DOES
 
     /// A positive residual — the pod delivered MORE than our books say — beyond this opens the
-    /// loop. Ten pulses: quantization cannot produce it, a bolus we recorded cannot produce it,
-    /// and the largest bias we have ever measured is a third of it. So a trip means something
-    /// real happened that our records do not contain.
+    /// loop. **0.20 U, set FROM DATA on 2026-08-13** (Jeremy: "make it warn and open loop
+    /// asymmetrically … when the difference is more than .20 units"), replacing the deliberately
+    /// loose +0.5 U that had to be chosen when every residual available had been measured against
+    /// the watch's stale endpoint — i.e. against the wrong interval.
     ///
-    /// DELIBERATELY LOOSE, and it should not stay this loose. Every residual we had when this was
-    /// chosen was measured against the watch's stale endpoint, i.e. against the wrong interval —
-    /// which is exactly what `finishPendingHandbackAudit` now fixes. Tightening before the new
-    /// measurement has a distribution would be fitting to known-bad data. `bankResidual` counts
-    /// the clean samples and says in the log when there are enough. See RULINGS R32.
-    private static let openLoopPositiveResidual: Double = 0.5
+    /// The bank that justifies it: n=13 authoritative samples, mean −0.031, worst |0.200|,
+    /// min −0.200, max +0.000. Note WHERE THE MASS SITS — every sample is at or below zero, so the
+    /// open-loop direction has never once been observed. Tightening 2.5× therefore costs nothing
+    /// in false trips against the measured distribution, while catching a real over-delivery six
+    /// pulses sooner. Four pulses (0.20 U) is still well clear of quantization, which #107 showed
+    /// tops out around half a pulse per temp replacement.
+    private static let openLoopPositiveResidual: Double = 0.20
 
-    /// A negative residual — the pod delivered LESS than our books say — beyond this warns.
-    private static let warnNegativeResidual: Double = 0.5
+    /// A negative residual — the pod delivered LESS than our books say — beyond this warns, and
+    /// only warns (see the sign asymmetry on `applyReconciliationVerdict`). Also 0.20 U.
+    ///
+    /// Unlike the positive bound, this one DOES sit on the measured distribution: the worst banked
+    /// sample is exactly −0.200, so a loan marginally worse than anything yet seen will now warn.
+    /// That is the intended trade rather than an oversight — this direction never opens the loop,
+    /// so the cost of a trip is a notice, not a therapy gap, and the under-delivery direction is
+    /// precisely where we WANT early visibility while the residual's true distribution fills in.
+    private static let warnNegativeResidual: Double = 0.20
 
     /// R32(b), sign-aware. The two directions are not the same failure and do not deserve the
     /// same response:
@@ -411,17 +420,25 @@ final class PodLoanPhoneController {
         let worst = history.map(abs).max() ?? 0
         var line = String(format: "residual bank: n=%d mean=%+.3f worst=|%.3f| min=%+.3f max=%+.3f",
                           history.count, mean, worst, history.min() ?? 0, history.max() ?? 0)
-        if history.count >= Self.residualSampleTarget {
-            line += String(format: " ** R32 THRESHOLD REVIEW DUE — %d authoritative samples banked; the ±%.2f U bounds were set with none **",
+        // The first review HAPPENED (2026-08-13, n=13 → ±0.20 U), so this line no longer asks for
+        // it. Leaving the old text in place would have printed "the bounds were set with none" at
+        // every hand-back forever — a log line stating something false, which is the exact
+        // cry-wolf failure OBS-8 was about. The ratchet is kept, just re-armed further out.
+        if history.count >= Self.residualReReviewTarget {
+            line += String(format: " ** R32 THRESHOLD RE-REVIEW DUE — %d samples banked since the ±%.2f U bounds were set from 13 on 2026-08-13 **",
                            history.count, Self.openLoopPositiveResidual)
         } else {
-            line += String(format: " (%d more for a threshold review)", Self.residualSampleTarget - history.count)
+            line += String(format: " (bounds ±%.2f U, set from 13 samples 2026-08-13; %d more for a re-review)",
+                           Self.openLoopPositiveResidual, Self.residualReReviewTarget - history.count)
         }
         handbackDiag(epoch, line)
     }
 
-    /// How many phone-read residuals to bank before the loose bounds above are worth revisiting.
-    private static let residualSampleTarget = 10
+    /// How many banked residuals before the bounds above are worth revisiting AGAIN. The first
+    /// review fired at 10, was acted on at 13, and set ±0.20 U; this is the next checkpoint.
+    /// It equals the ring capacity, so it trips exactly when the whole 40-sample window is fresh
+    /// evidence gathered under the tightened bounds.
+    private static let residualReReviewTarget = 40
 
     /// True whenever this phone does NOT own the pod's connection (any non-owner
     /// state — the link is released or in flux). Delivery attempts made here while

@@ -895,8 +895,23 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         let bank = diagMatching("residual bank:")
         XCTAssertNotNil(bank, "each audit must bank its residual and say how many exist")
         XCTAssertTrue(bank!.contains("n=1"), "got: \(bank!)")
-        XCTAssertTrue(bank!.contains("9 more for a threshold review"), "got: \(bank!)")
+        XCTAssertTrue(bank!.contains("39 more for a re-review"), "got: \(bank!)")
+        XCTAssertFalse(bank!.contains("set with none"),
+                       "the first review HAPPENED — this line must not keep claiming otherwise: \(bank!)")
         XCTAssertEqual((UserDefaults.standard.array(forKey: "PodLoanPhoneController.residualHistory") as? [Double])?.count, 1)
+    }
+
+    /// The tightening itself (2026-08-13, ±0.5 → ±0.20 U). +0.25 U is the interesting case: it is
+    /// over the new bound and UNDER the old one, so this test fails against the previous
+    /// thresholds and passes against these. Without it, a silent revert of the constant would go
+    /// unnoticed — the other R32 tests use ±2 U and stay green either way.
+    func testResidualJustAboveTheTightenedBoundOpensTheLoop() throws {
+        let controller = makeController()
+        try runLoanToAudit(controller, deliveredDuringLoan: 0.25)
+
+        waitUntil(timeout: 5, "open-loop verdict") { self.diagMatching("R32 OPEN LOOP") != nil }
+        XCTAssertEqual(openLoopCalls, 1, "+0.25 U is over the 0.20 U bound — the loop must open")
+        XCTAssertTrue(notices.contains("Loop Opened — Unexplained Insulin"))
     }
 
     /// Row 10: the same offer redelivered (lost ack) re-acks the same cursor and
