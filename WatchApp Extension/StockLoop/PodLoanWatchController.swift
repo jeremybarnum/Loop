@@ -106,6 +106,17 @@ final class PodLoanWatchController {
     /// wedge, where every offer went out with reachable=true and none was ever acked. Only the
     /// second one is fixed by restarting the watch app, so only the second one should say so.
     private var handbackSawUnreachable = false
+    /// Did any urgent send ERROR during this hand-back? Separates #113's two variants at the
+    /// timeout: erroring sends mean the session is re-establishing and will likely self-heal
+    /// (variant B, field 2026-08-13 — recovered 76 s after the timeout fired); silent sends
+    /// with no acks mean the one-way wedge whose only known recovery is restarting the watch
+    /// app (variant A, 2026-08-11). The advice for one is wrong for the other.
+    private var handbackSawUrgentSendError = false
+
+    /// Called by the transport when an urgent send's errorHandler fires (StockLoopSession).
+    func noteUrgentSendFailed() {
+        queue.async { self.handbackSawUrgentSendError = true }
+    }
 
     /// Injected transport: dictionary -> WCSession.transferUserInfo (integration step).
     var send: (([String: Any]) -> Void)?
@@ -1436,6 +1447,7 @@ final class PodLoanWatchController {
             self.handbackRequested = true
             self.handbackResendCount = 0
             self.handbackSawUnreachable = false   // #113
+            self.handbackSawUrgentSendError = false
             // #67: bound the wait for the phone's ack. Pre-scheduled alert fires from a suspended
             // app; the resend loop resumes Sport Mode on the watch at the same deadline. Covers
             // both the interim-drain path below and the legacy single-phase finalize.
@@ -1485,9 +1497,19 @@ final class PodLoanWatchController {
         // and not a single ack came back. An unreachable phone explains a hang innocently and
         // heals itself; sustained reachability with total silence is the transport wedge.
         let wedgeSuspected = handbackResendCount >= 3 && !handbackSawUnreachable && isPhoneReachable()
-        let wedgeSuffix = wedgeSuspected
-            ? " · ** \(handbackResendCount) offers, phone REACHABLE throughout, zero acks — transport wedge (#113); restarting the WATCH app is the known recovery **"
-            : ""
+        // Erroring sends = the session is tearing down/re-establishing (variant B): the queued
+        // fallback delivers when it comes back, usually within a minute or two. Silent sends
+        // with zero acks = the one-way wedge (variant A), where only a watch-app restart has
+        // ever recovered it.
+        let sendsErrored = handbackSawUrgentSendError
+        let wedgeSuffix: String
+        if wedgeSuspected && sendsErrored {
+            wedgeSuffix = " · ** \(handbackResendCount) offers, phone reachable, zero acks — but the sends themselves ERRORED: session re-establishing (#113 variant B), usually self-heals in 1-2 min **"
+        } else if wedgeSuspected {
+            wedgeSuffix = " · ** \(handbackResendCount) offers, phone REACHABLE throughout, zero acks — transport wedge (#113 variant A); restarting the WATCH app is the known recovery **"
+        } else {
+            wedgeSuffix = ""
+        }
         handbackRequested = false
         finalOfferSent = false
         if wasFinal, let manager = pumpManager {
@@ -1504,11 +1526,11 @@ final class PodLoanWatchController {
             // Interim hang: never stopped dosing; phase already .active. Just abort the drain.
             SportLog.event("loan", "HAND-BACK timed out (interim, \(Int(HandbackStuckAlert.interval))s) — iPhone never acked; Sport Mode continues on the watch\(wedgeSuffix)")
         }
-        if wedgeSuspected {
-            // #113: tell the user the ONE thing that fixes it. On 2026-08-11 the phone acked
-            // eight times, the watch saw none, and the only recovery was force-quitting the WATCH
-            // app — which nothing on screen suggested. The generic "iPhone never acked" points at
-            // the phone, which is exactly the wrong device to go poke at.
+        if wedgeSuspected && sendsErrored {
+            issueProtocolAlert(body: "The connection to the iPhone is re-establishing — replies usually resume within a minute or two. Try End again shortly. Restart the Watch app only if this keeps happening. The pod is still safe on the watch.")
+        } else if wedgeSuspected {
+            // Tell the user the ONE thing that fixes variant A: the generic "iPhone never
+            // acked" points at the phone, which is exactly the wrong device to go poke at.
             issueProtocolAlert(body: "The iPhone is reachable but its replies are not arriving. Force-quit and reopen the Watch app to restore the connection. The pod is still safe on the watch.")
         }
         // HandbackStuckAlert is intentionally NOT disarmed here — its pre-scheduled notification

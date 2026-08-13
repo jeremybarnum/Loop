@@ -75,7 +75,7 @@ final class StockLoopSession {
         // #67 follow-up: the one question the hand-back UI needs answered.
         loanController.isPhoneReachable = { WCSession.default.isReachable }
 
-        loanController.send = { dictionary in
+        loanController.send = { [weak loanController] dictionary in
             // Two channels, chosen per message kind. transferUserInfo is queued and survives
             // reachability flaps and relaunches — the semantics the cursor/ID machinery assumes —
             // but it is non-urgent, which strands an interactive handshake. Those take sendMessage
@@ -118,6 +118,7 @@ final class StockLoopSession {
             }
             session.sendMessage(dictionary, replyHandler: nil, errorHandler: { error in
                 SportLog.event("wc", "urgent send FAILED (\(error.localizedDescription)) — falling back to the queued path")
+                loanController?.noteUrgentSendFailed()   // #113: erroring sends distinguish variant B at the timeout
                 enqueueSuperseding(dictionary)
             })
         }
