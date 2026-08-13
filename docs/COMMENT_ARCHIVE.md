@@ -332,3 +332,36 @@ temp a 1.67x high temp, corrections 1.67x oversized, systematic OVER-delivery un
 reduced-needs override, while the prediction path already used the applied ISF (:1211, :1607) so
 prediction and dosing disagreed. #112 (2026-08-11) then removed the `?? settings.<raw>` fallback
 for stock parity.
+
+## Second batch, same date — four more blocks
+
+**PodLoanWatchController, loanDidRecordCarbs — this one was WRONG, not merely long.** It opened
+with a whole paragraph of superseded v1 policy: "SUPPRESSED in v1 (Jeremy 2026-07-26): carbs are
+ONE-WAY phone→watch ... Carb entry during a loan isn't part of v1, so this is a guard: we do NOT
+mint a `.carb` journal event or stream it. Re-enable the round-trip (restore the mint +
+streamRecords below) when the phone-side idempotent carb ingest lands. The carb-entry UI still
+calls this; it just no-ops." The very next line said #49/#66 (2026-08-04) had shipped the
+round-trip. A reader taking the paragraphs in order would conclude the opposite of what the code
+does. Deleted rather than rewritten.
+
+**PodLoanWatchController, the grant-timeout cancel ordering.** The stranded-phase fix
+(2026-08-06): `requestTimeoutWork?.cancel()` used to run as the FIRST line, before validation, so
+every rejection returned without restoring `phase` — leaving the controller at `.requested` with
+no timeout pending and nothing to move it. Since requestLoan guards on `phase == .idle`, Start
+became a silent no-op and Sport Mode was unstartable until relaunch. debugReset was the other
+escape at the time; it was removed 2026-08-11.
+
+**PodLoanWatchController, teardownPump's explicit BLE release.** Added 2026-08-04. Field evidence
+(Jeremy): during "Reclaiming…" the phone's pump status read minutes old, from BEFORE the loan.
+Measured — the watch reported CLOSED 0.9-7.2 s after End, yet the phone did not reach a verified
+round-trip for another 85-99 s. Crude never had this problem because crude never had this
+teardown path; E4 releases explicitly every five minutes and logs a clean
+`state connected -> disconnected (+3s)`.
+
+**PodLoanWatchController, the #81 reclaim gate.** The statistics stay in the code — they are the
+non-obvious thing the gate exists for. What left is the regression history: it broke via two
+changes that only co-occurred on 2026-07-30, the loop trigger moving to the phone-BG fallback
+(firing ~1 s AFTER G7 connect, mid-handshake, where the watch's own glucose packet used to fire
+at handshake END), and #54 making scan-adopt primary (a one-shot scan is contention-sensitive
+where the old queued pending-connect with its read-6 escalation was not). Jul 25-26, live sensor,
+old paths: 59/59.

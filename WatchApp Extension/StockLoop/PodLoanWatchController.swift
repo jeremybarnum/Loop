@@ -521,18 +521,13 @@ final class PodLoanWatchController {
     private func handleGrant(_ grant: LoanGrant) {
         SportLog.event("loan", "GRANT received — epoch \(grant.epoch), \(grant.pumpManagerRawState.count)B pod state")
 
-        /// STRANDED-PHASE FIX (backlog triage, 2026-08-06). `requestTimeoutWork?.cancel()` used to
-        /// run as the FIRST line — before any validation. Every rejection below then returned
-        /// without restoring `phase`, so a rejected grant left the controller at `.requested`
-        /// with no timeout pending and nothing to move it. `requestLoan` guards on
-        /// `phase == .idle` (:283), so from then on Start was a silent no-op: Sport Mode
-        /// unstartable until the app was relaunched (debugReset was the other escape at the
-        /// time; it was removed 2026-08-11).
-        ///
-        /// Cancelling here — after the phase check, before the rejections — keeps the original
-        /// intent (a grant that we are going to ACT on stops the timeout) while every rejection
-        /// path goes through `rejectGrant`, which restores `.idle` so the timeout's job is done
-        /// by the state instead.
+        /// Order matters here. The timeout is cancelled AFTER the phase check and BEFORE the
+        /// rejections: a grant we are going to act on stops the timeout, but a rejected one must
+        /// leave something to move the controller. Cancel any earlier and a rejection strands it
+        /// at `.requested` with no timeout pending — and since `requestLoan` guards on
+        /// `phase == .idle`, Start becomes a silent no-op until the app is relaunched. Every
+        /// rejection path goes through `rejectGrant`, which restores `.idle` so the state does
+        /// the timeout's job instead.
         guard phase == .idle || phase == .requested else {
             SportLog.event("loan", "grant ignored — wrong phase (\(phase.rawValue))")
             return
@@ -996,21 +991,14 @@ final class PodLoanWatchController {
     /// Highest epoch the phone has ever revoked — survives an unmatched revoke (see handleRevoke).
     private var lastRevokedEpoch: Int?
 
-    /// #81 (2026-07-30 forensics): the reclaim must not start INSIDE the G7's connect+auth
-    /// burst. Across 140 ladders spanning five days, the single discriminator is how much
-    /// live G7 GATT session remains when the reclaim starts: >1s remaining → 0/45 success;
-    /// closing within 1s → 62/69; no link → 23/26 (p ≈ 2.7e-27). A G7 SCAN in flight is
-    /// harmless (4/4) — the contended resource is the connection initiator, not the scanner.
+    /// The reclaim must not start INSIDE the G7's connect+auth burst. Measured across 140
+    /// ladders over five days, the single discriminator is how much live G7 GATT session
+    /// remains when the reclaim starts: >1 s remaining → 0/45 succeed; closing within 1 s →
+    /// 62/69; no link at all → 23/26 (p ≈ 2.7e-27). A G7 SCAN in flight is harmless (4/4) —
+    /// the contended resource is the connection initiator, not the scanner.
     ///
-    /// It regressed via two changes that only co-occurred on 2026-07-30: the loop trigger
-    /// moved to the phone-BG fallback (fires ~1s AFTER G7 connect, i.e. mid-handshake, where
-    /// the watch's own glucose packet used to fire at handshake END), and #54 made scan-adopt
-    /// primary (a one-shot scan is contention-sensitive where the old queued pending-connect
-    /// with its read-6 escalation was not). Jul 25-26, live sensor, old paths: 59/59.
-    ///
-    /// The enact path already waits (WatchLoopManager :1822) — but the "pump data N min old"
-    /// pre-cycle refresh reclaims BEFORE any arbitration, which is the caller that failed all
-    /// day. Gating here covers every caller.
+    /// The enact path already waits (WatchLoopManager :1822), but the "pump data N min old"
+    /// pre-cycle refresh reclaims BEFORE any arbitration. Gating here covers every caller.
     ///
     /// #97: is the pod's standing auto-connect bid currently RELEASED? E4-OFF assumes the pod
     /// is held; after an E4 release has disarmed the bid, that assumption is false and nothing
@@ -2080,26 +2068,16 @@ final class PodLoanWatchController {
     }
 
     private func teardownPump() {
-        // EXPLICITLY drop the BLE link before dropping the manager (2026-08-04).
+        // Drop the BLE link EXPLICITLY before dropping the manager. Relying on deallocation to
+        // tear down BlePodComms -> BluetoothManager -> CBCentralManager is the weakest release
+        // path there is, and this is the one moment the pod must actually become free: without
+        // an explicit disconnect nothing removes the pod from autoConnectIDs, any lingering
+        // reference keeps the link, and a pod that stays CONNECTED is not advertising — so the
+        // phone's standing connect cannot land however aggressive it is.
         //
-        // This used to rely on deallocation alone: nil the delegate, nil the manager, and trust
-        // ARC to tear down BlePodComms -> BluetoothManager -> CBCentralManager. That is the
-        // weakest release path in the codebase, and it was being used at the ONE moment the pod
-        // must actually become free. Nothing ever called cancelPeripheralConnection, nothing
-        // removed the pod from autoConnectIDs, and any lingering reference kept the link — so
-        // the pod stayed CONNECTED (and therefore not advertising), and the phone's standing
-        // connect could not land no matter how aggressive it is.
-        //
-        // Field evidence (Jeremy, 2026-08-04): during "Reclaiming…" the phone's pump status
-        // read minutes old — from BEFORE the loan — so the phone genuinely did not have the pod.
-        // Measured: the watch reported CLOSED 0.9-7.2s after End, yet the phone did not reach a
-        // verified round-trip for another 85-99s. And crude never had this, because crude never
-        // had this teardown path. E4 meanwhile releases explicitly every five minutes and logs a
-        // clean `state connected -> disconnected (+3s)`.
-        //
-        // podLoanOrphanConnection is the right primitive rather than releaseConnection: it does
-        // the disconnect + cancelLoanScan WITHOUT the C5 record-close, which finalizeHandback
-        // has already performed and which ledgerClear below supersedes anyway.
+        // podLoanOrphanConnection rather than releaseConnection: it does the disconnect +
+        // cancelLoanScan WITHOUT the C5 record-close, which finalizeHandback has already
+        // performed and which ledgerClear below supersedes anyway.
         SportLog.event("handback", "teardownPump: releasing BLE explicitly (see PODLOAN orphan log for the identifier)")
         pumpManager?.podLoanOrphanConnection()
         pumpManager?.pumpManagerDelegate = nil
@@ -2239,27 +2217,21 @@ extension PodLoanWatchController: WatchLoanDoseRecording {
                           uncertainKind: .bolusUncertain)
     }
 
-    /// SUPPRESSED in v1 (Jeremy 2026-07-26): carbs are ONE-WAY phone→watch. A watch-entered carb is
-    /// NOT returned to the phone — the takeover wipe-then-replace (`ingestGrantCarbs`) is the single
-    /// source of truth, and returning a watch carb would need the idempotent phone-side ingest that
-    /// isn't built yet (#49/#66); without it a returned carb could double-count on the phone. Carb
-    /// entry during a loan isn't part of v1, so this is a guard: we do NOT mint a `.carb` journal
-    /// event or stream it. Re-enable the round-trip (restore the mint + streamRecords below) when the
-    /// phone-side idempotent carb ingest lands. The carb-entry UI still calls this; it just no-ops.
-    /// #49/#66 (2026-08-04): watch-entered carbs now follow the pod home.
+    /// Watch-entered carbs follow the pod home.
     ///
-    /// Rides the ordinary journal, exactly like the override path — which means it inherits the
-    /// per-loan seq, the commit cursor, resend-until-ack and the hand-back drain for free. The
-    /// phone side was already complete: LoanReconciler turns a .carb record into a NewCarbEntry
-    /// (LoanReconciler.swift:183-189) and both commit sites run behind
+    /// Rides the ordinary journal, exactly like the override path, so it inherits the per-loan
+    /// seq, the commit cursor, resend-until-ack and the hand-back drain for free. On the phone,
+    /// LoanReconciler turns a .carb record into a NewCarbEntry (LoanReconciler.swift:183-189)
+    /// and both commit sites run behind
     /// `.filter { !stagedTombstones.contains($0.id) && !committedIDs.contains($0.id) }`, so a
-    /// redelivered record is dropped before it can reach addCarb. That protocol-level gate is
-    /// what #66 asked for; NewCarbEntry itself carries no identity (CarbStore mints a fresh
-    /// syncIdentifier on every addCarbEntry), so the store can never dedupe and the cursor has
-    /// to be the guard.
+    /// redelivered record is dropped before it reaches addCarb.
+    ///
+    /// That protocol-level gate is load-bearing, not belt-and-braces: NewCarbEntry carries no
+    /// identity of its own (CarbStore mints a fresh syncIdentifier on every addCarbEntry), so
+    /// the store can never dedupe and the cursor is the only guard against double-counting.
     ///
     /// No skew gate needed, unlike .overrideChange: .carb is an original kind that every phone
-    /// build in the field can already decode.
+    /// build in the field can decode.
     func loanDidRecordCarbs(_ entry: NewCarbEntry) {
         let grams = entry.quantity.doubleValue(for: .gram())
         queue.async {
