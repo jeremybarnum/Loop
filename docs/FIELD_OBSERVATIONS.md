@@ -730,6 +730,65 @@ carbs. Needs thought about the CarbStore surface (stock mints identity per add, 
 parked rather than rushed — #118 closes the known mechanism, and R-series discipline says no
 new safety machinery without a ruling.
 
+## 2026-08-13 02:13 (e36, build 274) — OBS-9: force-reclaim resumes CLOSED LOOP without ever asking the pod
+
+Jeremy's deliberate safety test, and the most valuable one run so far: start a loan, power the
+phone OFF, deliver a 1 U manual bolus on the watch, power the WATCH off, power the phone back
+on, then force-reclaim from the phone WHILE THE WATCH IS STILL OFF. Bench rig — water pod, not
+on his body.
+
+Expected (his): the phone notices an odometer discrepancy and throws an error.
+Observed: no error he could see, and yet the phone came back with the RIGHT IOB.
+
+**Where the right IOB came from — NOT the odometer.** Odometer-derived IOB injection is still
+gone, as ruled: `PodLoanPhoneController` :113 ("no odometer insulin is injected", removed
+2026-07-27) and :1179 ("stock never injects odometer-derived IOB"). `forceReclaimToOwner`
+builds its reconciler input with `odometer: nil` (:1521) under the comment "reconcile staged
+events records-only (no odometer)".
+
+It came from the STAGED EVENT REPLAY. The watch streams its journal to the phone continuously
+during a loan — `[handback] stream: N event(s)` fires within ~14 ms of a delivery (01:57:54.388
+MANUAL BOLUS → 01:57:54.402 stream) — the phone stages those events, and force-reclaim
+reconciles and writes whatever it holds before dropping the loan. Working as designed.
+
+**The error DID fire; it just is not phrased as one.** The "Sport Mode Reset — A previous watch
+loan was ended without a clean hand-back; its records were saved" notification is
+`deps.issueNotice` at :1572, and it sits INSIDE `if !events.isEmpty`. So its presence is proof
+the staged path ran with a non-empty set. Jeremy saw it in Notification Center, 4 minutes old.
+
+Corroborating arithmetic, all three independent: watch `[glance] RENDER iob=3.52` at 02:02:38
+and `[bolus-ui] flow open · ON LOAN` at 02:02:44 (the watch log ends 02:02:47, right as he
+opened the dial — the mirror stopped when the watch went off, so the delivery itself is not in
+any log we have); phone screenshot 02:17 showing IOB 4.3 U, i.e. 3.52 + 1.0 decayed over ~15
+min; and the phone log at 02:17:31 already `state=owner`, writing `0 dose(s)` for the returning
+watch's final offer at cursor 3 — nothing left to commit because it had all landed at 02:13.
+
+**THE FINDING. R32 never ran, and on this path it structurally cannot.** Force-reclaim writes
+its books and then calls `setAutomaticDosingPaused(false)` (:1578) — closed loop resumes —
+having never compared those books against the pod. The odometer is RIGHT THERE: `reclaimConnection()`
+is called on the next line (:1575), so the phone has the pod link back. R32's machinery exists,
+was just tightened to ±0.20 U, and is bypassed entirely here because the input carries no odometer.
+
+Why that matters, in the dangerous direction: this path trusts that the stream kept up. It did
+this time. If the watch had died with a delivered-but-unstreamed dose, the phone would resume
+closed-loop dosing UNDER-counting IOB — and under-counted IOB means dosing on top of insulin
+that is really there, i.e. stacking toward a hypo. That is precisely the failure R32(b)'s
+positive branch exists to stop, and precisely the case where the pod's own odometer would have
+caught it, because the pod always knows what it delivered.
+
+Note the test did not prove the path safe — it proved the stream was fast enough on this
+occasion. The 4-minute window between the force-reclaim at 02:13 and the watch's return at
+02:17 is exactly the interval in which the phone was looping on unverified books.
+
+PROPOSED (needs a ruling — this is a safety behavior change, not a bug fix): after force-reclaim
+writes the staged events, read the pod odometer and run the SAME `applyReconciliationVerdict`
+against expected-from-staged-events. Over-delivery beyond +0.20 U → R32 OPEN LOOP, which is the
+already-ruled remedy for exactly this uncertainty. Under-delivery → warn, per the existing
+asymmetry. The alternative reading is that force-reclaim should open the loop unconditionally,
+since "the watch vanished mid-loan" is the definition of an unclean hand-back — R32's own text
+says the loop goes open when a hand-back "cannot be established as complete", and this one
+cannot be, however good the records look.
+
 ## 2026-08-13 — the 19-second post-wake write EXPLAINED: it is a HealthKit sync, not Core Data
 
 Twice measured (e27 19.3 s, e31 18,989 ms), both on a freshly-woken phone, and recorded twice
