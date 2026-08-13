@@ -983,7 +983,17 @@ final class PodLoanPhoneController {
     // MARK: - Records (§2.4-2.6)
 
     private func handleBatch(_ batch: DoseRecordBatch) {
-        guard batch.epoch == epoch, state == .loaned || state == .reclaimPending else { return }
+        // OBS-9 (2026-08-13): this guard DISCARDS dose records, and used to do it in total
+        // silence — no log on either side. That made a whole class of question unanswerable
+        // from the logs: after a force-reclaim the phone is .owner, so every batch a returning
+        // watch flushes from its queued backlog lands here and vanishes. The records are not
+        // lost in the end (the watch's 15 s offer resend carries the same events, and the offer
+        // path still commits in .owner), but "were these doses dropped here, or did they never
+        // arrive?" had no answer. It has one now.
+        guard batch.epoch == epoch, state == .loaned || state == .reclaimPending else {
+            handbackDiag(batch.epoch, "batch DROPPED — \(batch.events.count) event(s) ev=\(batch.epoch) vs phone ev=\(epoch), state=\(state.rawValue) (recovered via the offer path if the watch still resends)")
+            return
+        }
         stage(events: batch.events, tombstones: batch.tombstones)
     }
 

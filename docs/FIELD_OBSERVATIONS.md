@@ -746,10 +746,37 @@ gone, as ruled: `PodLoanPhoneController` :113 ("no odometer insulin is injected"
 builds its reconciler input with `odometer: nil` (:1521) under the comment "reconcile staged
 events records-only (no odometer)".
 
-It came from the STAGED EVENT REPLAY. The watch streams its journal to the phone continuously
-during a loan — `[handback] stream: N event(s)` fires within ~14 ms of a delivery (01:57:54.388
-MANUAL BOLUS → 01:57:54.402 stream) — the phone stages those events, and force-reclaim
-reconciles and writes whatever it holds before dropping the loan. Working as designed.
+CAUSE NOT YET ESTABLISHED — and the first answer written here was wrong. It said "the staged
+event replay", i.e. that the watch had streamed the bolus to the phone and force-reclaim wrote
+it. Jeremy immediately challenged the premise: he ran the test so the phone and watch were
+never awake at the same time after the handoff, and streaming requires exactly that. He is
+right that the explanation needs it, and checking the guard makes it worse for that theory —
+`handleBatch` (:986) accepts a batch only while `state == .loaned || .reclaimPending`, so once
+force-reclaim sets `.owner` every streamed batch is DISCARDED. Post-reclaim streaming cannot be
+the source either.
+
+Two candidate timelines remain, and they have very different safety meanings:
+
+(a) The events were staged BEFORE the phone powered off (the loan ran from 02:02:18, so temp
+    basals and possibly more were streamed in that window), `staged` is persisted across the
+    reboot, and force-reclaim wrote them at 02:13. Benign — the books were complete when the
+    loop resumed.
+
+(b) The phone held NOTHING for the bolus at 02:13, and the records only landed when the watch
+    was powered back on at ~02:17:30 and flushed its queued offer. In that case the phone ran
+    CLOSED LOOP from 02:13 to 02:17:30 under-counting IOB by a full unit — dosing on top of
+    insulin that was really there. The hypothetical failure in the finding below would then be
+    something that actually happened in this test, not a thought experiment.
+
+The available phone log CANNOT distinguish them: it begins at 02:17:31.034, already `.owner`,
+and its first write says `0 dose(s)` for an offer carrying `ev=3`. Under (a) those 3 were
+committed at 02:13; under (b) they were committed by an earlier offer in the same wake-up
+burst, a fraction of a second before the excerpt starts. Both produce identical lines here.
+
+THE DECIDING ARTIFACT is a `write START 3 dose(s)` line and its timestamp — 02:13 means (a),
+02:17:30 means (b) — which needs the phone log covering 02:02 to 02:17. Also note the
+notification only proves force-reclaim had SOME non-empty staged set, not that the BOLUS was
+in it; early-loan temp basals satisfy `if !events.isEmpty` just as well.
 
 **The error DID fire; it just is not phrased as one.** The "Sport Mode Reset — A previous watch
 loan was ended without a clean hand-back; its records were saved" notification is
@@ -776,8 +803,8 @@ that is really there, i.e. stacking toward a hypo. That is precisely the failure
 positive branch exists to stop, and precisely the case where the pod's own odometer would have
 caught it, because the pod always knows what it delivered.
 
-Note the test did not prove the path safe — it proved the stream was fast enough on this
-occasion. The 4-minute window between the force-reclaim at 02:13 and the watch's return at
+Note the test did not prove the path safe. Under timeline (b) it actively demonstrated the
+failure. The 4-minute window between the force-reclaim at 02:13 and the watch's return at
 02:17 is exactly the interval in which the phone was looping on unverified books.
 
 PROPOSED (needs a ruling — this is a safety behavior change, not a bug fix): after force-reclaim
