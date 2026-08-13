@@ -139,6 +139,8 @@ struct GlanceUIState {
 
     /// WS1: hand-back requested but still draining — watch remains in control;
     /// the glance shows "ending…" plus a Cancel affordance.
+    /// Active override as "<symbol> <name>", shown in the top row. nil = none.
+    var overrideLabel: String? = nil
     var handbackPending: Bool = false
     /// When the current reclaim began — anchors the determinate reclaim bar (2026-08-04).
     var handbackStartedAt: Date? = nil
@@ -576,10 +578,13 @@ final class GlanceViewModel: ObservableObject {
             // systematically a full window pessimistic. The ladder ceiling
             // (untilNext + cadence) stays one line away for an explicit
             // "no later than …" if the estimate ever proves shakier than it looks.
-            let by = now.addingTimeInterval(untilNext)
-            let formatter = DateFormatter(); formatter.timeStyle = .short
-            return String(format: NSLocalizedString("G7 likely by ~%@", comment: "Glance G7 first-catch estimate (1: clock time)"),
-                          formatter.string(from: by))
+            // #93 (Jeremy, 2026-08-12): the first-catch ESTIMATE is gone. Everything in the block
+            // above is still true — the grid phase predicts well and E4 catches the first window
+            // ~94-100% of the time — but a wall-clock time on the glance reads as a PROMISE, and
+            // the ~5% that misses it is the case where the user is already anxious about whether
+            // the watch has glucose. The live countdown and the provenance lines below survive;
+            // they state what is, not what will be.
+            return nil
         }
         let seconds = Int(untilNext.rounded())
         guard seconds > 10 else {
@@ -592,6 +597,7 @@ final class GlanceViewModel: ObservableObject {
 
     static func activeState(data: WatchLoopManager.GlanceData, cob: Double?, now: Date, phoneGlucoseDate: Date? = nil) -> GlanceUIState {
         var s = GlanceUIState()
+        s.overrideLabel = data.overrideLabel
         s.phase = .active
 
         // Rail.
@@ -751,7 +757,21 @@ struct GlanceView: View {
             Button(action: onLoopTap) { loopIndicator }
                 .buttonStyle(.plain)
                 .disabled(model.state.phase != .active)
-            Spacer()
+            Spacer(minLength: 2)
+            // #68 follow-up (Jeremy, 2026-08-12): an active override belongs on the face of the
+            // screen. It silently rescales ISF AND the basal baseline, so every number here means
+            // something different under one — and until now the only way to know was to remember
+            // setting it. Symbol + name, centred between the ring and the session control, in the
+            // space the build tag used to occupy.
+            if let label = model.state.overrideLabel {
+                Text(label)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.glanceInk)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .layoutPriority(1)
+                Spacer(minLength: 2)
+            }
             statusRight
         }
         .padding(.horizontal, 6)
@@ -792,11 +812,11 @@ struct GlanceView: View {
                 .buttonStyle(.plain)
             }
         } else {
-            // Just the build tag — "SPORT" misreads when sport isn't active (Jeremy
-            // 2026-07-24). Temporary; the build tag goes away for production (#58).
-            Text("b\(Self.buildNumber)")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(.glanceDim)
+            // The build tag MOVED to the diagnostic page (Jeremy, 2026-08-12). It earned its
+            // place on the glance while builds landed mid-session and the wrist was the only
+            // way to tell them apart; it is noise on the screen a user actually reads, and the
+            // diagnostic page is where someone asking "which build is this?" already goes.
+            EmptyView()
         }
     }
 

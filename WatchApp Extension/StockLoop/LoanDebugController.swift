@@ -77,6 +77,10 @@ struct LoanDebugView: View {
                 // #29: the dosing decision, on-wrist. `recommend` vs `running` is the
                 // tell — high recommend + baseline running + closed = it wants to dose
                 // but isn't enacting; matching = it dosed; loop OPEN = not dosing at all.
+                // Build tag, moved off the glance (Jeremy, 2026-08-12). "Which build is this?"
+                // is a diagnostic question, and this is the page you are already on when you ask.
+                Text("build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?")")
+                    .font(.footnote).foregroundColor(.secondary)
                 Text("DOSING").font(.footnote).foregroundColor(.secondary)
                 row("closed?", (dosing?.closedLoopEnabled ?? false) ? "YES" : "no")
                 row("BG now", dosing?.glucose.map { String(format: "%.0f", $0.doubleValue(for: .milligramsPerDeciliter)) } ?? "—")

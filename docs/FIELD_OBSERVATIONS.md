@@ -529,3 +529,45 @@ entry is the counterexample.
 Also on e15, and not a defect: `[override] SKIPPED (already applied) 🕺 crashy`. The phone
 already had that override on, so the resume had nothing to do. Worth knowing the line is
 the healthy path, not a dropped write.
+
+## 2026-08-12 — R35 and #112 both VALIDATED in the field (build 270)
+
+Two rulings closed by two loans. Recorded because both were open on my side longer than the
+evidence warranted, and the second one had a decisive probe I did not think to ask for first.
+
+**R35 (config-only DoseStore, no fallback) — e22, 3 cycles, 13 min.** The ledger was the only
+insulin book and dosing ran off it end to end:
+
+```
+[ledger] seeded — 123 doses (122 finished + 1 live)
+insulin books rebuilt from grant — 122 records (ledger seed, R35)
+[iob-diff] phoneIOB=0.99 seedIOB=0.99 cycle1=0.99 · Δ(seed−phone)=-0.00[wire] · Δ(cycle1−seed)=+0.00[reconcile]
+[iob-decomp] @SEED-IN Σnet=0.885U n=123 … @CYCLE1 Σnet=0.885U n=123
+```
+
+Three cycles dosed off ledger IOB (0.99→3.00 U/hr, 1.18→2.90, 1.26→1.80, all ACCEPTED), ZERO
+ledger refusals in 289 lines, clean hand-back, and the phone's authoritative reconcile came in
+at `delivered=0.400 expected=0.400 residual=-0.000`. The seed matched the phone to 0.00 at the
+wire and to 0.00 across the first cycle — the two seams where a second book would have shown.
+
+**#112 (override applies to the ledger's BASAL BASELINE, not just ISF) — the following loan.**
+The probe is one field. `[iob-decomp]`'s `sched=` reads from
+`basalRateScheduleApplyingOverrideHistory`, so under an override it must show the SCALED rate:
+
+```
+[override] APPLIED 🕺 crashy · insulin needs 52% (basal x0.52, ISF x1.92, CR x1.92)
+sched=0.36  × 199 rows        (0.70 × 0.52 = 0.364 ✓)
+sched=0.70  × 1054 rows       (pre-override history, correctly raw)
+```
+
+BOTH values in one log, split exactly at the override boundary. Unfixed, every row reads 0.70.
+
+**Why this one needed the specific probe.** #112's bug was invisible in the headline numbers:
+ISF was ALREADY override-applied, so eventual-BG and the recommendation looked right the whole
+time — only the temp-netting baseline was raw, which moves IOB subtly. "Looks reasonable" is
+precisely the symptom the unfixed code produced, which is why the decomp field, not the
+dosing line, is the thing to read.
+
+Also of note: the -0.60 `[iob-diff]` wire leg seen on build 270 earlier has NOT recurred —
+both of these loans show -0.00. It has no reproduction and no explanation; leaving it recorded
+rather than chased.

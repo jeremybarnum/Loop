@@ -507,6 +507,10 @@ final class WatchLoopManager {
         /// no way to tell Integral from Standard while looking at a suspicious eventual.
         let retrospectiveCorrectionIsIntegral: Bool
         let retrospectiveDiscrepancyCount: Int
+        /// Active override, as "<symbol> <name>" (#68 follow-up, 2026-08-12). The glance shows
+        /// this in the top row: an override silently rescales ISF AND the basal baseline, so a
+        /// number on this screen means something different depending on it. nil = none active.
+        let overrideLabel: String?
     }
 
 
@@ -677,7 +681,11 @@ final class WatchLoopManager {
                 // Same queue as the rest of this closure, so these are consistent with the
                 // prediction being rendered rather than a torn read from another cycle.
                 retrospectiveCorrectionIsIntegral: retrospectiveCorrection is IntegralRetrospectiveCorrection,
-                retrospectiveDiscrepancyCount: retrospectiveGlucoseDiscrepancies?.count ?? 0)
+                retrospectiveDiscrepancyCount: retrospectiveGlucoseDiscrepancies?.count ?? 0,
+                overrideLabel: {
+                    guard let o = settings.scheduleOverride, o.isActive() else { return nil }
+                    return o.context.presetNameForLog
+                }())
     }
 
     /// COB for the glance rail (async — the store computes it).
