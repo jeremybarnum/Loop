@@ -64,8 +64,37 @@ about explicitly. Never silently dropped.
   merely SLOW confirmation instead, cutting the phone's blind window from the 5-minute
   T1 to 20 s on its first loan in the field.
 
-- **OBS-8 (2026-08-11 18:51, build 268, epoch 10): the watch keeps running loop cycles
-  AFTER hand-back and logging FAILED verdicts.** 43 s after the loan closed:
+- **OBS-8 — RESOLVED 2026-08-13. Two cosmetic defects, ZERO alert risk.** Original text
+  below. Jeremy: "that seems sloppy" — it was, and one of its two worries was unfounded.
+
+  THE WATCHDOG WORRY IS UNFOUNDED, and this is the part worth keeping. `watchdog=HELD`
+  reads as "the dead-man is armed and nobody is refreshing it", i.e. a spurious
+  loop-stopped alert waiting to fire. It is not: `LoopStallWatchdog.disarm()` runs at
+  every loan end (StockLoopSession, the `onLoanActiveChanged(false)` branch, reached from
+  both close paths). Nothing is armed. `HELD` in those lines is the per-cycle verdict
+  reporting "this cycle did not refresh it" about a dead-man that no longer exists —
+  a misleading label on a disarmed thing, not a live hazard.
+
+  WHAT WAS ACTUALLY WRONG, both now fixed:
+  1. The cycle ran at all. The G7 keeps delivering after hand-back, and every reading drove
+     `updateCachedEffects` + the full prediction to conclude "no pod" — forever, once per
+     reading, on battery. Now `checkPumpDataAndLoop` returns early when `pumpManager` is nil
+     and says so ONCE per transition. This DELIBERATELY diverges from stock (LoopDataManager
+     :571 loops without a pump): on the phone, no pump is an error state worth surfacing every
+     cycle; on the wrist between loans it is the normal resting state, because the phone owns
+     the pod and is looping. Glucose ingestion and the glance are untouched — they read the
+     stores directly.
+  2. `computed=FAILED` was a lie. `pumpManagerUnconnected` is raised by the ENACT stage but is
+     not wrapped as `.enactFailed`, so the verdict logic classified an enact refusal as a
+     compute failure — a cycle whose prediction was perfect printed FAILED. The verdict now
+     distinguishes the stages, so FAILED again means what it says.
+
+  A log line that cries wolf is not a cosmetic problem, which is why this was worth the time:
+  #98 built the CYCLE VERDICT line precisely so "did this cycle dose?" had a greppable answer,
+  and a healthy watch printing FAILED every five minutes was training us to ignore it.
+
+  ORIGINAL (2026-08-11 18:51, build 268, epoch 10): the watch keeps running loop cycles
+  AFTER hand-back and logging FAILED verdicts. 43 s after the loan closed:
   `18:51:52 [loop] CYCLE VERDICT computed=FAILED enact=not-attempted(pumpManagerUnconnected)
   watchdog=HELD lastCompletedAge=296s`. The refusal to enact is CORRECT — `pumpManager`
   is nil'd at hand-back and the watch must not dose. But the G7 keeps delivering, each
@@ -683,6 +712,32 @@ into the phone's carb commit as a dedupe key, so no future concurrency hole can 
 carbs. Needs thought about the CarbStore surface (stock mints identity per add, by design);
 parked rather than rushed — #118 closes the known mechanism, and R-series discipline says no
 new safety machinery without a ruling.
+
+## 2026-08-13 — the 19-second post-wake write EXPLAINED: it is a HealthKit sync, not Core Data
+
+Twice measured (e27 19.3 s, e31 18,989 ms), both on a freshly-woken phone, and recorded twice
+as "the amplifier, unexplained". It is not a slow database. `DoseStore.addPumpEvents` calls
+its completion from inside `syncPumpEventsToInsulinDeliveryStore` — AFTER the Core Data save,
+after `getLastImmutableBasalEndDate`, and after `savePumpEventsToInsulinDeliveryStore` has
+pushed the doses into the InsulinDeliveryStore, which on this phone is backed by HealthKit
+(`healthKitSampleStore: insulinHealthStore`, DeviceDataManager :318).
+
+So the thing we timed as "the write" is really Core Data + a full HealthKit round-trip, and
+HealthKit on a just-unlocked phone is cold and protected-data-gated. That is where the ~19 s
+lives, and it explains why the number is so stable across incidents and so absent from
+steady-state loans (85 ms and 18 ms in the same e31 log, once warm).
+
+CONSEQUENCE FOR THE PROTOCOL, worth stating plainly: the hand-back ack is gated on a
+HealthKit write. The phone cannot ack until insulin has reached the health database, so a
+cold HealthKit stalls the loan's close by exactly that long — and before #118 that stall was
+the window every duplicate offer piled into. Nothing here is wrong (records-before-ack is
+the design, a897d22c), but the ack latency is a HEALTHKIT property, not a database one, and
+future timing analysis should read it that way.
+
+NOT CHANGED. Acking earlier — say, after the Core Data save but before the HealthKit sync —
+would decouple loan liveness from HealthKit warmth, and would also weaken the guarantee the
+ack exists to make ("records are committed"). That is a ruling-shaped tradeoff, not a fix to
+make at 1 a.m.; #118 and #120 already removed the harm it was causing.
 
 ## 2026-08-13 00:16 (e31, build 273 both devices) — #118 FIELD-VALIDATED in the e27 shape
 

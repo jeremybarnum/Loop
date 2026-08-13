@@ -1179,11 +1179,31 @@ final class WatchLoopManager {
     /// data is still fresh, because under E4 a reclaim costs pod contact that stock
     /// never pays. With E4 off the reclaim closure returns immediately and this
     /// collapses to the stock call.
+    /// OBS-8: latched so the no-pod state logs once per transition, not once per reading.
+    private var loggedIdleNoPump = false
+
     func checkPumpDataAndLoop() {
         guard let pumpManager = pumpManager else {
-            loop()   // stock (:571): loop even without a pump so the cycle still runs
+            // OBS-8 (2026-08-13): AFTER a hand-back there is no pod and never will be until the
+            // next grant, so running the full cycle is pure waste — the G7 keeps delivering, and
+            // every reading drove updateCachedEffects + the whole prediction to conclude "no pod",
+            // forever, once per reading. Log it ONCE per transition instead of once per cycle.
+            //
+            // This deliberately diverges from stock (LoopDataManager :571 loops without a pump).
+            // On the phone that is right: no pump is an ERROR STATE the user should see surfaced
+            // every cycle. On the wrist during Sport Mode it is the NORMAL resting state between
+            // loans — the phone owns the pod and is looping — so treating it as a per-reading
+            // failure produces alarming FAILED verdicts for a device that is working correctly.
+            //
+            // Glucose ingestion and the glance are untouched: they read the stores directly and
+            // do not depend on this cycle.
+            if !loggedIdleNoPump {
+                loggedIdleNoPump = true
+                SportLog.event("loop", "idle — no pod on the watch; cycles paused until the next grant (glucose still ingesting)")
+            }
             return
         }
+        loggedIdleNoPump = false
 
         let assertThenLoop: (@escaping () -> Void) -> Void = { done in
             pumpManager.ensureCurrentPumpData { _ in
@@ -1344,8 +1364,19 @@ final class WatchLoopManager {
             let watchdogRefreshed = (error == nil && self.pumpManager != nil)
             if watchdogRefreshed { LoopStallWatchdog.refresh() }
             let sinceCompleted = self.lastLoopCompleted.map { Int(self.now().timeIntervalSince($0)) }
+            // OBS-8: an ENACT-stage failure must not read as a COMPUTE failure. pumpManagerUnconnected
+            // is raised by enactRecommendedAutomaticDose but is not wrapped as .enactFailed, so it
+            // used to print computed=FAILED for a cycle whose prediction was perfect — which is how
+            // a healthy post-hand-back watch logged FAILED every five minutes.
+            let computeSucceeded: Bool = {
+                switch error {
+                case .none: return true
+                case .enactFailed, .pumpManagerUnconnected: return true   // computed fine; the ENACT is what refused
+                default: return false
+                }
+            }()
             SportLog.event("loop", String(format: "CYCLE VERDICT computed=%@ enact=%@ watchdog=%@ lastCompletedAge=%@",
-                                          error == nil || (error.map { if case .enactFailed = $0 { return true } else { return false } } ?? false) ? "ok" : "FAILED",
+                                          computeSucceeded ? "ok" : "FAILED",
                                           enactVerdict,
                                           watchdogRefreshed ? "refreshed" : "HELD",
                                           sinceCompleted.map { "\($0)s" } ?? "never"))
