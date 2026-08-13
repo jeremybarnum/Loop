@@ -285,6 +285,17 @@ final class GlanceViewModel: ObservableObject {
 
     func cancelHandback() {
         guard !isPreview else { return }
+
+        // Cancel gets the SAME tap acknowledgement as End, which it should have had all along —
+        // #90 gave End a haptic and an optimistic flip after Jeremy's "it's a bit anxiety
+        // producing not to be sure that it's been tapped", and Cancel was simply missed. It is
+        // the same small chip in the same corner, so it has the same problem: a fingertip covers
+        // it, and without the haptic a registered tap and a missed tap look identical for 0.4s.
+        // The flip back to "End" is optimistic in the same bounded way — the refresh below
+        // corrects it if the controller declined the cancel (already finalizing).
+        WKInterfaceDevice.current().play(.click)
+        state.handbackPending = false
+
         ExtensionDelegate.shared().stockLoopSession.loanController.cancelHandback()
         // The cancel lands on the controller's queue — refresh after it drains so
         // the "ending…" UI doesn't linger a full timer tick.
@@ -389,8 +400,8 @@ final class GlanceViewModel: ObservableObject {
             // timeout with no idea which it was (field 2026-08-02 23:58, phone Bluetooth off).
             s.phoneUnreachable = !snap.phoneReachable
             s.idleNote = snap.phoneReachable
-                ? NSLocalizedString("Ending Sport Mode — waiting for iPhone. The pod is still on your watch; bolus is unavailable until the iPhone connects.", comment: "Glance note while a hand-back waits for the phone")
-                : NSLocalizedString("Can't reach iPhone. Move it closer, or check that its Bluetooth is on. Sport Mode will end by itself as soon as the phone connects — the pod is still on your watch.", comment: "Glance note while a hand-back waits for an UNREACHABLE phone")
+                ? NSLocalizedString("Waiting for iPhone — pod still on watch. Bolus unavailable until it connects.", comment: "Glance note while a hand-back waits for the phone")
+                : NSLocalizedString("Can't reach iPhone — pod still on watch. Move it closer or check its Bluetooth.", comment: "Glance note while a hand-back waits for an UNREACHABLE phone")
             state = s
         case .revoked, .recoveredDrain:
             var s = GlanceUIState(); s.phase = .draining
@@ -423,7 +434,7 @@ final class GlanceViewModel: ObservableObject {
                 // continuing is the reassuring half of the message, so say both.
                 s.phoneUnreachable = !snap.phoneReachable
                 if !snap.phoneReachable {
-                    s.idleNote = NSLocalizedString("Can't reach iPhone. Move it closer, or check that its Bluetooth is on. Sport Mode will end as soon as the phone connects; looping continues until then.", comment: "Glance note when an interim hand-back is blocked by an unreachable phone")
+                    s.idleNote = NSLocalizedString("Can't reach iPhone — still looping. Move it closer or check its Bluetooth.", comment: "Glance note when an interim hand-back is blocked by an unreachable phone")
                 }
             }
             // A manual bolus spends most of its wall-clock waiting on the radio arbiter, with
