@@ -1351,6 +1351,46 @@ extension PodLoanPhoneControllerTests {
         XCTAssertNotNil(UserDefaults.standard.dictionary(forKey: "PodLoanPhoneController.gapBooking"))
     }
 
+    /// The peer session's catch: the doc comment on retireGapBookingIfExplained claimed a failed
+    /// delete is "retried on the next offer and at launch" — but retireGapBookingIfExplained has
+    /// exactly one caller, inside an offer's write completion, AFTER the handbackAck that stops
+    /// the watch's 15 s resend loop. So a delete that fails once could outlive every offer that
+    /// would have retried it, with the placeholder stuck forever. This proves the launch half of
+    /// that claim is now real: a FRESH controller — no offer, no audit in flight, nothing but the
+    /// persisted gap state from a previous session — must retry the delete on construction.
+    func testPersistedGapDeleteRetriesOnFreshLaunch() throws {
+        UserDefaults.standard.set(["epoch": 7, "units": 1.75, "bookedAt": Date().timeIntervalSince1970],
+                                  forKey: "PodLoanPhoneController.gapBooking")
+
+        // Held for the test's duration — init's retry runs on a `[weak self]` queue.async, so an
+        // unretained controller can deallocate before its own retry fires.
+        let controller = makeController()   // simulates the next app launch finding stale gap state
+        _ = controller
+
+        waitUntil(timeout: 5, "launch retry succeeds") {
+            UserDefaults.standard.dictionary(forKey: "PodLoanPhoneController.gapBooking") == nil
+        }
+        lock.lock()
+        let deleted = deletedGapSyncs
+        lock.unlock()
+        XCTAssertEqual(deleted, ["PODLOAN-ODOGAP-e7"], "retried against the PERSISTED epoch, no offer involved")
+    }
+
+    /// The failure side of the same path: launch retry fails again, state must survive for yet
+    /// another attempt rather than being dropped or silently swallowed.
+    func testPersistedGapDeleteThatFailsAgainAtLaunchKeepsState() throws {
+        UserDefaults.standard.set(["epoch": 3, "units": 0.9, "bookedAt": Date().timeIntervalSince1970],
+                                  forKey: "PodLoanPhoneController.gapBooking")
+        lock.lock(); gapDeleteSucceeds = false; lock.unlock()
+
+        let controller = makeController()
+        _ = controller
+
+        waitUntil(timeout: 5, "launch retry attempted") { self.lock.lock(); defer { self.lock.unlock() }; return !self.deletedGapSyncs.isEmpty }
+        XCTAssertNotNil(UserDefaults.standard.dictionary(forKey: "PodLoanPhoneController.gapBooking"),
+                        "still failing — state must survive for the NEXT launch or offer, not vanish")
+    }
+
     /// A failed placeholder delete must be loud and keep its state — a silent failure here is a
     /// double-counted IOB (placeholder + real records both in the books).
     func testFailedGapDeleteKeepsStateAndSaysSo() throws {

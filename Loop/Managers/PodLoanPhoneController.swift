@@ -514,6 +514,31 @@ final class PodLoanPhoneController {
 
     private static func gapSyncIdentifier(epoch: Int) -> String { "PODLOAN-ODOGAP-e\(epoch)" }
 
+    /// R37: retry a gap delete that failed on a previous launch. `retireGapBookingIfExplained`
+    /// only runs from inside an offer's write completion, and the hand-back ack that stops the
+    /// watch's 15 s resend loop goes out BEFORE that retire attempt — so a delete that fails on
+    /// its one shot can outlive the offer that would have retried it, with no other trigger left
+    /// to fire. This is that other trigger: called once from `init`, it retries against whatever
+    /// is persisted, independent of any offer or epoch match, because by the time this runs the
+    /// watch may never send another one.
+    private func retryPersistedGapDeleteIfAny() {
+        guard let gap = UserDefaults.standard.dictionary(forKey: Keys.gapBooking),
+              let gapEpoch = gap["epoch"] as? Int, let booked = gap["units"] as? Double else { return }
+        let sync = Self.gapSyncIdentifier(epoch: gapEpoch)
+        handbackDiag(gapEpoch, String(format: "R37 gap DELETE retrying at launch — %.2f U placeholder (sync %@) was unretired last session", booked, sync))
+        deps.deleteGapDose(sync) { [weak self] ok in
+            guard let self = self else { return }
+            self.queue.async {
+                if ok {
+                    UserDefaults.standard.removeObject(forKey: Keys.gapBooking)
+                    self.handbackDiag(gapEpoch, String(format: "R37 gap RETIRED on launch retry — %.2f U placeholder cleared", booked))
+                } else {
+                    self.handbackDiag(gapEpoch, String(format: "** R37 gap DELETE FAILED AGAIN at launch — %.2f U placeholder still stands; will retry next launch or the next matching offer **", booked))
+                }
+            }
+        }
+    }
+
     /// R37: the watch came back. Its offer just committed the REAL records behind the gap, so
     /// the placeholder retires — full replacement, not a partial offset: the store now carries
     /// the truth-bearing account (validated in aggregate by the odometer at reclaim), and any
@@ -760,6 +785,14 @@ final class PodLoanPhoneController {
                 self.handbackDiag(e, "R37 audit RE-ARMED after relaunch — verdict still owed")
                 self.beginReclaimSettleWindow()
             }
+        }
+
+        // R37: a gap placeholder whose delete failed has no other trigger once the watch's
+        // resend loop has been acked off — see retryPersistedGapDeleteIfAny for why. Independent
+        // of the audit re-arm above: this fires on every launch that finds ANY persisted
+        // booking, whether or not a force-reclaim is currently in flight.
+        queue.async { [weak self] in
+            self?.retryPersistedGapDeleteIfAny()
         }
 
         // Relaunch during a non-owner state: dosing stays paused (persisted-state
