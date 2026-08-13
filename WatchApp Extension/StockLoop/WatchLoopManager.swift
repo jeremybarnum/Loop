@@ -3181,20 +3181,19 @@ extension WatchLoopManager: CGMManagerDelegate {
     /// the watch latch at different instants,
     /// so their estimates differ by a fraction of a second and the full string never matches.
     ///
-    /// That is why the store's syncIdentifier uniqueness constraint never fired: the same physical
-    /// reading arrived under two different names and was filed twice, once from the direct G7 read
-    /// and once from the phone relay. Measured 2026-07-31: the sample count in the 25-minute
-    /// momentum window tracked the relay exactly — 5 clean, climbing to 10 while the relay ran,
-    /// decaying back to 5 within 25 minutes of it stopping, and one stray relay producing one
-    /// +1 blip. Mostly benign (duplicate points carry the same value, so a regression through them
-    /// barely moves) EXCEPT at `GlucoseMath.swift:103`, whose `count > 2` floor counts ROWS: a
-    /// two-reading window that stock refuses to regress becomes four rows, clears the floor, and
-    /// manufactures a trend.
+    /// So the store's syncIdentifier uniqueness constraint never fires across devices: the same
+    /// physical reading arrives under two different names and is filed twice, once from the direct
+    /// G7 read and once from the phone relay.
     ///
-    /// Verified device-independent against the field log — the stamp parsed out of the watch's own
-    /// raw BLE frames equalled the phone's relayed stamp on 13 of 14 cycles (the exception was the
-    /// phone relaying a ~110-minute-stale reading near a grant, which is genuinely a different
-    /// reading and correctly does NOT dedup).
+    /// Duplicate points carry the same value, so a regression through them barely moves — EXCEPT
+    /// at `GlucoseMath.swift:103`, whose `count > 2` floor counts ROWS. A two-reading window that
+    /// stock refuses to regress becomes four rows, clears the floor, and manufactures a trend.
+    /// That is the reason this exists.
+    ///
+    /// The truncated form is verified device-independent in the field: the stamp parsed from the
+    /// watch's own raw BLE frames equalled the phone's relayed stamp on 13 of 14 cycles, and the
+    /// exception was the phone relaying a ~110-minute-stale reading, which is genuinely a
+    /// different reading and correctly does NOT dedup.
     private static func sensorIdentity(_ syncIdentifier: String?) -> String? {
         guard let s = syncIdentifier, let sp = s.firstIndex(of: " ") else { return nil }
         let tail = s[s.index(after: sp)...]

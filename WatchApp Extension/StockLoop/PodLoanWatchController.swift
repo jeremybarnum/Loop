@@ -1635,21 +1635,19 @@ final class PodLoanWatchController {
         // Ask the loop manager instead: it falls back to the temp it last enacted, until that
         // temp's programmed end.
         let runningTemp = self.loopManager.runningTempBasalForHandback()
-        // MOVED TO THE PHONE (2026-08-11, R33 amended). The watch used to enact the cancel here.
-        // It cannot. Between dose windows the watch has deliberately released the pod's BLE link,
-        // so the command fails INSTANTLY — field 15:23:37.130 "cancelling our temp (1.75 U/hr…)",
-        // 15:23:37.131 "CANCEL FAILED · podNotConnected". One millisecond: there was no round-trip
-        // to fail, there was no link. Every hand-back looked like this, and the same missing link
-        // is why the odometer freshen below also fails and every audit prints `fresh=N`. One cause,
-        // both symptoms.
+        // The CANCEL IS THE PHONE'S JOB (R33 amended), because the watch cannot do it. Between
+        // dose windows the watch has deliberately released the pod's BLE link, so the command
+        // fails in about a millisecond with podNotConnected — there is no round-trip to fail,
+        // there is no link. The same missing link is why the odometer freshen below also fails
+        // and the audit prints `fresh=N`: one cause, both symptoms.
         //
-        // The phone is the device that is by definition talking to the pod at this moment — its
-        // reclaim round-trip lands within seconds. So the phone cancels (see
-        // PodLoanPhoneController.finishPendingHandbackAudit) and the pod keeps delivering OUR last
-        // temp in the meantime, which is the better failure mode anyway: continuous therapy across
-        // the boundary instead of a gap. R33's principle is unchanged — no automatic program
-        // outlives the controller that set it — only the device that enforces it moved to the one
-        // that can.
+        // The phone is by definition talking to the pod at this moment, and its reclaim
+        // round-trip lands within seconds, so it cancels instead (see
+        // PodLoanPhoneController.finishPendingHandbackAudit). The pod keeps delivering OUR last
+        // temp in the meantime, which is the better failure mode anyway: continuous therapy
+        // across the boundary rather than a gap. R33's principle is unchanged — no automatic
+        // program outlives the controller that set it — only the device that enforces it moved
+        // to the one that can.
         //
         // The ledger truncation stays: it is watch-LOCAL bookkeeping (#73/#74), and if a failed
         // offer resumes this session the ledger must not carry a phantom full-span temp.
@@ -1834,25 +1832,24 @@ final class PodLoanWatchController {
     // MARK: - Revoke (§3.2)
 
     private func handleRevoke(_ revoke: Revoke) {
-        // SPLIT-BRAIN GUARD (2026-08-05). Record that the phone asked for the pod back BEFORE
-        // the epoch match, and log it — this used to `return` in silence.
+        // SPLIT-BRAIN GUARD. Record that the phone asked for the pod back BEFORE the epoch
+        // match, and log it rather than returning in silence.
         //
-        // The hole it closes: the watch's request patience is 25s (:304) but a grant's lease is
+        // The hole it closes: the watch's request patience is 25 s (:304) but a grant's lease is
         // 5 MINUTES (PodLoanPhoneController :603). A grant delivered on the queued path can land
-        // after the watch has given up and dropped to .idle with `epoch` still nil. If the phone
-        // revoked in between, that revoke matched nothing here and vanished; the late grant then
-        // arrived un-expired into .idle — an accepting phase (:383) — and the watch took the pod.
-        // The phone meanwhile ignores the resulting takeoverComplete (it requires .grantOffered,
+        // after the watch has given up and dropped to .idle with `epoch` still nil. A revoke
+        // arriving in between would match nothing and vanish; the late grant then arrives
+        // un-expired into .idle — an accepting phase (:383) — and the watch takes the pod. The
+        // phone meanwhile ignores the resulting takeoverComplete (it requires .grantOffered,
         // PodLoanPhoneController :662), times out, and forceReclaimToOwner sets state = .owner
         // AND setAutomaticDosingPaused(false). Both sides then believe they own the pod.
         //
         // The pod is single-central so they cannot drive it at the same instant — but E4 frees
-        // the radio 90s after takeover and 12s after every dose, so they would ALTERNATE, each
+        // the radio 90 s after takeover and 12 s after every dose, so they would ALTERNATE, each
         // dosing off its own books with no sight of the other's insulin.
         //
         // Remembering the epoch is enough: the phone increments on every grant, so a legitimate
-        // later grant is > this and still passes. Crude was immune the same way (it refused a
-        // grant older than the last revoke, WatchPodLoanCoordinator :475-479).
+        // later grant is > this and still passes.
         if revoke.epoch > (lastRevokedEpoch ?? Int.min) {
             lastRevokedEpoch = revoke.epoch
         }
