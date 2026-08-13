@@ -162,13 +162,12 @@ final class StockLoopSession {
 
         // Reclaim the orphaned pod to dose, then re-release it for G7. Unconditional on both
         // sides (#101): reclaimPodForDose already no-ops when the link is held, so one wiring
-        // covers every case and can never strand a released bid (#97). The `e4` prefix is
-        // historical — that experiment is now simply the link policy.
-        stack.loopManager.e4ReclaimPodForDose = { [weak self] completion in
+        // covers every case and can never strand a released bid (#97).
+        stack.loopManager.reclaimPodForDose = { [weak self] completion in
             guard let self = self else { completion(false); return }
             self.loanController.reclaimPodForDose(completion)
         }
-        stack.loopManager.e4ReleasePodAfterDose = { [weak self] in
+        stack.loopManager.releasePodAfterDose = { [weak self] in
             self?.loanController.releasePodAfterDose()
         }
 

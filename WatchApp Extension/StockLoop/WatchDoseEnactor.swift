@@ -46,8 +46,8 @@ final class WatchDoseEnactor {
     /// reclaim's completion(true) = pod connected & ready; (false) = couldn't
     /// reconnect in the bounded window → SKIP this automatic dose (pod keeps running
     /// its baseline, loop retries next cycle). Both nil / no-op when E4 is off.
-    var e4ReclaimPodForDose: ((@escaping (Bool) -> Void) -> Void)?
-    var e4ReleasePodAfterDose: (() -> Void)?
+    var reclaimPodForDose: ((@escaping (Bool) -> Void) -> Void)?
+    var releasePodAfterDose: (() -> Void)?
 
     /// #50: fired with the (rate, duration) the pod just accepted for a temp basal, so the
     /// owner can cache what is running without querying the pod — E4 orphans it seconds later.
@@ -64,21 +64,21 @@ final class WatchDoseEnactor {
             // failure: skip the dose — never block, never dose against a pod that
             // isn't confirmed connected. Runs on dosingQueue (not the loop's
             // dataAccessQueue), so the bounded wait can't stall the loop cycle.
-            if let reclaim = self.e4ReclaimPodForDose {
+            if let reclaim = self.reclaimPodForDose {
                 let group = DispatchGroup()
                 group.enter()
                 var connected = false
                 reclaim { ok in connected = ok; group.leave() }
                 if group.wait(timeout: .now() + 25) == .timedOut || !connected {
                     SportLog.event("radio", "E4: pod not reconnected — automatic dose SKIPPED (pod runs baseline; loop retries next cycle)")
-                    self.e4ReleasePodAfterDose?()
+                    self.releasePodAfterDose?()
                     completion(.communication(nil))   // benign: the loop re-enacts next reading
                     return
                 }
             }
             // Always re-release the pod on the way out, whatever the dose result.
             let finish: (PumpManagerError?) -> Void = { err in
-                self.e4ReleasePodAfterDose?()
+                self.releasePodAfterDose?()
                 completion(err)
             }
 

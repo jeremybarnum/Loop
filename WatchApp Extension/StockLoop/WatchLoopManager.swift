@@ -226,7 +226,7 @@ final class WatchLoopManager {
     /// silenced — then the haptic is the ONLY confirmation and must stay.
     ///
     /// A closure, not a cast: this file works against the `PumpManager` protocol and does not
-    /// import OmnipodKit. Wired in StockLoopSession alongside e4ReclaimPodForDose.
+    /// import OmnipodKit. Wired in StockLoopSession alongside reclaimPodForDose.
     var podBeepsOnManualBolusProbe: (() -> Bool)?
     var podBeepsOnManualBolus: Bool { podBeepsOnManualBolusProbe?() ?? false }
 
@@ -307,13 +307,13 @@ final class WatchLoopManager {
         manualBolusLock.unlock()
     }
 
-    var e4ReclaimPodForDose: ((@escaping (Bool) -> Void) -> Void)? {
-        get { doseEnactor.e4ReclaimPodForDose }
-        set { doseEnactor.e4ReclaimPodForDose = newValue }
+    var reclaimPodForDose: ((@escaping (Bool) -> Void) -> Void)? {
+        get { doseEnactor.reclaimPodForDose }
+        set { doseEnactor.reclaimPodForDose = newValue }
     }
-    var e4ReleasePodAfterDose: (() -> Void)? {
-        get { doseEnactor.e4ReleasePodAfterDose }
-        set { doseEnactor.e4ReleasePodAfterDose = newValue }
+    var releasePodAfterDose: (() -> Void)? {
+        get { doseEnactor.releasePodAfterDose }
+        set { doseEnactor.releasePodAfterDose = newValue }
     }
 
     /// Per-session watch-local closed-loop opt-in (R23 confidence model). Each loan
@@ -1217,7 +1217,7 @@ final class WatchLoopManager {
         // cycle = exactly the cadence E5 proved all night. Recovery from a genuinely
         // missed cycle is the scan escalation's job; this keeps the miss from happening.
         guard age > .minutes(4),
-              let reclaim = e4ReclaimPodForDose else {
+              let reclaim = reclaimPodForDose else {
             assertThenLoop({})
             return
         }
@@ -1241,7 +1241,7 @@ final class WatchLoopManager {
                 // Radio back to the G7. The +12s settle comfortably outlasts a
                 // same-cycle enact, whose own reclaim is a no-op because the link
                 // is already up.
-                self.e4ReleasePodAfterDose?()
+                self.releasePodAfterDose?()
             }
         }
     }
@@ -2497,7 +2497,7 @@ final class WatchLoopManager {
                 let eventID = self.doseEnactor.loanRecorder?.loanWillEnactBolus(units: rounded)
                 pumpManager.enactBolus(units: rounded, activationType: activationType) { error in
                     self.doseEnactor.loanRecorder?.loanDidEnact(eventID: eventID, error: error)
-                    self.e4ReleasePodAfterDose?()   // E4 Stage 2: re-release the pod after the bolus
+                    self.releasePodAfterDose?()   // E4 Stage 2: re-release the pod after the bolus
                     if let error = error {
                         SportLog.event("loan", "MANUAL BOLUS FAILED — \(String(describing: error))")
                     } else {
@@ -2531,7 +2531,7 @@ final class WatchLoopManager {
             // E4 Stage 2: the pod is orphaned for G7 — reclaim it before the bolus.
             // User is PRESENT, so a few seconds' reconnect is fine; on failure FAIL
             // LOUDLY (never a silent no-bolus). No-op immediate when E4 is off.
-            if let reclaim = self.e4ReclaimPodForDose {
+            if let reclaim = self.reclaimPodForDose {
                 reclaim { ok in
                     if ok {
                         // #64 ROOT CAUSE (2026-07-29): this completion runs ON the loan
@@ -2558,7 +2558,7 @@ final class WatchLoopManager {
                             deliverBolus()
                         }
                     } else {
-                        self.e4ReleasePodAfterDose?()
+                        self.releasePodAfterDose?()
                         SportLog.event("loan", "MANUAL BOLUS FAILED — the pod did not reconnect in time. If Sport Mode was just ended, the hand-back cancelled it (see the E4 reclaim ABORTED line above) — that is NOT a pod fault.")
                         self.setManualBolusInFlight(false)
                         DispatchQueue.main.async { completion(WatchLoopError.pumpManagerUnconnected) }
