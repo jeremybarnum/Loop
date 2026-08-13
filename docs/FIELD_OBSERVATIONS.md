@@ -1159,3 +1159,46 @@ signature to watch — a deferred release firing minutes late is what poisons th
 
 Loan health meanwhile: 8 cycles, all `computed=ok enact=ok`, zero ledger refusals, takeover 8.5 s
 on 2 reads.
+
+## 2026-08-13 04:05 — the [cob-diff] ⚠ EXPLAINED: it never measured the wipe
+
+Five write-ups have called this warning unexplained. It is a category error in the check, and
+the data separates cleanly on the one variable nobody had plotted — how far into absorption the
+newest carb was:
+
+```
+Δ = +0.01 g      newest carb   1 min old      (clean)
+Δ = +0.00 g      newest carb  90 min old      (clean)
+Δ = -0.52 g      newest carb 148 min old      (clean)
+Δ = +5.40 g ⚠    newest carb   3 min old
+Δ = +4.99 g ⚠    newest carb   5 min old
+Δ = +7.32 g ⚠    newest carb   8 min old
+Δ = +4.86 g ⚠    newest carb  21 min old
+Δ = +4.28 g ⚠    newest carb  51 min old
+```
+
+Perfect separation, 8 for 8, on absorption phase — and NO separation on entry count (9 entries
+clean, 8 entries dirty), on snapshot age (1-3 s throughout, both verdicts), or on whether an
+override was active (02:27:00 applied an override and the very next diff was clean).
+
+The mechanism was written in the code's own comment all along: "`post` is a pre-settle read
+(static absorption) so a small +Δ vs the phone's dynamic COB is expected". The watch reports
+STATIC absorption; the phone reports DYNAMIC, fitted to observed glucose. Those two must agree
+when nothing has absorbed yet (a 1-minute-old carb is entirely on board under either model) and
+when everything has (both read ~0 at 90+ min), and must diverge in between. The fixed 2 g
+threshold simply doesn't scale with the amount of carb in flight, so at realistic loads the
+⚠ fires on healthy behavior.
+
+**The check never tested its own claim.** "Wipe failed?" is a statement about the ENTRY SET, and
+the line inferred it from a computed COB. I initially thought the log's entry manifest proved the
+store was correct — it does not: `manifest` is built from `carbs`, the list we SEND, so it says
+nothing about what landed.
+
+Fixed by reading the store back after the replace and comparing sync identities: residual,
+missing and duplicate counts, with a distinct "wipe UNVERIFIED" if the read-back itself fails,
+because unverified is not clean. Δ stays in the line — it is worth seeing — labelled
+"(static vs dynamic)".
+
+The general lesson is the one already in the file two lines above the bug: a false alarm in the
+instrumentation is worse than none, because it teaches you to skip the line. This one had taught
+me to skip it five times.

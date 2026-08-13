@@ -1337,26 +1337,55 @@ final class PodLoanWatchController {
                 os_log("Grant carb replace failed: %{public}@", log: OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController"), type: .error, String(describing: error))
                 return
             }
-            // [cob-diff] (#65): after a true wipe-then-replace the watch holds EXACTLY the phone's
-            // carbs, so watch COB(post) should ≈ phoneCOB and Δ(post−phone) ≈ 0. A residual now would
-            // mean the wipe itself failed (not an upsert leak). `post` is a pre-settle read (static
-            // absorption) so a small +Δ vs the phone's dynamic COB is expected, not a defect.
-            self?.loopManager.glanceCarbsOnBoard { cob in
-                let postV = cob ?? 0
-                let vsPhone = phoneCOB.map { postV - $0 }
-                // The ⚠ used to fire on Δ > 2 g alone, and on 2026-08-11 it cried wolf: +2.83 g
-                // on 41 g of actively-absorbing carbs against a phone snapshot that the sibling
-                // [iob-diff] line reported as 98 s old. Carbs decay; the phone's number is from
-                // the grant instant, the watch's from now. Print the age and require the snapshot
-                // to be FRESH before calling it a residual — a false alarm in the instrumentation
-                // is worse than none, because it teaches you to skip the line.
-                let ageSec = snapshotAge.map { Int($0.rounded()) }
-                let ageStr = ageSec.map { "\($0)s" } ?? "n/a"
-                let suspect = (vsPhone ?? 0) > 2.0 && (snapshotAge ?? .greatestFiniteMagnitude) < 60
-                SportLog.event("cob-diff", String(format: "REPLACE %@ · phoneCOB=%@ g (snapshot age %@) · watch COB(post)=%.2f g · replaced %.0f g · Δ(post−phone)=%@ g%@ · [%@]",
-                                                   source, phoneCOBStr, ageStr, postV, seededGrams,
-                                                   vsPhone.map { String(format: "%+.2f", $0) } ?? "—",
-                                                   suspect ? " ⚠ residual (wipe failed?)" : "", manifest))
+            // [cob-diff] (#65): did the wipe-then-replace leave the watch holding EXACTLY the
+            // phone's carbs?
+            //
+            // That question is answered by the ENTRY SET, not by comparing computed COB. The
+            // earlier check inferred a residual from Δ(post−phone) > 2 g, which is a category
+            // error: the watch's number is a pre-settle read (STATIC absorption) and the phone's
+            // is DYNAMIC (fitted to observed glucose), so the two legitimately disagree whenever
+            // any carb is mid-absorption. Field evidence across eight replaces — Δ was ≈0 with
+            // the newest carb 1 min old (nothing absorbed yet, both models agree) and 90-148 min
+            // old (both say zero), and +4.3 to +7.3 g at 3, 5, 8, 21 and 51 min. Perfect
+            // separation on absorption phase, none on entry count or snapshot age. Every one of
+            // those was reported as "wipe failed?".
+            //
+            // So read the store back and compare identities. `manifest` above is what we SENT,
+            // which proves nothing about what landed.
+            guard let self = self else { return }
+            let expectedIDs = Set(carbs.compactMap { $0.syncIdentifier })
+            let readFrom = (carbs.map(\.startDate).min() ?? self.now()).addingTimeInterval(-3600)
+            self.loopManager.carbStore.getCarbEntries(start: readFrom) { result in
+                var verdict: String
+                switch result {
+                case .failure(let e):
+                    // Unverified is NOT the same as clean — say so rather than printing a
+                    // silent pass.
+                    verdict = " ⚠ wipe UNVERIFIED (read-back failed: \(e))"
+                case .success(let stored):
+                    let storedIDs = Set(stored.compactMap { $0.syncIdentifier })
+                    let residual = storedIDs.subtracting(expectedIDs)
+                    let missing = expectedIDs.subtracting(storedIDs)
+                    let dupes = stored.count - storedIDs.count
+                    if residual.isEmpty && missing.isEmpty && dupes == 0 {
+                        verdict = " · wipe verified \(stored.count)/\(expectedIDs.count)"
+                    } else {
+                        verdict = String(format: " ⚠ WIPE FAILED — %d residual, %d missing, %d duplicate",
+                                         residual.count, missing.count, dupes)
+                    }
+                }
+                self.loopManager.glanceCarbsOnBoard { cob in
+                    let postV = cob ?? 0
+                    let vsPhone = phoneCOB.map { postV - $0 }
+                    // Δ stays in the line — it is worth seeing — but as what it is: static-vs-
+                    // dynamic divergence, which grows with actively-absorbing carbs and says
+                    // nothing about the wipe.
+                    let ageStr = snapshotAge.map { "\(Int($0.rounded()))s" } ?? "n/a"
+                    SportLog.event("cob-diff", String(format: "REPLACE %@ · phoneCOB=%@ g (snapshot age %@) · watch COB(post)=%.2f g · replaced %.0f g · Δ(post−phone)=%@ g (static vs dynamic)%@ · [%@]",
+                                                       source, phoneCOBStr, ageStr, postV, seededGrams,
+                                                       vsPhone.map { String(format: "%+.2f", $0) } ?? "—",
+                                                       verdict, manifest))
+                }
             }
         }
         // Carb effect is cached; force a recompute so the replaced COB reaches the first
