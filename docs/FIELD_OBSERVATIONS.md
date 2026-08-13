@@ -683,3 +683,36 @@ into the phone's carb commit as a dedupe key, so no future concurrency hole can 
 carbs. Needs thought about the CarbStore surface (stock mints identity per add, by design);
 parked rather than rushed — #118 closes the known mechanism, and R-series discipline says no
 new safety machinery without a ruling.
+
+## 2026-08-13 00:16 (e31, build 273 both devices) — #118 FIELD-VALIDATED in the e27 shape
+
+The exact scenario that produced e27's eleven concurrent writes recurred on the fixed build:
+a 19-second Core Data write (18,989 ms — same magnitude as e27's 19.3 s) with EIGHT copies of
+the same offer arriving during it. Result this time:
+
+```
+write START 1 dose(s)
+offer COALESCED behind the in-flight write (#118) — 1 waiting   (x7, all merging into one slot)
+write DONE 18989ms → ACK cursor 2
+write START 0 dose(s)     <- the single merged replay
+write DONE 18ms → ACK
+```
+
+One write instead of eight, the merged replay a no-op, ack flowing, loan clean. A second
+smaller coalesce at 00:17:07 (offer during an 85 ms write) was caught the same way.
+Reconcile: provisional == authoritative == +0.000 exact. Residual bank n=13 — R32 review
+still due, and the answer is still "scale with cycle count", not a new constant.
+
+Also observed, benign and self-healing: a KEEPALIVE START RACE at takeover. The screen
+dropped between the Start tap and the grant arriving, so the HKWorkoutSession start hit
+HealthKit Code 14 ("cannot start a workout session while in the background"). The takeover
+proceeded on ordinary background grace, and the existing retry-on-foreground path healed it
+17 s later at wrist-raise (fresh session, holders intact); soak keepalive then held for the
+whole loan. Residual exposure is narrow — Start tapped and the wrist never raised during the
+takeover — which is the known #88 territory, not new machinery. Recorded so Code 14 in a
+future log reads as "the race" and not as a broken keepalive.
+
+The #113 channel instrumentation is live in the field (41 `RX … ch=` lines this loan,
+`RX grant ch=urgent` among them) — a future wedge now self-diagnoses. And the corrected seed
+line renders as intended: "124 seeded doses: 122 finished; 2 live — delivery tracked from
+pod state (#72)".
