@@ -1532,6 +1532,20 @@ final class PodLoanPhoneController {
                 loanStart: loanStartedAt ?? deps.now().addingTimeInterval(-.hours(2)),
                 loanEnd: deps.now())
             let outcome = LoanReconciler.reconcile(input)  // isFinalHandback defaults true → all finalized
+            // OBS-9 (2026-08-13): SAY WHAT WAS SALVAGED. This path wrote insulin and announced
+            // "its records were saved" without ever logging WHAT it saved, which is exactly why
+            // Jeremy's phone-off/watch-off test could not be settled from the logs: the notice
+            // proves only that `events` was non-empty, and an early-loan temp basal satisfies
+            // that as well as a bolus does. The distinction that matters is whether a
+            // delivered-but-unstreamed BOLUS was in this set at reclaim time or arrived minutes
+            // later with the returning watch — the difference between complete books and the
+            // loop resuming while under-counting IOB. One line answers it.
+            // deliveredUnits ?? programmedUnits — same convention as the LoanDoseRecord mapping
+            // (:1642): report what actually went in, falling back to what was commanded.
+            let salvagedUnits = outcome.doses.reduce(0.0) { $0 + ($1.deliveredUnits ?? $1.programmedUnits) }
+            handbackDiag(epoch, String(format:
+                "force reclaim SALVAGE — %d staged event(s) → %d dose(s) totalling %.3f U, %d carb(s), %d delete(s); loop resumes CLOSED on these books (no odometer check — OBS-9)",
+                events.count, outcome.doses.count, salvagedUnits, outcome.carbs.count, outcome.deletedCarbs.count))
             deps.addPumpEvents(newPumpEvents(from: outcome.doses), deps.now()) { _ in }
             for carb in outcome.carbs { deps.addCarb(carb.entry, carb.eventID.uuidString) { _ in } }
             for gone in outcome.deletedCarbs {   // R30 (#89)
