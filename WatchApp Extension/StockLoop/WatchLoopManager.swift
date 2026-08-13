@@ -2252,27 +2252,19 @@ final class WatchLoopManager {
         guard let glucoseTargetRange = settings.effectiveGlucoseTargetRangeSchedule() else {
             return .configurationError("glucoseTargetRangeSchedule")
         }
-        // #68 FIX (2026-08-01): DoseMath must consume the OVERRIDE-APPLIED schedules, exactly as
-        // the phone does (LoopDataManager.swift:1726ff guards on basalRateScheduleApplyingOverride-
-        // History / insulinSensitivityScheduleApplyingOverrideHistory). This port passed the raw
-        // settings schedules, so an active override moved the TARGET (effectiveGlucoseTargetRange-
-        // Schedule below) but not the SCALES: field 2026-08-01, with a 60%-needs override the
-        // [dosemath] line read `scheduled 0.70 · ISF 70` where 0.42 / ~117 were intended — every
-        // "neutral" temp was a 1.67x high temp in override terms, and corrections were 1.67x
-        // oversized. Systematic OVER-delivery under a reduced-needs override.
+        // DoseMath consumes the OVERRIDE-APPLIED schedules, as the phone does (LoopDataManager
+        // :1726ff). Passing the raw settings schedules instead moves the TARGET under an override
+        // but not the SCALES, which makes every "neutral" temp a high temp in override terms and
+        // over-delivers systematically under a reduced-needs override. The prediction path uses
+        // the applied ISF, so raw schedules here also put prediction and dosing in disagreement
+        // about the same override. The [dosemath] line below prints these locals, so the wrist
+        // telemetry is the field check.
         //
-        // The prediction path already used the applied ISF (:1211, :1607), so prediction and
-        // dosing disagreed about the same override. The [dosemath] log line below prints these
-        // same locals, so with this fix the wrist telemetry shows the applied values — scheduled
-        // 0.42 / ISF 117 under the 60% preset — which is the field verification.
-        //
-        // STOCK PARITY (#112, 2026-08-11). Was `<applied> ?? settings.<raw>` on all three. The
-        // phone has no such fallback anywhere — LoopDataManager :1763-1775 treats a nil applied
-        // schedule as a configurationError and short-circuits the whole recommendation. Falling
-        // back to the RAW schedule is the more dangerous option precisely when it fires: under an
-        // active override the raw schedule is the wrong one, so the fallback silently doses from
-        // settings the user has overridden. R35 says the same thing from the other direction —
-        // refuse rather than substitute.
+        // NO `?? settings.<raw>` fallback, matching stock: the phone treats a nil applied schedule
+        // as a configurationError and short-circuits the recommendation (:1763-1775). A raw
+        // fallback is most dangerous exactly when it fires — under an active override the raw
+        // schedule is the wrong one, so it would silently dose from settings the user overrode.
+        // Refuse rather than substitute.
         guard let basalRateSchedule = basalRateScheduleApplyingOverrideHistory else {
             return .configurationError("basalRateSchedule")
         }

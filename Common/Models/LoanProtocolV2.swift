@@ -988,38 +988,26 @@ extension LoanMessage {
         return [LoanProtocol.userInfoKey: data]
     }
 
-    /// #42 (2026-08-02): which kinds ride the IMMEDIATE WCSession channel (sendMessage)
-    /// instead of the queued one (transferUserInfo).
+    /// Which kinds ride the IMMEDIATE WCSession channel (sendMessage) instead of the queued one
+    /// (transferUserInfo).
     ///
-    /// transferUserInfo is explicitly NON-URGENT: iOS drains it opportunistically. Field
-    /// 2026-08-02 08:38 — a Start request sat queued while the phone slept; the phone's
-    /// answer reached the watch 40 s later, 15 s AFTER the watch's 25 s timeout had already
-    /// told the user the takeover had failed. An unrelated sensor-code relay arrived 0.1 s
-    /// from the grant: the signature of a whole queue flushing when the phone woke.
+    /// transferUserInfo is explicitly NON-URGENT: iOS drains it opportunistically, and a whole
+    /// queue can sit until the phone wakes — long enough for a Start request's answer to arrive
+    /// after the watch's 25 s timeout has already told the user the takeover failed. So the
+    /// INTERACTIVE moments of a loan, everything the user is watching a spinner through, take
+    /// the immediate channel, which wakes the counterpart app in milliseconds.
     ///
-    /// So the INTERACTIVE moments of a loan — everything the user is watching a spinner
-    /// through, at the start and the end — take the immediate channel, which wakes the
-    /// counterpart app in milliseconds. Background bookkeeping (record streaming, status,
-    /// diagnostics) keeps transferUserInfo, whose guaranteed, relaunch-surviving delivery
-    /// the cursor/ID machinery is built around.
+    /// Background bookkeeping (record streaming, status, diagnostics) keeps transferUserInfo,
+    /// whose guaranteed, relaunch-surviving delivery the cursor/ID machinery is built around.
     ///
-    /// Every urgent kind here is idempotent under those same cursor/ID rules (a redelivered
-    /// offer re-acks the same cursor; a repeat request is exactly a double-tap of Start), so
-    /// the rare delivered-but-reported-failed duplicate from the fallback is harmless.
+    /// Every urgent kind is idempotent under those same cursor/ID rules — a redelivered offer
+    /// re-acks the same cursor, a repeat request is a double-tap of Start — so the rare
+    /// delivered-but-reported-failed duplicate from the fallback is harmless.
     ///
-    /// #109 (2026-08-12): `.takeoverComplete` MOVED here from the queued side. It is the end of
-    /// the start — the moment the watch actually has the pod — and by the rule above it always
-    /// belonged on the immediate channel. Measured on build 268 epoch 10: the watch had the pod
-    /// at +10.2 s and said so 1 ms later, but on `transferUserInfo`; at +20 s the phone was
-    /// still in `.grantOffered` and fired the #108 "did the grant arrive?" probe at a takeover
-    /// that had already succeeded.
-    ///
-    /// This was invisible until now, because the pump tile treated `.grantOffered` and
-    /// `.loaned` identically ("Pod on Watch" from the instant the grant was SENT). The tile now
-    /// distinguishes them — "Taking over…" then "Pod on Watch" — so the phone's promptness in
-    /// learning the truth became user-visible, and a queued `.takeoverComplete` would leave a
-    /// progress label sitting there for minutes after a takeover that had already finished.
-    /// The honest tile REQUIRES this channel; do not move it back without reverting that.
+    /// `.takeoverComplete` belongs here: it is the moment the watch actually has the pod, and
+    /// the pump tile distinguishes "Taking over…" from "Pod on Watch" on the strength of it.
+    /// Queued, that label can sit for minutes after a takeover has already finished. The honest
+    /// tile REQUIRES this channel — do not move it back without reverting the tile.
     /// Wire-kind name for logs (#113). Matches the envelope's `kind` string, so a watch RX line
     /// and a phone SEND line for the same message read the same.
     public var kindLabel: String {

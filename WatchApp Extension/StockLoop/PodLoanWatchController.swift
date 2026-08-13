@@ -820,34 +820,22 @@ final class PodLoanWatchController {
                     // glucose NOW (display-only, no enact) so the prediction reflects the seeded
                     // carbs at takeover instead of the stale pre-loan value until the first G7
                     // reading drives a full cycle. The seeds completed well before this point.
-                    // R2 OVERTURNED (2026-08-11, Jeremy: "cancel any running temp as part of
-                    // takeover, run a fresh loop/prediction at takeover, and enact a new temp…
-                    // it clarifies things"). THE WATCH ASSERTS ITS OWN PROGRAM AT TAKEOVER — no
-                    // program crosses the boundary.
-                    //
-                    // R2 said the phone does NOT cancel its running temp, the pod keeps executing
-                    // it until our first command supersedes, and "the grant→first-enact gap is
-                    // covered by the odometer audit". That last clause was the load-bearing one,
-                    // and on 2026-08-11 we found the audit has never printed a usable number (it
-                    // compared whole-loan delivered against one drain's doses). So the ruling was
-                    // resting on a net that was not reporting.
-                    //
-                    // Inheriting a running temp is the root of a whole family: #72 (unbooked tail),
-                    // #76 (re-arm copy divergence), the C5 record-close that silently truncated the
-                    // running temp at every release, and a systematic audit bias — expectedInsulin
-                    // predicts the SCHEDULE across a gap it has no journal segment for, so an
-                    // inherited 0.90 U/hr against a 0.70 schedule accrues ~0.20 U/hr of unexplained
-                    // delivery. Two controllers sharing one program is the defect; a clean boundary
-                    // removes it rather than accounting around it.
+                    // THE WATCH ASSERTS ITS OWN PROGRAM AT TAKEOVER — no program crosses the
+                    // boundary. Two controllers sharing one temp is the defect behind a whole
+                    // family of problems: unbooked tails, re-arm copy divergence, the record-close
+                    // that truncated a running temp at every release, and a systematic audit bias
+                    // (expectedInsulin predicts the SCHEDULE across a gap it has no journal segment
+                    // for, so an inherited 0.90 U/hr against a 0.70 schedule accrues ~0.20 U/hr of
+                    // unexplained delivery). A clean boundary removes that rather than accounting
+                    // around it.
                     //
                     // A full loop() rather than a bespoke enact, deliberately: it reuses every gate
                     // (closed-loop mode inherited from the grant, glucose recency, pump-data
                     // freshness, DoseMath limits, the IOB clamp), records a CYCLE VERDICT like any
                     // other cycle, and — the point — MINTS A JOURNAL EVENT, so the loan's first
                     // program is ours, streamed to the phone, and inside the audit. The pod link is
-                    // already up here, so the enactor's reclaim is a no-op and this costs one extra
-                    // command in a session we are already holding. Nothing is lost: the new temp
-                    // supersedes the old in the same breath, so there is no gap in delivery.
+                    // already up here, so the enactor's reclaim is a no-op. The new temp supersedes
+                    // the old in the same breath, so there is no gap in delivery.
                     SportLog.event("loan", "takeover: asserting our own program (R2 overturned — no inherited temp crosses the boundary)")
                     self.loopManager.loop()
                     // Time-separate the radios. The takeover is done and the initial status
@@ -935,28 +923,17 @@ final class PodLoanWatchController {
                     self.teardownPump()
                     self.phase = .idle
                     let failSecs = self.attemptStartedAt.map { self.now().timeIntervalSince($0) } ?? -1
-                    // #86 (2026-07-31, ORIGINAL finding): the takeover ladder ran with NO keepalive
-                    // — startSoak() only fired once the loan went ACTIVE, which needs a takeover
-                    // that already succeeded — so the whole connect phase was unprotected and, on
-                    // low battery, watchOS suspended the app mid-ladder. Observed 2026-07-31, epochs
-                    // 81-83 at 15%: reads stalled 86 s and 70 s, each resuming only on a wrist raise,
-                    // and three takeovers failed in a row while the pod was fine. Keeping this
-                    // account rather than deleting it — see Jeremy's standing "don't lose the
-                    // narrative" instruction — but it is HISTORY, not current behavior: the 2026-08-06
-                    // keepalive-ownership refactor wired `onTakeoverRadioHold` to the same
-                    // WorkoutKeepalive that soak/handback use (StockLoopSession.swift), so from
-                    // build ~244 on, .takingOver DOES hold runtime for the whole ladder. The
-                    // `takeoverMaxReadGap > 20` heuristic below still catches a suspension if the
-                    // keepalive itself fails to start/renew (HK auth denied, session error) — the
-                    // #86 max-instrumentation pass (2026-08-07) put `RuntimeStateLog.snapshot()` on
-                    // every read line specifically so that question no longer needs inference: if a
-                    // future stall shows "keepalive running(takeover)" on every read, the keepalive
-                    // held and the stall is something else; if it shows "keepalive off" or
-                    // "DENIED"/"FAILED", the keepalive itself is the failure.
+                    // A stalled ladder usually means watchOS suspended the app mid-connect, not
+                    // that the pod is unreachable — so the message must not send the user to the
+                    // pod. `.takingOver` holds runtime through `onTakeoverRadioHold`
+                    // (StockLoopSession.swift), the same WorkoutKeepalive soak and hand-back use,
+                    // so this gap should only open if the keepalive itself failed to start or
+                    // renew (HK auth denied, session error).
                     //
-                    // The old note blamed the pod ("check the pod is nearby and awake") and quoted
-                    // a 40 s timeout that no longer matches the ~180 s ladder. Blaming the pod for
-                    // a suspended app sends the user to the wrong place — so say which one it was.
+                    // `RuntimeStateLog.snapshot()` on every read line settles which it was without
+                    // inference: "keepalive running(takeover)" on every read means the keepalive
+                    // held and the stall is something else; "off"/"DENIED"/"FAILED" means the
+                    // keepalive is the failure.
                     let stalled = self.takeoverMaxReadGap > 20
                     if stalled {
                         // Say ONLY what was measured. An earlier draft of this note told the user
@@ -1276,28 +1253,16 @@ final class PodLoanWatchController {
     // auditDoseCount + the addPumpEvents seed doc DELETED (R35): the store holds no doses.
     // Seed mechanics live in SessionInsulinLedger; DESIGN_LOAN_ADDPUMPEVENTS.md is historical.
     private func ingestGrantHistory(_ grant: LoanGrant) {
-        // R35 (2026-08-11, Jeremy: "stop pretending — use it for settings and that's it").
+        // R35: the watch DoseStore is CONFIG ONLY. It holds no dose data, and nothing here
+        // maintains a second book — the watch store is `isReadOnly`, so its saves silently no-op
+        // and any dose written to it is invisible. The LEDGER is the book: born per epoch, so a
+        // new ledger IS the wipe and there is nothing to leak, seeded from the grant split.
         //
-        // This function used to be ~120 lines: wipe both DoseStore tables, audit the wipe,
-        // force-repurge on a leak, hex-decode seed identities, seed via addPumpEvents, read the
-        // store's IOB back. ALL of it existed to maintain a second dose book that #111 proved
-        // never persisted a row — the watch store is isReadOnly, saves silently no-op, and the
-        // batch-delete purges could not touch the pending inserts they were auditing. The wipe
-        // leak (#110), the repurge (#111), the seed-identity machinery (#69's hex-decode), and
-        // the SEED-IN store read all leave with it. The LEDGER is the book: born per epoch (a
-        // new ledger IS the wipe — nothing to leak), seeded from the same grant split.
-        //
-        // #72: FINISHED history seeds as fixed records; a dose still DELIVERING at takeover is
-        // seeded LIVE instead — `ledgerSeed(finished:live:)` takes both. The live one carries no
-        // settled delivered amount (it logs `del=nil`), because the grant's podState blob owns it
-        // and the pump manager reports it as a mutable dose, so IOB tracks delivery in real time.
-        //
-        // It is NOT omitted. It was, before R35, when the finished set went to the DoseStore and
-        // the live dose was deliberately withheld from it — and the log line below went on saying
-        // "omitted" for a build after that stopped being true. Field log 2026-08-12 18:08:00 had
-        // the two adjacent lines contradicting each other: `[ledger] seeded — 123 doses
-        // (122 finished + 1 live)` immediately under "1 live dose(s) omitted". Both the count and
-        // the verb are fixed below; the decomposition (n=123) was right all along.
+        // FINISHED history seeds as fixed records; a dose still DELIVERING at takeover seeds
+        // LIVE instead — `ledgerSeed(finished:live:)` takes both. The live one carries no settled
+        // delivered amount (it logs `del=nil`) because the grant's podState blob owns it and the
+        // pump manager reports it as a mutable dose, so IOB tracks delivery in real time. It is
+        // seeded, not omitted.
         let seedReconciliation = self.now()
         let (entries, liveDoses) = grant.seedDoseEntries(finishedBy: seedReconciliation)
         loopManager.ledgerSeed(finished: entries, live: liveDoses)

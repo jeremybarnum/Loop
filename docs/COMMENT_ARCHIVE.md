@@ -268,3 +268,67 @@ _97 lines, from `3610bfc1`_
             // install — for the sensor already on-body, re-relay the held code or
             // prompt for it now.
 ```
+
+---
+
+# 2026-08-13 sweep — narrative removed from six blocks
+
+Comments-only; behavior provably unchanged. What was cut was the incident narrative. What each
+comment now says is why the code is there and what it does. The findings themselves live in
+FIELD_OBSERVATIONS.md and the commit history — this file keeps the detail that was in the code.
+
+**GlanceController, the >20 s manual-bolus label.** The removed account: the second branch used
+to read "waiting for sensor — bolus will deliver", which Jeremy called out in the field on
+2026-08-05 ("it seems like that happens every time… in theory this should only happen when the
+bolus coincides with a G7 read, so 10% of the time"). It was wrong twice over — never gated on
+the G7 at all (a bare 20-second stopwatch, firing whenever a bolus was merely slow), and naming
+a wait that cannot occur on this path, since R5 exempts manual boluses from the radio arbiter
+(WatchLoopManager :2176) and there is no defer gate in enactManualBolus. True rate zero, not
+10%. The #91 wording pass (2026-08-08, "'reaching' is no good") settled on "starting" over
+stock's "Bolusing" (BolusProgressTableViewCell :111) because stock's verb is true on the phone,
+where the pump is already connected, and false here where the pod is still orphaned. Three doses
+were lost to End taps during this window, which is why the label exists at all.
+
+**LoanProtocolV2, the urgent-channel list.** #42 (2026-08-02). Field 2026-08-02 08:38: a Start
+request sat queued while the phone slept, the answer reached the watch 40 s later — 15 s AFTER
+the 25 s timeout had told the user the takeover failed. An unrelated sensor-code relay arrived
+0.1 s from the grant, the signature of a whole queue flushing on wake. #109 (2026-08-12) moved
+`.takeoverComplete` to the urgent channel; measured on build 268 epoch 10, the watch had the pod
+at +10.2 s and said so 1 ms later but on transferUserInfo, and at +20 s the phone was still in
+`.grantOffered` and fired the #108 "did the grant arrive?" probe at a takeover that had already
+succeeded. Invisible until the tile stopped treating `.grantOffered` and `.loaned` identically.
+
+**PodLoanWatchController, the stalled-ladder message.** #86 (2026-07-31): the takeover ladder
+ran with NO keepalive, because startSoak() only fired once the loan went ACTIVE — which needs a
+takeover that already succeeded. Epochs 81-83 at 15% battery: reads stalled 86 s and 70 s, each
+resuming only on a wrist raise, three takeovers failed in a row while the pod was fine. Fixed by
+the 2026-08-06 keepalive-ownership refactor wiring `onTakeoverRadioHold` to the same
+WorkoutKeepalive soak and hand-back use; from build ~244 `.takingOver` holds runtime for the
+whole ladder. The old note blamed the pod ("check the pod is nearby and awake") and quoted a
+40 s timeout that no longer matched the ~180 s ladder.
+
+**PodLoanWatchController, asserting our own program at takeover.** R2 was OVERTURNED 2026-08-11
+(Jeremy: "cancel any running temp as part of takeover, run a fresh loop/prediction at takeover,
+and enact a new temp… it clarifies things"). R2 had said the phone does not cancel its running
+temp and "the grant→first-enact gap is covered by the odometer audit" — and that clause was
+load-bearing, but the audit had never printed a usable number (it compared whole-loan delivered
+against one drain's doses). The ruling was resting on a net that was not reporting. Inheriting a
+running temp was the root of #72 (unbooked tail), #76 (re-arm copy divergence), and the C5
+record-close truncation.
+
+**PodLoanWatchController, the R35 ledger seed.** R35 (2026-08-11, Jeremy: "stop pretending — use
+it for settings and that's it"). The function was ~120 lines: wipe both DoseStore tables, audit
+the wipe, force-repurge on a leak, hex-decode seed identities, seed via addPumpEvents, read the
+store's IOB back. All of it maintained a second dose book that #111 proved never persisted a
+row. The wipe leak (#110), the repurge (#111), #69's hex-decode and the SEED-IN store read all
+left with it. The log line kept saying "1 live dose(s) omitted" for a build after that stopped
+being true — field log 2026-08-12 18:08:00 has it directly under `[ledger] seeded — 123 doses
+(122 finished + 1 live)`.
+
+**WatchLoopManager, override-applied schedules.** #68 (2026-08-01): the port passed raw settings
+schedules, so an override moved the target but not the scales. With a 60%-needs override the
+[dosemath] line read `scheduled 0.70 · ISF 70` where 0.42 / ~117 were intended — every "neutral"
+temp a 1.67x high temp, corrections 1.67x oversized, systematic OVER-delivery under a
+reduced-needs override, while the prediction path already used the applied ISF (:1211, :1607) so
+prediction and dosing disagreed. #112 (2026-08-11) then removed the `?? settings.<raw>` fallback
+for stock parity.

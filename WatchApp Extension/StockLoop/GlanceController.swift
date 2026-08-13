@@ -441,41 +441,23 @@ final class GlanceViewModel: ObservableObject {
             // the flow already dismissed. Say so, or the wrist looks idle and the user taps End
             // — which cancels the dose (field: 3x).
             if let startedAt = session.stack.loopManager.manualBolusStartedAt {
-                // Under ~20s reads as normal work. Past that it needs a reason, or it reads as
-                // a hang — which is what cost three doses to End taps.
-                // Outranks the hand-back drain: a dose in flight is what gets destroyed by a
-                // mistimed tap; "ending…" merely describes waiting.
+                // Under ~20 s reads as normal work; past that it needs a reason or it reads as a
+                // hang, and a mistimed End tap during a manual bolus destroys the dose. This
+                // outranks the hand-back drain for that reason: "ending…" merely describes
+                // waiting, but a dose in flight can be lost.
                 //
-                // NOT "delivering" — nothing is being delivered yet. This window is the radio
-                // arbiter wait plus the pod reconnect, and it ENDS when the pod accepts the
-                // command (which is what fires the success haptic; measured 1.3s to accept
-                // against ~8s to actually push 0.2U). Calling it "delivering" was the same
-                // class of lie as the old unconditional "G7 direct" label.
-                // The second branch used to read "waiting for sensor — bolus will deliver". That
-                // was wrong twice over (Jeremy, field 2026-08-05: "it seems like that happens every
-                // time… in theory this should only happen when the bolus coincides with a G7 read,
-                // so 10% of the time").
+                // What the window IS: E4 orphans the pod between doses to keep its radio off the
+                // G7, so every manual bolus must first re-acquire the pod — scan, connect,
+                // establish session — before it can command it. It ends when the pod ACCEPTS the
+                // command (~1.3 s to accept vs ~8 s to push 0.2 U), which is what fires the
+                // success haptic. It is NOT a radio-arbiter wait: R5 exempts manual boluses
+                // because the user is standing there (WatchLoopManager :2176).
                 //
-                // First, it was never gated on the G7 at all — it is a bare 20-second stopwatch, so
-                // it fired whenever a bolus was merely SLOW. Second, and worse, the wait it named
-                // cannot happen on this path: R5 says a manual bolus NEVER defers to the radio
-                // arbiter because the user is standing there (WatchLoopManager :2176), and there is
-                // no radio/window/defer gate anywhere in enactManualBolus. So the true rate is not
-                // 10%, it is zero.
-                //
-                // What the >20s window actually is: E4 orphans the pod between doses to keep its
-                // radio away from the G7, so every manual bolus must first re-acquire the pod —
-                // scan, connect, establish the session — before it can command it. Naming that is
-                // both honest and more useful, because it identifies the delay as the cost we
-                // deliberately pay for G7 protection. The "bolus will deliver" half stays: it is
-                // what stops the End tap that killed three doses.
-                // #91 WORDING (Jeremy 2026-08-08: "'reaching' is no good"). Stock's phone names
-                // this same moment — command sent, no progress yet — as "Bolusing 0.90 U"
-                // (BolusProgressTableViewCell :111). We keep stock's shape (gerund + amount) but
-                // NOT its verb: on the phone the pump is connected and the command is in flight
-                // inches away, so "bolusing" is true; here the pod is still orphaned and nothing
-                // has been commanded yet. "starting" is true at every instant of this window, and
-                // naming the AMOUNT tells the user what is coming without exposing our plumbing.
+                // So the verb is "starting", not "delivering" or stock's "bolusing" — the pod is
+                // still orphaned and nothing has been commanded yet, and those would be true only
+                // on the phone, where the pump is already connected. Naming the AMOUNT tells the
+                // user what is coming without exposing the plumbing; "bolus will deliver" is what
+                // stops the End tap.
                 let pending = session.stack.loopManager.manualBolusPendingUnits
                 let amount = pending.map { Self.unitsFormatter.string(from: NSNumber(value: $0)) ?? String($0) }
                 s.transientText = Date().timeIntervalSince(startedAt) < 20
