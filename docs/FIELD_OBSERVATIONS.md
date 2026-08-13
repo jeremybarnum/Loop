@@ -571,3 +571,56 @@ dosing line, is the thing to read.
 Also of note: the -0.60 `[iob-diff]` wire leg seen on build 270 earlier has NOT recurred —
 both of these loans show -0.00. It has no reproduction and no explanation; leaving it recorded
 rather than chased.
+
+## 2026-08-12 (e27, MIXED BUILDS 270/271) — R32 review due; a phone-side write pile-up
+
+Jeremy ran this loan with different builds on the watch and phone, so attribute carefully.
+Two findings survive that caveat, and one does not.
+
+**1. R32 THRESHOLD REVIEW IS DUE — the mechanism fired as designed.**
+
+```
+residual bank: n=11 mean=-0.036 worst=|0.200| min=-0.200 max=+0.000
+** R32 THRESHOLD REVIEW DUE — 11 authoritative samples banked; the ±0.50 U bounds were set with none **
+```
+
+All 11 samples lie in [−0.200, 0.000] — not one positive. The ±0.50 U bounds are ~2.5x the
+worst observed.
+
+**Do NOT simply tighten to the observed range.** The residual is quantization-driven (#107:
+~0.5 pulse ≈ 0.025 U per temp replacement), so its scale is a function of HOW MANY temps a
+loan replaced, not a constant. Every banked sample is a short bench loan (1-21 min, 1-11
+cycles); an overnight loan runs ~140 cycles. A fixed bound tuned on these is simultaneously
+too loose for a 3-cycle loan and a false-alarm generator for a long one. The right shape is a
+threshold that scales with cycle count, with a floor. That is a design decision, not an
+arithmetic one.
+
+**2. THE PHONE STARTS ONE WRITE PER DUPLICATE OFFER — no in-flight guard.**
+
+The watch sent THREE offers on its normal ~15 s cadence (20:41:14, :29, :44). The phone logged
+TWELVE receipts and started a Core Data write for every one:
+
+```
+write DONE 19313ms · 18444ms · 13385ms · 12968ms · 12387ms · 12286ms · 10213ms · 8074ms · 7948ms · 7931ms · 3019ms
+```
+
+Eleven concurrent writes for the SAME single-dose offer, 3-19 seconds each, all completing in a
+400 ms burst. It self-amplifies: slow writes → no ack → the watch resends → more writes.
+
+The 4x receipt amplification is NOT attributable with mixed builds in play. The phone's
+response to it is, and it is version-independent: whatever produces duplicate offers —
+redelivery, resend, version skew — the commit path should collapse them rather than launch a
+write per copy. Correctness held throughout (cursor 1, one dose committed, dedup intact), so
+this is latency and robustness, not lost or doubled insulin.
+
+Deliberately NOT fixed in the build this was found in: an in-flight guard on the dose-commit
+path is a concurrency change that deserves a test, not a late edit on top of an otherwise
+clean build.
+
+**3. FIRST `fresh=Y` ON RECORD — and it confirms the staleness diagnosis.**
+
+`reconcile[provisional]` and `reconcile[AUTHORITATIVE]` agreed EXACTLY (both −0.150), with
+`vs watch endpoint +0.000`. Every prior loan was `fresh=N`, and those are the ones where the
+two diverged (e15's −0.500 vs +0.000). Direct evidence that the provisional/authoritative gap
+is a measurement-staleness artifact rather than a disagreement about delivery — exactly as the
+2026-08-11 entry predicted, now with the positive case.

@@ -34,8 +34,8 @@ final class WatchDataManager: NSObject {
         watchSession?.delegate = self
         watchSession?.activate()
 
-        // M5: construct eagerly so a relaunch mid-loan restores the persisted state
-        // machine (dosing stays paused, reminders re-arm) before any message arrives.
+        // Constructed eagerly so a relaunch mid-loan restores the persisted state machine —
+        // dosing stays paused, reminders re-arm — before any message arrives.
         _ = podLoanController
     }
 
@@ -60,23 +60,22 @@ final class WatchDataManager: NSObject {
             setAutomaticDosingPaused: { [weak self] paused in
                 guard let self = self else { return }
                 if paused {
-                    // Capture-once (the 4880ef92 lesson), persisted so a relaunch
-                    // mid-loan still restores the right value at reconcile.
+                    // Captured once and persisted, so a relaunch mid-loan still restores the right value at
+                    // reconcile.
                     if UserDefaults.standard.object(forKey: dosingKey) == nil {
                         UserDefaults.standard.set(self.deviceManager.loopManager.settings.dosingEnabled, forKey: dosingKey)
                     }
                     self.deviceManager.loopManager.mutateSettings { $0.dosingEnabled = false }
-                    // SPORT MODE (#2): loan just started — cancel the "Loop Failure" batch the last
-                    // pre-loan loop already queued (the podOnLoanProvider gate stops FUTURE re-arms,
-                    // but the queued 20/40/60/120-min ladder must be killed now so it never fires
-                    // mid-loan). Also covers relaunch-into-loan (this closure runs at reconcile).
-                    // #26: the ForLoanGrant variant also drops the future rungs' bookkeeping so
-                    // loan-end inference can't record phantom "issued" alerts for cancelled rungs.
+                    // A loan just started: cancel the "Loop Failure" batch the last pre-loan loop queued.
+                    // Gating future re-arms is not enough — the already-queued 20/40/60/120-minute rungs
+                    // would still fire mid-loan. Also covers relaunching into an active loan, since this runs
+                    // at reconcile. The ForLoanGrant variant additionally drops the future rungs' bookkeeping,
+                    // so loan-end inference cannot record alerts that were cancelled.
                     self.deviceManager.alertManager?.clearLoopNotRunningNotificationsForLoanGrant()
-                    // #26 (replace, don't just mute): arm the watch-silence dead-man — during a
-                    // loan the alarm-worthy failure is the WATCH going dark, not the phone not
-                    // looping. Ungated arm (the loan state flips after this closure runs);
-                    // main-hopped so every watch-silence mutation serializes on one queue.
+                    // Arm the watch-silence dead-man: during a loan the alarm-worthy failure is the WATCH
+                    // going dark, not the phone failing to loop. Armed ungated because the loan state flips
+                    // after this closure runs, and main-hopped so every watch-silence mutation serializes on
+                    // one queue.
                     DispatchQueue.main.async { [weak self] in
                         self?.deviceManager.alertManager?.armWatchSilenceNotifications()
                     }
@@ -86,13 +85,11 @@ final class WatchDataManager: NSObject {
                     let prior = UserDefaults.standard.object(forKey: dosingKey) as? Bool ?? false
                     UserDefaults.standard.removeObject(forKey: dosingKey)
                     self.deviceManager.loopManager.mutateSettings { $0.dosingEnabled = prior }
-                    // #26: this closure runs ON the loan controller's serial queue, and the
-                    // reschedule below reads the podOnLoan gate, which does queue.sync onto that
-                    // SAME queue — calling it inline is a guaranteed deadlock (adversarial
-                    // review blocker). Hop to main: by the time it runs, state == .owner is
-                    // already set (every unpause site flips state first), so the gate is open
-                    // and reads safely cross-queue. The main hop also serializes the clear
-                    // against any in-flight watch-receipt re-arm (TOCTOU).
+                    // This closure runs on the loan controller's serial queue, and the
+                    // reschedule below reads a gate that dispatches sync onto that same queue —
+                    // calling it inline deadlocks. Hopping to main is safe: state is already
+                    // .owner by then, so the gate reads open from another queue, and the hop
+                    // also serializes this clear against any in-flight re-arm.
                     DispatchQueue.main.async { [weak self] in
                         // Loan ended — the watch no longer owes us a heartbeat.
                         self?.deviceManager.alertManager?.clearWatchSilenceNotifications()
@@ -106,16 +103,13 @@ final class WatchDataManager: NSObject {
             },
             send: { [weak self] dictionary in
                 guard let session = self?.watchSession else { return }
-                // #42 (2026-08-02): mirror of the watch's transport policy. The interactive
-                // handshake (grant / denial / revoke / hand-back ack) takes the immediate
-                // channel so a backgrounded watch app is woken now instead of whenever iOS
-                // decides to drain its queue; record-bearing and diagnostic traffic keeps
-                // transferUserInfo's guaranteed delivery. Failure falls back to that queue,
-                // so this is never less reliable than the previous unconditional path.
-                // #61/#35: log the SEND outcome. The grant's delivery was previously a black
-                // box — an urgent send could fail into the queued fallback with no line saying
-                // so, and on the simulator the queued path may not drain for minutes, which
-                // presented as "phone granted, watch timed out" with zero evidence in between.
+                // The interactive handshake — grant, denial, revoke, hand-back ack — takes the
+                // immediate channel so a backgrounded watch app wakes now rather than when iOS
+                // drains its queue. Record-bearing and diagnostic traffic keeps
+                // transferUserInfo's guaranteed delivery, and an urgent failure falls back to
+                // it, so this is never less reliable than sending everything queued. The send
+                // outcome is logged because an urgent send that failed into the fallback is
+                // otherwise indistinguishable from one that worked.
                 let kind: String? = (dictionary[LoanProtocol.userInfoKey] as? Data)
                     .flatMap { try? JSONDecoder().decode(LoanKindPeek.self, from: $0) }?.kind
                 guard LoanMessage.isInteractiveHandshake(transport: dictionary),
@@ -135,12 +129,11 @@ final class WatchDataManager: NSObject {
             },
             addPumpEvents: { [weak self] events, lastReconciliation, completion in
                 guard let self = self else { completion(nil); return }
-                // #69/#52: loan insulin behaves like real pump insulin — PumpEvent rows
-                // (Event History) + stock reconciled() truncation + HealthKit. All loan
-                // doses are IMMUTABLE (the interim open temp is deferred to the final drain),
-                // so replacePendingEvents:false — there is no loan mutable dose to replace,
-                // and it must NOT purge the phone's OWN resumed-pod in-flight temp when a
-                // post-reclaim write (re-audit / forced reclaim) lands.
+                // Loan insulin is treated exactly like pump insulin: PumpEvent rows, stock
+                // reconciliation, HealthKit. Every loan dose is immutable by the time it
+                // arrives — the interim open temp is held back until the final drain — so
+                // there is no pending loan dose to replace, and replacing would purge the
+                // phone's own in-flight temp when a post-reclaim write lands.
                 self.deviceManager.doseStore.addPumpEvents(events, lastReconciliation: lastReconciliation, replacePendingEvents: false) { error in
                     completion(error.map { $0 as Error })
                 }
@@ -151,17 +144,15 @@ final class WatchDataManager: NSObject {
                     if case .failure(let error) = result { completion(error) } else { completion(nil) }
                 }
             },
-            // R30 (#89): a carb the WRIST deleted during the loan. Deleting through
-            // `loopManager.deleteCarbEntry` (not carbStore directly) is deliberate — that is the
-            // same door CarbAbsorptionViewController's swipe-to-delete uses, so the phone's COB
-            // and prediction invalidate exactly as they do for a phone-side deletion.
+            // A carb the wrist deleted during the loan. Deleting through loopManager rather
+            // than carbStore directly is deliberate: it is the same door the phone's own
+            // swipe-to-delete uses, so COB and the prediction invalidate identically.
             //
-            // MATCHED, NOT TRUSTED. We re-read the store and match rather than reconstructing a
-            // StoredCarbEntry from the wire: syncIdentifier first (phone-originated carbs carry
-            // the phone's own, seeded through the grant), falling back to (startDate, grams)
-            // within a second. A miss is logged and dropped — deleting the WRONG carb because a
-            // key was ambiguous would be far worse than failing to delete, and the failure
-            // direction here is a carb that survives and keeps driving dosing, which is visible.
+            // The entry is matched against the store rather than reconstructed from the wire —
+            // syncIdentifier first, falling back to (startDate, grams) within a second. A miss
+            // is logged and dropped: deleting the wrong carb because a key was ambiguous is far
+            // worse than failing to delete, and a carb that wrongly survives keeps driving
+            // dosing visibly.
             deleteCarb: { [weak self] gone, completion in
                 guard let self = self else { completion(nil); return }
                 let window = gone.startDate.addingTimeInterval(-.hours(1))
@@ -194,23 +185,19 @@ final class WatchDataManager: NSObject {
                 }
             },
             applyScheduleOverride: { [weak self] override in
-                // #68 part B: the watch's override lands on the phone through the SAME single
-                // door every other override uses — mutateSettings, whose didSet does the
-                // overrideHistory.recordOverride (LoopDataManager:269-270) that actually
-                // rescales basal/ISF/carb-ratio. Nothing bespoke, and no merge: during a loan
-                // the watch is sovereign over overrides, so this is a straight assignment.
-                // Called INLINE on the loan controller's queue (as setAutomaticDosingPaused
-                // above already does) so the controller's "already applied?" read and this
-                // write cannot interleave; mutateSettings is Locked-based and any-queue safe,
-                // and its own oldValue != newValue guard makes a redundant write free.
+                // The watch's override lands through the same single door every other override uses —
+                // mutateSettings, whose didSet records it in the override history that actually rescales
+                // basal, ISF and carb ratio. No merge: during a loan the watch is sovereign over
+                // overrides, so this is a straight assignment. Called inline on the loan controller's
+                // queue so the controller's "already applied?" read cannot interleave with this write;
+                // mutateSettings is lock-based and safe from any queue.
                 self?.deviceManager.loopManager.mutateSettings { $0.scheduleOverride = override }
             },
-            // R23 overturned 2026-08-04: overwrite the captured pre-loan value with the WRIST's
-            // final mode, so the restore in setAutomaticDosingPaused(false) picks it up
-            // untouched. Writing the SAME key inherits the persistence that already survives a
-            // relaunch mid-loan, and leaves the "missing capture defaults to OPEN" fail-safe
-            // exactly as it was. Called inline on the loan controller's queue, like the
-            // override door above; UserDefaults is any-queue safe.
+            // Overwrite the captured pre-loan loop mode with the wrist's final one, so the
+            // restore at loan end picks it up untouched — the phone inherits the watch's mode
+            // rather than reverting to its own. Writing the same key keeps the persistence that
+            // already survives a relaunch mid-loan and leaves the "missing capture defaults to
+            // open loop" fail-safe intact.
             noteWatchClosedLoop: { closed in
                 UserDefaults.standard.set(closed, forKey: dosingKey)
             },
@@ -222,9 +209,9 @@ final class WatchDataManager: NSObject {
             },
             carbHistory: { [weak self] start, completion in
                 guard let self = self else { completion([]); return }
-                // #49: the phone's active carbs, carrying the identity CarbStore.syncCarbObjects
-                // dedups on so re-seeding is idempotent. Absorbed carbs older than the window
-                // fall off naturally; only entries with future absorption matter for COB.
+                // The phone's active carbs, carrying the identity CarbStore dedups on so re-seeding is
+                // idempotent. Absorbed carbs older than the window fall off naturally; only entries with
+                // future absorption matter for COB.
                 self.deviceManager.carbStore.getCarbEntries(start: start) { result in
                     guard case .success(let entries) = result else { completion([]); return }
                     completion(entries.map { e in
@@ -258,8 +245,8 @@ final class WatchDataManager: NSObject {
                 }
             },
             predictionSnapshot: { [weak self] completion in
-                // INSTRUMENTATION ONLY (#45): the phone's last-computed prediction, decomposed,
-                // for the grant. Pure cached read (no recompute, no dosing).
+                // Instrumentation only: the phone's last-computed prediction, decomposed, for the grant.
+                // A pure cached read — no recompute, no dosing.
                 guard let self = self else { completion(nil); return }
                 self.deviceManager.loopManager.capturePredictionSnapshot(completion)
             },
@@ -288,18 +275,17 @@ final class WatchDataManager: NSObject {
                 (self?.deviceManager.pumpManager as? PumpConnectionLendable)?.isConnectionReady ?? true
             },
             cancelTempBasalAfterPodReturn: { [weak self] completion in
-                // R33 (2026-08-11): the pod is home and reachable; drop the temp the WATCH set.
+                // The pod is home and reachable: drop the temp the watch set.
                 guard let self = self else { return completion(nil) }
                 self.deviceManager.loopManager.cancelTempBasalAfterPodReturn(completion: completion)
             },
             openLoopForUncertainReconciliation: { [weak self] in
                 guard let self = self else { return }
-                // ORDER MATTERS. Clear the pre-loan capture FIRST: `setAutomaticDosingPaused(false)`
-                // at the END of the next loan restores dosingEnabled from this key, so leaving it
-                // set would silently re-close the loop R32 just opened — the user would get one
-                // loud warning and then have the machine quietly resume anyway, which is worse
-                // than never warning. With the key cleared, the next loan captures `false` and
-                // restores `false`; only the user's own settings change re-closes the loop.
+                // ORDER MATTERS: clear the pre-loan capture before opening the loop. The end of the next
+                // loan restores dosingEnabled from that key, so leaving it set would silently re-close the
+                // loop this just opened — one loud warning followed by the machine quietly resuming, which
+                // is worse than not warning at all. Cleared, the next loan captures false and restores
+                // false, and only the user's own settings change can re-close it.
                 UserDefaults.standard.removeObject(forKey: dosingKey)
                 self.deviceManager.loopManager.mutateSettings { $0.dosingEnabled = false }
             }
@@ -642,12 +628,10 @@ final class WatchDataManager: NSObject {
             return
         }
 
-        // PODLOAN: while the pod is loaned to the watch this phone CANNOT deliver —
-        // its pod link is deliberately released. Current watch builds enact locally
-        // and never send a bolus here mid-loan; this catches stale/legacy requests
-        // LOUDLY instead of letting them die in a BLE timeout. DELIVERY ONLY is
-        // refused — an attached carb entry still stores below (dropping it would
-        // lose the meal from the record entirely).
+        // While the pod is loaned to the watch this phone cannot deliver — its pod link is
+        // deliberately released. Refuse loudly rather than letting the request die in a BLE
+        // timeout. Delivery only is refused: an attached carb entry still stores below, because
+        // dropping it would lose the meal from the record entirely.
         let deliveryRefusedForLoan = bolus.value > 0 && podLoanController.isPodLoanedOut
         if deliveryRefusedForLoan {
             log.error("Refusing watch bolus while the pod is on loan: %{public}@", String(describing: message))
@@ -846,11 +830,9 @@ extension WatchDataManager: WCSessionDelegate {
         }
     }
 
-    /// #42: the IMMEDIATE channel. sendMessage(replyHandler: nil) lands HERE — the
-    /// replyHandler variant above is only called when the sender supplied one — so without
-    /// this method the watch's urgent Start request would be silently dropped. Mirrors the
-    /// loan routing in didReceiveUserInfo below, including the sensor-code re-relay that a
-    /// request triggers.
+    /// The immediate channel. `sendMessage(replyHandler: nil)` lands here rather than in the
+    /// replyHandler variant above, which is only called when the sender supplied one — without
+    /// this method the watch's urgent Start request would be silently dropped.
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
         deviceManager.alertManager?.noteWatchContactDuringLoan()   // #26: re-arm the silence dead-man
         guard message[LoanProtocol.userInfoKey] != nil else {
@@ -867,22 +849,21 @@ extension WatchDataManager: WCSessionDelegate {
 
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
         deviceManager.alertManager?.noteWatchContactDuringLoan()   // #26: loan protocol traffic re-arms the silence dead-man
-        // M5: loan protocol v2 rides its own single key. Unknown payloads are logged
-        // and ignored — never asserted on (failure-matrix row 17: WC redelivers
-        // queued userInfo across reinstalls).
+        // The loan protocol rides its own single key. Unknown payloads are logged and ignored,
+        // never asserted on: WatchConnectivity redelivers queued userInfo across reinstalls, so a
+        // payload from an older build can always arrive.
         if userInfo[LoanProtocol.userInfoKey] != nil {
-            // #35 liveness: log EVERY loan userInfo the OS delivers to this phone, before
-            // routing. If a future field log shows the watch resending offers but NO
-            // "Loan userInfo delivered" line here, the OS never handed them over (app
-            // suspended/killed/unreachable) — a delivery problem, not a controller drop.
+            // Log every loan userInfo the OS delivers, before routing. If the watch is
+            // resending offers and no line appears here, the OS never handed them over — a
+            // delivery problem rather than a controller drop, and the two are otherwise
+            // indistinguishable.
             let peekedKind: String? = (userInfo[LoanProtocol.userInfoKey] as? Data)
                 .flatMap { try? JSONDecoder().decode(LoanKindPeek.self, from: $0) }?.kind
             log.default("Loan userInfo delivered: kind=%{public}@", peekedKind ?? "unknown")
-            // Component A re-arm: a loan REQUEST is the moment the watch needs the
-            // current sensor's pairing code (its direct-G7 bond/prewarm path). The
-            // automatic .sensorStart capture only fires for sensors started after
-            // install — for the sensor already on-body, re-relay the held code or
-            // prompt for it now.
+            // A loan request is the moment the watch needs the current sensor's pairing code
+            // for its direct-G7 bond. The automatic capture only fires for sensors started
+            // after install, so for a sensor already on-body, re-relay the held code or prompt
+            // for it now.
             if peekedKind == "request" {
             }
             podLoanController.handleIncoming(userInfo: userInfo)

@@ -154,7 +154,11 @@ struct LoanDebugView: View {
                 row("link", cgm?.linkState ?? "—")
                 row("state", cgm?.lifecycle ?? "—")
                 row("expires", cgm?.expiresIn ?? "—")
-                row("needs D2W", "YES — Dexcom watch app must stay installed")
+                // "needs D2W: YES" removed (Jeremy, 2026-08-12). It was a hardcoded constant from
+                // when a non-D2W path still existed to contrast with; R34 retired that, so the row
+                // could only ever read YES. A diagnostic that cannot vary is not a diagnostic — it
+                // is a distraction on a screen read while something is wrong. The requirement now
+                // lives where it is actionable: the Series 6+ eligibility note for testers.
 
                 // E4 toggle REMOVED (#101 phase 2, 2026-08-10). The link policy is automatic:
                 // orphan between doses, per-cycle reclaim gated on G7 acquisition state while
