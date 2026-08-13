@@ -449,10 +449,7 @@ final class WatchStoreEffectsTests: XCTestCase {
 
     private func addDoses(_ doses: [DoseEntry], to doseStore: DoseStore) {
         let exp = expectation(description: "addDoses")
-        // Stock DoseStore.addDoses invokes its completion TWICE on success: once when
-        // addDoseEntries lands, again after syncPumpEventsToInsulinDeliveryStore. Not our
-        // bug and not worth deviating over — just don't let XCTest treat it as a violation.
-        exp.assertForOverFulfill = false
+        // Fixed contract: completion fires exactly once.
         doseStore.addDoses(doses, from: nil) { error in
             XCTAssertNil(error)
             exp.fulfill()
