@@ -617,6 +617,14 @@ Deliberately NOT fixed in the build this was found in: an in-flight guard on the
 path is a concurrency change that deserves a test, not a late edit on top of an otherwise
 clean build.
 
+FIXED the same night as #118, in the following build: one commit in flight at a time;
+duplicates coalesce (latest per epoch, a final never displaced by an interim) and replay
+after the completion; a force-reclaim arriving mid-write defers behind it — closing the
+adjacent #66-family hazard where it re-committed identity-less carbs. Three two-sided tests;
+sabotage-verified (guard removed: four writes for four copies, and the carb doubles). One
+consequence worth knowing when reading logs: duplicate offers can now MERGE, so N delivered
+copies may produce fewer than N acks — the watch's resend loop converges regardless.
+
 **3. FIRST `fresh=Y` ON RECORD — and it confirms the staleness diagnosis.**
 
 `reconcile[provisional]` and `reconcile[AUTHORITATIVE]` agreed EXACTLY (both −0.150), with

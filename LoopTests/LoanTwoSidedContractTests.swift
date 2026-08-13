@@ -165,6 +165,10 @@ final class LoanTwoSidedContractTests: XCTestCase {
 
     /// Drops the next N phone→watch acks on the floor — the transport-loss fault.
     private var acksToDrop = 0
+    /// #118: per-call event counts for addPumpEvents, and an artificial write duration —
+    /// the pile-up only exists while a write is slower than the offer cadence.
+    private var pumpWriteEventCounts: [Int] = []
+    private var pumpWriteDelay: TimeInterval = 0
 
     private var journalDir: URL!
 
@@ -184,6 +188,8 @@ final class LoanTwoSidedContractTests: XCTestCase {
         committedCarbs = []
         phoneToWatch = []
         acksToDrop = 0
+        pumpWriteEventCounts = []
+        pumpWriteDelay = 0
         pump = MockPumpManager()
         MockPumpManager.testConnectionReleased = false
         MockPumpManager.testOdometer = nil
@@ -208,11 +214,13 @@ final class LoanTwoSidedContractTests: XCTestCase {
 
     override func tearDown() {
         // #103: no synchronous unlink of a directory a live object may still be writing.
-        // (The journal is a plain atomic file write rather than Core Data, so this is
-        // belt-and-braces — but the rule is easier to keep than to qualify.)
-        journalDir = nil
-        watch = nil
-        phone = nil
+        //
+        // And NO NIL-ING EITHER (2026-08-12): a timed-out waitUntil poller gets a ~1 s grace
+        // before its deadline stops it, and `self?.watch.acks` force-unwraps the IUO — so
+        // `watch = nil` here turned any timeout into a SIGTRAP that killed the runner and every
+        // suite after it (the :615 fatal). XCTest allocates a FRESH INSTANCE per test method,
+        // so releasing these properties frees nothing that matters; the next test never sees
+        // this instance at all.
         super.tearDown()
     }
 
@@ -244,9 +252,15 @@ final class LoanTwoSidedContractTests: XCTestCase {
             addPumpEvents: { [weak self] events, _, completion in
                 guard let self = self else { completion(nil); return }
                 self.lock.lock()
+                self.pumpWriteEventCounts.append(events.count)
                 self.committedDoses.append(contentsOf: events.compactMap { $0.dose })
+                let delay = self.pumpWriteDelay
                 self.lock.unlock()
-                completion(nil)
+                if delay > 0 {
+                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) { completion(nil) }
+                } else {
+                    completion(nil)
+                }
             },
             addCarb: { [weak self] entry, completion in
                 self?.lock.lock(); self?.committedCarbs.append(entry); self?.lock.unlock()
@@ -263,6 +277,7 @@ final class LoanTwoSidedContractTests: XCTestCase {
     // MARK: - Harness helpers
 
     private func doses() -> [DoseEntry] { lock.lock(); defer { lock.unlock() }; return committedDoses }
+    private func writeCounts() -> [Int] { lock.lock(); defer { lock.unlock() }; return pumpWriteEventCounts }
     private func carbs() -> [NewCarbEntry] { lock.lock(); defer { lock.unlock() }; return committedCarbs }
     private func acks() -> [HandbackAck] {
         lock.lock(); defer { lock.unlock() }
@@ -598,12 +613,23 @@ final class LoanTwoSidedContractTests: XCTestCase {
         }
         XCTAssertTrue(watch.acks.isEmpty, "the watch heard nothing, so it kept offering")
 
-        watch.sendOffer(released: false, at: now)
-        waitUntil("ack finally heard") { [weak self] in (self?.watch.acks.count ?? 0) >= 1 }
+        // #118 changed the transport model this test may assume. Duplicates arriving during an
+        // in-flight write now COALESCE — probed on 2026-08-12: offers 3 and 4 merged into one
+        // replay, so four offers produced THREE acks, and a fixed drop-3-then-hear-the-4th
+        // ledger times out. That is the fix working, not a liveness hole: the watch does not
+        // need one ack per copy, it needs ONE, and its 15 s resend guarantees an offer
+        // eventually arrives with no write in flight. So model the resend loop.
+        var heard = false
+        for _ in 0..<6 {
+            watch.sendOffer(released: false, at: now)
+            settle(0.15)
+            if !watch.acks.isEmpty { heard = true; break }
+        }
+        XCTAssertTrue(heard, "an offer arriving with no write in flight gets acked — the resend loop converges")
 
-        XCTAssertEqual(doses().filter { $0.type == .bolus }.count, 1, "one bolus after four deliveries")
-        XCTAssertEqual(doses().filter { $0.type == .tempBasal }.count, 1, "one temp after four deliveries")
-        XCTAssertEqual(carbs().count, 1, "one carb after four deliveries — carbs have no store-level net")
+        XCTAssertEqual(doses().filter { $0.type == .bolus }.count, 1, "one bolus, however many deliveries it took")
+        XCTAssertEqual(doses().filter { $0.type == .tempBasal }.count, 1, "one temp")
+        XCTAssertEqual(carbs().count, 1, "one carb — carbs have no store-level net")
         XCTAssertTrue(watch.isDrained)
     }
 
@@ -664,5 +690,73 @@ final class LoanTwoSidedContractTests: XCTestCase {
                        "the ack must carry the max committed seq, not the stale 0")
         XCTAssertTrue(watch.isDrained,
                       "THE FIX: an advanced cursor lets the returning watch finally drain and close the loan")
+    }
+    // MARK: - #118 one commit in flight
+
+    /// e27 (2026-08-12): the watch sent 3 offers on its normal 15 s cadence; the phone logged
+    /// 12 receipts and started a Core Data write for EVERY one — eleven concurrent writes,
+    /// 3-19 s each, for a single 0.15 U dose. Events only enter committedIDs in the write's
+    /// COMPLETION, so every duplicate arriving before that saw them as uncommitted. And it
+    /// self-amplifies: slow writes delay the ack, the watch resends, more writes.
+    ///
+    /// The guard: one write in flight; duplicates COALESCE (§2.9 — never drop a message) and
+    /// replay after the completion, where committedIDs makes them a cheap re-ack.
+    func testDuplicateOffersDuringASlowWriteCollapseToOneCommit() throws {
+        let now = Date()
+        try establishLoan(at: now)
+        try watch.mint(bolus(1.0, at: now.addingTimeInterval(-300)), at: now.addingTimeInterval(-300))
+
+        lock.lock(); pumpWriteDelay = 0.4; lock.unlock()
+        for _ in 0..<4 { watch.sendOffer(released: false, at: now) }
+
+        waitUntil("ack lands") { [weak self] in (self?.watch.acks.count ?? 0) >= 1 }
+        settle()   // let the coalesced replay finish
+
+        let counts = writeCounts()
+        XCTAssertEqual(counts.filter { $0 > 0 }.count, 1,
+                       "one dose-bearing write for four copies of the offer (got \(counts))")
+        XCTAssertLessThanOrEqual(counts.count, 2,
+                                 "the coalesced duplicates collapse to at most one empty re-ack write (got \(counts))")
+        XCTAssertEqual(doses().count, 1)
+        XCTAssertTrue(watch.isDrained)
+    }
+
+    /// A FINAL offer arriving while an interim write is still running must be neither lost nor
+    /// run concurrently: it coalesces (a final is never displaced by an interim), replays after
+    /// the completion, and closes the loan.
+    func testFinalOfferDuringInterimWriteStillClosesTheLoan() throws {
+        let now = Date()
+        try establishLoan(at: now)
+        try watch.mint(bolus(0.5, at: now.addingTimeInterval(-300)), at: now.addingTimeInterval(-300))
+
+        lock.lock(); pumpWriteDelay = 0.4; lock.unlock()
+        watch.sendOffer(released: false, at: now)   // write 1 in flight
+        watch.sendOffer(released: true, at: now)    // coalesces behind it
+
+        waitUntil("owner", timeout: 8) { [weak self] in self?.phone?.state == .owner }
+        XCTAssertEqual(doses().count, 1, "the dose committed exactly once through the pile-up")
+        XCTAssertTrue(watch.isDrained)
+    }
+
+    /// #66's family, one layer deeper: a force-reclaim firing DURING an in-flight commit used
+    /// to read committedIDs before the completion updated it and re-commit the same staged
+    /// records — insulin survives (raw dedup at the store) but carbs have no identity and
+    /// DOUBLE. The guard defers the reclaim until the write lands; drainAfterCommit then runs
+    /// it against an up-to-date committedIDs.
+    func testForceReclaimDuringInFlightCommitDoesNotDoubleTheCarb() throws {
+        let now = Date()
+        try establishLoan(at: now)
+        try watch.mint(carb(30, at: now.addingTimeInterval(-400)), at: now.addingTimeInterval(-400))
+        try watch.mint(bolus(1.0, at: now.addingTimeInterval(-390)), at: now.addingTimeInterval(-390))
+
+        lock.lock(); pumpWriteDelay = 0.4; lock.unlock()
+        watch.sendOffer(released: false, at: now)
+        settle(0.1)   // the write is now in flight (0.4 s duration); carbs commit in its completion
+        phone.forceReclaimToOwner(reason: "test: user escape during commit")
+
+        waitUntil("owner", timeout: 8) { [weak self] in self?.phone?.state == .owner }
+        settle()
+        XCTAssertEqual(carbs().count, 1, "the carb must commit exactly once (#118 / #66's family)")
+        XCTAssertEqual(doses().filter { $0.type == .bolus }.count, 1, "and the bolus once")
     }
 }

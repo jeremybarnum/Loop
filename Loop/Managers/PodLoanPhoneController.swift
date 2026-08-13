@@ -477,6 +477,22 @@ final class PodLoanPhoneController {
     }
     private var pendingHandbackAudit: PendingHandbackAudit?
 
+    /// #118 (e27, 2026-08-12): true from write START until its completion runs, both paths.
+    /// While set, incoming offers COALESCE below instead of launching concurrent Core Data
+    /// writes, and a force-reclaim defers. Events only enter `committedIDs` in the write's
+    /// completion, so without this latch every duplicate copy of an offer arriving mid-write
+    /// saw them as uncommitted and started its own write — e27 logged 12 receipts for 3 sends
+    /// and ELEVEN concurrent writes (3-19 s each) for one 0.15 U dose. Self-amplifying: slow
+    /// writes delay the ack, the watch resends, more writes.
+    private var commitInFlight = false
+    /// #118: offers that arrived during an in-flight write — latest per epoch, and a FINAL is
+    /// never displaced by an interim. Replayed one-per-completion by `drainAfterCommit`, at
+    /// which point `committedIDs` makes a duplicate a cheap re-ack. §2.9: never drop a message.
+    private var coalescedOffers: [Int: HandbackOffer] = [:]
+    /// #118: a force-reclaim requested mid-write. It used to run immediately, read the
+    /// not-yet-updated `committedIDs`, and re-commit the same staged records — insulin
+    /// survives (raw dedup at the store) but CARBS HAVE NO IDENTITY and double (#66's family).
+    private var pendingForceReclaimReason: String?
     private var committedIDs: Set<UUID>
     /// Staged (received, not-yet-committed) events for the current epoch — persisted
     /// on every batch so a phone relaunch keeps the trap-cell defense.
@@ -769,6 +785,11 @@ final class PodLoanPhoneController {
         committedCursor = 0
         committedIDs = []
         persistCommittedIDs()
+        // #118: a new grant supersedes any deferred force-reclaim — running it later would
+        // stomp this fresh loan straight back to .owner — and any coalesced old-epoch offers:
+        // the watch resends whatever went unacked, and those take the stale-offer path.
+        pendingForceReclaimReason = nil
+        coalescedOffers.removeAll()
         staged = [:]
         stagedTombstones = []
         persistStaged()
@@ -981,6 +1002,16 @@ final class PodLoanPhoneController {
         }
         handbackDiag(offer.epoch, "offer RX ev=\(offer.events.count) released=\(offer.released.map { $0 ? "final" : "interim" } ?? "nil") stale=\(isStale) state=\(state.rawValue)")
 
+        // #118: one commit in flight at a time — see the property doc. Coalesce, never drop.
+        if commitInFlight {
+            let storedIsFinal = coalescedOffers[offer.epoch]?.released == true
+            if !(storedIsFinal && offer.released != true) {
+                coalescedOffers[offer.epoch] = offer
+            }
+            handbackDiag(offer.epoch, "offer COALESCED behind the in-flight write (#118) — \(coalescedOffers.count) waiting")
+            return
+        }
+
         // WS1 (two-phase hand-back): an INTERIM offer (released == false) means the
         // watch is still dosing and still owns the pod — commit + ack ONLY; no state
         // change, no reclaim, tile stays "Pod on Watch". Legacy senders (released
@@ -1159,9 +1190,11 @@ final class PodLoanPhoneController {
 
         let writeStart = deps.now()
         handbackDiag(offer.epoch, "write START \(sane.count) dose(s) (final=\(isFinal))")
+        commitInFlight = true   // #118: cleared first thing in the completion, both paths
         deps.addPumpEvents(newPumpEvents(from: sane), offer.handedBackAt) { [weak self] error in
             guard let self = self else { return }
             self.queue.async {
+                self.commitInFlight = false
                 if let error = error {
                     self.handbackDiag(offer.epoch, "write FAILED: \(String(describing: error))")
                     os_log("Reconcile write failed: %{public}@", log: self.log, type: .fault, String(describing: error))
@@ -1174,6 +1207,14 @@ final class PodLoanPhoneController {
                         self.deps.issueNotice("Watch Records Not Saved", "The watch session's records could not be saved. Dosing stays paused; will retry on the next hand-back attempt.")
                     }
                     self.armPausedReminder()
+                    // #118: no coalesced replay on failure — the watch's 15 s resend is the
+                    // retry, and a hot local replay of the same failing write would spin. A
+                    // deferred force-reclaim DOES run: it is the loan's only way out, and its
+                    // own path re-attempts the staged records.
+                    if let reason = self.pendingForceReclaimReason {
+                        self.pendingForceReclaimReason = nil
+                        self.forceReclaimToOwner(reason: reason)
+                    }
                     return
                 }
                 self.hasWarnedRecordsNotSaved = false   // recovered — a future failure is news again
@@ -1234,7 +1275,21 @@ final class PodLoanPhoneController {
                 } else {
                     self.sendMessage(.handbackAck(HandbackAck(epoch: offer.epoch, committedCursor: newCursor, stale: true)))
                 }
+                self.drainAfterCommit()   // #118
             }
+        }
+    }
+
+    /// #118: runs on `queue` after a successful commit. The deferred force-reclaim goes first
+    /// (it writes any remaining staged tail itself, now against an up-to-date committedIDs);
+    /// then ONE coalesced offer replays — one per completion, so a storm drains serially.
+    private func drainAfterCommit() {
+        if let reason = pendingForceReclaimReason {
+            pendingForceReclaimReason = nil
+            forceReclaimToOwner(reason: reason)
+        }
+        if let next = coalescedOffers.popFirst()?.value {
+            handleHandbackOffer(next)
         }
     }
 
@@ -1426,6 +1481,12 @@ final class PodLoanPhoneController {
 
     func forceReclaimToOwner(reason: String) {
         os_log("Force reclaim to OWNER: %{public}@", log: log, type: .default, reason)
+        // #118: never mid-write — see pendingForceReclaimReason's doc. drainAfterCommit runs it.
+        if commitInFlight {
+            handbackDiag(epoch, "force reclaim DEFERRED (#118) — a hand-back commit is writing; runs when it lands")
+            pendingForceReclaimReason = reason
+            return
+        }
         reclaimTimeoutWork?.cancel()
         cancelNotification(id: NotificationID.onLoan)
         cancelNotification(id: NotificationID.paused)
