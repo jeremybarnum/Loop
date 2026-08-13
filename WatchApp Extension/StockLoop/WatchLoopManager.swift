@@ -243,10 +243,7 @@ final class WatchLoopManager {
     /// Wired by StockLoopSession to the loan controller (which owns the OmniPumpManager);
     /// no-op / immediate-connected when E4 is off.
     /// #94: device-log storm dedupe (see logEventForDeviceIdentifier). Any thread may log.
-    private let deviceLogDedupeLock = NSLock()
-    private var lastDeviceLogLine = ""
-    private var lastDeviceLogAt = Date.distantPast
-    private var suppressedDeviceLogCount = 0
+    private let deviceLogThrottle = DeviceLogThrottle()
 
     private let manualBolusLock = NSLock()
     private var _manualBolusInFlight = false
@@ -3219,23 +3216,15 @@ extension WatchLoopManager: CGMManagerDelegate {
         // a future storm cheap AND readable: an identical repeat within 2s is counted, not
         // written, and the count is flushed on the next DIFFERENT line. Distinct lines pass
         // through untouched.
-        deviceLogDedupeLock.lock()
         let line = "\(type) \(deviceIdentifier ?? "—"): \(message)"
-        let now = self.now()
-        if line == lastDeviceLogLine, now.timeIntervalSince(lastDeviceLogAt) < 2.0 {
-            suppressedDeviceLogCount += 1
-            lastDeviceLogAt = now
-            deviceLogDedupeLock.unlock()
+        switch deviceLogThrottle.admit(line, at: now()) {
+        case .suppress:
             completion?(nil)
             return
-        }
-        let suppressed = suppressedDeviceLogCount
-        suppressedDeviceLogCount = 0
-        lastDeviceLogLine = line
-        lastDeviceLogAt = now
-        deviceLogDedupeLock.unlock()
-        if suppressed > 0 {
-            SportLog.event(source, "(previous line repeated ×\(suppressed) — suppressed)")
+        case .write(let flushing):
+            if flushing > 0 {
+                SportLog.event(source, "(previous line repeated ×\(flushing) — suppressed)")
+            }
         }
         SportLog.event(source, line)
         completion?(nil)
