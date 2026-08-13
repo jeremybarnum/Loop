@@ -29,7 +29,10 @@ final class TimerRecorder {
 
     private let lock = NSLock()
     private var _armed: [Armed] = []
-    private var _work: [String: DispatchWorkItem] = [:]
+    /// Every arming is kept, not just the latest: a superseded timer still exists in production
+    /// and still reaches its deadline, so a test that discarded it could not observe what the
+    /// seam does with one.
+    private var _work: [String: [DispatchWorkItem]] = [:]
 
     /// Set to fire work items inline as they are armed — a virtual jump to every deadline.
     var fireInline = false
@@ -42,22 +45,33 @@ final class TimerRecorder {
             guard let self = self else { return }
             self.lock.lock()
             self._armed.append(Armed(label: label, delay: delay))
-            self._work[label] = work
+            self._work[label, default: []].append(work)
             let fire = self.fireInline
             self.lock.unlock()
             if fire { work.perform() }
         }
     }
 
-    /// Fire one armed timer by label — virtual time for exactly that deadline.
+    /// Fire one armed timer by label — virtual time for exactly that deadline. When a label was
+    /// armed more than once this fires the LATEST, matching what a real deadline would do to
+    /// the most recent arming.
     @discardableResult
     func fire(_ label: String) -> Bool {
         lock.lock()
-        let work = _work[label]
+        let work = _work[label]?.last
         lock.unlock()
         guard let work = work else { return false }
         work.perform()
         return true
+    }
+
+    /// Fire EVERY arming of a label, oldest first — the only way to observe what happens to a
+    /// superseded timer, since production fires all of them and lets the guards sort it out.
+    func fireAll(_ label: String) {
+        lock.lock()
+        let items = _work[label] ?? []
+        lock.unlock()
+        items.forEach { $0.perform() }
     }
 
     func reset() { lock.lock(); _armed.removeAll(); _work.removeAll(); lock.unlock() }

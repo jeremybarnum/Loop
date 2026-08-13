@@ -287,6 +287,9 @@ final class PodLoanWatchController {
     /// waiting for the phone's permission, versus iOS actually freeing the pod's BLE slot.
     private var finalOfferSentAt: Date?
     private var requestTimeoutWork: DispatchWorkItem?
+    /// The pending post-dose release, so a second dose in the same cycle re-arms rather than
+    /// stacking a second independent 12 s timer (build 275, epoch 38).
+    private var postDoseReleaseWork: DispatchWorkItem?
     /// Surfaced on the glance idle screen after a failed/timed-out start, so the user
     /// sees WHY instead of a silent return to idle.
     private(set) var lastIdleNote: String?
@@ -1227,35 +1230,62 @@ final class PodLoanWatchController {
         // so a deferred release that has been waiting on us can proceed promptly. Enqueued
         // rather than set inline because `doseWindowUntil` is queue-confined and this is
         // called from the enactor's own queue.
-        queue.async { [weak self] in self?.doseWindowUntil = nil }
-        // epochScoped: this is the one timer in the file that ACTS on the pod link across a
-        // window long enough to outlive its loan. Its `.active` guard is not sufficient alone,
-        // because a LATER loan is also `.active` — a hand-back and re-grant inside 12 s would
-        // let this drop the BLE link out from under the loan that now owns the pod. The field
-        // margin is real but thin: e34 ended 01:56:31 with e35 active by 01:56:54, and the
-        // fast takeovers in that same session ran 6.8-7.2 s.
-        schedule(after: 12, label: "post-dose-release", epochScoped: true) { [weak self] in
-            // Unconditional since #101 phase 2 — see the takeover-release note above for why
-            // the `g7.e4ReleasePod` gate had to go (absent key = false = hold the link forever
-            // on a fresh install, the arm the toggle experiment disproved).
-            guard let self = self, self.phase == .active, let manager = self.pumpManager,
-                  manager.isConnectionReleased == false else { return }
-            // Capture the peripheral BEFORE and AFTER the cancel. The E4-v1 poisoning
-            // signature is a peripheral left in .disconnecting, and on 2026-07-22 we could
-            // only infer it minutes later from a central recreate. Cancelling a link the pod
-            // has ALREADY dropped is the suspected trigger, so "what state were we in when
-            // we cancelled" is the load-bearing fact — and a state that is not .connected
-            // going in means there was nothing to cancel.
-            let before = manager.podLoanConnectionStateDescription
-            // #72: ORPHAN, not release — same as the deferred takeover release: E4 keeps the
-            // watch as controller, so the running temp's record must NOT close here.
-            manager.podLoanOrphanConnection()
-            self.lastPodLinkContact = self.now()
-            self.schedule(after: 3, label: "post-dose-verify") { [weak self] in
-                guard let self = self, let manager = self.pumpManager else { return }
-                let after = manager.podLoanConnectionStateDescription
-                SportLog.event("loan", "E4: pod re-released after dose (+12s settle) — state \(before) -> \(after) (+3s)\(after.hasPrefix("DISCONNECTING") ? " ** WEDGED — this is the poisoning signature **" : "")")
-            }
+        // Cancel-before-rearm, the same one-shot idiom as chaseWorkItem / resendWorkItem /
+        // takeoverBackstop / requestTimeoutWork. This one lacked it, and build 275's timer log
+        // caught the consequence on epoch 38: a cycle that reclaims TWICE — once because the
+        // pump data was 5 min stale, once to dose — armed two independent 12 s releases 2.7 s
+        // apart, and both fired (02:57:08 and 02:57:10).
+        //
+        // The second firing was harmless only because the first had already released the link,
+        // so `isConnectionReleased` bailed it out. Had a new reclaim reconnected inside those
+        // 2 s, both of its guards would have passed and it would have dropped the link out
+        // from under a live dose. Note `epochScoped` does NOT cover this: both timers belong
+        // to the SAME epoch.
+        //
+        // Arming moved onto the controller's queue, where the work-item handle and `epoch`
+        // both live — this is called from the enactor's queue.
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            self.doseWindowUntil = nil
+            self.postDoseReleaseWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.performPostDoseRelease() }
+            self.postDoseReleaseWork = work
+            // epochScoped: this is the one timer in the file that ACTS on the pod link across a
+            // window long enough to outlive its loan. Its `.active` guard is not sufficient
+            // alone, because a LATER loan is also `.active` — a hand-back and re-grant inside
+            // 12 s would let this drop the BLE link out from under the loan that now owns the
+            // pod. The field margin is real but thin: e34 ended 01:56:31 with e35 active by
+            // 01:56:54, and the fast takeovers in that same session ran 6.8-7.2 s.
+            self.schedule(after: 12, label: "post-dose-release", epochScoped: true, execute: work)
+        }
+    }
+
+    /// Queue affinity comes from the only call site: the work item is armed inside a
+    /// `queue.async` block and fired by the seam, which dispatches on `queue`. Deliberately no
+    /// `dispatchPrecondition` here — the test harness fires timer bodies directly, and an
+    /// assert that makes the one timer with a known field defect untestable is a bad trade.
+    private func performPostDoseRelease() {
+        postDoseReleaseWork = nil
+        // Unconditional since #101 phase 2 — see the takeover-release note above for why
+        // the `g7.e4ReleasePod` gate had to go (absent key = false = hold the link forever
+        // on a fresh install, the arm the toggle experiment disproved).
+        guard self.phase == .active, let manager = self.pumpManager,
+              manager.isConnectionReleased == false else { return }
+        // Capture the peripheral BEFORE and AFTER the cancel. The E4-v1 poisoning
+        // signature is a peripheral left in .disconnecting, and on 2026-07-22 we could
+        // only infer it minutes later from a central recreate. Cancelling a link the pod
+        // has ALREADY dropped is the suspected trigger, so "what state were we in when
+        // we cancelled" is the load-bearing fact — and a state that is not .connected
+        // going in means there was nothing to cancel.
+        let before = manager.podLoanConnectionStateDescription
+        // #72: ORPHAN, not release — same as the deferred takeover release: E4 keeps the
+        // watch as controller, so the running temp's record must NOT close here.
+        manager.podLoanOrphanConnection()
+        lastPodLinkContact = now()
+        schedule(after: 3, label: "post-dose-verify") { [weak self] in
+            guard let self = self, let manager = self.pumpManager else { return }
+            let after = manager.podLoanConnectionStateDescription
+            SportLog.event("loan", "E4: pod re-released after dose (+12s settle) — state \(before) -> \(after) (+3s)\(after.hasPrefix("DISCONNECTING") ? " ** WEDGED — this is the poisoning signature **" : "")")
         }
     }
 

@@ -165,6 +165,43 @@ final class PodLoanEpochScopingTests: XCTestCase {
                        "only opted-in timers are epoch-scoped")
     }
 
+    /// Reproduces build 275 / epoch 38. A cycle that reclaims TWICE — once because the pump
+    /// data was 5 min stale, once to dose — called releasePodAfterDose twice 2.7 s apart, and
+    /// TWO independent 12 s releases fired (02:57:08 and 02:57:10). The second was harmless
+    /// only because the first had already released the link; had a new reclaim reconnected in
+    /// that gap, both of its guards would have passed and it would have dropped the link out
+    /// from under a live dose.
+    ///
+    /// Note this is deliberately NOT an epoch problem — both timers belong to the same epoch,
+    /// so `epochScoped` cannot catch it. Cancel-before-rearm is what does.
+    func testASecondDoseInTheSameCycleRearmsTheReleaseRatherThanStackingIt() {
+        let controller = makeController()
+        let rec = TimerRecorder()
+        rec.install(on: controller)
+        controller.send = { _ in }
+
+        runOneLoanToActive(controller, rec)
+
+        controller.releasePodAfterDose()     // the stale-pump-data reclaim
+        drain()
+        controller.releasePodAfterDose()     // the dose itself, moments later
+        drain()
+
+        let armings = rec.armed.filter { $0.label == "post-dose-release" }
+        XCTAssertEqual(armings.count, 2, "each call still arms — the fix is cancellation, not suppression")
+
+        // The first work item must have been cancelled, so only ONE release can actually run.
+        // The seam reports a cancelled item as `skipped`, which is the observable.
+        clearLog()
+        rec.fireAll("post-dose-release")
+
+        let lines = logLines()
+        let fired = lines.filter { $0.contains("fired post-dose-release") }.count
+        let skipped = lines.filter { $0.contains("skipped post-dose-release") }.count
+        XCTAssertEqual(fired, 1, "exactly one release may run. Log was:\n\(lines.joined(separator: "\n"))")
+        XCTAssertEqual(skipped, 1, "and the superseded one must say so rather than vanish")
+    }
+
     /// A timer armed before any grant has NO epoch, and must never be suppressed by scoping —
     /// the request timeout is exactly this case, and it is the path that rescues a hung
     /// request. Blanket enforcement would have broken it, which is why scoping is opt-in.
