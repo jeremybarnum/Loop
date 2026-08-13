@@ -716,3 +716,48 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   Also under this ruling: ANY alert that opens the loop — R32(b)'s regular hand-back
   verdict included — now rides the urgent channel. An alert that stops automatic dosing
   must never be a quiet list entry.
+
+- **R38 — A comment must stand on its own where it sits**
+  (2026-08-13, Jeremy: "to the greatest possible extent, I'm trying to keep the code
+  standalone reasonable, which I know lives in tension with having the comments not be
+  too verbose").
+
+  A reader must be able to understand a piece of code without leaving the file. No comment
+  may lean on a reference the reader cannot resolve in front of them:
+
+  - **`#NNN` task numbers — removed.** They look like stock's `#123` but are not. Stock's
+    resolve to public GitHub issues; ours resolve to a backlog that exists only in chat
+    history, so the same syntax that informs an upstream reader informs nobody here.
+  - **`R-NN` ruling numbers — also removed from code**, which is the sharper half of this
+    rule. Being resolvable *in-repo* is not good enough: one directory away is still a hop,
+    and the citation goes stale the moment a ruling is amended. State the constraint, not
+    its docket number.
+  - **`TODO` / `FIXME` stay.** Stock uses them, they carry their whole meaning inline, and
+    they are a convention a Loop developer already reads fluently.
+
+  The transformation, where a reference is removed:
+
+  - If the reference DECORATED an otherwise complete explanation, delete it and stop. This
+    is most of them — e.g. `// MARK: - Glance surface (R23; display only — no dosing paths
+    read this)` already says what R23 requires, so the token is pure subtraction.
+  - If the reference WAS the explanation (`// #101: unconditional now`), replace it with one
+    sentence stating the constraint — what must hold and why the code is shaped that way.
+    Not the incident, not the date, not who said it.
+
+  Where a ruling's force is partly that it WAS ruled — R35's refusal to fall back, R32's
+  sign asymmetry — keep the imperative and drop the citation: write the prohibition
+  ("never substitute the raw schedule; refuse instead") so a future reader knows not to
+  casually undo it without needing to look up why.
+
+  **Runtime log strings are out of scope.** A `#NNN` inside a `SportLog.event(...)` body is
+  a field-diagnostic breadcrumb that appears in logs we grep; changing it alters observable
+  output and is not a comment edit. Left alone deliberately.
+
+  On the tension Jeremy names: **standalone wins, brevity is the constraint rather than the
+  goal.** A comment that is long because the thing is genuinely subtle is correct; a comment
+  that is long because it recounts how we found out is not. The test is whether a competent
+  reader who has never seen this project's history can act on it.
+
+  Note the irony and its limit: this is a ruling saying not to cite rulings. RULINGS.md
+  remains the register of DECISIONS — it is where a future session looks before
+  re-litigating something settled. It simply stops being a dependency for reading the code.
