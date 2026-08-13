@@ -844,3 +844,63 @@ Also in this log, smaller but real:
 - **Takeovers: 26.6 s / 9.1 s / 7.2 s.** The slow one started backgrounded with the keepalive
   refused (HK error 14) and recovered at the first wrist-raise — the known self-heal, visible
   end to end.
+
+## 2026-08-13 01:52 (build 274, e34/e35) — R35 + #112 VALIDATED IN THE FIELD
+
+The deferred validation finally ran. e35 was started with an override active, and the dosing
+math shows both scales applied:
+
+```
+[override] APPLIED 🕺 crashy · insulin needs 52% (basal x0.52, ISF x1.92, CR x1.92)
+[settings] granted @now — ISF 70 mg/dL/U · basal 0.70 U/hr        <- the RAW schedule
+[dosemath] ... running 1.30 U/hr · scheduled 0.36 · ISF 135       <- what dosing actually used
+```
+
+0.70 × 0.52 = 0.364 → `scheduled 0.36`. 70 × 1.92 = 134.4 → `ISF 135`. **Both the basal
+baseline and the ISF are override-applied in the same cycle**, which is exactly what #112
+fixed — temps had been netting against the RAW basal while ISF was already scaled — and what
+R35's ledger-only dosing requires. Eight cycles across two loans, every verdict `computed=ok`,
+and no ledger refusal anywhere in the log: the no-fallback rule never had to fire because the
+ledger was always there.
+
+Both reconciles were exact: e34 `delivered=0.300 expected=0.300 residual=-0.000`, e35
+`0.300/0.300 residual=+0.000`. Bank now n=17, mean −0.026, worst |0.200|.
+
+## Same night — a failed manual bolus, classified correctly and INDEPENDENTLY PROVEN
+
+01:54:13 a 0.10 U manual bolus failed with a BLE write timeout — the textbook uncertain
+shape, since a timed-out write cannot by itself tell you whether the pod received it. The
+watch told the user flatly "Bolus Not Delivered — 0.10 U did not deliver".
+
+That assertion is stronger than a write timeout alone can justify, so it is worth recording
+WHY it was safe. `loanDidEnact` does not guess: past the `unfinalizedBolus` certain-refusal
+check it asks the pump manager whether a pending command exists
+(`podLoanPendingCommandKind != nil`). It was nil — OmnipodKit knew the bytes never went out —
+so the enact was classified a certain failure and the journal entry ANNULLED rather than
+booked as an assumed max-exposure dose. No chase, no phantom insulin.
+
+**The odometer then proved it independently.** Had the 0.10 U actually delivered, the
+hand-back audit would have read `delivered=0.400 expected=0.300 residual=+0.100`. It read
+0.300/0.300, −0.000. Two mechanisms built for different reasons — #99's certainty
+classification and the item-1 authoritative odometer read — agreeing on a real event.
+
+Note the direction: annulling an uncertain bolus is the AGGRESSIVE choice (unbooked insulin
+under-counts IOB and permits more dosing later), and it is only safe because the pending-command
+check is real evidence rather than an assumption. If OmnipodKit ever reports no pending command
+for a write that DID land, this is where phantom-free becomes insulin-blind. Worth remembering
+if a residual ever comes back positive and unexplained.
+
+Smaller, in the same window:
+
+- **`[cob-diff]` ⚠ fired twice more at snapshot ages 3 s and 1 s** (Δ +4.86 g, +5.40 g).
+  Third and fourth occurrences where the snapshot-age explanation cannot apply. Same
+  conclusion as 08-13 00:13: model disagreement, not data loss — but the warning threshold is
+  now demonstrably mis-tuned and should either account for absorption-model divergence or
+  stop claiming "wipe failed?".
+- **e34 took 56.9 s / 8 reads to take over**, e35 12.5 s / 2. The slow one is the same
+  fixed-cadence-polling-before-discovery shape recorded on 08-12: reads fire on an 8 s ladder
+  while the pod is still `no-peripheral`, and the event is what actually ends the wait.
+- **One `CYCLE VERDICT computed=FAILED enact=not-attempted(pumpManagerUnconnected)`** at
+  01:56:47, during e35's takeover, following a `[CONFIG] configure FAILED (discoverServices
+  timeout)`. Recovered 7 s later. Cosmetic if the OBS-8 verdict-classification fix is not in
+  274; worth confirming it does not survive into the next build.
