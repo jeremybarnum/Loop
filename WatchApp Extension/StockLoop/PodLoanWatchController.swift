@@ -23,29 +23,24 @@ import OmnipodKit
 import WatchKit
 import os.log
 
-/// What a stuck hand-back looks like, when it looks like #113 at all.
-///
-/// The two variants need OPPOSITE advice, which is the whole reason they are told apart. The
-/// one-way wedge has only ever been recovered by restarting the WATCH app; a re-establishing
-/// session heals itself in a minute or two and telling the user to force-quit would be noise.
-/// The generic "iPhone never acked" wording points at the phone — the one device that is not
-/// the problem in either case.
+/// Why a hand-back is stuck, when the shape says the transport is at fault rather than the
+/// phone. The two wedges need opposite advice, which is the only reason to tell them apart.
 enum HandbackWedge: Equatable {
     /// Nothing here looks like a wedge: too few offers, or the phone was legitimately away.
     case none
-    /// Sends went out silently and nothing came back (#113 variant A).
+    /// Sends reported success and nothing came back. Only restarting the WATCH app recovers it.
     case oneWay
-    /// The sends themselves errored — the session is tearing down and re-establishing, and the
-    /// queued fallback delivers when it returns (#113 variant B).
+    /// The sends themselves errored: the session is tearing down and re-establishing, and the
+    /// queued fallback delivers when it returns. Self-heals, so advise waiting.
     case sessionReestablishing
 
-    /// Several offers went out, the phone was reachable for EVERY one of them, and not a single
-    /// ack came back. An unreachable phone explains a hang innocently and heals itself;
-    /// sustained reachability with total silence is the transport wedge.
+    /// A wedge means several offers went out, the phone was reachable for EVERY one, and not a
+    /// single ack came back. An unreachable phone explains a hang innocently and heals itself;
+    /// sustained reachability with total silence does not.
     ///
-    /// `sawUnreachable` is deliberately sticky over the whole hand-back rather than sampled at
-    /// timeout: a phone that dropped out for one of the offers explains the hang without
-    /// invoking a wedge, even if it happens to be reachable again by the time we give up.
+    /// `sawUnreachable` is sticky across the whole hand-back rather than sampled at timeout: a
+    /// phone that dropped out even once explains the hang, even though it is usually reachable
+    /// again by the time we give up.
     static func classify(resendCount: Int,
                          sawUnreachable: Bool,
                          reachableNow: Bool,
@@ -92,14 +87,12 @@ final class PodLoanWatchController {
     /// what poisons the BLE stack — and an armed-epoch that differs from the firing epoch is
     /// the cross-loan-residue signature. Both were previously inferable only from clustered
     /// timestamps; now each firing carries its own evidence.
-    /// `epochScoped` timers refuse to fire into a loan they were not armed for. Opt-in rather
-    /// than blanket, for two reasons. A timer armed before any grant has no epoch — the request
-    /// timeout is armed while `epoch` is still nil, and blanket scoping would suppress the very
-    /// timeout that rescues a hung request. And some timers SHOULD outlive their loan: the
-    /// hand-back resend exists precisely to keep pushing records after the loan is over.
+    /// `epochScoped` timers refuse to fire into a loan they were not armed for.
     ///
-    /// The seam already knew the arming epoch and was only reporting a mismatch. This makes it
-    /// enforce one where the audit found firing into a later loan does damage.
+    /// Opt-in, not blanket, because two kinds of timer legitimately cross: those armed before
+    /// any grant, which have no epoch at all (the request timeout, whose whole job is to rescue
+    /// a hung request), and those that must outlive their loan by design (the hand-back resend,
+    /// which exists to keep pushing records after the loan ends).
     private func schedule(after delay: TimeInterval, label: String, epochScoped: Bool = false, execute work: DispatchWorkItem) {
         let armedEpoch = epoch
         let armedAt = now()
@@ -110,9 +103,8 @@ final class PodLoanWatchController {
                 SportLog.event("timer", "skipped \(label) — cancelled before its deadline")
                 return
             }
-            // Skip LOUDLY. A silent drop here would be the #113 mistake again: "never armed",
-            // "fired and did nothing" and "refused to fire" have to stay distinguishable in
-            // the log, or the next investigation has no way to tell them apart.
+            // Skip loudly: "never armed", "fired and did nothing" and "refused to fire" have to
+            // stay distinguishable in the log, or a delivery bug cannot be diagnosed from it.
             if epochScoped, let armed = armedEpoch, armed != self.epoch {
                 SportLog.event("timer", "REFUSED \(label) — armed e=\(armed), now e=\(self.epoch.map(String.init) ?? "-") · a different loan owns the pod")
                 return
@@ -1230,40 +1222,32 @@ final class PodLoanWatchController {
         // so a deferred release that has been waiting on us can proceed promptly. Enqueued
         // rather than set inline because `doseWindowUntil` is queue-confined and this is
         // called from the enactor's own queue.
-        // Cancel-before-rearm, the same one-shot idiom as chaseWorkItem / resendWorkItem /
-        // takeoverBackstop / requestTimeoutWork. This one lacked it, and build 275's timer log
-        // caught the consequence on epoch 38: a cycle that reclaims TWICE — once because the
-        // pump data was 5 min stale, once to dose — armed two independent 12 s releases 2.7 s
-        // apart, and both fired (02:57:08 and 02:57:10).
+        // Cancel before re-arming, like every other one-shot timer here. A cycle can reclaim
+        // twice — once to refresh stale pump data, then again to dose — and without this each
+        // call stacks its own independent 12 s release. A superseded one whose guards happen to
+        // pass (a new reclaim reconnected inside the window) would drop the BLE link out from
+        // under a live dose. Both timers belong to the same epoch, so `epochScoped` cannot see
+        // this; only cancellation prevents it.
         //
-        // The second firing was harmless only because the first had already released the link,
-        // so `isConnectionReleased` bailed it out. Had a new reclaim reconnected inside those
-        // 2 s, both of its guards would have passed and it would have dropped the link out
-        // from under a live dose. Note `epochScoped` does NOT cover this: both timers belong
-        // to the SAME epoch.
-        //
-        // Arming moved onto the controller's queue, where the work-item handle and `epoch`
-        // both live — this is called from the enactor's queue.
+        // Armed on the controller's queue, where the work-item handle and `epoch` both live —
+        // this is called from the enactor's queue.
         queue.async { [weak self] in
             guard let self = self else { return }
             self.doseWindowUntil = nil
             self.postDoseReleaseWork?.cancel()
             let work = DispatchWorkItem { [weak self] in self?.performPostDoseRelease() }
             self.postDoseReleaseWork = work
-            // epochScoped: this is the one timer in the file that ACTS on the pod link across a
-            // window long enough to outlive its loan. Its `.active` guard is not sufficient
-            // alone, because a LATER loan is also `.active` — a hand-back and re-grant inside
-            // 12 s would let this drop the BLE link out from under the loan that now owns the
-            // pod. The field margin is real but thin: e34 ended 01:56:31 with e35 active by
-            // 01:56:54, and the fast takeovers in that same session ran 6.8-7.2 s.
+            // epochScoped: the only timer here that ACTS on the pod link across a window long
+            // enough to outlive its loan. `.active` alone is not enough, because a LATER loan is
+            // also `.active` — a hand-back and re-grant inside 12 s would let this tear down the
+            // link belonging to the loan that now owns the pod.
             self.schedule(after: 12, label: "post-dose-release", epochScoped: true, execute: work)
         }
     }
 
-    /// Queue affinity comes from the only call site: the work item is armed inside a
-    /// `queue.async` block and fired by the seam, which dispatches on `queue`. Deliberately no
-    /// `dispatchPrecondition` here — the test harness fires timer bodies directly, and an
-    /// assert that makes the one timer with a known field defect untestable is a bad trade.
+    /// Runs on `queue`: armed inside a `queue.async` block and fired by the seam, which
+    /// dispatches there. No `dispatchPrecondition` — tests drive timer bodies directly, and
+    /// this body needs to stay reachable from them.
     private func performPostDoseRelease() {
         postDoseReleaseWork = nil
         // Unconditional since #101 phase 2 — see the takeover-release note above for why
