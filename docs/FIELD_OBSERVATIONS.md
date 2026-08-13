@@ -889,6 +889,61 @@ since "the watch vanished mid-loan" is the definition of an unclean hand-back �
 says the loop goes open when a hand-back "cannot be established as complete", and this one
 cannot be, however good the records look.
 
+## 2026-08-13 evening — the dead-watch review: three defects found, batch fixed, two earlier
+## readings corrected
+
+The full-day review of loans e41-e47 (three parallel forensic/trace agents, adversarial
+verification, then implementation) closed out the dead-watch test campaign. What it found,
+beyond what OBS-9/R37 already recorded:
+
+**1. e44's retirement UNDER-counted — journal temps silently lost at commit (fixed: the
+backfill upsert).** DoseStore's HealthKit sync drops any basal-shaped dose starting before
+`getLastImmutableBasalEndDate` (boluses have an escape clause). After a force-reclaim the
+salvage write and the phone's own resumed records move that boundary past the loan window, so
+the returning watch's temps commit as pump events but never reach the delivery store, IOB, or
+dosing. e44: books 0.600 U vs pod 0.850 — and the 0.85 placeholder R37 deleted was MORE
+accurate than the records that replaced it. The commit path now re-reconciles the full loan
+and upserts through `syncDoseEntries` (identity-keyed, boundary-immune), with the store's
+truncation and delivered-units resolution restated locally so backfilled rows are
+indistinguishable from clean-path rows.
+
+**2. The phone's stale prediction was ICE-memo staleness, and it REACHED DOSING (fixed: the
+reservoir-idiom prune).** `insulinCounteractionEffects` is an append-only memo of
+observed-minus-insulin-modeled velocity. Stock invalidates it for back-dated glucose and
+reservoir rewrites; back-dated DOSE writes — which every hand-back commits 30 minutes of —
+never pruned it. Carbs are downstream of ICE (re-attributed wholesale on every carb change,
+which is why Jeremy's "carb edits are the common case and stock must handle them" was exactly
+right — they need no ICE invalidation at all), so the poisoned memo inflated COB and the
+prediction until relaunch. `insulinHistoryRewritten(startingAt:)` now restates the reservoir
+prune (keep bins through doseStart+10 min, the model-delay window) at every back-dated dose
+write: offer commit, backfill, gap retirement, salvage.
+
+**CORRECTION to the earlier "quiescence" reading: the engine did NOT stand down at 15:11.**
+The 15:17 grant seed shows a SECOND max-rate temp (3.55 U/hr) issued at 15:11:47 — the 11-min
+continuation-interval re-issue slot — running until the takeover pulled the pod at ~15:17:51.
+Its ~0.36 U IS the "unexplained 0.3-0.4 U odometer gap" from the earlier entry: explained,
+booked late because the mutable segment was still live when the pod left. Consequence, stated
+plainly: the 14:51:44 automatic temp WAS computed on the poisoned prediction (there is no
+separate render cache — the engine and the UI read the same LoopDataManager state), and the
+engine max-temped for ~26 minutes (~1.5 U gross, vs a correct-books recommendation of
+roughly zero) until an external event stopped it. Water pod; on a body this would have been
+the anti-conservative direction twice over (under-counted IOB from defect 1 stacking with
+inflated COB from defect 2).
+
+**3. Assorted, same batch:** stock LoopKit's `addDoses` fired its completion twice per success
+(the duplicate "gap BOOKED" lines; latent false "NOT in the books — dose by hand" alarm on an
+HK sync failure) — single-fire now, with the old test tolerance turned into a tripwire. The
+retire/salvage lines summed gross programmed temp content as if delivered (e44's impossible
+"1.53 U" — historic logs before this date carry that overstatement; read them as gross
+programmed). The R32 residual bank was banking force-reclaim gaps (+0.800/+0.850) into the
+clean-hand-back calibration set — handback-only now, contaminants purged one-shot. The phone
+log mirror destroyed its previous session at every launch (twice on this date; the second
+destruction hid the second temp above) — stamped archives now, keep 20.
+
+Validation: the ICE tests pin the statelessness contract mechanically (T3: pruned-and-
+recomputed == cold rebuild — the force-quit heal, as an assertion); the backfill tests
+reproduce the e44 signature and assert the healed books row by row.
+
 ## 2026-08-13 — the 19-second post-wake write EXPLAINED: it is a HealthKit sync, not Core Data
 
 Twice measured (e27 19.3 s, e31 18,989 ms), both on a freshly-woken phone, and recorded twice
