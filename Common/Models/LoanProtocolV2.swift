@@ -1051,6 +1051,17 @@ extension LoanMessage {
         }
     }
 
+    /// Transport-level kind peek (#120), on LoanMessage beside its sibling transport peek:
+    /// the wire `kind` string, or nil for anything not ours.
+    /// Exists so the WATCH can identify which of its own QUEUED transfers are hand-back offers
+    /// without decoding full envelopes — the supersede logic cancels only offers, because a
+    /// cancelled offer is re-sent 15 s later by design while a cancelled record stream is not.
+    public static func peekKind(transport userInfo: [String: Any]) -> String? {
+        guard let data = userInfo[LoanProtocol.userInfoKey] as? Data else { return nil }
+        struct Peek: Decodable { let kind: String }
+        return (try? JSONDecoder().decode(Peek.self, from: data))?.kind
+    }
+
     /// Transport-level peek: safe on any dictionary, false for anything not ours.
     public static func isInteractiveHandshake(transport userInfo: [String: Any]) -> Bool {
         // sendMessage caps payloads far below transferUserInfo. Anything unexpectedly large

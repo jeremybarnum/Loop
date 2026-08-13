@@ -533,4 +533,23 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertFalse(LoanMessage.statusQuery(StatusQuery(epoch: 1)).isInteractiveHandshake)
         XCTAssertFalse(LoanMessage.diag(LoanDiag(epoch: 1, text: "x")).isInteractiveHandshake)
     }
+
+    // MARK: - #120 transport kind peek
+
+    /// The watch's queued-offer supersede cancels ONLY hand-back offers, identified by this
+    /// peek. A false positive cancels a one-shot message (a record stream is not resent until
+    /// the next cycle); a false negative just leaves a duplicate in the queue for #118 to
+    /// coalesce. So: exact kind for an offer, nil for everything not ours.
+    func testPeekKindIdentifiesOffersAndRejectsForeignPayloads() throws {
+        let offer = HandbackOffer(epoch: 3, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                                  events: [], tombstones: [], recovered: false, released: false)
+        let dict = try LoanMessage.handbackOffer(offer).transportDictionary()
+        XCTAssertEqual(LoanMessage.peekKind(transport: dict), "handbackOffer")
+
+        let batch = try LoanMessage.doseRecordBatch(DoseRecordBatch(epoch: 3, events: [], tombstones: [])).transportDictionary()
+        XCTAssertEqual(LoanMessage.peekKind(transport: batch), "doseRecordBatch", "streams must NOT peek as offers")
+
+        XCTAssertNil(LoanMessage.peekKind(transport: ["name": "WatchContext"]), "foreign payloads peek as nil")
+        XCTAssertNil(LoanMessage.peekKind(transport: [:]))
+    }
 }

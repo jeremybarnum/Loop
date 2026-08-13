@@ -84,13 +84,41 @@ final class StockLoopSession {
             let session = WCSession.default
             let urgent = LoanMessage.isInteractiveHandshake(transport: dictionary) && session.isReachable
             SportLog.event("wc", "send \(dictionary.keys.joined(separator: ",")) — session \(session.activationState.rawValue), reachable \(session.isReachable), path \(urgent ? "urgent" : "queued")")
+
+            // #120: AT MOST ONE QUEUED OFFER. The resend loop re-offers every 15 s and
+            // transferUserInfo queues every call separately, so an unreachable phone accumulated
+            // one copy per 15 s — twelve in the #119 incident — delivered as a burst at wake,
+            // which is the flood #118 defends against downstream. Supersede at the source: when
+            // enqueueing a NEW offer, cancel the still-undelivered PREVIOUS offer transfers.
+            //
+            // ORDER IS LOAD-BEARING, in both directions. Capture the stale list BEFORE enqueueing
+            // (outstandingUserInfoTransfers includes the new transfer immediately, and cancelling
+            // that would leave ZERO queued offers — the first cut of this code had exactly that
+            // bug); cancel AFTER enqueueing, so the queue is never empty in between and the worst
+            // case is both copies delivering — the already-idempotent case. ONLY offers are ever
+            // cancelled: they are resent by design, so a cancelled one is replaced within 15 s;
+            // record streams and status messages are one-shot and are never touched.
+            let enqueueSuperseding = { (payload: [String: Any]) in
+                let isOffer = LoanMessage.peekKind(transport: payload) == "handbackOffer"
+                let stale = isOffer
+                    ? session.outstandingUserInfoTransfers.filter {
+                        LoanMessage.peekKind(transport: $0.userInfo) == "handbackOffer"
+                      }
+                    : []
+                session.transferUserInfo(payload)
+                let cancelled = stale.filter { !$0.isTransferring }
+                guard !cancelled.isEmpty else { return }
+                cancelled.forEach { $0.cancel() }
+                SportLog.event("wc", "superseded \(cancelled.count) queued offer(s) with the fresh one (#120)")
+            }
+
             guard urgent else {
-                session.transferUserInfo(dictionary)
+                enqueueSuperseding(dictionary)
                 return
             }
             session.sendMessage(dictionary, replyHandler: nil, errorHandler: { error in
                 SportLog.event("wc", "urgent send FAILED (\(error.localizedDescription)) — falling back to the queued path")
-                session.transferUserInfo(dictionary)
+                enqueueSuperseding(dictionary)
             })
         }
 
