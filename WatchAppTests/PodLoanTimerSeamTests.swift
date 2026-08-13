@@ -116,6 +116,20 @@ final class PodLoanTimerSeamTests: XCTestCase {
 
         wait(for: [secondSend], timeout: 5)
         XCTAssertEqual(sends, 2, "a timed-out request must not wedge the controller in .requested")
+
+        // The send fulfills MID-queue-block; the inline timeout that flips phase back to idle
+        // runs after it in the same block. Poll rather than read immediately — and bound the
+        // poller, because an unbounded one outlives a failed wait and SIGTRAPs the runner.
+        let idled = expectation(description: "returned to idle")
+        let deadline = Date().addingTimeInterval(5)
+        DispatchQueue.global().async {
+            while controller.phase != .idle {
+                guard Date() < deadline else { return }
+                usleep(10_000)
+            }
+            idled.fulfill()
+        }
+        wait(for: [idled], timeout: 5)
         XCTAssertEqual(controller.phase, .idle, "timed out and recovered")
     }
 
