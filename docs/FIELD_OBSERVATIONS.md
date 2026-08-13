@@ -613,6 +613,14 @@ redelivery, resend, version skew — the commit path should collapse them rather
 write per copy. Correctness held throughout (cursor 1, one dose committed, dedup intact), so
 this is latency and robustness, not lost or doubled insulin.
 
+**SEVERITY CORRECTION (2026-08-12 23:30 — see #119 below).** "Latency, not insulin" was true
+of THIS loan only because its offer happened to carry doses and no carb. Doses survive a
+pile-up via raw-dedup at the store; CARBS HAVE NO STORE IDENTITY, so the identical storm with
+a carb aboard multiplies it once per copy. Three hours after this entry was written, exactly
+that happened: 12 phantom copies of one confirmed 10 g entry, 120.7 g of COB, max basal. The
+pile-up was never merely a latency bug — it was a data-poisoning bug whose trigger had not
+yet carried a carb.
+
 Deliberately NOT fixed in the build this was found in: an in-flight guard on the dose-commit
 path is a concurrency change that deserves a test, not a late edit on top of an otherwise
 clean build.
