@@ -23,6 +23,38 @@ import OmnipodKit
 import WatchKit
 import os.log
 
+/// What a stuck hand-back looks like, when it looks like #113 at all.
+///
+/// The two variants need OPPOSITE advice, which is the whole reason they are told apart. The
+/// one-way wedge has only ever been recovered by restarting the WATCH app; a re-establishing
+/// session heals itself in a minute or two and telling the user to force-quit would be noise.
+/// The generic "iPhone never acked" wording points at the phone — the one device that is not
+/// the problem in either case.
+enum HandbackWedge: Equatable {
+    /// Nothing here looks like a wedge: too few offers, or the phone was legitimately away.
+    case none
+    /// Sends went out silently and nothing came back (#113 variant A).
+    case oneWay
+    /// The sends themselves errored — the session is tearing down and re-establishing, and the
+    /// queued fallback delivers when it returns (#113 variant B).
+    case sessionReestablishing
+
+    /// Several offers went out, the phone was reachable for EVERY one of them, and not a single
+    /// ack came back. An unreachable phone explains a hang innocently and heals itself;
+    /// sustained reachability with total silence is the transport wedge.
+    ///
+    /// `sawUnreachable` is deliberately sticky over the whole hand-back rather than sampled at
+    /// timeout: a phone that dropped out for one of the offers explains the hang without
+    /// invoking a wedge, even if it happens to be reachable again by the time we give up.
+    static func classify(resendCount: Int,
+                         sawUnreachable: Bool,
+                         reachableNow: Bool,
+                         sendsErrored: Bool) -> HandbackWedge {
+        guard resendCount >= 3, !sawUnreachable, reachableNow else { return .none }
+        return sendsErrored ? .sessionReestablishing : .oneWay
+    }
+}
+
 final class PodLoanWatchController {
 
     enum Phase: String {
@@ -1517,21 +1549,17 @@ final class PodLoanWatchController {
         handbackDeadline = nil
         handbackStartedAt = nil
         let wasFinal = (phase == .handingBack)
-        // #113 signature: several offers went out, the phone was reachable for EVERY one of them,
-        // and not a single ack came back. An unreachable phone explains a hang innocently and
-        // heals itself; sustained reachability with total silence is the transport wedge.
-        let wedgeSuspected = handbackResendCount >= 3 && !handbackSawUnreachable && isPhoneReachable()
-        // Erroring sends = the session is tearing down/re-establishing (variant B): the queued
-        // fallback delivers when it comes back, usually within a minute or two. Silent sends
-        // with zero acks = the one-way wedge (variant A), where only a watch-app restart has
-        // ever recovered it.
-        let sendsErrored = handbackSawUrgentSendError
+        let wedge = HandbackWedge.classify(resendCount: handbackResendCount,
+                                           sawUnreachable: handbackSawUnreachable,
+                                           reachableNow: isPhoneReachable(),
+                                           sendsErrored: handbackSawUrgentSendError)
         let wedgeSuffix: String
-        if wedgeSuspected && sendsErrored {
+        switch wedge {
+        case .sessionReestablishing:
             wedgeSuffix = " · ** \(handbackResendCount) offers, phone reachable, zero acks — but the sends themselves ERRORED: session re-establishing (#113 variant B), usually self-heals in 1-2 min **"
-        } else if wedgeSuspected {
+        case .oneWay:
             wedgeSuffix = " · ** \(handbackResendCount) offers, phone REACHABLE throughout, zero acks — transport wedge (#113 variant A); restarting the WATCH app is the known recovery **"
-        } else {
+        case .none:
             wedgeSuffix = ""
         }
         handbackRequested = false
@@ -1550,12 +1578,15 @@ final class PodLoanWatchController {
             // Interim hang: never stopped dosing; phase already .active. Just abort the drain.
             SportLog.event("loan", "HAND-BACK timed out (interim, \(Int(HandbackStuckAlert.interval))s) — iPhone never acked; Sport Mode continues on the watch\(wedgeSuffix)")
         }
-        if wedgeSuspected && sendsErrored {
+        switch wedge {
+        case .sessionReestablishing:
             issueProtocolAlert(body: "The connection to the iPhone is re-establishing — replies usually resume within a minute or two. Try End again shortly. Restart the Watch app only if this keeps happening. The pod is still safe on the watch.")
-        } else if wedgeSuspected {
+        case .oneWay:
             // Tell the user the ONE thing that fixes variant A: the generic "iPhone never
             // acked" points at the phone, which is exactly the wrong device to go poke at.
             issueProtocolAlert(body: "The iPhone is reachable but its replies are not arriving. Force-quit and reopen the Watch app to restore the connection. The pod is still safe on the watch.")
+        case .none:
+            break
         }
         // HandbackStuckAlert is intentionally NOT disarmed here — its pre-scheduled notification
         // is the user's signal that End didn't complete. It self-expires; a later successful
