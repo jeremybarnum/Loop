@@ -605,6 +605,33 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   currently the pump-data recency clock that gates dosing (`pumpDataTooOld`) and the
   per-cycle reclaim cadence. It must be owned directly rather than read off the store.
 
+- **R36 — Delivered carbs carry their wire identity INTO the store; the store
+  inserts-if-absent.** (2026-08-13, Jeremy: "if the idea is that when something is generated
+  externally and the transmission is uncertain and lossy, then the events need unique IDs …
+  there's essentially no difference in terms of safety risk between doing that with insulin
+  and doing that with carbs. And actually I would argue it's riskier with carbs.")
+
+  The principle: a record authored on one device and delivered over an at-least-once
+  transport must carry a source-minted identity end to end, with dedup enforced ATOMICALLY
+  at the sink store — not by caller sequencing, which is a race one layer down (#118's
+  lesson). Insulin always had this (pod-minted `raw`, DoseStore upserts on it); carbs did
+  not, because stock's CarbStore is an authoring surface that mints identity per add — and
+  #119 (twelve phantom copies, 120.7 g COB, max basal) is what that asymmetry costs. The
+  risk asymmetry runs the WRONG way: phantom carbs drive OVER-delivery, phantom insulin
+  records drive under-delivery.
+
+  Implementation: `CarbStore.addCarbEntry(_:syncIdentifier:)` in LoopKit — additive,
+  insert-if-absent on (provenance, syncIdentifier), lookup and insert in one operation on
+  the store's queue. INSERT-IF-ABSENT and never upsert: a late replay must lose to any
+  later local edit of the same entry. The identity is the watch journal event UUID, minted
+  once at authoring, unchanged across every resend. The store already practiced this
+  pattern privately for HealthKit ingestion; this exposes it for the loan.
+
+  This ruling also RELAXES the LoopKit-modification bias, deliberately and narrowly:
+  additive, contained ingestion surfaces on our LoopKit branch are acceptable when the
+  alternative is caller-side machinery that cannot be made atomic. Behavioral changes to
+  existing LoopKit surfaces remain out.
+
 ## Not yet ruled (do not decide without Jeremy)
 
 - Risk-register #8: any on-body session of any milestone build — per-build,

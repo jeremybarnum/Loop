@@ -54,6 +54,12 @@ enum LoanReconciler {
         let grams: Double
     }
 
+    /// R36: a carb plus the wire identity it travels under.
+    struct IdentifiedCarb: Equatable {
+        let eventID: UUID
+        let entry: NewCarbEntry
+    }
+
     struct Outcome: Equatable {
         /// Insulin records to write (per-event deterministic syncIdentifiers).
         var doses: [DoseEntry] = []
@@ -61,8 +67,11 @@ enum LoanReconciler {
         /// gate clears) but NOT written or committed here — it re-drains and is written on
         /// the final drain (nil on a final hand-back). See below / the design doc.
         var openEventID: UUID? = nil
-        /// Carb records to write (merge-not-replace happens at the store call).
-        var carbs: [NewCarbEntry] = []
+        /// Carb records to write, each carrying the WATCH JOURNAL EVENT UUID that names it on
+        /// the wire (R36). The store inserts-if-absent on this identity, which is what makes a
+        /// redelivered offer physically unable to duplicate a carb — the identity is minted once
+        /// at authoring on the wrist and survives to the phone's store row.
+        var carbs: [IdentifiedCarb] = []
         /// R30 (#89): carbs the WRIST deleted during the loan, as (startDate, grams) natural
         /// keys plus the phone syncIdentifier when the watch knew one.
         ///
@@ -202,11 +211,13 @@ enum LoanReconciler {
                 }
             case .carb:
                 if let grams = event.record.amount {
-                    outcome.carbs.append(NewCarbEntry(
-                        quantity: HKQuantity(unit: .gram(), doubleValue: grams),
-                        startDate: event.record.startDate,
-                        foodType: nil,
-                        absorptionTime: event.record.absorptionTime))
+                    outcome.carbs.append(IdentifiedCarb(
+                        eventID: event.id,
+                        entry: NewCarbEntry(
+                            quantity: HKQuantity(unit: .gram(), doubleValue: grams),
+                            startDate: event.record.startDate,
+                            foodType: nil,
+                            absorptionTime: event.record.absorptionTime)))
                 }
             case .carbDeleted:
                 // R30 (#89): the wrist owned the carb store for the length of the loan, so the
@@ -222,7 +233,7 @@ enum LoanReconciler {
                 if let grams = event.record.amount {
                     let start = event.record.startDate
                     let before = outcome.carbs.count
-                    outcome.carbs.removeAll { $0.startDate == start && $0.quantity.doubleValue(for: .gram()) == grams }
+                    outcome.carbs.removeAll { $0.entry.startDate == start && $0.entry.quantity.doubleValue(for: .gram()) == grams }
                     guard outcome.carbs.count == before else { break }   // cancelled the pair
                     outcome.deletedCarbs.append(DeletedCarb(
                         syncIdentifier: event.record.syncIdentifier,

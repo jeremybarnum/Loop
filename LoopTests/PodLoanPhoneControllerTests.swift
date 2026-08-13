@@ -121,8 +121,12 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 self.lock.lock(); self.addedDoses.append(events.compactMap { $0.dose }); self.lock.unlock()
                 completion(nil)
             },
-            addCarb: { [weak self] entry, completion in
+            addCarb: { [weak self] entry, syncIdentifier, completion in
+                // RAW append on purpose (no R36 store emulation): this harness discriminates the
+                // CONTROLLER's own guards — committedIDs, staleness, #118 — and a store-level
+                // dedupe here would let a controller regression hide behind the store.
                 self?.lock.lock(); self?.addedCarbs.append(entry); self?.lock.unlock()
+                _ = syncIdentifier
                 completion(nil)
             },
             doseHistory: { _, completion in completion([]) },

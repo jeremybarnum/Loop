@@ -41,7 +41,9 @@ final class PodLoanPhoneController {
         /// InsulinMath.reconciled() at the store (overlap truncation), and mirrors into
         /// InsulinDeliveryStore/HealthKit — behaving exactly like real pump insulin (#69/#52).
         var addPumpEvents: ([NewPumpEvent], _ lastReconciliation: Date?, @escaping (Error?) -> Void) -> Void
-        var addCarb: (NewCarbEntry, @escaping (Error?) -> Void) -> Void
+        /// R36: the String is the watch journal event UUID — the identity the store
+        /// inserts-if-absent on. Every redelivery of the same event carries the same string.
+        var addCarb: (NewCarbEntry, String, @escaping (Error?) -> Void) -> Void
         /// R30 (#89): remove a carb the WRIST deleted during the loan. Matched on the phone's
         /// syncIdentifier when the watch knew one (phone-originated carbs, which are the only
         /// ones that reach here — watch-entered add/delete pairs cancel in the reconciler), and
@@ -1227,7 +1229,7 @@ final class PodLoanPhoneController {
                 // identity at all, so the cursor is the only guard and it was being skipped.
                 if !isStale {
                     for carb in outcome.carbs {
-                        self.deps.addCarb(carb) { _ in }  // merge-not-replace at integration
+                        self.deps.addCarb(carb.entry, carb.eventID.uuidString) { _ in }  // R36: insert-if-absent on the wire identity
                     }
                     // R30 (#89): deletions ride the same staleness gate as adds — a dead loan
                     // may not mutate the carb store in either direction.
@@ -1504,7 +1506,7 @@ final class PodLoanPhoneController {
                 loanEnd: deps.now())
             let outcome = LoanReconciler.reconcile(input)  // isFinalHandback defaults true → all finalized
             deps.addPumpEvents(newPumpEvents(from: outcome.doses), deps.now()) { _ in }
-            for carb in outcome.carbs { deps.addCarb(carb) { _ in } }
+            for carb in outcome.carbs { deps.addCarb(carb.entry, carb.eventID.uuidString) { _ in } }
             for gone in outcome.deletedCarbs {   // R30 (#89)
                 deps.deleteCarb(gone) { error in
                     self.handbackDiag(self.epoch, error == nil

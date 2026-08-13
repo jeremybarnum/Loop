@@ -169,6 +169,9 @@ final class LoanTwoSidedContractTests: XCTestCase {
     /// the pile-up only exists while a write is slower than the offer cadence.
     private var pumpWriteEventCounts: [Int] = []
     private var pumpWriteDelay: TimeInterval = 0
+    /// R36 store emulation + the controller-layer commit counter (see the addCarb stub).
+    private var committedCarbIDs: Set<String> = []
+    private var rawCarbCommits = 0
 
     private var journalDir: URL!
 
@@ -190,6 +193,8 @@ final class LoanTwoSidedContractTests: XCTestCase {
         acksToDrop = 0
         pumpWriteEventCounts = []
         pumpWriteDelay = 0
+        committedCarbIDs = []
+        rawCarbCommits = 0
         pump = MockPumpManager()
         MockPumpManager.testConnectionReleased = false
         MockPumpManager.testOdometer = nil
@@ -262,8 +267,19 @@ final class LoanTwoSidedContractTests: XCTestCase {
                     completion(nil)
                 }
             },
-            addCarb: { [weak self] entry, completion in
-                self?.lock.lock(); self?.committedCarbs.append(entry); self?.lock.unlock()
+            addCarb: { [weak self] entry, syncIdentifier, completion in
+                guard let self = self else { completion(nil); return }
+                self.lock.lock()
+                // Emulates the R36 store: insert-if-absent on the wire identity. carbs() is the
+                // STORE view (what a person's record ends up as); rawCarbCommitCount is the
+                // CONTROLLER view (how many commit calls were made) — assert on raw when the
+                // test is about controller guards, on carbs() when it is about the outcome.
+                self.rawCarbCommits += 1
+                if !self.committedCarbIDs.contains(syncIdentifier) {
+                    self.committedCarbIDs.insert(syncIdentifier)
+                    self.committedCarbs.append(entry)
+                }
+                self.lock.unlock()
                 completion(nil)
             },
             doseHistory: { _, completion in completion([]) },
@@ -278,6 +294,7 @@ final class LoanTwoSidedContractTests: XCTestCase {
 
     private func doses() -> [DoseEntry] { lock.lock(); defer { lock.unlock() }; return committedDoses }
     private func writeCounts() -> [Int] { lock.lock(); defer { lock.unlock() }; return pumpWriteEventCounts }
+    private func rawCarbCommitCount() -> Int { lock.lock(); defer { lock.unlock() }; return rawCarbCommits }
     private func carbs() -> [NewCarbEntry] { lock.lock(); defer { lock.unlock() }; return committedCarbs }
     private func acks() -> [HandbackAck] {
         lock.lock(); defer { lock.unlock() }
@@ -725,6 +742,8 @@ final class LoanTwoSidedContractTests: XCTestCase {
         XCTAssertEqual(doses().count, 1)
         XCTAssertEqual(carbs().count, 1,
                        "THE #119 INVARIANT: one confirmed carb stays ONE carb through the storm — every extra commit is 10 g of phantom COB feeding max basal")
+        XCTAssertEqual(rawCarbCommitCount(), 1,
+                       "#118 alone must hold this at ONE COMMIT CALL — the R36 store dedupe is the independent second layer, not this test's excuse")
         XCTAssertTrue(watch.isDrained)
     }
 
@@ -764,6 +783,7 @@ final class LoanTwoSidedContractTests: XCTestCase {
         waitUntil("owner", timeout: 8) { [weak self] in self?.phone?.state == .owner }
         settle()
         XCTAssertEqual(carbs().count, 1, "the carb must commit exactly once (#118 / #66's family)")
+        XCTAssertEqual(rawCarbCommitCount(), 1, "the deferral means ONE commit call, not two deduped ones")
         XCTAssertEqual(doses().filter { $0.type == .bolus }.count, 1, "and the bolus once")
     }
 }

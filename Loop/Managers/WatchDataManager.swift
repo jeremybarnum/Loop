@@ -138,9 +138,12 @@ final class WatchDataManager: NSObject {
                     completion(error.map { $0 as Error })
                 }
             },
-            addCarb: { [weak self] entry, completion in
+            addCarb: { [weak self] entry, syncIdentifier, completion in
                 guard let self = self else { completion(nil); return }
-                self.deviceManager.carbStore.addCarbEntry(entry) { result in
+                // R36: the identity-accepting ingestion path. The plain addCarbEntry mints a
+                // fresh identity per call — correct for authoring, wrong for delivery, and the
+                // mechanism behind the twelve phantom carbs of 2026-08-12.
+                self.deviceManager.carbStore.addCarbEntry(entry, syncIdentifier: syncIdentifier) { result in
                     if case .failure(let error) = result { completion(error) } else { completion(nil) }
                 }
             },
