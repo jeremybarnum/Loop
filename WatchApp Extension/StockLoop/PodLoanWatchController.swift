@@ -45,6 +45,25 @@ final class PodLoanWatchController {
     /// out real seconds, which is what made it untestable before.
     var now: () -> Date = Date.init
 
+    /// The scheduling seam, completing the clock seam above. Every delayed execution in this
+    /// file crosses it, so a test can substitute a virtual clock and drive the ladders,
+    /// resends and deferred releases deterministically. nil (production) preserves the exact
+    /// prior behavior — same queue, same deadline arithmetic — and the DispatchWorkItem
+    /// crosses the seam intact, so cancellation works identically in both worlds.
+    var scheduler: ((_ delay: TimeInterval, _ work: DispatchWorkItem) -> Void)?
+
+    private func schedule(after delay: TimeInterval, execute work: DispatchWorkItem) {
+        if let scheduler = scheduler {
+            scheduler(delay, work)
+        } else {
+            queue.asyncAfter(deadline: .now() + delay, execute: work)
+        }
+    }
+
+    private func schedule(after delay: TimeInterval, execute body: @escaping () -> Void) {
+        schedule(after: delay, execute: DispatchWorkItem(block: body))
+    }
+
     /// Item 2 companion seam: `UserDefaults.standard` reads/writes go through this, so a test
     /// can hand in a scratch suite instead of mutating the host app's real defaults.
     var defaults: UserDefaults = .standard
@@ -348,7 +367,7 @@ final class PodLoanWatchController {
                 SportLog.event("loan", "REQUEST TIMED OUT — no grant in 25s (phone refused / busy / unreachable)")
             }
             self.requestTimeoutWork = work
-            self.queue.asyncAfter(deadline: .now() + 25, execute: work)
+            self.schedule(after: 25, execute: work)
         }
     }
 
@@ -367,12 +386,12 @@ final class PodLoanWatchController {
             self.lastIdleNote = nil
             self.attemptStartedAt = self.now()
             self.phase = .requested
-            self.queue.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            self.schedule(after: 0.8) { [weak self] in
                 guard let self, self.phase == .requested else { return }
                 self.attemptStartedAt = self.now()          // reset anchor for the ~10s takeover bar
                 self.phase = .takingOver
             }
-            self.queue.asyncAfter(deadline: .now() + 2.4) { [weak self] in
+            self.schedule(after: 2.4) { [weak self] in
                 guard let self, self.phase == .takingOver else { return }
                 self.epoch = (self.epoch ?? 0) + 1
                 self.phase = .active
@@ -387,7 +406,7 @@ final class PodLoanWatchController {
             guard self.phase == .active else { return }
             SportLog.event("sim", "SIM hand-back — draining to idle")
             self.handbackRequested = true
-            self.queue.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            self.schedule(after: 2.5) { [weak self] in
                 guard let self, self.handbackRequested else { return }   // a cancel aborts the drain
                 self.simStopGlucoseFeed()
                 self.handbackRequested = false
@@ -664,7 +683,7 @@ final class PodLoanWatchController {
                 self.takeoverRetryAction = nil
                 self.takeoverBackstop?.cancel()      // cancel the TIMER only
                 self.takeoverBackstop = nil
-                self.queue.asyncAfter(deadline: .now() + 0.25) { action() }   // the action still lives
+                self.schedule(after: 0.25) { action() }   // the action still lives
             }
         }
     }
@@ -775,7 +794,7 @@ final class PodLoanWatchController {
                         // which should tear down cleaner than a fresh one.
                         SportLog.event("loan", "pod release DEFERRED +90s (release a settled connection after first reads)")
                         let scheduledReleaseAt = self.now().addingTimeInterval(90)
-                        self.queue.asyncAfter(deadline: .now() + 90) { [weak self] in
+                        self.schedule(after: 90) { [weak self] in
                             self?.performDeferredTakeoverRelease(epoch: grant.epoch, manager: manager,
                                                                 scheduledAt: scheduledReleaseAt)
                         }
@@ -829,7 +848,7 @@ final class PodLoanWatchController {
                     self.takeoverRetryAction = { fireRetry("event") }
                     let backstop = DispatchWorkItem { fireRetry("backstop") }
                     self.takeoverBackstop = backstop
-                    self.queue.asyncAfter(deadline: .now() + 8, execute: backstop)
+                    self.schedule(after: 8, execute: backstop)
                 } else {
                     self.teardownPump()
                     self.phase = .idle
@@ -972,7 +991,7 @@ final class PodLoanWatchController {
         if let busyUntil = doseWindowUntil, busyUntil > now() {
             SportLog.event("loan", String(format: "pod release DEFERRED again — dose in flight (retry in 10s, window closes in %.0fs)",
                                           busyUntil.timeIntervalSince(now())))
-            queue.asyncAfter(deadline: .now() + 10) { [weak self] in
+            schedule(after: 10) { [weak self] in
                 self?.performDeferredTakeoverRelease(epoch: grantEpoch, manager: manager, scheduledAt: scheduledAt)
             }
             return
@@ -993,7 +1012,7 @@ final class PodLoanWatchController {
         SportLog.event("loan", String(format: "E4: pod BLE released (+90s deferred, %.0fs late) — state was %@ at cancel%@",
                                       lateBy, before,
                                       before == "connected" ? "" : " ** cancelled a link that was ALREADY GONE **"))
-        queue.asyncAfter(deadline: .now() + 3) { [weak self] in
+        schedule(after: 3) { [weak self] in
             guard let self = self, let manager = self.pumpManager else { return }
             let after = manager.podLoanConnectionStateDescription
             SportLog.event("loan", "E4: post-release pod state \(after)\(after.hasPrefix("DISCONNECTING") ? " ** WEDGED — poisoning signature **" : "")")
@@ -1097,7 +1116,7 @@ final class PodLoanWatchController {
                     // The fresh central's poweredOn handler races the bare bid and the address scan;
                     // these reads just poll for the winner. (Was: bare-connect first, escalate at read 6,
                     // which burned ~15s on the ~98% of reclaims the bare bid never won.)
-                    self.queue.asyncAfter(deadline: .now() + 2) {
+                    self.schedule(after: 2) {
                         guard self.phase == .active else {
                             SportLog.event("loan", "E4: reclaim ABORTED mid-ladder — phase left .active (now \(self.phase.rawValue)); in-flight dose cancelled by the hand-back")
                             completion(false); return
@@ -1122,7 +1141,7 @@ final class PodLoanWatchController {
         // rather than set inline because `doseWindowUntil` is queue-confined and this is
         // called from the enactor's own queue.
         queue.async { [weak self] in self?.doseWindowUntil = nil }
-        queue.asyncAfter(deadline: .now() + 12) { [weak self] in
+        schedule(after: 12) { [weak self] in
             // Unconditional since #101 phase 2 — see the takeover-release note above for why
             // the `g7.e4ReleasePod` gate had to go (absent key = false = hold the link forever
             // on a fresh install, the arm the toggle experiment disproved).
@@ -1139,7 +1158,7 @@ final class PodLoanWatchController {
             // watch as controller, so the running temp's record must NOT close here.
             manager.podLoanOrphanConnection()
             self.lastPodLinkContact = self.now()
-            self.queue.asyncAfter(deadline: .now() + 3) { [weak self] in
+            self.schedule(after: 3) { [weak self] in
                 guard let self = self, let manager = self.pumpManager else { return }
                 let after = manager.podLoanConnectionStateDescription
                 SportLog.event("loan", "E4: pod re-released after dose (+12s settle) — state \(before) -> \(after) (+3s)\(after.hasPrefix("DISCONNECTING") ? " ** WEDGED — this is the poisoning signature **" : "")")
@@ -1641,7 +1660,7 @@ final class PodLoanWatchController {
             }
         }
         resendWorkItem = work
-        queue.asyncAfter(deadline: .now() + 15, execute: work)
+        schedule(after: 15, execute: work)
     }
 
     private func handleAck(_ ack: HandbackAck) {
@@ -2064,7 +2083,7 @@ final class PodLoanWatchController {
             }
         }
         chaseWorkItem = work
-        queue.asyncAfter(deadline: .now() + delays[attempt], execute: work)
+        schedule(after: delays[attempt], execute: work)
     }
 
     private func alertRefuted(kind: OmniPumpManager.PodLoanPendingKind) {

@@ -1,0 +1,145 @@
+//
+//  PodLoanTimerSeamTests.swift
+//  WatchAppTests
+//
+//  First behavioral tests against the watch's loan controller — possible because every delayed
+//  execution in PodLoanWatchController now crosses one seam (`scheduler`), so a test can hold
+//  time still or jump it forward deterministically. No sleeps, no 25-second waits.
+//
+//  The determinism trick: every `schedule(after:)` call site already runs ON the controller's
+//  serial queue, so a test scheduler that fires the work item INLINE executes it on the correct
+//  queue with no races. Firing inline is a virtual jump past the timer's deadline.
+//
+//  Construction here is the answer to an open question: WatchLoopManager CAN be stood up in a
+//  test — its init takes three plain stores against a temp-directory PersistenceController and
+//  touches no radio. The recipe is StockLoopStack.makeStores, minus HealthKit.
+//
+
+import XCTest
+import LoopKit
+import LoopCore
+@testable import WatchApp_Extension
+
+final class PodLoanTimerSeamTests: XCTestCase {
+
+    private var cacheDir: URL!
+    private var cacheStore: PersistenceController!
+    private var journalDir: URL!
+    private var defaults: UserDefaults!
+
+    override func setUp() {
+        super.setUp()
+        cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        cacheStore = PersistenceController(directoryURL: cacheDir)
+        journalDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try? FileManager.default.createDirectory(at: journalDir, withIntermediateDirectories: true)
+        defaults = UserDefaults(suiteName: "PodLoanTimerSeamTests-\(UUID().uuidString)")!
+    }
+
+    override func tearDown() {
+        // Never unlink a live store's directory synchronously — the async-init race answers
+        // later reads with zero rows (the #103 lesson from the iOS suites). Unique names mean
+        // nothing collides; the OS reclaims temp.
+        cacheStore = nil
+        cacheDir = nil
+        journalDir = nil
+        defaults = nil
+        super.tearDown()
+    }
+
+    private func makeController() -> PodLoanWatchController {
+        let doseStore = DoseStore(
+            healthKitSampleStore: nil,
+            cacheStore: cacheStore,
+            insulinModelProvider: PresetInsulinModelProvider(defaultRapidActingModel: nil),
+            longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration,
+            basalProfile: nil,
+            insulinSensitivitySchedule: nil,
+            provenanceIdentifier: "PodLoanTimerSeamTests"
+        )
+        let glucoseStore = GlucoseStore(
+            healthKitSampleStore: nil,
+            cacheStore: cacheStore,
+            cacheLength: .hours(4),
+            provenanceIdentifier: "PodLoanTimerSeamTests"
+        )
+        let carbStore = CarbStore(
+            healthKitSampleStore: nil,
+            cacheStore: cacheStore,
+            cacheLength: .hours(24),
+            defaultAbsorptionTimes: LoopCoreConstants.defaultCarbAbsorptionTimes,
+            provenanceIdentifier: "PodLoanTimerSeamTests"
+        )
+        let manager = WatchLoopManager(doseStore: doseStore, glucoseStore: glucoseStore, carbStore: carbStore)
+        return PodLoanWatchController(loopManager: manager,
+                                      journal: LoanEventJournal(directory: journalDir),
+                                      defaults: defaults)
+    }
+
+    /// A request schedules its 25 s no-grant timeout through the seam — the delay crosses as
+    /// data a test can see, instead of vanishing into `asyncAfter`.
+    func testRequestTimeoutCrossesTheSeamAt25Seconds() {
+        let controller = makeController()
+
+        var sent = 0
+        controller.send = { _ in sent += 1 }
+
+        // Fulfill on the SCHEDULER, not the send: both happen in one queue block, send first,
+        // and a wait keyed on the send can return in the gap between them.
+        var captured: [TimeInterval] = []
+        let timerArmed = expectation(description: "timeout armed")
+        controller.scheduler = { delay, _ in captured.append(delay); timerArmed.fulfill() }
+
+        controller.requestLoan(watchBuild: "seam-test")
+        wait(for: [timerArmed], timeout: 5)
+
+        XCTAssertEqual(sent, 1)
+        XCTAssertEqual(captured, [25], "the request timeout is the only timer a bare request arms")
+    }
+
+    /// Virtual time: fire the timeout inline (we are on the controller's queue at schedule
+    /// time) and the controller must return to idle and accept a NEW request — the recovery
+    /// the timeout exists to provide. Without the seam this test would take 25 real seconds.
+    func testFiredTimeoutReturnsToIdleAndANewRequestIsAccepted() {
+        let controller = makeController()
+
+        var sends = 0
+        let secondSend = expectation(description: "two requests sent")
+        secondSend.expectedFulfillmentCount = 2
+        controller.send = { _ in sends += 1; secondSend.fulfill() }
+
+        // Jump every one-shot timer to its deadline the moment it is armed.
+        controller.scheduler = { _, work in work.perform() }
+
+        controller.requestLoan(watchBuild: "seam-test")   // request → inline timeout → idle
+        controller.requestLoan(watchBuild: "seam-test")   // must be accepted again
+
+        wait(for: [secondSend], timeout: 5)
+        XCTAssertEqual(sends, 2, "a timed-out request must not wedge the controller in .requested")
+        XCTAssertEqual(controller.phase, .idle, "timed out and recovered")
+    }
+
+    /// Holding time still, the second Start is refused while the first is pending — the
+    /// dedupe that stops a double-tap arming two loans.
+    func testSecondRequestIgnoredWhileFirstIsPending() {
+        let controller = makeController()
+
+        var sends = 0
+        let firstSend = expectation(description: "first request sent")
+        controller.send = { _ in sends += 1; if sends == 1 { firstSend.fulfill() } }
+        controller.scheduler = { _, _ in }   // time never advances
+
+        controller.requestLoan(watchBuild: "seam-test")
+        wait(for: [firstSend], timeout: 5)
+        controller.requestLoan(watchBuild: "seam-test")
+
+        // Drain the controller's queue: a third call's guard runs after the second's.
+        let drained = expectation(description: "queue drained")
+        controller.scheduler = { _, _ in }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { drained.fulfill() }
+        wait(for: [drained], timeout: 5)
+
+        XCTAssertEqual(sends, 1, "the pending request absorbs the double-tap")
+        XCTAssertEqual(controller.phase, .requested)
+    }
+}
