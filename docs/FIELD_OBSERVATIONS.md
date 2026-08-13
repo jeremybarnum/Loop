@@ -632,3 +632,46 @@ copies may produce fewer than N acks — the watch's resend loop converges regar
 two diverged (e15's −0.500 vs +0.000). Direct evidence that the provisional/authoritative gap
 is a measurement-staleness artifact rather than a disagreement about delivery — exactly as the
 2026-08-11 entry predicted, now with the positive case.
+
+## #119 (2026-08-12 22:19, build 272 phone): 12 phantom carb copies — the #118 pile-up with a carb aboard
+
+Jeremy's report: a G7 outage with the phone off; phone cycled off/on twice; ~10 duplicated
+carb entries appeared. His worry: "carbs are supposed to require confirmation." Both logs in
+hand, the chain is complete, count-for-count:
+
+1. **21:33** — e29 granted. **21:35:25** — ONE 10 g carb entered on the wrist, confirmed
+   once, journaled `seq 1, event E291453B`.
+2. **Phone off.** The watch (in `recoveredDrain` after its own relaunch) offered every ~15 s:
+   `hand-back offer attempt 1 … 12`, every send `reachable false, path queued` — **twelve
+   copies of the e29 offer queued in WCSession**, each carrying the same carb event.
+3. **22:19:31** — phone reachable; iOS flushed the whole queue into the freshly woken
+   build-272 phone. Pre-#118, each copy computed its carb set from `committedIDs` BEFORE any
+   completion had updated it → **each committed the carb**. `CarbStore.addCarbEntry` mints a
+   fresh syncIdentifier per add, so: 12 entries, 12 UUIDs, all `10 g @ 21:35:17`. (This is
+   also why the duplicates LOOK like independent entries — the identities are minted at
+   commit, not carried from the wrist.)
+4. **The poison propagated.** The 22:27 e30 grant seeded the watch with the phone's carb
+   history: `phoneCOB=120.7 g`, `eventual 1150` — and the watch dosed **max basal 3.55 U/hr
+   for ~7 minutes** (≈0.4 U above schedule; IOB clamp headroom 5.1 — the clamp was nowhere
+   near binding) until Jeremy deleted the 12 duplicates on the wrist at ~22:34, at which
+   point eventual collapsed 1086 → 89 within a minute.
+5. **Cleanup held end-to-end:** the 12 delete records rode the e30 drain at 23:21 and the
+   phone applied all 12 (the R30 delete flow, working under exactly the load it was built
+   for). Both books ended clean.
+
+**On the confirmation worry — no bypass.** One entry was confirmed once. The duplication is
+transport-level re-commit of that confirmed event; nothing skipped a confirmation screen.
+That is materially better than a UI bypass, but the OUTCOME still matters: phantom COB drives
+dosing in the aggressive direction, bounded only by maxBasal and the IOB clamp.
+
+**Status: CLOSED BY #118**, which shipped ~90 minutes after this incident occurred. With the
+guard, the flushed queue coalesces behind one write and replays as no-ops; the pile-up test
+now carries a carb and asserts it stays exactly one (`testDuplicateOffersDuringASlowWrite\
+CollapseToOneCommit`). The fix is PHONE-side — the incident build (272) does not have it;
+the build uploaded at 21:54 does.
+
+**Defense-in-depth candidate, documented not built:** carry the watch's carb event identity
+into the phone's carb commit as a dedupe key, so no future concurrency hole can multiply
+carbs. Needs thought about the CarbStore surface (stock mints identity per add, by design);
+parked rather than rushed — #118 closes the known mechanism, and R-series discipline says no
+new safety machinery without a ruling.

@@ -705,6 +705,11 @@ final class LoanTwoSidedContractTests: XCTestCase {
         let now = Date()
         try establishLoan(at: now)
         try watch.mint(bolus(1.0, at: now.addingTimeInterval(-300)), at: now.addingTimeInterval(-300))
+        // #119: the carb is the load-bearing passenger. Doses survive a pile-up via raw-dedup
+        // at the store; CarbStore mints a fresh syncIdentifier per add, so every extra commit
+        // is a NEW carb. Field 2026-08-12 22:19: 12 queued offers flushed into a waking phone
+        // -> 12 copies of one confirmed 10 g entry -> 120.7 g phantom COB -> max basal.
+        try watch.mint(carb(10, at: now.addingTimeInterval(-290)), at: now.addingTimeInterval(-290))
 
         lock.lock(); pumpWriteDelay = 0.4; lock.unlock()
         for _ in 0..<4 { watch.sendOffer(released: false, at: now) }
@@ -718,6 +723,8 @@ final class LoanTwoSidedContractTests: XCTestCase {
         XCTAssertLessThanOrEqual(counts.count, 2,
                                  "the coalesced duplicates collapse to at most one empty re-ack write (got \(counts))")
         XCTAssertEqual(doses().count, 1)
+        XCTAssertEqual(carbs().count, 1,
+                       "THE #119 INVARIANT: one confirmed carb stays ONE carb through the storm — every extra commit is 10 g of phantom COB feeding max basal")
         XCTAssertTrue(watch.isDrained)
     }
 
