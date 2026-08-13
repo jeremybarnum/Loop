@@ -50,6 +50,25 @@ final class WatchdogArmingTests: XCTestCase {
         return result
     }
 
+    /// Read only once the daemon has stopped changing its mind.
+    ///
+    /// `center.add(_:)` is fire-and-forget — production passes no completion handler — so in
+    /// principle a read after N refreshes can land before the adds do, and a premature read
+    /// returns ONE request, which is indistinguishable from correct replacement. It has not been
+    /// observed racing here (the identifier-stacking sabotage reddens these tests with or
+    /// without the wait), so this is insurance against the API's contract rather than a fix for
+    /// a seen failure.
+    private func settledPending(timeout: TimeInterval = 3) -> [UNNotificationRequest] {
+        let deadline = Date().addingTimeInterval(timeout)
+        var last = pending()
+        while Date() < deadline {
+            let next = pending()
+            if next.count == last.count { return next }
+            last = next
+        }
+        return last
+    }
+
     private func interval(of request: UNNotificationRequest) -> TimeInterval? {
         (request.trigger as? UNTimeIntervalNotificationTrigger)?.timeInterval
     }
@@ -87,12 +106,14 @@ final class WatchdogArmingTests: XCTestCase {
     /// watchdog would alarm during a perfectly healthy loop.
     func testRefreshReplacesRatherThanStacking() {
         for _ in 0..<5 { LoopStallWatchdog.refresh() }
-        XCTAssertEqual(pending().count, 1, "five refreshes must leave ONE pending alarm, not five")
+        let reqs = settledPending()
+        XCTAssertEqual(reqs.count, 1, "five refreshes must leave ONE pending alarm, not five")
+        XCTAssertEqual(Set(reqs.map(\.identifier)).count, reqs.count)
     }
 
     func testSensorBlackoutRefreshAlsoReplaces() {
         for _ in 0..<4 { SensorBlackoutAlert.refresh() }
-        XCTAssertEqual(pending().count, 1)
+        XCTAssertEqual(settledPending().count, 1)
     }
 
     // MARK: - Independence
@@ -104,7 +125,7 @@ final class WatchdogArmingTests: XCTestCase {
         LoopStallWatchdog.refresh()
         SensorBlackoutAlert.refresh()
         HandbackStuckAlert.arm()
-        XCTAssertEqual(pending().count, 3, "three distinct identifiers, three pending requests")
+        XCTAssertEqual(settledPending().count, 3, "three distinct identifiers, three pending requests")
     }
 
     func testDisarmingOneLeavesTheOthersArmed() {
