@@ -88,6 +88,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         MockPumpManager.testOdometer = nil
         UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.deliveredAuthoritative")
         UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.residualHistory")
+        // The residual-bank purge is one-shot per install, so its flag has to be cleared per test
+        // or whichever test happens to construct the first controller consumes it for the rest.
+        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.residualHistoryPurged.2026-08-13")
 
         let timeZone = TimeZone(identifier: "GMT")!
         settings = LoopSettings(
@@ -932,6 +935,28 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertFalse(bank!.contains("set with none"),
                        "the first review HAPPENED — this line must not keep claiming otherwise: \(bank!)")
         XCTAssertEqual((UserDefaults.standard.array(forKey: "PodLoanPhoneController.residualHistory") as? [Double])?.count, 1)
+    }
+
+    /// The bank is calibration data for CLEAN hand-backs, and two force-reclaim residuals
+    /// (+0.800, +0.850) were banked before it was scoped that way — moving the banked max from
+    /// +0.000 to +0.850, which is the number the next threshold review would have read. A one-shot
+    /// purge at construction repairs it: no clean hand-back can produce more than +0.5 U (2.5× the
+    /// R32 open-loop bound, and the legit distribution tops out at zero), and it runs exactly once,
+    /// so a later genuine outlier is never quietly deleted.
+    func testContaminatedResidualsArePurgedOnceAtLaunch() {
+        UserDefaults.standard.set([-0.200, -0.150, 0.800, 0.850, -0.050],
+                                  forKey: "PodLoanPhoneController.residualHistory")
+        _ = makeController()
+        XCTAssertEqual(UserDefaults.standard.array(forKey: "PodLoanPhoneController.residualHistory") as? [Double],
+                       [-0.200, -0.150, -0.050],
+                       "the two force-reclaim residuals go; every clean sample survives, order intact")
+
+        // ONE SHOT, not a standing rule: a hand-back genuinely above +0.5 U is a loud R32 event
+        // whose residual is still authentic calibration data.
+        UserDefaults.standard.set([0.900], forKey: "PodLoanPhoneController.residualHistory")
+        _ = makeController()
+        XCTAssertEqual(UserDefaults.standard.array(forKey: "PodLoanPhoneController.residualHistory") as? [Double],
+                       [0.900], "the flag is already set — a later launch must not purge again")
     }
 
     /// The tightening itself (2026-08-13, ±0.5 → ±0.20 U). +0.25 U is the interesting case: it is

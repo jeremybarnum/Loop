@@ -269,6 +269,41 @@ private final class LoanBooksDriver {
         ledger.seed(finished: finished, live: live)
     }
 
+    /// e44: a raw batch straight into the store. The force-reclaim seam is not the pod's report
+    /// lifecycle — it is the loan controller writing salvage records, the phone writing its own
+    /// resumed basal, and a late journal commit — so it is scripted event by event.
+    func storeEvents(_ events: [NewPumpEvent], lastReconciliation: Date) {
+        addToStore(events, lastReconciliation: lastReconciliation, replacePendingEvents: false)
+    }
+
+    /// e44: `PodLoanPhoneController.Dependencies.backfillDoses` against the real store —
+    /// stock's update-or-insert-by-syncIdentifier door, which has no basal boundary in front
+    /// of it (the boundary lives on the pump-event → delivery-store sync, not here).
+    func backfill(_ doses: [DoseEntry]) {
+        let exp = host.expectation(description: "syncDoseEntries")
+        Task {
+            do {
+                try await self.store.syncDoseEntries(doses)
+            } catch {
+                XCTFail("backfill threw: \(error)")
+            }
+            exp.fulfill()
+        }
+        host.wait(for: [exp], timeout: 10)
+    }
+
+    /// What every dosing consumer actually reads.
+    func normalizedDoses(start: Date, end: Date) -> [DoseEntry] {
+        var out: [DoseEntry] = []
+        let exp = host.expectation(description: "normalized dose read")
+        store.getNormalizedDoseEntries(start: start, end: end) { result in
+            if case .success(let doses) = result { out = doses }
+            exp.fulfill()
+        }
+        host.wait(for: [exp], timeout: 10)
+        return out
+    }
+
     func storeBolusCount(start: Date, end: Date) -> Int {
         var count = -1
         let exp = host.expectation(description: "normalized dose read")
@@ -969,6 +1004,151 @@ final class LoanBooksHarnessTests: XCTestCase {
                              "the gap must be material — at least the field's +1 g seam")
         XCTAssertLessThanOrEqual(phoneTruncatedCOB, 20.0 + 0.01,
                                  "sanity: COB can never exceed the entry")
+    }
+
+    // MARK: - 9. e44 — the store's basal boundary vs a late journal commit
+
+    /// FIELD (loan e44, 2026-08-13): a force-reclaim salvaged the staged tail, the phone resumed
+    /// and wrote its own basal records, and the watch came back minutes later with the whole
+    /// journal. Every dose was written and only the BOLUS reached the books; the loan came out
+    /// 0.25 U light, which is the anti-conservative direction.
+    ///
+    /// THE MECHANISM, in the real store: `addPumpEvents` saves PumpEvent rows unconditionally, but
+    /// syncs them into the InsulinDeliveryStore starting at `lastImmutableBasalEndDate` and drops
+    /// anything basal-shaped that begins before it — `|| $0.type == .bolus` is the only escape
+    /// (DoseStore.swift:1174). That is why the field signature is a surviving bolus beside
+    /// vanished temps. The salvage's clamped record and the phone's own resumed record had walked
+    /// the boundary past the whole loan window.
+    ///
+    /// Two errors, opposite signs, one cause. The temp the phone never held (t3) cannot land at
+    /// all; the temp it DID hold (t2) is stuck at the salvage's estimate, which clamped a 30-min
+    /// programmed window to the reclaim instant rather than to the successor that actually
+    /// superseded it. The backfill upsert fixes both, because both are named by the same store
+    /// identity the pump-event path used. Everything before the backfill call is the sabotage
+    /// form: delete that one line and the e44 signature is what remains.
+    func testForceReclaimSalvageThenLateJournalCommitLandsTempsInTheBooks() {
+        let now = Date()
+        let loanStart = now.addingTimeInterval(-.minutes(40))
+        let t1Start = loanStart.addingTimeInterval(.minutes(2))     // 0.05 U/hr, 30 min programmed
+        let t2Start = loanStart.addingTimeInterval(.minutes(8))     // 2.35 U/hr, 30 min programmed
+        let bolusAt = loanStart.addingTimeInterval(.minutes(10))    // 0.60 U — the dose that survived
+        let t3Start = loanStart.addingTimeInterval(.minutes(14))    // 1.15 U/hr, 30 min programmed
+        let reclaim = loanStart.addingTimeInterval(.minutes(26))    // force-reclaim / salvage instant
+        let phoneResumedThrough = reclaim.addingTimeInterval(.minutes(1))
+        let handedBack = reclaim.addingTimeInterval(.minutes(2))    // the watch's own release stamp
+
+        // Journal identities, exactly LoanReconciler's shape. The store rewrites these to hex(raw)
+        // on the pump-event path (#69), which is why the backfill has to carry the hex form.
+        let syncT1 = "loanv2-\(UUID().uuidString)"
+        let syncT2 = "loanv2-\(UUID().uuidString)"
+        let syncBolus = "loanv2-\(UUID().uuidString)"
+        let syncT3 = "loanv2-\(UUID().uuidString)"
+
+        func tempDose(_ rate: Double, _ start: Date, _ end: Date) -> DoseEntry {
+            DoseEntry(type: .tempBasal, startDate: start, endDate: end, value: rate, unit: .unitsPerHour)
+        }
+        func bolusDose(_ units: Double, _ start: Date) -> DoseEntry {
+            DoseEntry(type: .bolus, startDate: start, endDate: start.addingTimeInterval(38),
+                      value: units, unit: .units)
+        }
+        /// The controller's `newPumpEvents`: identity in `raw`, discarded from the dose.
+        func loanEvent(_ dose: DoseEntry, _ sync: String) -> NewPumpEvent {
+            NewPumpEvent(date: dose.startDate, dose: dose, raw: Data(sync.utf8),
+                         title: dose.type == .bolus ? "Bolus" : "Temp Basal")
+        }
+        /// The controller's `storeIdentifiedDoses`: same dose, hex identity.
+        func upsert(_ dose: DoseEntry, _ sync: String) -> DoseEntry {
+            DoseEntry(type: dose.type, startDate: dose.startDate, endDate: dose.endDate,
+                      value: dose.unit == .unitsPerHour ? dose.unitsPerHour : dose.programmedUnits,
+                      unit: dose.unit, syncIdentifier: hexString(Data(sync.utf8)))
+        }
+
+        let driver = makeDriver()
+
+        // 1. Pre-loan: the phone's own basal, immutable, ending as the loan starts. This is what
+        //    puts the boundary at `loanStart` — a boundary behind the loan, where it is harmless.
+        let preLoanStart = loanStart.addingTimeInterval(-.minutes(30))
+        driver.storeEvents([NewPumpEvent(date: preLoanStart,
+                                         dose: tempDose(fieldBasalRate, preLoanStart, loanStart),
+                                         raw: podRaw(type: "tempBasal", value: fieldBasalRate, start: preLoanStart),
+                                         title: "Temp Basal")],
+                           lastReconciliation: loanStart)
+
+        // 2. The force-reclaim salvage: the two events the watch had streamed before it went
+        //    quiet, reconciled with loanEnd = the reclaim instant (isFinalHandback defaults true,
+        //    so both are clamped there). t2's real successor is still on the dead wrist, so its
+        //    clamp is an ESTIMATE that runs 12 min past the truth.
+        driver.storeEvents([loanEvent(tempDose(0.05, t1Start, reclaim), syncT1),
+                            loanEvent(tempDose(2.35, t2Start, reclaim), syncT2)],
+                           lastReconciliation: reclaim)
+
+        // 3. The phone resumes and writes its own basal. The boundary is now past every loan temp.
+        driver.storeEvents([NewPumpEvent(date: reclaim,
+                                         dose: tempDose(fieldBasalRate, reclaim, phoneResumedThrough),
+                                         raw: podRaw(type: "tempBasal", value: fieldBasalRate, start: reclaim),
+                                         title: "Temp Basal")],
+                           lastReconciliation: phoneResumedThrough)
+
+        // 4. The watch returns. The commit writes the WHOLE loan through the pump-event path,
+        //    every rate record clamped to the journal's own release stamp.
+        driver.storeEvents([loanEvent(tempDose(0.05, t1Start, handedBack), syncT1),
+                            loanEvent(tempDose(2.35, t2Start, handedBack), syncT2),
+                            loanEvent(bolusDose(0.60, bolusAt), syncBolus),
+                            loanEvent(tempDose(1.15, t3Start, handedBack), syncT3)],
+                           lastReconciliation: handedBack)
+
+        let hexT1 = hexString(Data(syncT1.utf8))
+        let hexT2 = hexString(Data(syncT2.utf8))
+        let hexBolus = hexString(Data(syncBolus.utf8))
+        let hexT3 = hexString(Data(syncT3.utf8))
+        // Prefix match, not equality: `annotated(with:)` suffixes " i/n" onto the syncIdentifier
+        // when a dose straddles a basal-schedule boundary, which a run near midnight would do.
+        func rows(_ hex: String, _ list: [DoseEntry]) -> [DoseEntry] {
+            list.filter { $0.syncIdentifier?.hasPrefix(hex) == true }
+        }
+        /// Seconds, not Dates: a Core Data round trip is a double, so compare with a tolerance
+        /// rather than betting on bit-exact equality. Missing rows read NaN and fail.
+        func endOf(_ hex: String, _ list: [DoseEntry]) -> TimeInterval {
+            rows(hex, list).map(\.endDate).max()?.timeIntervalSinceReferenceDate ?? .nan
+        }
+        func units(_ list: [DoseEntry]) -> Double {
+            rows(hexT1, list).reduce(0) { $0 + $1.programmedUnits }
+                + rows(hexT2, list).reduce(0) { $0 + $1.programmedUnits }
+                + rows(hexBolus, list).reduce(0) { $0 + $1.programmedUnits }
+                + rows(hexT3, list).reduce(0) { $0 + $1.programmedUnits }
+        }
+
+        // 5. THE e44 SIGNATURE, from the real store.
+        let broken = driver.normalizedDoses(start: loanStart, end: handedBack)
+        XCTAssertFalse(rows(hexBolus, broken).isEmpty, "the bolus escapes the boundary filter — DoseStore.swift:1174")
+        XCTAssertTrue(rows(hexT3, broken).isEmpty,
+                      "the temp the phone never held cannot land: every basal-shaped dose starting before the boundary is dropped")
+        XCTAssertEqual(endOf(hexT2, broken), reclaim.timeIntervalSinceReferenceDate, accuracy: 1,
+                       "and the salvage's estimate still stands — the real records could not correct it either")
+
+        // 6. The backfill: the whole loan restated under its store identity, overlaps truncated
+        //    the way `DoseStore` truncates them on the path this write bypasses.
+        driver.backfill([upsert(tempDose(0.05, t1Start, t2Start), syncT1),
+                         upsert(tempDose(2.35, t2Start, t3Start), syncT2),
+                         upsert(bolusDose(0.60, bolusAt), syncBolus),
+                         upsert(tempDose(1.15, t3Start, handedBack), syncT3)])
+
+        let fixed = driver.normalizedDoses(start: loanStart, end: handedBack)
+        XCTAssertFalse(rows(hexT3, fixed).isEmpty, "THE FIX: the missing temp is in the books")
+        XCTAssertEqual(endOf(hexT3, fixed), handedBack.timeIntervalSinceReferenceDate, accuracy: 1,
+                       "and it ends where the journal says the loan ended")
+        XCTAssertEqual(endOf(hexT2, fixed), t3Start.timeIntervalSinceReferenceDate, accuracy: 1,
+                       "the salvage extension is TRIMMED to the successor the journal brought — R37's real-records-replace-estimates, as an upsert")
+        XCTAssertEqual(endOf(hexT1, fixed), t2Start.timeIntervalSinceReferenceDate, accuracy: 1,
+                       "and the record that was already right is left alone — same identity, same row, no duplicate")
+
+        // The whole loan, to the journal's own arithmetic: 6 min at 0.05 + 6 min at 2.35 +
+        // 0.60 U bolus + 14 min at 1.15.
+        let truth = 0.05 * 6 / 60 + 2.35 * 6 / 60 + 0.60 + 1.15 * 14 / 60
+        XCTAssertEqual(units(fixed), truth, accuracy: 0.001,
+                       "the loan window's insulin is exactly what the watch journaled")
+        XCTAssertGreaterThan(abs(units(broken) - truth), 0.15,
+                             "sanity: the pre-backfill books were materially wrong, so the assertion above is load-bearing")
     }
 }
 

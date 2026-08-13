@@ -108,6 +108,13 @@ final class PodLoanPhoneController {
         var bookGapDose: (_ entry: DoseEntry, _ completion: @escaping (Bool) -> Void) -> Void = { _, done in done(false) }
         /// R37: retire the placeholder by its syncIdentifier.
         var deleteGapDose: (_ syncIdentifier: String, _ completion: @escaping (Bool) -> Void) -> Void = { _, done in done(false) }
+        /// e44 (2026-08-13): UPSERT reconciled loan doses into the delivery store by their store
+        /// identity (update-or-insert on syncIdentifier). The only write that can land a loan dose
+        /// BEHIND the store's basal boundary — the pump-event path above cannot, which is how a
+        /// force-reclaim followed by a late journal commit silently loses every temp. See the call
+        /// site in `handleHandbackOffer` for the mechanism. Default no-op keeps the state-machine
+        /// tests constructing unchanged.
+        var backfillDoses: (_ doses: [DoseEntry], _ completion: @escaping (Error?) -> Void) -> Void = { _, done in done(nil) }
         var now: () -> Date = { Date() }
     }
 
@@ -135,6 +142,89 @@ final class PodLoanPhoneController {
                                 dose: dose,
                                 raw: Data(syncID.utf8),
                                 title: Self.pumpEventTitle(for: dose.type))
+        }
+    }
+
+    /// e44: the overlap truncation the STORE does on the way into the delivery store, done here
+    /// because the backfill upsert deliberately bypasses that path.
+    ///
+    /// NOT optional. The watch journals a temp with its PROGRAMMED end (PodLoanWatchController
+    /// `loanWillEnactTempBasal`: `endDate = now + duration`), so a 5-minutely dose cycle leaves
+    /// half a dozen 30-minute temps overlapping — the watch's own log calls that untruncated sum
+    /// "NOT a meaningful commanded total" (:2222). LoanReconciler leaves them that way on purpose
+    /// (LoanReconciler.swift:182-188) because `DoseStore.addPumpEvents` runs stock
+    /// `InsulinMath.reconciled()` before the delivery-store insert (DoseStore.swift:1174). An
+    /// upsert that carried the untruncated spans would REPLACE the store's own truncated rows
+    /// with them and inflate IOB on every hand-back, healthy ones included.
+    ///
+    /// `reconciled()` is internal to LoopKit, so this is its rate-record arm restated against the
+    /// only two dose types that can appear here: a rate record ends where the next one starts, a
+    /// fully superseded one is dropped, boluses pass through. The suspend/resume arms are
+    /// unreachable — LoanReconciler mints suspends as rate-0 `.tempBasal` (:200-211) and never
+    /// emits `.suspend`/`.resume` DoseEntries.
+    private func truncatingOverlaps(_ doses: [DoseEntry]) -> [DoseEntry] {
+        var out: [DoseEntry] = []
+        var lastRate: DoseEntry?
+        for dose in doses.sorted(by: { $0.startDate < $1.startDate }) {
+            guard dose.type != .bolus else {
+                out.append(dose)
+                continue
+            }
+            if let last = lastRate {
+                let end = Swift.min(last.endDate, dose.startDate)
+                if end > last.startDate {
+                    out.append(last.trimmed(from: nil, to: end, syncIdentifier: last.syncIdentifier))
+                }
+            }
+            lastRate = dose
+        }
+        // Stock's tail guard verbatim (InsulinMath.swift:514): a zero-duration final record is
+        // dropped there, so appending it here would upsert a stray row the clean path never wrote.
+        if let last = lastRate, last.endDate > last.startDate { out.append(last) }
+        return out
+    }
+
+    /// The other half of what the store's path does that the upsert bypasses:
+    /// `reconciled()` ends with `resolvingDelivery` (InsulinMath.swift:345-365, fileprivate),
+    /// which stamps `deliveredUnits` on every immutable dose — pulse-quantized for temps.
+    /// Without this, an upserted row REPLACES a clean row that had `deliveredUnits` set with
+    /// one that has nil, and downstream math falls back to un-quantized programmed figures —
+    /// sub-pulse drift, but rows the backfill corrects must be indistinguishable from rows
+    /// the clean path wrote.
+    private static func resolvedDeliveredUnits(for dose: DoseEntry) -> Double? {
+        guard !dose.isMutable else { return nil }
+        switch dose.type {
+        case .bolus:     return dose.programmedUnits
+        case .tempBasal: return dose.unitsInDeliverableIncrements
+        default:         return nil
+        }
+    }
+
+    /// e44: the same reconciled doses, restated under the identity the STORE gave them.
+    ///
+    /// `NewPumpEvent.init` DISCARDS `dose.syncIdentifier` and derives the stored one as
+    /// `raw.hexadecimalString` (NewPumpEvent.swift:33), so a dose upserted by syncIdentifier has
+    /// to carry hex(utf8("loanv2-<uuid>")) or it inserts a SECOND row instead of correcting the
+    /// one the pump-event path already wrote. Rebuilt rather than mutated: `syncIdentifier` is
+    /// `internal(set)` outside LoopKit, and `value` is not readable at all — recovered through
+    /// the unit-appropriate public accessor.
+    private func storeIdentifiedDoses(from doses: [DoseEntry]) -> [DoseEntry] {
+        doses.compactMap { dose in
+            guard let syncID = dose.syncIdentifier else { return nil }
+            return DoseEntry(type: dose.type,
+                             startDate: dose.startDate,
+                             endDate: dose.endDate,
+                             value: dose.unit == .unitsPerHour ? dose.unitsPerHour : dose.programmedUnits,
+                             unit: dose.unit,
+                             deliveredUnits: dose.deliveredUnits ?? Self.resolvedDeliveredUnits(for: dose),
+                             description: dose.description,
+                             syncIdentifier: Data(syncID.utf8).hexadecimalString,
+                             scheduledBasalRate: dose.scheduledBasalRate,
+                             insulinType: dose.insulinType,
+                             automatic: dose.automatic,
+                             manuallyEntered: dose.manuallyEntered,
+                             isMutable: dose.isMutable,
+                             wasProgrammedByPumpUI: dose.wasProgrammedByPumpUI)
         }
     }
 
@@ -356,9 +446,18 @@ final class PodLoanPhoneController {
                 drift.map { String(format: "%+.3f", $0) } ?? "n/a",
                 pending.watchFreshened ? "Y" : "N"))
             UserDefaults.standard.set(delivered, forKey: Keys.deliveredAuthoritative)
-            bankResidual(residual, epoch: pending.epoch)
             switch pending.flavor {
             case .handback:
+                // BANKED ONLY ON A CLEAN HAND-BACK (2026-08-13). The bank exists to describe the
+                // residual of a loan whose records are COMPLETE, because that is the distribution
+                // the ±0.20 U bounds are calibrated against. A force-reclaim's residual measures
+                // the opposite — a dead watch's missing records — so banking it poisons the very
+                // statistics the next threshold review reads: two of them (+0.800, +0.850) had
+                // already moved the banked max from +0.000 to +0.850. Force-reclaim residuals stay
+                // visible in the reconcile[FORCE-RECLAIM] line above; they just are not evidence
+                // about hand-backs. Consequence, intended: a force-reclaim audit prints no bank
+                // line, so the "N more for a re-review" countdown counts clean samples only.
+                bankResidual(residual, epoch: pending.epoch)
                 applyReconciliationVerdict(residual: residual, epoch: pending.epoch)
             case .forceReclaim:
                 applyForceReclaimVerdict(residual: residual, epoch: pending.epoch)
@@ -547,11 +646,23 @@ final class PodLoanPhoneController {
     /// direction; a gap of neither is not). Keyed on persisted state: duplicate redeliveries
     /// find nothing and no-op. A failed delete keeps the state (retried on the next offer and
     /// at launch) and says so, because a silent failure here is a double-counted IOB.
-    private func retireGapBookingIfExplained(offerEpoch: Int, dosesJustCommitted: Int, unitsJustCommitted: Double, carbsJustCommitted: Int) {
+    private func retireGapBookingIfExplained(offerEpoch: Int, dosesJustCommitted: [DoseEntry], carbsJustCommitted: Int) {
         guard let gap = UserDefaults.standard.dictionary(forKey: Keys.gapBooking),
               let gapEpoch = gap["epoch"] as? Int, gapEpoch == offerEpoch,
               let booked = gap["units"] as? Double else { return }
-        guard dosesJustCommitted > 0 else { return }   // an empty offer explains nothing
+        guard !dosesJustCommitted.isEmpty else { return }   // an empty offer explains nothing
+        // The array, not a pre-summed total: `booked` is a bolus-shaped, odometer-derived number,
+        // so only bolus units are comparable to it. LoanReconciler mints every dose without
+        // deliveredUnits (:193-198, :205-210), which made the old single total ALWAYS gross
+        // programmed — rate × FULL clamped window, un-netted against the schedule and untruncated
+        // against the next temp. That is the "implied Σ" over-count this file already deleted once
+        // (see the note above forceReclaimToOwner), printed here against a real delivered figure.
+        // `deliveredUnits ??` survives on the BOLUS sum only: inert today, right the day a record
+        // carries one. Rate records get their own column, labelled gross on its face.
+        let boluses = dosesJustCommitted.filter { $0.type == .bolus }
+        let bolusUnits = boluses.reduce(0.0) { $0 + ($1.deliveredUnits ?? $1.programmedUnits) }
+        let rateCount = dosesJustCommitted.count - boluses.count
+        let rateGross = dosesJustCommitted.filter { $0.type != .bolus }.reduce(0.0) { $0 + $1.programmedUnits }
         let sync = Self.gapSyncIdentifier(epoch: gapEpoch)
         deps.deleteGapDose(sync) { [weak self] ok in
             guard let self = self else { return }
@@ -559,11 +670,11 @@ final class PodLoanPhoneController {
                 if ok {
                     UserDefaults.standard.removeObject(forKey: Keys.gapBooking)
                     self.handbackDiag(gapEpoch, String(format:
-                        "R37 gap RETIRED — the watch returned with %d real dose(s) (%.2f U) and %d carb(s); the %.2f U estimate is replaced by actual timing",
-                        dosesJustCommitted, unitsJustCommitted, carbsJustCommitted, booked))
+                        "R37 gap RETIRED — the watch returned with %d real dose(s): %.2f U bolus + %d rate record(s) (%.2f U gross programmed, pre-truncation) and %d carb(s); the %.2f U estimate is replaced by actual timing",
+                        dosesJustCommitted.count, bolusUnits, rateCount, rateGross, carbsJustCommitted, booked))
                     self.deps.issueNotice("Watch Records Recovered",
                                           String(format: "The watch is back. Its records (%d doses, %d carbs) replaced the estimated %.2f U bolus — your IOB and COB now reflect actual timing.",
-                                                 dosesJustCommitted, carbsJustCommitted, booked))
+                                                 dosesJustCommitted.count, carbsJustCommitted, booked))
                 } else {
                     self.handbackDiag(gapEpoch, String(format:
                         "** R37 gap DELETE FAILED — the %.2f U placeholder AND the real records are both booked; IOB is over-counted until this retries **", booked))
@@ -728,6 +839,10 @@ final class PodLoanPhoneController {
         static let deliveredAuthoritative = "PodLoanPhoneController.deliveredAuthoritative"
         /// R32(b): every authoritative residual, so the loose thresholds get tightened from data.
         static let residualHistory = "PodLoanPhoneController.residualHistory"
+        /// One-shot repair flag for the residuals banked before the bank was scoped to clean
+        /// hand-backs. Date-suffixed on purpose: this names a specific 2026-08-13 field-data
+        /// repair, not a standing rule, so nobody reads it as a recurring purge.
+        static let residualHistoryPurged = "PodLoanPhoneController.residualHistoryPurged.2026-08-13"
     }
 
     private enum NotificationID {
@@ -768,6 +883,25 @@ final class PodLoanPhoneController {
             self.committedIDs = []
         }
         loadStaged()
+
+        // One-shot: two R37 force-reclaim residuals (+0.800, +0.850) were banked before
+        // bankResidual was scoped to `.handback`, and they are what the next threshold review
+        // would read as the worst clean hand-backs on record. No clean hand-back can exceed
+        // +0.5 U — it is 2.5× the R32 open-loop bound, and the banked legit distribution tops
+        // out at +0.000 — so that is the cut. Deliberately NOT the +0.20 bound: a legitimate
+        // hand-back above it trips R32 loudly and its residual is still authentic calibration
+        // data. Runs here rather than in bankResidual so the stats stop lying now, instead of
+        // at whenever the next hand-back happens to be.
+        if !UserDefaults.standard.bool(forKey: Keys.residualHistoryPurged) {
+            if var history = UserDefaults.standard.array(forKey: Keys.residualHistory) as? [Double] {
+                let before = history.count
+                history.removeAll { $0 > 0.5 }
+                if history.count != before {
+                    UserDefaults.standard.set(history, forKey: Keys.residualHistory)
+                }
+            }
+            UserDefaults.standard.set(true, forKey: Keys.residualHistoryPurged)
+        }
 
         // R37: a restart between a force-reclaim and its verified round-trip must not lose the
         // audit — the loop is being held open waiting on the pod's answer, and forgetting the
@@ -1445,12 +1579,15 @@ final class PodLoanPhoneController {
 
         let writeStart = deps.now()
         handbackDiag(offer.epoch, "write START \(sane.count) dose(s) (final=\(isFinal))")
-        commitInFlight = true   // #118: cleared first thing in the completion, both paths
+        // #118: held until BOTH store writes are done (pump events, then the e44 backfill) —
+        // the latch's job is to keep a second Core Data write from starting, and the backfill
+        // is one. Cleared on every exit path below.
+        commitInFlight = true
         deps.addPumpEvents(newPumpEvents(from: sane), offer.handedBackAt) { [weak self] error in
             guard let self = self else { return }
             self.queue.async {
-                self.commitInFlight = false
                 if let error = error {
+                    self.commitInFlight = false
                     self.handbackDiag(offer.epoch, "write FAILED: \(String(describing: error))")
                     os_log("Reconcile write failed: %{public}@", log: self.log, type: .fault, String(describing: error))
                     // #102: ONCE per failing state, not once per retry. Offers resend every 15 s,
@@ -1474,72 +1611,139 @@ final class PodLoanPhoneController {
                 }
                 self.hasWarnedRecordsNotSaved = false   // recovered — a future failure is news again
 
-                // #66 (2026-08-04): gate carbs on !isStale, matching the override change below.
-                // The commit used to run unconditionally while committedIDs.formUnion sat inside
-                // the `if !isStale` block at the bottom of this closure — so a stale redelivery
-                // committed the carbs and recorded nothing, and every resend added another copy.
-                // Insulin is immune (NewPumpEvent.raw dedupes at the store); carbs have no
-                // identity at all, so the cursor is the only guard and it was being skipped.
-                if !isStale {
-                    for carb in outcome.carbs {
-                        self.deps.addCarb(carb.entry, carb.eventID.uuidString) { _ in }  // R36: insert-if-absent on the wire identity
-                    }
-                    // R30 (#89): deletions ride the same staleness gate as adds — a dead loan
-                    // may not mutate the carb store in either direction.
-                    for gone in outcome.deletedCarbs {
-                        self.handbackDiag(offer.epoch, String(format: "carb DELETE from wrist — %.0f g @ %@ sync=%@", gone.grams, String(describing: gone.startDate), gone.syncIdentifier.map { String($0.prefix(8)) } ?? "nil"))
-                        self.deps.deleteCarb(gone) { error in
-                            // Outcome, always — a delete that silently missed is how a carb
-                            // survives to the next grant and "resurrects" on the wrist.
-                            self.handbackDiag(offer.epoch, error == nil
-                                ? String(format: "carb DELETE applied on phone — %.0f g", gone.grams)
-                                : String(format: "carb DELETE MISSED on phone — %.0f g: %@", gone.grams, String(describing: error!)))
+                // Everything downstream of the store writes — carbs, overrides, the ack, the gap
+                // retire — held in one closure so the e44 backfill below can fail the whole commit
+                // the way a failed pump-event write already does: nothing committed past the
+                // insulin, and no ack.
+                let finishCommit: (Error?) -> Void = { [weak self] backfillError in
+                    guard let self = self else { return }
+                    self.queue.async {
+                        self.commitInFlight = false
+                        if let backfillError = backfillError {
+                            // Same treatment as a failed write, and for the same reason: the ack is
+                            // what stops the watch's 15 s resend, so acking a half-landed commit
+                            // retires the only retry we have. The upsert is idempotent, so the
+                            // resend costs nothing.
+                            self.handbackDiag(offer.epoch, "backfill FAILED: \(String(describing: backfillError))")
+                            os_log("Loan dose backfill failed: %{public}@", log: self.log, type: .fault, String(describing: backfillError))
+                            if !self.hasWarnedRecordsNotSaved {
+                                self.hasWarnedRecordsNotSaved = true
+                                self.deps.issueNotice("Watch Records Not Saved", "The watch session's records could not be saved. Dosing stays paused; will retry on the next hand-back attempt.")
+                            }
+                            self.armPausedReminder()
+                            if let reason = self.pendingForceReclaimReason {
+                                self.pendingForceReclaimReason = nil
+                                self.forceReclaimToOwner(reason: reason)
+                            }
+                            return
                         }
+
+                        // #66 (2026-08-04): gate carbs on !isStale, matching the override change below.
+                        // The commit used to run unconditionally while committedIDs.formUnion sat inside
+                        // the `if !isStale` block at the bottom of this closure — so a stale redelivery
+                        // committed the carbs and recorded nothing, and every resend added another copy.
+                        // Insulin is immune (NewPumpEvent.raw dedupes at the store); carbs have no
+                        // identity at all, so the cursor is the only guard and it was being skipped.
+                        if !isStale {
+                            for carb in outcome.carbs {
+                                self.deps.addCarb(carb.entry, carb.eventID.uuidString) { _ in }  // R36: insert-if-absent on the wire identity
+                            }
+                            // R30 (#89): deletions ride the same staleness gate as adds — a dead loan
+                            // may not mutate the carb store in either direction.
+                            for gone in outcome.deletedCarbs {
+                                self.handbackDiag(offer.epoch, String(format: "carb DELETE from wrist — %.0f g @ %@ sync=%@", gone.grams, String(describing: gone.startDate), gone.syncIdentifier.map { String($0.prefix(8)) } ?? "nil"))
+                                self.deps.deleteCarb(gone) { error in
+                                    // Outcome, always — a delete that silently missed is how a carb
+                                    // survives to the next grant and "resurrects" on the wrist.
+                                    self.handbackDiag(offer.epoch, error == nil
+                                        ? String(format: "carb DELETE applied on phone — %.0f g", gone.grams)
+                                        : String(format: "carb DELETE MISSED on phone — %.0f g: %@", gone.grams, String(describing: error!)))
+                                }
+                            }
+                        } else if !outcome.carbs.isEmpty {
+                            self.handbackDiag(offer.epoch, "stale offer — \(outcome.carbs.count) carb(s) NOT committed (a dead loan cannot add carbs)")
+                        }
+
+                        // #68 part B: the watch owned overrides for the loan, so a drained override
+                        // record lands on the phone here — after the store write commits, alongside
+                        // carbs, and touching NO dose accounting. Stale offers are excluded: a dead
+                        // loan cannot change live therapy settings.
+                        if !isStale, let change = outcome.overrideChange {
+                            self.applyWatchOverride(change, epoch: offer.epoch, isFinal: isFinal)
+                        }
+
+                        // Over/under delivery warning removed for now (Jeremy 2026-07-27): the hand-back is
+                        // silent — records committed, delta captured in the [phone] reconcile line above, no
+                        // user notice. outcome.residualShortfallUnits is still computed but no longer surfaced;
+                        // the warning returns once a threshold is chosen from the captured field data.
+
+                        let newCursor = events.map(\.seq).max() ?? self.committedCursor
+                        if !isStale {
+                            self.committedCursor = max(self.committedCursor, newCursor)
+                            self.committedIDs.formUnion(committable.map(\.id))
+                            self.persistCommittedIDs()
+                            self.sendMessage(.handbackAck(HandbackAck(epoch: self.epoch, committedCursor: self.committedCursor)))
+                            self.handbackDiag(self.epoch, String(format: "write DONE %.0fms → ACK cursor %d", self.deps.now().timeIntervalSince(writeStart) * 1000, self.committedCursor))
+                            if isFinal, self.state == .reconciling {
+                                // Only the transition-owning offer finishes; a duplicate final
+                                // offer post-.owner just committed any unseen tail + re-acked.
+                                self.finishLoanAfterCommit()
+                            } else if !isFinal {
+                                os_log("Interim drain committed to cursor %d — watch still dosing", log: self.log, type: .default, self.committedCursor)
+                            }
+                        } else {
+                            self.sendMessage(.handbackAck(HandbackAck(epoch: offer.epoch, committedCursor: newCursor, stale: true)))
+                        }
+                        // R37: outside the staleness gate ON PURPOSE — a watch that comes back after a
+                        // NEW loan has started re-offers its old epoch as stale, and stale offers still
+                        // write their doses ("historical truth" above). If those doses explain a gap
+                        // booking, the placeholder retires regardless of loan-state bookkeeping.
+                        self.retireGapBookingIfExplained(
+                            offerEpoch: offer.epoch,
+                            dosesJustCommitted: sane,
+                            carbsJustCommitted: isStale ? 0 : outcome.carbs.count)
+                        self.drainAfterCommit()   // #118
                     }
-                } else if !outcome.carbs.isEmpty {
-                    self.handbackDiag(offer.epoch, "stale offer — \(outcome.carbs.count) carb(s) NOT committed (a dead loan cannot add carbs)")
                 }
 
-                // #68 part B: the watch owned overrides for the loan, so a drained override
-                // record lands on the phone here — after the store write commits, alongside
-                // carbs, and touching NO dose accounting. Stale offers are excluded: a dead
-                // loan cannot change live therapy settings.
-                if !isStale, let change = outcome.overrideChange {
-                    self.applyWatchOverride(change, epoch: offer.epoch, isFinal: isFinal)
-                }
-
-                // Over/under delivery warning removed for now (Jeremy 2026-07-27): the hand-back is
-                // silent — records committed, delta captured in the [phone] reconcile line above, no
-                // user notice. outcome.residualShortfallUnits is still computed but no longer surfaced;
-                // the warning returns once a threshold is chosen from the captured field data.
-
-                let newCursor = events.map(\.seq).max() ?? self.committedCursor
-                if !isStale {
-                    self.committedCursor = max(self.committedCursor, newCursor)
-                    self.committedIDs.formUnion(committable.map(\.id))
-                    self.persistCommittedIDs()
-                    self.sendMessage(.handbackAck(HandbackAck(epoch: self.epoch, committedCursor: self.committedCursor)))
-                    self.handbackDiag(self.epoch, String(format: "write DONE %.0fms → ACK cursor %d", self.deps.now().timeIntervalSince(writeStart) * 1000, self.committedCursor))
-                    if isFinal, self.state == .reconciling {
-                        // Only the transition-owning offer finishes; a duplicate final
-                        // offer post-.owner just committed any unseen tail + re-acked.
-                        self.finishLoanAfterCommit()
-                    } else if !isFinal {
-                        os_log("Interim drain committed to cursor %d — watch still dosing", log: self.log, type: .default, self.committedCursor)
+                // e44 (field 2026-08-13, −0.25 U): the pump-event write above CANNOT land a
+                // basal-shaped dose that starts before the delivery store's last immutable basal
+                // end date — DoseStore.swift:1174 drops it from the InsulinDeliveryStore sync,
+                // with a bolus-only escape. After a force-reclaim the salvage's clamped tail AND
+                // the phone's own resumed records sit ahead of the entire loan window, so a
+                // journal that comes back late writes its PumpEvent rows fine and NONE of its
+                // temps reach the books: the bolus survives, the temps vanish, IOB under-counts.
+                // That asymmetry is the field signature exactly.
+                //
+                // So restate the WHOLE loan's doses under their store identity and upsert them
+                // (DoseStore.syncDoseEntries — update-or-insert on syncIdentifier, built for a
+                // remote authoritative store, which is what the watch journal is). Inserts the
+                // dropped temps, no-op-updates the clean path's rows, and corrects the
+                // salvage-clamped extension to the journal's true end: same event UUID, same
+                // identity, so R37's "real records replace estimates" happens as an
+                // upsert-correction instead of a delete.
+                //
+                // STALE OFFERS SKIP IT (#102): a dead loan speaks only for its own records, and
+                // reconciling the whole staged set against a stale `handedBackAt` is exactly the
+                // defect that wrote temps ending before they started on 2026-08-11.
+                let backfillOutcome = LoanReconciler.reconcile(LoanReconciler.Input(
+                    events: allStagedEvents,
+                    odometer: nil,
+                    schedule: self.deps.settings().basalRateSchedule,
+                    loanStart: loanStart,
+                    loanEnd: offer.handedBackAt,
+                    isFinalHandback: isFinal))
+                let backfill = self.storeIdentifiedDoses(from: self.truncatingOverlaps(
+                    backfillOutcome.doses.filter { $0.endDate >= $0.startDate }))
+                if isStale || backfill.isEmpty {
+                    if isStale {
+                        self.handbackDiag(offer.epoch, "backfill SKIPPED — a stale offer speaks only for its own records (#102)")
                     }
+                    finishCommit(nil)
                 } else {
-                    self.sendMessage(.handbackAck(HandbackAck(epoch: offer.epoch, committedCursor: newCursor, stale: true)))
+                    self.handbackDiag(offer.epoch, "backfill \(backfill.count) loan-window dose(s) by store identity (e44 boundary)")
+                    self.deps.backfillDoses(backfill, finishCommit)
                 }
-                // R37: outside the staleness gate ON PURPOSE — a watch that comes back after a
-                // NEW loan has started re-offers its old epoch as stale, and stale offers still
-                // write their doses ("historical truth" above). If those doses explain a gap
-                // booking, the placeholder retires regardless of loan-state bookkeeping.
-                self.retireGapBookingIfExplained(
-                    offerEpoch: offer.epoch,
-                    dosesJustCommitted: sane.count,
-                    unitsJustCommitted: sane.reduce(0.0) { $0 + ($1.deliveredUnits ?? $1.programmedUnits) },
-                    carbsJustCommitted: isStale ? 0 : outcome.carbs.count)
-                self.drainAfterCommit()   // #118
             }
         }
     }
@@ -1775,12 +1979,23 @@ final class PodLoanPhoneController {
             // delivered-but-unstreamed BOLUS was in this set at reclaim time or arrived minutes
             // later with the returning watch — the difference between complete books and the
             // loop resuming while under-counting IOB. One line answers it.
-            // deliveredUnits ?? programmedUnits — same convention as the LoanDoseRecord mapping
-            // (:1642): report what actually went in, falling back to what was commanded.
-            let salvagedUnits = outcome.doses.reduce(0.0) { $0 + ($1.deliveredUnits ?? $1.programmedUnits) }
+            // SPLIT, because one number cannot answer that question. The old line claimed to
+            // "report what actually went in" via `deliveredUnits ?? programmedUnits`, but
+            // LoanReconciler mints every dose with deliveredUnits nil (:193-198, :205-210), so the
+            // `??` never fired and the total was ALWAYS gross programmed — rate × FULL clamped
+            // window, un-netted against the schedule and untruncated against the next temp. That
+            // is the very "implied Σ" over-count removed above, and with temps dominating it can
+            // read 1.53 U for 0.85 U of real delivery, burying the bolus this line exists to
+            // surface. Bolus units stand alone; rate records get a column labelled gross on its
+            // face. (`deliveredUnits ??` kept on the bolus sum only — inert today, right the day a
+            // record carries one.)
+            let boluses = outcome.doses.filter { $0.type == .bolus }
+            let bolusUnits = boluses.reduce(0.0) { $0 + ($1.deliveredUnits ?? $1.programmedUnits) }
+            let rateGross = outcome.doses.filter { $0.type != .bolus }.reduce(0.0) { $0 + $1.programmedUnits }
             handbackDiag(epoch, String(format:
-                "force reclaim SALVAGE — %d staged event(s) → %d dose(s) totalling %.3f U, %d carb(s), %d delete(s); loop resumes CLOSED on these books (no odometer check — OBS-9)",
-                events.count, outcome.doses.count, salvagedUnits, outcome.carbs.count, outcome.deletedCarbs.count))
+                "force reclaim SALVAGE — %d staged event(s) → %d dose(s): %.3f U bolus + %d rate record(s) (%.3f U gross programmed), %d carb(s), %d delete(s); loop resumes CLOSED on these books (no odometer check — OBS-9)",
+                events.count, outcome.doses.count, bolusUnits, outcome.doses.count - boluses.count,
+                rateGross, outcome.carbs.count, outcome.deletedCarbs.count))
             deps.addPumpEvents(newPumpEvents(from: outcome.doses), deps.now()) { _ in }
             for carb in outcome.carbs { deps.addCarb(carb.entry, carb.eventID.uuidString) { _ in } }
             for gone in outcome.deletedCarbs {   // R30 (#89)

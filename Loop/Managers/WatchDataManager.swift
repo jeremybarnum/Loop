@@ -324,6 +324,23 @@ final class WatchDataManager: NSObject {
                 self.deviceManager.doseStore.deleteDose(stub) { error in
                     completion(error == nil)
                 }
+            },
+            backfillDoses: { [weak self] doses, completion in
+                // e44: the pump-event path above cannot land a basal-shaped dose behind the
+                // delivery store's last immutable basal end date (DoseStore.swift:1174), which is
+                // how a late journal commit after a force-reclaim loses every temp. syncDoseEntries
+                // is stock's update-or-insert-by-syncIdentifier door, written for a remote
+                // authoritative store — the watch journal is exactly that — so it writes straight
+                // into the InsulinDeliveryStore with no boundary in the way.
+                guard let self = self else { completion(nil); return }
+                Task {
+                    do {
+                        try await self.deviceManager.doseStore.syncDoseEntries(doses)
+                        completion(nil)
+                    } catch {
+                        completion(error)
+                    }
+                }
             }
         ))
     }()

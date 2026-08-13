@@ -172,6 +172,10 @@ final class LoanTwoSidedContractTests: XCTestCase {
     /// R36 store emulation + the controller-layer commit counter (see the addCarb stub).
     private var committedCarbIDs: Set<String> = []
     private var rawCarbCommits = 0
+    /// e44: every store-identity upsert the phone attempted, and an injectable failure — a
+    /// backfill that fails must be treated as a write failure (no ack; the resend is the retry).
+    private var backfillCalls: [[DoseEntry]] = []
+    private var backfillFailure: Error?
 
     private var journalDir: URL!
 
@@ -195,6 +199,8 @@ final class LoanTwoSidedContractTests: XCTestCase {
         pumpWriteDelay = 0
         committedCarbIDs = []
         rawCarbCommits = 0
+        backfillCalls = []
+        backfillFailure = nil
         pump = MockPumpManager()
         MockPumpManager.testConnectionReleased = false
         MockPumpManager.testOdometer = nil
@@ -286,7 +292,15 @@ final class LoanTwoSidedContractTests: XCTestCase {
             issueNotice: { _, _ in },
             isConnectionReady: { true },
             cancelTempBasalAfterPodReturn: { completion in completion(nil) },
-            openLoopForUncertainReconciliation: { }
+            openLoopForUncertainReconciliation: { },
+            backfillDoses: { [weak self] doses, completion in
+                guard let self = self else { completion(nil); return }
+                self.lock.lock()
+                self.backfillCalls.append(doses)
+                let failure = self.backfillFailure
+                self.lock.unlock()
+                completion(failure)
+            }
         ))
     }
 
@@ -296,6 +310,7 @@ final class LoanTwoSidedContractTests: XCTestCase {
     private func writeCounts() -> [Int] { lock.lock(); defer { lock.unlock() }; return pumpWriteEventCounts }
     private func rawCarbCommitCount() -> Int { lock.lock(); defer { lock.unlock() }; return rawCarbCommits }
     private func carbs() -> [NewCarbEntry] { lock.lock(); defer { lock.unlock() }; return committedCarbs }
+    private func backfills() -> [[DoseEntry]] { lock.lock(); defer { lock.unlock() }; return backfillCalls }
     private func acks() -> [HandbackAck] {
         lock.lock(); defer { lock.unlock() }
         return phoneToWatch.compactMap { if case .handbackAck(let a) = $0 { return a } else { return nil } }
@@ -785,5 +800,76 @@ final class LoanTwoSidedContractTests: XCTestCase {
         XCTAssertEqual(carbs().count, 1, "the carb must commit exactly once (#118 / #66's family)")
         XCTAssertEqual(rawCarbCommitCount(), 1, "the deferral means ONE commit call, not two deduped ones")
         XCTAssertEqual(doses().filter { $0.type == .bolus }.count, 1, "and the bolus once")
+    }
+
+    // MARK: - e44: the commit has to land doses PAST the store's basal boundary
+
+    /// FIELD (loan e44, 2026-08-13, −0.25 U of real insulin missing from the books): a
+    /// force-reclaim salvaged the staged tail, the phone resumed and wrote its own basal records,
+    /// and the watch came back minutes later with the whole journal. Every dose was written, and
+    /// only the BOLUS reached the books. `DoseStore` syncs pump events into the delivery store
+    /// starting at the last immutable basal end date and drops anything basal-shaped that begins
+    /// before it (DoseStore.swift:1174 — the `|| $0.type == .bolus` escape is why the asymmetry is
+    /// the field signature). The salvage record and the phone's own resumed records had moved that
+    /// boundary past the entire loan window, so the temps had nowhere to land.
+    ///
+    /// The fix is a second write with no boundary: upsert the FULL loan's reconciled doses under
+    /// the identity the STORE gave them. This test pins the CONTROLLER contract — what is upserted,
+    /// under what identity, and what happens when the upsert fails. The store mechanism itself
+    /// needs a real DoseStore and is pinned in
+    /// `LoanBooksHarnessTests.testForceReclaimSalvageThenLateJournalCommitLandsTempsInTheBooks`.
+    func testForceReclaimThenReofferBackfillsDosesPastTheBoundary() throws {
+        let now = Date()
+        try establishLoan(at: now)
+
+        let firstTemp = try watch.mint(temp(2.35, at: now.addingTimeInterval(-.minutes(26)), minutes: 30),
+                                       at: now.addingTimeInterval(-.minutes(26)))
+        let theBolus = try watch.mint(bolus(0.60, at: now.addingTimeInterval(-.minutes(24))),
+                                      at: now.addingTimeInterval(-.minutes(24)))
+        let lastTemp = try watch.mint(temp(1.15, at: now.addingTimeInterval(-.minutes(14)), minutes: 30),
+                                      at: now.addingTimeInterval(-.minutes(14)))
+
+        // Streamed, never offered — so the phone is holding them staged when the wrist goes quiet,
+        // which is the state a force-reclaim salvages from.
+        watch.streamRecords(at: now)
+        settle()
+        phone.forceReclaimToOwner(reason: "test: watch dead (e44)")
+        waitUntil("owner") { [weak self] in self?.phone?.state == .owner }
+        XCTAssertEqual(doses().count, 3, "the salvage preserved the staged records")
+
+        // The watch comes back and re-offers. Every event is already in committedIDs, so the
+        // pump-event write commits nothing new — and that is precisely the shape that lost the
+        // temps in the field, because by now the boundary sits past all of them.
+        lock.lock(); backfillCalls = []; lock.unlock()
+        watch.sendOffer(released: true, recovered: true, at: now)
+        waitUntil("re-offer acked") { [weak self] in (self?.watch.acks.count ?? 0) >= 1 }
+
+        let backfill = try XCTUnwrap(backfills().last, "the commit must restate the loan's doses by store identity")
+        XCTAssertEqual(backfill.count, 3,
+                       "the WHOLE loan's dose set, not the uncommitted tail — the tail is empty here (got \(backfill.count))")
+        XCTAssertEqual(backfill.filter { $0.type == .bolus }.count, 1)
+        XCTAssertEqual(backfill.filter { $0.type == .tempBasal }.count, 2)
+
+        // THE IDENTITY IS THE WHOLE FIX. `NewPumpEvent.init` discards `dose.syncIdentifier` and
+        // stores hex(raw) instead, so an upsert carrying the bare "loanv2-<uuid>" string would
+        // insert a SECOND row rather than correcting the one already written — doubling the books
+        // instead of completing them.
+        func hexIdentity(_ event: LoanEvent) -> String {
+            Data("loanv2-\(event.id.uuidString)".utf8).map { String(format: "%02hhx", $0) }.joined()
+        }
+        XCTAssertEqual(Set(backfill.compactMap(\.syncIdentifier)),
+                       Set([firstTemp, theBolus, lastTemp].map(hexIdentity)),
+                       "the upsert must use hex(loanv2-<eventID>) — the identity the store gave these very doses")
+
+        // A FAILED UPSERT MAY NOT ACK. The ack is what stops the watch's 15 s resend loop, and
+        // that resend is the only retry this commit has; the upsert is idempotent, so replaying it
+        // costs nothing and acking early costs the temps.
+        lock.lock(); backfillCalls = []; backfillFailure = NSError(domain: "test.backfill", code: 1); lock.unlock()
+        let acksBefore = acks().count
+        watch.sendOffer(released: true, recovered: true, at: now)
+        waitUntil("failing backfill attempted") { [weak self] in (self?.backfills().count ?? 0) >= 1 }
+        settle()
+        XCTAssertEqual(acks().count, acksBefore,
+                       "no ack while any part of the commit is unwritten — the resend is the retry")
     }
 }
