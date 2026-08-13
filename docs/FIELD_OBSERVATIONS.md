@@ -1202,3 +1202,49 @@ because unverified is not clean. Δ stays in the line — it is worth seeing —
 The general lesson is the one already in the file two lines above the bug: a false alarm in the
 instrumentation is worse than none, because it teaches you to skip the line. This one had taught
 me to skip it five times.
+
+## 2026-08-13 12:10 — CORRECTION to the cob-diff explanation: it is NOT a static-vs-dynamic split
+
+The 04:05 entry above explains the Δ pattern correctly and its fix (verify the wipe by reading
+the entry set back) is right. Its MECHANISM is stated wrong, and the wrong version is the kind
+that misleads a future reader into hunting a bug that does not exist.
+
+It said: "The watch reports STATIC absorption; the phone reports DYNAMIC." Read naturally, that
+says the two platforms run different COB algorithms — that the watch is on a legacy non-DCA
+path. Jeremy read it that way and asked why anything computes COB without dynamic absorption.
+Fair question, and the answer is: nothing does.
+
+Verified against source, every production COB call passes effect velocities and takes the
+dynamic path:
+
+```
+WatchLoopManager.swift:703    carbStore.carbsOnBoard(at:effectVelocities: velocities)     watch glance
+WatchLoopManager.swift:749    carbStore.carbsOnBoard(at:effectVelocities: ICE)            watch HUD publish
+LoopDataManager.swift:1142    carbStore.carbsOnBoard(at:effectVelocities: ICE)            phone dosing
+BolusEntryViewModel:635 / ManualEntryDoseViewModel:308                                    phone entry UI
+```
+
+The only call in the repo that omits velocities — and so reaches LoopKit's genuinely static
+branch — is `LoopTests/WatchStoreEffectsTests.swift:304`, which is test-only and unreachable
+from shipping code.
+
+**What actually produces the Δ.** Dynamic absorption contains its own per-entry fallback
+(`CarbStatus.swift:56`): with no observed timeline for an entry yet, it returns the modelled
+curve for THAT ENTRY. The cob-diff read runs immediately after the carb replace, before any
+cycle has extended the watch's `insulinCounteractionEffects` over the just-seeded carbs, so
+they take the fallback. The phone's figure is cached from a completed cycle with observation
+behind it. Read the phone at the same instant and it prints the same number. Same algorithm,
+different observation maturity — a freshness artifact, not an algorithm choice.
+
+**There WAS a real non-DCA bug, and it is fixed.** The port originally omitted effect
+velocities entirely, so watch COB was genuinely static while `carbEffect` was dynamic —
+`WatchLoopManager.swift:685-692` documents it, found in the 2026-07-22 stock-call audit, field
+symptom "15 g entered on the wrist moved eventual correctly while COB read a hard 0". Current
+code passes them. So Jeremy's instinct was right about the class of bug; it had simply already
+been caught.
+
+Dosing never depended on this either way: the watch doses off
+`carbStore.getGlucoseEffects(...effectVelocities:)` (`WatchLoopManager.swift:1796`), not off
+`carbsOnBoard`. COB here is display plus this diff check.
+
+Log label and code comments corrected to say "observation freshness, not a model split".

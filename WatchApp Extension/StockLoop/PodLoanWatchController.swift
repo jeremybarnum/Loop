@@ -1342,13 +1342,22 @@ final class PodLoanWatchController {
             //
             // That question is answered by the ENTRY SET, not by comparing computed COB. The
             // earlier check inferred a residual from Δ(post−phone) > 2 g, which is a category
-            // error: the watch's number is a pre-settle read (STATIC absorption) and the phone's
-            // is DYNAMIC (fitted to observed glucose), so the two legitimately disagree whenever
-            // any carb is mid-absorption. Field evidence across eight replaces — Δ was ≈0 with
-            // the newest carb 1 min old (nothing absorbed yet, both models agree) and 90-148 min
-            // old (both say zero), and +4.3 to +7.3 g at 3, 5, 8, 21 and 51 min. Perfect
-            // separation on absorption phase, none on entry count or snapshot age. Every one of
-            // those was reported as "wipe failed?".
+            // error.
+            //
+            // Both devices compute COB through the SAME dynamic API, with effect velocities
+            // passed identically (WatchLoopManager :703, LoopDataManager :1142) — this is NOT a
+            // static-vs-dynamic split between platforms. The divergence is observation
+            // FRESHNESS: dynamic absorption falls back, per entry, to the modelled curve while
+            // that entry has no observed timeline yet (CarbStatus :56). This read happens
+            // immediately after the replace, before any cycle has extended the watch's
+            // insulinCounteractionEffects over the newly-seeded carbs, so they take that
+            // fallback; the phone's cached figure is from a completed cycle that has observation
+            // behind it. The phone would print the same number if read at this instant.
+            //
+            // Field evidence across eight replaces: Δ ≈ 0 with the newest carb 1 min old
+            // (nothing absorbed yet, both agree) and 90-148 min old (both ~zero), and +4.3 to
+            // +7.3 g at 3, 5, 8, 21 and 51 min — perfect separation on absorption phase, none on
+            // entry count or snapshot age. Every one was reported as "wipe failed?".
             //
             // So read the store back and compare identities. `manifest` above is what we SENT,
             // which proves nothing about what landed.
@@ -1377,11 +1386,11 @@ final class PodLoanWatchController {
                 self.loopManager.glanceCarbsOnBoard { cob in
                     let postV = cob ?? 0
                     let vsPhone = phoneCOB.map { postV - $0 }
-                    // Δ stays in the line — it is worth seeing — but as what it is: static-vs-
-                    // dynamic divergence, which grows with actively-absorbing carbs and says
-                    // nothing about the wipe.
+                    // Δ stays in the line — it is worth seeing — but as what it is: the two sides
+                    // reading the same dynamic model at different observation maturity, which
+                    // grows with actively-absorbing carbs and says nothing about the wipe.
                     let ageStr = snapshotAge.map { "\(Int($0.rounded()))s" } ?? "n/a"
-                    SportLog.event("cob-diff", String(format: "REPLACE %@ · phoneCOB=%@ g (snapshot age %@) · watch COB(post)=%.2f g · replaced %.0f g · Δ(post−phone)=%@ g (static vs dynamic)%@ · [%@]",
+                    SportLog.event("cob-diff", String(format: "REPLACE %@ · phoneCOB=%@ g (snapshot age %@) · watch COB(post)=%.2f g · replaced %.0f g · Δ(post−phone)=%@ g (observation freshness, not a model split)%@ · [%@]",
                                                        source, phoneCOBStr, ageStr, postV, seededGrams,
                                                        vsPhone.map { String(format: "%+.2f", $0) } ?? "—",
                                                        verdict, manifest))
