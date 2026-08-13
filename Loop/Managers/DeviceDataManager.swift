@@ -314,6 +314,12 @@ final class DeviceDataManager {
             observationStart: Date().addingTimeInterval(-absorptionTimes.slow * 2)
         )
 
+        // Attribute the hand-back write latency (see DoseStoreWriteCensus). Set before the
+        // store exists so the very first write is measured — this phone's DoseStore is
+        // HealthKit-backed via insulinHealthStore just below, which is precisely the half we
+        // cannot currently see. Mirrors StockLoopSession's G7RadioCensus.sink wiring.
+        DoseStoreWriteCensus.sink = { line in PhoneLog.event("dose-write", line) }
+
         self.doseStore = DoseStore(
             healthKitSampleStore: insulinHealthStore,
             cacheStore: cacheStore,
