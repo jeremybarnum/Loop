@@ -291,6 +291,39 @@ final class WatchDataManager: NSObject {
                 // false, and only the user's own settings change can re-close it.
                 UserDefaults.standard.removeObject(forKey: dosingKey)
                 self.deviceManager.loopManager.mutateSettings { $0.dosingEnabled = false }
+            },
+            issueUrgentNotice: { [weak self] title, body in
+                // R37: the watch is dead, so the phone is the only device that can get the
+                // user's attention — time-sensitive interruption, and an identifier prefix
+                // LoopAppManager grants a FOREGROUND banner (a plain notification is silent
+                // in-app, which is precisely when the user is staring at the screen after a
+                // force-reclaim).
+                self?.log.error("PodLoan URGENT: %{public}@ - %{public}@", title, body)
+                let content = UNMutableNotificationContent()
+                content.title = title
+                content.body = body
+                content.sound = .default
+                content.interruptionLevel = .timeSensitive
+                UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "podloan.urgent.\(UUID().uuidString)", content: content, trigger: nil))
+            },
+            bookGapDose: { [weak self] entry, completion in
+                // R37: manually-entered dose — the store keeps its syncIdentifier as identity
+                // (pump events overwrite theirs with hex-of-raw), which is what makes the
+                // placeholder deletable when the watch's real records arrive.
+                guard let self = self else { return completion(false) }
+                self.deviceManager.doseStore.addDoses([entry], from: nil) { error in
+                    completion(error == nil)
+                }
+            },
+            deleteGapDose: { [weak self] syncIdentifier, completion in
+                guard let self = self else { return completion(false) }
+                // deleteDose matches on syncIdentifier alone; the other fields are inert.
+                let stub = DoseEntry(type: .bolus, startDate: Date(), endDate: Date(),
+                                     value: 0, unit: .units, syncIdentifier: syncIdentifier,
+                                     manuallyEntered: true)
+                self.deviceManager.doseStore.deleteDose(stub) { error in
+                    completion(error == nil)
+                }
             }
         ))
     }()

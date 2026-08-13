@@ -669,3 +669,50 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
 - The :89 pump-connection TODO is not a ruling — it unblocks mechanically
   when loan-protocol-v2 exists (its ruling dependencies R16 are
   discharged); the v2 spec itself requires Jeremy's sign-off.
+
+- **R37 — The dead-watch reclaim: audit, hold-open, escalate, and book the gap**
+  (2026-08-13, Jeremy, from the watch-battery-dies field test; supplies the ruling
+  OBS-9 deferred as #120/#121).
+
+  When a loan ends by force-reclaim — the watch unreachable, dead, or lost — the phone
+  does NOT resume automatic dosing on whatever records happened to stream. It runs the
+  same odometer audit a clean hand-back gets, holds dosing until the verdict, and then:
+
+  - **Clean (|residual| ≤ 0.20 U):** automatic dosing resumes, one log line, no alarm.
+  - **Positive beyond +0.20 U** (the pod delivered insulin the records cannot explain —
+    the typical dead-watch case): the loop OPENS and stays open, the alert rides the
+    urgent channel (time-sensitive + foreground banner), and the gap is BOOKED as a
+    bolus timestamped at the reclaim — zero decay, maximum IOB, the conservative
+    direction. Booking is code-configurable
+    (`PodLoanPhoneController.bookUnattributedInsulinOnForceReclaim`, default true);
+    turning it off keeps the open + alert.
+  - **Negative beyond −0.20 U:** warn urgently, keep looping — R32(b)'s asymmetry,
+    unchanged: phantom IOB under-doses and decays out, and opening would worsen the
+    real failure.
+  - **Unverifiable** (no baseline, no odometer in the read, or the pod unreachable
+    through the settle window): treated as dirty, never as clean. Open + urgent alert.
+    "Cannot verify" must never quietly become "assume fine".
+
+  Decided as a SUBCATEGORY of R32(b), not a separate protocol (Jeremy delegated the
+  choice): a dead watch is the limiting case of incomplete books — "if I'm being told
+  nothing, I treat that as zero insulin delivered" — and the same bounds, bank and sign
+  asymmetry apply. The baseline that makes it possible is banked at LOAN START from
+  takeoverComplete's post-takeover odometer, while the watch is still alive to send it.
+
+  **The watch's return replaces the estimate, without asking.** Its journal re-offers
+  the unstreamed events; the real doses commit with their true timestamps, real carbs
+  commit through R36's insert-if-absent identity (carbs are never invented — no
+  source), and the placeholder retires by its deterministic syncIdentifier
+  (PODLOAN-ODOGAP-e<epoch>) in the same completion — real records first, then the
+  delete, so the transition never passes through neither. No approval gate, argued and
+  accepted: the records are ground truth already validated in aggregate by the odometer,
+  suppressing truth would contradict loop-is-stateless, and the IOB change at return is
+  always DOWNWARD (the placeholder was booked at zero decay), so auto-apply only removes
+  conservatism. The user gets a disclosure notice with the numbers instead of a prompt.
+  Retirement is keyed on persisted state (restart-safe, stale-offer-safe for a watch
+  that returns after a newer loan), and a failed delete is loud and retried — silent
+  failure there is a double-counted IOB.
+
+  Also under this ruling: ANY alert that opens the loop — R32(b)'s regular hand-back
+  verdict included — now rides the urgent channel. An alert that stops automatic dosing
+  must never be a quiet list entry.

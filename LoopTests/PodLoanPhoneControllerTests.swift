@@ -30,24 +30,29 @@ extension MockPumpManager: PumpConnectionLendable {
 
 final class PodLoanPhoneControllerTests: XCTestCase {
 
-    private var sent: [LoanMessage] = []
-    private var sentExpectations: [XCTestExpectation] = []
-    private var addedDoses: [[DoseEntry]] = []
+    var sent: [LoanMessage] = []
+    var sentExpectations: [XCTestExpectation] = []
+    var addedDoses: [[DoseEntry]] = []
     /// #49/#66: every NewCarbEntry the controller committed, for round-trip assertions.
-    private var addedCarbs: [NewCarbEntry] = []
-    private var pauseCalls: [Bool] = []
-    private var notices: [String] = []
+    var addedCarbs: [NewCarbEntry] = []
+    var pauseCalls: [Bool] = []
+    var notices: [String] = []
     /// #42: drives Dependencies.isConnectionReady — false = pod still returning from a reclaim.
-    private var connectionReady = true
+    var connectionReady = true
     /// Item 1: every HANDBACK-DIAG line the controller emitted (the harness otherwise drops .diag).
-    private var diags: [String] = []
+    var diags: [String] = []
     /// Item 1: how many times the phone enacted the R33 post-return temp cancel, and its result.
-    private var cancelCalls = 0
-    private var cancelError: Error?
+    var cancelCalls = 0
+    var cancelError: Error?
     /// R32(b): how many times the phone stopped automatic dosing over a reconciliation difference.
-    private var openLoopCalls = 0
-    private var pump: MockPumpManager!
-    private var settings: LoopSettings!
+    var openLoopCalls = 0
+    var pump: MockPumpManager!
+    var settings: LoopSettings!
+    /// R37 captures.
+    var urgentNotices: [String] = []
+    var bookedGapDoses: [DoseEntry] = []
+    var deletedGapSyncs: [String] = []
+    var gapDeleteSucceeds = true
     private let lock = NSLock()
 
     override func setUp() {
@@ -56,9 +61,15 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         // test starts from a clean slate.
         for key in ["PodLoanPhoneController.state", "PodLoanPhoneController.epoch",
                     "PodLoanPhoneController.cursor", "PodLoanPhoneController.pendingRevoke",
-                    "PodLoanPhoneController.committedIDs", "PodLoanPhoneController.loanStartedAt"] {
+                    "PodLoanPhoneController.committedIDs", "PodLoanPhoneController.loanStartedAt",
+                    "PodLoanPhoneController.deliveredAtTakeover", "PodLoanPhoneController.gapBooking",
+                    "PodLoanPhoneController.pendingForceAudit", "PodLoanPhoneController.deliveredAtGrant"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
+        urgentNotices = []
+        bookedGapDoses = []
+        deletedGapSyncs = []
+        gapDeleteSucceeds = true
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         try? FileManager.default.removeItem(at: base.appendingPathComponent("PodLoanStagedRecordsV2.json"))
 
@@ -89,7 +100,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             maximumBolus: 5.0)
     }
 
-    private func makeController() -> PodLoanPhoneController {
+    func makeController() -> PodLoanPhoneController {
         return PodLoanPhoneController(dependencies: .init(
             pumpManager: { [weak self] in self?.pump },
             settings: { [weak self] in self?.settings ?? LoopSettings() },
@@ -143,30 +154,44 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             openLoopForUncertainReconciliation: { [weak self] in
                 guard let self = self else { return }
                 self.lock.lock(); self.openLoopCalls += 1; self.lock.unlock()
+            },
+            issueUrgentNotice: { [weak self] title, _ in
+                guard let self = self else { return }
+                self.lock.lock(); self.urgentNotices.append(title); self.lock.unlock()
+            },
+            bookGapDose: { [weak self] entry, completion in
+                guard let self = self else { return completion(false) }
+                self.lock.lock(); self.bookedGapDoses.append(entry); self.lock.unlock()
+                completion(true)
+            },
+            deleteGapDose: { [weak self] sync, completion in
+                guard let self = self else { return completion(false) }
+                self.lock.lock(); self.deletedGapSyncs.append(sync); let ok = self.gapDeleteSucceeds; self.lock.unlock()
+                completion(ok)
             }
         ))
     }
 
-    private func diagMatching(_ needle: String) -> String? {
+    func diagMatching(_ needle: String) -> String? {
         lock.lock(); defer { lock.unlock() }
         return diags.first { $0.contains(needle) }
     }
 
     /// Wait until the controller's send fires once more.
-    private func expectSend() -> XCTestExpectation {
+    func expectSend() -> XCTestExpectation {
         let e = expectation(description: "message sent")
         lock.lock(); sentExpectations.append(e); lock.unlock()
         return e
     }
 
-    private func lastSent() -> LoanMessage? {
+    func lastSent() -> LoanMessage? {
         lock.lock(); defer { lock.unlock() }
         return sent.last
     }
 
     /// The ack fires the send expectation a hair before the controller's queue runs
     /// its post-commit transition; poll instead of racing it.
-    private func waitForState(_ controller: PodLoanPhoneController, _ state: PodLoanPhoneController.State) {
+    func waitForState(_ controller: PodLoanPhoneController, _ state: PodLoanPhoneController.State) {
         let e = expectation(description: "state \(state.rawValue)")
         DispatchQueue.global().async {
             while controller.state != state { usleep(20_000) }
@@ -176,7 +201,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     }
 
     /// #49/#66: carbs the phone actually committed, for the watch->phone round-trip tests.
-    private func carbEvent(seq: Int, grams: Double, at date: Date, absorption: TimeInterval) -> LoanEvent {
+    func carbEvent(seq: Int, grams: Double, at date: Date, absorption: TimeInterval) -> LoanEvent {
         LoanEvent(id: UUID(), seq: seq, provenance: .confirmed,
                   record: LoanDoseRecord(kind: .carb, startDate: date, amount: grams, absorptionTime: absorption),
                   loggedAt: date)
@@ -187,7 +212,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                   record: LoanDoseRecord(kind: .bolus, startDate: date, amount: units), loggedAt: date)
     }
 
-    private func tempEvent(seq: Int, rate: Double, start: Date, durationMinutes: Double) -> LoanEvent {
+    func tempEvent(seq: Int, rate: Double, start: Date, durationMinutes: Double) -> LoanEvent {
         LoanEvent(id: UUID(), seq: seq, provenance: .confirmed,
                   record: LoanDoseRecord(kind: .tempBasal, startDate: start,
                                          endDate: start.addingTimeInterval(durationMinutes * 60), unitsPerHour: rate),
@@ -196,7 +221,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
     /// Drives a controller into LOANED at epoch 1, returning the grant it sent.
     @discardableResult
-    private func establishLoan(_ controller: PodLoanPhoneController) -> LoanGrant {
+    func establishLoan(_ controller: PodLoanPhoneController) -> LoanGrant {
         let grantSent = expectSend()
         controller.handleIncoming(userInfo: try! LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
         wait(for: [grantSent], timeout: 5)
@@ -347,7 +372,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     }
 
     /// Let the controller's serial queue drain when the expectation is that NOTHING is sent.
-    private func settle(_ seconds: TimeInterval = 0.6) {
+    func settle(_ seconds: TimeInterval = 0.6) {
         let e = expectation(description: "queue settled")
         DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { e.fulfill() }
         wait(for: [e], timeout: seconds + 2)
@@ -526,7 +551,12 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         controller.forceReclaimToOwner(reason: "test")
         waitForState(controller, .owner)
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed on force")
-        XCTAssertEqual(pauseCalls.last, false, "dosing restored on force reclaim")
+        // R37: dosing is no longer restored AT the reclaim — it is held for the audit's verdict.
+        // With no odometer on the mock the session is UNVERIFIED, which resumes-the-latch and
+        // opens the loop instead of quietly closing it.
+        waitUntil(timeout: 5, "audit verdict") { self.pauseCalls.last == false }
+        XCTAssertEqual(openLoopCalls, 1, "unverifiable session opens the loop rather than resuming closed")
+        XCTAssertTrue(urgentNotices.contains { $0.contains("Unverified") })
     }
 
     /// #42: a re-Start while the pod is still returning from the previous reclaim must
@@ -752,6 +782,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
         waitForState(controller, .owner)
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "the pod comes straight back")
+        waitUntil(timeout: 5, "dosing resumed") { self.lock.lock(); defer { self.lock.unlock() }; return self.pauseCalls.last == false }
         XCTAssertEqual(pauseCalls.last, false, "and the phone resumes its own dosing")
     }
 
@@ -843,7 +874,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
         waitUntil(timeout: 5, "open-loop verdict") { self.diagMatching("R32 OPEN LOOP") != nil }
         XCTAssertEqual(openLoopCalls, 1, "automatic dosing must be stopped exactly once")
-        XCTAssertTrue(notices.contains("Loop Opened — Unexplained Insulin"), "the user must be told, loudly")
+        // R37 escalation: anything that OPENS the loop rides the urgent channel (banner +
+        // time-sensitive), never the quiet list.
+        XCTAssertTrue(urgentNotices.contains("Loop Open — Unexplained Insulin"), "the user must be told, loudly")
     }
 
     /// NEGATIVE beyond the bound: the books carry phantom IOB, so the loop runs CAUTIOUS. Opening
@@ -911,7 +944,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
         waitUntil(timeout: 5, "open-loop verdict") { self.diagMatching("R32 OPEN LOOP") != nil }
         XCTAssertEqual(openLoopCalls, 1, "+0.25 U is over the 0.20 U bound — the loop must open")
-        XCTAssertTrue(notices.contains("Loop Opened — Unexplained Insulin"))
+        XCTAssertTrue(urgentNotices.contains("Loop Open — Unexplained Insulin"))
     }
 
     /// Row 10: the same offer redelivered (lost ack) re-acks the same cursor and
@@ -1059,6 +1092,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertFalse(ack.stale)
         XCTAssertEqual(addedDoses.flatMap { $0 }.count, 0, "nothing to write")
         waitForState(controller, .owner)
+        // The unpause lands a few ms AFTER the state flip (notification-center XPC sits between
+        // them), so an instant read here races it — wait for the value, then assert the shape.
+        waitUntil(timeout: 5, "dosing resumed") { self.lock.lock(); defer { self.lock.unlock() }; return self.pauseCalls.contains(false) }
         XCTAssertEqual(pauseCalls, [true, false], "the loan still closes and dosing resumes")
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed on the empty close")
     }
@@ -1159,5 +1195,182 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
         XCTAssertFalse(controller.isPodTakeoverInProgress, "confirmed — the tile may now say 'Pod on Watch'")
         XCTAssertTrue(controller.podIsOnLoan)
+    }
+}
+
+// MARK: - R37: the dead-watch reclaim audit
+//
+// The scenario is the watch-battery-dies test: a loan is running, the watch delivers insulin it
+// never gets to stream, dies, and the user force-reclaims from the phone. Before R37 the phone
+// resumed CLOSED loop on books missing real insulin, with no odometer check at all (the salvage
+// line said so itself: "no odometer check — OBS-9").
+//
+// The audit is a SUBCATEGORY of R32(b), not a new protocol: same odometer bracket, same ±0.20
+// bounds, same sign asymmetry, same bank. What differs is the response — dosing is HELD from the
+// reclaim until the pod answers, the alerts escalate (the watch is dead; the phone is the only
+// device that can speak), and the unexplained insulin books as a placeholder bolus that the
+// watch's return retires.
+extension PodLoanPhoneControllerTests {
+
+    /// The watch delivered 2.5 U it never streamed, then died. The odometer knows. The phone
+    /// must open the loop, alert urgently, and book the gap under a deterministic identity.
+    func testForceReclaimWithUnstreamedInsulinOpensLoopAndBooksTheGap() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)   // takeoverComplete banks deliveredAtStart = 10
+
+        MockPumpManager.testOdometer = 12.5     // 2.5 U the phone has no records for
+
+        controller.forceReclaimToOwner(reason: "test: watch dead")
+        waitForState(controller, .owner)
+        waitUntil(timeout: 5, "force verdict") { self.diagMatching("reconcile[FORCE-RECLAIM]") != nil }
+        waitUntil(timeout: 5, "gap booked") { self.lock.lock(); defer { self.lock.unlock() }; return !self.bookedGapDoses.isEmpty }
+
+        lock.lock()
+        let opened = openLoopCalls
+        let urgent = urgentNotices
+        let booked = bookedGapDoses
+        lock.unlock()
+
+        XCTAssertEqual(opened, 1, "unexplained insulin beyond +0.20 U opens the loop")
+        XCTAssertTrue(urgent.contains { $0.contains("Unverified Insulin") },
+                      "the alert rides the URGENT channel — the watch is dead, the phone must get attention")
+        XCTAssertEqual(booked.count, 1, "the gap books as a placeholder bolus")
+        XCTAssertEqual(booked.first?.deliveredUnits ?? 0, 2.5, accuracy: 0.1, "booked amount = the odometer gap")
+        XCTAssertEqual(booked.first?.syncIdentifier, "PODLOAN-ODOGAP-e\(grant.epoch)",
+                       "deterministic identity, so the watch's return can retire it")
+        XCTAssertEqual(booked.first?.manuallyEntered, true,
+                       "manual-entry namespace — pump events overwrite syncIdentifier with hex(raw); manual doses keep it")
+    }
+
+    /// The clean case: the odometer matches the books. Dosing resumes, nothing books, no alarm.
+    func testForceReclaimWithMatchingOdometerResumesQuietly() throws {
+        let controller = makeController()
+        establishLoan(controller)
+
+        MockPumpManager.testOdometer = 10.05    // within the 0.20 bound of expected ≈ 0
+
+        controller.forceReclaimToOwner(reason: "test: watch dead, but books are complete")
+        waitForState(controller, .owner)
+        waitUntil(timeout: 5, "clean verdict") { self.diagMatching("R37 audit CLEAN") != nil }
+
+        lock.lock()
+        let opened = openLoopCalls
+        let booked = bookedGapDoses
+        let resumed = pauseCalls.contains(false)
+        lock.unlock()
+
+        XCTAssertEqual(opened, 0, "a clean audit does not open the loop")
+        XCTAssertTrue(booked.isEmpty, "nothing to book")
+        XCTAssertTrue(resumed, "automatic dosing resumes on the clean verdict")
+    }
+
+    /// The hold-open behavior, isolated: with the pod unreachable the verdict cannot land, and
+    /// dosing must NOT resume — the old unconditional resume-closed is precisely what let the
+    /// loop run on books missing a real bolus.
+    func testDosingIsHeldUntilTheAuditVerdictArrives() throws {
+        let controller = makeController()
+        establishLoan(controller)
+        MockPumpManager.testOdometer = 12.5
+
+        lock.lock(); connectionReady = false; lock.unlock()   // the pod is not back yet
+
+        controller.forceReclaimToOwner(reason: "test: watch dead, pod not yet reachable")
+        waitForState(controller, .owner)
+        settle()
+
+        lock.lock()
+        let resumedEarly = pauseCalls.contains(false)
+        lock.unlock()
+        XCTAssertFalse(resumedEarly, "no verdict, no resumption — 'cannot verify' must never become 'assume fine'")
+
+        lock.lock(); connectionReady = true; lock.unlock()    // the pod comes back
+        waitUntil(timeout: 8, "verdict after pod returns") { self.lock.lock(); defer { self.lock.unlock() }; return self.pauseCalls.contains(false) }
+        lock.lock(); let opened = openLoopCalls; lock.unlock()
+        XCTAssertEqual(opened, 1, "and the verdict still opens on the unexplained 2.5 U")
+    }
+
+    /// The dead watch is recharged; its journal re-offers the unstreamed events. The real
+    /// records commit with their true timestamps and the placeholder retires — replacement,
+    /// not partial offset.
+    func testReturningWatchRetiresTheGapBooking() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        MockPumpManager.testOdometer = 12.5
+
+        controller.forceReclaimToOwner(reason: "test: watch dead")
+        waitForState(controller, .owner)
+        waitUntil(timeout: 5, "gap booked") { self.lock.lock(); defer { self.lock.unlock() }; return !self.bookedGapDoses.isEmpty }
+
+        // The watch returns and offers the events it never streamed.
+        let realTail = tempEvent(seq: 1, rate: 5.0, start: Date().addingTimeInterval(-.minutes(30)), durationMinutes: 30)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                          events: [realTail], tombstones: [], recovered: true)).transportDictionary())
+
+        waitUntil(timeout: 5, "gap retired") { self.lock.lock(); defer { self.lock.unlock() }; return !self.deletedGapSyncs.isEmpty }
+
+        lock.lock()
+        let deleted = deletedGapSyncs
+        let recovered = notices.contains { $0.contains("Watch Records Recovered") }
+        lock.unlock()
+
+        XCTAssertEqual(deleted, ["PODLOAN-ODOGAP-e\(grant.epoch)"], "the placeholder retires by its deterministic identity")
+        XCTAssertTrue(recovered, "the user is told their numbers changed, and why")
+        waitUntil(timeout: 5, "state cleared") {
+            UserDefaults.standard.dictionary(forKey: "PodLoanPhoneController.gapBooking") == nil
+        }
+    }
+
+    /// A redelivered PRE-death offer carries only events the salvage already committed. It
+    /// explains nothing new, so it must not retire the placeholder — that would erase the gap
+    /// insulin while the real tail is still missing.
+    func testRedeliveredPreDeathOfferDoesNotRetireTheGap() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+
+        // The watch streams ONE event, then dies. The salvage commits it.
+        let streamed = tempEvent(seq: 1, rate: 2.0, start: Date().addingTimeInterval(-.minutes(20)), durationMinutes: 10)
+        controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
+            DoseRecordBatch(epoch: grant.epoch, events: [streamed], tombstones: [])).transportDictionary())
+        settle()
+
+        MockPumpManager.testOdometer = 13.0     // well beyond what the streamed temp explains
+
+        controller.forceReclaimToOwner(reason: "test: watch dead")
+        waitForState(controller, .owner)
+        waitUntil(timeout: 5, "gap booked") { self.lock.lock(); defer { self.lock.unlock() }; return !self.bookedGapDoses.isEmpty }
+
+        // WC redelivers the PRE-death offer — the same already-committed event, nothing new.
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                          events: [streamed], tombstones: [], recovered: true)).transportDictionary())
+        settle()
+
+        lock.lock(); let deleted = deletedGapSyncs; lock.unlock()
+        XCTAssertTrue(deleted.isEmpty, "an offer that commits no NEW doses explains nothing — the placeholder must stand")
+        XCTAssertNotNil(UserDefaults.standard.dictionary(forKey: "PodLoanPhoneController.gapBooking"))
+    }
+
+    /// A failed placeholder delete must be loud and keep its state — a silent failure here is a
+    /// double-counted IOB (placeholder + real records both in the books).
+    func testFailedGapDeleteKeepsStateAndSaysSo() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        MockPumpManager.testOdometer = 12.5
+
+        controller.forceReclaimToOwner(reason: "test: watch dead")
+        waitForState(controller, .owner)
+        waitUntil(timeout: 5, "gap booked") { self.lock.lock(); defer { self.lock.unlock() }; return !self.bookedGapDoses.isEmpty }
+
+        lock.lock(); gapDeleteSucceeds = false; lock.unlock()
+
+        let realTail = tempEvent(seq: 1, rate: 4.0, start: Date().addingTimeInterval(-.minutes(25)), durationMinutes: 25)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                          events: [realTail], tombstones: [], recovered: true)).transportDictionary())
+
+        waitUntil(timeout: 5, "failure logged") { self.diagMatching("gap DELETE FAILED") != nil }
+        XCTAssertNotNil(UserDefaults.standard.dictionary(forKey: "PodLoanPhoneController.gapBooking"),
+                        "state survives a failed delete, so the next offer retries it")
     }
 }

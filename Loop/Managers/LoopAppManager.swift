@@ -560,6 +560,11 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
              LoopNotificationCategory.remoteCarbsFailure.rawValue,
              LoopNotificationCategory.missedMeal.rawValue:
             completionHandler([.badge, .sound, .list, .banner])
+        // R37: the dead-watch reclaim alerts. The user is very likely staring AT the phone
+        // when these fire (they just force-reclaimed on it), which is exactly when a plain
+        // notification is invisible — foreground banner or nothing.
+        case let id where id.hasPrefix("podloan.urgent."):
+            completionHandler([.badge, .sound, .list, .banner])
         default:
             // For all others, banners are not to be displayed while in the foreground
             completionHandler([.badge, .sound, .list])
