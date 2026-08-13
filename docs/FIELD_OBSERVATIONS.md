@@ -788,3 +788,59 @@ The #113 channel instrumentation is live in the field (41 `RX … ch=` lines thi
 `RX grant ch=urgent` among them) — a future wedge now self-diagnoses. And the corrected seed
 line renders as intended: "124 seeded doses: 122 finished; 2 live — delivery tracked from
 pod state (#72)".
+
+## 2026-08-13 00:13 (build 273, e31) — #113 recurred, and the instrumentation caught it: a SECOND variant, self-healing
+
+The hand-back wedge came back on its first hard-exercise night after the channel-tagged RX
+instrumentation shipped — and the tags did their job. This is not the 2026-08-11 wedge.
+
+**Timeline.** Hand-back requested 00:13:05, phone reachable. Every urgent offer send failed
+LOUDLY — `urgent send FAILED (Unknown WatchConnectivity error.)` on each 15 s resend — and
+fell back to the queued path. **Zero `RX` lines of any kind on the watch from 00:13:05 to
+00:16:20**: no acks (urgent) and no diags (queued). Both directions were dead. At 00:15:10 the
+timeout fired with the new escalation: `** 8 offers, phone REACHABLE throughout, zero acks —
+transport wedge (#113) **`.
+
+Then at **00:16:26 the entire queued backlog flushed in one burst** — the phone's own diag
+echoes show it receiving all eight queued offers within ~500 ms and #118's coalescing eating
+the storm (`offer COALESCED behind the in-flight write` repeatedly, exactly as designed).
+Acks arrived `ch=urgent` at 00:16:44 — the urgent channel had recovered too. The second
+hand-back attempt drained 0 events (everything already committed under the first), and the
+loan CLOSED at 00:17:13. A stale duplicate ack after close was loudly ignored
+(`ack IGNORED ev=31 — ours ev=nil`), which is the guard added the same day doing its job.
+
+**So #113 is two distinct failures wearing the same "no acks" face:**
+
+| | Variant A (2026-08-11) | Variant B (this) |
+|---|---|---|
+| watch→phone | WORKED — phone logged and acked 8 offers | DEAD — urgent errored, queued sat undelivered |
+| phone→watch | dead until the WATCH app restarted | dead ~3.4 min, then the queue flushed |
+| urgent send errors on the watch | none observed | `Unknown WatchConnectivity error` on every attempt |
+| recovery | force-quit the watch app | **self-healed**, no restart |
+| insulin | none lost (idempotency) | none lost (idempotency + #118 coalescing) |
+
+**The discriminator for the wrist, next time:** if the watch's own urgent sends are ERRORING,
+it is variant B — wait a minute or two, the session is re-establishing, and "restart the watch
+app" is premature advice. If the sends succeed silently and no acks come back, it is variant A
+and the restart is the known recovery. The current escalation message fired 76 seconds before
+a self-heal here, so it should learn this distinction: track whether any urgent send in the
+current hand-back drain returned an error, and soften the advice when one did. Not yet built —
+held because a ship was staging at the time.
+
+Also in this log, smaller but real:
+
+- **#118 field-validated under storm conditions** — the coalescing absorbed an 8-offer
+  redelivery burst arriving within one second, plus the routine duplicate at e33.
+- **e33 reconcile was perfect at n=15**: `delivered=2.300 expected=2.300` on an 11-cycle loan,
+  provisional AND authoritative agreeing at −0.000. The bank now reads n=15, mean −0.030,
+  worst |0.200| — the numbers behind the R32(c) tightening.
+- **The `[cob-diff]` ⚠ fired with a 1-second-old snapshot** (`phoneCOB=13.9 g, watch 18.21 g,
+  Δ +4.28 g, snapshot age 1s`). The standing explanation for these warnings — snapshot age
+  over actively-absorbing carbs — cannot cover a 1 s old snapshot. 53 g of entries transferred
+  with identical identities, so the delta is MODEL disagreement (the phone's dynamic ICE
+  absorption vs the watch's read at seed time), not data loss. Still probably instrument
+  rather than defect, but the old explanation is now insufficient and this line is the
+  counterexample.
+- **Takeovers: 26.6 s / 9.1 s / 7.2 s.** The slow one started backgrounded with the keepalive
+  refused (HK error 14) and recovered at the first wrist-raise — the known self-heal, visible
+  end to end.
