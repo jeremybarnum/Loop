@@ -64,8 +64,11 @@ about explicitly. Never silently dropped.
   merely SLOW confirmation instead, cutting the phone's blind window from the 5-minute
   T1 to 20 s on its first loan in the field.
 
-- **OBS-8 — RESOLVED 2026-08-13. Two cosmetic defects, ZERO alert risk.** Original text
-  below. Jeremy: "that seems sloppy" — it was, and one of its two worries was unfounded.
+- **OBS-8 — RESOLVED 2026-08-13. One behavior change + one logging fix. ZERO alert risk,
+  ZERO dosing change.** Original text below. Jeremy: "that seems sloppy" — it was, and one
+  of its two worries was unfounded. Calling both fixes "cosmetic" (as this entry first did)
+  was wrong: skipping the idle cycle changes what the watch DOES, so it is written up as a
+  deliberate divergence, not a cosmetic tidy-up.
 
   THE WATCHDOG WORRY IS UNFOUNDED, and this is the part worth keeping. `watchdog=HELD`
   reads as "the dead-man is armed and nobody is refreshing it", i.e. a spurious
@@ -82,8 +85,22 @@ about explicitly. Never silently dropped.
      and says so ONCE per transition. This DELIBERATELY diverges from stock (LoopDataManager
      :571 loops without a pump): on the phone, no pump is an error state worth surfacing every
      cycle; on the wrist between loans it is the normal resting state, because the phone owns
-     the pod and is looping. Glucose ingestion and the glance are untouched — they read the
-     stores directly.
+     the pod and is looping.
+
+     VERIFIED, not assumed — the first draft of this entry asserted it, and the comment on
+     `refreshPredictionForGlance` says the glance reads CACHED IOB/eventual that only a
+     completed cycle refreshes, which looked like a direct contradiction. It is not:
+     (a) `GlanceController.idleState` builds the idle screen entirely from the phone-fed
+     `WatchContext` — BG, trend, "phone loop active" — and sets no eventual and no IOB, so
+     that cached-IOB warning applies to the ACTIVE builder, not the idle one;
+     (b) no live-loan window has a nil pod handle — the only two `loopManager.pumpManager =
+     nil` sites are drain-complete ("loop dosing stops now") and revoke, both AFTER dosing
+     has stopped, so the only cycles skipped are idle ones;
+     (c) the next loan re-primes explicitly (grant sets `pumpManager` then calls
+     `checkPumpDataAndLoop`; takeover calls `refreshPredictionForGlance`), so nothing
+     depended on idle cycles keeping state warm.
+     What DOES freeze between loans is the DOSING panel's cached IOB — correct, since the
+     watch is not dosing.
   2. `computed=FAILED` was a lie. `pumpManagerUnconnected` is raised by the ENACT stage but is
      not wrapped as `.enactFailed`, so the verdict logic classified an enact refusal as a
      compute failure — a cycle whose prediction was perfect printed FAILED. The verdict now
