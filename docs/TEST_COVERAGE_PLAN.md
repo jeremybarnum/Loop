@@ -218,13 +218,22 @@ log-replay idea at 5% of the cost.
 - The suite runs green before every archive (item 1 enforces this).
 
 ## What the net does NOT cover — and the rule that follows
-Everything in LoopTests runs the watch files in an iOS test host. It tests logic, not the
-watchOS runtime: app suspension, keepalive survival, pre-scheduled notification delivery,
-real WCSession semantics, and all radio timing remain FIELD-ONLY (the overnight of 2026-08-09
-proved the dead-man there better than any test could). Consequence for the refactor:
-**logic may be rewritten under the net; code that touches the watchOS runtime — keepalive,
-notification arming, WCSession activation — is MOVED, not rewritten**, because nothing below
-the wrist can detect a break in it.
+
+**Updated 2026-08-13: a watchOS test target now exists, and this section was written before it.**
+`WatchAppTests` runs in the watch extension's own host on a watchOS simulator, so some of what
+was field-only is now reachable — notably notification ARMING, which `WatchdogArmingTests` covers
+for all three dead-man alerts (intervals, replace-not-stack, independent identifiers). The
+scheduling seam plus `LogSink.shared.handler` also make the loan controller's timers and its own
+log assertable. See REFACTOR_TIMERS.md.
+
+What remains genuinely FIELD-ONLY: app suspension, keepalive survival, notification DELIVERY (as
+opposed to arming), real WCSession semantics against a live phone, and all radio timing. The
+overnight of 2026-08-09 proved the dead-man in the field better than any test could, and that is
+still true of delivery.
+
+Consequence for the refactor, revised: **logic may be rewritten under the net. Code that touches
+the watchOS runtime — keepalive, WCSession activation, notification delivery — is MOVED, not
+rewritten.** Notification arming has moved out of that category: it is now covered.
 
 ## Cut, deliberately (do not resurrect without a new reason)
 - **Log-replay infrastructure** — input-reconstruction from prose logs is real machinery that

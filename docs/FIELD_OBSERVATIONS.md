@@ -1120,3 +1120,42 @@ Method note for next time: the aggregate that produced this was nearly a lie too
 grepped each rotated log file for its first takeover and reported twenty rows — twenty copies of
 the same epoch, because the logs are rotating snapshots of one stream. Deduplicating by EPOCH is
 what turned it into evidence.
+
+## 2026-08-13 03:25 (build 275, e38) — the post-dose-release double-arm is EVERY steady-state cycle
+
+The first loan with timer instrumentation, still running. Nine `post-dose-release` armings so far,
+and the pattern is not occasional:
+
+```
+02:48:19  armed            02:56:55  armed        03:06:49  armed
+02:48:53  armed            02:56:57  armed  <--   03:06:52  armed  <--
+02:51:52  armed            03:01:49  armed        03:11:53  armed
+                           03:01:52  armed  <--   03:11:55  armed  <--
+```
+
+Three singles while the loan settles, then **six consecutive cycles that each arm TWO releases
+about 2.4 s apart, and fire both**. It is not a coincidence of timing — it is what steady state
+looks like. The loop runs every five minutes, so every cycle finds the pump data ~5 min stale,
+reclaims once to refresh status, then reclaims again to dose. Two reclaims, two calls to
+`releasePodAfterDose`, two independent 12 s timers, because that function was the only one-shot
+timer in the file with no cancel-before-rearm.
+
+Both fire. The second is a no-op only because the first already released the link and
+`isConnectionReleased` bails it out — visible in the log as a second `fired` with no matching
+`E4: pod re-released` line after it. So the redundant release has been running once per cycle,
+every cycle, for as long as E4 has existed, and was invisible until the timers started logging.
+
+The hazard was never the second release itself; it is that a reclaim landing inside that ~2 s gap
+would leave both of the stale timer's guards (`phase == .active`, `isConnectionReleased == false`)
+satisfied, and it would drop the BLE link out from under a live dose. Once per cycle is a lot of
+chances.
+
+Fixed for the next build by cancel-before-rearm; the epoch scoping added the same night does NOT
+cover it, since both timers belong to epoch 38.
+
+Also caught, and only visible because of the lateness field: `03:12:06 fired post-dose-release
++12s late 1.0s`. One second, harmless, but it is the first measured lateness of the run and the
+signature to watch — a deferred release firing minutes late is what poisons the BLE stack.
+
+Loan health meanwhile: 8 cycles, all `computed=ok enact=ok`, zero ledger refusals, takeover 8.5 s
+on 2 reads.
