@@ -540,21 +540,15 @@ final class WatchLoopManager {
 
     // MARK: - Glance mirror (main must never wait on dataAccessQueue)
 
-    /// The glance used to read `glanceData()` — a `dataAccessQueue.sync` — from MAIN, on a 2s
-    /// timer. That queue is held for the whole of a dose cycle, and `enactRecommendedAutomaticDose`
-    /// polls the radio arbiter for up to 15s (:2527) before giving up. So any cycle that had to
-    /// wait out the G7 handshake froze the entire UI for as long as it waited.
+    /// The glance must NEVER read `dataAccessQueue` from main. That queue is held for the whole
+    /// of a dose cycle, and `enactRecommendedAutomaticDose` polls the radio arbiter for up to 15 s
+    /// (:2527) before giving up — so a `dataAccessQueue.sync` on a 2 s UI timer freezes the entire
+    /// interface for as long as any cycle waits out the G7 handshake, ~16 s in the worst measured
+    /// case. Almost all of that is the radio wait, not compute.
     ///
-    /// Measured, build 237: carbs saved 23:41:47.583, compute done 63ms later, then
-    /// `enact DEFERRED — G7 still owns the radio after 15s` at 23:42:04.261 and the glance's next
-    /// render 0.3s after that — main parked ~16.6s. The identical stall is in the build 236 log
-    /// (18:44:05 → 18:44:20, 15.0s), so this is not a regression from the #47 work: that ran 9.4s
-    /// BEFORE the tap and cost 63ms. 99.6% of the freeze is the radio wait.
-    ///
-    /// Same remedy PodLoanWatchController already applies to the loan/pump queue (ba92c3cb,
-    /// `refreshDebugSnapshot`/`mirroredDebugSnapshot`): publish a mirror from the queue, read the
-    /// mirror from main, never block. That fix left `dataAccessQueue` untouched — this is the
-    /// surviving edge of the same defect, and the fourth field report of the class.
+    /// Same remedy PodLoanWatchController applies to the loan/pump queue
+    /// (`refreshDebugSnapshot`/`mirroredDebugSnapshot`): publish a mirror FROM the queue, read the
+    /// mirror ON main, never block.
     private let glanceMirrorLock = NSLock()
     private var _glanceMirror: GlanceData?
     private var _glanceRefreshPending = false
@@ -1252,10 +1246,9 @@ final class WatchLoopManager {
         }
     }
 
-    /// #101 phase 2 acquisition gate (census build 263, 2026-08-10). The fragile phase is
-    /// the G7 CONNECT/AUTH ESTABLISHMENT, ~1.5s straddling the grid point — an established
-    /// link coexists with pod traffic (23:36/23:41/23:46: backfill and a live read landed
-    /// DURING pod handshake), and #81's forensics say the same from the pod's side. So the
+    /// The fragile phase is G7 CONNECT/AUTH ESTABLISHMENT, ~1.5 s straddling the grid point. An
+    /// ESTABLISHED link coexists with pod traffic perfectly well — backfill and live reads land
+    /// during pod handshakes — and the #81 forensics say the same from the pod's side. So the
     /// gate keys on live acquisition state, not the clock:
     ///
     /// - Direct G7 fresh (< 6.5 min): the read that triggered this cycle already completed —
@@ -3297,22 +3290,19 @@ extension WatchLoopManager: CGMManagerDelegate {
         let raw = manager.rawState
         let sensorID = raw["sensorID"] as? String
 
-        // #104: a nil sensorID means "unknown", NOT "forget".
+        // A nil sensorID means "unknown", NOT "forget".
         //
-        // Stock decides a session ended when the sensor disconnects while auth is still pending
+        // Stock treats a disconnect while auth is still pending as end-of-session
         // (G7Sensor.swift:227) and calls scanForNewSensor(), nilling the identity. On the WATCH
-        // that fires as a matter of course after every loan: the loan releases keepalive, the app
-        // backgrounds, it can no longer hold a connection long enough to authenticate, the sensor
-        // drops it, and stock reads that as end-of-session. Field 2026-08-11, three for three
-        // (06:56:57, 10:16:59, 10:47:12), each ~2 min after the loan closed, on a sensor 8 hours
-        // into a 10-day life. Persisting that nil threw away the adoption we had just shipped two
-        // builds to keep — and after the 10:47 one the watch spent 83 minutes failing
-        // authentication with ZERO direct reads, so a forgotten identity is not merely a slow
-        // re-acquisition, it can leave the app unable to re-acquire at all.
+        // that fires as a matter of course after every loan: keepalive is released, the app
+        // backgrounds, it can no longer hold a connection long enough to authenticate, and the
+        // sensor drops it — roughly two minutes after every loan closes, mid-sensor-life.
         //
-        // So: keep the last known-good identity rather than overwrite it with nothing. A genuine
-        // new sensor still lands, because it arrives with its OWN non-nil sensorID and takes this
-        // branch normally. The escape for a sensor that really is finished is its age — past the
+        // Persisting that nil is not merely a slow re-acquisition: a watch that has forgotten the
+        // identity can fail authentication indefinitely and take ZERO direct reads. So keep the
+        // last known-good identity rather than overwrite it with nothing. A genuine new sensor
+        // still lands, because it arrives with its OWN non-nil sensorID and takes this branch
+        // normally, and the escape for a sensor that really is finished is its age — past the
         // 10-day life plus a margin, a nil is honoured and the identity clears. (The bench
         // "Forget Sensor" button remains the manual escape for a mid-life sensor change.)
         if sensorID == nil,

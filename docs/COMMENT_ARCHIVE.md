@@ -365,3 +365,23 @@ changes that only co-occurred on 2026-07-30, the loop trigger moving to the phon
 at handshake END), and #54 making scan-adopt primary (a one-shot scan is contention-sensitive
 where the old queued pending-connect with its read-6 escalation was not). Jul 25-26, live sensor,
 old paths: 59/59.
+
+## Third batch — WatchLoopManager
+
+**The glance mirror.** Measured on build 237: carbs saved 23:41:47.583, compute done 63 ms
+later, then `enact DEFERRED — G7 still owns the radio after 15s` at 23:42:04.261 and the glance's
+next render 0.3 s after that — main parked ~16.6 s. The identical stall is in the build 236 log
+(18:44:05 → 18:44:20, 15.0 s), so it was NOT a regression from the #47 work, which ran 9.4 s
+before the tap and cost 63 ms. 99.6% of the freeze was the radio wait. This was the fourth field
+report of the block-main-on-a-worker-queue class; the same remedy had already been applied to the
+loan/pump queue in ba92c3cb.
+
+**#104, the nil sensorID.** Field 2026-08-11, three for three (06:56:57, 10:16:59, 10:47:12),
+each ~2 min after a loan closed, on a sensor 8 hours into a 10-day life. Persisting the nil threw
+away the adoption two builds had just shipped to keep; after the 10:47 occurrence the watch spent
+83 minutes failing authentication with ZERO direct reads.
+
+**#101 phase 2 acquisition gate.** Census build 263, 2026-08-10. The coexistence evidence was
+23:36/23:41/23:46 — backfill and a live read landing DURING a pod handshake. The gate's tuning
+constants and the ad-vs-INGEST timing that justifies the 2.5 s minimum hold stay in the code:
+they are the non-obvious part, not the narrative.
