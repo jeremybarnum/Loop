@@ -50,7 +50,7 @@ extension DeviceDataManager {
             // the pod. This branch MUST precede the one below: the grant releases the pod's BLE
             // immediately, so `isConnectionReleased` is already true here and would otherwise
             // claim "Pod on Watch" for a handover still in flight.
-            return DeviceDataManager.podTakingOverStatusHighlight
+            return DeviceDataManager.podHandingOverStatusHighlight
         } else if (pumpManager as? PumpConnectionLendable)?.isConnectionReleased == true || isPodLoanedToWatch {
             // PODLOAN (ported from the crude branch's "instant status update"): while
             // the pod is loaned to the watch, keying on the persisted release flag
@@ -72,15 +72,22 @@ extension DeviceDataManager {
         var state: DeviceStatusHighlightState = .normalPump
     }
 
-    static var podTakingOverStatusHighlight: PodTakingOverStatusHighlight {
-        return PodTakingOverStatusHighlight()
+    static var podHandingOverStatusHighlight: PodHandingOverStatusHighlight {
+        return PodHandingOverStatusHighlight()
     }
 
     /// The outbound twin of `PodReclaimingStatusHighlight` — same in-transit idiom, same symbol,
     /// opposite direction. Requires `.takeoverComplete` on the immediate channel (#109): on the
     /// queued channel this label would outlive the takeover by minutes and read as a hang.
-    struct PodTakingOverStatusHighlight: DeviceStatusHighlight {
-        var localizedMessage: String = NSLocalizedString("Taking over…", comment: "Title text for the pump tile while the watch is taking over the pod")
+    ///
+    /// "HANDING over", deliberately, while the watch says "taking over" for the same instant
+    /// (Jeremy, 2026-08-12, after field-validating the two-state pill). Each device narrates the
+    /// handover from its own side, so a user glancing between them reads one event from two
+    /// viewpoints rather than the same words twice. The state predicates keep the protocol's
+    /// vocabulary (`isPodTakeoverInProgress`) — it is one takeover either way; only the label is
+    /// perspectival.
+    struct PodHandingOverStatusHighlight: DeviceStatusHighlight {
+        var localizedMessage: String = NSLocalizedString("Handing over…", comment: "Title text for the pump tile while the pod is being handed over to the watch")
         var imageName: String = "arrow.triangle.2.circlepath"
         var state: DeviceStatusHighlightState = .normalPump
     }

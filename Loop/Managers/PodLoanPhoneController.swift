@@ -518,7 +518,7 @@ final class PodLoanPhoneController {
     /// Derived — what v1 kept as the volatile `podLoanedToWatch` flag (:480/:697).
     /// #92/#109: the grant is out but the watch has NOT confirmed it has the pod. Distinct from
     /// `podIsOnLoan`, which is true here too — this is the narrower "in transit, outbound" window
-    /// the tile shows as "Taking over…". Ends when `.takeoverComplete` arrives (state -> .loaned)
+    /// the tile shows as "Handing over…". Ends when `.takeoverComplete` arrives (state -> .loaned)
     /// or the loan is abandoned.
     var isPodTakeoverInProgress: Bool {
         return state == .grantOffered

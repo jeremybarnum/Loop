@@ -856,7 +856,7 @@ extension DeviceDataManager {
         return watchManager?.podLoanController.isPodLoanedOut ?? false
     }
     /// #92: the outbound half of the handover — grant sent, takeover not yet confirmed. The
-    /// pump tile shows "Taking over…" here rather than claiming "Pod on Watch" for a handover
+    /// pump tile shows "Handing over…" here rather than claiming "Pod on Watch" for a handover
     /// that has not happened. Mirrors `isPodLoanReclaiming` on the return journey.
     var isPodTakingOver: Bool {
         return watchManager?.podLoanController.isPodTakeoverInProgress ?? false
