@@ -846,6 +846,32 @@ extension LoopDataManager {
         }
     }
 
+    /// A back-dated batch of doses just landed behind the counteraction-effect frontier — a watch
+    /// hand-back commit, the e44 backfill upsert, or an R37 gap-placeholder retirement.
+    ///
+    /// `insulinCounteractionEffects` is an append-only memo (see the frontier at `update(for:)`),
+    /// so a dose written into its past leaves every bin over the rewritten window computed against
+    /// an insulin-effect curve that no longer exists: COB is then attributed from velocities that
+    /// still contain the insulin's effect, and over-counts until relaunch. Field-proven on the
+    /// hand-back, where 30-minute rewrites are routine rather than rare.
+    ///
+    /// The fix is stock's own precedent, `addReservoirValue` above: prune the memo back to the
+    /// rewrite point and let the next `update()` regenerate those bins against the corrected
+    /// curve. The +10 min keeps bins the rewrite cannot have invalidated — a dose cannot move
+    /// glucose inside the model-delay window. The didSet on `insulinCounteractionEffects` nils
+    /// `carbEffect`/`carbsOnBoard`, so dynamic carb absorption re-attributes over the regenerated
+    /// velocities, exactly as after a reservoir rewrite.
+    func insulinHistoryRewritten(startingAt earliestRewrittenDoseStart: Date) {
+        dataAccessQueue.async {
+            self.clearCachedInsulinEffects()
+
+            // Prune back any counteraction effects for recomputation, after the effect delay
+            self.insulinCounteractionEffects = self.insulinCounteractionEffects.filterDateRange(nil, earliestRewrittenDoseStart.addingTimeInterval(.minutes(10)))
+
+            self.notify(forChange: .insulin)
+        }
+    }
+
     func storeManualBolusDosingDecision(_ bolusDosingDecision: BolusDosingDecision, withDate date: Date) {
         let dosingDecision = StoredDosingDecision(date: date,
                                                   reason: bolusDosingDecision.reason.rawValue,

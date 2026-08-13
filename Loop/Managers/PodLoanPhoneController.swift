@@ -115,6 +115,14 @@ final class PodLoanPhoneController {
         /// site in `handleHandbackOffer` for the mechanism. Default no-op keeps the state-machine
         /// tests constructing unchanged.
         var backfillDoses: (_ doses: [DoseEntry], _ completion: @escaping (Error?) -> Void) -> Void = { _, done in done(nil) }
+        /// A2: doses just landed BEHIND the phone's counteraction-effect frontier. That memo is
+        /// append-only, so the bins covering the loan window still carry the insulin's effect as
+        /// if it were unexplained glucose movement, and dynamic carb absorption over-attributes
+        /// COB from them until the app relaunches. Prune the memo from the earliest rewritten
+        /// dose start and recompute — the same idiom `addReservoirValue` has always used for a
+        /// reservoir-inferred dose. Default no-op keeps the state-machine tests constructing
+        /// unchanged.
+        var insulinHistoryRewritten: (_ earliestDoseStart: Date) -> Void = { _ in }
         var now: () -> Date = { Date() }
     }
 
@@ -630,6 +638,13 @@ final class PodLoanPhoneController {
             self.queue.async {
                 if ok {
                     UserDefaults.standard.removeObject(forKey: Keys.gapBooking)
+                    // A2: a delete is an insulin-history rewrite like any other — the placeholder
+                    // was booked AT the reclaim, which by the time this launch-retry runs is well
+                    // behind the frontier. Without the prune the counteraction memo keeps the
+                    // deleted units baked into its bins.
+                    if let bookedAt = (gap["bookedAt"] as? TimeInterval).map(Date.init(timeIntervalSince1970:)) {
+                        self.deps.insulinHistoryRewritten(bookedAt)
+                    }
                     self.handbackDiag(gapEpoch, String(format: "R37 gap RETIRED on launch retry — %.2f U placeholder cleared", booked))
                 } else {
                     self.handbackDiag(gapEpoch, String(format: "** R37 gap DELETE FAILED AGAIN at launch — %.2f U placeholder still stands; will retry next launch or the next matching offer **", booked))
@@ -669,6 +684,12 @@ final class PodLoanPhoneController {
             self.queue.async {
                 if ok {
                     UserDefaults.standard.removeObject(forKey: Keys.gapBooking)
+                    // A2: the placeholder is gone from the books, so the counteraction bins that
+                    // were computed with it in the insulin curve are wrong from `bookedAt` on.
+                    // Same prune as the doses that just replaced it — the pair is one rewrite.
+                    if let bookedAt = (gap["bookedAt"] as? TimeInterval).map(Date.init(timeIntervalSince1970:)) {
+                        self.deps.insulinHistoryRewritten(bookedAt)
+                    }
                     self.handbackDiag(gapEpoch, String(format:
                         "R37 gap RETIRED — the watch returned with %d real dose(s): %.2f U bolus + %d rate record(s) (%.2f U gross programmed, pre-truncation) and %d carb(s); the %.2f U estimate is replaced by actual timing",
                         dosesJustCommitted.count, bolusUnits, rateCount, rateGross, carbsJustCommitted, booked))
@@ -1611,6 +1632,13 @@ final class PodLoanPhoneController {
                 }
                 self.hasWarnedRecordsNotSaved = false   // recovered — a future failure is news again
 
+                // A2: the earliest dose the e44 backfill restated, filled in by the branch below
+                // and read back inside finishCommit. Declared ahead of the closure because the
+                // backfill is decided after it — the prune must span BOTH writes, and the
+                // backfill routinely reaches further back than the pump-event batch (it restates
+                // the whole loan window, including temps the boundary dropped).
+                var backfillEarliestStart: Date? = nil
+
                 // Everything downstream of the store writes — carbs, overrides, the ack, the gap
                 // retire — held in one closure so the e44 backfill below can fail the whole commit
                 // the way a failed pump-event write already does: nothing committed past the
@@ -1694,6 +1722,16 @@ final class PodLoanPhoneController {
                         } else {
                             self.sendMessage(.handbackAck(HandbackAck(epoch: offer.epoch, committedCursor: newCursor, stale: true)))
                         }
+                        // A2: every dose this commit just wrote sits behind the phone's counteraction
+                        // frontier — that is what a loan window IS — so the memo must be pruned back
+                        // to the earliest of them or COB keeps attributing the loan's insulin as
+                        // unexplained glucose movement. Outside the staleness gate for the same
+                        // reason the retire below is: a stale offer still writes its doses, so it
+                        // still rewrites insulin history. Both writes count — the pump-event batch
+                        // (`sane`) and the e44 backfill.
+                        if let earliest = (sane.map(\.startDate) + (backfillEarliestStart.map { [$0] } ?? [])).min() {
+                            self.deps.insulinHistoryRewritten(earliest)
+                        }
                         // R37: outside the staleness gate ON PURPOSE — a watch that comes back after a
                         // NEW loan has started re-offers its old epoch as stale, and stale offers still
                         // write their doses ("historical truth" above). If those doses explain a gap
@@ -1742,6 +1780,7 @@ final class PodLoanPhoneController {
                     finishCommit(nil)
                 } else {
                     self.handbackDiag(offer.epoch, "backfill \(backfill.count) loan-window dose(s) by store identity (e44 boundary)")
+                    backfillEarliestStart = backfill.map(\.startDate).min()   // A2: read by finishCommit
                     self.deps.backfillDoses(backfill, finishCommit)
                 }
             }
@@ -1997,6 +2036,12 @@ final class PodLoanPhoneController {
                 events.count, outcome.doses.count, bolusUnits, outcome.doses.count - boluses.count,
                 rateGross, outcome.carbs.count, outcome.deletedCarbs.count))
             deps.addPumpEvents(newPumpEvents(from: outcome.doses), deps.now()) { _ in }
+            // A2: the salvage is the fourth back-dated dose write on this file's books — these
+            // doses span the loan from `loanStart`, entirely behind the frontier. `bookGapDose`
+            // below needs no prune: its placeholder is timestamped at reclaim-now, ahead of it.
+            if let earliest = outcome.doses.map(\.startDate).min() {
+                deps.insulinHistoryRewritten(earliest)
+            }
             for carb in outcome.carbs { deps.addCarb(carb.entry, carb.eventID.uuidString) { _ in } }
             for gone in outcome.deletedCarbs {   // R30 (#89)
                 deps.deleteCarb(gone) { error in

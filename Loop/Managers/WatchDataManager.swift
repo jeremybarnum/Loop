@@ -341,6 +341,23 @@ final class WatchDataManager: NSObject {
                         completion(error)
                     }
                 }
+            },
+            // A2: the writes above all land BEHIND the loop's counteraction-effect frontier, and
+            // that memo is append-only — its bins over the loan window were computed against an
+            // insulin curve that did not yet contain these doses, so dynamic carb absorption goes
+            // on attributing the watch's insulin as unexplained glucose movement. Worse for the
+            // e44 path, which posts no store notification at all (syncDoseEntries reaches
+            // InsulinDeliveryStore, whose doseEntriesDidChange nothing in this app observes), so
+            // without this hook a backfill invalidates nothing whatsoever.
+            insulinHistoryRewritten: { [weak self] earliestStart in
+                guard let self = self else { return }
+                self.deviceManager.loopManager.insulinHistoryRewritten(startingAt: earliestStart)
+                // The memo refills lazily, at the next update(). If the status screen is not
+                // frontmost nothing calls getLoopState, so COB and IOB would stay wrong on the
+                // books for up to a full 5-minute cycle after the hand-back that corrected them.
+                // Nudge one update. Same serial dataAccessQueue as the prune, so it is ordered
+                // after it by construction.
+                self.deviceManager.loopManager.getLoopState { _, _ in }
             }
         ))
     }()
