@@ -990,3 +990,60 @@ Smaller, in the same window:
   01:56:47, during e35's takeover, following a `[CONFIG] configure FAILED (discoverServices
   timeout)`. Recovered 7 s later. Cosmetic if the OBS-8 verdict-classification fix is not in
   274; worth confirming it does not survive into the next build.
+
+## 2026-08-13 02:40 — CORRECTION: the slow takeover is not a polling problem, and phase 5 is cancelled
+
+Earlier tonight I wrote that e34's 56.9 s takeover was "the same fixed-cadence-polling-before-
+discovery shape ... reads fire on an 8 s ladder while the pod is still `no-peripheral`, and the
+event is what actually ends the wait." The first half of that is wrong, and it was about to
+justify refactoring the most safety-critical path in the app.
+
+**The takeover has been event-driven since #86.** `takeoverRetryAction` runs the next read the
+moment `podLoanOnSessionEstablished` fires; the 8 s timer is a labelled backstop, not a
+metronome. The field data says it works:
+
+```
+e37   7.2s  2 reads  driver=event      e34  56.9s  8 reads  driver=event
+e36   6.8s  2 reads  driver=event      e33   7.2s  2 reads  driver=event
+e35  12.5s  2 reads  driver=backstop   e32   9.1s  2 reads  driver=event
+                                       e31  26.6s  4 reads  driver=event
+```
+
+Five of seven finish in ≤12.5 s and six of seven end on the event. Slow takeover is a 2-of-7
+outlier, not the shape of the thing.
+
+**What e34's 49 s actually was.** The scan was running the entire time:
+
+```
+01:52:36.300  [SCAN] start — service 0x4024 · reason takeover(0x17358635)
+              ... 49 s, no advertisement ...
+01:53:25.858  [SCAN] ad seen: pod 0x17358635 rssi -73 — MATCHES takeover target
+01:53:25.867  Pod failed to connect — CBErrorDomain Code=11 "maximum number of connections"
+              held[devices=1(conn 0/ing 0/dis 1/other 0) auto=1]
+01:53:27.140  Pod connected
+```
+
+The wait was for the POD to advertise. Reads landing at +9.7/+18.5/+26.7/+34.7/+42.7 s were
+observing "still nothing" against a scan that had been live since +0.3 s. A faster ladder would
+have produced more `no-peripheral` lines and not one second of improvement. Then the first
+advertisement hit `CBErrorDomain#11` — the already-recorded BLE-slot exhaustion where our own
+pending connect holds the slot — costing another 1.3 s.
+
+So the two outliers have two different causes, neither of them cadence:
+- **e34 (56.9 s)** — pod advertisement timing, which is the pod's clock, plus CBError#11.
+- **e31 (26.6 s)** — the only one with a local cause: `keepalive FAILED` at reads 1-2 with the
+  app backgrounded, and discovery made no progress until the workout session came up at ~17 s.
+  Worth a look on its own terms; it is NOT what happened in e34, which was foreground and
+  keepalive-clean throughout (the hypothesis was tested against e34 and refuted).
+
+**Phase 5 is cancelled as a refactor.** There is no cadence bug to fix, the mechanism is
+already the one a refactor would have introduced, and touching it would spend risk on the
+takeover path against a premise the logs contradict. It also runs straight into two standing
+rulings — never shorten connect budgets below one ad window, and G7 connectivity outranks
+takeover reliability. The remaining real items are CBError#11 (known, unfixed, tracked
+separately) and e31's keepalive start-up gap.
+
+Method note for next time: the aggregate that produced this was nearly a lie too. A first pass
+grepped each rotated log file for its first takeover and reported twenty rows — twenty copies of
+the same epoch, because the logs are rotating snapshots of one stream. Deduplicating by EPOCH is
+what turned it into evidence.
