@@ -746,6 +746,79 @@ gone, as ruled: `PodLoanPhoneController` :113 ("no odometer insulin is injected"
 builds its reconciler input with `odometer: nil` (:1521) under the comment "reconcile staged
 events records-only (no odometer)".
 
+**RESOLVED 2026-08-13 by a clean re-run (e37): TIMELINE (b). There is NO bolus injection — the
+phone does not get the dose until the watch comes back.** Jeremy re-ran the test controlling the
+overlap ("I must have done something wrong before... As you expected, there is no bolus
+injection"). The first run must have had a window where both devices were awake; this one does
+not, and it is unambiguous in the logs.
+
+THE PROOF, the exact line called for above:
+
+    watch 02:29:03.146  MANUAL BOLUS 1.05 U — enacting on the watch pump
+    watch 02:29:04.397  [handback] stream: 2 event(s)      <- enqueued, phone off, cannot land
+    watch 02:29:04.519  [glance] RENDER iob=4.95           <- was 4.11 before the bolus
+    ...watch dark from ~02:35:37...
+    watch 02:36:33.712  REVOKED — phone reclaimed the pod, draining records
+    watch 02:36:33.716  [phone] reclaim VERIFIED — pod round-trip complete +44s
+    phone 02:36:34.024  e37 offer RX ev=2 released=final state=owner
+    phone 02:36:34.046  e37 write START 1 dose(s) (final=true)      <- THE BOLUS, ARRIVING NOW
+
+`state=owner` with the FIRST offer writing `1 dose(s)` is decisive: the phone had already
+force-reclaimed and was looping, and the bolus reached it only when the watch was powered back
+on. Under timeline (a) this line would have read `0 dose(s)`, exactly as the 02:17:31 excerpt
+from the earlier run did.
+
+The exposure window here was about 45 seconds — the relayed `reclaim VERIFIED +44s` at
+02:36:33.716 puts the phone's reclaim at roughly 02:35:49, and the dose landed at 02:36:34 —
+because Jeremy powered the watch straight back on. THAT IS THE ARTIFACT OF THE TEST, NOT THE
+BOUND. In the scenario this actually models — a watch battery dying mid-session, which Jeremy
+rightly calls "a pretty common situation" — the window runs until the watch is charged and
+booted. Hours, not seconds, with the phone closed-loop dosing the whole time while
+under-counting IOB by the full undelivered amount.
+
+Second field judgement from the same run: **the warning is too quiet.** The "Sport Mode Reset"
+notice is an ordinary notification, easily missed — he found it in Notification Center after the
+fact, four minutes old, and only because he went looking.
+
+=== TOMORROW'S AGENDA (Jeremy, deferred deliberately — do not build tonight) ===
+
+1. LOUDER, MORE VISIBLE WARNING for this exact scenario: forced reclaim + no streaming + watch
+   unreachable. Ordinary `issueNotice` is not enough. Candidates: the `.timeSensitive` treatment
+   LoopStallWatchdog already uses, a persistent on-screen state rather than a one-shot banner,
+   and/or letting R32's open-loop carry the message (an open loop is self-announcing).
+
+2. FORCED INJECTION — Jeremy: "I'm pretty tempted to simply inject the odometer gap as a recent
+   bolus in this scenario. It's conservative and correct."
+
+   IMPORTANT PRECEDENT, and it favours him: this is not a new idea proposed against a standing
+   ruling, it is the standing ruling's own re-enable condition being met. The 2026-07-27
+   odometer ruling turned injection OFF and said re-enable "if/when the reconciliation warning
+   is redesigned with a proper threshold". R32(c) (2026-08-13) just set that threshold from data
+   (±0.20 U, n=13). The precondition is satisfied, so R32's "odometer-derived IOB injection
+   remains OFF and unruled" is ripe for revision rather than an obstacle.
+
+   Design questions to settle before building:
+   - WHEN to date the injected dose. The gap accrued across the whole loan; booking it all as a
+     bolus at reclaim time front-loads IOB. That errs toward MORE apparent IOB and therefore
+     LESS dosing — conservative in the same direction as the injection itself — but it misshapes
+     the curve, and #107's pulse arithmetic already supports a better-founded split.
+   - WHAT the gap actually is. `expected` must be the pulse-quantized figure (#107), or basal
+     the phone never knew about masquerades as unattributed bolus.
+   - INTERACTION WITH THE RETURNING WATCH, which this run proves is real and not theoretical.
+     The watch DOES come back and its offer DOES commit in `.owner` — that is literally the
+     `write START 1 dose(s)` above. So an injected dose must carry identity the real record
+     dedups against, or the same insulin lands twice: the #119 failure mode with insulin in
+     place of carbs. `NewPumpEvent.raw` is the existing lever, and the pod-minted syncIdentifier
+     is what the real record will arrive carrying.
+
+3. THE OPPOSITE DIRECTION — odometer says LESS than the books. Jeremy: "maybe it doesn't matter,
+   although we should think about how that odometer error will carry forward." Nothing can be
+   un-injected; the books carry phantom IOB, the loop runs cautious, and it decays within DIA.
+   The open question is whether an uncorrected negative gap persists into later loans' baselines
+   rather than washing out — worth tracing before assuming it is self-limiting.
+
+=== original analysis follows (kept as the reasoning trail) ===
+
 CAUSE NOT YET ESTABLISHED — and the first answer written here was wrong. It said "the staged
 event replay", i.e. that the watch had streamed the bolus to the phone and force-reclaim wrote
 it. Jeremy immediately challenged the premise: he ran the test so the phone and watch were
