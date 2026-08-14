@@ -27,13 +27,18 @@ final class PodLoanPhoneController {
         case owner, grantOffered, loaned, reconciling, reclaimPending
     }
 
-    /// What a tapped reclaim is doing right now, and when it has promised to be done — published
-    /// so the pump pill can draw a DETERMINATE bar and the tile can name the situation instead of
-    /// implying progress that isn't happening.
+    /// What a reclaim is doing right now — published so the tile can name the situation instead of
+    /// implying progress that isn't happening, and so the pump pill can draw a DETERMINATE bar for
+    /// the one part of the return that is long enough to be worth drawing.
     ///
-    /// Covers the ownership handover only (the drain and, failing that, the force). The BLE settle
-    /// that follows is 2 s to 190 s across 16 measured reclaims, so nothing here describes it —
-    /// that half stays an indeterminate sweep, which is the only honest drawing of a 100x spread.
+    /// ONLY THE SETTLE CARRIES A FRACTION, and it was not the half this started as. The ownership
+    /// handover — the drain and, failing that, the force — was measured at 736 ms for a
+    /// phone-tapped reclaim on 2026-08-14 and runs sub-second on a watch-initiated hand-back;
+    /// dosing and prediction are back on the phone's screen that fast. A bar over a sub-second
+    /// event is a flash, so the handover phases publish a nil `fraction` and the pill sweeps
+    /// through them. The BLE settle behind it — the phone re-establishing its own pod link and
+    /// proving it with one round-trip — is the wait the user actually sits through, and it gets
+    /// the bar in two stages (see `reclaimSettleStageOneExpectation` for why two).
     struct ReclaimProgress: Equatable {
         enum Phase: Equatable {
             /// The watch was heard from within one log-pulse period, or is reachable now: its
@@ -44,15 +49,46 @@ final class PodLoanPhoneController {
             case wakingTheWatch
             /// Both attempts spent: taking the pod back without the watch's cooperation.
             case forcing
+            /// Ownership is already back on the phone, but the phone has not yet completed the pod
+            /// round-trip that proves the pod is home — it is re-establishing the BLE session.
+            /// Reached identically from a tapped reclaim and from a watch-initiated hand-back,
+            /// which is why it hangs off the settle window rather than off the tapped-reclaim
+            /// ladder: a regularly ended session arms no ladder and lands in exactly this wait.
+            ///
+            /// This is the settle's FAST mode, which 70 of 91 measured reclaims completed inside.
+            case reconnectingToPod
+            /// The same settle, still running past the point where every fast-mode sample had
+            /// finished. Nothing is wrong with the pod — the radio link is simply taking the slow
+            /// path — but the promise made a few seconds ago has expired, so the copy and the bar
+            /// both re-baseline rather than pretending the first estimate still stands.
+            case reconnectingToPodSlowly
         }
         let phase: Phase
+        /// When the whole wait began — the reclaim tap for a handover, the settle window opening
+        /// for a settle. It does NOT move when the settle re-baselines into its second stage, so
+        /// `elapsed` below stays a continuous count of how long the user has been waiting.
         let startedAt: Date
-        /// When the force fires — the moment the user has been promised an answer by. The pod
-        /// round-trip is additive after this (3-9 s, p50 4 s, n=20/20 current era).
+        /// The moment the user has been promised an answer by: the force deadline during the
+        /// ownership handover, the end of stage one during a fast settle, the end of stage two
+        /// once that has expired. Never a ceiling — overrunning it holds the bar at its cap
+        /// rather than ending the wait.
         let expectedBy: Date
-        /// 0...0.95 of the way from `startedAt` to `expectedBy`. Holds at 0.95 rather than
-        /// completing, because completion is the tile changing, not the bar filling.
-        let fraction: Double
+        /// 0...0.95 within the CURRENT STAGE — or NIL when this phase is too short to draw, which
+        /// is every phase except the settle. Deliberately not `startedAt`-to-`expectedBy`: the
+        /// settle's second stage is re-baselined at its own entry, so the bar restarts there and
+        /// climbs against the slow mode's deadline instead of crawling against a total. Holds at
+        /// 0.95 rather than completing, because completion is the tile changing, not the bar
+        /// filling.
+        ///
+        /// A nil here is what leaves the pill on its indeterminate sweep, which is the right
+        /// affordance for the one handover that can genuinely take a while: a dead-watch reclaim
+        /// waits out the ladder's 20 s force with nothing to report but the "Watch Silent…" label.
+        let fraction: Double?
+        /// How long the whole wait has been running, on the controller's own clock, as of the
+        /// moment this was read. Published rather than re-derived at the call site so the label's
+        /// ticking seconds and the bar's fill can never disagree about when the wait started, and
+        /// continuous across the settle's stage change so the counter never appears to reset.
+        let elapsed: TimeInterval
     }
 
     struct Dependencies {
@@ -307,20 +343,70 @@ final class PodLoanPhoneController {
         }
     }
 
-    /// The tapped reclaim's phase and its real deadline, or nil when no ladder is running.
+    /// The reclaim's phase, its real deadline, and — for the settle alone — a fraction to draw.
+    /// nil when nothing is in flight.
     ///
-    /// The fraction comes from the ladder's own force deadline — the promise actually made to the
-    /// user on this tap — rather than from a fixed calibration constant, so the bar cannot drift
-    /// away from the thing it is drawing. nil during the drain's commit (state .reconciling) and
-    /// through the BLE settle, where the caller falls back to the indeterminate sweep.
+    /// Two windows, one accessor, and only the settle draws. The tapped handover still publishes
+    /// its phase and the ladder's own force deadline, because the tile's label comes from that phase
+    /// ("Watch Silent…" the moment a dead branch is decided, not after the wait). What it no
+    /// longer publishes is a fraction: at 736 ms tapped and sub-second on a hand-back, a bar over
+    /// the handover is a flash, and a dead-watch handover is better served by the sweep plus a
+    /// label that names the problem than by a bar racing a 20 s force.
+    ///
+    /// The settle arm is deliberately NOT gated on a ladder. A watch-initiated hand-back arms no
+    /// ladder and still lands in the same settle, so gating on one is what left a regularly ended
+    /// session with an indeterminate sweep for the whole of its wait. Every route into `.owner`
+    /// opens the settle window, so every route — tapped, watch-initiated, forced — draws the same
+    /// bar for the same wait.
+    ///
+    /// nil during a watch-initiated hand-back's own store commit, which no tap promised anything
+    /// about, and nil again the moment the settle's round-trip verifies.
     var reclaimProgress: ReclaimProgress? {
-        return queue.sync {
-            guard let ladder = reclaimLadder, state == .reclaimPending else { return nil }
-            let total = ladder.forceAt.timeIntervalSince(ladder.startedAt)
-            let elapsed = deps.now().timeIntervalSince(ladder.startedAt)
-            let fraction = total > 0 ? min(max(elapsed, 0) / total, 0.95) : 0.95
-            return ReclaimProgress(phase: ladder.phase, startedAt: ladder.startedAt,
-                                   expectedBy: ladder.forceAt, fraction: fraction)
+        // Return type spelled out: the closure has two `return`s of different shapes plus a nil,
+        // and leaving it to inference is a compile error waiting on the next edit.
+        return queue.sync { () -> ReclaimProgress? in
+            let now = deps.now()
+            // `.reconciling` is part of the tapped handover, not a gap in it: the drain's records
+            // are being written, and the label the user is reading was chosen by this ladder's
+            // branch. Guarding on `.reclaimPending` alone dropped the phase for the length of one
+            // Core Data write, which relabels a dead-watch reclaim from "Watch Silent…" to the
+            // generic "Reclaiming…" mid-write and then back.
+            if let ladder = reclaimLadder, state == .reclaimPending || state == .reconciling {
+                return ReclaimProgress(phase: ladder.phase, startedAt: ladder.startedAt,
+                                       expectedBy: ladder.forceAt, fraction: nil,
+                                       elapsed: max(now.timeIntervalSince(ladder.startedAt), 0))
+            }
+            // The settle predicate is restated inline rather than read from `isReclaimSettling`:
+            // that accessor takes the same serial queue this block is already running on, and a
+            // nested sync onto a serial queue deadlocks. It is `isReclaimSettling` and not
+            // `isReclaimSettlingOnly` that it must match, ceiling term included — the pill draws
+            // this fraction BEFORE it checks whether a reclaim is in progress at all, so a bar
+            // that outlived the "Reclaiming…" tile would paint itself under some other label.
+            if state == .owner, let started = reclaimStartedAt, reclaimVerifiedAt == nil,
+               now.timeIntervalSince(started) < Self.reclaimSettleTimeout {
+                let elapsed = max(now.timeIntervalSince(started), 0)
+                // Both stages cap at 0.95 and HOLD there on an overrun: the settle's real bound is
+                // `reclaimSettleTimeout`, not either expectation, so a bar that has run out of
+                // deadline must read as nearly-done-and-still-working rather than as finished.
+                if elapsed < Self.reclaimSettleStageOneExpectation {
+                    return ReclaimProgress(
+                        phase: .reconnectingToPod, startedAt: started,
+                        expectedBy: started.addingTimeInterval(Self.reclaimSettleStageOneExpectation),
+                        fraction: min(elapsed / Self.reclaimSettleStageOneExpectation, 0.95),
+                        elapsed: elapsed)
+                }
+                // Stage one expired, which is itself the finding: no measured settle has ever
+                // landed in the band just crossed, so this one is in the slow mode. Re-baseline
+                // the fraction at the stage boundary and run it against the slow mode's deadline.
+                let inStageTwo = elapsed - Self.reclaimSettleStageOneExpectation
+                return ReclaimProgress(
+                    phase: .reconnectingToPodSlowly, startedAt: started,
+                    expectedBy: started.addingTimeInterval(Self.reclaimSettleStageOneExpectation
+                                                           + Self.reclaimSettleStageTwoExpectation),
+                    fraction: min(inStageTwo / Self.reclaimSettleStageTwoExpectation, 0.95),
+                    elapsed: elapsed)
+            }
+            return nil
         }
     }
 
@@ -339,6 +425,32 @@ final class PodLoanPhoneController {
     private var reclaimStartedAt: Date?
     private var reclaimSettleWork: DispatchWorkItem?
     private static let reclaimSettleTimeout: TimeInterval = .minutes(5)
+    /// Stage one of the settle bar: the deadline the great majority of settles beat outright.
+    ///
+    /// THE SETTLE IS BIMODAL, not merely variable, and that is why the bar has stages at all.
+    /// Across 91 verified reclaims logged 2026-08-02 through 2026-08-14, 70 landed between 1 s and
+    /// 11 s and the other 21 landed between 24 s and 190 s — with NOT ONE sample in between. The
+    /// empty 12-23 s band is what makes re-baselining here honest rather than a fudge: the
+    /// boundary sits in a gap the process itself leaves, so a bar that expires at 12 s has learned
+    /// something real about this settle (it is in the slow mode) instead of merely running out of
+    /// guess.
+    ///
+    /// Any single deadline is wrong at both ends. Calibrated to the slow mode, the 77% that finish
+    /// inside 11 s would creep to about a fifth of the pill and then teleport to done, which reads
+    /// as broken; calibrated to the fast mode, half the settles that actually make the user wait
+    /// would blow through it.
+    private static let reclaimSettleStageOneExpectation: TimeInterval = 12
+
+    /// Stage two, entered only when stage one expires — which by the measured distribution means
+    /// this settle is in the slow mode. Measured from the STAGE TWO ENTRY, not from the settle's
+    /// start, so the bar restarts against a deadline chosen for the mode it now knows it is in.
+    ///
+    /// 105 s covers 17 of the 21 slow samples (24, 31, 35, 37, 39, 44, 52, 53, 57, 59, 66, 68, 75,
+    /// 87, 92, 99, 101, 161, 186, 188, 190 seconds). The four beyond it hold at the 0.95 cap with
+    /// the elapsed counter still climbing, which is what keeps an overrun reading as alive rather
+    /// than stuck. The real bound stays `reclaimSettleTimeout` at 5 minutes, comfortably past the
+    /// 190 s worst case on record.
+    private static let reclaimSettleStageTwoExpectation: TimeInterval = 105
     /// Set when a pod ROUND-TRIP has completed since the reclaim began.
     /// This — not the peripheral's Bluetooth state — is what "the pod is back" means.
     /// Field measurement: after a hand-back the pod advertises immediately, the phone's
@@ -348,6 +460,15 @@ final class PodLoanPhoneController {
     /// Every recorded failure sat inside that window; every success outside it.
     private var reclaimVerifiedAt: Date?
     private var reclaimVerifyInFlight = false
+    /// The two halves of a settle, so the single elapsed number stops hiding which one it was.
+    /// `reclaimLinkUpAt` is when the peripheral first reached CoreBluetooth "connected";
+    /// `reclaimStaleReads` counts status round-trips that came back without advancing lastSync
+    /// after that. Measured across 91 settles, the wait is bimodal — 70 land in 1-11 s, 21 in
+    /// 24-190 s, and NOTHING lands in the 12-23 s band — so something discrete decides the
+    /// mode, and these two fields are what say whether it is the link or the read. Nil/zero
+    /// outside a settle window.
+    private var reclaimLinkUpAt: Date?
+    private var reclaimStaleReads = 0
     /// Last request identity handled, for transport-redelivery suppression.
     /// sendMessage can report a timeout WITHOUT meaning undelivered, so the queued fallback
     /// sends a second copy that also lands. See handleRequest for what that cost in the field.
@@ -371,6 +492,8 @@ final class PodLoanPhoneController {
         reclaimStartedAt = started
         reclaimVerifiedAt = nil
         reclaimVerifyInFlight = false
+        reclaimLinkUpAt = nil
+        reclaimStaleReads = 0
         reclaimSettleWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self = self, self.reclaimStartedAt == started else { return }
@@ -400,6 +523,19 @@ final class PodLoanPhoneController {
     /// the ceiling, or a grant taking us out of .owner).
     private func chaseReclaimVerification(started: Date, attempt: Int = 0) {
         guard reclaimStartedAt == started, reclaimVerifiedAt == nil else { return }
+        // Stamp the link-up edge exactly once. Everything before it is the peripheral coming
+        // back; everything after it is us failing to get a word in over a link that is already
+        // up. The tick number rides along because a slow link and a slow FIRST poll look
+        // identical in an elapsed time on its own.
+        if reclaimLinkUpAt == nil, deps.isConnectionReady() {
+            let up = deps.now()
+            reclaimLinkUpAt = up
+            let waited = up.timeIntervalSince(started)
+            os_log("Settle: pod link UP %.1fs after reclaim began (tick %d)",
+                   log: log, type: .default, waited, attempt)
+            sendMessage(.diag(LoanDiag(epoch: epoch,
+                text: String(format: "settle: link up +%.1fs (tick %d)", waited, attempt))))
+        }
         attemptReclaimVerificationNow(started: started)
         queue.asyncAfter(deadline: .now() + 2) { [weak self] in
             self?.chaseReclaimVerification(started: started, attempt: attempt + 1)
@@ -426,18 +562,35 @@ final class PodLoanPhoneController {
                         self.reclaimVerifiedAt = self.deps.now()
                         self.reclaimSettleWork?.cancel()
                         self.reclaimStartedAt = nil
-                        os_log("Reclaim VERIFIED — pod round-trip complete %.0fs after reclaim began",
-                               log: self.log, type: .default, elapsed)
+                        // Split the wait. A missing link stamp means the link and the read
+                        // landed inside one tick, so charge the whole thing to the link rather
+                        // than inventing a read time.
+                        let linkWait = self.reclaimLinkUpAt.map { $0.timeIntervalSince(started) } ?? elapsed
+                        let readWait = max(elapsed - linkWait, 0)
+                        os_log("Reclaim VERIFIED — pod round-trip complete %.0fs after reclaim began (link %.1fs, stale reads %d, read %.1fs)",
+                               log: self.log, type: .default, elapsed, linkWait, self.reclaimStaleReads, readWait)
                         // Ride the existing diag channel so the unified watch/iCloud log
                         // carries the completion time — otherwise nothing measures the return.
+                        // The leading phrase is unchanged on purpose: 91 historical samples are
+                        // parsed off it, so the split appends rather than replaces.
                         self.sendMessage(.diag(LoanDiag(epoch: self.epoch,
-                            text: String(format: "reclaim VERIFIED — pod round-trip complete +%.0fs", elapsed))))
+                            text: String(format: "reclaim VERIFIED — pod round-trip complete +%.0fs (link +%.1fs, stale reads %d, read +%.1fs)",
+                                         elapsed, linkWait, self.reclaimStaleReads, readWait))))
                         self.deps.ownershipDidChange()
                         // The pod is provably reachable RIGHT NOW. This is the only moment in the
                         // whole hand-back where that is true, so it is where both jobs that need
                         // the pod happen: read the real end-of-loan odometer, and cancel the temp
                         // the watch left running.
                         self.finishPendingHandbackAudit(elapsed: elapsed)
+                    } else {
+                        // The link was up enough to attempt a read and the read still did not
+                        // advance lastSync. Counting these is the whole point: a slow settle
+                        // with zero of them is the pod failing to come back, and a slow settle
+                        // with several is the pod being back and refusing to answer.
+                        self.reclaimStaleReads += 1
+                        os_log("Settle: status read %d did not advance lastSync — link %{public}@",
+                               log: self.log, type: .default, self.reclaimStaleReads,
+                               self.reclaimLinkUpAt == nil ? "still down" : "already up")
                     }
                 }
             }

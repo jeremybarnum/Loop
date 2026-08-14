@@ -49,7 +49,12 @@ extension DeviceDataManager {
             // not answering implies progress that is not happening. The dead branch says the
             // watch is silent from the first second, which is the whole point of deciding the
             // branch before the wait starts rather than after it.
-            return DeviceDataManager.podReclaimingStatusHighlight(phase: podReclaimProgress?.phase)
+            //
+            // Read ONCE and passed whole: the phase and the elapsed seconds must describe the same
+            // instant, and two reads of a live accessor do not.
+            let progress = podReclaimProgress
+            return DeviceDataManager.podReclaimingStatusHighlight(phase: progress?.phase,
+                                                                  elapsed: progress?.elapsed)
         } else if isPodTakingOver {
             // PODLOAN #92 (2026-08-12): the grant is out but the watch has NOT confirmed it has
             // the pod. This branch MUST precede the one below: the grant releases the pod's BLE
@@ -97,8 +102,9 @@ extension DeviceDataManager {
         var state: DeviceStatusHighlightState = .normalPump
     }
 
-    static func podReclaimingStatusHighlight(phase: PodLoanPhoneController.ReclaimProgress.Phase?) -> PodReclaimingStatusHighlight {
-        return PodReclaimingStatusHighlight(phase: phase)
+    static func podReclaimingStatusHighlight(phase: PodLoanPhoneController.ReclaimProgress.Phase?,
+                                             elapsed: TimeInterval? = nil) -> PodReclaimingStatusHighlight {
+        return PodReclaimingStatusHighlight(phase: phase, elapsed: elapsed)
     }
 
     struct PodReclaimingStatusHighlight: DeviceStatusHighlight {
@@ -106,10 +112,23 @@ extension DeviceDataManager {
         var imageName: String = "arrow.triangle.2.circlepath"
         var state: DeviceStatusHighlightState = .normalPump
 
-        /// nil phase = no ladder is running: either the watch started this hand-back itself, or
-        /// the ownership handover is already done and the pod's BLE link is still settling. Both
-        /// are plain "Reclaiming…" — nothing is stalled, there is just no deadline to name.
-        init(phase: PodLoanPhoneController.ReclaimProgress.Phase? = nil) {
+        /// nil phase = the reclaim is inside the drain's store commit, which has no deadline to
+        /// name; plain "Reclaiming…" is the honest label for it.
+        ///
+        /// BOTH SETTLE CASES CARRY LIVE SECONDS, and they are different words on purpose. The
+        /// settle's measured distribution is bimodal — 70 of 91 reclaims logged between 2026-08-02
+        /// and 2026-08-14 finished in 1-11 s, the other 21 in 24-190 s, none in between — so a
+        /// settle still running once the fast mode's deadline has passed is a different situation
+        /// from the one the first label described, and repeating that label would be repeating a
+        /// promise that has already expired. The second says the link is slow, which is what it
+        /// is: the pod is fine and nothing has failed, the radio is just taking the long path.
+        ///
+        /// The seconds keep climbing even after the bar caps, and once it has capped they are the
+        /// only thing on this tile that can distinguish still-working from stuck. Both strings are
+        /// kept to the width the other labels here have proven, which is why they are
+        /// abbreviations rather than sentences.
+        init(phase: PodLoanPhoneController.ReclaimProgress.Phase? = nil, elapsed: TimeInterval? = nil) {
+            let seconds = max(elapsed ?? 0, 0)
             switch phase {
             case .wakingTheWatch?:
                 // Say it in the first second. The five dead revokes on record had silences of 5.5
@@ -118,6 +137,12 @@ extension DeviceDataManager {
                 localizedMessage = NSLocalizedString("Watch Silent…", comment: "Title text for the pump tile while a reclaim waits on a watch that has not been heard from")
             case .forcing?:
                 localizedMessage = NSLocalizedString("Forcing Return…", comment: "Title text for the pump tile while the phone takes the pod back without the watch's cooperation")
+            case .reconnectingToPod?:
+                localizedMessage = String(format: NSLocalizedString("Reconnect… %.0fs", comment: "Title text (with elapsed seconds) for the pump tile while the phone re-establishes its own connection to the pod after a watch session"),
+                                          seconds)
+            case .reconnectingToPodSlowly?:
+                localizedMessage = String(format: NSLocalizedString("Link slow… %.0fs", comment: "Title text (with elapsed seconds) for the pump tile when the phone's reconnection to the pod is taking the slow path"),
+                                          seconds)
             case .draining?, .none:
                 localizedMessage = NSLocalizedString("Reclaiming…", comment: "Title text for the pump tile while the pod is coming back from the watch")
             }

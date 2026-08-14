@@ -53,6 +53,17 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     var bookedGapDoses: [DoseEntry] = []
     var deletedGapSyncs: [String] = []
     var gapDeleteSucceeds = true
+    /// Virtual clock behind `Dependencies.now`, for the reclaim bars. Both fractions are pure
+    /// functions of elapsed time, so a test that could not move the clock could only assert them
+    /// by sleeping through a 45-second settle. Only the tests that pass `now:` to `makeController`
+    /// see it; everything else keeps the real clock.
+    var clock = Date()
+    /// When true, `addPumpEvents` parks its completion in `heldPumpEventWrite` instead of calling
+    /// it. That holds the hand-back commit open, which is the only way to observe the controller
+    /// while state is `.reconciling` — the harness otherwise completes the write inline and the
+    /// whole drain-to-settle transition happens inside one queue block.
+    var holdPumpEventWrites = false
+    var heldPumpEventWrite: ((Error?) -> Void)?
     private let lock = NSLock()
 
     override func setUp() {
@@ -83,6 +94,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         cancelCalls = 0
         cancelError = nil
         openLoopCalls = 0
+        clock = Date()
+        holdPumpEventWrites = false
+        heldPumpEventWrite = nil
         pump = MockPumpManager()
         MockPumpManager.testConnectionReleased = false
         MockPumpManager.testOdometer = nil
@@ -108,7 +122,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// describing a controller this one is not. Defaults reproduce a phone that has heard nothing
     /// from the watch this launch, which is the dead branch.
     func makeController(watchReachable: @escaping () -> Bool = { false },
-                        lastWatchContact: @escaping () -> Date? = { nil }) -> PodLoanPhoneController {
+                        lastWatchContact: @escaping () -> Date? = { nil },
+                        now: @escaping () -> Date = { Date() }) -> PodLoanPhoneController {
         return PodLoanPhoneController(dependencies: .init(
             pumpManager: { [weak self] in self?.pump },
             settings: { [weak self] in self?.settings ?? LoopSettings() },
@@ -137,8 +152,12 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             addPumpEvents: { [weak self] events, _, completion in
                 guard let self = self else { completion(nil); return }
                 // Capture the doses inside the pump events so existing count assertions hold.
-                self.lock.lock(); self.addedDoses.append(events.compactMap { $0.dose }); self.lock.unlock()
-                completion(nil)
+                self.lock.lock()
+                self.addedDoses.append(events.compactMap { $0.dose })
+                let hold = self.holdPumpEventWrites
+                if hold { self.heldPumpEventWrite = completion }
+                self.lock.unlock()
+                if !hold { completion(nil) }
             },
             addCarb: { [weak self] entry, syncIdentifier, completion in
                 // RAW append on purpose (no store emulation): this harness discriminates the
@@ -178,8 +197,15 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 completion(ok)
             },
             isWatchReachable: watchReachable,
-            lastWatchContactAt: lastWatchContact
+            lastWatchContactAt: lastWatchContact,
+            now: now
         ))
+    }
+
+    /// Release a hand-back commit parked by `holdPumpEventWrites`.
+    func releaseHeldPumpEventWrite() {
+        lock.lock(); let completion = heldPumpEventWrite; heldPumpEventWrite = nil; lock.unlock()
+        completion?(nil)
     }
 
     func diagMatching(_ needle: String) -> String? {
@@ -1576,6 +1602,194 @@ extension PodLoanPhoneControllerTests {
         XCTAssertEqual(ladder.armed.filter { $0.label == "reclaim-resend" }.count, 1,
                        "promotion must not buy a third attempt")
         XCTAssertNotNil(diagMatching("watch became reachable"), "the promotion is on the record, not silent")
+    }
+
+    // MARK: - The BLE settle is the wait the bar draws (2026-08-14)
+
+    /// A REGULARLY ENDED session: the watch hands back on its own, so no reclaim ladder is ever
+    /// armed. Everything the user waits through afterwards is the settle, and it used to get an
+    /// indeterminate sweep for the whole of it precisely because the progress was gated on a
+    /// ladder this path never has.
+    func testWatchInitiatedHandbackPublishesSettleProgress() throws {
+        let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
+        let grant = establishLoan(controller)
+        let ladder = ReclaimLadderRecorder()
+        ladder.install(on: controller)
+        connectionReady = false            // the pod's link is not back, so the settle stays open
+
+        let ackSent = expectSend()
+        let event = makeEvent(seq: 1, units: 0.4, at: clock.addingTimeInterval(-.minutes(3)))
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: grant.epoch, handedBackAt: clock, finalStatus: nil, odometer: nil,
+                          events: [event], tombstones: [], recovered: false)).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+
+        XCTAssertTrue(ladder.armed.isEmpty, "the watch ended this session — no tap, so no ladder")
+        let atStart = try XCTUnwrap(controller.reclaimProgress,
+                                    "a watch-initiated hand-back must publish progress for its settle")
+        XCTAssertEqual(atStart.phase, .reconnectingToPod)
+        XCTAssertEqual(atStart.fraction ?? -1, 0, accuracy: 0.001, "anchored where the settle began")
+        XCTAssertEqual(atStart.expectedBy.timeIntervalSince(atStart.startedAt), 12, accuracy: 0.001,
+                       "stage one runs to the fast mode's deadline, not to the 5-minute ceiling")
+
+        clock = clock.addingTimeInterval(6)
+        let later = try XCTUnwrap(controller.reclaimProgress)
+        XCTAssertEqual(later.phase, .reconnectingToPod)
+        XCTAssertEqual(later.fraction ?? -1, 0.5, accuracy: 0.001, "the bar moves with the clock")
+        XCTAssertEqual(later.elapsed, 6, accuracy: 0.001, "and so do the label's ticking seconds")
+        XCTAssertGreaterThan(later.fraction ?? -1, atStart.fraction ?? 0)
+    }
+
+    /// The settle is BIMODAL — 70 of 91 reclaims logged 2026-08-02 to 2026-08-14 finished in
+    /// 1-11 s, the other 21 in 24-190 s, and nothing at all in between. Stage one expiring is
+    /// therefore a real finding rather than an arbitrary cutoff: this settle is in the slow mode.
+    /// The bar re-baselines at that boundary and runs against the slow mode's own deadline, while
+    /// the label's seconds keep counting the WHOLE wait so nothing appears to restart.
+    func testSettleRebaselinesIntoItsSlowStageWhenTheFastDeadlineExpires() throws {
+        let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
+        let grant = establishLoan(controller)
+        connectionReady = false
+
+        let ackSent = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: grant.epoch, handedBackAt: clock, finalStatus: nil, odometer: nil,
+                          events: [], tombstones: [], recovered: false)).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+
+        clock = clock.addingTimeInterval(11)          // the last second of the fast mode
+        let lastFast = try XCTUnwrap(controller.reclaimProgress)
+        XCTAssertEqual(lastFast.phase, .reconnectingToPod, "still inside the mode 77% of settles finish in")
+        XCTAssertEqual(lastFast.fraction ?? -1, 11.0 / 12.0, accuracy: 0.001)
+
+        clock = clock.addingTimeInterval(1)           // 12 s: stage one expires exactly here
+        let entry = try XCTUnwrap(controller.reclaimProgress)
+        XCTAssertEqual(entry.phase, .reconnectingToPodSlowly, "the copy has to stop repeating an expired promise")
+        XCTAssertEqual(entry.fraction ?? -1, 0, accuracy: 0.001, "the bar re-baselines at the stage boundary")
+        XCTAssertEqual(entry.elapsed, 12, accuracy: 0.001, "the seconds do NOT restart with it")
+        XCTAssertEqual(entry.expectedBy.timeIntervalSince(entry.startedAt), 12 + 105, accuracy: 0.001,
+                       "stage two promises an answer 105 s after the stage it was entered from")
+
+        clock = clock.addingTimeInterval(52.5)        // half of stage two's budget
+        let midSlow = try XCTUnwrap(controller.reclaimProgress)
+        XCTAssertEqual(midSlow.phase, .reconnectingToPodSlowly)
+        XCTAssertEqual(midSlow.fraction ?? -1, 0.5, accuracy: 0.001,
+                       "the slow stage measures from its own entry, not from the settle's start")
+        XCTAssertEqual(midSlow.elapsed, 64.5, accuracy: 0.001)
+    }
+
+    /// A phone-TAPPED reclaim crosses two waits. Only the second one is drawn — the handover is
+    /// 736 ms measured, too short for a bar — but the reclaim must stay DESCRIBED across the whole
+    /// crossing, because the tile's label is chosen from the published phase and a nil there
+    /// relabels a dead-watch reclaim to the generic "Reclaiming…" for the length of a store write.
+    func testTappedReclaimCarriesThePhaseFromDrainThroughSettleWithoutGoingNil() throws {
+        let controller = makeController(lastWatchContact: { [weak self] in (self?.clock ?? Date()).addingTimeInterval(-30) },
+                                        now: { [weak self] in self?.clock ?? Date() })
+        let grant = establishLoan(controller)
+        let ladder = ReclaimLadderRecorder()
+        ladder.install(on: controller)
+        connectionReady = false
+
+        controller.reclaimNow()
+        waitUntil(timeout: 5, "ladder armed") { ladder.armed.count == 2 }
+        let drain = try XCTUnwrap(controller.reclaimProgress)
+        XCTAssertEqual(drain.phase, .draining)
+        XCTAssertNil(drain.fraction, "the handover is sub-second measured — it sweeps, it does not fill")
+
+        // Park the commit so `.reconciling` is observable at all: completed inline, the whole
+        // drain-to-settle crossing happens inside one queue block and nothing can sample it.
+        holdPumpEventWrites = true
+        let event = makeEvent(seq: 1, units: 0.6, at: clock.addingTimeInterval(-.minutes(3)))
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: grant.epoch, handedBackAt: clock, finalStatus: nil, odometer: nil,
+                          events: [event], tombstones: [], recovered: true)).transportDictionary())
+        waitUntil(timeout: 5, "commit parked") {
+            self.lock.lock(); defer { self.lock.unlock() }; return self.heldPumpEventWrite != nil
+        }
+
+        XCTAssertEqual(controller.state, .reconciling)
+        let midWrite = try XCTUnwrap(controller.reclaimProgress,
+                                     "the reclaim must stay described for the length of the write")
+        XCTAssertEqual(midWrite.phase, .draining, "the tap's own branch still names this wait")
+        XCTAssertNil(midWrite.fraction)
+
+        let ackSent = expectSend()
+        holdPumpEventWrites = false
+        releaseHeldPumpEventWrite()
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+
+        let settling = try XCTUnwrap(controller.reclaimProgress,
+                                     "the settle is the half the user waits through")
+        XCTAssertEqual(settling.phase, .reconnectingToPod)
+        XCTAssertNotNil(settling.fraction, "and the only half that gets a bar")
+        XCTAssertEqual(settling.expectedBy.timeIntervalSince(settling.startedAt), 12, accuracy: 0.001)
+    }
+
+    /// Both stage deadlines are EXPECTATIONS, not ceilings: four of the 21 slow samples on record
+    /// ran past stage two's 105 s budget, out to 190 s. The bar caps at 0.95 and STAYS there — the
+    /// 5-minute settle timeout is the real bound — while the elapsed seconds keep climbing, which
+    /// is the only thing left on the tile that can say the phone is still working.
+    func testSettleFractionCapsAndHoldsWhenTheSettleOverruns() throws {
+        let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
+        let grant = establishLoan(controller)
+        connectionReady = false
+
+        let ackSent = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: grant.epoch, handedBackAt: clock, finalStatus: nil, odometer: nil,
+                          events: [], tombstones: [], recovered: false)).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+
+        clock = clock.addingTimeInterval(11.4)      // 0.95 of stage one's 12 s
+        let stageOneCap = try XCTUnwrap(controller.reclaimProgress)
+        XCTAssertEqual(stageOneCap.phase, .reconnectingToPod)
+        XCTAssertEqual(stageOneCap.fraction ?? -1, 0.95, accuracy: 0.001,
+                       "stage one caps too — it never reads done before the round-trip lands")
+
+        clock = clock.addingTimeInterval(0.5)       // 11.9 s: still stage one, still capped
+        let stageOneEnd = try XCTUnwrap(controller.reclaimProgress)
+        XCTAssertEqual(stageOneEnd.phase, .reconnectingToPod)
+        XCTAssertEqual(stageOneEnd.fraction ?? -1, 0.95, accuracy: 0.001)
+
+        clock = clock.addingTimeInterval(100)       // 111.9 s: 99.9 s into stage two, past its 0.95
+        let stageTwoCap = try XCTUnwrap(controller.reclaimProgress)
+        XCTAssertEqual(stageTwoCap.phase, .reconnectingToPodSlowly)
+        XCTAssertEqual(stageTwoCap.fraction ?? -1, 0.95, accuracy: 0.001)
+
+        clock = clock.addingTimeInterval(78.1)      // 190 s: the worst settle ever measured
+        let overrun = try XCTUnwrap(controller.reclaimProgress,
+                                    "an overrun is still a live settle, not a cleared one")
+        XCTAssertEqual(overrun.phase, .reconnectingToPodSlowly)
+        XCTAssertEqual(overrun.fraction ?? -1, 0.95, accuracy: 0.001, "held at the cap, not restarted")
+        XCTAssertEqual(overrun.elapsed, 190, accuracy: 0.001,
+                       "the seconds keep climbing so a capped bar still reads as alive")
+    }
+
+    /// The end condition. "The pod is back" is a completed pod round-trip, not a Bluetooth state,
+    /// so the bar clears on the verification and not a moment earlier.
+    func testSettleProgressClearsOnceTheRoundTripVerifies() throws {
+        // Real clock here on purpose: verification compares the pump's own lastSync against the
+        // settle's start, and a frozen clock would be asserting against MockPumpManager's stamp
+        // rather than against the controller.
+        let controller = makeController()
+        let grant = establishLoan(controller)
+        connectionReady = false
+
+        let ackSent = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                          events: [], tombstones: [], recovered: false)).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+        XCTAssertEqual(controller.reclaimProgress?.phase, .reconnectingToPod)
+
+        connectionReady = true
+        waitUntil(timeout: 8, "reclaim verification") { !controller.isReclaimSettling }
+        XCTAssertNil(controller.reclaimProgress,
+                     "a verified round-trip is the pod being home — there is nothing left to draw")
     }
 }
 

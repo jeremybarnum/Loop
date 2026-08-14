@@ -1335,3 +1335,66 @@ Dosing never depended on this either way: the watch doses off
 `carbsOnBoard`. COB here is display plus this diff check.
 
 Log label and code comments corrected to say "observation freshness, not a model split".
+
+## 2026-08-14 — the BLE settle is BIMODAL, not variable; and a CORRECTION to my own regression call
+
+**CORRECTION FIRST.** Earlier today I told Jeremy the settle looked like a build-279
+regression, on the strength of a clean-looking split: 08-13 samples (builds 277/278) were
++7, +4, +1, +4, +2 s and 08-14 samples (build 279) were +39, +53, +54, +24 s. That was an
+artifact of reading only the two newest log files. Pulling `reclaim VERIFIED — pod
+round-trip complete +Ns` from the WHOLE corpus (2026-08-02 onward, n=91) shows slow
+settles have been present since the first day of records: +188 s and +190 s on 08-02/08-03,
+long before any of this build's code existed. **There is no 279 regression.** The mistake
+was the same one as the R37 "path not exercised" call — concluding from a truncated slice.
+
+**The measurement (n=91, all logs, 2026-08-02 → 2026-08-14):**
+
+    p50 = 5 s    p75 = 9 s    p90 = 68 s    p95 = 101 s    max = 190 s
+
+The percentiles undersell the shape. The distribution is **strictly bimodal with an empty
+gap**:
+
+    fast mode   70/91 (77%)   1-11 s
+    slow mode   21/91 (23%)   24-190 s
+    NO SAMPLES AT ALL between 12 s and 23 s
+
+Slow-mode values in full: 24, 31, 35, 37, 39, 44, 52, 53, 57, 59, 66, 68, 75, 87, 92, 99,
+101, 161, 186, 188, 190.
+
+An empty gap that wide in 91 samples is not noise. Something discrete decides which mode a
+reclaim lands in, and it costs at least ~13 s when it goes the wrong way.
+
+**What has been RULED OUT.** Loan duration and cycle count do not predict it. Of the 34
+settles that also carry an AUTHORITATIVE reconcile line (the only ones with `loanMin`/
+`cycles` attached), the 32 fast ones span loanMin 2-118 and cycles 0-28 — the full range —
+and there is a 7 s settle at loanMin=1 cycles=1, the exact shape of the slow pair. A short
+loan does not cause a slow settle. Jeremy's cold/new-build hypothesis is also out, by the
+corpus.
+
+**Why the root cause CANNOT be read off the current logs — the real finding.**
+`isConnectionReady` resolves to `podLoanConnectionStateDescription == "connected"`, i.e.
+the raw CoreBluetooth peripheral state (OmniPumpManager+PodLoan.swift:287). The settle
+therefore has two sub-phases that the log conflates into one opaque number:
+
+  (a) waiting for the phone's standing CB connect to land after the watch releases, and
+  (b) `ensureCurrentPumpData` round-trips that return a stale `lastSync` — connected
+      already, but the status read failing and being retried on the 2 s tick.
+
+`chaseReclaimVerification` / `attemptReclaimVerificationNow` log NOTHING between reclaim
+start and success: no tick count, no moment `isConnectionReady()` first went true, no
+failed-read record. (Its `attempt` parameter is threaded through and incremented but never
+read — dead.) The phone log across the +39 s settle at 08:30:28-08:31:07 is entirely
+silent, which is consistent with either sub-phase.
+
+The two point at opposite fixes: (a) is the pod's advertising behaviour after a disconnect
+and is probably not ours to fix, so the UI should simply be honest about it; (b) IS ours
+and would be worth fixing. **Split the settle into its two halves and log each tick** —
+the same move that resolved the 19-second write in one build by splitting it into Core
+Data and HealthKit halves. Until that ships, any named cause is a guess.
+
+**Consequence for the UI, already sent to the implementation in flight:** a single
+determinate bar to one deadline is wrong at both ends. For the 77% it creeps to ~18% of a
+60 s bar and teleports to done; and 11 of the 21 slow settles exceed 60 s anyway. The
+honest shape is two stages — 12 s, then re-baseline to ~105 s — because the 12-23 s gap is
+a real physical boundary rather than a chosen cutoff.
+
