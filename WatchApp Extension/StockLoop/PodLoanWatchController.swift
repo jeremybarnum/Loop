@@ -204,6 +204,22 @@ final class PodLoanWatchController {
             if (oldValue == .handingBack) != (phase == .handingBack) {
                 onHandbackRuntimeHold?(phase == .handingBack)
             }
+            // Repaint the glance on EVERY phase change, because every one of them changes what
+            // the wrist should be reading and none of them is guaranteed a tick: the 2 s timer
+            // runs only while the page is on screen, a screen dim kills it, and a bare undim
+            // does not revive it.
+            //
+            // Poking only at the loan-end callback was not enough. It painted the drain frame
+            // ("returning records…") and then nothing repainted when the drain finished and this
+            // went .idle, so the wrist held an intermediate frame until a tap (field, 2026-08-14).
+            // Transitions are rare — steady-state looping sits in .active and never re-enters
+            // here — so this is a handful of renders per session, not a tick.
+            //
+            // Guarded on a REAL change: Swift fires didSet on same-value assignment too, and
+            // several paths reassign .idle defensively.
+            if oldValue != phase {
+                DispatchQueue.main.async { GlanceController.current?.refreshGlanceNow() }
+            }
         }
     }
     private var epoch: Int? {

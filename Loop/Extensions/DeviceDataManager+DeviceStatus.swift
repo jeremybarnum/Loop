@@ -131,12 +131,19 @@ extension DeviceDataManager {
             let seconds = max(elapsed ?? 0, 0)
             switch phase {
             case .wakingTheWatch?:
-                // Say it in the first second. The five dead revokes on record had silences of 5.5
-                // to 21.2 minutes before the tap — the watch was already gone, and a spinner
-                // labelled "Reclaiming…" told the user nothing for the whole wait.
-                localizedMessage = NSLocalizedString("Watch Silent…", comment: "Title text for the pump tile while a reclaim waits on a watch that has not been heard from")
-            case .forcing?:
-                localizedMessage = NSLocalizedString("Forcing Return…", comment: "Title text for the pump tile while the phone takes the pod back without the watch's cooperation")
+                // Say it in the first second — the five dead revokes on record had silences of
+                // 5.5 to 21.2 minutes before the tap — but say the ATTEMPT, not the verdict:
+                // a revoke goes out the moment the tap lands, and "reaching" is what the phone
+                // is actually doing. The verdict has its own phase seconds later.
+                localizedMessage = NSLocalizedString("Reaching Watch…", comment: "Title text for the pump tile while a reclaim's first revoke waits on a watch that has not been heard from")
+            case .watchUnreachable?:
+                localizedMessage = NSLocalizedString("Can't Reach Watch", comment: "Title text for the pump tile once both revoke attempts have gone out unanswered, before the force")
+            case .forcing?, .forceReclaimingPod?:
+                // One label across the force rung AND the settle that follows it, so the force
+                // reads as a single timed operation rather than three renamed waits. The settle
+                // phase behind it carries the determinate bar; this string carries the clock.
+                localizedMessage = String(format: NSLocalizedString("Forcing… %.0fs", comment: "Title text (with elapsed seconds) for the pump tile while the phone force-reclaims the pod and verifies it"),
+                                          seconds)
             case .reconnectingToPod?:
                 localizedMessage = String(format: NSLocalizedString("Reconnect… %.0fs", comment: "Title text (with elapsed seconds) for the pump tile while the phone re-establishes its own connection to the pod after a watch session"),
                                           seconds)

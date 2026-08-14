@@ -26,6 +26,14 @@ extension MockPumpManager: PumpConnectionLendable {
     public func releaseConnection() { Self.testConnectionReleased = true }
     public func reclaimConnection() { Self.testConnectionReleased = false }
     public var lentDeviceInsulinDelivered: Double? { Self.testOdometer }
+    /// Counts the FORCED round-trips (the ones that bypass the freshness optimization), so a
+    /// test can assert the settle forces early without forcing on every 2 s tick — the whole
+    /// point of the backoff is that reclaim speed is not bought with radio time.
+    static var testForcedReadCount = 0
+    public func refreshLentDeviceStatus(completion: @escaping (Bool) -> Void) {
+        Self.testForcedReadCount += 1
+        completion(true)
+    }
 }
 
 final class PodLoanPhoneControllerTests: XCTestCase {
@@ -77,6 +85,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                     "PodLoanPhoneController.pendingForceAudit", "PodLoanPhoneController.deliveredAtGrant"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
+        MockPumpManager.testForcedReadCount = 0
         urgentNotices = []
         bookedGapDoses = []
         deletedGapSyncs = []
@@ -1544,6 +1553,69 @@ extension PodLoanPhoneControllerTests {
         XCTAssertEqual(revokeCount(), 2)
     }
 
+    /// The dead branch's labels are attempt then verdict: the phase is `.wakingTheWatch` while
+    /// the first revoke is out, and flips to `.watchUnreachable` at the resend deadline — both
+    /// attempts out, none answered — so the tile says "can't reach" twelve seconds BEFORE the
+    /// force instead of the user discovering the failure only when the force fires.
+    func testDeadBranchPhaseBecomesUnreachableAtTheResendDeadline() throws {
+        let controller = makeController(watchReachable: { false },
+                                        lastWatchContact: { [weak self] in (self?.clock ?? Date()).addingTimeInterval(-.minutes(12)) },
+                                        now: { [weak self] in self?.clock ?? Date() })
+        establishLoan(controller)
+        let ladder = ReclaimLadderRecorder()
+        ladder.install(on: controller)
+
+        controller.reclaimNow()
+        waitUntil(timeout: 5, "ladder armed") { ladder.armed.count == 2 }
+        XCTAssertEqual(controller.reclaimProgress?.phase, .wakingTheWatch,
+                       "the first revoke is an attempt, not a verdict")
+
+        clock = clock.addingTimeInterval(7.9)      // just inside the first attempt's window
+        XCTAssertEqual(controller.reclaimProgress?.phase, .wakingTheWatch)
+
+        clock = clock.addingTimeInterval(0.2)      // past the +8 s resend deadline
+        XCTAssertEqual(controller.reclaimProgress?.phase, .watchUnreachable,
+                       "both attempts out and unanswered — the tile says so before the force")
+        XCTAssertEqual(controller.reclaimProgress.map { $0.expectedBy.timeIntervalSince($0.startedAt) } ?? 0, 20,
+                       accuracy: 0.5, "the published deadline is still the ladder's force rung")
+    }
+
+    /// A settle that follows a FORCE reclaim runs ONE stage against its own 90 s promise — no
+    /// fast/slow re-baseline, which mid-force would read as a second failure. The four forced
+    /// reclaims measured verified at +1, +45, +66 and +70 s; an overrun holds at the cap.
+    func testForcedSettleRunsOneStageAgainstTheForcedPromise() throws {
+        let controller = makeController(watchReachable: { false },
+                                        lastWatchContact: { nil },
+                                        now: { [weak self] in self?.clock ?? Date() })
+        establishLoan(controller)
+        connectionReady = false                    // nothing verifies — the settle stays open
+        let ladder = ReclaimLadderRecorder()
+        ladder.install(on: controller)
+
+        controller.reclaimNow()
+        waitUntil(timeout: 5, "ladder armed") { ladder.armed.count == 2 }
+        ladder.fire("reclaim-resend")
+        ladder.fire("reclaim-force")
+        waitForState(controller, .owner)
+
+        let early = try XCTUnwrap(controller.reclaimProgress,
+                                  "a forced settle publishes progress like any other")
+        XCTAssertEqual(early.phase, .forceReclaimingPod)
+        XCTAssertEqual(early.expectedBy.timeIntervalSince(early.startedAt), 90, accuracy: 0.5)
+
+        clock = clock.addingTimeInterval(45)       // deep past the two-stage path's 12 s boundary
+        let mid = try XCTUnwrap(controller.reclaimProgress)
+        XCTAssertEqual(mid.phase, .forceReclaimingPod,
+                       "no re-baseline mid-force — one operation, one timer")
+        XCTAssertEqual(mid.fraction ?? -1, 45.0 / 90.0, accuracy: 0.01)
+
+        clock = clock.addingTimeInterval(50)       // 95 s: past the promise
+        let over = try XCTUnwrap(controller.reclaimProgress)
+        XCTAssertEqual(over.phase, .forceReclaimingPod)
+        XCTAssertEqual(over.fraction ?? -1, 0.95, accuracy: 0.001,
+                       "wrong-is-fine means cap-and-hold, not restart")
+    }
+
     /// The good case: the watch drains before the first deadline. Both rungs must die with the
     /// loan — a resend fired afterwards would push a revoke at a watch that already handed back,
     /// and a force would fire against a phone that is already the owner.
@@ -1768,6 +1840,61 @@ extension PodLoanPhoneControllerTests {
         XCTAssertEqual(overrun.fraction ?? -1, 0.95, accuracy: 0.001, "held at the cap, not restarted")
         XCTAssertEqual(overrun.elapsed, 190, accuracy: 0.001,
                        "the seconds keep climbing so a capped bar still reads as alive")
+    }
+
+    /// The settle must FORCE a real pod round-trip rather than trusting the cheap call, because
+    /// the cheap one skips the radio entirely whenever the manager judges its data fresh (under
+    /// 6 minutes) and hands back the pre-existing lastSync — which this settle's `lastSync >
+    /// started` test then rejects forever. Measured 2026-08-14: 77 such calls returned in about
+    /// 150 ms each, no radio involved, and the settle sat at 169 s until a manual status check
+    /// broke it.
+    ///
+    /// And it must force on a BACKOFF, not on every 2 s tick: forcing each tick would be up to
+    /// 150 real round-trips across the five-minute ceiling, which is reclaim speed paid for with
+    /// G7 radio time.
+    ///
+    /// The virtual clock is parked an hour ahead so the mock's real-dated lastSync can never
+    /// exceed `started` — that keeps the settle open for the whole test instead of verifying on
+    /// the first read.
+    func testSettleForcesARealReadEarlyThenBacksOff() throws {
+        clock = Date().addingTimeInterval(.hours(1))
+        let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
+        let grant = establishLoan(controller)
+        connectionReady = true              // the link is up, so the settle can force from tick 0
+
+        let ackSent = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: grant.epoch, handedBackAt: clock, finalStatus: nil, odometer: nil,
+                          events: [], tombstones: [], recovered: false)).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+
+        waitUntil(timeout: 5, "the settle forces its first real read") {
+            MockPumpManager.testForcedReadCount >= 1
+        }
+
+        // More ticks at 2 s. The clock has not moved, so the backoff must hold them all.
+        let ticksPassed = XCTestExpectation(description: "several ticks pass")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) { ticksPassed.fulfill() }
+        wait(for: [ticksPassed], timeout: 10)
+        XCTAssertEqual(MockPumpManager.testForcedReadCount, 1,
+                       "a frozen clock inside the interval means every later tick takes the cheap path")
+        XCTAssertTrue(controller.isReclaimSettling, "the settle is still open, so ticks are still running")
+
+        // Past the interval, the next tick is allowed to force again.
+        clock = clock.addingTimeInterval(13)
+        waitUntil(timeout: 5, "the backoff interval re-opens") {
+            MockPumpManager.testForcedReadCount >= 2
+        }
+        XCTAssertLessThanOrEqual(MockPumpManager.testForcedReadCount, 3,
+                                 "re-opening the interval allows another forced read, not a burst")
+
+        // PARK THE CHASE. This settle can never verify (the clock is an hour ahead of anything
+        // the mock will report), so it runs to the 5-minute ceiling — and unlike the other
+        // settle tests, which hold the link DOWN and leave an inert loop, this one holds it up
+        // and would keep calling the shared pump every 2 s straight through the tests that run
+        // after it. Dropping the link makes the leftover loop a no-op, as it is everywhere else.
+        connectionReady = false
     }
 
     /// The end condition. "The pod is back" is a completed pod round-trip, not a Bluetooth state,

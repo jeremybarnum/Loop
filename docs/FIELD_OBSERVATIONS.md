@@ -1449,3 +1449,53 @@ the phone file as well, plus a per-read stale line (phone file only; no diag flo
 dead watch). And the glance repaint marks never ship in the log pipeline at all, so the
 frozen-glance report could not be checked from logs — the fix (one-shot repaint at loan
 end, no timer re-arm) went in on the code asymmetry instead.
+
+## 2026-08-14 14:48 (e68, build 281) — the slow settle ROOT-CAUSED: the verification call
+## never reaches the radio
+
+**The sample.** `reclaim VERIFIED — pod round-trip complete +169s (link +2.2s, stale reads 77,
+read +166.9s)`. Jeremy watched the pill reach "Link slow… 162s", tapped through to the pod
+status screen (which reported the pod's last comms as 2 s old), and on returning the pill was
+normal. The pill was NOT stale — the settle really was still running, and it verified at +169 s,
+about seven seconds after the tap. **His manual pod-status check succeeded where 77 consecutive
+automated reads had failed.**
+
+**The mechanism, from the code.** `OmniPumpManager.ensureCurrentPumpData` (:2498) only touches
+the radio when `state.isPumpDataStale`; otherwise it takes
+
+    case false?:
+        log.default("Skipping status update because pumpData is fresh")
+        completion?(self.lastSync)
+
+and returns the EXISTING lastSync without any pod contact. `isPumpDataStale`
+(OmniPumpManagerState :414) is simply `lastPumpDataReportDate` older than 6 minutes. The settle's
+success test is `lastSync > started`, so every skipped call is rejected and re-tried on the 2 s
+tick. The chase was not failing to reach the pod; it was never asking.
+
+**The timing proves it rather than merely fitting it.** Stale reads 75, 76 and 77 landed at
+14:50:49.385, 14:50:51.514 and 14:50:53.712 — 2.13 s and 2.20 s apart on a 2 s tick, so each
+call returned in roughly 150 ms. No pod BLE round-trip completes in 150 ms. Those reads never
+went near the radio.
+
+**The fix has an existing seam.** `refreshLentDeviceStatus` (PumpManager protocol :293,
+implemented in OmnipodKit +PodLoan :403 as `podLoanReadStatus`) is documented as "force a real
+status round-trip (bypassing freshness optimizations)". The R37 odometer audit already uses it.
+The settle chase is the one path that does not.
+
+**Why the fix is NOT a straight swap.** The chase ticks every 2 s, so routing it through the
+forced read would mean up to 150 real pod round-trips across a 5-minute settle where today most
+are free skips — buying reclaim speed with G7 radio time, which the standing rule forbids.
+Proposed instead: force a real read on the first tick, then back off to a slower forced cadence
+(~10-15 s) with the cheap check in between. That removes the 167-second case while adding a
+handful of round-trips rather than 150.
+
+**What is still NOT explained.** What keeps `lastPumpDataReportDate` fresh across a hand-back,
+and why the durations land where they do. A naive "the phone has not touched the pod during the
+loan, so its data is already 6 minutes stale" story predicts fast settles after long loans, but
+e62 ran a 60-minute loan and still went slow (+45 s, 17 stale reads). The proposed fix does not
+depend on resolving this, since it bypasses the optimization outright — but the model is
+incomplete and should not be written up as though it were settled.
+
+**Initiation type is not the variable**, despite looking like it twice. Build 281 samples:
+watch-initiated End +4, +7, +7 s (1, 1, 2 stale reads); phone tap +1, +7 and +169 s (0, 1, 77);
+forced +45 s (17). A phone tap produced both the fastest settle of the day and the slowest.
