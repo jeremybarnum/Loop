@@ -18,10 +18,10 @@ import os.log
 /// Same sequencing as the phone's DoseEnactor: temp-basal adjustment first, wait, then any
 /// automatic bolus — all through stock `PumpManager` protocol methods, so pulse-grid
 /// snapping, cancel-before-program, busy handling, and uncertain-delivery classification are
-/// the stock driver's (OmniPumpManager, M2), not ours.
+/// the stock driver's (OmniPumpManager), not ours.
 final class WatchDoseEnactor {
 
-    /// Test coverage plan item 2: this class records dose timestamps into the ledger, so it
+    /// This class records dose timestamps into the ledger, so it
     /// needs its own clock seam — it is a separate type from WatchLoopManager and cannot
     /// reach that one. WatchLoopManager keeps the two in sync when it builds the enactor.
     var now: () -> Date = Date.init
@@ -30,29 +30,29 @@ final class WatchDoseEnactor {
 
     private let log = OSLog(category: "WatchDoseEnactor")
 
-    /// M5: the loan controller's intent-minting hooks (spec §1.2). nil outside a loan;
+    /// The loan controller's intent-minting hooks. nil outside a loan;
     /// the enact calls themselves are unchanged stock PumpManager methods either way.
     weak var loanRecorder: WatchLoanDoseRecording?
 
-    /// Fix B (radio arbiter, c6c9e18f port): BG wins the single watch radio. When the
+    /// BG wins the single watch radio. When the
     /// G7 is mid-handshake (the heavy ~8-10s burst), a LOOP enact yields instead of
     /// colliding ("Empty Value") — the stock-shaped loop retries naturally on the next
     /// reading, which is exactly the fresh BG landing. Only the automatic path runs
     /// through this enactor today; a future manual path must NOT defer (user present —
     /// the crude loudDrop==true analog).
 
-    /// E4 Stage 2 (task #40): while E4 time-separation is active the pod BLE is
+    /// While pod/G7 time-separation is active the pod BLE is
     /// orphaned for G7's sake. reclaim it just before dosing; release it just after.
     /// reclaim's completion(true) = pod connected & ready; (false) = couldn't
     /// reconnect in the bounded window → SKIP this automatic dose (pod keeps running
-    /// its baseline, loop retries next cycle). Both nil / no-op when E4 is off.
+    /// its baseline, loop retries next cycle). Both nil / no-op when that separation is off.
     var reclaimPodForDose: ((@escaping (Bool) -> Void) -> Void)?
     var releasePodAfterDose: (() -> Void)?
 
-    /// #50: fired with the (rate, duration) the pod just accepted for a temp basal, so the
-    /// owner can cache what is running without querying the pod — E4 orphans it seconds later.
+    /// Fired with the (rate, duration) the pod just accepted for a temp basal, so the
+    /// owner can cache what is running without querying the pod — the link is released seconds later.
     var onTempBasalEnacted: ((_ unitsPerHour: Double, _ duration: TimeInterval) -> Void)?
-    /// #73/#74 shadow ledger: pod-ACCEPTED doses flow to the owner's session timeline.
+    /// Shadow ledger: pod-ACCEPTED doses flow to the owner's session timeline.
     var ledgerRecord: ((DoseEntry) -> Void)?
 
     func enact(recommendation: AutomaticDoseRecommendation, with pumpManager: PumpManager, completion: @escaping (PumpManagerError?) -> Void) {
@@ -60,7 +60,7 @@ final class WatchDoseEnactor {
             // BG still wins the radio — but WAIT for the handshake instead of throwing the
             // dose cycle away on a millisecond-scale collision.
             //
-            // E4: reclaim the orphaned pod before dosing (bounded). Safe-fallback on
+            // Reclaim the orphaned pod before dosing (bounded). Safe-fallback on
             // failure: skip the dose — never block, never dose against a pod that
             // isn't confirmed connected. Runs on dosingQueue (not the loop's
             // dataAccessQueue), so the bounded wait can't stall the loop cycle.
@@ -90,9 +90,8 @@ final class WatchDoseEnactor {
             if let basalAdjustment = recommendation.basalAdjustment {
                 self.log.default("Enacting recommended basal change")
                 // What the pod is ACTUALLY being told, and whether it took it. Without
-                // this the field log showed a reclaim and a released pod with no way to
-                // tell whether a command went out at all (2026-07-22 08:48) — E5 had
-                // this line, the real dosing path did not.
+                // this line the field log shows a reclaim and a released pod with no way
+                // to tell whether a command went out at all.
                 SportLog.event("dose", String(format: "enacting temp %.2f U/hr × %.0f min", basalAdjustment.unitsPerHour, basalAdjustment.duration / 60))
                 doseDispatchGroup.enter()
                 let eventID = self.loanRecorder?.loanWillEnactTempBasal(unitsPerHour: basalAdjustment.unitsPerHour, duration: basalAdjustment.duration)
@@ -103,11 +102,11 @@ final class WatchDoseEnactor {
                         SportLog.event("dose", "temp enact FAILED — \(String(describing: error))")
                     } else {
                         SportLog.event("dose", String(format: "temp %.2f U/hr ACCEPTED by pod", basalAdjustment.unitsPerHour))
-                        // #50: hand the accepted temp to the owner so it can cache what the pod
-                        // is running once E4 orphans it (basalDeliveryState goes nil seconds
-                        // after release).
+                        // Hand the accepted temp to the owner so it can cache what the pod
+                        // is running once the link is released (basalDeliveryState goes nil
+                        // seconds after release).
                         self.onTempBasalEnacted?(basalAdjustment.unitsPerHour, basalAdjustment.duration)
-                        // #73/#74 shadow ledger: the accepted temp enters the single-owner
+                        // Shadow ledger: the accepted temp enters the single-owner
                         // timeline (truncating its open predecessor — the journal's rule).
                         let acceptedAt = self.now()
                         self.ledgerRecord?(DoseEntry(
@@ -119,8 +118,8 @@ final class WatchDoseEnactor {
                     doseDispatchGroup.leave()
                 }
             } else {
-                // The silent case that made 08:48 unreadable: DoseMath ran and chose to
-                // leave the running basal alone. That is a decision, and it gets a line.
+                // The otherwise-silent case: DoseMath ran and chose to leave the running
+                // basal alone. That is a decision, and it gets a line.
                 SportLog.event("dose", "no temp change recommended — leaving the running basal as-is")
             }
 
@@ -140,7 +139,7 @@ final class WatchDoseEnactor {
                     if let error = error {
                         bolusError = error
                     } else {
-                        // #73/#74 shadow ledger: point-ish event; DASH delivers ~1.5 U/min.
+                        // Shadow ledger: point-ish event; DASH delivers ~1.5 U/min.
                         let acceptedAt = self.now()
                         self.ledgerRecord?(DoseEntry(
                             type: .bolus, startDate: acceptedAt,

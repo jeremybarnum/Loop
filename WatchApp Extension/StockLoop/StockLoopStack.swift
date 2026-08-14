@@ -66,12 +66,12 @@ enum StockLoopStack {
 
         // Stock, delegate-wired: the manager's CGMManagerDelegate output is the loop's input.
         //
-        // #101 phase 2: restore persisted state (the stock phone pattern — DeviceDataManager
+        // Restore persisted state (the stock phone pattern — DeviceDataManager
         // rebuilds its CGM manager from rawState). The bare init here meant every launch and
         // every app update forgot the adopted sensor and reran the acquisition lottery against
-        // D2W's ~15s ride windows — three sessions on 2026-08-10 were relay-covered for
-        // 10-25 minutes each for exactly this reason. WatchLoopManager persists rawState on
-        // cgmManagerDidUpdateState; a corrupt or absent blob falls back to the bare init.
+        // D2W's ~15s ride windows, leaving the watch relay-covered until it won again.
+        // WatchLoopManager persists rawState on cgmManagerDidUpdateState; a corrupt or
+        // absent blob falls back to the bare init.
         let cgmManager: G7CGMManager
         if let raw = UserDefaults.standard.dictionary(forKey: WatchLoopManager.cgmStateDefaultsKey),
            let restored = G7CGMManager(rawState: raw) {
@@ -111,13 +111,13 @@ enum StockLoopStack {
         let cacheStore = PersistenceController(directoryURL: documents.appendingPathComponent("com.loopkit.LoopKit.StockLoop"), isReadOnly: isAppExtension)
         let provenanceIdentifier = HKSource.default().bundleIdentifier
 
-        // #41 wall #2 (2026-07-21, sim-proven in WatchStoreEffectsTests): BOTH stores
+        // Wall #2 (sim-proven in WatchStoreEffectsTests): BOTH stores
         // need a TemporaryScheduleOverrideHistory at CONSTRUCTION (it's init-only).
         // DoseStore.getGlucoseEffects guards insulinSensitivityScheduleApplying-
         // OverrideHistory, which is nil whenever overrideHistory is nil — even with
         // the ISF schedule set — so insulinEffect failed every cycle after the
         // schedule fix. Shared instance across stores, mirroring the phone's
-        // DeviceDataManager wiring. #68: a granted override IS recorded into this
+        // DeviceDataManager wiring. A granted override IS recorded into this
         // history at takeover, so schedules resolve scaled exactly as on the phone.
         let overrideHistory = TemporaryScheduleOverrideHistory()
 
@@ -149,12 +149,12 @@ enum StockLoopStack {
             provenanceIdentifier: provenanceIdentifier
         )
 
-        // #68: the shared history is now RETURNED, not swallowed. The watch records the
+        // The shared history is RETURNED, not swallowed. The watch records the
         // granted override into it exactly as the phone's LoopDataManager does
         // (:270 overrideHistory.recordOverride) — without that, basal/ISF/carb-ratio all
         // resolve UNSCALED during a loan and historical temps net against the wrong
-        // baseline. The comment below used to say "no overrides are ever ACTIVE on the
-        // watch"; that was the gap, not a design choice.
+        // baseline. Overrides ARE active on the watch during a loan; do not assume
+        // otherwise and drop this return value.
         return (doseStore, glucoseStore, carbStore, overrideHistory)
     }
 }

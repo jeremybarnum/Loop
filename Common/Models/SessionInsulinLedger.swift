@@ -2,12 +2,10 @@
 //  SessionInsulinLedger.swift
 //  Loop / WatchApp Extension (compiled into BOTH targets — one source file, tested from LoopTests)
 //
-//  #73/#74 (2026-07-29, Jeremy's zoom-out ruling: "in the end, we have to store some insulin
-//  doses and then move them back and forth — shouldn't be that hard"): the loan session's
-//  insulin books as a PLAIN, SINGLE-OWNER timeline, replacing the Core Data DoseStore for the
-//  watch's dosing path. SHADOW MODE first: runs alongside the untouched store and emits
-//  [ledger-diff] every cycle; cutover is a later, explicit flag flip. Reverting = delete this
-//  file + three one-line hooks.
+//  The loan session's insulin books as a PLAIN, SINGLE-OWNER timeline, replacing the Core Data
+//  DoseStore for the watch's dosing path. SHADOW MODE first: runs alongside the untouched store
+//  and emits [ledger-diff] every cycle; cutover is a later, explicit flag flip. Reverting =
+//  delete this file + three one-line hooks.
 //
 //  WHY (the seven-incident pattern, all field-diagnosed): the stock DoseStore stack is
 //  multi-year, HealthKit-syncing Core Data machinery whose invariants assume ONE writer (the
@@ -15,7 +13,7 @@
 //  pump rows AND soft-deletes every mutable delivery entry not re-asserted in that exact batch,
 //  with unverified saves and no rollback. The loan fed it THREE writers (grant seed, pod
 //  re-reports, wipes); every incident — identity laundering (hex-of-hex), store-trump swallows,
-//  wipe leaks, pending-object zombies, the 2026-07-29 IOB cliffs — was a coherence failure
+//  wipe leaks, pending-object zombies, the IOB cliffs — was a coherence failure
 //  between them. A session holds ≤ ~200 doses and the math (LoopKit InsulinMath) is pure
 //  functions over [DoseEntry]. This ledger is that array with ONE owner:
 //   - no wipes: a new ledger per epoch is a new array;
@@ -23,14 +21,13 @@
 //   - no mutability lifecycle: a still-running temp is just a full-span entry — InsulinMath's
 //     eval-time bound (delivery integrated only to eval-time + model delay) counts
 //     delivered-so-far natively, the same semantics as the phone's own mutable row;
-//   - the #72 inherited-temp problem dissolves: seed it full-span, done. No re-arm, no C5.
+//   - the inherited-temp problem dissolves: seed it full-span, done. No re-arm, no C5.
 //
-//  PARITY GOAL (honest scope, per the 2026-07-29 adversarial review): the ledger folds the
+//  PARITY GOAL (honest scope, per the adversarial review): the ledger folds the
 //  MAIN inputs the hand-back journal carries (enacts, predecessors truncated at supersede),
 //  aiming for hand-back parity by derivation. KNOWN GAPS, all deliberate for shadow mode and
 //  all cutover-blockers until closed: (1) CLOSED (5cf065d4 + 07e72789: uncertain enacts book
-//  direction-aware .assumed doses with refute-restore — this header previously said otherwise
-//  and misled the 2026-08-11 audit, hence the correction);
+//  direction-aware .assumed doses with refute-restore);
 //  (2) dose timestamps are stamped at pod-ACCEPT with programmed values (the journal mints at
 //  will-enact; the pod's actual start precedes accept by the BLE round-trip — supersede
 //  boundaries shift late by seconds); (3) pod-actual reconciliation (pulse quantization,
@@ -47,7 +44,7 @@ import LoopKit
 /// NOT thread-safe by design: the owner (WatchLoopManager) confines every access to its
 /// serial `dataAccessQueue`. There is deliberately no locking to get wrong.
 public struct SessionInsulinLedger {
-    // #112 (2026-08-11): the ledger no longer OWNS a basal schedule. It used to freeze the
+    // The ledger no longer OWNS a basal schedule. It used to freeze the
     // raw grant schedule at seed and net every temp against it for the whole loan — while the
     // ISF handed to glucoseEffects() was override-APPLIED at read time. Mixed conventions in
     // one computation, and the same defect family as the manual-bolus ISF bug Jeremy
@@ -64,7 +61,7 @@ public struct SessionInsulinLedger {
     /// needs (versus reconciled() + resolveMutable + replacePendingEvents + raw constraints).
     public private(set) var doses: [DoseEntry] = []
 
-    /// #74 refute-restore bookkeeping: what each accepted basal command truncated.
+    /// Refute-restore bookkeeping: what each accepted basal command truncated.
     /// Bounded by the session's dose count and cleared as causes are removed.
     private struct Truncation {
         let causeStart: Date
@@ -97,9 +94,9 @@ public struct SessionInsulinLedger {
             })
         }
         var merged = (deduped + live).sorted { $0.startDate < $1.startDate }
-        // Defense-in-depth (2026-07-29 duplicate-twin trace): if the GRANT ever carries one
+        // Defense-in-depth (duplicate-twin trace): if the GRANT ever carries one
         // physical bolus under two identities (loanv2 fold row + pod-native row — the phone
-        // store's version of tonight's watch-side zombie), collapse same-units (±0.01U)
+        // store's version of the watch-side zombie), collapse same-units (±0.01U)
         // same-instant (±2s) bolus twins, keeping the longer span (pod-actual timing).
         // Not implicated in the observed incident (the grant had ONE bolus; the ledger was
         // structurally immune) — this guards the mirrored phone-side topology only.
@@ -125,7 +122,7 @@ public struct SessionInsulinLedger {
     /// the same supersede rule the hand-back journal fold applies on the phone.
     public mutating func recordEnact(_ dose: DoseEntry) {
         if dose.type != .bolus {
-            // #74 refute-restore: remember what this command truncated, so a later REFUTED
+            // Refute-restore: remember what this command truncated, so a later REFUTED
             // chase verdict can put the predecessor's tail back. Without this, removing the
             // assumed dose left the predecessor short and the interval fell back to schedule
             // — an UNDER-count for an above-schedule predecessor (anti-conservative; the
@@ -154,12 +151,12 @@ public struct SessionInsulinLedger {
         doses.sort { $0.startDate < $1.startDate }
     }
 
-    /// #74 cutover: reverse a previously booked ASSUMED dose whose chase verdict came back
+    /// Reverse a previously booked ASSUMED dose whose chase verdict came back
     /// REFUTED (the command never reached the pod). Removes the first dose of `type` whose
     /// start is within `tolerance` of `startingAt`.
     ///
     /// Restores any tail the refuted dose truncated (the pod never ran it, so its
-    /// predecessor kept going to its programmed end) — closed 2026-07-30, sim-verified.
+    /// predecessor kept going to its programmed end) — sim-verified.
     /// RESIDUAL, deliberately not restored: a predecessor the command removed OUTRIGHT
     /// (equal- or later-starting overlap) is gone rather than trimmed; that path needs a
     /// same-instant collision with a refuted command, and the direction is conservative.
@@ -182,7 +179,7 @@ public struct SessionInsulinLedger {
             let predecessor = doses[restoreIndex]
             // Clamp to whatever superseded it NEXT: an accepted command that landed after
             // the refuted one legitimately owns the edge, and restoring past it would
-            // double-book that interval (sim-caught 2026-07-30). Physically exact: the pod
+            // double-book that interval (sim-caught). Physically exact: the pod
             // ran the original temp until the next accepted command replaced it.
             let nextBasalStart = doses.enumerated()
                 .filter { $0.offset != restoreIndex && $0.element.type != .bolus

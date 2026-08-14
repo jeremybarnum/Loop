@@ -6,12 +6,10 @@
 //  holds one lazily; it stays inert — no radio, no dosing — until a loan grant arrives. CGM is
 //  stock G7SensorKit and runs independently of the loan.
 //
-//  Shorthand in this file (#N, RN, EN, "the ladder") resolves in docs/GLOSSARY.md.
-//
 
 import Foundation
 import OmnipodKit
-import G7SensorKit        // #86: PodLoanConnectClock.podLoanLogSink (pod BLE layer -> watch log)
+import G7SensorKit        // PodLoanConnectClock.podLoanLogSink (pod BLE layer -> watch log)
 import WatchConnectivity
 import os.log
 
@@ -44,7 +42,7 @@ final class StockLoopSession {
     private let log = OSLog(subsystem: "com.loopkit.Loop", category: "StockLoopSession")
 
     init() {
-        // Link policy is automatic (#101, R31): orphan the pod between doses, reclaim every
+        // Link policy is automatic: orphan the pod between doses, reclaim every
         // cycle, and gate that reclaim on G7 acquisition state while the sensor is un-adopted.
         // Replaced a user toggle whose two arms were each wrong for acquisition — evidence in
         // docs/E4_TIME_SEPARATION.md.
@@ -57,22 +55,22 @@ final class StockLoopSession {
         stack = StockLoopStack.assemble()
         loanController = PodLoanWatchController(loopManager: stack.loopManager)
 
-        // #86: route the pod BLE layer into the watch's mirrored log. OmnipodKit logs via os_log,
+        // Route the pod BLE layer into the watch's mirrored log. OmnipodKit logs via os_log,
         // which never reaches the file the field analysis reads. Watch only — the phone leaves the
         // sink nil and keeps os_log.
         PodLoanConnectClock.podLoanLogSink = { line in SportLog.event("pod-ble", line) }
 
-        // #101: the G7 radio census — names which of the three acquisition triggers fires
+        // The G7 radio census — names which of the three acquisition triggers fires
         // (system-connected piggyback / connection event / ad scan), D2W's rhythm, and connect
         // verdicts. Made the acquisition mechanism observed rather than inferred.
         G7RadioCensus.sink = { line in SportLog.event("g7-ble", line) }
 
         // Main-thread stall detector. Runs from LAUNCH and never stops, unlike the loan-scoped
         // heartbeat below: a wedged main thread is exactly the condition under which nothing else
-        // in this app can report anything (#95). One ping/second, silent while healthy.
+        // in this app can report anything. One ping/second, silent while healthy.
         RuntimeStateLog.startMainStallDetector()
 
-        // #67 follow-up: the one question the hand-back UI needs answered.
+        // The one question the hand-back UI needs answered.
         loanController.isPhoneReachable = { WCSession.default.isReachable }
 
         loanController.send = { [weak loanController] dictionary in
@@ -85,10 +83,10 @@ final class StockLoopSession {
             let urgent = LoanMessage.isInteractiveHandshake(transport: dictionary) && session.isReachable
             SportLog.event("wc", "send \(dictionary.keys.joined(separator: ",")) — session \(session.activationState.rawValue), reachable \(session.isReachable), path \(urgent ? "urgent" : "queued")")
 
-            // #120: AT MOST ONE QUEUED OFFER. The resend loop re-offers every 15 s and
+            // AT MOST ONE QUEUED OFFER. The resend loop re-offers every 15 s and
             // transferUserInfo queues every call separately, so an unreachable phone accumulated
-            // one copy per 15 s — twelve in the #119 incident — delivered as a burst at wake,
-            // which is the flood #118 defends against downstream. Supersede at the source: when
+            // one copy per 15 s — a dozen in one observed case — delivered as a burst at wake,
+            // which is the flood defended against downstream. Supersede at the source: when
             // enqueueing a NEW offer, cancel the still-undelivered PREVIOUS offer transfers.
             //
             // ORDER IS LOAD-BEARING, in both directions. Capture the stale list BEFORE enqueueing
@@ -118,13 +116,13 @@ final class StockLoopSession {
             }
             session.sendMessage(dictionary, replyHandler: nil, errorHandler: { error in
                 SportLog.event("wc", "urgent send FAILED (\(error.localizedDescription)) — falling back to the queued path")
-                loanController?.noteUrgentSendFailed()   // #113: erroring sends distinguish variant B at the timeout
+                loanController?.noteUrgentSendFailed()   // an erroring send means the link is re-establishing, not one-way wedged
                 enqueueSuperseding(dictionary)
             })
         }
 
         // NO RADIO ARBITER, deliberately. It made pod commands yield to our own G7 reader's
-        // scan/handshake (#84); that reader is gone, and its flags were the arbiter's only
+        // scan/handshake; that reader is gone, and its flags were the arbiter's only
         // producer.
         //
         // Not because the app stopped using the sensor radio — stock G7SensorKit still runs its
@@ -136,7 +134,7 @@ final class StockLoopSession {
             self?.loanController.podBeepsOnManualBolus ?? false
         }
 
-        // #86: the takeover ladder needs background runtime — fires true on entering .takingOver
+        // The takeover ladder needs background runtime — fires true on entering .takingOver
         // and false on every exit, so it spans exactly the ladder. Without it the poll is throttled
         // the moment the wrist drops and the read budget burns on wall-clock instead of attempts.
         loanController.onTakeoverRadioHold = { [weak self] holding in
@@ -156,13 +154,13 @@ final class StockLoopSession {
                 : "hand-back runtime hold released")
         }
 
-        // #82, retired by #84: the dose-window stand-down is deliberately NOT wired — it stranded
+        // The dose-window stand-down is deliberately NOT wired — it stranded
         // the radio for 2.9 h overnight (app suspended mid-ladder holding the sensor off, no BLE
         // event left to wake it). The takeover hold above stays: user-present and bounded.
 
         // Reclaim the orphaned pod to dose, then re-release it for G7. Unconditional on both
-        // sides (#101): reclaimPodForDose already no-ops when the link is held, so one wiring
-        // covers every case and can never strand a released bid (#97).
+        // sides: reclaimPodForDose already no-ops when the link is held, so one wiring
+        // covers every case and can never strand a released bid.
         stack.loopManager.reclaimPodForDose = { [weak self] completion in
             guard let self = self else { completion(false); return }
             self.loanController.reclaimPodForDose(completion)
@@ -175,15 +173,15 @@ final class StockLoopSession {
             guard let self = self else { return }
             if active {
                 os_log("Loan active: starting G7 transport", log: self.log, type: .default)
-                // The wrist inherits the phone's loop mode from the grant (R23, overturned
-                // 2026-08-04). Deliberately NOT re-asserted here: this also fires on the
+                // The wrist inherits the phone's loop mode from the grant.
+                // Deliberately NOT re-asserted here: this also fires on the
                 // hand-back-timeout resume path, where the user's own choice must survive.
                 self.setKeepalive(true, reason: "soak")
                 // Loop-stall dead-man: every live cycle re-defers it, so it fires only on a stall.
                 LoopStallWatchdog.refresh()
                 // Sensor-blackout dead-man: every direct reading re-defers it.
                 SensorBlackoutAlert.refresh()
-                // R23: the glance page is the landing surface during a loan.
+                // The glance page is the landing surface during a loan.
                 DispatchQueue.main.async { GlanceController.current?.becomeCurrentPage() }
                 // 5-min pulse independent of readings: the per-reading transfer goes silent
                 // exactly when the session is dry, which is when we most need to hear from it.
@@ -243,7 +241,7 @@ final class StockLoopSession {
         logPulse = nil
     }
 
-    // MARK: E1 — standalone-G7 diagnostic mode (#36)
+    // MARK: Standalone-G7 diagnostic mode
     // Runs the G7 soak with no pod loan and no dosing, so the G7 is the only BLE connection the
     // watch holds. Isolates whether holding the pod link starves G7 connects under watchOS's
     // per-app BLE budget. Bench-only and firewalled: takes no pod, enacts nothing, arms no
