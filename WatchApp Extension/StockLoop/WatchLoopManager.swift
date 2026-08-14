@@ -342,12 +342,37 @@ final class WatchLoopManager {
         // Mirror synchronously so a hand-back offer built immediately after a wrist tap
         // carries the value the user just chose, not the one before it.
         closedLoopMirrorLock.lock()
+        let wasEnabled = _closedLoopMirror
         _closedLoopMirror = enabled
         closedLoopMirrorLock.unlock()
 
         dataAccessQueue.async {
             self._closedLoopEnabled = enabled
             SportLog.event("loop", enabled ? "CLOSED \(reason) — the watch will adjust basal" : "OPENED \(reason) — advisory only, no dosing")
+
+            // Opening the loop CANCELS the running temp, exactly as the phone does — stock
+            // subscribes to its automatic-dosing flag and cancels on every transition to off
+            // (LoopDataManager, alongside clearing the pre-meal override). Without this the
+            // wrist stopped issuing new temps but left the last one delivering for up to its
+            // full 30 minutes, so "open loop" on the watch and on the phone meant different
+            // amounts of insulin.
+            //
+            // Guarded on a REAL transition, which is what makes it safe at grant intake: a
+            // loan that inherits an open loop calls this with the flag already false, and a
+            // cancel there would fire at a pod the watch has only just taken over.
+            //
+            // Failure is logged, not escalated: the enactor answers `.pumpManagerUnconnected`
+            // when there is no loan, and a cancel can only ever move toward LESS insulin, so a
+            // failed one leaves the pod running the rate it already had until the temp expires
+            // on its own.
+            guard wasEnabled, !enabled else { return }
+            let recommendation = AutomaticDoseRecommendation(basalAdjustment: .cancel)
+            self.recommendedAutomaticDose = (recommendation: recommendation, date: self.now())
+            if let error = self.enactRecommendedAutomaticDose() {
+                SportLog.event("loop", "OPEN: temp cancel FAILED — \(String(describing: error)); the pod keeps its current rate until the temp expires")
+            } else {
+                SportLog.event("loop", "OPEN: running temp cancelled — pod reverts to the user's schedule")
+            }
         }
     }
 
@@ -646,7 +671,13 @@ final class WatchLoopManager {
                 // `lastLoopCompleted` is already in GlanceData, so activeState MARKS a stale
                 // prediction instead of dropping it — a stale eventual stays shown while the
                 // dot goes amber→red, so it never looks authoritative once old.
-                eventual: predictedGlucose?.last?.quantity,
+                // The pending-inclusive curve, matching the phone's "Eventually" — which reads
+                // the same one. The dosing curve stamped just below credits nothing for a temp
+                // the instant it is enacted, so the wrist and the phone disagreed by ISF times
+                // the net remaining span: measured in the field at 493 on the phone against
+                // ~490 on the wrist within a minute of a net -3.3 U/hr enact. Dosing is
+                // unaffected — DoseMath consumes the no-pending curve, deliberately.
+                eventual: predictedGlucoseIncludingPendingInsulin?.last?.quantity,
                 iob: liveIOB,
                 tempRate: tempRate,
                 lastLoopCompleted: lastLoopCompleted,
@@ -1121,6 +1152,31 @@ final class WatchLoopManager {
         dataAccessQueue.async {
             self.sessionLedger?.recordEnact(dose)
             self.clearCachedInsulinEffects()   // The dose must reach the next prediction
+            // ...and the DISPLAY curve must reach the wrist now, not next cycle. This is the
+            // half of stock's dosing-change observer that had no analogue here: stock clears
+            // the same two caches and then posts `notify(forChange: .insulin)`, and the status
+            // screen's recompute off that notification is why the phone's "Eventually" credits
+            // a temp within seconds of enacting it. The watch stamps its curves once per cycle,
+            // BEFORE the enactor runs, so without this the wrist showed a figure computed
+            // before the dose it had just delivered — the disagreement Jeremy measured at ~100
+            // mg/dL against the phone, side by side.
+            //
+            // Effects first, curve second, and in that order: predictGlucose READS the caches
+            // that were just nil-ed and does not rebuild them, so predicting here without the
+            // refresh would produce a curve with no insulin in it at all.
+            //
+            // Only the pending-inclusive array is re-stamped. Nothing dosing reads it — DoseMath
+            // consumes the locally-computed curve — so this cannot reach delivery, and no
+            // recommendation is produced off-cycle.
+            _ = self.updateCachedEffects()
+            if let updated = try? self.predictGlucose(includingPendingInsulin: true) {
+                self.predictedGlucoseIncludingPendingInsulin = updated
+            }
+            // No explicit glance poke: the glance's own tick rebuilds its mirror, and leaving a
+            // failed predict on the previous value is the same choice made for the eventual
+            // everywhere else on the wrist — a stale figure carrying a freshness grade beats a
+            // blank one, which is why clearCachedInsulinEffects deliberately does not nil the
+            // display curve the way stock's does.
         }
     }
 

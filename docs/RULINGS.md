@@ -717,6 +717,52 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   verdict included — now rides the urgent channel. An alert that stops automatic dosing
   must never be a quiet list entry.
 
+- **R40 — The dead branch forces immediately, and every reclaim gets one short determinate bar**
+  (2026-08-14, Jeremy, superseding R39's two-attempt wait on the dead branch — his own ruling,
+  overturned on his own evidence and framing.)
+
+  THE SETTLE'S SLOW MODE WAS A BUG, NOT PHYSICS. The bimodal distribution R39's bar was built
+  for (70 of 91 settles in 1-11 s, 21 in 24-190 s, nothing between) was diagnosed the same day:
+  the verification call skips the radio whenever the pump manager judges its data fresh (under
+  6 minutes) and returns the stale lastSync forever; 77 such calls in ~150 ms each over one
+  169 s settle, no radio involved. With the forced-read backoff in place, every settle on the
+  fixed build finished in 1-3 s with zero stale reads — six samples: one forced, two phone-tap,
+  three watch-End — and end-to-end tap-to-verified ran 3.2-7.1 s, phone-tap and watch-End
+  indistinguishable.
+
+  THE RULING, in three parts:
+
+  1. **Watch present: one 10 s determinate settle bar.** No two-stage re-baseline — the stage
+     boundary was calibrated to a distribution the bug produced. Overruns hold at the 0.95 cap
+     with seconds ticking, under the unchanged 5-minute ceiling. Known and accepted: one
+     afternoon of clean samples is evidence, not proof; a reclaim during an in-flight G7
+     acquisition is unsampled; the rare WCSession transport stall (~80 s once in 20) would hold
+     the bar at cap until the live ladder's 25 s force resolves it. Wrong-is-fine covers all
+     three — the cap-and-hold is the designed degradation.
+
+  2. **Watch absent: no wait at all.** The dead branch sends its revoke fire-and-forget and
+     forces immediately — tap to done in seconds instead of 20-plus. Jeremy's framing, which is
+     the honest justification: the realistic force-reclaim is a LOST watch or a DEAD BATTERY,
+     where nothing can answer; and the scenario that looks risky — a live watch in a bag —
+     cannot normally reach the dead branch, because an alive watch's 300 s log pulse (keepalive
+     holds the app awake; 283-302 s across 134 gaps) keeps it inside the liveness window and on
+     the live branch. The guard was always the pulse discriminator, never the wait. The
+     eight-for-eight unanswered dead-branch revokes are consistent but near-tautological (the
+     bench tests had the watch off by design) and are NOT the load-bearing argument. The revoke
+     still goes out: a returning watch consumes it from the queue, which arms the split-brain
+     guard and drives the booked-gap retirement — validated three times in the field the same
+     day. The force still defers behind an in-flight commit.
+
+  3. **Forced settle: a 15 s bar**, looser than the ordinary one because the clean forced
+     sample is n=1 (+1 s); the prior +45/+66/+70 s forced settles all carried the stale-read
+     signature of the bug. Tighten when the data says so.
+
+  Deleted with the wait: the dead branch's "Reaching watch…" / "Watch silent…" labels (no wait
+  left to label), the dead→live ladder promotion (no window left to promote in — a watch that
+  wakes after the force follows the ordinary returning-watch path), and the slow-mode settle
+  phase and its "Link slow…" copy. Reachability-triggered revoke resends still count against
+  the live ladder's two-attempt budget.
+
 - **R39 — The reclaim button tells the truth about time: two branches, two attempts, no flat wait**
   (2026-08-13, Jeremy: "I'm skeptical of the need for the 45 second wait. Seems pedantic. I
   think it's step 1 - check if watch visible. If yes, assume quick reclaim with a predictable

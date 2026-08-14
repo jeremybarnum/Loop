@@ -38,21 +38,15 @@ final class PodLoanPhoneController {
     /// event is a flash, so the handover phases publish a nil `fraction` and the pill sweeps
     /// through them. The BLE settle behind it — the phone re-establishing its own pod link and
     /// proving it with one round-trip — is the wait the user actually sits through, and it gets
-    /// the bar in two stages (see `reclaimSettleStageOneExpectation` for why two).
+    /// the bar (see `reclaimSettleExpectation` for the promise and its evidence).
     struct ReclaimProgress: Equatable {
         enum Phase: Equatable {
             /// The watch was heard from within one log-pulse period, or is reachable now: its
             /// records are draining and the wait is a real drain window.
             case draining
-            /// Nothing recent from the watch. The revoke is being resent in case it is merely
-            /// asleep — this is not a hope that a dead watch will answer.
-            case wakingTheWatch
-            /// The second and last revoke has gone out and nothing has answered. This is the
-            /// verdict, published as its own phase so the user reads "can't reach watch" in the
-            /// twelve seconds BEFORE the force, instead of discovering the failure only when
-            /// the force fires.
-            case watchUnreachable
-            /// Both attempts spent: taking the pod back without the watch's cooperation.
+            /// Taking the pod back without the watch's cooperation. The dead branch enters this
+            /// the moment it is chosen — it waits for nothing — and a force deferred behind an
+            /// in-flight commit stays described by it.
             case forcing
             /// Ownership is already back on the phone, but the phone has not yet completed the pod
             /// round-trip that proves the pod is home — it is re-establishing the BLE session.
@@ -60,18 +54,16 @@ final class PodLoanPhoneController {
             /// which is why it hangs off the settle window rather than off the tapped-reclaim
             /// ladder: a regularly ended session arms no ladder and lands in exactly this wait.
             ///
-            /// This is the settle's FAST mode, which 70 of 91 measured reclaims completed inside.
+            /// One stage, no slow-mode re-baseline. The two-stage split existed for a bimodal
+            /// settle whose slow mode turned out to be verification calls that skipped the radio
+            /// when the manager judged its data fresh; with the forced read in place, every
+            /// watch-present settle measured on the fixed build landed in 2-3 s with zero stale
+            /// reads. An overrun holds at the cap under the 5-minute ceiling, as ever.
             case reconnectingToPod
-            /// The same settle, still running past the point where every fast-mode sample had
-            /// finished. Nothing is wrong with the pod — the radio link is simply taking the slow
-            /// path — but the promise made a few seconds ago has expired, so the copy and the bar
-            /// both re-baseline rather than pretending the first estimate still stands.
-            case reconnectingToPodSlowly
             /// The settle that follows a FORCE reclaim, presented as one operation with one
-            /// deadline. The user was just told the watch could not be reached; a bar that
-            /// re-baselined mid-force would read as a second failure, so the two-stage path
-            /// does not apply here. Ruled in the field: users understand a force takes a
-            /// while, so a generous promise that is occasionally wrong beats a renamed wait.
+            /// deadline — a bar that re-baselined mid-force would read as a second failure.
+            /// Ruled in the field: users understand a force takes a while, so a generous
+            /// promise that is occasionally wrong beats a renamed wait.
             case forceReclaimingPod
         }
         let phase: Phase
@@ -386,14 +378,7 @@ final class PodLoanPhoneController {
             // Core Data write, which relabels a dead-watch reclaim from its branch label to the
             // generic "Reclaiming…" mid-write and then back.
             if let ladder = reclaimLadder, state == .reclaimPending || state == .reconciling {
-                // The dead branch splits on the resend rung: while the first revoke is out, the
-                // label is the attempt; once the second and last has gone out, it is the verdict.
-                // Computed here rather than on the ladder because it needs the clock.
-                var phase = ladder.phase
-                if phase == .wakingTheWatch, now >= ladder.resendAt {
-                    phase = .watchUnreachable
-                }
-                return ReclaimProgress(phase: phase, startedAt: ladder.startedAt,
+                return ReclaimProgress(phase: ladder.phase, startedAt: ladder.startedAt,
                                        expectedBy: ladder.forceAt, fraction: nil,
                                        elapsed: max(now.timeIntervalSince(ladder.startedAt), 0))
             }
@@ -419,25 +404,13 @@ final class PodLoanPhoneController {
                         fraction: min(elapsed / Self.reclaimForcedSettleExpectation, 0.95),
                         elapsed: elapsed)
                 }
-                // Both stages cap at 0.95 and HOLD there on an overrun: the settle's real bound is
-                // `reclaimSettleTimeout`, not either expectation, so a bar that has run out of
+                // One stage. Caps at 0.95 and HOLDS there on an overrun: the settle's real bound
+                // is `reclaimSettleTimeout`, not the expectation, so a bar that has run out of
                 // deadline must read as nearly-done-and-still-working rather than as finished.
-                if elapsed < Self.reclaimSettleStageOneExpectation {
-                    return ReclaimProgress(
-                        phase: .reconnectingToPod, startedAt: started,
-                        expectedBy: started.addingTimeInterval(Self.reclaimSettleStageOneExpectation),
-                        fraction: min(elapsed / Self.reclaimSettleStageOneExpectation, 0.95),
-                        elapsed: elapsed)
-                }
-                // Stage one expired, which is itself the finding: no measured settle has ever
-                // landed in the band just crossed, so this one is in the slow mode. Re-baseline
-                // the fraction at the stage boundary and run it against the slow mode's deadline.
-                let inStageTwo = elapsed - Self.reclaimSettleStageOneExpectation
                 return ReclaimProgress(
-                    phase: .reconnectingToPodSlowly, startedAt: started,
-                    expectedBy: started.addingTimeInterval(Self.reclaimSettleStageOneExpectation
-                                                           + Self.reclaimSettleStageTwoExpectation),
-                    fraction: min(inStageTwo / Self.reclaimSettleStageTwoExpectation, 0.95),
+                    phase: .reconnectingToPod, startedAt: started,
+                    expectedBy: started.addingTimeInterval(Self.reclaimSettleExpectation),
+                    fraction: min(elapsed / Self.reclaimSettleExpectation, 0.95),
                     elapsed: elapsed)
             }
             return nil
@@ -459,39 +432,32 @@ final class PodLoanPhoneController {
     private var reclaimStartedAt: Date?
     private var reclaimSettleWork: DispatchWorkItem?
     private static let reclaimSettleTimeout: TimeInterval = .minutes(5)
-    /// Stage one of the settle bar: the deadline the great majority of settles beat outright.
+    /// The settle bar's single-stage promise, watch-present and watch-initiated alike.
     ///
-    /// THE SETTLE IS BIMODAL, not merely variable, and that is why the bar has stages at all.
-    /// Across 91 verified reclaims logged 2026-08-02 through 2026-08-14, 70 landed between 1 s and
-    /// 11 s and the other 21 landed between 24 s and 190 s — with NOT ONE sample in between. The
-    /// empty 12-23 s band is what makes re-baselining here honest rather than a fudge: the
-    /// boundary sits in a gap the process itself leaves, so a bar that expires at 12 s has learned
-    /// something real about this settle (it is in the slow mode) instead of merely running out of
-    /// guess.
+    /// This replaced a two-stage bar (12 s, then a 105 s re-baseline) that was calibrated to a
+    /// BIMODAL distribution: across 91 verified reclaims, 70 landed in 1-11 s and 21 in
+    /// 24-190 s with nothing between. The slow mode then turned out not to be radio physics at
+    /// all — the verification call skips the radio whenever the manager judges its pump data
+    /// fresh (under 6 minutes) and returns the old lastSync, which the settle rejects forever;
+    /// one field settle burned 77 such calls over 167 s. With the forced read in place, every
+    /// settle measured on the fixed build finished in 1-3 s with zero stale reads (six samples:
+    /// one forced, two phone-tap, three watch-End), and end-to-end tap-to-verified ran
+    /// 3.2-7.1 s. Ten seconds covers the worst of those by 40%.
     ///
-    /// Any single deadline is wrong at both ends. Calibrated to the slow mode, the 77% that finish
-    /// inside 11 s would creep to about a fifth of the pill and then teleport to done, which reads
-    /// as broken; calibrated to the fast mode, half the settles that actually make the user wait
-    /// would blow through it.
-    private static let reclaimSettleStageOneExpectation: TimeInterval = 12
+    /// The slow mode has existed and could recur (one afternoon of clean samples is evidence,
+    /// not proof; a reclaim during an in-flight G7 acquisition is still unsampled). If it does,
+    /// the bar holds at the 0.95 cap with the elapsed seconds climbing — nearly-done and
+    /// visibly alive — under the unchanged 5-minute ceiling. Ruled in the field: an
+    /// occasionally-wrong promise beats a re-baseline that reads as a second failure.
+    private static let reclaimSettleExpectation: TimeInterval = 10
 
-    /// Stage two, entered only when stage one expires — which by the measured distribution means
-    /// this settle is in the slow mode. Measured from the STAGE TWO ENTRY, not from the settle's
-    /// start, so the bar restarts against a deadline chosen for the mode it now knows it is in.
-    ///
-    /// 105 s covers 17 of the 21 slow samples (24, 31, 35, 37, 39, 44, 52, 53, 57, 59, 66, 68, 75,
-    /// 87, 92, 99, 101, 161, 186, 188, 190 seconds). The four beyond it hold at the 0.95 cap with
-    /// the elapsed counter still climbing, which is what keeps an overrun reading as alive rather
-    /// than stuck. The real bound stays `reclaimSettleTimeout` at 5 minutes, comfortably past the
-    /// 190 s worst case on record.
-    private static let reclaimSettleStageTwoExpectation: TimeInterval = 105
-
-    /// The FORCED settle's single-stage promise. The four forced reclaims measured on
-    /// 2026-08-14 verified at +1, +45, +66 and +70 s; 90 covers them with margin. Deliberately
-    /// generous and deliberately single-stage — the field ruling on this UI was that users
-    /// understand a force takes a while, so an over-promise beats a mid-force re-baseline. An
-    /// overrun holds at the 0.95 cap; the real bound stays `reclaimSettleTimeout`.
-    private static let reclaimForcedSettleExpectation: TimeInterval = 90
+    /// The FORCED settle's promise, a little looser than the ordinary one: the only forced
+    /// reclaim measured on the fixed build verified at +1 s, but that is n=1 — the earlier +45,
+    /// +66 and +70 s forced settles all carried the stale-read signature of the freshness bug
+    /// rather than force physics, so the true clean distribution is thin. Fifteen seconds is
+    /// generous against the evidence and cheap to be wrong about: an overrun holds at the 0.95
+    /// cap; the real bound stays `reclaimSettleTimeout`.
+    private static let reclaimForcedSettleExpectation: TimeInterval = 15
 
     /// How often the settle forces a REAL pod round-trip past the freshness optimization. The
     /// first one goes out as soon as the link is up; this spaces the rest. Twelve seconds is
@@ -842,12 +808,18 @@ final class PodLoanPhoneController {
                 "** R37 OPEN LOOP — force-reclaim residual %+.3f U exceeds +%.2f: the pod delivered insulin the records cannot explain (watch died mid-session?). Automatic dosing STOPPED. **",
                 residual, Self.openLoopPositiveResidual))
             deps.openLoopForUncertainReconciliation()
+            // Written to survive a BANNER, which is where this is actually read. The previous
+            // wording ran past four lines and truncated mid-sentence on the field screenshot
+            // (2026-08-14), cutting off at "its real records w" — so the reader lost the one
+            // clause that says the situation resolves itself. Order is deliberate: the number
+            // and the dosing state first, because those are what a truncated banner must still
+            // carry, then the reassurance. The ~2 min figure is the measured lag from the watch
+            // reconnecting to its records landing and the estimate retiring.
             var body = String(format:
-                "The pod delivered %.2f U during the watch session that its records don't account for. Automatic dosing is OFF until you turn it back on.", residual)
+                "%.2f U on the pod isn't in the watch's records, so automatic dosing is OFF.", residual)
             if Self.bookUnattributedInsulinOnForceReclaim {
                 bookGapDose(units: residual, epoch: epoch)
-                body += String(format:
-                    " That %.2f U was logged as a bolus just now, so your IOB stays conservative. If the watch comes back, its real records will replace the estimate.", residual)
+                body += " It's booked as a bolus to keep IOB conservative; the watch's real records replace it about 2 min after it returns."
             } else {
                 body += " Check your insulin on board before dosing."
             }
@@ -1136,8 +1108,11 @@ final class PodLoanPhoneController {
         /// outlive its own last rung and must keep describing the situation until state moves.
         var forced: Bool
         var phase: ReclaimProgress.Phase {
-            if forced { return .forcing }
-            return branch == .live ? .draining : .wakingTheWatch
+            // The dead branch IS the force from the moment it is chosen — it waits for nothing —
+            // so it reads as forcing even in the instant before the rung runs, and through a
+            // force deferred behind an in-flight commit.
+            if forced || branch == .dead { return .forcing }
+            return .draining
         }
     }
     private var reclaimLadder: ReclaimLadder?
@@ -1157,11 +1132,9 @@ final class PodLoanPhoneController {
     private static let liveResendDelay: TimeInterval = 10
     private static let liveForceDelay: TimeInterval = 25
 
-    /// Dead branch: nothing is expected to answer, so the only reason to wait at all is the watch
-    /// that is merely asleep and wakes on the resend. Shorter on both rungs than the live branch,
-    /// because there is no drain in progress to give time to.
-    private static let deadResendDelay: TimeInterval = 8
-    private static let deadForceDelay: TimeInterval = 20
+    // The dead branch has no delay constants: it forces immediately. See armReclaimLadder for
+    // the reasoning — nothing that lands on that branch can answer, and the pulse discriminator
+    // above is what keeps an alive watch off it.
 
     /// The scheduling seam for the ladder's rungs. nil (production) runs them on `queue` at their
     /// real deadlines; a test substitutes a virtual clock and fires a rung inline, which is what
@@ -2334,13 +2307,34 @@ final class PodLoanPhoneController {
         let contactAge = lastContact.map { deps.now().timeIntervalSince($0) }
         let heardRecently = (contactAge ?? .greatestFiniteMagnitude) < Self.watchContactLivenessWindow
         let branch: ReclaimLadder.Branch = (reachable || heardRecently) ? .live : .dead
-        let resendDelay = branch == .live ? Self.liveResendDelay : Self.deadResendDelay
-        let forceDelay = branch == .live ? Self.liveForceDelay : Self.deadForceDelay
+
+        // The DEAD branch does not wait (field ruling, 2026-08-14). The reclaims that land here
+        // are, realistically: a lost watch, or a watch out of battery — and in both, nothing can
+        // answer a revoke, so a wait is ceremony. The scenario that LOOKS risky — the watch is
+        // actually alive in a bag and the user just wants the pod back on the phone — cannot
+        // normally reach this branch at all: an alive watch with the app running pulses its log
+        // every 300 s (the keepalive holds it awake for the whole loan; 283-302 s across 134
+        // measured gaps), so it is heardRecently and lands LIVE. The guard for that scenario is
+        // the pulse discriminator above, not a wait; the wait never protected anything.
+        //
+        // An earlier version waited out two revoke attempts here. No dead-branch revoke was
+        // ever answered — though honestly, the bench tests had the watch off by design, so that
+        // record is close to tautological. The structural argument is the one that holds: a
+        // watch silent past the liveness window either cannot answer or is not running, and in
+        // both cases its records come home the same way whenever it returns — the queued revoke
+        // is consumed at relaunch, the watch offers what it has, and the booked gap retires.
+        // Waiting changed none of that; it only delayed the force.
+        //
+        // The revoke is still SENT — it arms the split-brain guard on any watch that later
+        // wakes, and the returning-watch record flow rides on it. Fire, and force now. The
+        // force itself still defers behind an in-flight commit, unchanged.
+        let resendDelay: TimeInterval? = branch == .live ? Self.liveResendDelay : nil
+        let forceDelay: TimeInterval = branch == .live ? Self.liveForceDelay : 0
 
         let started = deps.now()
         reclaimLadder = ReclaimLadder(branch: branch,
                                       startedAt: started,
-                                      resendAt: started.addingTimeInterval(resendDelay),
+                                      resendAt: started.addingTimeInterval(resendDelay ?? 0),
                                       forceAt: started.addingTimeInterval(forceDelay),
                                       attempts: 1,          // the tap's own revoke
                                       forced: false)
@@ -2348,8 +2342,11 @@ final class PodLoanPhoneController {
         // The evidence, not just the verdict: a field log has to be auditable after the fact for
         // whether the branch this reclaim took was the right one.
         let ageText = contactAge.map { String(format: "%.1fs ago", $0) } ?? "never"
-        handbackDiag(epoch, String(format: "reclaim ladder %@ — last watch contact %@, reachable %d · resend +%.0fs, force +%.0fs",
-                                   branch.rawValue, ageText, reachable ? 1 : 0, resendDelay, forceDelay))
+        let planText = branch == .live
+            ? String(format: "resend +%.0fs, force +%.0fs", Self.liveResendDelay, Self.liveForceDelay)
+            : "force NOW (dead branch waits for nothing; the revoke is fire-and-forget)"
+        handbackDiag(epoch, String(format: "reclaim ladder %@ — last watch contact %@, reachable %d · %@",
+                                   branch.rawValue, ageText, reachable ? 1 : 0, planText))
 
         scheduleRungs(resendIn: resendDelay, forceIn: forceDelay)
     }
@@ -2571,47 +2568,26 @@ final class PodLoanPhoneController {
         return true
     }
 
-    /// Re-send a parked revoke on any sign of watch life (kept from v1), and promote a reclaim
-    /// that was running on the dead-watch budget: a watch that just became reachable is alive by
-    /// the one signal that proves it, so it gets the live branch's more generous deadlines and a
-    /// real chance to drain its records instead of being forced off in 20 s.
+    /// Re-send a parked revoke on any sign of watch life (kept from v1), and record it against
+    /// a waiting ladder's two-attempt budget so the resend rung never buys a third — this
+    /// wake-up revoke is the best-timed attempt available, going out while the watch is
+    /// provably awake.
+    ///
+    /// A dead-branch promotion used to live here (a dead ladder that got proof of life moved
+    /// onto the live deadlines). It went with the dead branch's wait: a dead ladder now forces
+    /// immediately, so there is no window left in which a waking watch could promote one — and
+    /// a watch that wakes after the force follows the ordinary returning-watch path, records
+    /// and all.
     func watchDidBecomeReachable() {
         queue.async {
-            var resent = false
-            if self.pendingRevoke {
-                self.sendMessage(.revoke(Revoke(epoch: self.epoch)))
-                resent = true
+            guard self.pendingRevoke else { return }
+            self.sendMessage(.revoke(Revoke(epoch: self.epoch)))
+            if var ladder = self.reclaimLadder, self.state == .reclaimPending, !ladder.forced,
+               ladder.attempts < 2 {
+                ladder.attempts += 1
+                self.reclaimLadder = ladder
             }
-            self.promoteReclaimLadderToLive(afterResend: resent)
         }
-    }
-
-    /// Move a DEAD-branch ladder onto the live deadlines, still anchored to the original tap so
-    /// the promise on screen only ever gets later by the amount the live branch allows. Safe to
-    /// call when no ladder is armed, when it is already live, or once the force has run.
-    ///
-    /// The revoke that reachability just sent COUNTS as an attempt — it is the best-timed one
-    /// available, going out while the watch is provably awake — so this never buys a third.
-    private func promoteReclaimLadderToLive(afterResend resent: Bool) {
-        guard var ladder = reclaimLadder, state == .reclaimPending, !ladder.forced else { return }
-        let wasDead = ladder.branch == .dead
-        if resent, ladder.attempts < 2 { ladder.attempts += 1 }
-        if wasDead {
-            ladder.branch = .live
-            ladder.resendAt = ladder.startedAt.addingTimeInterval(Self.liveResendDelay)
-            ladder.forceAt = ladder.startedAt.addingTimeInterval(Self.liveForceDelay)
-        }
-        reclaimLadder = ladder
-        // An already-live ladder keeps its deadlines; only the spent attempt was worth recording,
-        // and the resend rung reads it before adding a third.
-        guard wasDead else { return }
-
-        let now = deps.now()
-        let resendIn: TimeInterval? = ladder.attempts < 2 ? ladder.resendAt.timeIntervalSince(now) : nil
-        let forceIn = ladder.forceAt.timeIntervalSince(now)
-        handbackDiag(epoch, String(format: "reclaim ladder DEAD → LIVE — watch became reachable · %d attempt(s) sent, force now at +%.0fs from the tap",
-                                   ladder.attempts, Self.liveForceDelay))
-        scheduleRungs(resendIn: resendIn, forceIn: forceIn)
     }
 
     // MARK: - Helpers

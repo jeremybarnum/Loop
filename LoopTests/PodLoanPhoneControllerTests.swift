@@ -332,8 +332,10 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// lands the NEXT request grants. The invariant this test protects is unchanged: no
     /// permanent refusal.
     func testStrandedStateRecoversOnNewRequest() throws {
-        let controller = makeController()
-        // Strand it: escape-hatch reclaim with no watch to hand back → reclaimPending.
+        // Recent contact keeps this on the LIVE branch, which waits on its ladder — the only
+        // way to strand in reclaimPending now, since the dead branch forces on its own. The
+        // watch then never drains, which is the strand.
+        let controller = makeController(lastWatchContact: { Date() })
         establishLoan(controller)
         controller.reclaimNow()
         waitForState(controller, .reclaimPending)
@@ -591,10 +593,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     func testForceReclaimReturnsToOwner() throws {
         let controller = makeController()
         establishLoan(controller)
+        // No contact on record and unreachable = the dead branch, which forces on its own —
+        // the tap IS the force now, no separate call needed.
         controller.reclaimNow()
-        waitForState(controller, .reclaimPending)
-
-        controller.forceReclaimToOwner(reason: "test")
         waitForState(controller, .owner)
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed on force")
         // Dosing is no longer restored AT the reclaim — it is held for the audit's verdict.
@@ -611,11 +612,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     func testGrantDeferredWhilePodStillReturningFromReclaim() throws {
         let controller = makeController()
         establishLoan(controller)
-        controller.reclaimNow()
-        waitForState(controller, .reclaimPending)
-
         connectionReady = false                       // pod's BLE not truly back yet
-        controller.forceReclaimToOwner(reason: "test")
+        // Dead branch: the tap forces on its own and opens the settle window.
+        controller.reclaimNow()
         waitForState(controller, .owner)              // settle window now open
 
         let denied = expectSend()
@@ -1526,7 +1525,13 @@ extension PodLoanPhoneControllerTests {
     /// The same tap against a watch nobody has heard from in 12 minutes — five of the six field
     /// revokes looked exactly like this. Shorter ladder, and the tile is told to stop implying a
     /// drain is happening.
-    func testDeadBranchArmsShorterLadderAndForcesAfterTwoAttempts() throws {
+    /// The dead branch does not wait. The reclaims that land here are, realistically, a lost
+    /// watch or a dead battery — nothing can answer — and an alive watch cannot normally reach
+    /// this branch at all, because its 300 s log pulse keeps it inside the liveness window. So:
+    /// one revoke goes out fire-and-forget (the returning-watch record flow rides on it), the
+    /// force is armed at ZERO delay, and no resend rung exists to push a second revoke at a
+    /// watch that is not there.
+    func testDeadBranchForcesImmediatelyWithoutWaitingOnTheWatch() throws {
         let controller = makeController(watchReachable: { false },
                                         lastWatchContact: { Date().addingTimeInterval(-.minutes(12)) })
         establishLoan(controller)
@@ -1534,55 +1539,26 @@ extension PodLoanPhoneControllerTests {
         ladder.install(on: controller)
 
         controller.reclaimNow()
-        waitUntil(timeout: 5, "ladder armed") { ladder.armed.count == 2 }
+        waitUntil(timeout: 5, "force armed") { ladder.armed.count == 1 }
 
-        XCTAssertEqual(ladder.armed.map(\.label), ["reclaim-resend", "reclaim-force"])
-        XCTAssertEqual(ladder.armed.map(\.delay), [8, 20], "stale contact and unreachable is the dead branch")
-        XCTAssertEqual(controller.reclaimProgress?.phase, .wakingTheWatch)
-        XCTAssertEqual(controller.reclaimProgress.map { $0.expectedBy.timeIntervalSince($0.startedAt) } ?? 0, 20,
-                       accuracy: 0.5)
+        XCTAssertEqual(ladder.armed.map(\.label), ["reclaim-force"], "no resend rung — nothing can answer it")
+        XCTAssertEqual(ladder.armed.first?.delay ?? -1, 0, accuracy: 0.001, "the force waits for nothing")
+        XCTAssertEqual(revokeCount(), 1, "the tap's own revoke still goes out, fire-and-forget")
+        XCTAssertEqual(controller.reclaimProgress?.phase, .forcing,
+                       "the tile says what is actually happening from the first paint")
         XCTAssertNotNil(diagMatching("reclaim ladder DEAD"))
         XCTAssertNotNil(diagMatching("reachable 0"), "the evidence that chose the branch is logged, not just the verdict")
-
-        ladder.fire("reclaim-resend")
-        XCTAssertEqual(revokeCount(), 2, "the retry exists for a watch that is merely asleep")
-        XCTAssertEqual(controller.state, .reclaimPending)
+        XCTAssertNotNil(diagMatching("force NOW"), "the zero-wait plan is on the record, not implied")
 
         ladder.fire("reclaim-force")
         waitForState(controller, .owner)
-        XCTAssertEqual(revokeCount(), 2)
+        XCTAssertEqual(revokeCount(), 1, "nothing ever resends on the dead branch")
     }
 
-    /// The dead branch's labels are attempt then verdict: the phase is `.wakingTheWatch` while
-    /// the first revoke is out, and flips to `.watchUnreachable` at the resend deadline — both
-    /// attempts out, none answered — so the tile says "can't reach" twelve seconds BEFORE the
-    /// force instead of the user discovering the failure only when the force fires.
-    func testDeadBranchPhaseBecomesUnreachableAtTheResendDeadline() throws {
-        let controller = makeController(watchReachable: { false },
-                                        lastWatchContact: { [weak self] in (self?.clock ?? Date()).addingTimeInterval(-.minutes(12)) },
-                                        now: { [weak self] in self?.clock ?? Date() })
-        establishLoan(controller)
-        let ladder = ReclaimLadderRecorder()
-        ladder.install(on: controller)
-
-        controller.reclaimNow()
-        waitUntil(timeout: 5, "ladder armed") { ladder.armed.count == 2 }
-        XCTAssertEqual(controller.reclaimProgress?.phase, .wakingTheWatch,
-                       "the first revoke is an attempt, not a verdict")
-
-        clock = clock.addingTimeInterval(7.9)      // just inside the first attempt's window
-        XCTAssertEqual(controller.reclaimProgress?.phase, .wakingTheWatch)
-
-        clock = clock.addingTimeInterval(0.2)      // past the +8 s resend deadline
-        XCTAssertEqual(controller.reclaimProgress?.phase, .watchUnreachable,
-                       "both attempts out and unanswered — the tile says so before the force")
-        XCTAssertEqual(controller.reclaimProgress.map { $0.expectedBy.timeIntervalSince($0.startedAt) } ?? 0, 20,
-                       accuracy: 0.5, "the published deadline is still the ladder's force rung")
-    }
-
-    /// A settle that follows a FORCE reclaim runs ONE stage against its own 90 s promise — no
-    /// fast/slow re-baseline, which mid-force would read as a second failure. The four forced
-    /// reclaims measured verified at +1, +45, +66 and +70 s; an overrun holds at the cap.
+    /// A settle that follows a FORCE reclaim runs against its own 15 s promise — a little looser
+    /// than the ordinary settle's, because the clean forced sample is thin (one measurement at
+    /// +1 s; the earlier +45/+66/+70 s all carried the stale-read signature of the freshness
+    /// bug). No re-baseline mid-force, and an overrun holds at the cap.
     func testForcedSettleRunsOneStageAgainstTheForcedPromise() throws {
         let controller = makeController(watchReachable: { false },
                                         lastWatchContact: { nil },
@@ -1593,23 +1569,22 @@ extension PodLoanPhoneControllerTests {
         ladder.install(on: controller)
 
         controller.reclaimNow()
-        waitUntil(timeout: 5, "ladder armed") { ladder.armed.count == 2 }
-        ladder.fire("reclaim-resend")
+        waitUntil(timeout: 5, "force armed") { ladder.armed.count == 1 }
         ladder.fire("reclaim-force")
         waitForState(controller, .owner)
 
         let early = try XCTUnwrap(controller.reclaimProgress,
                                   "a forced settle publishes progress like any other")
         XCTAssertEqual(early.phase, .forceReclaimingPod)
-        XCTAssertEqual(early.expectedBy.timeIntervalSince(early.startedAt), 90, accuracy: 0.5)
+        XCTAssertEqual(early.expectedBy.timeIntervalSince(early.startedAt), 15, accuracy: 0.5)
 
-        clock = clock.addingTimeInterval(45)       // deep past the two-stage path's 12 s boundary
+        clock = clock.addingTimeInterval(7.5)      // halfway through the promise
         let mid = try XCTUnwrap(controller.reclaimProgress)
         XCTAssertEqual(mid.phase, .forceReclaimingPod,
                        "no re-baseline mid-force — one operation, one timer")
-        XCTAssertEqual(mid.fraction ?? -1, 45.0 / 90.0, accuracy: 0.01)
+        XCTAssertEqual(mid.fraction ?? -1, 0.5, accuracy: 0.01)
 
-        clock = clock.addingTimeInterval(50)       // 95 s: past the promise
+        clock = clock.addingTimeInterval(12.5)     // 20 s: past the promise
         let over = try XCTUnwrap(controller.reclaimProgress)
         XCTAssertEqual(over.phase, .forceReclaimingPod)
         XCTAssertEqual(over.fraction ?? -1, 0.95, accuracy: 0.001,
@@ -1649,33 +1624,27 @@ extension PodLoanPhoneControllerTests {
         XCTAssertEqual(controller.state, .owner)
     }
 
-    /// A dead-branch ladder that gets proof of life mid-flight. Reachability is the one signal
-    /// that settles the question in the positive, so the ladder moves onto the live budget — the
-    /// watch is awake and now has a real chance to drain rather than being cut off at 20 s.
-    func testReachabilityMidDeadLadderCollapsesItToTheLiveDeadline() throws {
-        let controller = makeController(lastWatchContact: { Date().addingTimeInterval(-.minutes(12)) })
+    /// A reachability wake-up while a LIVE ladder waits re-sends the parked revoke — the best-
+    /// timed attempt available, going out while the watch is provably awake — and it COUNTS
+    /// against the two-attempt budget, so the resend rung never buys a third. (The dead-branch
+    /// promotion that used to live here is gone with the dead branch's wait: a dead ladder
+    /// forces immediately, so there is no window left for a waking watch to promote.)
+    func testReachabilityResendOnALiveLadderSpendsTheSecondAttempt() throws {
+        let controller = makeController(lastWatchContact: { Date().addingTimeInterval(-10) })
         establishLoan(controller)
         let ladder = ReclaimLadderRecorder()
         ladder.install(on: controller)
 
         controller.reclaimNow()
         waitUntil(timeout: 5, "ladder armed") { ladder.armed.count == 2 }
-        XCTAssertEqual(ladder.armed.map(\.delay), [8, 20])
+        XCTAssertEqual(revokeCount(), 1)
 
         controller.watchDidBecomeReachable()
-        waitUntil(timeout: 5, "ladder promoted") { ladder.armed.count == 3 }
+        waitUntil(timeout: 5, "revoke resent") { self.revokeCount() == 2 }
 
-        XCTAssertTrue(ladder.isCancelled("reclaim-force", arming: 0), "the dead branch's 20 s force is retired")
-        XCTAssertEqual(ladder.armed.last?.label, "reclaim-force")
-        XCTAssertEqual(ladder.armed.last?.delay ?? 0, 25, accuracy: 1.0,
-                       "the new force deadline is the live one, still measured from the tap")
-        XCTAssertEqual(controller.reclaimProgress?.phase, .draining, "a watch that just woke is alive")
-        XCTAssertEqual(controller.reclaimProgress.map { $0.expectedBy.timeIntervalSince($0.startedAt) } ?? 0, 25,
-                       accuracy: 0.5)
-        XCTAssertEqual(revokeCount(), 2, "the wake-up resend IS the second attempt — better timed than the rung's")
-        XCTAssertEqual(ladder.armed.filter { $0.label == "reclaim-resend" }.count, 1,
-                       "promotion must not buy a third attempt")
-        XCTAssertNotNil(diagMatching("watch became reachable"), "the promotion is on the record, not silent")
+        ladder.fire("reclaim-resend")
+        XCTAssertEqual(revokeCount(), 2, "the wake-up resend spent the budget — the rung must not buy a third")
+        XCTAssertEqual(controller.state, .reclaimPending)
     }
 
     // MARK: - The BLE settle is the wait the bar draws (2026-08-14)
@@ -1704,53 +1673,15 @@ extension PodLoanPhoneControllerTests {
                                     "a watch-initiated hand-back must publish progress for its settle")
         XCTAssertEqual(atStart.phase, .reconnectingToPod)
         XCTAssertEqual(atStart.fraction ?? -1, 0, accuracy: 0.001, "anchored where the settle began")
-        XCTAssertEqual(atStart.expectedBy.timeIntervalSince(atStart.startedAt), 12, accuracy: 0.001,
-                       "stage one runs to the fast mode's deadline, not to the 5-minute ceiling")
+        XCTAssertEqual(atStart.expectedBy.timeIntervalSince(atStart.startedAt), 10, accuracy: 0.001,
+                       "the settle runs to its own promise, not to the 5-minute ceiling")
 
         clock = clock.addingTimeInterval(6)
         let later = try XCTUnwrap(controller.reclaimProgress)
         XCTAssertEqual(later.phase, .reconnectingToPod)
-        XCTAssertEqual(later.fraction ?? -1, 0.5, accuracy: 0.001, "the bar moves with the clock")
+        XCTAssertEqual(later.fraction ?? -1, 0.6, accuracy: 0.001, "the bar moves with the clock")
         XCTAssertEqual(later.elapsed, 6, accuracy: 0.001, "and so do the label's ticking seconds")
         XCTAssertGreaterThan(later.fraction ?? -1, atStart.fraction ?? 0)
-    }
-
-    /// The settle is BIMODAL — 70 of 91 reclaims logged 2026-08-02 to 2026-08-14 finished in
-    /// 1-11 s, the other 21 in 24-190 s, and nothing at all in between. Stage one expiring is
-    /// therefore a real finding rather than an arbitrary cutoff: this settle is in the slow mode.
-    /// The bar re-baselines at that boundary and runs against the slow mode's own deadline, while
-    /// the label's seconds keep counting the WHOLE wait so nothing appears to restart.
-    func testSettleRebaselinesIntoItsSlowStageWhenTheFastDeadlineExpires() throws {
-        let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
-        let grant = establishLoan(controller)
-        connectionReady = false
-
-        let ackSent = expectSend()
-        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
-            HandbackOffer(epoch: grant.epoch, handedBackAt: clock, finalStatus: nil, odometer: nil,
-                          events: [], tombstones: [], recovered: false)).transportDictionary())
-        wait(for: [ackSent], timeout: 5)
-        waitForState(controller, .owner)
-
-        clock = clock.addingTimeInterval(11)          // the last second of the fast mode
-        let lastFast = try XCTUnwrap(controller.reclaimProgress)
-        XCTAssertEqual(lastFast.phase, .reconnectingToPod, "still inside the mode 77% of settles finish in")
-        XCTAssertEqual(lastFast.fraction ?? -1, 11.0 / 12.0, accuracy: 0.001)
-
-        clock = clock.addingTimeInterval(1)           // 12 s: stage one expires exactly here
-        let entry = try XCTUnwrap(controller.reclaimProgress)
-        XCTAssertEqual(entry.phase, .reconnectingToPodSlowly, "the copy has to stop repeating an expired promise")
-        XCTAssertEqual(entry.fraction ?? -1, 0, accuracy: 0.001, "the bar re-baselines at the stage boundary")
-        XCTAssertEqual(entry.elapsed, 12, accuracy: 0.001, "the seconds do NOT restart with it")
-        XCTAssertEqual(entry.expectedBy.timeIntervalSince(entry.startedAt), 12 + 105, accuracy: 0.001,
-                       "stage two promises an answer 105 s after the stage it was entered from")
-
-        clock = clock.addingTimeInterval(52.5)        // half of stage two's budget
-        let midSlow = try XCTUnwrap(controller.reclaimProgress)
-        XCTAssertEqual(midSlow.phase, .reconnectingToPodSlowly)
-        XCTAssertEqual(midSlow.fraction ?? -1, 0.5, accuracy: 0.001,
-                       "the slow stage measures from its own entry, not from the settle's start")
-        XCTAssertEqual(midSlow.elapsed, 64.5, accuracy: 0.001)
     }
 
     /// A phone-TAPPED reclaim crosses two waits. Only the second one is drawn — the handover is
@@ -1798,13 +1729,15 @@ extension PodLoanPhoneControllerTests {
                                      "the settle is the half the user waits through")
         XCTAssertEqual(settling.phase, .reconnectingToPod)
         XCTAssertNotNil(settling.fraction, "and the only half that gets a bar")
-        XCTAssertEqual(settling.expectedBy.timeIntervalSince(settling.startedAt), 12, accuracy: 0.001)
+        XCTAssertEqual(settling.expectedBy.timeIntervalSince(settling.startedAt), 10, accuracy: 0.001)
     }
 
-    /// Both stage deadlines are EXPECTATIONS, not ceilings: four of the 21 slow samples on record
-    /// ran past stage two's 105 s budget, out to 190 s. The bar caps at 0.95 and STAYS there — the
-    /// 5-minute settle timeout is the real bound — while the elapsed seconds keep climbing, which
-    /// is the only thing left on the tile that can say the phone is still working.
+    /// The promise is an EXPECTATION, not a ceiling: the slow mode existed (24-190 s on record,
+    /// diagnosed as verification calls that skipped the radio and fixed by the forced read) and
+    /// could recur. The bar caps at 0.95 and STAYS there — the 5-minute settle timeout is the
+    /// real bound — while the elapsed seconds keep climbing, which is the only thing left on
+    /// the tile that can say the phone is still working. No re-baseline, no phase change: one
+    /// promise, held.
     func testSettleFractionCapsAndHoldsWhenTheSettleOverruns() throws {
         let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
         let grant = establishLoan(controller)
@@ -1817,29 +1750,25 @@ extension PodLoanPhoneControllerTests {
         wait(for: [ackSent], timeout: 5)
         waitForState(controller, .owner)
 
-        clock = clock.addingTimeInterval(11.4)      // 0.95 of stage one's 12 s
-        let stageOneCap = try XCTUnwrap(controller.reclaimProgress)
-        XCTAssertEqual(stageOneCap.phase, .reconnectingToPod)
-        XCTAssertEqual(stageOneCap.fraction ?? -1, 0.95, accuracy: 0.001,
-                       "stage one caps too — it never reads done before the round-trip lands")
+        clock = clock.addingTimeInterval(9.5)       // 0.95 of the 10 s promise
+        let capped = try XCTUnwrap(controller.reclaimProgress)
+        XCTAssertEqual(capped.phase, .reconnectingToPod)
+        XCTAssertEqual(capped.fraction ?? -1, 0.95, accuracy: 0.001,
+                       "the bar never reads done before the round-trip lands")
 
-        clock = clock.addingTimeInterval(0.5)       // 11.9 s: still stage one, still capped
-        let stageOneEnd = try XCTUnwrap(controller.reclaimProgress)
-        XCTAssertEqual(stageOneEnd.phase, .reconnectingToPod)
-        XCTAssertEqual(stageOneEnd.fraction ?? -1, 0.95, accuracy: 0.001)
-
-        clock = clock.addingTimeInterval(100)       // 111.9 s: 99.9 s into stage two, past its 0.95
-        let stageTwoCap = try XCTUnwrap(controller.reclaimProgress)
-        XCTAssertEqual(stageTwoCap.phase, .reconnectingToPodSlowly)
-        XCTAssertEqual(stageTwoCap.fraction ?? -1, 0.95, accuracy: 0.001)
-
-        clock = clock.addingTimeInterval(78.1)      // 190 s: the worst settle ever measured
+        clock = clock.addingTimeInterval(50.5)      // 60 s: deep past the promise
         let overrun = try XCTUnwrap(controller.reclaimProgress,
                                     "an overrun is still a live settle, not a cleared one")
-        XCTAssertEqual(overrun.phase, .reconnectingToPodSlowly)
+        XCTAssertEqual(overrun.phase, .reconnectingToPod, "no slow-mode phase left to re-baseline into")
         XCTAssertEqual(overrun.fraction ?? -1, 0.95, accuracy: 0.001, "held at the cap, not restarted")
-        XCTAssertEqual(overrun.elapsed, 190, accuracy: 0.001,
+        XCTAssertEqual(overrun.elapsed, 60, accuracy: 0.001,
                        "the seconds keep climbing so a capped bar still reads as alive")
+
+        clock = clock.addingTimeInterval(130)       // 190 s: the worst settle ever measured
+        let worst = try XCTUnwrap(controller.reclaimProgress)
+        XCTAssertEqual(worst.phase, .reconnectingToPod)
+        XCTAssertEqual(worst.fraction ?? -1, 0.95, accuracy: 0.001)
+        XCTAssertEqual(worst.elapsed, 190, accuracy: 0.001)
     }
 
     /// The settle must FORCE a real pod round-trip rather than trusting the cheap call, because

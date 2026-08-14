@@ -1499,3 +1499,21 @@ incomplete and should not be written up as though it were settled.
 **Initiation type is not the variable**, despite looking like it twice. Build 281 samples:
 watch-initiated End +4, +7, +7 s (1, 1, 2 stale reads); phone tap +1, +7 and +169 s (0, 1, 77);
 forced +45 s (17). A phone tap produced both the fastest settle of the day and the slowest.
+
+## 2026-08-14 16:49-17:36 (build 282, the forced-read build) — six settles, zero stale reads,
+## and the evidence that retired the two-stage bar and the dead branch's wait
+
+    e71  forced (watch never seen)   settle +1s   0 stale   (~22s total, 20s of it the old ladder wait)
+    e72  phone tap, live             settle +3s   0 stale   4.3s tap-to-verified
+    e73  watch End                   settle +3s   0 stale   4.3s
+    e74  watch End (6-event drain)   settle +3s   0 stale   7.1s
+    e75  phone tap, live             settle +2s   0 stale   3.2s
+    e76  watch End                   settle +3s   0 stale   6.7s
+
+Phone-tap and watch-End are indistinguishable — both run the same drain and the same settle —
+and the one forced reclaim's settle matched the live ones once the freshness bug stopped
+starving it. Jeremy's read, adopted as the ruling above (R40): 10 s determinate bar watch-
+present, zero-wait force watch-absent with a 15 s bar. His caution, kept on the record: the
+eight-for-eight unanswered dead-branch revokes are near-tautological evidence, since every
+bench test had the watch off by design; the structural argument (the pulse discriminator keeps
+an alive watch off the dead branch) is the one that holds.

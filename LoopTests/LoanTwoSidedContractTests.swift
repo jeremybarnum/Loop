@@ -300,7 +300,12 @@ final class LoanTwoSidedContractTests: XCTestCase {
                 let failure = self.backfillFailure
                 self.lock.unlock()
                 completion(failure)
-            }
+            },
+            // This harness pairs the phone with a live, responsive fake watch, so the phone's
+            // liveness evidence must say so: a recent contact keeps a tapped reclaim on the
+            // LIVE branch, where it waits for the drain these tests then perform. Without it
+            // the dead branch would force instantly against a watch that was about to answer.
+            lastWatchContactAt: { Date() }
         ))
     }
 
