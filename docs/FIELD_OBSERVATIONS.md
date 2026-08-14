@@ -889,6 +889,38 @@ since "the watch vanished mid-loan" is the definition of an unclean hand-back �
 says the loop goes open when a hand-back "cannot be established as complete", and this one
 cannot be, however good the records look.
 
+## 2026-08-13 21:16-21:20 (e49, build 278) — THE BATCH FIELD-VALIDATED in one genuine dead-watch run
+
+The first dead-watch run on 278 was the real thing: the watch took the loan at 10% battery and
+died mid-session with a 1.00 U bolus and a 10 g carb aboard, phone off. Every fix in the batch
+executed on its first field opportunity, phone log timestamps:
+
+    21:16:43  SALVAGE — 2 dose(s): 0.000 U bolus + 2 rate record(s) (0.460 U gross programmed)
+    21:16:45  reconcile[FORCE-RECLAIM] delivered=1.050 expected=0.150 residual=+0.900 · odometer +2s
+    21:16:45  R37 OPEN LOOP · gap BOOKED 0.90 U — ONCE (e42/e44 printed it twice)
+    (no residual-bank line — the +0.900 stayed OUT of the R32 calibration set)
+    21:20:03  watch returns · write 3 dose(s) · backfill 5 loan-window dose(s) (e44 boundary) · ACK
+    21:20:03  gap RETIRED — 3 real dose(s): 1.00 U bolus + 2 rate record(s) (0.72 U gross
+              programmed, pre-truncation) + 1 carb; the 0.90 U estimate replaced
+    21:20:05  duplicate offer (WC redelivery) → write 0 dose(s), backfill re-ran in 6 ms, re-ACK
+              — the upsert's idempotency proven under real transport redelivery
+
+The arithmetic closes: pod measured 1.050 U in the phone-absent window; the salvage expected
+0.150; the placeholder banked the 0.900 gap; the journal's real records (1.00 bolus + temp
+pulses) replace it and the books land on the odometer. The e44 failure mode — books 0.600 vs
+pod 0.850, temps silently dropped at the boundary — did not recur: the backfill line is it
+being prevented, live. The salvage line's bolus/rate split answered "was the bolus in the
+set?" at a glance (no), which is precisely what OBS-9 built it for.
+
+R37's hold also showed its shape: dosing stopped from the 21:16:45 verdict until the user
+re-enables — the 3.3-minute watch-dead window ran with the loop OPEN, no dosing on unverified
+books.
+
+Remaining boxes, both passive: the phone-vs-watch Eventually agreement (A2's screen proof —
+no log line by design) and the next loan's SEED-IN dump, which will enumerate the healed rows.
+B6 separately confirmed: the 277-era session and both 278 sessions survived as stamped
+archives — the first phone-log history this project has ever retained across a relaunch.
+
 ## 2026-08-13 evening — the dead-watch review: three defects found, batch fixed, two earlier
 ## readings corrected
 
