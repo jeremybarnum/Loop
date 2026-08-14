@@ -2,16 +2,15 @@
 //  WatchStoreEffectsTests.swift
 //  LoopTests
 //
-//  Track B of the 2026-07-21 two-track plan (task #41): sim-side proof of the
-//  watch store-configuration chain, iterated locally instead of one 20-minute
-//  TestFlight cycle per guard.
+//  Sim-side proof of the watch store-configuration chain, iterated locally
+//  instead of one 20-minute TestFlight cycle per guard.
 //
 //  The field bug: StockLoopStack.makeStores built the watch CarbStore/DoseStore
 //  with no schedules and no overrideHistory, and nothing propagated the loan
 //  grant's therapy settings to the stores — so carbStore.getGlucoseEffects
 //  (.notConfigured) and doseStore.getGlucoseEffects (.configurationError)
 //  failed on EVERY loop cycle and the watch's automatic loop never once
-//  produced a dose recommendation. Build 142's instrumentation surfaced it as
+//  produced a dose recommendation. Instrumentation surfaced it as
 //  "NOT DOSING — prediction missing carbEffect", then (after the schedule fix)
 //  "missing insulinEffect" — the second wall being the overrideHistory
 //  asymmetry these tests pin down.
@@ -83,7 +82,7 @@ final class WatchStoreEffectsTests: XCTestCase {
 
     override func tearDown() {
         cacheStore = nil
-        // #103: never unlink a temp store directory synchronously — PersistenceController's
+        // Never unlink a temp store directory synchronously — PersistenceController's
         // Core Data stack comes up ASYNCHRONOUSLY, and the unlink race presents as a store that
         // answers with zero rows, in whichever suite happens to be running. The OS reclaims temp.
         cacheDir = nil
@@ -245,9 +244,9 @@ final class WatchStoreEffectsTests: XCTestCase {
     /// `guard events.count > 0` early return. So a pod status read that yields no new
     /// doses STILL advances the loop's `pumpDataTooOld` gate.
     ///
-    /// The entire `checkPumpDataAndLoop` fix depends on this: under E4 the pod is
-    /// orphaned, an idle pod produces no dose events, and if a status-only read could
-    /// not refresh recency the loop would stay deadlocked forever. If LoopKit ever
+    /// The entire `checkPumpDataAndLoop` fix depends on this: the pod's BLE link is
+    /// released between doses, an idle pod produces no dose events, and if a status-only
+    /// read could not refresh recency the loop would stay deadlocked forever. If LoopKit ever
     /// moves that assignment below the guard, this test fails loudly instead of the
     /// watch silently refusing to dose again.
     func testEmptyPumpEventsStillRefreshesLastAddedPumpData() {
@@ -265,7 +264,7 @@ final class WatchStoreEffectsTests: XCTestCase {
         XCTAssertEqual(doseStore.lastAddedPumpData.timeIntervalSince1970,
                        reconciliation.timeIntervalSince1970,
                        accuracy: 0.001,
-                       "an empty event batch must still advance lastAddedPumpData — otherwise a status-only pod read can never clear pumpDataTooOld under E4")
+                       "an empty event batch must still advance lastAddedPumpData — otherwise a status-only pod read can never clear pumpDataTooOld while the pod link is released between doses")
     }
 
     // MARK: - momentum (guard :671) — glucose-store-only, no schedules involved
@@ -299,7 +298,7 @@ final class WatchStoreEffectsTests: XCTestCase {
         waitForExpectations(timeout: 10)
     }
 
-    // MARK: - #49 phone→watch carb seeding: idempotent across re-takeovers
+    // MARK: - phone→watch carb seeding: idempotent across re-takeovers
 
     /// The load-bearing correctness property. The watch re-ingests the grant on EVERY
     /// re-takeover (~12 epochs occurred in a single 2026-07-22 session), so seeding carbs
@@ -339,7 +338,7 @@ final class WatchStoreEffectsTests: XCTestCase {
         XCTAssertEqual(first, second, accuracy: 0.01, "re-seeding the SAME carb must NOT double COB")
     }
 
-    // MARK: - R30/#89: wrist carb delete on the mirror store
+    // MARK: - Wrist carb delete on the mirror store
 
     // Two field failures, one release each, both authorship gates: 258 died on
     // deleteCarbEntry's method guard ("unauthorized"), 260 died on
@@ -443,7 +442,7 @@ final class WatchStoreEffectsTests: XCTestCase {
         waitForExpectations(timeout: 10)
     }
 
-    // MARK: - Grant insulin seeding across epochs (#53)
+    // MARK: - Grant insulin seeding across epochs
 
     // The insulin analog of the carb test above, and the regression guard for the
     // worst bug of 2026-07-22. Carb seeding is idempotent because it reuses the
@@ -536,7 +535,7 @@ final class WatchStoreEffectsTests: XCTestCase {
                        "...and across three, the count that produced 7.40 U in the field")
     }
 
-    // MARK: - Handover fidelity (#69): the real seed path via the shared seedDoseEntries
+    // MARK: - Handover fidelity: the real seed path via the shared seedDoseEntries
 
     /// A minimal grant carrying the given records (the fields seedDoseEntries reads).
     private func makeGrant(epoch: Int, doseHistory: [LoanDoseRecord], boundary: LoanDoseRecord?) -> LoanGrant {
@@ -573,7 +572,7 @@ final class WatchStoreEffectsTests: XCTestCase {
         waitForExpectations(timeout: 10)
     }
 
-    /// #69, field-confirmed `boundaryDup=YES`: a running temp arrives in doseHistory as the
+    /// Field-confirmed `boundaryDup=YES`: a running temp arrives in doseHistory as the
     /// open temp AND (older phones) as a same-start boundaryRecord. Seeding via addPumpEvents
     /// runs stock reconciled(), which collapses the same-start overlap to ONE dose, so the
     /// boundary does not inflate IOB — the pre-fix `addDoses` side door summed them (the
@@ -605,7 +604,7 @@ final class WatchStoreEffectsTests: XCTestCase {
         // near — not exactly at — the single-temp value. The point is it is NOT ~2x (the field
         // double-seed). A naive double would be ≈1.8x; bound it well under that, and above zero.
         XCTAssertLessThan(iobWithBoundary, iobNoBoundary * 1.4,
-                          "boundaryRecord must NOT double-seed — addPumpEvents+reconciled() collapses the same-start duplicate (#69)")
+                          "boundaryRecord must NOT double-seed — addPumpEvents+reconciled() collapses the same-start duplicate")
         XCTAssertGreaterThan(iobWithBoundary, iobNoBoundary * 0.5,
                              "...and the temp must still count once, not vanish")
     }
@@ -670,7 +669,7 @@ final class WatchStoreEffectsTests: XCTestCase {
                           "netting rides the current profile on the pump-event path — the watch's frozen profile keeps it stable")
     }
 
-    // MARK: - #69 double-hex fix (build ~180): seed identity must round-trip to the pod-native raw
+    // MARK: - Double-hex fix: seed identity must round-trip to the pod-native raw
 
     /// Counts distinct bolus doses visible to IOB (the same delivery-store ∪ pump-event dedup
     /// union `insulinOnBoard` reads, over a fixed 6 h window).
@@ -812,7 +811,7 @@ final class WatchStoreEffectsTests: XCTestCase {
         XCTAssertEqual(temps.first?.isMutable, false, "the surviving row is the immutable seeded version")
     }
 
-    // MARK: - #73/#74 SessionInsulinLedger — the single-owner timeline
+    // MARK: - SessionInsulinLedger — the single-owner timeline
 
     private func flatSchedule(_ rate: Double = 1.0) -> BasalRateSchedule {
         BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: rate)])!
@@ -903,11 +902,11 @@ final class WatchStoreEffectsTests: XCTestCase {
                        "~0.08 U per 5 min of a +1.0 U/hr net temp — reality-tracking by construction")
     }
 
-    // MARK: - #72: a pod-owned live temp must make IOB TRACK delivery in real time
+    // MARK: - A pod-owned live temp must make IOB TRACK delivery in real time
 
-    /// Jeremy's reference example (2026-07-28): schedule 1.0 U/hr, a 2.0 U/hr temp running at
+    /// Jeremy's reference example: schedule 1.0 U/hr, a 2.0 U/hr temp running at
     /// takeover → net +1.0 U/hr → IOB must GROW ~0.08 U per 5 min (minus early decay) while the
-    /// temp runs. SCOPE (adversarial-review correction): this test pins the STORE half of #72 —
+    /// temp runs. SCOPE (adversarial-review correction): this test pins the STORE half —
     /// GIVEN a mutable full-span row, stock IOB math (delivery integrated only to eval-time +
     /// model delay, InsulinMath's continuousDeliveryInsulinOnBoard loop bound) yields
     /// delivered-so-far + a constant ~delay lookahead, so the delta between two instants is pure

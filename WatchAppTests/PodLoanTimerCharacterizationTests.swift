@@ -98,7 +98,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
 
     override func tearDown() {
         // Never unlink a live store's directory synchronously — the async-init race answers
-        // later reads with zero rows (the #103 lesson). Unique names mean nothing collides.
+        // later reads with zero rows. Unique names mean nothing collides.
         cacheStore = nil; cacheDir = nil; journalDir = nil; defaults = nil; loopManager = nil
         super.tearDown()
     }
@@ -137,7 +137,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
     ///
     /// `drain` below sleeps a fixed interval, which is a race: the controller arms on its own
     /// serial queue, and on a loaded machine that block may not have run yet. Observed
-    /// 2026-08-13 with a field loan running and a second session building — two tests read an
+    /// with a field loan running and a second session building — two tests read an
     /// EMPTY recorder and failed against a pure code move that could not have changed behavior.
     /// Wait for the value wherever the assertion is about something being present; `drain`
     /// remains correct only for asserting an ABSENCE, which cannot be waited for.
@@ -235,7 +235,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
     }
 
     /// Firing both hops in order walks idle → requested → takingOver → active, and the
-    /// loan starts OPEN (R23). The phase guards are what make out-of-order firing safe.
+    /// loan starts OPEN. The phase guards are what make out-of-order firing safe.
     func testSimFlowHopsWalkToActiveAndOpenLoop() {
         let controller = makeController()
         defaults.set(true, forKey: "sim.fakeLoanFlow")
@@ -253,7 +253,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
         rec.fire("sim-active")
         XCTAssertEqual(controller.phase, .active)
         XCTAssertFalse(loopManager.closedLoopEnabled,
-                       "R23: a loan starts OPEN — the wearer closes it deliberately")
+                       "a loan starts OPEN — the wearer closes it deliberately")
     }
 
     /// Out-of-order firing is inert: sim-active found the wrong phase and did nothing. This

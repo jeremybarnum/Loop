@@ -92,7 +92,7 @@ private final class WatchDrainDriver {
         journal.confirm(id: event.id)
     }
 
-    /// The pod REFUTED an assumed command (#99): drop the event and tombstone its ID, so an
+    /// The pod REFUTED an assumed command: drop the event and tombstone its ID, so an
     /// already-streamed copy is unwound phone-side. Stops being withheld either way — there is
     /// nothing left to withhold.
     func refute(_ event: LoanEvent) {
@@ -101,7 +101,7 @@ private final class WatchDrainDriver {
     }
 
     /// Streams everything unacked EXCEPT the withheld set — the controller's `streamRecords`
-    /// shape. `released: false` is WS1's interim drain (still dosing, still holding the pod).
+    /// shape. `released: false` is the hand-back's interim drain (still dosing, still holding the pod).
     func sendOffer(released: Bool, recovered: Bool = false, at date: Date) {
         guard let epoch = epoch else { return }
         let streamable = journal.unackedEvents().filter { !withheld.contains($0.id) }
@@ -120,7 +120,7 @@ private final class WatchDrainDriver {
 
     /// §2.4 streaming: records flow to the phone DURING the loan and are STAGED there, not
     /// committed. This is the path that leaves the phone holding uncommitted records when the
-    /// wrist goes quiet, which is the precondition for #66.
+    /// wrist goes quiet, which is the precondition for the force-reclaim/re-offer double-commit.
     func streamRecords(at date: Date) {
         guard let epoch = epoch else { return }
         let streamable = journal.unackedEvents().filter { !withheld.contains($0.id) }
@@ -165,11 +165,11 @@ final class LoanTwoSidedContractTests: XCTestCase {
 
     /// Drops the next N phone→watch acks on the floor — the transport-loss fault.
     private var acksToDrop = 0
-    /// #118: per-call event counts for addPumpEvents, and an artificial write duration —
+    /// Per-call event counts for addPumpEvents, and an artificial write duration —
     /// the pile-up only exists while a write is slower than the offer cadence.
     private var pumpWriteEventCounts: [Int] = []
     private var pumpWriteDelay: TimeInterval = 0
-    /// R36 store emulation + the controller-layer commit counter (see the addCarb stub).
+    /// Store emulation + the controller-layer commit counter (see the addCarb stub).
     private var committedCarbIDs: Set<String> = []
     private var rawCarbCommits = 0
     /// e44: every store-identity upsert the phone attempted, and an injectable failure — a
@@ -224,9 +224,9 @@ final class LoanTwoSidedContractTests: XCTestCase {
     }
 
     override func tearDown() {
-        // #103: no synchronous unlink of a directory a live object may still be writing.
+        // No synchronous unlink of a directory a live object may still be writing.
         //
-        // And NO NIL-ING EITHER (2026-08-12): a timed-out waitUntil poller gets a ~1 s grace
+        // And NO NIL-ING EITHER: a timed-out waitUntil poller gets a ~1 s grace
         // before its deadline stops it, and `self?.watch.acks` force-unwraps the IUO — so
         // `watch = nil` here turned any timeout into a SIGTRAP that killed the runner and every
         // suite after it (the :615 fatal). XCTest allocates a FRESH INSTANCE per test method,
@@ -276,7 +276,7 @@ final class LoanTwoSidedContractTests: XCTestCase {
             addCarb: { [weak self] entry, syncIdentifier, completion in
                 guard let self = self else { completion(nil); return }
                 self.lock.lock()
-                // Emulates the R36 store: insert-if-absent on the wire identity. carbs() is the
+                // Emulates the store: insert-if-absent on the wire identity. carbs() is the
                 // STORE view (what a person's record ends up as); rawCarbCommitCount is the
                 // CONTROLLER view (how many commit calls were made) — assert on raw when the
                 // test is about controller guards, on carbs() when it is about the outcome.
@@ -399,7 +399,7 @@ final class LoanTwoSidedContractTests: XCTestCase {
         waitUntil("interim ack") { [weak self] in (self?.watch.acks.count ?? 0) >= 1 }
 
         XCTAssertTrue(watch.isDrained, "the interim ack must clear the journal — nothing withheld here")
-        XCTAssertEqual(phone.state, .loaned, "an INTERIM offer commits records but must not end the loan (WS1)")
+        XCTAssertEqual(phone.state, .loaned, "an INTERIM offer commits records but must not end the loan")
 
         // The watch releases and offers final; the phone finalizes.
         watch.sendOffer(released: true, at: now)
@@ -527,7 +527,7 @@ final class LoanTwoSidedContractTests: XCTestCase {
     // MARK: - 5. A dead loan cannot speak
 
     /// An offer for a superseded epoch must drain its records without touching live loan state
-    /// (rows 13/14) — the #102 field incident, where two already-acked epoch-1 offers were
+    /// (rows 13/14) — the field incident, where two already-acked epoch-1 offers were
     /// redelivered while epoch 2 was live and wrote temps ending before they started.
     ///
     /// Two-sided version: the stale offer's events are a real journal's contents through a real
@@ -575,19 +575,19 @@ final class LoanTwoSidedContractTests: XCTestCase {
                        "the controller re-emits across epochs; DoseStore dedups on the stable raw")
 
         // Carbs are the higher-stakes case — NewCarbEntry has no identity field, so there is no
-        // store-level net beneath them (#65/#66 phantom COB). Observed: the stale offer did NOT
+        // store-level net beneath them (phantom COB). Observed: the stale offer did NOT
         // re-book the carb. Pinned rather than derived — the mechanism is not isolated here, and
         // if this ever reads 2 it is a phantom-COB regression worth stopping for.
-        XCTAssertEqual(carbs().count, 1, "the stale offer must not re-book the carb (#65)")
+        XCTAssertEqual(carbs().count, 1, "the stale offer must not re-book the carb")
 
-        // The actual safety property, and the one #102 was about: a dead epoch may drain its own
+        // The actual safety property: a dead epoch may drain its own
         // records and must touch nothing else.
         XCTAssertEqual(phone.state, .loaned, "a stale offer must not end the loan that is actually running")
     }
 
     // MARK: - 6. Fault variants (coverage plan item 6)
 
-    /// CERTAIN REFUSAL (#99), end to end. A bolus goes out, the pod's verdict refutes it, and
+    /// CERTAIN REFUSAL, end to end. A bolus goes out, the pod's verdict refutes it, and
     /// the phantom-IOB guarantee is that those units are never booked ANYWHERE.
     ///
     /// The interesting part is that two mechanisms have to line up. Withholding keeps the
@@ -619,12 +619,12 @@ final class LoanTwoSidedContractTests: XCTestCase {
         XCTAssertEqual(booked.count, 1, "the refuted bolus must not appear")
         XCTAssertEqual(booked.first?.unitsInDeliverableIncrements, 0.6)
         XCTAssertFalse(booked.contains { ($0.unitsInDeliverableIncrements ?? 0) > 3.0 },
-                       "4 U of phantom insulin would be the #99 failure")
+                       "4 U of phantom insulin would mean the refuted command was booked")
         XCTAssertTrue(watch.isDrained, "the tombstone clears with the ack")
     }
 
     /// UNREACHABLE PHONE. The watch's resend loop reoffers every 15 s while it cannot hear an
-    /// ack, so the phone receives the SAME records several times over. #35's field shape: 28
+    /// ack, so the phone receives the SAME records several times over. The field shape: 28
     /// offers, one loan. Nothing may accumulate.
     func testRepeatedRedeliveryWhileTheAckIsUnheardCommitsOnce() throws {
         let now = Date()
@@ -645,8 +645,8 @@ final class LoanTwoSidedContractTests: XCTestCase {
         }
         XCTAssertTrue(watch.acks.isEmpty, "the watch heard nothing, so it kept offering")
 
-        // #118 changed the transport model this test may assume. Duplicates arriving during an
-        // in-flight write now COALESCE — probed on 2026-08-12: offers 3 and 4 merged into one
+        // The one-write-in-flight guard changed the transport model this test may assume. Duplicates
+        // arriving during an in-flight write now COALESCE — probed: offers 3 and 4 merged into one
         // replay, so four offers produced THREE acks, and a fixed drop-3-then-hear-the-4th
         // ledger times out. That is the fix working, not a liveness hole: the watch does not
         // need one ack per copy, it needs ONE, and its 15 s resend guarantees an offer
@@ -665,20 +665,21 @@ final class LoanTwoSidedContractTests: XCTestCase {
         XCTAssertTrue(watch.isDrained)
     }
 
-    /// #66, END TO END, and the reason it needs the STREAMING path to mean anything.
+    /// THE STAGED-RECORD DOUBLE-COMMIT, END TO END, and the reason it needs the STREAMING
+    /// path to mean anything.
     ///
     /// Records reach the phone two ways. An OFFER commits them immediately (and records the IDs
-    /// at :1215). A STREAM only STAGES them. #66's fix — the `committedIDs.formUnion` inside
+    /// at :1215). A STREAM only STAGES them. The fix — the `committedIDs.formUnion` inside
     /// `forceReclaimToOwner` — exists for the second case: records that were staged, never
     /// committed through an offer, and then written by the force-reclaim itself. Build this on
     /// an offer instead and the test passes no matter what, because :1215 already deduped it;
-    /// that is exactly what the first version of this test did, and sabotaging the #66 fix left
+    /// that is exactly what the first version of this test did, and sabotaging the fix left
     /// it green.
     ///
     /// Carbs are the point. `NewPumpEvent` carries `raw` and the DoseStore dedups on it, so
     /// insulin has a net underneath. `NewCarbEntry` has no identity field and CarbStore mints a
     /// fresh syncIdentifier per add, so committedIDs is the ONLY guard — and a duplicate here
-    /// mirrors into every later grant through wipe-then-replace, which is #65's phantom COB with
+    /// mirrors into every later grant through wipe-then-replace, which is phantom COB with
     /// the phone as the source.
     func testForceReclaimThenWatchReofferDoesNotDoubleTheCarb() throws {
         let now = Date()
@@ -708,23 +709,23 @@ final class LoanTwoSidedContractTests: XCTestCase {
         waitUntil("reoffer acked") { [weak self] in (self?.watch.acks.count ?? 0) >= 1 }
 
         XCTAssertEqual(carbs().count, 1,
-                       "THE #66 INVARIANT: the re-offer must not re-book the carb (got \(carbs().count))")
+                       "THE INVARIANT: the re-offer must not re-book the carb (got \(carbs().count))")
         XCTAssertEqual(doses().count, 1, "nor the bolus")
-        // THE LIVELOCK (found here 2026-08-12, fixed the same day). Before the fix the phone acked
+        // THE LIVELOCK. Before the fix the phone acked
         // `committedCursor = 0` — forceReclaimToOwner recorded the committed IDs but never advanced
         // the cursor — so the watch's journal kept seq [1, 2] forever, `handleAck` never saw an
         // empty unacked set, and its 15 s resend loop ran indefinitely. No insulin was at risk (the
         // assertions above show the dedup holding); the loan simply never closed on the wrist.
         //
-        // Worth knowing when reading a log: it presents as #35's "28 offers" signature but with the
-        // phone ACKING rather than silently dropping, so the #35 diagnosis does not match it.
+        // Worth knowing when reading a log: it presents as the "28 offers" redelivery signature but
+        // with the phone ACKING rather than silently dropping, so that diagnosis does not match it.
         XCTAssertTrue(watch.acks.count >= 1, "the phone replies")
         XCTAssertEqual(watch.acks.last?.committedCursor, 2,
                        "the ack must carry the max committed seq, not the stale 0")
         XCTAssertTrue(watch.isDrained,
                       "THE FIX: an advanced cursor lets the returning watch finally drain and close the loan")
     }
-    // MARK: - #118 one commit in flight
+    // MARK: - One commit in flight
 
     /// e27 (2026-08-12): the watch sent 3 offers on its normal 15 s cadence; the phone logged
     /// 12 receipts and started a Core Data write for EVERY one — eleven concurrent writes,
@@ -738,9 +739,9 @@ final class LoanTwoSidedContractTests: XCTestCase {
         let now = Date()
         try establishLoan(at: now)
         try watch.mint(bolus(1.0, at: now.addingTimeInterval(-300)), at: now.addingTimeInterval(-300))
-        // #119: the carb is the load-bearing passenger. Doses survive a pile-up via raw-dedup
+        // The carb is the load-bearing passenger. Doses survive a pile-up via raw-dedup
         // at the store; CarbStore mints a fresh syncIdentifier per add, so every extra commit
-        // is a NEW carb. Field 2026-08-12 22:19: 12 queued offers flushed into a waking phone
+        // is a NEW carb. Field: 12 queued offers flushed into a waking phone
         // -> 12 copies of one confirmed 10 g entry -> 120.7 g phantom COB -> max basal.
         try watch.mint(carb(10, at: now.addingTimeInterval(-290)), at: now.addingTimeInterval(-290))
 
@@ -757,9 +758,9 @@ final class LoanTwoSidedContractTests: XCTestCase {
                                  "the coalesced duplicates collapse to at most one empty re-ack write (got \(counts))")
         XCTAssertEqual(doses().count, 1)
         XCTAssertEqual(carbs().count, 1,
-                       "THE #119 INVARIANT: one confirmed carb stays ONE carb through the storm — every extra commit is 10 g of phantom COB feeding max basal")
+                       "THE INVARIANT: one confirmed carb stays ONE carb through the storm — every extra commit is 10 g of phantom COB feeding max basal")
         XCTAssertEqual(rawCarbCommitCount(), 1,
-                       "#118 alone must hold this at ONE COMMIT CALL — the R36 store dedupe is the independent second layer, not this test's excuse")
+                       "the one-write-in-flight guard alone must hold this at ONE COMMIT CALL — the store dedupe is the independent second layer, not this test's excuse")
         XCTAssertTrue(watch.isDrained)
     }
 
@@ -780,7 +781,7 @@ final class LoanTwoSidedContractTests: XCTestCase {
         XCTAssertTrue(watch.isDrained)
     }
 
-    /// #66's family, one layer deeper: a force-reclaim firing DURING an in-flight commit used
+    /// One layer deeper: a force-reclaim firing DURING an in-flight commit used
     /// to read committedIDs before the completion updated it and re-commit the same staged
     /// records — insulin survives (raw dedup at the store) but carbs have no identity and
     /// DOUBLE. The guard defers the reclaim until the write lands; drainAfterCommit then runs
@@ -798,7 +799,7 @@ final class LoanTwoSidedContractTests: XCTestCase {
 
         waitUntil("owner", timeout: 8) { [weak self] in self?.phone?.state == .owner }
         settle()
-        XCTAssertEqual(carbs().count, 1, "the carb must commit exactly once (#118 / #66's family)")
+        XCTAssertEqual(carbs().count, 1, "the carb must commit exactly once")
         XCTAssertEqual(rawCarbCommitCount(), 1, "the deferral means ONE commit call, not two deduped ones")
         XCTAssertEqual(doses().filter { $0.type == .bolus }.count, 1, "and the bolus once")
     }

@@ -3,9 +3,9 @@
 //  LoopTests
 //
 //  A scripted "session replay" harness for the watch loan insulin books, built from the
-//  2026-07-29 field incidents. The loan session keeps TWO books: the real Core Data
+//  field incidents. The loan session keeps TWO books: the real Core Data
 //  DoseStore (multi-writer, mutable-dose lifecycle, raw-identity dedup) and the
-//  SessionInsulinLedger (#73/#74, single-owner [DoseEntry] timeline, SHADOW MODE). Every
+//  SessionInsulinLedger (single-owner [DoseEntry] timeline, SHADOW MODE). Every
 //  field incident so far has been a coherence failure BETWEEN writers or ACROSS the
 //  handover seam — never in InsulinMath itself. So the harness replays one scripted
 //  session against BOTH books at once and pins the seams:
@@ -16,27 +16,27 @@
 //   2. testDuplicateBolusTwinDetection — the zero-length journal bolus + pod-native twin
 //      pair double-booking ~0.95 U of phantom IOB, in the store AND (documented, not
 //      blessed) in the ledger.
-//   3. testHandbackSeamCloses — the 21:16 → 21:21 hand-back seam must be fully explained
+//   3. testHandbackSeamCloses — the hand-back seam must be fully explained
 //      by decay + the zero-temp's withheld basal; when the rows match, nothing leaks.
 //   4. testReGrantRoundTripPreservesBooks — seed → enact chain → hand-back fold →
 //      re-grant reseed must conserve IOB across the epoch boundary (cross-epoch fidelity).
-//   5. testBolusDeliveryQueueShapeDoesNotTrap — the #64 bolus-crash queue invariant: the
+//   5. testBolusDeliveryQueueShapeDoesNotTrap — the bolus-crash queue invariant: the
 //      FIXED dispatch topology (reclaim completion on the loan queue → async hop to the
 //      dosing queue → journal mint queue.sync back onto the loan queue) must complete.
-//   6. testBolusBooksLandInBothBooksAfterQueueHop — books-level #64: a bolus delivered
-//      through the hopped topology lands in BOTH books with IOB parity (field 20:45
+//   6. testBolusBooksLandInBothBooksAfterQueueHop — the books-level pin: a bolus delivered
+//      through the hopped topology lands in BOTH books with IOB parity (field
 //      signature: store = ledger = 2.33).
 //   7. testCarbRoundTripDynamicAbsorptionParity — the carb fold seam: a watch loan carb
 //      folded to the phone in LoanReconciler's shape, fed the SAME stock-computed ICE
 //      velocities, must produce the same dynamic COB and carb-effect curve.
 //   8. testTruncatedPhoneICEOverstatesCOB — the relay-gap hypothesis: a phone missing the
-//      loan-window glucose observes less absorption → MORE COB (the 6g-vs-7g +1g seam of
-//      2026-07-29 21:21) — the diagnostic pin for glucose-relay completeness.
+//      loan-window glucose observes less absorption → MORE COB (the 6g-vs-7g +1g seam)
+//      — the diagnostic pin for glucose-relay completeness.
 //
 //  Conventions copied from WatchStoreEffectsTests: PersistenceController-per-store temp
 //  dirs, the fixed-store construction (shared TemporaryScheduleOverrideHistory at init,
 //  schedules via the property setters), seeds through addPumpEvents so stock reconciled()
-//  runs, and the #69 identity contract (syncId == hex(raw); LoanSeedIdentity hex-DECODES
+//  runs, and the identity contract (syncId == hex(raw); LoanSeedIdentity hex-DECODES
 //  the phone syncId back to the pod-native bytes). Basal here is 0.70 U/hr FLAT — the
 //  field profile behind every number below — not the 1.0 of the older fixtures.
 //
@@ -153,7 +153,7 @@ private final class LoanBooksDriver {
         doseStore.basalProfile = schedule
         self.store = doseStore
         self.schedule = schedule
-        // #112: the ledger no longer owns a schedule — reads take it per call, as production does.
+        // The ledger no longer owns a schedule — reads take it per call, as production does.
         self.ledger = SessionInsulinLedger(
             insulinModelProvider: PresetInsulinModelProvider(defaultRapidActingModel: nil),
             longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration)
@@ -162,7 +162,7 @@ private final class LoanBooksDriver {
     // MARK: Script steps
 
     /// seed(grant records): runs the REAL grant split. Finished history lands in the
-    /// store under hex-decoded pod-native raws (#69); a live dose is NOT seeded (#72) —
+    /// store under hex-decoded pod-native raws; a live dose is NOT seeded —
     /// the driver plays the pod and reports it MUTABLE full-span. The ledger takes the
     /// identical split through `seed(finished:live:)`.
     func seed(_ records: [LoanDoseRecord], at instant: Date, epoch: Int = 1) {
@@ -379,20 +379,20 @@ final class LoanBooksHarnessTests: XCTestCase {
     /// Core Data table (test 3 and 4 run a watch store and a phone store side by side).
     private var cacheDirs: [URL] = []
 
-    /// #103 FIX (2026-08-12). This tearDown used to `removeItem(at:)` every directory, and
+    /// This tearDown used to `removeItem(at:)` every directory, and
     /// that synchronous delete was the flake.
     ///
     /// The mechanism was already written down by LoanOverrideTests in this same file (see its
     /// `cacheStore` comment): `PersistenceController` brings its Core Data stack up
     /// ASYNCHRONOUSLY, so deleting the directory at test end is a "vnode unlinked while in
     /// use" race against a stack that may still be initializing — and the way that race
-    /// presents is **a store that answers with zero rows**. That is #103's exact symptom, and
+    /// presents is **a store that answers with zero rows**. That is the flake's exact symptom, and
     /// it is not confined to the test that loses the race: the noise lands on whichever suite
     /// is running in the same process when the unlink hits, which is why the false alarm moved
     /// between `testDuplicateBolusTwinDetection` and `testHandbackSeamCloses` on different
     /// runs, and why both passed in isolation.
     ///
-    /// COST OF THE FLAKE, measured: it cost three gate runs and a real scare on 2026-08-11 —
+    /// COST OF THE FLAKE, measured: it cost three gate runs and a real scare —
     /// the ship gate refused to archive a DOSING build over a phantom 1 U hand-back-seam
     /// discrepancy, on the one build where a real seam regression was most plausible. A gate
     /// that cannot tell a flake from a regression fails in both directions.
@@ -521,7 +521,7 @@ final class LoanBooksHarnessTests: XCTestCase {
         XCTAssertEqual(sample.store, 1.90, accuracy: 0.1,
                        "the store books BOTH twins: ~2 × 0.95 U of IOB for one physical bolus (+0.95 U phantom, field 2026-07-29)")
 
-        // LEDGER: the seed's bolus-twin guard (#74 cutover, 2026-07-29) collapses
+        // LEDGER: the seed's bolus-twin guard collapses
         // same-units (±0.01U) same-instant (±2s) bolus twins, keeping the longer span
         // (pod-actual timing) — one physical bolus books ONCE.
         XCTAssertEqual(sample.ledger, 0.95, accuracy: 0.1,
@@ -643,17 +643,18 @@ final class LoanBooksHarnessTests: XCTestCase {
                        "cross-epoch fidelity: IOB is conserved through fold → re-grant → reseed")
     }
 
-    // MARK: - 5. The #64 bolus-crash queue invariant (shape)
+    // MARK: - 5. The bolus-crash queue invariant (shape)
 
-    /// FIELD (2026-07-29, #64): an E4 reclaim completion runs ON the loan controller's
-    /// serial queue (reclaimPodForDose wraps every path in queue.async, including the
+    /// FIELD: the pod's BLE link is released between doses, so a bolus must reclaim it
+    /// first, and that reclaim completion runs ON the loan controller's serial queue
+    /// (reclaimPodForDose wraps every path in queue.async, including the
     /// still-connected short-circuit), and deliverBolus → loanWillEnactBolus → mintIntent
     /// does queue.sync onto that SAME queue — a guaranteed libdispatch trap BEFORE
     /// enactBolus was ever issued (apparent success at the crown, crash 0-40 s later, NO
     /// insulin delivered). The fix (WatchLoopManager.enactManualBolus, ~:1515-1545): hop
     /// to the dosing queue via .async before delivering — and .async is load-bearing,
-    /// because with E4 off the reclaim closure completes SYNCHRONOUSLY on the dosing
-    /// queue itself, where a .sync hop would deadlock on itself.
+    /// because when the link is already held the reclaim closure completes SYNCHRONOUSLY
+    /// on the dosing queue itself, where a .sync hop would deadlock on itself.
     ///
     /// That code is watch-target-only, so this pins the SHAPE with real DispatchQueues:
     /// both delivery legs of the fixed topology must complete. (No trap-reproduction
@@ -683,7 +684,7 @@ final class LoanBooksHarnessTests: XCTestCase {
             }
         }
 
-        // Leg 2 — the E4-off short-circuit: the reclaim closure completes SYNCHRONOUSLY
+        // Leg 2 — the link-already-held short-circuit: the reclaim closure completes SYNCHRONOUSLY
         // on the dosing queue, so the SAME hop line re-dispatches onto the queue it is
         // already on. .async makes that legal; a .sync hop would self-deadlock (the
         // adversarial-review edge documented at the fix site).
@@ -699,13 +700,13 @@ final class LoanBooksHarnessTests: XCTestCase {
         wait(for: [reclaimLeg, shortCircuitLeg], timeout: 5)
     }
 
-    // MARK: - 6. The #64 bolus — books land after the hop
+    // MARK: - 6. The bolus-crash fix — books land after the hop
 
-    /// Books-level #64: the crash fired BEFORE the pod command, so the field signature of
+    /// The books-level pin: the crash fired BEFORE the pod command, so the field signature of
     /// the FIX is a bolus that (a) survives the queue topology and (b) lands in BOTH books
     /// coherently. This replays the fixed shape, then books the delivered bolus the way the
     /// session does — store via the pod-style report batch, ledger via recordEnact — and
-    /// pins IOB parity (field 20:45 DOSING panel: store = ledger = 2.33 after the first
+    /// pins IOB parity (field DOSING panel: store = ledger = 2.33 after the first
     /// post-fix manual bolus).
     func testBolusBooksLandInBothBooksAfterQueueHop() {
         let now = Date()
@@ -728,7 +729,7 @@ final class LoanBooksHarnessTests: XCTestCase {
             }
         }
         wait(for: [delivered], timeout: 5)
-        XCTAssertTrue(mintedBeforeCommand, "no delivery without a completed mint — #64 ordering")
+        XCTAssertTrue(mintedBeforeCommand, "no delivery without a completed mint")
 
         // The books: pod-accepted bolus, both writers, exactly as the session records it.
         let driver = makeDriver()
@@ -764,9 +765,9 @@ final class LoanBooksHarnessTests: XCTestCase {
         return store
     }
 
-    /// R36: the store is the idempotency point for DELIVERED carbs. Real CarbStore, real
+    /// The store is the idempotency point for DELIVERED carbs. Real CarbStore, real
     /// Core Data: two deliveries of one identity make one row; a late replay loses to a
-    /// local edit. This is the layer that makes #119 structurally impossible rather than
+    /// local edit. This is the layer that makes double-booking structurally impossible rather than
     /// merely guarded against — the check and the insert run in one operation on the
     /// store's own queue, where no caller-side sequencing can be bypassed.
     func testR36DeliveredCarbIdentityInsertIfAbsent() {
@@ -1047,7 +1048,7 @@ final class LoanBooksHarnessTests: XCTestCase {
         let handedBack = reclaim.addingTimeInterval(.minutes(2))    // the watch's own release stamp
 
         // Journal identities, exactly LoanReconciler's shape. The store rewrites these to hex(raw)
-        // on the pump-event path (#69), which is why the backfill has to carry the hex form.
+        // on the pump-event path, which is why the backfill has to carry the hex form.
         let syncT1 = "loanv2-\(UUID().uuidString)"
         let syncT2 = "loanv2-\(UUID().uuidString)"
         let syncBolus = "loanv2-\(UUID().uuidString)"
@@ -1147,7 +1148,7 @@ final class LoanBooksHarnessTests: XCTestCase {
         XCTAssertEqual(endOf(hexT3, fixed), handedBack.timeIntervalSinceReferenceDate, accuracy: 1,
                        "and it ends where the journal says the loan ended")
         XCTAssertEqual(endOf(hexT2, fixed), t3Start.timeIntervalSinceReferenceDate, accuracy: 1,
-                       "the salvage extension is TRIMMED to the successor the journal brought — R37's real-records-replace-estimates, as an upsert")
+                       "the salvage extension is TRIMMED to the successor the journal brought — real records replace estimates, as an upsert")
         XCTAssertEqual(endOf(hexT1, fixed), t2Start.timeIntervalSinceReferenceDate, accuracy: 1,
                        "and the record that was already right is left alone — same identity, same row, no duplicate")
 
@@ -1161,7 +1162,7 @@ final class LoanBooksHarnessTests: XCTestCase {
     }
 }
 
-// MARK: - #80: pulse-quantization fidelity across the wire
+// MARK: - Pulse-quantization fidelity across the wire
 
 /// FIELD (2026-07-30 18:45, epoch 73): phone IOB 0.70 vs watch 1.00 on the SAME 41 seeded
 /// records — a +0.30 "wire" gap with the watch's two books in perfect agreement (store =
@@ -1236,12 +1237,12 @@ final class LoanWireQuantizationTests: XCTestCase {
     }
 }
 
-// MARK: - #74: refuted uncertain command must restore what it truncated
+// MARK: - Refuted uncertain command must restore what it truncated
 
 /// The last documented ledger corner, closed in the SIM rather than waiting for a rare
-/// field event (Jeremy 2026-07-30: "can you field verify that one on the sim?").
+/// field event.
 ///
-/// Sequence: a high temp is running; an uncertain enact books an assumed dose (R5 books
+/// Sequence: a high temp is running; an uncertain enact books an assumed dose (the watch assumes
 /// only above-schedule commands, so this is the case that matters) which truncates the
 /// running temp; the chase then comes back REFUTED — the pod never received it. Reality:
 /// the original temp kept running to its programmed end. Pre-fix the ledger removed the
@@ -1326,7 +1327,7 @@ final class LedgerRefuteRestoreTests: XCTestCase {
     }
 }
 
-// MARK: - #68 overrides across the loan
+// MARK: - Overrides across the loan
 
 /// Jeremy's ruling (2026-07-31): overrides carry BOTH ways, stock framework, no sport-mode
 /// special case. The gap these pin: the watch's stores were built with an override history
@@ -1369,7 +1370,7 @@ final class LoanOverrideTests: XCTestCase {
     private let baseCR = CarbRatioSchedule(unit: .gram(), dailyItems: [RepeatingScheduleValue(startTime: 0, value: 10.0)])!
 
     override func tearDown() {
-        // #103: same reasoning as LoanBooksHarnessTests above — do not race the async Core Data
+        // Same reasoning as LoanBooksHarnessTests above — do not race the async Core Data
         // stack to unlink a temp directory. Lazy creation already limited the blast radius here;
         // dropping the delete removes the race outright.
         _cacheStore = nil
@@ -1488,7 +1489,7 @@ final class LoanOverrideTests: XCTestCase {
         XCTAssertEqual(range.upperBound.doubleValue(for: .milligramsPerDeciliter), 160, accuracy: 0.1)
     }
 
-    // MARK: - #68 PART B: watch-enacted overrides ride the journal home
+    // MARK: - PART B: watch-enacted overrides ride the journal home
 
     /// The wrist fixture, created exactly the way the wrist creates it: the stock
     /// OverrideSelectionController hands a preset to `createOverride(enactTrigger: .local)`
@@ -1686,7 +1687,7 @@ final class LoanOverrideTests: XCTestCase {
                        accuracy: 0.0001, "carb ratio: wrist-set == granted")
 
         // The stores the loop actually reads resolve through that same history instance —
-        // this is the #41/#68 wall: an override that isn't in the history changes nothing.
+        // this is the wall: an override that isn't in the history changes nothing.
         let store = DoseStore(
             healthKitSampleStore: nil, cacheStore: cacheStore,
             insulinModelProvider: PresetInsulinModelProvider(defaultRapidActingModel: nil),
@@ -1714,7 +1715,7 @@ final class LoanOverrideTests: XCTestCase {
     }
 }
 
-// MARK: - Phone-side override harness (#68 part B)
+// MARK: - Phone-side override harness (part B)
 
 /// The real `PodLoanPhoneController`, driven straight into LOANED via its persisted state so a
 /// hand-back offer can be delivered without a pump or a live grant. Captures every

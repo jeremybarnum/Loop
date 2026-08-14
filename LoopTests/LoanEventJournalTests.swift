@@ -129,7 +129,7 @@ final class LoanEventJournalTests: XCTestCase {
     /// Two failure modes this pins, both of which would look like "the loan never drains":
     /// a cap computed from an already-acked event would freeze the cursor forever, and a cap
     /// applied when the withheld ID is not in the journal at all (annulled mid-drain — the
-    /// certain-refusal path, #99) would do the same.
+    /// certain-refusal path) would do the same.
     func testCapIgnoresWithheldEventsThatAreAlreadyAckedOrGone() throws {
         let journal = makeJournal()
         try journal.begin(epoch: 1)

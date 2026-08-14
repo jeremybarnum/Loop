@@ -2,16 +2,15 @@
 //  WatchOverrideDosingTests.swift
 //  LoopTests
 //
-//  #112 / #68: override-scaled dosing on the watch.
+//  Override-scaled dosing on the watch.
 //
-//  WHY THIS SUITE EXISTS. On 2026-08-11 Jeremy ran a 50% override and the watch
-//  recommended a manual bolus of 0.35 U where ~0.13 U was correct — because the
-//  RECOMMENDATION used the raw ISF schedule while the PREDICTION it was correcting used
-//  the override-applied one. Same computation, two different sensitivities. He caught it
-//  by arithmetic on the wrist ("that's clearly a number from the regular 70 ISF, not the
-//  140"), and asked for coverage because "I was worried that we hadn't tested thoroughly
-//  enough on that one". He was right: the temp-basal path had been fixed for exactly this
-//  in #68, and the bolus path survived because nothing tested it.
+//  WHY THIS SUITE EXISTS. In the field, a 50% override made the watch recommend a manual
+//  bolus of 0.35 U where ~0.13 U was correct — because the RECOMMENDATION used the raw
+//  ISF schedule while the PREDICTION it was correcting used the override-applied one.
+//  Same computation, two different sensitivities. Arithmetic on the wrist caught it: the
+//  dose was plainly scaled from the regular 70 ISF, not the 140 the override implies. The
+//  temp-basal path had already been fixed for exactly this, and the bolus path survived
+//  because nothing tested it.
 //
 //  The direction is what makes it dangerous. A reduced-needs override means MORE insulin
 //  sensitivity, so LESS insulin — and it is the override you set for exercise, when hypo
@@ -166,10 +165,10 @@ final class WatchOverrideDosingTests: XCTestCase {
                           "and it must overshoot into territory the coherent dose never approaches")
     }
 
-    // MARK: - The temp-basal path (#68) must stay fixed
+    // MARK: - The temp-basal path must stay fixed
 
-    /// #68 fixed the temp path to use the override-applied ISF. Pin it, because the bolus
-    /// path proves that a fix on one path does not protect its sibling.
+    /// The temp path was fixed earlier to use the override-applied ISF. Pin it, because the
+    /// bolus path proves that a fix on one path does not protect its sibling.
     func testTempBasalUnderOverrideUsesTheScaledISF() {
         let now = Date()
         let prediction = curve(from: now, values: Array(repeating: 200.0, count: 73))
@@ -189,7 +188,7 @@ final class WatchOverrideDosingTests: XCTestCase {
                           "a reduced-needs override must lower the temp rate, not raise it")
     }
 
-    // MARK: - #117: the recommendation's REASON reaches the wrist
+    // MARK: - The recommendation's REASON reaches the wrist
 
     /// A bare "REC: 0 U" is indistinguishable from a broken screen — which is exactly how it
     /// read in the field on 2026-08-11 while the loop was correcting at maxBasal and zero was
@@ -223,10 +222,10 @@ final class WatchOverrideDosingTests: XCTestCase {
         XCTAssertNil(Optional<BolusRecommendationNotice>.none?.wristDescription)
     }
 
-    // MARK: - #112's ledger half (CLOSED by R35 build): per-read override-applied netting
+    // MARK: - The ledger half (already fixed): per-read override-applied netting
 
-    /// The ledger half of the #112 family, through the REAL ledger. Since the R35 build the
-    /// ledger takes its basal schedule per READ (symmetric with ISF) and the caller passes the
+    /// The ledger half of the override-scaling work, through the REAL ledger. The ledger now
+    /// takes its basal schedule per READ (symmetric with ISF) and the caller passes the
     /// override-applied accessor. This pins the netting arithmetic that motivated the change:
     /// the same 1.00 U/hr temp carries MORE net insulin against a 50%-override baseline (0.35)
     /// than against the raw one (0.70) — the under-count the frozen raw schedule caused.
@@ -249,9 +248,9 @@ final class WatchOverrideDosingTests: XCTestCase {
                              "netting against the override-halved baseline must book materially MORE IOB for the same temp — the raw baseline was under-counting it")
     }
 
-    // MARK: - #112's open half: the basal baseline the ledger nets against
+    // MARK: - The open half: the basal baseline the ledger nets against
 
-    /// DOCUMENTS THE MIXED CONVENTION still open as #112. The ledger is handed the RAW basal
+    /// DOCUMENTS THE MIXED CONVENTION that is still open. The ledger is handed the RAW basal
     /// schedule to net temps against (WatchLoopManager :1017-1024) while being handed the
     /// OVERRIDE-APPLIED ISF at read time (:1658). This test does not assert which is correct
     /// — that is the open ruling — it pins HOW MUCH the choice matters, so the decision is
@@ -270,6 +269,6 @@ final class WatchOverrideDosingTests: XCTestCase {
         XCTAssertEqual(netAgainstRaw, 0.30, accuracy: 0.001)
         XCTAssertEqual(netAgainstOverride, 0.65, accuracy: 0.001)
         XCTAssertEqual(netAgainstOverride - netAgainstRaw, 0.35, accuracy: 0.001,
-                       "#112: baseline choice moves net IOB by the full override delta — 0.35 U per temp-hour here")
+                       "baseline choice moves net IOB by the full override delta — 0.35 U per temp-hour here")
     }
 }

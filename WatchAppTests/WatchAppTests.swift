@@ -34,7 +34,7 @@ final class WatchAppTargetReachabilityTests: XCTestCase {
         XCTAssertNotEqual(toldTooOld.localizedDescription, pump.localizedDescription)
     }
 
-    /// The transport-channel tag added for #113. Watch-only, pure, and the thing that will make
+    /// The transport-channel tag. Watch-only, pure, and the thing that will make
     /// the next one-way-WCSession incident diagnosable — so it is worth pinning that the two
     /// channels are distinguishable rather than both rendering as the same string.
     func testTransportChannelsAreDistinguishable() {

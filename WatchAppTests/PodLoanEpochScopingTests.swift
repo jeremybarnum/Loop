@@ -8,7 +8,7 @@
 //  through. It matters that the enforcement is observable at all: with no pump manager the
 //  timer body early-returns anyway, so "refused because the epoch moved" and "ran and did
 //  nothing" are otherwise byte-identical from outside — the same indistinguishability that
-//  made #113 survive two occurrences.
+//  let an earlier bug survive two occurrences.
 //
 
 import XCTest
@@ -165,9 +165,9 @@ final class PodLoanEpochScopingTests: XCTestCase {
                        "only opted-in timers are epoch-scoped")
     }
 
-    /// Reproduces build 275 / epoch 38. A cycle that reclaims TWICE — once because the pump
+    /// Reproduces a field failure. A cycle that reclaims TWICE — once because the pump
     /// data was 5 min stale, once to dose — called releasePodAfterDose twice 2.7 s apart, and
-    /// TWO independent 12 s releases fired (02:57:08 and 02:57:10). The second was harmless
+    /// TWO independent 12 s releases fired two seconds apart. The second was harmless
     /// only because the first had already released the link; had a new reclaim reconnected in
     /// that gap, both of its guards would have passed and it would have dropped the link out
     /// from under a live dose.
