@@ -717,6 +717,69 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   verdict included — now rides the urgent channel. An alert that stops automatic dosing
   must never be a quiet list entry.
 
+- **R39 — The reclaim button tells the truth about time: two branches, two attempts, no flat wait**
+  (2026-08-13, Jeremy: "I'm skeptical of the need for the 45 second wait. Seems pedantic. I
+  think it's step 1 - check if watch visible. If yes, assume quick reclaim with a predictable
+  progress bar. If no, display something appropriate and try a couple of times before force
+  reclaiming, again with predictable timeline." Retry count ruled at TWO attempts.)
+
+  Reclaim Now sent a revoke and then waited a FLAT 45 SECONDS before force-reclaiming,
+  regardless of whether the watch was alive. With a dead watch the user watched an
+  indeterminate sweep for the full 45 s — measured in the simulator: tap 22:38:08, verdict
+  22:38:53. The wait was not a liveness probe. It was a DRAIN window, sized for the worst case
+  and charged to every case.
+
+  **The two regimes are separable BEFORE the wait starts, and the separator is the loan pulse,
+  not reachability.** The watch transfers its log every 300 s while a loan is active —
+  metronomic: n=134 gaps since 2026-08-08, range 283.1-301.4 s, ZERO excursions past 302 s. Age
+  of last watch contact therefore separates the six field revokes with enormous margin: the one
+  live revoke had a 6.5-SECOND-old pulse; the five dead ones had silences of 5.5, 6.1, 12.1,
+  14.8 and 21.2 MINUTES. Reachability alone would not do this — `isReachable` in this codebase
+  is a CHANNEL SELECTOR (urgent vs queued), never a liveness verdict, and it reads false for a
+  healthy watch whose app is merely backgrounded. It is admissible only as a positive signal:
+  reachable NOW proves alive, but not-reachable proves nothing.
+
+  **The branch, on tap:**
+
+  - **LIVE** (last contact younger than 330 s — one pulse period plus margin — OR reachable
+    now): expect a fast drain. Deadline 10 s, one retry, force at 25 s.
+  - **DEAD** (older, and not reachable): say so immediately and stop pretending. Deadline 8 s,
+    one retry, force at 20 s.
+
+  Both branches are TWO ATTEMPTS before forcing, per the ruling. The retry exists for the watch
+  that is merely asleep and wakes; it is not a hope that a dead watch will answer.
+
+  **Why 10 s covers the live case.** The drain is two urgent WatchConnectivity round trips plus
+  one Core Data commit, with NO pod round-trip on the critical path: the single field revoke
+  drained 9 doses in 2.32 s, and 20 current-era hand-backs (same machinery, same transport) put
+  trigger-to-final-ack at p50 1.0 s. 10 s covers 16/20 outright; the retry captures 19/20. The
+  20th was an 80 s WatchConnectivity transport failure — not a drain problem, and deliberately
+  surrendered to the force path rather than charged to everyone as a longer deadline.
+
+  **What the user is promised.** Whatever the branch, the pod round-trip is additive after the
+  drain: 3-9 s, p50 4 s, n=20/20 current era. So the honest live-case promise is ~5-15 s, and
+  the honest dead-case promise is ~20 s plus the pod. Both are determinate; both are stated on
+  screen. `DeviceStatusHUDView.setActivityFill` already exists and is public, and
+  `reclaimPhase1Progress` already computes a fraction with ZERO consumers — the determinate bar
+  is mostly a matter of publishing a phase and a real deadline instead of the hardcoded 25 s.
+
+  **What shortening the wait costs, stated plainly.** Reclaiming earlier makes it likelier that
+  a returning watch finds a NEWER loan already started, which makes its offer stale — and a
+  stale offer skips the e44 backfill by design, so its temps can vanish at the delivery-store
+  boundary again. Also lost on any early reclaim: the wrist's final loop-mode inheritance, and
+  one R32 calibration sample (force-reclaim residuals are not banked, by R32(c)). These are the
+  reason the LIVE branch stays generous enough for a real drain to finish rather than being
+  tuned to the p50.
+
+  **What made this safe to do at all** is that late-arriving records now land: the e44 backfill
+  upserts by store identity past the boundary, and it runs on the returning-watch offer path
+  regardless of loan state. Before that fix, shortening this wait would have been trading a
+  cosmetic annoyance for lost insulin records.
+
+  Two corrections this ruling makes to the record: the source comment calling this "the 45 s
+  reachability timeout", and the test that repeats the phrase, are both wrong — nothing read
+  reachability to decide that timer. It fired on `state == .reclaimPending` and nothing else.
+
 - **R38 — A comment must stand on its own where it sits**
   (2026-08-13, Jeremy: "to the greatest possible extent, I'm trying to keep the code
   standalone reasonable, which I know lives in tension with having the comments not be
