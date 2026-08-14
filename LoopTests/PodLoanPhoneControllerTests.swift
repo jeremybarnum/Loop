@@ -103,7 +103,12 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             maximumBolus: 5.0)
     }
 
-    func makeController() -> PodLoanPhoneController {
+    /// The two reclaim-ladder inputs are parameters rather than mutable test state because the
+    /// branch is decided ONCE, at the tap — a test that could change them afterwards would be
+    /// describing a controller this one is not. Defaults reproduce a phone that has heard nothing
+    /// from the watch this launch, which is the dead branch.
+    func makeController(watchReachable: @escaping () -> Bool = { false },
+                        lastWatchContact: @escaping () -> Date? = { nil }) -> PodLoanPhoneController {
         return PodLoanPhoneController(dependencies: .init(
             pumpManager: { [weak self] in self?.pump },
             settings: { [weak self] in self?.settings ?? LoopSettings() },
@@ -171,7 +176,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 guard let self = self else { return completion(false) }
                 self.lock.lock(); self.deletedGapSyncs.append(sync); let ok = self.gapDeleteSucceeds; self.lock.unlock()
                 completion(ok)
-            }
+            },
+            isWatchReachable: watchReachable,
+            lastWatchContactAt: lastWatchContact
         ))
     }
 
@@ -482,8 +489,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// kept redelivering the same offer against an unchanged committedIDs set. Every resend
     /// added another copy of the carb.
     ///
-    /// This is the path a watch takes whenever it goes unreachable mid-loan (the 45 s
-    /// reachability timeout, a stranded relaunch, or a fresh request while loaned), so it is not
+    /// This is the path a watch takes whenever it goes unreachable mid-loan (the reclaim ladder
+    /// spending both attempts, a stranded relaunch, or a fresh request while loaned), so it is not
     /// an exotic corner. Insulin survived it because NewPumpEvent.raw dedupes at the store;
     /// NewCarbEntry has no identity, so the cursor is the only guard.
     func testForceReclaimThenRedeliveryCommitsCarbOnce() throws {
@@ -1437,5 +1444,190 @@ extension PodLoanPhoneControllerTests {
         waitUntil(timeout: 5, "failure logged") { self.diagMatching("gap DELETE FAILED") != nil }
         XCTAssertNotNil(UserDefaults.standard.dictionary(forKey: "PodLoanPhoneController.gapBooking"),
                         "state survives a failed delete, so the next offer retries it")
+    }
+
+    // MARK: - Reclaim ladder (2026-08-13)
+
+    /// Every revoke the controller has sent so far. The ladder's whole contract is "two attempts,
+    /// then force", and this is the only way to state the "two" half.
+    private func revokeCount() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return sent.filter { if case .revoke = $0 { return true } else { return false } }.count
+    }
+
+    /// Reclaim tap → the ladder arms the LIVE deadlines, and the force does not run until the
+    /// second attempt has been spent. A watch heard from 30 s ago is inside the loan's 300 s log
+    /// pulse, so there is a real drain to wait for.
+    func testLiveBranchArmsLiveDeadlinesAndForcesOnlyAfterTwoAttempts() throws {
+        let controller = makeController(lastWatchContact: { Date().addingTimeInterval(-30) })
+        establishLoan(controller)
+        let ladder = ReclaimLadderRecorder()
+        ladder.install(on: controller)
+
+        controller.reclaimNow()
+        waitUntil(timeout: 5, "ladder armed") { ladder.armed.count == 2 }
+
+        XCTAssertEqual(ladder.armed.map(\.label), ["reclaim-resend", "reclaim-force"])
+        XCTAssertEqual(ladder.armed.map(\.delay), [10, 25],
+                       "a watch heard from inside one log-pulse period gets the live budget, not the dead one")
+        XCTAssertEqual(revokeCount(), 1, "the tap's own revoke is the only one until the first deadline")
+        XCTAssertEqual(controller.reclaimProgress?.phase, .draining)
+        XCTAssertEqual(controller.reclaimProgress.map { $0.expectedBy.timeIntervalSince($0.startedAt) } ?? 0, 25,
+                       accuracy: 0.5, "the published deadline is the ladder's, not a fixed calibration constant")
+        XCTAssertNotNil(diagMatching("reclaim ladder LIVE"), "the branch and its evidence are in the field log")
+
+        ladder.fire("reclaim-resend")
+        XCTAssertEqual(revokeCount(), 2, "the second attempt is a resend, not a force")
+        XCTAssertEqual(controller.state, .reclaimPending, "an attempt is not a verdict")
+
+        ladder.fire("reclaim-force")
+        waitForState(controller, .owner)
+        XCTAssertEqual(revokeCount(), 2, "two attempts is the whole budget")
+    }
+
+    /// The same tap against a watch nobody has heard from in 12 minutes — five of the six field
+    /// revokes looked exactly like this. Shorter ladder, and the tile is told to stop implying a
+    /// drain is happening.
+    func testDeadBranchArmsShorterLadderAndForcesAfterTwoAttempts() throws {
+        let controller = makeController(watchReachable: { false },
+                                        lastWatchContact: { Date().addingTimeInterval(-.minutes(12)) })
+        establishLoan(controller)
+        let ladder = ReclaimLadderRecorder()
+        ladder.install(on: controller)
+
+        controller.reclaimNow()
+        waitUntil(timeout: 5, "ladder armed") { ladder.armed.count == 2 }
+
+        XCTAssertEqual(ladder.armed.map(\.label), ["reclaim-resend", "reclaim-force"])
+        XCTAssertEqual(ladder.armed.map(\.delay), [8, 20], "stale contact and unreachable is the dead branch")
+        XCTAssertEqual(controller.reclaimProgress?.phase, .wakingTheWatch)
+        XCTAssertEqual(controller.reclaimProgress.map { $0.expectedBy.timeIntervalSince($0.startedAt) } ?? 0, 20,
+                       accuracy: 0.5)
+        XCTAssertNotNil(diagMatching("reclaim ladder DEAD"))
+        XCTAssertNotNil(diagMatching("reachable 0"), "the evidence that chose the branch is logged, not just the verdict")
+
+        ladder.fire("reclaim-resend")
+        XCTAssertEqual(revokeCount(), 2, "the retry exists for a watch that is merely asleep")
+        XCTAssertEqual(controller.state, .reclaimPending)
+
+        ladder.fire("reclaim-force")
+        waitForState(controller, .owner)
+        XCTAssertEqual(revokeCount(), 2)
+    }
+
+    /// The good case: the watch drains before the first deadline. Both rungs must die with the
+    /// loan — a resend fired afterwards would push a revoke at a watch that already handed back,
+    /// and a force would fire against a phone that is already the owner.
+    func testDrainBeforeTheFirstDeadlineCancelsTheLadder() throws {
+        let controller = makeController(lastWatchContact: { Date().addingTimeInterval(-30) })
+        let grant = establishLoan(controller)
+        let ladder = ReclaimLadderRecorder()
+        ladder.install(on: controller)
+
+        controller.reclaimNow()
+        waitUntil(timeout: 5, "ladder armed") { ladder.armed.count == 2 }
+        let revokesAtTap = revokeCount()
+
+        // The watch answers the revoke the way the protocol says: a recovered final offer.
+        let ackSent = expectSend()
+        let event = makeEvent(seq: 1, units: 0.6, at: Date().addingTimeInterval(-.minutes(3)))
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                          events: [event], tombstones: [], recovered: true)).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+
+        XCTAssertTrue(ladder.isCancelled("reclaim-resend"), "a completed drain kills the pending resend")
+        XCTAssertTrue(ladder.isCancelled("reclaim-force"), "and the force with it")
+        XCTAssertNil(controller.reclaimProgress, "nothing left to draw a determinate bar for")
+
+        // Belt and braces: even if a rung reached its deadline anyway, its guards refuse.
+        ladder.fire("reclaim-resend")
+        ladder.fire("reclaim-force")
+        XCTAssertEqual(revokeCount(), revokesAtTap, "no revoke may go out after the loan is over")
+        XCTAssertEqual(controller.state, .owner)
+    }
+
+    /// A dead-branch ladder that gets proof of life mid-flight. Reachability is the one signal
+    /// that settles the question in the positive, so the ladder moves onto the live budget — the
+    /// watch is awake and now has a real chance to drain rather than being cut off at 20 s.
+    func testReachabilityMidDeadLadderCollapsesItToTheLiveDeadline() throws {
+        let controller = makeController(lastWatchContact: { Date().addingTimeInterval(-.minutes(12)) })
+        establishLoan(controller)
+        let ladder = ReclaimLadderRecorder()
+        ladder.install(on: controller)
+
+        controller.reclaimNow()
+        waitUntil(timeout: 5, "ladder armed") { ladder.armed.count == 2 }
+        XCTAssertEqual(ladder.armed.map(\.delay), [8, 20])
+
+        controller.watchDidBecomeReachable()
+        waitUntil(timeout: 5, "ladder promoted") { ladder.armed.count == 3 }
+
+        XCTAssertTrue(ladder.isCancelled("reclaim-force", arming: 0), "the dead branch's 20 s force is retired")
+        XCTAssertEqual(ladder.armed.last?.label, "reclaim-force")
+        XCTAssertEqual(ladder.armed.last?.delay ?? 0, 25, accuracy: 1.0,
+                       "the new force deadline is the live one, still measured from the tap")
+        XCTAssertEqual(controller.reclaimProgress?.phase, .draining, "a watch that just woke is alive")
+        XCTAssertEqual(controller.reclaimProgress.map { $0.expectedBy.timeIntervalSince($0.startedAt) } ?? 0, 25,
+                       accuracy: 0.5)
+        XCTAssertEqual(revokeCount(), 2, "the wake-up resend IS the second attempt — better timed than the rung's")
+        XCTAssertEqual(ladder.armed.filter { $0.label == "reclaim-resend" }.count, 1,
+                       "promotion must not buy a third attempt")
+        XCTAssertNotNil(diagMatching("watch became reachable"), "the promotion is on the record, not silent")
+    }
+}
+
+/// Holds the reclaim ladder's rungs still. The controller schedules them through `scheduler`, so
+/// a test can read the geometry it armed and jump to a deadline on demand — without which these
+/// tests would spend 25 real seconds each waiting for a force.
+///
+/// Every arming is kept, not just the latest: a superseded rung still exists in production, and a
+/// test that discarded it could not say whether the promotion actually retired the old force.
+final class ReclaimLadderRecorder {
+    struct Armed: Equatable {
+        let label: String
+        let delay: TimeInterval
+    }
+
+    private let lock = NSLock()
+    private var _armed: [Armed] = []
+    private var _work: [String: [DispatchWorkItem]] = [:]
+
+    var armed: [Armed] { lock.lock(); defer { lock.unlock() }; return _armed }
+
+    func install(on controller: PodLoanPhoneController) {
+        controller.scheduler = { [weak self] delay, label, work in
+            guard let self = self else { return }
+            self.lock.lock()
+            self._armed.append(Armed(label: label, delay: delay))
+            self._work[label, default: []].append(work)
+            self.lock.unlock()
+        }
+    }
+
+    /// Fire the LATEST arming of a rung — virtual time for exactly that deadline.
+    @discardableResult
+    func fire(_ label: String) -> Bool {
+        lock.lock()
+        let work = _work[label]?.last
+        lock.unlock()
+        guard let work = work else { return false }
+        work.perform()
+        return true
+    }
+
+    /// `arming` nil = the latest. Index it to ask about a rung that has since been superseded.
+    func isCancelled(_ label: String, arming index: Int? = nil) -> Bool {
+        lock.lock()
+        let items = _work[label] ?? []
+        lock.unlock()
+        let work: DispatchWorkItem?
+        if let index = index {
+            work = items.indices.contains(index) ? items[index] : nil
+        } else {
+            work = items.last
+        }
+        return work?.isCancelled ?? false
     }
 }

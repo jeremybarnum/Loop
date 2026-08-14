@@ -694,8 +694,9 @@ final class LoanTwoSidedContractTests: XCTestCase {
         XCTAssertEqual(carbs().count, 0, "streaming stages; it must not commit")
         XCTAssertEqual(doses().count, 0, "streaming stages; it must not commit")
 
-        // The wrist goes quiet — 45 s reachability timeout, or a stranded relaunch. The phone
-        // abandons the loan, and writes the staged records first: never understate IOB.
+        // The wrist goes quiet — the reclaim ladder spends both attempts, or a stranded relaunch
+        // finds the loan dead. The phone abandons it, and writes the staged records first:
+        // never understate IOB.
         phone.forceReclaimToOwner(reason: "watch unreachable (test)")
         waitUntil("owner") { [weak self] in self?.phone?.state == .owner }
         XCTAssertEqual(carbs().count, 1, "force-reclaim preserves the staged carb")

@@ -358,7 +358,14 @@ final class WatchDataManager: NSObject {
                 // Nudge one update. Same serial dataAccessQueue as the prune, so it is ordered
                 // after it by construction.
                 self.deviceManager.loopManager.getLoopState { _, _ in }
-            }
+            },
+            // The two inputs the reclaim ladder branches on. Reachability is the positive-only
+            // signal (true proves the watch is awake; false is routinely true of a healthy
+            // backgrounded watch, which is why it cannot stand alone), and the contact timestamp
+            // is the real separator — the loan's 300 s log pulse means a live watch is never more
+            // than a few minutes stale.
+            isWatchReachable: { [weak self] in self?.watchSession?.isReachable ?? false },
+            lastWatchContactAt: { [weak self] in self?.lockedLastWatchContact.value ?? nil }
         ))
     }()
 
@@ -380,6 +387,19 @@ final class WatchDataManager: NSObject {
         set { lockedContextDosingDecisions.value = newValue }
     }
     private var lockedContextDosingDecisions: Locked<[Date: BolusDosingDecision]> = Locked([:])
+
+    /// When the phone last heard ANYTHING from the watch. Written from every inbound
+    /// WatchConnectivity funnel (all four route through `noteWatchContact`), read from the loan
+    /// controller's own serial queue when a reclaim picks its branch — hence the same `Locked`
+    /// idiom the dosing-decision cache above uses, rather than a bare stored property.
+    ///
+    /// Deliberately NOT persisted: after a relaunch the phone genuinely has heard nothing from the
+    /// watch this launch, and nil is the honest answer. The cost is bounded and known — a reclaim
+    /// tapped in the first minutes after a relaunch runs the dead-watch ladder even if the watch is
+    /// alive; live reachability, and the promotion when reachability arrives mid-ladder, are what
+    /// recover that case. Persisting it instead would let a timestamp from a previous launch
+    /// vouch for a watch nobody has heard from since.
+    private let lockedLastWatchContact = Locked<Date?>(nil)
 
     private let contextDosingDecisionExpirationDuration: TimeInterval = -.minutes(5)
 
@@ -758,8 +778,19 @@ final class WatchDataManager: NSObject {
 
 
 extension WatchDataManager: WCSessionDelegate {
+
+    /// The single place every inbound WatchConnectivity delivery reports itself. Two consumers,
+    /// both of which need "the watch is alive" rather than "the watch said something specific":
+    /// the silence dead-man re-arms, and the timestamp feeds the reclaim ladder's branch — a
+    /// watch holding the pod transfers its log every 300 s, so contact age is what separates a
+    /// drain worth waiting for from a watch that is not going to answer.
+    private func noteWatchContact() {
+        lockedLastWatchContact.value = Date()
+        deviceManager.alertManager?.noteWatchContactDuringLoan()
+    }
+
     func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
-        deviceManager.alertManager?.noteWatchContactDuringLoan()   // #26: any watch traffic re-arms the silence dead-man
+        noteWatchContact()   // any watch traffic re-arms the silence dead-man
         switch message["name"] as? String {
         case PotentialCarbEntryUserInfo.name?:
             if let potentialCarbEntry = PotentialCarbEntryUserInfo(rawValue: message)?.carbEntry {
@@ -833,7 +864,7 @@ extension WatchDataManager: WCSessionDelegate {
     }
 
     func session(_ session: WCSession, didReceive file: WCSessionFile) {
-        deviceManager.alertManager?.noteWatchContactDuringLoan()   // #26: the 5-min log pulse is the loan's heartbeat
+        noteWatchContact()   // the 5-min log pulse is the loan's heartbeat
         // Watch diagnostics log → Documents, visible in the Files app (On My iPhone →
         // Loop) so it can be AirDropped from the PHONE (watchOS has no AirDrop; logs
         // were being texted). Copy immediately — the system deletes file.fileURL when
@@ -904,7 +935,7 @@ extension WatchDataManager: WCSessionDelegate {
     /// replyHandler variant above, which is only called when the sender supplied one — without
     /// this method the watch's urgent Start request would be silently dropped.
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
-        deviceManager.alertManager?.noteWatchContactDuringLoan()   // #26: re-arm the silence dead-man
+        noteWatchContact()   // re-arm the silence dead-man
         guard message[LoanProtocol.userInfoKey] != nil else {
             log.default("Ignoring unexpected sendMessage from watch: %{public}@", String(describing: message.keys))
             return
@@ -918,7 +949,7 @@ extension WatchDataManager: WCSessionDelegate {
     }
 
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
-        deviceManager.alertManager?.noteWatchContactDuringLoan()   // #26: loan protocol traffic re-arms the silence dead-man
+        noteWatchContact()   // loan protocol traffic re-arms the silence dead-man
         // The loan protocol rides its own single key. Unknown payloads are logged and ignored,
         // never asserted on: WatchConnectivity redelivers queued userInfo across reinstalls, so a
         // payload from an older build can always arrive.

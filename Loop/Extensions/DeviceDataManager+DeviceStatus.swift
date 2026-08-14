@@ -44,7 +44,12 @@ extension DeviceDataManager {
             // PODLOAN: hand-back in flight — records draining + radio re-arming takes
             // a few seconds; show movement, not a frozen "on watch" (2026-07-18: the
             // ~5s frozen tile during hand-back read as ownership ambiguity).
-            return DeviceDataManager.podReclaimingStatusHighlight
+            //
+            // The label follows the reclaim's phase, because "Reclaiming…" over a watch that is
+            // not answering implies progress that is not happening. The dead branch says the
+            // watch is silent from the first second, which is the whole point of deciding the
+            // branch before the wait starts rather than after it.
+            return DeviceDataManager.podReclaimingStatusHighlight(phase: podReclaimProgress?.phase)
         } else if isPodTakingOver {
             // PODLOAN #92 (2026-08-12): the grant is out but the watch has NOT confirmed it has
             // the pod. This branch MUST precede the one below: the grant releases the pod's BLE
@@ -92,14 +97,31 @@ extension DeviceDataManager {
         var state: DeviceStatusHighlightState = .normalPump
     }
 
-    static var podReclaimingStatusHighlight: PodReclaimingStatusHighlight {
-        return PodReclaimingStatusHighlight()
+    static func podReclaimingStatusHighlight(phase: PodLoanPhoneController.ReclaimProgress.Phase?) -> PodReclaimingStatusHighlight {
+        return PodReclaimingStatusHighlight(phase: phase)
     }
 
     struct PodReclaimingStatusHighlight: DeviceStatusHighlight {
-        var localizedMessage: String = NSLocalizedString("Reclaiming…", comment: "Title text for the pump tile while the pod is coming back from the watch")
+        var localizedMessage: String
         var imageName: String = "arrow.triangle.2.circlepath"
         var state: DeviceStatusHighlightState = .normalPump
+
+        /// nil phase = no ladder is running: either the watch started this hand-back itself, or
+        /// the ownership handover is already done and the pod's BLE link is still settling. Both
+        /// are plain "Reclaiming…" — nothing is stalled, there is just no deadline to name.
+        init(phase: PodLoanPhoneController.ReclaimProgress.Phase? = nil) {
+            switch phase {
+            case .wakingTheWatch?:
+                // Say it in the first second. The five dead revokes on record had silences of 5.5
+                // to 21.2 minutes before the tap — the watch was already gone, and a spinner
+                // labelled "Reclaiming…" told the user nothing for the whole wait.
+                localizedMessage = NSLocalizedString("Watch Silent…", comment: "Title text for the pump tile while a reclaim waits on a watch that has not been heard from")
+            case .forcing?:
+                localizedMessage = NSLocalizedString("Forcing Return…", comment: "Title text for the pump tile while the phone takes the pod back without the watch's cooperation")
+            case .draining?, .none:
+                localizedMessage = NSLocalizedString("Reclaiming…", comment: "Title text for the pump tile while the pod is coming back from the watch")
+            }
+        }
     }
 
     var pumpStatusBadge: DeviceStatusBadge? {

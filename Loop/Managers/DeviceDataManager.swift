@@ -877,9 +877,15 @@ extension DeviceDataManager {
     var isPodSettlingAfterReclaim: Bool {
         return watchManager?.podLoanController.isReclaimSettlingOnly ?? false
     }
+    /// The tapped reclaim's phase and deadline, nil when no reclaim ladder is running (including
+    /// through the BLE settle, which has no honest deadline to publish).
+    var podReclaimProgress: PodLoanPhoneController.ReclaimProgress? {
+        return watchManager?.podLoanController.reclaimProgress
+    }
     /// Fraction of the expected phase-1 handover for the pump pill's fill, nil outside phase 1.
+    /// Measured against the deadline THIS reclaim promised, not a fixed calibration constant.
     var podReclaimHandoverProgress: Double? {
-        return watchManager?.podLoanController.reclaimPhase1Progress
+        return podReclaimProgress?.fraction
     }
 
     func enactBolus(units: Double, activationType: BolusActivationType, completion: @escaping (_ error: Error?) -> Void = { _ in }) {

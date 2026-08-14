@@ -1848,6 +1848,16 @@ final class StatusTableViewController: LoopChartsTableViewController {
     /// countdown would not be.
     /// True while the pump pill is sweeping for an in-flight reclaim.
     private var isPodReclaimSweeping = false
+    /// True while the pill is showing the ladder's DETERMINATE fill. Tracked rather than derived,
+    /// so the clear runs exactly once instead of on every status refresh for the rest of the day.
+    private var isPodReclaimFilling = false
+    /// Redraw tick for the determinate fill. The reclaim ladder's deadline is 20-25 s and the
+    /// change signal this screen listens to fires on STATE changes only, so without a tick the
+    /// bar would be drawn once at the tap and then sit still for the whole countdown. Lives only
+    /// as long as a ladder does — armed when the fill goes determinate, invalidated the moment it
+    /// stops, so nothing polls a screen that has nothing to animate.
+    private var podReclaimCountdownTimer: Timer?
+    private let podReclaimCountdownInterval = TimeInterval(0.5)
 
     // MARK: - Pod reclaim fill (2026-08-04)
 
@@ -1861,18 +1871,55 @@ final class StatusTableViewController: LoopChartsTableViewController {
     /// so it gets an explanatory refusal instead (presentPodSettlingNotice).
     private func updatePodReclaimFill() {
         guard let hudView = hudView else { return }
-        // Sweep across the WHOLE reclaim, both phases. The phone's phase 1 is ~1s (measured:
-        // offer arrives state=loaned 15:28:02.215 -> state=owner 15:28:03.259), so a bar
-        // anchored to it was invisible; and phase 2 is 2s..190s, which no determinate bar can
-        // represent honestly. An indeterminate sweep is the only truthful option here.
-        if deviceManager.isPodLoanReclaiming {
+        // A tapped reclaim knows its own deadline — 25 s on the live branch, 20 s on the dead one
+        // — so it gets a DETERMINATE bar measured against that promise. Everything else keeps the
+        // indeterminate sweep: a watch-initiated hand-back has no ladder, and the BLE settle that
+        // follows is 2s..190s, which no bar can represent honestly.
+        if let fraction = deviceManager.podReclaimHandoverProgress {
+            if isPodReclaimSweeping {
+                isPodReclaimSweeping = false
+                hudView.pumpStatusHUD.stopActivitySweep()
+            }
+            isPodReclaimFilling = true
+            hudView.pumpStatusHUD.setActivityFill(fraction, color: .systemOrange)
+            startPodReclaimCountdown()
+        } else if deviceManager.isPodLoanReclaiming {
+            stopPodReclaimCountdown()
+            isPodReclaimFilling = false
             guard !isPodReclaimSweeping else { return }
             isPodReclaimSweeping = true
             hudView.pumpStatusHUD.startActivitySweep(color: .systemOrange)
-        } else if isPodReclaimSweeping {
-            isPodReclaimSweeping = false
-            hudView.pumpStatusHUD.stopActivitySweep()
+        } else {
+            stopPodReclaimCountdown()
+            if isPodReclaimSweeping {
+                isPodReclaimSweeping = false
+                hudView.pumpStatusHUD.stopActivitySweep()   // also clears the fill
+                isPodReclaimFilling = false
+            } else if isPodReclaimFilling {
+                isPodReclaimFilling = false
+                hudView.pumpStatusHUD.setActivityFill(nil)
+            }
         }
+    }
+
+    private func startPodReclaimCountdown() {
+        guard podReclaimCountdownTimer == nil else { return }
+        podReclaimCountdownTimer = Timer.scheduledTimer(withTimeInterval: podReclaimCountdownInterval, repeats: true) { [weak self] timer in
+            // A repeating timer outlives a weak reference that went nil, so it has to retire
+            // itself — invalidating from `stopPodReclaimCountdown` is unreachable without a self.
+            guard let self = self else { timer.invalidate(); return }
+            guard let hudView = self.hudView else { self.stopPodReclaimCountdown(); return }
+            // Re-present the highlight on every tick, not just the fill: the ladder's phase moves
+            // under the bar (a dead branch that gives up starts forcing), and the label has to
+            // move with it. presentStatusHighlight rewrites the message text on every call.
+            hudView.pumpStatusHUD.presentStatusHighlight(self.deviceManager.pumpStatusHighlight)
+            self.updatePodReclaimFill()
+        }
+    }
+
+    private func stopPodReclaimCountdown() {
+        podReclaimCountdownTimer?.invalidate()
+        podReclaimCountdownTimer = nil
     }
 
     private func presentPodSettlingNotice() {

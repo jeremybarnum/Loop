@@ -27,6 +27,34 @@ final class PodLoanPhoneController {
         case owner, grantOffered, loaned, reconciling, reclaimPending
     }
 
+    /// What a tapped reclaim is doing right now, and when it has promised to be done — published
+    /// so the pump pill can draw a DETERMINATE bar and the tile can name the situation instead of
+    /// implying progress that isn't happening.
+    ///
+    /// Covers the ownership handover only (the drain and, failing that, the force). The BLE settle
+    /// that follows is 2 s to 190 s across 16 measured reclaims, so nothing here describes it —
+    /// that half stays an indeterminate sweep, which is the only honest drawing of a 100x spread.
+    struct ReclaimProgress: Equatable {
+        enum Phase: Equatable {
+            /// The watch was heard from within one log-pulse period, or is reachable now: its
+            /// records are draining and the wait is a real drain window.
+            case draining
+            /// Nothing recent from the watch. The revoke is being resent in case it is merely
+            /// asleep — this is not a hope that a dead watch will answer.
+            case wakingTheWatch
+            /// Both attempts spent: taking the pod back without the watch's cooperation.
+            case forcing
+        }
+        let phase: Phase
+        let startedAt: Date
+        /// When the force fires — the moment the user has been promised an answer by. The pod
+        /// round-trip is additive after this (3-9 s, p50 4 s, n=20/20 current era).
+        let expectedBy: Date
+        /// 0...0.95 of the way from `startedAt` to `expectedBy`. Holds at 0.95 rather than
+        /// completing, because completion is the tile changing, not the bar filling.
+        let fraction: Double
+    }
+
     struct Dependencies {
         /// The current pump manager, if any (conditionally cast for lending).
         var pumpManager: () -> PumpManager?
@@ -123,6 +151,20 @@ final class PodLoanPhoneController {
         /// reservoir-inferred dose. Default no-op keeps the state-machine tests constructing
         /// unchanged.
         var insulinHistoryRewritten: (_ earliestDoseStart: Date) -> Void = { _ in }
+        /// True when the watch app is reachable RIGHT NOW (WCSession.isReachable at integration).
+        /// Admissible only as a POSITIVE signal: reachable proves the watch is alive, but false
+        /// proves nothing — in this codebase the flag is a channel selector (urgent vs queued) and
+        /// reads false for a healthy watch whose app is merely backgrounded. Default false, so a
+        /// caller that does not wire it falls back to the contact-age evidence below.
+        var isWatchReachable: () -> Bool = { false }
+        /// When the phone last heard ANYTHING from the watch — any inbound WatchConnectivity
+        /// funnel. This, not reachability, is what separates a live watch from a dead one at
+        /// reclaim time: a watch holding the pod transfers its log every 300 s, metronomically
+        /// (n=134 gaps since 2026-08-08, range 283.1-301.4 s, zero excursions past 302 s), while
+        /// the five dead revokes on record had silences of 5.5 to 21.2 MINUTES. nil = nothing
+        /// heard, which the reclaim ladder treats as dead. Default nil keeps the state-machine
+        /// tests constructing unchanged.
+        var lastWatchContactAt: () -> Date? = { nil }
         var now: () -> Date = { Date() }
     }
 
@@ -254,18 +296,6 @@ final class PodLoanPhoneController {
             // user-visible — crude parity: it pushed every phase, and the 5s frozen
             // tile during hand-back read as ambiguity).
             if oldValue != state {
-                // Phase-1 anchor for the pump pill's fill (2026-08-04). Phase 1 is the
-                // ownership handover — bounded, and the only half worth drawing a bar for.
-                // Measured across 51 real hand-backs: median 6s, p75 24s, p85 61s. Phase 2
-                // (the BLE settle) is deliberately NOT covered: 2s to 190s with no way to
-                // predict which, so a bar there would be a lie about half the time.
-                let inPhase1 = (state == .reconciling || state == .reclaimPending)
-                let wasPhase1 = (oldValue == .reconciling || oldValue == .reclaimPending)
-                if inPhase1 && !wasPhase1 {
-                    reclaimPhase1StartedAt = deps.now()
-                } else if !inPhase1 {
-                    reclaimPhase1StartedAt = nil
-                }
                 deps.ownershipDidChange()
                 // A reclaim just landed us in .owner, but reclaimConnection() only re-armed
                 // the BLE bid — the pod isn't actually back for ~2 min. Open the settle window
@@ -277,20 +307,20 @@ final class PodLoanPhoneController {
         }
     }
 
-    /// When the ownership handover (phase 1) began, or nil if not in it.
-    private var reclaimPhase1StartedAt: Date?
-
-    /// Fraction 0...0.95 of the expected phase-1 handover, or nil when phase 1 is not running.
+    /// The tapped reclaim's phase and its real deadline, or nil when no ladder is running.
     ///
-    /// Calibrated PESSIMISTICALLY at 25s, the p75 of 51 measured hand-backs (median 6s), so
-    /// three quarters of reclaims beat the bar — the same "make the good case a pleasant
-    /// surprise" rule Jeremy set for the takeover bar. Holds at 0.95 rather than completing,
-    /// because completion is the tile changing, not the bar filling.
-    var reclaimPhase1Progress: Double? {
+    /// The fraction comes from the ladder's own force deadline — the promise actually made to the
+    /// user on this tap — rather than from a fixed calibration constant, so the bar cannot drift
+    /// away from the thing it is drawing. nil during the drain's commit (state .reconciling) and
+    /// through the BLE settle, where the caller falls back to the indeterminate sweep.
+    var reclaimProgress: ReclaimProgress? {
         return queue.sync {
-            guard let started = reclaimPhase1StartedAt else { return nil }
-            let elapsed = deps.now().timeIntervalSince(started)
-            return min(max(elapsed, 0) / 25.0, 0.95)
+            guard let ladder = reclaimLadder, state == .reclaimPending else { return nil }
+            let total = ladder.forceAt.timeIntervalSince(ladder.startedAt)
+            let elapsed = deps.now().timeIntervalSince(ladder.startedAt)
+            let fraction = total > 0 ? min(max(elapsed, 0) / total, 0.95) : 0.95
+            return ReclaimProgress(phase: ladder.phase, startedAt: ladder.startedAt,
+                                   expectedBy: ladder.forceAt, fraction: fraction)
         }
     }
 
@@ -836,6 +866,69 @@ final class PodLoanPhoneController {
     }
     private var t1WorkItem: DispatchWorkItem?
     private var reclaimTimeoutWork: DispatchWorkItem?
+    private var reclaimResendWork: DispatchWorkItem?
+
+    // MARK: - Reclaim ladder (2026-08-13)
+
+    /// The state of a tapped reclaim: which branch the evidence chose, when it started, and the
+    /// two deadlines it is running to. One ladder at a time; nil means no reclaim is in flight.
+    private struct ReclaimLadder {
+        enum Branch: String { case live = "LIVE", dead = "DEAD" }
+        var branch: Branch
+        let startedAt: Date
+        /// The rung that resends the revoke — the second and last attempt.
+        var resendAt: Date
+        /// The rung that gives up on the watch and takes the pod back.
+        var forceAt: Date
+        /// Revokes sent for this reclaim, counting the one the tap itself sent. Capped at two:
+        /// a retry exists for a watch that is merely asleep, and a third would only delay the
+        /// force. Any resend counts — including the one a reachability change fires.
+        var attempts: Int
+        /// The force rung has run. NOT the same as finished: a force lands on
+        /// `pendingForceReclaimReason` when a hand-back commit is mid-write, so this ladder can
+        /// outlive its own last rung and must keep describing the situation until state moves.
+        var forced: Bool
+        var phase: ReclaimProgress.Phase {
+            if forced { return .forcing }
+            return branch == .live ? .draining : .wakingTheWatch
+        }
+    }
+    private var reclaimLadder: ReclaimLadder?
+
+    /// A watch holding the pod transfers its log every 300 s. Measured across 134 gaps since
+    /// 2026-08-08: 283.1 s to 301.4 s, zero excursions past 302 s. One pulse period plus margin
+    /// therefore separates a live watch from a dead one with enormous headroom — the one live
+    /// revoke on record had a 6.5-second-old pulse, the five dead ones 5.5 to 21.2 minutes.
+    private static let watchContactLivenessWindow: TimeInterval = 330
+
+    /// Live branch: the drain is two urgent WatchConnectivity round trips plus one Core Data
+    /// commit, with NO pod round-trip on the critical path. The one field revoke drained 9 doses
+    /// in 2.32 s, and 20 current-era hand-backs put trigger-to-final-ack at p50 1.0 s. 10 s covers
+    /// 16 of those 20 outright; the resend captures 19. The 20th was an 80 s WatchConnectivity
+    /// transport failure — surrendered to the force path on purpose rather than charged to every
+    /// reclaim as a longer wait.
+    private static let liveResendDelay: TimeInterval = 10
+    private static let liveForceDelay: TimeInterval = 25
+
+    /// Dead branch: nothing is expected to answer, so the only reason to wait at all is the watch
+    /// that is merely asleep and wakes on the resend. Shorter on both rungs than the live branch,
+    /// because there is no drain in progress to give time to.
+    private static let deadResendDelay: TimeInterval = 8
+    private static let deadForceDelay: TimeInterval = 20
+
+    /// The scheduling seam for the ladder's rungs. nil (production) runs them on `queue` at their
+    /// real deadlines; a test substitutes a virtual clock and fires a rung inline, which is what
+    /// makes a 25-second geometry assertable without waiting 25 real seconds. The label crosses
+    /// too, so a test can assert WHICH rung armed at which deadline rather than merely how many.
+    var scheduler: ((_ delay: TimeInterval, _ label: String, _ work: DispatchWorkItem) -> Void)?
+
+    private func scheduleLadderRung(after delay: TimeInterval, label: String, execute work: DispatchWorkItem) {
+        if let scheduler = scheduler {
+            scheduler(delay, label, work)
+        } else {
+            queue.asyncAfter(deadline: .now() + delay, execute: work)
+        }
+    }
 
     private enum Keys {
         static let state = "PodLoanPhoneController.state"
@@ -1871,6 +1964,9 @@ final class PodLoanPhoneController {
     }
 
     private func finishLoanAfterCommit() {
+        // The drain landed — whatever rungs a reclaim tap left armed have nothing left to do, and
+        // a resend firing now would push a revoke at a watch that has already handed back.
+        cancelReclaimLadder()
         cancelNotification(id: NotificationID.duration)
         cancelNotification(id: NotificationID.paused)
         cancelNotification(id: NotificationID.onLoan)
@@ -1963,16 +2059,99 @@ final class PodLoanPhoneController {
             self.armPausedReminder()
             // §5.3.3 dead-watch path: audit against the schedule, notice-only.
             self.schedulePostReclaimReAudit(recordsCommitted: false)
-            // The explicit override, made real: if the watch never drains within 45 s (dead /
-            // gone / already handed off), force back to OWNER so we never strand.
-            self.reclaimTimeoutWork?.cancel()
-            let work = DispatchWorkItem { [weak self] in
-                guard let self = self, self.state == .reclaimPending else { return }
-                self.forceReclaimToOwner(reason: "reclaim timed out — watch did not drain")
-            }
-            self.reclaimTimeoutWork = work
-            self.queue.asyncAfter(deadline: .now() + 45, execute: work)
+            self.armReclaimLadder()
         }
+    }
+
+    /// Two attempts, then force — on a deadline chosen ONCE, here, from the evidence available at
+    /// the tap.
+    ///
+    /// The two regimes are separable before the wait starts, and the separator is the loan pulse
+    /// rather than reachability: a watch holding the pod checks in every 300 s like a metronome,
+    /// so the age of the last contact says whether there is a drain to wait for. Reachability
+    /// only ever ADDS to the live side — it is a channel selector in this codebase, false for a
+    /// healthy backgrounded watch, so it can prove life but never absence.
+    ///
+    /// Resending the revoke is safe: it carries only the epoch, and the watch guards on epoch
+    /// plus phase, so the second copy is either the first one the watch ever sees or a no-op.
+    ///
+    /// The cost of the shorter wait, stated where it is paid: reclaiming earlier makes it likelier
+    /// that a returning watch finds a NEWER loan already started, and a stale offer forfeits the
+    /// wrist's final loop-mode inheritance and one calibration sample. That is why the live branch
+    /// stays generous enough for a real drain to finish instead of being tuned to the p50.
+    private func armReclaimLadder() {
+        cancelReclaimLadder()
+
+        let reachable = deps.isWatchReachable()
+        let lastContact = deps.lastWatchContactAt()
+        let contactAge = lastContact.map { deps.now().timeIntervalSince($0) }
+        let heardRecently = (contactAge ?? .greatestFiniteMagnitude) < Self.watchContactLivenessWindow
+        let branch: ReclaimLadder.Branch = (reachable || heardRecently) ? .live : .dead
+        let resendDelay = branch == .live ? Self.liveResendDelay : Self.deadResendDelay
+        let forceDelay = branch == .live ? Self.liveForceDelay : Self.deadForceDelay
+
+        let started = deps.now()
+        reclaimLadder = ReclaimLadder(branch: branch,
+                                      startedAt: started,
+                                      resendAt: started.addingTimeInterval(resendDelay),
+                                      forceAt: started.addingTimeInterval(forceDelay),
+                                      attempts: 1,          // the tap's own revoke
+                                      forced: false)
+
+        // The evidence, not just the verdict: a field log has to be auditable after the fact for
+        // whether the branch this reclaim took was the right one.
+        let ageText = contactAge.map { String(format: "%.1fs ago", $0) } ?? "never"
+        handbackDiag(epoch, String(format: "reclaim ladder %@ — last watch contact %@, reachable %d · resend +%.0fs, force +%.0fs",
+                                   branch.rawValue, ageText, reachable ? 1 : 0, resendDelay, forceDelay))
+
+        scheduleRungs(resendIn: resendDelay, forceIn: forceDelay)
+    }
+
+    /// Arm (or re-arm) the two rungs. Delays are measured from NOW, so a caller that moves a
+    /// deadline passes the remaining time rather than the original budget.
+    private func scheduleRungs(resendIn resendDelay: TimeInterval?, forceIn forceDelay: TimeInterval) {
+        reclaimResendWork?.cancel()
+        reclaimTimeoutWork?.cancel()
+
+        if let resendDelay = resendDelay {
+            let resend = DispatchWorkItem { [weak self] in
+                guard let self = self, self.state == .reclaimPending,
+                      var ladder = self.reclaimLadder, !ladder.forced else { return }
+                // Two attempts is the whole budget. A reachability change can already have spent
+                // the second one — better timed than this rung, since the watch was awake for it.
+                guard ladder.attempts < 2 else { return }
+                self.sendMessage(.revoke(Revoke(epoch: self.epoch)))
+                ladder.attempts += 1
+                self.reclaimLadder = ladder
+                self.handbackDiag(self.epoch, "reclaim revoke RESENT (attempt \(ladder.attempts) of 2) — no drain yet on the \(ladder.branch.rawValue) branch")
+            }
+            reclaimResendWork = resend
+            scheduleLadderRung(after: max(resendDelay, 0), label: "reclaim-resend", execute: resend)
+        } else {
+            reclaimResendWork = nil
+        }
+
+        let force = DispatchWorkItem { [weak self] in
+            guard let self = self, self.state == .reclaimPending, let ladder = self.reclaimLadder else { return }
+            // Mark BEFORE forcing: a force can be deferred behind an in-flight hand-back commit,
+            // and while it waits the tile must say what is actually happening.
+            self.reclaimLadder?.forced = true
+            self.forceReclaimToOwner(reason: "reclaim ladder spent on the \(ladder.branch.rawValue) branch — \(ladder.attempts) revoke attempt(s), watch did not drain")
+        }
+        reclaimTimeoutWork = force
+        scheduleLadderRung(after: max(forceDelay, 0), label: "reclaim-force", execute: force)
+    }
+
+    /// Kill every pending rung and forget the ladder. Called wherever a reclaim stops being in
+    /// flight — a completed drain, a force that landed, a fresh tap, an abandoned loan — so no
+    /// rung can resend a revoke into a loan that is already over, and so the determinate bar
+    /// stops the moment the handover does.
+    private func cancelReclaimLadder() {
+        reclaimResendWork?.cancel()
+        reclaimResendWork = nil
+        reclaimTimeoutWork?.cancel()
+        reclaimTimeoutWork = nil
+        reclaimLadder = nil
     }
 
     /// The explicit override, made real: abandon a stuck/stale loan and return to
@@ -1994,7 +2173,7 @@ final class PodLoanPhoneController {
             pendingForceReclaimReason = reason
             return
         }
-        reclaimTimeoutWork?.cancel()
+        cancelReclaimLadder()
         cancelNotification(id: NotificationID.onLoan)
         cancelNotification(id: NotificationID.paused)
         cancelNotification(id: NotificationID.duration)
@@ -2061,8 +2240,8 @@ final class PodLoanPhoneController {
             // here then mirror into every later grant via wipe-then-replace — the
             // phantom-COB failure mode with the phone as the source.
             //
-            // Reached whenever a watch goes unreachable mid-loan: the 45 s reachability timeout,
-            // a stranded-state relaunch, or a fresh request while still loaned.
+            // Reached whenever a watch goes unreachable mid-loan: the reclaim ladder spending both
+            // of its attempts, a stranded-state relaunch, or a fresh request while still loaned.
             committedIDs.formUnion(events.map(\.id))
             persistCommittedIDs()
             // LIVELOCK FIX. This used to record the IDs and stop, leaving
@@ -2145,18 +2324,55 @@ final class PodLoanPhoneController {
         return true
     }
 
-    /// Re-send a parked revoke on any sign of watch life (kept from v1).
+    /// Re-send a parked revoke on any sign of watch life (kept from v1), and promote a reclaim
+    /// that was running on the dead-watch budget: a watch that just became reachable is alive by
+    /// the one signal that proves it, so it gets the live branch's more generous deadlines and a
+    /// real chance to drain its records instead of being forced off in 20 s.
     func watchDidBecomeReachable() {
         queue.async {
+            var resent = false
             if self.pendingRevoke {
                 self.sendMessage(.revoke(Revoke(epoch: self.epoch)))
+                resent = true
             }
+            self.promoteReclaimLadderToLive(afterResend: resent)
         }
+    }
+
+    /// Move a DEAD-branch ladder onto the live deadlines, still anchored to the original tap so
+    /// the promise on screen only ever gets later by the amount the live branch allows. Safe to
+    /// call when no ladder is armed, when it is already live, or once the force has run.
+    ///
+    /// The revoke that reachability just sent COUNTS as an attempt — it is the best-timed one
+    /// available, going out while the watch is provably awake — so this never buys a third.
+    private func promoteReclaimLadderToLive(afterResend resent: Bool) {
+        guard var ladder = reclaimLadder, state == .reclaimPending, !ladder.forced else { return }
+        let wasDead = ladder.branch == .dead
+        if resent, ladder.attempts < 2 { ladder.attempts += 1 }
+        if wasDead {
+            ladder.branch = .live
+            ladder.resendAt = ladder.startedAt.addingTimeInterval(Self.liveResendDelay)
+            ladder.forceAt = ladder.startedAt.addingTimeInterval(Self.liveForceDelay)
+        }
+        reclaimLadder = ladder
+        // An already-live ladder keeps its deadlines; only the spent attempt was worth recording,
+        // and the resend rung reads it before adding a third.
+        guard wasDead else { return }
+
+        let now = deps.now()
+        let resendIn: TimeInterval? = ladder.attempts < 2 ? ladder.resendAt.timeIntervalSince(now) : nil
+        let forceIn = ladder.forceAt.timeIntervalSince(now)
+        handbackDiag(epoch, String(format: "reclaim ladder DEAD → LIVE — watch became reachable · %d attempt(s) sent, force now at +%.0fs from the tap",
+                                   ladder.attempts, Self.liveForceDelay))
+        scheduleRungs(resendIn: resendIn, forceIn: forceIn)
     }
 
     // MARK: - Helpers
 
     private func reclaimToOwner(alert: (title: String, body: String)) {
+        // Abandoning the loan retires any ladder with it; a rung firing afterwards would be
+        // reasoning about a reclaim that no longer exists.
+        cancelReclaimLadder()
         cancelNotification(id: NotificationID.onLoan)
         (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
         state = .owner
