@@ -409,8 +409,17 @@ final class LoanBooksHarnessTests: XCTestCase {
     private func makeDriver() -> LoanBooksDriver {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         cacheDirs.append(dir)
+        let store = PersistenceController(directoryURL: dir)
+        // The store attaches asynchronously; handing it to a driver that writes immediately is
+        // the zero-rows race. Block until it is up — see the note in WatchStoreEffectsTests.
+        let ready = expectation(description: "persistent store attached")
+        store.onReady { error in
+            XCTAssertNil(error, "store failed to come up")
+            ready.fulfill()
+        }
+        wait(for: [ready], timeout: 10)
         return LoanBooksDriver(host: self,
-                               cacheStore: PersistenceController(directoryURL: dir),
+                               cacheStore: store,
                                basalRate: fieldBasalRate)
     }
 
@@ -1344,6 +1353,12 @@ final class LoanOverrideTests: XCTestCase {
         if let existing = _cacheStore { return existing }
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let store = PersistenceController(directoryURL: dir)
+        let ready = expectation(description: "persistent store attached")
+        store.onReady { error in
+            XCTAssertNil(error, "store failed to come up")
+            ready.fulfill()
+        }
+        wait(for: [ready], timeout: 10)
         cacheDir = dir
         _cacheStore = store
         return store

@@ -56,6 +56,29 @@ final class WatchStoreEffectsTests: XCTestCase {
         super.setUp()
         cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         cacheStore = PersistenceController(directoryURL: cacheDir)
+        waitUntilStoreIsUp(cacheStore)
+    }
+
+    /// The other half of the zero-rows flake. Removing the synchronous unlink from tearDown
+    /// fixed the race at the END of a test; this is the one at the START. PersistenceController
+    /// attaches its persistent store ASYNCHRONOUSLY (its own readyState machine), so a test that
+    /// writes and reads immediately can be served by a coordinator that has no store attached
+    /// yet — and that presents as a query answering with ZERO ROWS, which is indistinguishable
+    /// from a real accounting bug.
+    ///
+    /// Field signature this closes, measured 2026-08-13/14: an IOB delta asserted at 0.083 U
+    /// returned 0.083 (green), then 0.038, then 0.000 across identical runs, and the suite's
+    /// failure COUNT wandered 2 -> 4 -> 4 -> 3, which is a race rather than arithmetic. A
+    /// grid-alignment theory was tried first and falsified — the phase of the query was never
+    /// the problem; an empty store was.
+    private func waitUntilStoreIsUp(_ store: PersistenceController,
+                                    file: StaticString = #filePath, line: UInt = #line) {
+        let ready = expectation(description: "persistent store attached")
+        store.onReady { error in
+            XCTAssertNil(error, "store failed to come up", file: file, line: line)
+            ready.fulfill()
+        }
+        wait(for: [ready], timeout: 10)
     }
 
     override func tearDown() {
