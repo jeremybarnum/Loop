@@ -199,6 +199,14 @@ final class StockLoopSession {
                 // Queue the session log at every loan end, so a deleted or reinstalled app
                 // cannot eat it.
                 self.sendLogSnapshot("loan end")
+                // The start branch lands the user ON the glance; the end branch must at
+                // least repaint it. The 2 s tick dies on a screen dim and a bare undim does
+                // not revive it, so a phone-initiated revoke arriving in that gap goes
+                // unpainted — the glance holds its last active-loan frame, which reads as
+                // two devices both in control, until a swipe forces an appearance event
+                // (field, 2026-08-14). One render, no timer re-arm: the page may be hidden,
+                // and a hidden page must not tick.
+                DispatchQueue.main.async { GlanceController.current?.refreshGlanceNow() }
             }
         }
 

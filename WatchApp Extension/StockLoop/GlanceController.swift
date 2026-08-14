@@ -62,6 +62,11 @@ final class GlanceController: WKHostingController<GlanceView> {
         super.didDeactivate()
         model.stopRefreshing()
     }
+
+    /// Session-side poke: repaint once without arming the tick (see model.refreshNow).
+    func refreshGlanceNow() {
+        model.refreshNow()
+    }
 }
 
 // MARK: - UI state (a pure value the view renders; previews hand-build these)
@@ -250,6 +255,18 @@ final class GlanceViewModel: ObservableObject {
         }
     }
 
+    /// One catch-up render, deliberately WITHOUT touching the tick. For state the session
+    /// pushes while the page is off-screen or its timer is dead: a screen dim delivers
+    /// didDeactivate (timer dies) but a bare undim delivers no didAppear (nothing revives
+    /// it), so an event landing in that gap goes unpainted until a real appearance
+    /// transition. Not startRefreshing(), because that arms the timer — and a page that
+    /// might be hidden must not tick (each tick takes the loan controller's queue).
+    func refreshNow() {
+        guard !isPreview else { return }
+        RuntimeStateLog.mark("glance.refreshNow")
+        refresh()
+    }
+
     /// Stop ticking while off screen — nothing is reading this, and each tick takes the loan
     /// controller's queue, which the pump also uses.
     func stopRefreshing() {
@@ -290,6 +307,10 @@ final class GlanceViewModel: ObservableObject {
     func startSportMode() {
         RuntimeStateLog.mark("glance.startSportMode")
         guard !isPreview else { return }
+        // This build number is what a sideload has to move. Installing the phone app carries
+        // the watch app with it as the companion, so if this reads the OLD number after a
+        // direct install, the watch half did not actually ship and the loan is being driven
+        // by stale extension code — the failure mode a version bump alone would hide.
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         let session = ExtensionDelegate.shared().stockLoopSession
         session.loanController.requestLoan(watchBuild: build)

@@ -1370,7 +1370,9 @@ extension PodLoanPhoneControllerTests {
 
         lock.lock()
         let deleted = deletedGapSyncs
-        let recovered = notices.contains { $0.contains("Watch Records Recovered") }
+        // The urgent channel, not the quiet one: the recovered-records message rewrites IOB
+        // and COB, so it rides time-sensitive interruption (field request 2026-08-14).
+        let recovered = urgentNotices.contains { $0.contains("Watch Records Recovered") }
         lock.unlock()
 
         XCTAssertEqual(deleted, ["PODLOAN-ODOGAP-e\(grant.epoch)"], "the placeholder retires by its deterministic identity")

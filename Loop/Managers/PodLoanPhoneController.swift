@@ -531,10 +531,12 @@ final class PodLoanPhoneController {
             let up = deps.now()
             reclaimLinkUpAt = up
             let waited = up.timeIntervalSince(started)
-            os_log("Settle: pod link UP %.1fs after reclaim began (tick %d)",
-                   log: log, type: .default, waited, attempt)
-            sendMessage(.diag(LoanDiag(epoch: epoch,
-                text: String(format: "settle: link up +%.1fs (tick %d)", waited, attempt))))
+            // handbackDiag, not a bare diag send: the dead-watch force reclaim is the case
+            // that most needs this line, and that is exactly the case where the watch-bound
+            // diag channel queues until the watch returns — the first field run of this
+            // instrumentation (2026-08-14) left the phone's own file with no settle record
+            // at all. The phone file must carry its own account.
+            handbackDiag(epoch, String(format: "settle: link up +%.1fs (tick %d)", waited, attempt))
         }
         attemptReclaimVerificationNow(started: started)
         queue.asyncAfter(deadline: .now() + 2) { [weak self] in
@@ -567,15 +569,12 @@ final class PodLoanPhoneController {
                         // than inventing a read time.
                         let linkWait = self.reclaimLinkUpAt.map { $0.timeIntervalSince(started) } ?? elapsed
                         let readWait = max(elapsed - linkWait, 0)
-                        os_log("Reclaim VERIFIED — pod round-trip complete %.0fs after reclaim began (link %.1fs, stale reads %d, read %.1fs)",
-                               log: self.log, type: .default, elapsed, linkWait, self.reclaimStaleReads, readWait)
-                        // Ride the existing diag channel so the unified watch/iCloud log
-                        // carries the completion time — otherwise nothing measures the return.
-                        // The leading phrase is unchanged on purpose: 91 historical samples are
+                        // handbackDiag = the phone's own file AND the watch-bound diag echo. The
+                        // leading phrase is unchanged on purpose: 91 historical samples are
                         // parsed off it, so the split appends rather than replaces.
-                        self.sendMessage(.diag(LoanDiag(epoch: self.epoch,
-                            text: String(format: "reclaim VERIFIED — pod round-trip complete +%.0fs (link +%.1fs, stale reads %d, read +%.1fs)",
-                                         elapsed, linkWait, self.reclaimStaleReads, readWait))))
+                        self.handbackDiag(self.epoch,
+                            String(format: "reclaim VERIFIED — pod round-trip complete +%.0fs (link +%.1fs, stale reads %d, read +%.1fs)",
+                                   elapsed, linkWait, self.reclaimStaleReads, readWait))
                         self.deps.ownershipDidChange()
                         // The pod is provably reachable RIGHT NOW. This is the only moment in the
                         // whole hand-back where that is true, so it is where both jobs that need
@@ -591,6 +590,13 @@ final class PodLoanPhoneController {
                         os_log("Settle: status read %d did not advance lastSync — link %{public}@",
                                log: self.log, type: .default, self.reclaimStaleReads,
                                self.reclaimLinkUpAt == nil ? "still down" : "already up")
+                        // Phone file only — no diag: a slow settle produces ~30 of these on a
+                        // 2 s tick, and flooding the queued channel at a dead watch buys
+                        // nothing. Their timing says when the reads started failing and when
+                        // they stopped, which the end-of-settle count alone cannot.
+                        PhoneLog.event("loan", String(format: "e%d settle: read %d stale — link %@",
+                                                      self.epoch, self.reclaimStaleReads,
+                                                      self.reclaimLinkUpAt == nil ? "still down" : "already up"))
                     }
                 }
             }
@@ -876,7 +882,12 @@ final class PodLoanPhoneController {
                     self.handbackDiag(gapEpoch, String(format:
                         "R37 gap RETIRED — the watch returned with %d real dose(s): %.2f U bolus + %d rate record(s) (%.2f U gross programmed, pre-truncation) and %d carb(s); the %.2f U estimate is replaced by actual timing",
                         dosesJustCommitted.count, bolusUnits, rateCount, rateGross, carbsJustCommitted, booked))
-                    self.deps.issueNotice("Watch Records Recovered",
+                    // URGENT (field request 2026-08-14): this fires when the returning watch
+                    // replaces the placeholder estimate with real records — IOB and COB just
+                    // changed under the user's feet. Urgent buys time-sensitive interruption,
+                    // so the message breaks through a Focus mode and gets lock-screen
+                    // prominence rather than filing quietly into the list.
+                    self.deps.issueUrgentNotice("Watch Records Recovered",
                                           String(format: "The watch is back. Its records (%d doses, %d carbs) replaced the estimated %.2f U bolus — your IOB and COB now reflect actual timing.",
                                                  dosesJustCommitted.count, carbsJustCommitted, booked))
                 } else {

@@ -548,27 +548,15 @@ extension LoopAppManager: DeviceOrientationController {
 
 extension LoopAppManager: UNUserNotificationCenterDelegate {
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        switch notification.request.identifier {
-        // TODO: Until these notifications are converted to use the new alert system, they shall still show in the foreground
-        case LoopNotificationCategory.bolusFailure.rawValue,
-             LoopNotificationCategory.pumpBatteryLow.rawValue,
-             LoopNotificationCategory.pumpExpired.rawValue,
-             LoopNotificationCategory.pumpFault.rawValue,
-             LoopNotificationCategory.remoteBolus.rawValue,
-             LoopNotificationCategory.remoteBolusFailure.rawValue,
-             LoopNotificationCategory.remoteCarbs.rawValue,
-             LoopNotificationCategory.remoteCarbsFailure.rawValue,
-             LoopNotificationCategory.missedMeal.rawValue:
-            completionHandler([.badge, .sound, .list, .banner])
-        // R37: the dead-watch reclaim alerts. The user is very likely staring AT the phone
-        // when these fire (they just force-reclaimed on it), which is exactly when a plain
-        // notification is invisible — foreground banner or nothing.
-        case let id where id.hasPrefix("podloan.urgent."):
-            completionHandler([.badge, .sound, .list, .banner])
-        default:
-            // For all others, banners are not to be displayed while in the foreground
-            completionHandler([.badge, .sound, .list])
-        }
+        // Foreground banners for EVERYTHING, ported from the daily-driver branches (march2026,
+        // allMods27Apr25) where this same one-liner replaced the whitelist below it years ago
+        // and has been field-validated by daily wear since. Stock's default — quiet list entry
+        // while the app is frontmost — assumes an app you glance away from; this one delivers
+        // dosing-relevant messages at exactly the moment the user is staring at the screen (a
+        // returning watch rewriting IOB/COB, a reclaim verdict), and the quiet default buried
+        // them. Banner style (temporary vs persistent) stays the user's Settings choice, and
+        // per-notification urgency (time-sensitive interruption) rides on the content, not here.
+        completionHandler([.badge, .sound, .list, .banner])
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {

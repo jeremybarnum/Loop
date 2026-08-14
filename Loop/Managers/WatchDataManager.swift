@@ -293,11 +293,12 @@ final class WatchDataManager: NSObject {
                 self.deviceManager.loopManager.mutateSettings { $0.dosingEnabled = false }
             },
             issueUrgentNotice: { [weak self] title, body in
-                // R37: the watch is dead, so the phone is the only device that can get the
-                // user's attention — time-sensitive interruption, and an identifier prefix
-                // LoopAppManager grants a FOREGROUND banner (a plain notification is silent
-                // in-app, which is precisely when the user is staring at the screen after a
-                // force-reclaim).
+                // The urgent channel's distinction is TIME-SENSITIVE interruption: it breaks
+                // through Focus modes and gets lock-screen prominence, for messages where the
+                // phone is the only device able to get the user's attention (a dead-watch
+                // reclaim verdict, a rewritten IOB). Foreground banners are no longer this
+                // channel's job — LoopAppManager banners every notification in-app now, same
+                // as the daily-driver branches.
                 self?.log.error("PodLoan URGENT: %{public}@ - %{public}@", title, body)
                 let content = UNMutableNotificationContent()
                 content.title = title

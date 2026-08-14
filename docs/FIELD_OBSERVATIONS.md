@@ -1398,3 +1398,54 @@ determinate bar to one deadline is wrong at both ends. For the 77% it creeps to 
 honest shape is two stages — 12 s, then re-baseline to ~105 s — because the 12-23 s gap is
 a real physical boundary rather than a chosen cutoff.
 
+## 2026-08-14 10:10-10:46 (build 280) — the settle split's first outing ANSWERS the question;
+## e60 validates the dead-watch chain end to end
+
+**The settle verdict.** Four settles in one session, and the new split leaves no ambiguity
+about which half owns the slow mode:
+
+    10:18   +66s   link +0.0s   stale reads 30   read 65.5s
+    10:24    +2s   link +2.2s   stale reads  0   read  0.2s
+    10:35    +5s   link +4.4s   stale reads  0   read  0.6s
+    10:46   +70s   link +0.0s   stale reads 32   read 70.3s   (e60, dead watch)
+
+In both slow settles the pod link was CONNECTED BEFORE THE FIRST 2-SECOND TICK RAN, and
+then ~30 consecutive status reads failed over that up link for 65-70 s before one landed.
+In both fast ones the link took 2-4 s to come up and the FIRST read succeeded. The slow
+mode is not the pod failing to come home — it is the phone failing to get a word through a
+link that looks up. That is OURS. The old source comment claiming the link flips ready
+"long before the phone has actually TALKED to the pod" is now a measurement.
+
+Suggestive, not conclusive: today's two slow settles were both FORCE/revoke reclaims and
+both fast ones watch-initiated — but e50 (08-14 08:30, build 279) was watch-initiated and
+settled +39 s, so initiation type is not the whole story. Also visible: both slow settles
+stamped "link up" TWICE — the settle window was armed twice on the force path. Probably
+benign; check while hunting the read failures.
+
+**The red-ring decision this gates (deferred by Jeremy, same day).** A stale-ring settle
+presentation is worth building only if the slow tail survives. The tail now looks fixable
+(software-side read failures, not radio physics), so: fix first; decorate only if the fix
+fails. The settle bar, "Link slow…" copy and the bolus gate cover the interim.
+
+**e60 — the full dead-watch chain, live, one run:**
+
+    10:42:14  ladder DEAD — last contact never · resend +8s, force +20s  (ruled timings, exact)
+    10:42:23  revoke RESENT (attempt 2 of 2)
+    10:42:36  force SALVAGE — 2 staged events; audit armed, expected 0.100 U
+    10:43:46  reconcile: delivered=2.000 expected=0.100 residual=+1.900 → OPEN LOOP, loud
+    10:43:46  gap BOOKED — 1.90 U (PODLOAN-ODOGAP-e60)
+    10:46:32  watch returns → gap RETIRED — real 2.00 U bolus replaces the estimate
+
+The off-grid watch bolus was caught by the odometer, dosing stopped loudly, the estimate
+was booked under a deterministic identity, and the returning watch's real records replaced
+it. Reading note: every e60 diag line in the watch log carries the 10:46:32 delivery stamp
+because the queued channel held them while the watch was dead — event times are inside the
+text, not the line stamps.
+
+**Two instrumentation gaps found by this run, both fixed in the next build:** the settle
+split rode only the watch-bound diag channel, so the phone's own file had NO settle record
+for e60 (a never-returning watch would have lost the sample) — the lines now go through
+the phone file as well, plus a per-read stale line (phone file only; no diag flood at a
+dead watch). And the glance repaint marks never ship in the log pipeline at all, so the
+frozen-glance report could not be checked from logs — the fix (one-shot repaint at loan
+end, no timer re-arm) went in on the code asymmetry instead.
