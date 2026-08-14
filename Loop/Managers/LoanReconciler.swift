@@ -3,10 +3,10 @@
 //  Loop
 //
 //  Loan protocol v2 reconciliation (docs/DESIGN_LOAN_PROTOCOL_V2.md §5): the pure
-//  logic that turns a drained watch record into phone-store writes, the R6 one-way
-//  odometer valve, and the R22 fingerprints-only negative-remainder allocation.
+//  logic that turns a drained watch record into phone-store writes, the one-way
+//  odometer valve, and the fingerprints-only negative-remainder allocation.
 //
-//  Deliberately a value type with a static pure core so the R22 property tests
+//  Deliberately a value type with a static pure core so the property tests
 //  (never reduce confirmed, never below zero, exact-match preference, ambiguity
 //  touches nothing) run against it without stores or timers.
 //
@@ -17,7 +17,7 @@ import LoopKit
 
 enum LoanReconciler {
 
-    /// One pod pulse — the R22 exact-match tolerance.
+    /// One pod pulse — the exact-match tolerance.
     static let pulseTolerance: Double = 0.05
 
     struct Input {
@@ -25,36 +25,36 @@ enum LoanReconciler {
         let events: [LoanEvent]
         /// The odometer audit pair; nil or !freshenSucceeded → audit is advisory-only.
         let odometer: LoanOdometerSnapshot?
-        /// WS1: the FULL loan's event set for the odometer audit. With interim drains,
+        /// The FULL loan's event set for the odometer audit. With interim drains,
         /// `events` is only the uncommitted tail — auditing expected-insulin against
         /// the tail treats committed temps/suspends as schedule and mints phantom
-        /// remainders (verify finding 2026-07-19, invariant-2 break). nil = use
-        /// `events` (pre-WS1 behavior; single-offer drains and tests unchanged).
+        /// remainders. nil = use `events` (single-offer drains and tests unchanged).
         /// Annulment candidates stay TAIL-only: committed records can't be unwritten.
         var auditEvents: [LoanEvent]? = nil
-        /// Grant-frozen basal schedule in its captured timezone (R10/§8).
+        /// Grant-frozen basal schedule in its captured timezone
+        /// (docs/DESIGN_LOAN_PROTOCOL_V2.md §8).
         let schedule: BasalRateSchedule?
         /// Loan window: grant/handover stamp → handedBackAt.
         let loanStart: Date
         let loanEnd: Date
-        /// False for a WS1 interim drain (`released == false`: watch still dosing). On a
+        /// False for an interim drain (`released == false`: watch still dosing). On a
         /// final hand-back / forced reclaim (true) delivery has stopped, so every dose is
         /// finalized: immutable and clamped to `loanEnd`. On an interim drain the pod keeps
         /// running, so the still-open temp (`outcome.openEventID`) is SKIPPED here — it
         /// re-drains and is written on the final drain. Finalizing it early would orphan
-        /// its post-drain delivery and UNDER-count IOB, the dangerous direction (#69).
+        /// its post-drain delivery and UNDER-count IOB, the dangerous direction.
         /// See docs/DESIGN_LOAN_ADDPUMPEVENTS.md.
         var isFinalHandback: Bool = true
     }
 
-    /// R30 (#89): one wrist-side carb deletion, carried to the phone's store.
+    /// One wrist-side carb deletion, carried to the phone's store.
     struct DeletedCarb: Equatable {
         let syncIdentifier: String?
         let startDate: Date
         let grams: Double
     }
 
-    /// R36: a carb plus the wire identity it travels under.
+    /// A carb plus the wire identity it travels under.
     struct IdentifiedCarb: Equatable {
         let eventID: UUID
         let entry: NewCarbEntry
@@ -68,11 +68,11 @@ enum LoanReconciler {
         /// the final drain (nil on a final hand-back). See below / the design doc.
         var openEventID: UUID? = nil
         /// Carb records to write, each carrying the WATCH JOURNAL EVENT UUID that names it on
-        /// the wire (R36). The store inserts-if-absent on this identity, which is what makes a
+        /// the wire. The store inserts-if-absent on this identity, which is what makes a
         /// redelivered offer physically unable to duplicate a carb — the identity is minted once
         /// at authoring on the wrist and survives to the phone's store row.
         var carbs: [IdentifiedCarb] = []
-        /// R30 (#89): carbs the WRIST deleted during the loan, as (startDate, grams) natural
+        /// Carbs the WRIST deleted during the loan, as (startDate, grams) natural
         /// keys plus the phone syncIdentifier when the watch knew one.
         ///
         /// Two origins need two keys. A PHONE-originated carb reached the watch through the
@@ -85,14 +85,23 @@ enum LoanReconciler {
         /// see the `.carbDeleted` case below. Only deletes that survive that cancellation reach
         /// the phone's store, and they are the phone-originated ones by construction.
         var deletedCarbs: [DeletedCarb] = []
-        /// Event IDs annulled by the R22 exact-size fingerprint.
+        /// Event IDs annulled by the exact-size fingerprint.
         var annulledEventIDs: [UUID] = []
-        /// A positive odometer remainder entered timed-late at hand-back (R6 valve).
+        /// A positive odometer remainder no record explains — extra delivery the pod made
+        /// beyond the books. Computed and captured here; the consumer deliberately does NOT
+        /// inject it as IOB (that valve is disabled — see its call site in
+        /// PodLoanPhoneController). The asymmetry with the shortfall below still holds:
+        /// extra delivery may only ever ADD to the books, a shortfall may only annul a
+        /// whole ASSUMED record, and neither direction ever reduces a confirmed record or
+        /// reduces anything partially.
         var positiveRemainderUnits: Double?
-        /// A negative remainder no fingerprint explains — surfaced, never subtracted
-        /// (the ruled layer-3 notice, R22).
+        /// A negative remainder no fingerprint explains (case 3 in `reconcile`) — computed
+        /// and captured, never subtracted from any record. Deliberate: guessed or partial
+        /// reductions are prohibited, because a wrong reduction understates IOB, and
+        /// leaving IOB overstated is the safe direction. The user-facing warning for a
+        /// shortfall comes from the phone's authoritative odometer audit, not this field.
         var residualShortfallUnits: Double?
-        /// #68 part B: the override state this drain hands back, or nil when the drain
+        /// The override state this drain hands back, or nil when the drain
         /// carried no `.overrideChange` record at all (→ the phone's own override is left
         /// completely alone). LAST record wins: within one drain the watch may have set,
         /// re-set and cleared, and only the final wrist state is therapy-relevant.
@@ -114,11 +123,11 @@ enum LoanReconciler {
         var outcome = Outcome()
         var events = input.events
 
-        // The odometer audit (R6/R12): compare delivered against the journal +
+        // The odometer audit: compare delivered against the journal +
         // schedule over the loan window. Only meaningful with a fresh odometer.
         if let odometer = input.odometer, odometer.freshenSucceeded {
             let delivered = odometer.deliveredLatest - odometer.deliveredAtStart
-            // WS1: expected-insulin integrates the WHOLE loan's journal (committed
+            // Expected-insulin integrates the WHOLE loan's journal (committed
             // interim drains included), never just the uncommitted tail.
             let expected = expectedInsulin(events: input.auditEvents ?? events, schedule: input.schedule,
                                            from: input.loanStart, to: input.loanEnd)
@@ -130,7 +139,11 @@ enum LoanReconciler {
                 outcome.positiveRemainderUnits = remainder
             } else if remainder < -pulseTolerance {
                 let shortfall = -remainder
-                // R22 — fingerprints only:
+                // Fingerprints only: a shortfall may annul an ASSUMED record that
+                // exactly explains it — never a confirmed one, never below zero — and
+                // an ambiguous remainder touches nothing. Partial or newest-first
+                // reduction is prohibited: a wrong reduction understates IOB in
+                // exactly the least-understood scenarios.
                 // 1. Exact-size annulment: one .assumed event whose units equal the
                 //    shortfall within a pulse. Tie → the one closest to the failure
                 //    (latest); identical arithmetic, only decay timing differs.
@@ -179,7 +192,7 @@ enum LoanReconciler {
             .max(by: { $0.record.startDate < $1.record.startDate })?.id
         outcome.openEventID = openEventID
 
-        // Store writes for what remains: records are the truth (R12); confirmed and
+        // Store writes for what remains: records are the truth; confirmed and
         // surviving-assumed alike enter the record. Overlap truncation is NOT done here —
         // routing through DoseStore.addPumpEvents runs stock InsulinMath.reconciled() at
         // the store, which collapses overlaps and trims the last loan temp against the
@@ -220,7 +233,7 @@ enum LoanReconciler {
                             absorptionTime: event.record.absorptionTime)))
                 }
             case .carbDeleted:
-                // R30 (#89): the wrist owned the carb store for the length of the loan, so the
+                // The wrist owned the carb store for the length of the loan, so the
                 // drain replays that ownership onto the phone — the same contract as
                 // `.overrideChange`, and for the same reason: without it, `ingestGrantCarbs`
                 // resurrects the deletion at the next takeover.
@@ -241,7 +254,7 @@ enum LoanReconciler {
                         grams: grams))
                 }
             case .overrideChange:
-                // #68 part B: the wrist owned overrides for the length of the loan, so the
+                // The wrist owned overrides for the length of the loan, so the
                 // drain replays that ownership onto the phone. Fold in seq order and let the
                 // LAST record win — a set→clear pair inside one drain must land as "cleared",
                 // never as "set" (that is the resurrection this ordering rules out). Writes
@@ -269,9 +282,10 @@ enum LoanReconciler {
     /// Journal-aware expected insulin over the loan window: journaled temps/suspends
     /// override the schedule for their spans; the schedule fills the gaps; boluses add.
     /// The grant-frozen schedule in its captured timezone is the only schedule source
-    /// (R10/§8) — nil schedule means the basal expectation is unknowable, so only
-    /// journaled insulin counts (the audit then skews conservative: a too-low
-    /// expectation makes remainders MORE positive, which only ever adds IOB).
+    /// (docs/DESIGN_LOAN_PROTOCOL_V2.md §8) — nil schedule means the basal
+    /// expectation is unknowable, so only journaled insulin counts (the audit then
+    /// skews conservative: a too-low expectation makes remainders MORE positive,
+    /// which only ever adds IOB).
     static func expectedInsulin(events: [LoanEvent], schedule: BasalRateSchedule?, from start: Date, to end: Date) -> Double {
         guard end > start else { return 0 }
 
@@ -333,18 +347,19 @@ enum LoanReconciler {
 
     /// What the POD actually delivers for a basal segment — not `rate × time`.
     ///
-    /// #107 (2026-08-11, first field residual): the pod delivers discrete 0.05 U pulses spaced
-    /// `3600 × 0.05 / rate` apart, and every SetInsulinScheduleCommand RESTARTS that clock
-    /// (`RateEntry.makeEntries` sets `delayUntilFirstPulse` to a full interval). The loop replaces
-    /// the temp about every 5 minutes, so each segment is truncated mid-interval and loses its
-    /// partial pulse — a LOSS every time, never a gain, averaging half a pulse per replacement.
+    /// The pod delivers discrete 0.05 U pulses spaced `3600 × 0.05 / rate` apart, and every
+    /// SetInsulinScheduleCommand RESTARTS that clock (`RateEntry.makeEntries` sets
+    /// `delayUntilFirstPulse` to a full interval). The loop replaces the temp about every
+    /// 5 minutes, so each segment is truncated mid-interval and loses its partial pulse — a
+    /// LOSS every time, never a gain, averaging half a pulse per replacement.
     ///
-    /// Measured: epoch 5, 45 min, 12 cycles → `delivered=2.250 expected=2.592 residual=-0.342`,
-    /// i.e. 6.8 pulses adrift against a tolerance of one. Reconstructing the ten segments with
-    /// this model predicts −5.1 pulses: same sign, same mechanism, same order. The old continuous
-    /// figure was the biased estimate, and the bias grows with the NUMBER OF TEMP CHANGES, so a
-    /// long loan accrues ~0.6 U/hour of pure artifact — enough to trip R32's open-loop decision on
-    /// a perfectly healthy loan.
+    /// A continuous `rate × time` figure is therefore a biased estimate that OVERSTATES
+    /// expected insulin, and the bias grows with the NUMBER OF TEMP CHANGES — ~0.6 U/hour of
+    /// pure artifact on a long loan. Overstated expected drives the audit residual NEGATIVE,
+    /// which warns the user of phantom IOB on a perfectly healthy loan and can annul assumed
+    /// records that were in fact delivered. (A negative residual never opens the loop — only
+    /// unexplained EXTRA delivery does — so the artifact's cost is false alarms and wrongly
+    /// retired records, not a therapy stop.)
     ///
     /// Boluses are unaffected and stay exact: they are commanded directly as a pulse count.
     ///
@@ -387,7 +402,8 @@ private extension LoanEvent {
 }
 
 private extension LoanDoseRecord {
-    /// The insulin this record claims, for exact-size matching (R22 fingerprint 1).
+    /// The insulin this record claims, for exact-size matching (fingerprint 1 in
+    /// `reconcile`).
     func insulinUnits(schedule: BasalRateSchedule?) -> Double? {
         switch kind {
         case .bolus:
@@ -400,7 +416,7 @@ private extension LoanDoseRecord {
         }
     }
 
-    /// The schedule insulin over this record's window (R22 fingerprint 2 — how much a
+    /// The schedule insulin over this record's window (fingerprint 2 in `reconcile` — how much a
     /// real-but-unrecorded reduction could explain).
     func scheduledInsulin(schedule: BasalRateSchedule?) -> Double? {
         guard let schedule = schedule, let end = endDate else { return nil }
