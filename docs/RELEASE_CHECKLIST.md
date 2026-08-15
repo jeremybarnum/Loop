@@ -167,10 +167,11 @@ supervised session *if* that session is short and watched. Jeremy sets the final
 identifier, no extra compile conditions. A receiver clones and fills in their own team, exactly
 as they would for any DIY Loop build. Nothing personal to this build sits in the repos.
 
-Locally, that file carries two uncommitted lines — and they belong together:
+Locally, that file carries two uncommitted lines — a bundle identifier and a team id — and they
+belong together:
 
-    MAIN_APP_BUNDLE_IDENTIFIER = com.StockSportMode
-    LOOP_DEVELOPMENT_TEAM = 687ZSJ6WD3
+    MAIN_APP_BUNDLE_IDENTIFIER = <the identifier this build already ships under>
+    LOOP_DEVELOPMENT_TEAM = <your team id>
 
 The team id alone is not enough. Without the bundle identifier the build falls back to stock's
 `com.${DEVELOPMENT_TEAM}.loopkit`, which is a *different* app: it installs alongside the
