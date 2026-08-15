@@ -151,8 +151,32 @@ supervised session *if* that session is short and watched. Jeremy sets the final
 ## Pre-production only (not first-test blockers)
 
 - Remove the watch build tag (#58)
-- Remove the ladybug / FAKE_NEW_SENSOR test tool (#62)
+- ~~Remove the ladybug / FAKE_NEW_SENSOR test tool~~ (#62) — DONE 2026-08-14. The hooks
+  themselves went out with the J-PAKE reader; only the compile condition was still named
+  in `LoopConfigOverride.xcconfig`, and that file is now stock (see below).
 
 ## Path 2 (after first test proves out)
 
 - Merge Caitlin's branch customizations (March2026 G7-direct foundation).
+
+---
+
+## Signing config — what is committed, and what stays local
+
+`LoopConfigOverride.xcconfig` is committed **byte-identical to stock**: no team id, no bundle
+identifier, no extra compile conditions. A receiver clones and fills in their own team, exactly
+as they would for any DIY Loop build. Nothing personal to this build sits in the repos.
+
+Locally, that file carries two uncommitted lines — and they belong together:
+
+    MAIN_APP_BUNDLE_IDENTIFIER = com.StockSportMode
+    LOOP_DEVELOPMENT_TEAM = 687ZSJ6WD3
+
+The team id alone is not enough. Without the bundle identifier the build falls back to stock's
+`com.${DEVELOPMENT_TEAM}.loopkit`, which is a *different* app: it installs alongside the
+TestFlight build instead of replacing it, and both then appear on the watch — the duplicate-Loop
+confusion seen on 2026-08-14. Keep them together or remove them together.
+
+Do not "fix" this by moving the values into the optional `#include?` one directory above the
+checkout. Sibling clones resolve that include to the same file, so a test clone meant to prove
+the clean-receiver experience would silently inherit these values and prove nothing.
