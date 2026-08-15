@@ -1268,6 +1268,11 @@ private func previewState(_ build: (inout GlanceUIState) -> Void) -> GlanceUISta
     var s = GlanceUIState(); build(&s); return s
 }
 
+// Gated separately from DEBUG so that it is absent from a clone, which a receiver builds
+// and runs in Debug: a gallery of invented pod and insulin states is indistinguishable from
+// real readings to anyone who does not already know it is a mockup. Define GLANCE_DEMO in a
+// local LoopConfigOverride.xcconfig to restore both this view and its Diagnostics entry.
+#if GLANCE_DEMO
 /// Runtime glance-state gallery, reachable from the bench page (Diagnostics → Glance
 /// demo). Reliable on the simulator where the legacy WatchKit extension's *live*
 /// SwiftUI previews hang — this is a real running view, so it renders and interacts.
@@ -1349,6 +1354,7 @@ struct GlanceDemoView: View {
         .navigationTitle("Glance demo")
     }
 }
+#endif
 
 #Preview("Active · in range") {
     GlanceView(model: GlanceViewModel(preview: previewState { s in
