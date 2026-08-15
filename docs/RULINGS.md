@@ -717,6 +717,22 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   verdict included — now rides the urgent channel. An alert that stops automatic dosing
   must never be a quiet list entry.
 
+- **R41 — Loop mode INHERITANCE reaffirmed: it travels with the pod, both directions, no change**
+  (2026-08-14, Jeremy, on a challenge — the alternative was considered and rejected.)
+
+  Closed on the phone at grant means closed on the wrist; closed on the wrist at hand-back
+  means closed on the phone — and identically for open. The ONLY exceptions are the force-
+  reclaim path and a large insulin discrepancy, whose verdicts open the loop loudly.
+
+  Context, so this is not re-proposed: a field test read as "phone reclaim opens the loop,
+  watch End doesn't." The code was already symmetric — both directions inherit the last mode —
+  and the variable was the wrist's own state: the user had opened the wrist loop during that
+  session's testing, and inheritance carried it home faithfully. (A "loans start OPEN" default
+  was cited during the discussion; that rule is DEAD on the device path — it survives only in
+  the simulator fake-flow driver. The real grant inherits the phone's mode.) The alternative
+  (restore the phone's pre-loan mode at normal end, dropping inheritance) was considered and
+  rejected. The user's last loop mode is the loop mode, wherever the pod happens to be.
+
 - **R40 — The dead branch forces immediately, and every reclaim gets one short determinate bar**
   (2026-08-14, Jeremy, superseding R39's two-attempt wait on the dead branch — his own ruling,
   overturned on his own evidence and framing.)

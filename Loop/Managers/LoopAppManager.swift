@@ -555,7 +555,10 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
         // dosing-relevant messages at exactly the moment the user is staring at the screen (a
         // returning watch rewriting IOB/COB, a reclaim verdict), and the quiet default buried
         // them. Banner style (temporary vs persistent) stays the user's Settings choice, and
-        // per-notification urgency (time-sensitive interruption) rides on the content, not here.
+        // per-notification urgency (time-sensitive interruption) rides on the content, not
+        // here. The one notification this blanket ever promoted by accident — the designed-
+        // silent on-loan escape-hatch notice — was DELETED rather than carved out (field-ruled
+        // clutter); anything posted is meant to be seen.
         completionHandler([.badge, .sound, .list, .banner])
     }
 

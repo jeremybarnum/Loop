@@ -1258,9 +1258,6 @@ final class PodLoanPhoneController {
         static let t1 = "podloan.t1"           // start-confirmation, 5 min
         static let duration = "podloan.6h"     // loan-duration reminder, 6 h
         static let paused = "podloan.paused1h" // paused-dosing reminder, 1 h repeating
-        /// Silent informational notice carrying the bench reclaim action — NOT an
-        /// alarm (the three above are the complete alarm inventory); replaced by real UI later.
-        static let onLoan = "podloan.onloan"
     }
 
     /// Derived — what v1 kept as the volatile `podLoanedToWatch` flag (:480/:697).
@@ -1709,13 +1706,11 @@ final class PodLoanPhoneController {
                              body: "The pod has been on the watch for 6 hours.",
                              delay: .hours(6), repeats: false)
 
-        // Silent on-loan notice with the escape-hatch action (long-press → Reclaim
-        // Pod). The bench trigger for drills 12/13; the UI phase replaces it.
-        let content = UNMutableNotificationContent()
-        content.title = "Pod Is On the Watch"
-        content.body = "The watch is running the loop. Long-press for the escape hatch."
-        content.categoryIdentifier = NotificationManager.podLoanCategoryIdentifier
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: NotificationID.onLoan, content: content, trigger: nil))
+        // No on-loan notification. One existed here — a designed-silent notice carrying the
+        // bench-era escape-hatch action — until the blanket foreground-banner change promoted
+        // it to a banner announcing what the pump tile already says. Field-ruled clutter, and
+        // its escape-hatch role was superseded by the real UI (the tile's reclaim affordances)
+        // long ago, as its own comment admitted.
     }
 
     private func handleTakeoverFailed(_ failed: TakeoverFailed) {
@@ -2264,7 +2259,6 @@ final class PodLoanPhoneController {
         cancelReclaimLadder()
         cancelNotification(id: NotificationID.duration)
         cancelNotification(id: NotificationID.paused)
-        cancelNotification(id: NotificationID.onLoan)
         (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
         pendingRevoke = false
         state = .owner
@@ -2351,7 +2345,6 @@ final class PodLoanPhoneController {
             // ladder and orphans the pod until the user next looks at the phone.
             self.deps.beginReclaimBackgroundTask()
             self.pendingRevoke = true
-            self.cancelNotification(id: NotificationID.onLoan)
             self.sendMessage(.revoke(Revoke(epoch: self.epoch)))
             (self.deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
             self.state = .reclaimPending
@@ -2497,7 +2490,6 @@ final class PodLoanPhoneController {
             return
         }
         cancelReclaimLadder()
-        cancelNotification(id: NotificationID.onLoan)
         cancelNotification(id: NotificationID.paused)
         cancelNotification(id: NotificationID.duration)
 
@@ -2677,7 +2669,6 @@ final class PodLoanPhoneController {
         // this path never opens a settle window, so neither end-site below it would fire.
         cancelReclaimLadder()
         deps.endReclaimBackgroundTask()
-        cancelNotification(id: NotificationID.onLoan)
         (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
         state = .owner
         deps.setAutomaticDosingPaused(false)
