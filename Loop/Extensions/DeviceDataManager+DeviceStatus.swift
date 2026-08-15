@@ -140,9 +140,20 @@ extension DeviceDataManager {
                 localizedMessage = String(format: NSLocalizedString("Forcing… %.0fs", comment: "Title text (with elapsed seconds) for the pump tile while the phone force-reclaims the pod and verifies it"),
                                           seconds)
             case .reconnectingToPod?:
-                localizedMessage = String(format: NSLocalizedString("Reconnect… %.0fs", comment: "Title text (with elapsed seconds) for the pump tile while the phone re-establishes its own connection to the pod after a watch session"),
+                // Same string as the handover on purpose: to the user a live reclaim is ONE
+                // wait, and the bar behind it is one continuous fill from the tap — a label
+                // change at the handover/settle boundary would read as a phase they were never
+                // told about.
+                localizedMessage = String(format: NSLocalizedString("Reclaiming… %.0fs", comment: "Title text (with elapsed seconds) for the pump tile while the pod comes home and its round-trip is verified"),
                                           seconds)
-            case .draining?, .none:
+            case .watchNotAnswering?:
+                // Static — the bar is capped and the next event is the force, so ticking
+                // seconds would count toward nothing the user was promised.
+                localizedMessage = NSLocalizedString("No watch reply…", comment: "Title text for the pump tile when the watch has not answered within the drain promise, shortly before the force")
+            case .draining?:
+                localizedMessage = String(format: NSLocalizedString("Reclaiming… %.0fs", comment: "Title text (with elapsed seconds) for the pump tile while the watch drains its records under the determinate bar"),
+                                          seconds)
+            case .none:
                 localizedMessage = NSLocalizedString("Reclaiming…", comment: "Title text for the pump tile while the pod is coming back from the watch")
             }
         }

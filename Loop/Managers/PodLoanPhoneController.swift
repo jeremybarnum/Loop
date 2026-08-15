@@ -42,8 +42,14 @@ final class PodLoanPhoneController {
     struct ReclaimProgress: Equatable {
         enum Phase: Equatable {
             /// The watch was heard from within one log-pulse period, or is reachable now: its
-            /// records are draining and the wait is a real drain window.
+            /// records are draining and the wait is a real drain window. Carries a determinate
+            /// fraction against the drain promise — the sweep is retired.
             case draining
+            /// The drain promise expired without an answer: the bar holds at its cap and the
+            /// label concedes the trouble, twelve to fifteen seconds before the force resolves
+            /// it. Deliberately entered at the same moment the second revoke goes out, so the
+            /// concession and the last attempt are one event.
+            case watchNotAnswering
             /// Taking the pod back without the watch's cooperation. The dead branch enters this
             /// the moment it is chosen — it waits for nothing — and a force deferred behind an
             /// in-flight commit stays described by it.
@@ -378,9 +384,24 @@ final class PodLoanPhoneController {
             // Core Data write, which relabels a dead-watch reclaim from its branch label to the
             // generic "Reclaiming…" mid-write and then back.
             if let ladder = reclaimLadder, state == .reclaimPending || state == .reconciling {
-                return ReclaimProgress(phase: ladder.phase, startedAt: ladder.startedAt,
-                                       expectedBy: ladder.forceAt, fraction: nil,
-                                       elapsed: max(now.timeIntervalSince(ladder.startedAt), 0))
+                let elapsed = max(now.timeIntervalSince(ladder.startedAt), 0)
+                // The live handover draws a determinate bar against the drain promise — the
+                // sweep is retired (field ruling). Past the promise the phase concedes and the
+                // bar holds at cap; the force at 25 s is what actually resolves it. The forcing
+                // phase (dead branch, or a live force mid-deferral) keeps a nil fraction: its
+                // own settle bar arrives within a second.
+                var phase = ladder.phase
+                var fraction: Double?
+                if phase == .draining {
+                    fraction = min(elapsed / Self.liveHandoverExpectation, 0.95)
+                    if elapsed >= Self.liveHandoverExpectation { phase = .watchNotAnswering }
+                }
+                return ReclaimProgress(phase: phase, startedAt: ladder.startedAt,
+                                       expectedBy: phase == .draining
+                                           ? ladder.startedAt.addingTimeInterval(Self.liveHandoverExpectation)
+                                           : ladder.forceAt,
+                                       fraction: fraction,
+                                       elapsed: elapsed)
             }
             // The settle predicate is restated inline rather than read from `isReclaimSettling`:
             // that accessor takes the same serial queue this block is already running on, and a
@@ -404,14 +425,19 @@ final class PodLoanPhoneController {
                         fraction: min(elapsed / Self.reclaimForcedSettleExpectation, 0.95),
                         elapsed: elapsed)
                 }
-                // One stage. Caps at 0.95 and HOLDS there on an overrun: the settle's real bound
-                // is `reclaimSettleTimeout`, not the expectation, so a bar that has run out of
-                // deadline must read as nearly-done-and-still-working rather than as finished.
+                // One stage, anchored where the USER'S wait began — the tap for a phone
+                // reclaim, the settle open for a watch-initiated one — so the bar is a single
+                // continuous fill across the handover and the settle. Caps at 0.95 and HOLDS
+                // there on an overrun: the settle's real bound is `reclaimSettleTimeout`, not
+                // the expectation, so a bar that has run out of deadline must read as
+                // nearly-done-and-still-working rather than as finished.
+                let anchor = reclaimDisplayAnchor ?? started
+                let waitElapsed = max(now.timeIntervalSince(anchor), 0)
                 return ReclaimProgress(
-                    phase: .reconnectingToPod, startedAt: started,
-                    expectedBy: started.addingTimeInterval(Self.reclaimSettleExpectation),
-                    fraction: min(elapsed / Self.reclaimSettleExpectation, 0.95),
-                    elapsed: elapsed)
+                    phase: .reconnectingToPod, startedAt: anchor,
+                    expectedBy: anchor.addingTimeInterval(Self.reclaimSettleExpectation),
+                    fraction: min(waitElapsed / Self.reclaimSettleExpectation, 0.95),
+                    elapsed: waitElapsed)
             }
             return nil
         }
@@ -485,6 +511,13 @@ final class PodLoanPhoneController {
     private var reclaimStaleReads = 0
     /// When the settle last forced a real pod round-trip, so the backoff can space them.
     private var reclaimLastForcedReadAt: Date?
+    /// Where the USER'S wait began, for the bar alone — the tap for a phone-initiated reclaim,
+    /// the settle open for a watch-initiated one. The bar must be ONE continuous fill across
+    /// the handover and the settle (a bar that restarts at the phase boundary reads as a second
+    /// failure — the same ruling as the forced path), but the settle's own metrics keep
+    /// measuring from the settle open so the verified "+Ns (link, reads)" corpus stays
+    /// comparable across builds. Display state only; never read by any timing decision.
+    private var reclaimDisplayAnchor: Date?
     /// Last request identity handled, for transport-redelivery suppression.
     /// sendMessage can report a timeout WITHOUT meaning undelivered, so the queued fallback
     /// sends a second copy that also lands. See handleRequest for what that cost in the field.
@@ -511,12 +544,22 @@ final class PodLoanPhoneController {
         reclaimLinkUpAt = nil
         reclaimStaleReads = 0
         reclaimLastForcedReadAt = nil
+        // Keep a RECENT tap anchor so the bar continues across the handover-to-settle boundary
+        // instead of restarting; adopt the settle's own start otherwise. The 60 s staleness
+        // bound is structural protection: an anchor left behind by an abandoned reclaim must
+        // never stretch a later, unrelated settle's bar.
+        if let anchor = reclaimDisplayAnchor, started.timeIntervalSince(anchor) < 60 {
+            // continuous bar from the user's tap
+        } else {
+            reclaimDisplayAnchor = started
+        }
         reclaimSettleWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self = self, self.reclaimStartedAt == started else { return }
             os_log("Reclaim settle CEILING reached (%.0fs) without a verified round-trip — clearing anyway",
                    log: self.log, type: .error, Self.reclaimSettleTimeout)
             self.reclaimStartedAt = nil            // ceiling reached — stop settling
+            self.reclaimDisplayAnchor = nil
             // A force-reclaim audit that never got its round-trip is an UNVERIFIED
             // session, and dosing is still held from the reclaim. Unverified opens; it never
             // quietly resumes.
@@ -531,7 +574,9 @@ final class PodLoanPhoneController {
             self.deps.ownershipDidChange()         // final re-render that clears the tile
         }
         reclaimSettleWork = work
-        queue.asyncAfter(deadline: .now() + Self.reclaimSettleTimeout, execute: work)
+        // Wall clock for the same reason as the ladder rungs: a suspension must not stretch
+        // the ceiling past its promise.
+        queue.asyncAfter(wallDeadline: .now() + Self.reclaimSettleTimeout, execute: work)
         chaseReclaimVerification(started: started)
     }
 
@@ -613,6 +658,7 @@ final class PodLoanPhoneController {
                         self.reclaimVerifiedAt = self.deps.now()
                         self.reclaimSettleWork?.cancel()
                         self.reclaimStartedAt = nil
+                        self.reclaimDisplayAnchor = nil
                         // Split the wait. A missing link stamp means the link and the read
                         // landed inside one tick, so charge the whole thing to the link rather
                         // than inventing a read time.
@@ -1132,6 +1178,15 @@ final class PodLoanPhoneController {
     private static let liveResendDelay: TimeInterval = 10
     private static let liveForceDelay: TimeInterval = 25
 
+    /// The live handover's drain promise: the bar fills to here, and past it the label concedes
+    /// ("No watch reply…") while the bar holds at cap until the force resolves things at 25 s.
+    /// Ten seconds is the resend deadline ON PURPOSE — the concession and the second revoke are
+    /// one event — and it covers the measured drains with room: every answered revoke on record
+    /// drained in under 5 s (p50 1.0 s across 20 hand-backs). Field-ruled: a bar that fills and
+    /// concedes beats a sweep that promises nothing, and the unsure-if-reachable scenario the
+    /// sweep hedged against is not realistic.
+    private static let liveHandoverExpectation: TimeInterval = 10
+
     // The dead branch has no delay constants: it forces immediately. See armReclaimLadder for
     // the reasoning — nothing that lands on that branch can answer, and the pulse discriminator
     // above is what keeps an alive watch off it.
@@ -1146,7 +1201,13 @@ final class PodLoanPhoneController {
         if let scheduler = scheduler {
             scheduler(delay, label, work)
         } else {
-            queue.asyncAfter(deadline: .now() + delay, execute: work)
+            // WALL clock, not the monotonic default. Dispatch's `.now() + delay` freezes while
+            // iOS suspends the app, and the suspension is APPENDED to the wait: a reclaim's
+            // force rung due at +25 s fired at +85 s in the field because the phone was locked
+            // between the tap and the deadline — the resend at +11 s ran on time, which
+            // brackets the suspension. A wall deadline fires the overdue rung the moment the
+            // app resumes instead of restarting its remaining wait.
+            queue.asyncAfter(wallDeadline: .now() + delay, execute: work)
         }
     }
 
@@ -2271,6 +2332,7 @@ final class PodLoanPhoneController {
     func reclaimNow() {
         queue.async {
             guard self.podIsOnLoan else { return }
+            self.reclaimDisplayAnchor = self.deps.now()   // the user's wait starts at the tap
             self.pendingRevoke = true
             self.cancelNotification(id: NotificationID.onLoan)
             self.sendMessage(.revoke(Revoke(epoch: self.epoch)))

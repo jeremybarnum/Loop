@@ -199,6 +199,11 @@ final class StockLoopSession {
                 // Queue the session log at every loan end, so a deleted or reinstalled app
                 // cannot eat it.
                 self.sendLogSnapshot("loan end")
+                // Loop mode is PER-SESSION: the next grant re-asserts it from the phone's
+                // inheritance, so a "closed" left over from this session must not survive —
+                // stale, it makes an open-inheriting grant read as a closed→open transition
+                // and fire the temp cancel during grant intake, at a pod mid-takeover.
+                self.stack.loopManager.resetClosedLoopForSessionEnd()
                 // The start branch lands the user ON the glance; the end branch must at
                 // least repaint it. The 2 s tick dies on a screen dim and a bare undim does
                 // not revive it, so a phone-initiated revoke arriving in that gap goes

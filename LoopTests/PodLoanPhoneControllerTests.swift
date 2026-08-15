@@ -1509,8 +1509,9 @@ extension PodLoanPhoneControllerTests {
                        "a watch heard from inside one log-pulse period gets the live budget, not the dead one")
         XCTAssertEqual(revokeCount(), 1, "the tap's own revoke is the only one until the first deadline")
         XCTAssertEqual(controller.reclaimProgress?.phase, .draining)
-        XCTAssertEqual(controller.reclaimProgress.map { $0.expectedBy.timeIntervalSince($0.startedAt) } ?? 0, 25,
-                       accuracy: 0.5, "the published deadline is the ladder's, not a fixed calibration constant")
+        XCTAssertNotNil(controller.reclaimProgress?.fraction, "the handover draws a bar now — the sweep is retired")
+        XCTAssertEqual(controller.reclaimProgress.map { $0.expectedBy.timeIntervalSince($0.startedAt) } ?? 0, 10,
+                       accuracy: 0.5, "the published deadline is the drain promise, past which the label concedes")
         XCTAssertNotNil(diagMatching("reclaim ladder LIVE"), "the branch and its evidence are in the field log")
 
         ladder.fire("reclaim-resend")
@@ -1520,6 +1521,33 @@ extension PodLoanPhoneControllerTests {
         ladder.fire("reclaim-force")
         waitForState(controller, .owner)
         XCTAssertEqual(revokeCount(), 2, "two attempts is the whole budget")
+    }
+
+    /// The live handover's bar fills to its 10 s drain promise; past it, the phase concedes
+    /// ("No watch reply…") with the bar held at cap and the deadline republished as the force
+    /// rung's — the next event that actually resolves anything.
+    func testLiveHandoverBarConcedesAtTheDrainPromise() throws {
+        let controller = makeController(lastWatchContact: { [weak self] in (self?.clock ?? Date()).addingTimeInterval(-30) },
+                                        now: { [weak self] in self?.clock ?? Date() })
+        establishLoan(controller)
+        let ladder = ReclaimLadderRecorder()
+        ladder.install(on: controller)
+
+        controller.reclaimNow()
+        waitUntil(timeout: 5, "ladder armed") { ladder.armed.count == 2 }
+
+        clock = clock.addingTimeInterval(5)        // halfway through the promise
+        let mid = try XCTUnwrap(controller.reclaimProgress)
+        XCTAssertEqual(mid.phase, .draining)
+        XCTAssertEqual(mid.fraction ?? -1, 0.5, accuracy: 0.001, "the bar fills against the promise")
+
+        clock = clock.addingTimeInterval(6)        // 11 s: promise expired, force not yet due
+        let conceded = try XCTUnwrap(controller.reclaimProgress)
+        XCTAssertEqual(conceded.phase, .watchNotAnswering, "past the promise the label concedes")
+        XCTAssertEqual(conceded.fraction ?? -1, 0.95, accuracy: 0.001, "bar holds at cap, not restarted")
+        XCTAssertEqual(conceded.expectedBy.timeIntervalSince(conceded.startedAt), 25, accuracy: 0.5,
+                       "the republished deadline is the force rung — the event that resolves this")
+        XCTAssertEqual(conceded.elapsed, 11, accuracy: 0.001, "the seconds keep counting the whole wait")
     }
 
     /// The same tap against a watch nobody has heard from in 12 minutes — five of the six field
@@ -1684,10 +1712,10 @@ extension PodLoanPhoneControllerTests {
         XCTAssertGreaterThan(later.fraction ?? -1, atStart.fraction ?? 0)
     }
 
-    /// A phone-TAPPED reclaim crosses two waits. Only the second one is drawn — the handover is
-    /// 736 ms measured, too short for a bar — but the reclaim must stay DESCRIBED across the whole
-    /// crossing, because the tile's label is chosen from the published phase and a nil there
-    /// relabels a dead-watch reclaim to the generic "Reclaiming…" for the length of a store write.
+    /// A phone-TAPPED reclaim crosses two waits, and BOTH draw a bar now — the handover against
+    /// the drain promise, the settle against its own. The reclaim must stay DESCRIBED across the
+    /// whole crossing, because the tile's label is chosen from the published phase and a nil
+    /// there relabels the wait to the generic "Reclaiming…" for the length of a store write.
     func testTappedReclaimCarriesThePhaseFromDrainThroughSettleWithoutGoingNil() throws {
         let controller = makeController(lastWatchContact: { [weak self] in (self?.clock ?? Date()).addingTimeInterval(-30) },
                                         now: { [weak self] in self?.clock ?? Date() })
@@ -1700,7 +1728,7 @@ extension PodLoanPhoneControllerTests {
         waitUntil(timeout: 5, "ladder armed") { ladder.armed.count == 2 }
         let drain = try XCTUnwrap(controller.reclaimProgress)
         XCTAssertEqual(drain.phase, .draining)
-        XCTAssertNil(drain.fraction, "the handover is sub-second measured — it sweeps, it does not fill")
+        XCTAssertNotNil(drain.fraction, "the handover fills against the drain promise — the sweep is retired")
 
         // Park the commit so `.reconciling` is observable at all: completed inline, the whole
         // drain-to-settle crossing happens inside one queue block and nothing can sample it.
@@ -1717,7 +1745,7 @@ extension PodLoanPhoneControllerTests {
         let midWrite = try XCTUnwrap(controller.reclaimProgress,
                                      "the reclaim must stay described for the length of the write")
         XCTAssertEqual(midWrite.phase, .draining, "the tap's own branch still names this wait")
-        XCTAssertNil(midWrite.fraction)
+        XCTAssertNotNil(midWrite.fraction, "and the bar keeps filling across the store write")
 
         let ackSent = expectSend()
         holdPumpEventWrites = false

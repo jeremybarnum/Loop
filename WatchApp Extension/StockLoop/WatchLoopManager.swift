@@ -336,6 +336,22 @@ final class WatchLoopManager {
         return _closedLoopMirror
     }
 
+    /// Silent per-session reset, called at loan end. Loop mode is a PER-SESSION concept — the
+    /// next grant re-asserts it from the phone's inheritance — so a "closed" left over from the
+    /// previous session must not survive into the next one: with it stale, a grant inheriting
+    /// OPEN reads as a closed→open transition and fires the temp cancel below during grant
+    /// intake, aimed at a pod mid-takeover. (Today that shot goes wide — the pump is not wired
+    /// yet at the inheritance call — but a race that merely misses is still a race.) No cancel
+    /// here by construction: the session is over, there is no pod on the wrist to command.
+    func resetClosedLoopForSessionEnd() {
+        closedLoopMirrorLock.lock()
+        _closedLoopMirror = false
+        closedLoopMirrorLock.unlock()
+        dataAccessQueue.async {
+            self._closedLoopEnabled = false
+        }
+    }
+
     /// `reason` exists so the log distinguishes a wrist tap from the grant-inherited mode —
     /// otherwise every field log claims the user did it.
     func setClosedLoopEnabled(_ enabled: Bool, reason: String = "by user") {
