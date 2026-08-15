@@ -717,6 +717,36 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   verdict included — now rides the urgent channel. An alert that stops automatic dosing
   must never be a quiet list entry.
 
+- **R42 — Carbs are insulin on a delay: carb writes get dosing-path scrutiny, and carb
+  uncertainty resolves toward ABSENCE** (2026-08-15, Jeremy, reflecting on the phantom-carb
+  pile-up: "I feel like the project should have had a governing principle that applied extra
+  scrutiny to that… accidentally recording carbs, on closed loop, eventually becomes the same
+  thing, albeit more slowly.")
+
+  On a closed loop a carb record IS a dosing command with hours of latency, and its danger
+  direction is INVERTED relative to insulin. A phantom insulin record overstates IOB and makes
+  the loop UNDER-dose — the safe side. A phantom carb record overstates COB, so the loop doses
+  more AND defends less against lows, across the whole absorption tail, which outlasts
+  insulin's decay. Thirty phantom grams at 1:10 is roughly a 3 U dosing error delivered
+  stealthily over hours, with no single event for the user to notice.
+
+  Therefore:
+  - Every carb-writing path carries the same identity, idempotence, and review discipline as
+    dose enactment. Reviewing a carb path as if it were bookkeeping is the mistake.
+  - No machine path may originate, duplicate, or RE-originate a carb. A deleted carb that
+    comes back is a machine-authored add, whatever the mechanism — the earlier delete-
+    propagation defects are violations of THIS rule, not merely sync bugs.
+  - Carbs exist only by explicit user action, exactly once.
+  - Where insulin uncertainty resolves toward PRESENCE (book the assumed dose, maximum IOB),
+    carb uncertainty resolves toward ABSENCE.
+  - Software may PROMPT for a suspected meal — stock's missed-meal notification is the model,
+    and it only ever offers to log — but it may never book one.
+
+  Review test for any new code: if this path misfired, could a carb row exist that no human
+  typed, including a deleted one returning? If yes, it is a dosing path; review it as one.
+  Tests must assert delete-stays-deleted across at least two grant cycles, since a
+  resurrection only appears on the re-seed.
+
 - **R41 — Loop mode INHERITANCE reaffirmed: it travels with the pod, both directions, no change**
   (2026-08-14, Jeremy, on a challenge — the alternative was considered and rejected.)
 
