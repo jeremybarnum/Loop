@@ -879,7 +879,7 @@ final class PodLoanPhoneController {
                 "%.2f U on the pod isn't in the watch's records, so automatic dosing is OFF.", residual)
             if Self.bookUnattributedInsulinOnForceReclaim {
                 bookGapDose(units: residual, epoch: epoch)
-                body += " It's booked as a bolus to keep IOB conservative; the watch's real records replace it about 2 min after it returns."
+                body += " It's booked as a bolus to keep IOB conservative; the watch's real records replace it about 2 min after the phone sees the watch again."
             } else {
                 body += " Check your insulin on board before dosing."
             }
