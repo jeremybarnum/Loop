@@ -66,6 +66,10 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// by sleeping through a 45-second settle. Only the tests that pass `now:` to `makeController`
     /// see it; everything else keeps the real clock.
     var clock = Date()
+    /// Background-hold pairing counters: a begin without a matching end is a battery leak iOS
+    /// logs against the app, so the tests assert balance at rest.
+    var backgroundTaskBegins = 0
+    var backgroundTaskEnds = 0
     /// When true, `addPumpEvents` parks its completion in `heldPumpEventWrite` instead of calling
     /// it. That holds the hand-back commit open, which is the only way to observe the controller
     /// while state is `.reconciling` — the harness otherwise completes the write inline and the
@@ -86,6 +90,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             UserDefaults.standard.removeObject(forKey: key)
         }
         MockPumpManager.testForcedReadCount = 0
+        backgroundTaskBegins = 0
+        backgroundTaskEnds = 0
         urgentNotices = []
         bookedGapDoses = []
         deletedGapSyncs = []
@@ -204,6 +210,14 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 guard let self = self else { return completion(false) }
                 self.lock.lock(); self.deletedGapSyncs.append(sync); let ok = self.gapDeleteSucceeds; self.lock.unlock()
                 completion(ok)
+            },
+            beginReclaimBackgroundTask: { [weak self] in
+                guard let self = self else { return }
+                self.lock.lock(); self.backgroundTaskBegins += 1; self.lock.unlock()
+            },
+            endReclaimBackgroundTask: { [weak self] in
+                guard let self = self else { return }
+                self.lock.lock(); self.backgroundTaskEnds += 1; self.lock.unlock()
             },
             isWatchReachable: watchReachable,
             lastWatchContactAt: lastWatchContact,
@@ -1876,6 +1890,12 @@ extension PodLoanPhoneControllerTests {
         waitUntil(timeout: 8, "reclaim verification") { !controller.isReclaimSettling }
         XCTAssertNil(controller.reclaimProgress,
                      "a verified round-trip is the pod being home — there is nothing left to draw")
+        // The background hold pairs with the wait it covered: begun when the settle opened,
+        // ended by the verification. Unbalanced at rest = a hold nobody is using, which iOS
+        // charges against the app and eventually kills.
+        lock.lock(); let begins = backgroundTaskBegins; let ends = backgroundTaskEnds; lock.unlock()
+        XCTAssertGreaterThanOrEqual(begins, 1, "the reclaim held background execution for its wait")
+        XCTAssertEqual(ends, begins, "every hold released once the wait resolved")
     }
 }
 

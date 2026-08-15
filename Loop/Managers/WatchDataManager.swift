@@ -365,10 +365,37 @@ final class WatchDataManager: NSObject {
             // backgrounded watch, which is why it cannot stand alone), and the contact timestamp
             // is the real separator — the loan's 300 s log pulse means a live watch is never more
             // than a few minutes stale.
+            // Stock's background-task idiom (LoopDataManager keeps the same shape for its
+            // persistence saves): begin ends any previous hold first, so the settle's re-begin
+            // after the tap's begin nets one live identifier. beginBackgroundTask is one of the
+            // few UIKit calls documented safe off the main thread, which is why these run
+            // directly on the controller's queue.
+            beginReclaimBackgroundTask: { [weak self] in self?.beginReclaimBackgroundTask() },
+            endReclaimBackgroundTask: { [weak self] in self?.endReclaimBackgroundTask() },
             isWatchReachable: { [weak self] in self?.watchSession?.isReachable ?? false },
             lastWatchContactAt: { [weak self] in self?.lockedLastWatchContact.value ?? nil }
         ))
     }()
+
+    /// ~30 s of continued execution across a reclaim, so tap-and-pocket completes ON SCHEDULE
+    /// instead of freezing the ladder and orphaning the pod until the next foreground.
+    private var reclaimBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+
+    private func beginReclaimBackgroundTask() {
+        endReclaimBackgroundTask()
+        reclaimBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "PodLoanReclaim") { [weak self] in
+            // Expiration: iOS is done waiting — release the hold or be killed. The wall-clock
+            // rungs then fire whatever is overdue at the next resume.
+            self?.endReclaimBackgroundTask()
+        }
+    }
+
+    private func endReclaimBackgroundTask() {
+        if reclaimBackgroundTask != .invalid {
+            UIApplication.shared.endBackgroundTask(reclaimBackgroundTask)
+            reclaimBackgroundTask = .invalid
+        }
+    }
 
     private let log = DiagnosticLog(category: "WatchDataManager")
 

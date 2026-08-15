@@ -202,6 +202,15 @@ final class PodLoanPhoneController {
         /// proves nothing — in this codebase the flag is a channel selector (urgent vs queued) and
         /// reads false for a healthy watch whose app is merely backgrounded. Default false, so a
         /// caller that does not wire it falls back to the contact-age evidence below.
+        /// Hold background execution across a reclaim (tap through verified), stock's own
+        /// background-task idiom. Without it, tap-and-pocket freezes the ladder mid-flight and
+        /// the pod sits ORPHANED — released by the watch, not yet taken by the phone, nobody
+        /// dosing — until the user next looks at the phone. iOS grants ~30 s after
+        /// backgrounding, which covers the whole live ladder (force at 25 s) plus a typical
+        /// settle; the wall-clock rungs remain the backstop for anything longer. Defaults are
+        /// no-ops so tests and harnesses are unaffected.
+        var beginReclaimBackgroundTask: () -> Void = {}
+        var endReclaimBackgroundTask: () -> Void = {}
         var isWatchReachable: () -> Bool = { false }
         /// When the phone last heard ANYTHING from the watch — any inbound WatchConnectivity
         /// funnel. This, not reachability, is what separates a live watch from a dead one at
@@ -553,6 +562,9 @@ final class PodLoanPhoneController {
         } else {
             reclaimDisplayAnchor = started
         }
+        // Re-begin rather than assume the tap's hold is still alive: the watch-initiated route
+        // has no tap, and re-beginning is stock's own idiom (end-then-begin, one identifier).
+        deps.beginReclaimBackgroundTask()
         reclaimSettleWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self = self, self.reclaimStartedAt == started else { return }
@@ -560,6 +572,7 @@ final class PodLoanPhoneController {
                    log: self.log, type: .error, Self.reclaimSettleTimeout)
             self.reclaimStartedAt = nil            // ceiling reached — stop settling
             self.reclaimDisplayAnchor = nil
+            self.deps.endReclaimBackgroundTask()
             // A force-reclaim audit that never got its round-trip is an UNVERIFIED
             // session, and dosing is still held from the reclaim. Unverified opens; it never
             // quietly resumes.
@@ -659,6 +672,7 @@ final class PodLoanPhoneController {
                         self.reclaimSettleWork?.cancel()
                         self.reclaimStartedAt = nil
                         self.reclaimDisplayAnchor = nil
+                        self.deps.endReclaimBackgroundTask()
                         // Split the wait. A missing link stamp means the link and the read
                         // landed inside one tick, so charge the whole thing to the link rather
                         // than inventing a read time.
@@ -2333,6 +2347,9 @@ final class PodLoanPhoneController {
         queue.async {
             guard self.podIsOnLoan else { return }
             self.reclaimDisplayAnchor = self.deps.now()   // the user's wait starts at the tap
+            // Hold background execution from the tap: without it, tap-and-pocket freezes the
+            // ladder and orphans the pod until the user next looks at the phone.
+            self.deps.beginReclaimBackgroundTask()
             self.pendingRevoke = true
             self.cancelNotification(id: NotificationID.onLoan)
             self.sendMessage(.revoke(Revoke(epoch: self.epoch)))
@@ -2656,8 +2673,10 @@ final class PodLoanPhoneController {
 
     private func reclaimToOwner(alert: (title: String, body: String)) {
         // Abandoning the loan retires any ladder with it; a rung firing afterwards would be
-        // reasoning about a reclaim that no longer exists.
+        // reasoning about a reclaim that no longer exists. The background hold ends here too:
+        // this path never opens a settle window, so neither end-site below it would fire.
         cancelReclaimLadder()
+        deps.endReclaimBackgroundTask()
         cancelNotification(id: NotificationID.onLoan)
         (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
         state = .owner
