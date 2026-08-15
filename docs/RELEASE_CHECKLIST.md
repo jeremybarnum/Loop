@@ -1,7 +1,8 @@
 # Sport Mode — Pre-Release Checklist (Path 1)
 
-**Purpose.** The go/no-go list to finish on `watch-from-stock` before Caitlin (a real
-T1D user) tests it on-wrist. This is insulin dosing on a real person, so the bar is
+**Purpose.** The go/no-go list to finish on `SportMode` (the working branch across the
+superproject and all submodule forks; historical pointers `stock-cgm-piggyback` /
+`watch-from-stock` are frozen) before Caitlin (a real T1D user) tests it on-wrist. This is insulin dosing on a real person, so the bar is
 correctness and honest failure signalling — not feature completeness.
 
 **Scope note.** Path 1 = ship-to-Caitlin readiness (this doc). Path 2 (deferred) =
