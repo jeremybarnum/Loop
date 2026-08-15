@@ -453,24 +453,48 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
     /// which is why the send window is deliberately not re-opened), so the notification has to
     /// say both that the carbs landed and that the bolus must be delivered from the plain Bolus
     /// screen. Field 2026-08-05 00:18: 6 g journaled, 0.20 U lost, and nothing said what to do.
+    /// SAYS ONLY WHAT IS KNOWN HERE, which is very little: that `enactManualBolus` returned an
+    /// error. This closure never inspects the error's case, and the certainty classification
+    /// happens elsewhere, on another queue — so at post time the pod may well have delivered
+    /// the full dose. It used to assert "%@ U did not deliver" and instruct the user to
+    /// re-deliver from the Bolus screen; on the uncertain-delivery path the pod's verdict
+    /// arrives 5-85 s LATER and can say DELIVERED, leaving a standing instruction to bolus
+    /// again on top of insulin already in the body. That is why the wording hedges and why the
+    /// only imperative left is permission to wait — stock does the same thing for the same
+    /// reason (DeliveryUncertaintyAlertManager: it reports Loop's inability rather than
+    /// claiming what the pump did, and stock refuses to post its own bolus-failure notice for
+    /// .uncertainDelivery at all).
+    ///
+    /// The blunt "Bolus Not Delivered" title now belongs to the REFUTED alert
+    /// (PodLoanWatchController.alertRefuted), which is verdict-backed and has earned it.
+    ///
+    /// The carb clause stays because it is the one thing genuinely observed: the entry was
+    /// written locally and synchronously before the bolus was attempted. Stating it removes
+    /// the reason to re-enter carbs without commanding anything.
+    /// Field 2026-08-05 00:18: 6 g journaled, 0.20 U lost, and nothing said what happened.
     private static func notifyBolusFailure(units: Double, carbGrams: Double?, error: Swift.Error) {
         let content = UNMutableNotificationContent()
-        content.title = NSLocalizedString("Bolus Not Delivered", comment: "Watch notification title for a failed loan-time bolus")
         let unitsText = NumberFormatter.localizedString(from: NSNumber(value: units), number: .decimal)
+        content.title = String(
+            format: NSLocalizedString("Bolus Unconfirmed: %@ U", comment: "Watch notification title for a loan-time bolus whose delivery could not be confirmed (1: units)"),
+            unitsText)
         if let carbGrams = carbGrams {
             content.body = String(
-                format: NSLocalizedString("%1$@ g was logged, but %2$@ U did not deliver. Use the Bolus screen to deliver it — do NOT re-enter the carbs.", comment: "Watch notification body when carbs logged but the bolus failed (1: grams, 2: units)"),
-                NumberFormatter.localizedString(from: NSNumber(value: Int(carbGrams.rounded())), number: .none),
-                unitsText)
+                format: NSLocalizedString("%@ g was saved. Loop couldn't confirm delivery. You can wait to see if it resolves.", comment: "Watch notification body when carbs were saved but bolus delivery is unconfirmed (1: grams)"),
+                NumberFormatter.localizedString(from: NSNumber(value: Int(carbGrams.rounded())), number: .none))
         } else {
-            content.body = String(
-                format: NSLocalizedString("%1$@ U did not deliver. %2$@", comment: "Watch notification body for a failed loan-time bolus (1: units, 2: reason)"),
-                unitsText, error.localizedDescription)
+            // The error text goes to the log (above), not the lock screen: these are
+            // PodCommsError/PumpManagerError values whose localizedDescription is developer
+            // copy of unpredictable length.
+            content.body = NSLocalizedString("Loop couldn't confirm delivery. You can wait to see if it resolves.", comment: "Watch notification body when a loan-time bolus delivery is unconfirmed")
         }
         content.sound = .default
         UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: "loan.bolus.failure", content: content, trigger: nil))
+            UNNotificationRequest(identifier: Self.bolusUnconfirmedNotificationID, content: content, trigger: nil))
     }
+
+    /// Shared so the verdict paths can retract this notification once the pod's answer is in.
+    static let bolusUnconfirmedNotificationID = "loan.bolus.failure"
 
     private func sendSetBolusUserInfo(carbEntry: NewCarbEntry?, bolus: Double) {
         RuntimeStateLog.mark("carbflow.sendSetBolusUserInfo")

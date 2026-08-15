@@ -319,19 +319,21 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         let controller = makeController()
         controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
 
+        // The refusal is observed on the WIRE, not as a phone notice: the phone-side
+        // "Sport Mode Not Started" banner was removed as duplication — the watch the user
+        // just tapped already shows the reason.
         let refused = expectation(description: "refused")
         DispatchQueue.global().async {
             while true {
-                self.lock.lock(); let done = self.notices.contains("Sport Mode Not Started"); self.lock.unlock()
-                if done { refused.fulfill(); return }
+                // lastSent() takes `lock` itself — do NOT wrap it, the lock is not recursive.
+                if case .denied? = self.lastSent() { refused.fulfill(); return }
                 usleep(20_000)
             }
         }
         wait(for: [refused], timeout: 5)
         XCTAssertEqual(controller.state, .owner)
         XCTAssertTrue(pauseCalls.isEmpty, "denied grant must not touch dosing")
-        // A denial is now reported to the watch (never a grant).
-        if case .denied? = lastSent() {} else { XCTFail("expected a .denied message, got \(String(describing: lastSent()))") }
+        XCTAssertFalse(notices.contains("Sport Mode Not Started"), "the phone must not duplicate the watch's refusal reason")
         if case .grant? = lastSent() { XCTFail("no grant may be sent on refusal") }
     }
 
@@ -961,7 +963,10 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
         waitUntil(timeout: 8, "warn verdict") { self.diagMatching("R32 WARN") != nil }
         XCTAssertEqual(openLoopCalls, 0, "a shortfall must NOT open the loop — that worsens under-treatment")
-        XCTAssertTrue(notices.contains("Insulin On Board May Be High"))
+        // "Overstated", not "High" (ruled 2026-08-15): the pod delivered LESS than the records
+        // claim, so the books are wrong, not the body. Asserted on the PLAIN channel — this
+        // direction keeps looping, and only an alert that stops dosing earns the urgent one.
+        XCTAssertTrue(notices.contains("Insulin On Board May Be Overstated"))
     }
 
     /// The ordinary case — a residual inside the bounds — must be silent. If routine loans warn,
@@ -1441,8 +1446,14 @@ extension PodLoanPhoneControllerTests {
     /// would have retried it, with the placeholder stuck forever. This proves the launch half of
     /// that claim is now real: a FRESH controller — no offer, no audit in flight, nothing but the
     /// persisted gap state from a previous session — must retry the delete on construction.
+    /// RULED 2026-08-15: the launch retry fires ONLY for a booking whose delete failed AFTER the
+    /// watch's real records committed — `deleteFailedAfterRecords`. Before that flag existed this
+    /// fixture (a bare booking) also retried, which is the defect: a placeholder that nothing had
+    /// explained was deleted at the next launch, silently dropping 0.2-3 U of conservative IOB.
+    /// The un-flagged case is now pinned by testPersistedGapWithoutRecordsSurvivesLaunch below.
     func testPersistedGapDeleteRetriesOnFreshLaunch() throws {
-        UserDefaults.standard.set(["epoch": 7, "units": 1.75, "bookedAt": Date().timeIntervalSince1970],
+        UserDefaults.standard.set(["epoch": 7, "units": 1.75, "bookedAt": Date().timeIntervalSince1970,
+                                   "deleteFailedAfterRecords": true],
                                   forKey: "PodLoanPhoneController.gapBooking")
 
         // Held for the test's duration — init's retry runs on a `[weak self]` queue.async, so an
@@ -1462,7 +1473,8 @@ extension PodLoanPhoneControllerTests {
     /// The failure side of the same path: launch retry fails again, state must survive for yet
     /// another attempt rather than being dropped or silently swallowed.
     func testPersistedGapDeleteThatFailsAgainAtLaunchKeepsState() throws {
-        UserDefaults.standard.set(["epoch": 3, "units": 0.9, "bookedAt": Date().timeIntervalSince1970],
+        UserDefaults.standard.set(["epoch": 3, "units": 0.9, "bookedAt": Date().timeIntervalSince1970,
+                                   "deleteFailedAfterRecords": true],
                                   forKey: "PodLoanPhoneController.gapBooking")
         lock.lock(); gapDeleteSucceeds = false; lock.unlock()
 
@@ -1472,6 +1484,31 @@ extension PodLoanPhoneControllerTests {
         waitUntil(timeout: 5, "launch retry attempted") { self.lock.lock(); defer { self.lock.unlock() }; return !self.deletedGapSyncs.isEmpty }
         XCTAssertNotNil(UserDefaults.standard.dictionary(forKey: "PodLoanPhoneController.gapBooking"),
                         "still failing — state must survive for the NEXT launch or offer, not vanish")
+    }
+
+    /// The case the old guard could not express, and the reason it was wrong: a placeholder that
+    /// nothing ever explained. The watch never came back, so no real records arrived, so no
+    /// delete was ever attempted — and the booking is still TRUE. It must survive the launch
+    /// intact, because the insulin it stands for is still in the body and the user was told the
+    /// booking was there to keep IOB conservative. Losing the watch for good is exactly when
+    /// that margin matters most (ruled 2026-08-15).
+    func testPersistedGapWithoutRecordsSurvivesLaunch() throws {
+        UserDefaults.standard.set(["epoch": 11, "units": 0.85, "bookedAt": Date().timeIntervalSince1970],
+                                  forKey: "PodLoanPhoneController.gapBooking")
+
+        let controller = makeController()   // the next app launch
+        _ = controller
+
+        // Give init's queue.async retry the same room the other launch tests give it; the
+        // assertion is that nothing happens in that window.
+        let settled = expectation(description: "launch settled")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2) { settled.fulfill() }
+        wait(for: [settled], timeout: 5)
+
+        lock.lock(); let deleted = deletedGapSyncs; lock.unlock()
+        XCTAssertTrue(deleted.isEmpty, "an unexplained placeholder must NOT be deleted at launch — the insulin is still real")
+        XCTAssertNotNil(UserDefaults.standard.dictionary(forKey: "PodLoanPhoneController.gapBooking"),
+                        "the booking must persist so it keeps standing until the watch returns or it decays out")
     }
 
     /// A failed placeholder delete must be loud and keep its state — a silent failure here is a

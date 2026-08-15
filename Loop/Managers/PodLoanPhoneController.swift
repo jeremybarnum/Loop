@@ -581,8 +581,12 @@ final class PodLoanPhoneController {
                 self.handbackDiag(pending.epoch, "** R37: audit NEVER RAN — pod unreachable through the settle window. Session UNVERIFIED, loop OPENS **")
                 self.deps.setAutomaticDosingPaused(false)
                 self.deps.openLoopForUncertainReconciliation()
-                self.deps.issueUrgentNotice("Watch Session Unverified",
-                                            "The pod could not be reached to verify insulin delivered during the watch session. Automatic dosing is OFF — check your insulin on board before dosing.")
+                self.armOpenLoopReminder()
+                // One text for all three unverified outcomes (see Self.sessionUnverifiedBody):
+                // pod never answered, answered without a total, or no baseline to compare
+                // against. The difference is internal cause; the user's situation and the one
+                // thing they can do about it are identical in all three.
+                self.deps.issueUrgentNotice("Watch Session Unverified", Self.sessionUnverifiedBody)
             }
             self.deps.ownershipDidChange()         // final re-render that clears the tile
         }
@@ -774,8 +778,8 @@ final class PodLoanPhoneController {
             handbackDiag(pending.epoch, "** R37: reclaim round-trip landed but no odometer — session UNVERIFIED, loop OPENS **")
             deps.setAutomaticDosingPaused(false)
             deps.openLoopForUncertainReconciliation()
-            deps.issueUrgentNotice("Watch Session Unverified",
-                                   "The pod is back, but it did not report its insulin total. Automatic dosing is OFF — check your insulin on board before dosing.")
+            armOpenLoopReminder()
+            deps.issueUrgentNotice("Watch Session Unverified", Self.sessionUnverifiedBody)
         } else {
             handbackDiag(pending.epoch, "reconcile[AUTHORITATIVE]: pod reachable but reported no odometer — keeping the provisional line")
         }
@@ -843,6 +847,7 @@ final class PodLoanPhoneController {
                 "** R32 OPEN LOOP — residual %+.3f U exceeds +%.2f: the pod delivered insulin our records do not contain. Automatic dosing STOPPED. **",
                 residual, Self.openLoopPositiveResidual))
             deps.openLoopForUncertainReconciliation()
+            armOpenLoopReminder()
             // URGENT on either flavor: an alert that stops automatic dosing must never be a
             // quiet list entry. The one alert left on the plain channel is the negative warn
             // below, which keeps looping — caution, not action (alarm fatigue).
@@ -852,7 +857,10 @@ final class PodLoanPhoneController {
             handbackDiag(epoch, String(format:
                 "** R32 WARN — residual %+.3f U beyond -%.2f: records claim more delivery than the pod made (phantom IOB). Still looping — this direction under-doses and decays out. **",
                 residual, Self.warnNegativeResidual))
-            deps.issueNotice("Insulin On Board May Be High",
+            // "Overstated", not "High": the pod delivered LESS than the records claim, so the
+            // defect is in the books, not in the body. "High" reads as a therapy state — is my
+            // IOB high, is that bad? — and sends the user looking at the wrong thing.
+            deps.issueNotice("Insulin On Board May Be Overstated",
                              String(format: "The watch session's records account for %.2f U more than the pod delivered. Automatic dosing continues; expect it to run cautious until this clears.", -residual))
         }
     }
@@ -868,6 +876,7 @@ final class PodLoanPhoneController {
                 "** R37 OPEN LOOP — force-reclaim residual %+.3f U exceeds +%.2f: the pod delivered insulin the records cannot explain (watch died mid-session?). Automatic dosing STOPPED. **",
                 residual, Self.openLoopPositiveResidual))
             deps.openLoopForUncertainReconciliation()
+            armOpenLoopReminder()
             // Written to survive a BANNER, which is where this is actually read. The previous
             // wording ran past four lines and truncated mid-sentence on the field screenshot
             // (2026-08-14), cutting off at "its real records w" — so the reader lost the one
@@ -891,8 +900,12 @@ final class PodLoanPhoneController {
             handbackDiag(epoch, String(format:
                 "** R37 WARN — force-reclaim residual %+.3f U beyond -%.2f: records claim more than the pod delivered (phantom IOB). Looping resumes — this direction under-doses and decays out. **",
                 residual, Self.warnNegativeResidual))
-            deps.issueUrgentNotice("Insulin On Board May Be High",
-                                   String(format: "After the watch session ended abruptly, records account for %.2f U more than the pod delivered. Automatic dosing resumes; expect it to run cautious until this clears.", -residual))
+            // PLAIN channel, matching the identical verdict on the clean-hand-back path (:857).
+            // Same finding, same direction, same "looping continues" outcome — the urgent
+            // channel here was an inconsistency, and this direction under-doses and decays out
+            // on its own, which is the case for NOT breaking through a Focus mode.
+            deps.issueNotice("Insulin On Board May Be Overstated",
+                             String(format: "After the watch session ended abruptly, records account for %.2f U more than the pod delivered. Automatic dosing resumes; expect it to run cautious until this clears.", -residual))
         } else {
             handbackDiag(epoch, String(format:
                 "R37 audit CLEAN — residual %+.3f U within ±%.2f; automatic dosing resumes", residual, Self.openLoopPositiveResidual))
@@ -915,6 +928,10 @@ final class PodLoanPhoneController {
                     UserDefaults.standard.set(["epoch": epoch, "units": units,
                                                "bookedAt": now.timeIntervalSince1970],
                                               forKey: Keys.gapBooking)
+                    // The booking is now the standing condition, so this is where the standing
+                    // reminder belongs — not at the four "dosing is paused" sites the old one
+                    // used, none of which imply a placeholder exists.
+                    self.armPlaceholderReminders(units: units, bookedAt: now)
                     self.handbackDiag(epoch, String(format: "R37 gap BOOKED — %.2f U bolus @ reclaim (sync %@); retired if the watch returns", units, sync))
                 } else {
                     self.handbackDiag(epoch, String(format: "** R37 gap booking FAILED to save — %.2f U is NOT in the books. Loop is open; dose by hand with that in mind. **", units))
@@ -935,6 +952,22 @@ final class PodLoanPhoneController {
     private func retryPersistedGapDeleteIfAny() {
         guard let gap = UserDefaults.standard.dictionary(forKey: Keys.gapBooking),
               let gapEpoch = gap["epoch"] as? Int, let booked = gap["units"] as? Double else { return }
+        // RULED 2026-08-15: the placeholder STAYS unless the watch's real records actually
+        // arrived. Previously this guard asked only "is a booking persisted", which cannot tell
+        // "the delete failed after real records committed" (retry it — the point of this
+        // function) from "nothing ever explained this insulin" (the booking is still TRUE). The
+        // key is written at booking and cleared only on a successful delete, so the second case
+        // is the normal persisted state — and every launch was silently deleting a conservative
+        // IOB booking that nothing had replaced, while the user had been told it was there to
+        // keep IOB safe. Losing the watch for good is exactly when that margin matters most.
+        //
+        // The flag is set only in retireGapBookingIfExplained's failure branch, i.e. only after
+        // real records committed. An un-flagged booking now stands until either the watch comes
+        // back or the dose decays out of the DIA window on its own.
+        guard gap["deleteFailedAfterRecords"] as? Bool == true else {
+            handbackDiag(gapEpoch, String(format: "R37 gap placeholder STANDS — %.2f U still unexplained; the watch never returned, so the booking is left in place", booked))
+            return
+        }
         let sync = Self.gapSyncIdentifier(epoch: gapEpoch)
         handbackDiag(gapEpoch, String(format: "R37 gap DELETE retrying at launch — %.2f U placeholder (sync %@) was unretired last session", booked, sync))
         deps.deleteGapDose(sync) { [weak self] ok in
@@ -949,6 +982,7 @@ final class PodLoanPhoneController {
                     if let bookedAt = (gap["bookedAt"] as? TimeInterval).map(Date.init(timeIntervalSince1970:)) {
                         self.deps.insulinHistoryRewritten(bookedAt)
                     }
+                    self.cancelPlaceholderReminders()
                     self.handbackDiag(gapEpoch, String(format: "R37 gap RETIRED on launch retry — %.2f U placeholder cleared", booked))
                 } else {
                     self.handbackDiag(gapEpoch, String(format: "** R37 gap DELETE FAILED AGAIN at launch — %.2f U placeholder still stands; will retry next launch or the next matching offer **", booked))
@@ -997,15 +1031,28 @@ final class PodLoanPhoneController {
                     self.handbackDiag(gapEpoch, String(format:
                         "R37 gap RETIRED — the watch returned with %d real dose(s): %.2f U bolus + %d rate record(s) (%.2f U gross programmed, pre-truncation) and %d carb(s); the %.2f U estimate is replaced by actual timing",
                         dosesJustCommitted.count, bolusUnits, rateCount, rateGross, carbsJustCommitted, booked))
-                    // URGENT (field request 2026-08-14): this fires when the returning watch
-                    // replaces the placeholder estimate with real records — IOB and COB just
-                    // changed under the user's feet. Urgent buys time-sensitive interruption,
-                    // so the message breaks through a Focus mode and gets lock-screen
-                    // prominence rather than filing quietly into the list.
+                    // STAYS (ruled 2026-08-15, restoring the 2026-08-14 field request). The
+                    // keeps re-review called this a congratulation banner announcing that a
+                    // self-healing correction healed, and recommended killing it. That misses
+                    // what it is actually for: IOB and COB CHANGE UNDER THE USER'S FEET at this
+                    // instant. A numbers-changed notice is not reassurance, and the urgent
+                    // channel is right for it.
+                    //
+                    // The review's real finding stands though — it omits the half the user can
+                    // act on, because the loop the audit opened is STILL OPEN and nothing in
+                    // this codebase closes it. That sentence is going into the standing
+                    // placeholder/open-loop reminder rather than here, so this can stay a short
+                    // statement of what just changed.
+                    self.cancelPlaceholderReminders()   // the condition is gone
                     self.deps.issueUrgentNotice("Watch Records Recovered",
                                           String(format: "The watch is back. Its records (%d doses, %d carbs) replaced the estimated %.2f U bolus — your IOB and COB now reflect actual timing.",
                                                  dosesJustCommitted.count, carbsJustCommitted, booked))
                 } else {
+                    // Mark the booking as "real records DID arrive, the delete is what failed".
+                    // Only that state earns a launch retry — see retryPersistedGapDeleteIfAny.
+                    var marked = gap
+                    marked["deleteFailedAfterRecords"] = true
+                    UserDefaults.standard.set(marked, forKey: Keys.gapBooking)
                     self.handbackDiag(gapEpoch, String(format:
                         "** R37 gap DELETE FAILED — the %.2f U placeholder AND the real records are both booked; IOB is over-counted until this retries **", booked))
                 }
@@ -1086,7 +1133,8 @@ final class PodLoanPhoneController {
     /// is primary). Bounded: cleared when a loan fully closes.
     /// Latch so a repeatedly-failing hand-back write warns ONCE, not once per 15 s resend.
     /// Deliberately not persisted — a relaunch is a fresh chance to tell the user.
-    private var hasWarnedRecordsNotSaved = false
+    /// Same once-per-state discipline, for the build-skew notice: cleared on the first clean decode.
+    private var hasWarnedProtocolMismatch = false
 
     /// Everything the odometer audit needs EXCEPT the end reading, held
     /// from the final drain until the phone's own reclaim round-trip lands (seconds later) and can
@@ -1256,8 +1304,25 @@ final class PodLoanPhoneController {
 
     private enum NotificationID {
         static let t1 = "podloan.t1"           // start-confirmation, 5 min
-        static let duration = "podloan.6h"     // loan-duration reminder, 6 h
-        static let paused = "podloan.paused1h" // paused-dosing reminder, 1 h repeating
+        static let duration = "podloan.6h"     // retired; kept so upgrades can cancel it
+        static let paused = "podloan.paused1h" // retired; kept so upgrades can cancel it
+        /// One reminder, an hour after an AUDIT opened the loop. Once only (ruled 2026-08-15):
+        /// after that the user is making a conscious choice, and a repeating nag about a
+        /// decision teaches people to swipe reminders away.
+        static let openLoop = "podloan.openloop"
+        /// The standing placeholder reminder, bounded by DIA. Rungs, not a repeating trigger,
+        /// so the ladder simply runs out — nothing has to remember to stop it.
+        static func placeholder(_ index: Int) -> String { "podloan.placeholder.\(index)" }
+    }
+
+    /// Reminder geometry. Both ladders stop inside the insulin action duration (6 h) because
+    /// past that there is nothing left to remind about: the placeholder bolus has decayed out
+    /// of IOB entirely, and re-timing it is moot. Hassling someone about insulin that no longer
+    /// exists is how a useful reminder becomes noise.
+    private enum ReminderLadder {
+        /// t=0 is already covered by the force-reclaim notice that announced the booking.
+        static let placeholderRungs: [TimeInterval] = [.hours(2), .hours(4)]
+        static let openLoopDelay: TimeInterval = .hours(1)
     }
 
     /// Derived — what v1 kept as the volatile `podLoanedToWatch` flag (:480/:697).
@@ -1333,6 +1398,9 @@ final class PodLoanPhoneController {
         // booking, whether or not a force-reclaim is currently in flight.
         queue.async { [weak self] in
             self?.retryPersistedGapDeleteIfAny()
+            // Best-effort tidy-up: if the user closed the loop while the app was dead, retire
+            // the pending reminder rather than let it fire about a decision already made.
+            self?.cancelOpenLoopReminderIfLoopClosed()
         }
 
         // Relaunch during a non-owner state: dosing stays paused (persisted-state
@@ -1372,9 +1440,10 @@ final class PodLoanPhoneController {
             message = try LoanMessage.decode(fromTransport: userInfo)
         } catch {
             sendMessage(.nack(ProtocolNack(seenVersion: nil)))
-            deps.issueNotice("Loan Protocol Error", "The watch sent a message this phone build cannot read. Update one of the builds. Nothing was discarded.")
+            warnProtocolMismatch()
             return
         }
+        hasWarnedProtocolMismatch = false   // a clean decode means the skew is over
         guard let message = message else { return }
 
         switch message {
@@ -1391,7 +1460,13 @@ final class PodLoanPhoneController {
         case .statusReport(let report):
             handleStatusReport(report)
         case .nack:
-            deps.issueNotice("Loan Protocol Error", "The watch could not read this phone's messages. Update one of the builds.")
+            // Logged, not posted. Two reasons, both found in the keeps re-review: the shared
+            // notice says "Loop can't read a message from the watch", which is BACKWARDS here —
+            // a nack means the WATCH could not read US. And a nack is itself a clean decode, so
+            // it never reaches the latch that suppresses repeats: an ongoing skew would have
+            // posted a fresh banner every 15 s, forever. The decode arm keeps the notice; this
+            // direction is a developer fact, and the user's own signal is the loan not starting.
+            os_log("Loan protocol skew — the WATCH could not decode a message from this phone", log: log, type: .fault)
         case .grant, .handbackAck, .revoke, .statusQuery, .denied, .diag:
             break  // watch-bound kinds (diag is phone→watch only)
         }
@@ -1449,12 +1524,12 @@ final class PodLoanPhoneController {
         beginGrant()
     }
 
-    /// Refuse the request AND tell the watch why (so it shows the reason instead of
-    /// hanging on "requesting…"), plus a local phone banner for good measure.
+    /// Refuse the request and tell the WATCH why, so it shows the reason instead of hanging
+    /// on "requesting…". No phone notice: the user is looking at the wrist they just tapped,
+    /// and the reason is already on it — the phone copy was pure duplication.
     private func deny(_ reason: String) {
         os_log("Loan denied: %{public}@", log: log, type: .default, reason)
         sendMessage(.denied(LoanDenied(reason: reason)))
-        deps.issueNotice("Sport Mode Not Started", reason)
     }
 
     private func beginGrant() {
@@ -1633,9 +1708,12 @@ final class PodLoanPhoneController {
     }
 
     private func abortGrant(reason: String) {
+        // The refusal travels to the WATCH, which is where the user just tapped Start and is
+        // still looking; the phone posts nothing. Reasons here are internal encoding failures
+        // the user cannot act on, and the pod never left the phone.
         os_log("Grant aborted: %{public}@", log: log, type: .error, reason)
         sendMessage(.denied(LoanDenied(reason: "The loan could not start (\(reason)). The phone kept the pod.")))
-        reclaimToOwner(alert: ("Pod Loan Failed", "The loan could not start (\(reason)). The phone kept the pod."))
+        reclaimToOwner(alert: nil)
     }
 
     /// T1: 5 min start-confirmation, cancelled by TakeoverComplete. Row 4:
@@ -1673,8 +1751,14 @@ final class PodLoanPhoneController {
 
     private func armT1(for grantEpoch: Int) {
         armGrantLostProbe(for: grantEpoch)
+        // Pre-scheduled, so its text is fixed FIVE MINUTES before it lands and cannot describe
+        // anything that happens in between. It therefore states only what is certain at the
+        // fire instant — no confirmation has arrived — and the phone's INTENT, not a completed
+        // act. The reclaim itself runs 15 s later, and only when the app is awake to run the
+        // work item; the suspended-app case this dead-man exists for is precisely where a
+        // "the phone reclaimed it" claim would be false, potentially for a long time.
         scheduleNotification(id: NotificationID.t1, title: "Watch Loan Not Confirmed",
-                             body: "The watch never confirmed taking the pod. The phone reclaimed it.",
+                             body: "The watch hasn't confirmed taking the pod. The phone will take it back.",
                              delay: .minutes(5), repeats: false)
         t1WorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
@@ -1682,7 +1766,10 @@ final class PodLoanPhoneController {
             self.sendMessage(.statusQuery(StatusQuery(epoch: grantEpoch)))
             let confirm = DispatchWorkItem { [weak self] in
                 guard let self = self, self.state == .grantOffered, self.epoch == grantEpoch else { return }
-                self.reclaimToOwner(alert: ("Watch Loan Failed", "The watch never confirmed taking the pod. The phone reclaimed it."))
+                // Reclaims silently: the watch never confirmed, so in the common case nothing
+                // ever left the phone and there is nothing for the user to do. The phone's own
+                // pill already shows it holds the pod.
+                self.reclaimToOwner(alert: nil)
             }
             self.t1WorkItem = confirm
             self.queue.asyncAfter(deadline: .now() + 15, execute: confirm)
@@ -1702,9 +1789,13 @@ final class PodLoanPhoneController {
             UserDefaults.standard.set(atTakeover, forKey: Keys.deliveredAtTakeover)
         }
         state = .loaned
-        scheduleNotification(id: NotificationID.duration, title: "Pod Still On Loan",
-                             body: "The pod has been on the watch for 6 hours.",
-                             delay: .hours(6), repeats: false)
+        // No 6-hour duration notice. It was armed unconditionally the instant a takeover
+        // succeeded, with no fault predicate and no loan cap anywhere in this file — so its
+        // only condition was "Sport Mode is still working six hours later", i.e. it alarmed on
+        // success. A long ride is a choice, not a fault. Every real failure mode during a loan
+        // has its own signal on the WATCH, which is the device in a position to know.
+        // The cancel sites below are left in place so an upgrade retires any rung a previous
+        // build already scheduled.
 
         // No on-loan notification. One existed here — a designed-silent notice carrying the
         // bench-era escape-hatch action — until the blanket foreground-banner change promoted
@@ -1717,7 +1808,11 @@ final class PodLoanPhoneController {
         guard failed.epoch == epoch, state == .grantOffered else { return }
         t1WorkItem?.cancel()
         cancelNotification(id: NotificationID.t1)
-        reclaimToOwner(alert: ("Watch Loan Failed", "The watch could not take the pod (\(failed.reason)). The phone kept it."))
+        // Silent: the watch reported this failure, so the wrist the user is looking at already
+        // shows the reason in its idle note — with better wording and the retry affordance the
+        // phone banner lacked. iOS mirrors phone notices to that same wrist, so posting here put
+        // the worse copy on top of the better one.
+        reclaimToOwner(alert: nil)
     }
 
     private func handleStatusReport(_ report: StatusReport) {
@@ -1736,11 +1831,21 @@ final class PodLoanPhoneController {
             handbackDiag(report.epoch, "grant CONFIRMED LOST by the watch — reclaiming now instead of waiting out the 5-minute timer (#108)")
             t1WorkItem?.cancel()
             cancelNotification(id: NotificationID.t1)
-            reclaimToOwner(alert: ("Sport Mode Didn't Start",
-                                   "The watch never received the hand-over, so the phone kept the pod and is still looping. Tap Start again."))
+            // Tell the WATCH, don't post on the phone. Deleting the phone banner outright would
+            // be wrong here: without a .denied the wrist falls through to its request-timeout
+            // note ("No response from iPhone"), which is FALSE in this case — the phone answered,
+            // it was the grant that went missing — and points the user at the wrong device.
+            // With the reason routed, the glance shows it where the user is already looking.
+            sendMessage(.denied(LoanDenied(reason: "The hand-over never reached the watch. The phone kept the pod. Tap Start again.")))
+            reclaimToOwner(alert: nil)
         }
-        if let fault = report.podFault {
-            deps.issueNotice("Pod Fault During Loan", "The pod reported a fault while on the watch: \(fault). Check the pod.")
+        if report.podFault != nil {
+            // No notice. This line could never do what its title claimed: a StatusReport is only
+            // solicited while state == .grantOffered, so a fault occurring DURING the loan never
+            // reaches here — it was the appearance of pod-fault coverage, not coverage. The real
+            // gap is that the watch holds the pod and its own alert path for pod faults is a
+            // log-only stub; that is where the signal has to be built, not here.
+            handbackDiag(report.epoch, "pod fault reported in a status report — logged only; the watch owns pod-fault surfacing during a loan")
         }
     }
 
@@ -1994,14 +2099,12 @@ final class PodLoanPhoneController {
                     self.commitInFlight = false
                     self.handbackDiag(offer.epoch, "write FAILED: \(String(describing: error))")
                     os_log("Reconcile write failed: %{public}@", log: self.log, type: .fault, String(describing: error))
-                    // ONCE per failing state, not once per retry. Offers resend every 15 s,
-                    // so one phone-side bug can produce 10-12 identical "Watch Records Not Saved"
-                    // warnings on the wrist. A wall of identical
-                    // alarms for one fault is how people learn to ignore alarms.
-                    if !self.hasWarnedRecordsNotSaved {
-                        self.hasWarnedRecordsNotSaved = true
-                        self.deps.issueNotice("Watch Records Not Saved", "The watch session's records could not be saved. Dosing stays paused; will retry on the next hand-back attempt.")
-                    }
+                    // No notice. It was unactionable the instant it fired — the watch resends
+                    // every 15 s and the retry is automatic — and `issueNotice` mints a fresh
+                    // UUID per post, so it could never be retracted: the EXPECTED recovery left
+                    // a banner standing that still claimed "Dosing stays paused" long after
+                    // dosing had resumed. The .fault logs below carry the diagnosis, and
+                    // armPausedReminder still carries the user-visible consequence.
                     self.armPausedReminder()
                     // No coalesced replay on failure — the watch's 15 s resend is the
                     // retry, and a hot local replay of the same failing write would spin. A
@@ -2013,7 +2116,6 @@ final class PodLoanPhoneController {
                     }
                     return
                 }
-                self.hasWarnedRecordsNotSaved = false   // recovered — a future failure is news again
 
                 // A2: the earliest dose the e44 backfill restated, filled in by the branch below
                 // and read back inside finishCommit. Declared ahead of the closure because the
@@ -2037,10 +2139,7 @@ final class PodLoanPhoneController {
                             // resend costs nothing.
                             self.handbackDiag(offer.epoch, "backfill FAILED: \(String(describing: backfillError))")
                             os_log("Loan dose backfill failed: %{public}@", log: self.log, type: .fault, String(describing: backfillError))
-                            if !self.hasWarnedRecordsNotSaved {
-                                self.hasWarnedRecordsNotSaved = true
-                                self.deps.issueNotice("Watch Records Not Saved", "The watch session's records could not be saved. Dosing stays paused; will retry on the next hand-back attempt.")
-                            }
+                            // Same as the write-failure path above: logged, not posted.
                             self.armPausedReminder()
                             if let reason = self.pendingForceReclaimReason {
                                 self.pendingForceReclaimReason = nil
@@ -2582,7 +2681,25 @@ final class PodLoanPhoneController {
             if let newCursor = events.map(\.seq).max() {
                 committedCursor = max(committedCursor, newCursor)
             }
-            deps.issueNotice("Sport Mode Reset", "A previous watch loan was ended without a clean hand-back; its records were saved. Check Event History and the pod.")
+            // "Reset" named nothing observed. What IS observed here: a loan ended without a
+            // clean hand-back, and the staged records just went to the store.
+            //
+            // The old copy omitted the fact that matters most — automatic dosing is PAUSED at
+            // this instant and stays paused until the audit rules (:2614-2623) — so a reader
+            // came away believing the loop was running. It also told the user to "check Event
+            // History and the pod": Event History shows a set the code cannot vouch for (this
+            // path reconciles with odometer: nil, so `.assumed` records are written as fact),
+            // and there is nothing on the pod a user can read. Worse, the app REFUSES manual
+            // boluses and carb entry while the settle runs, so it was advice the app would
+            // then decline to let them act on.
+            //
+            // What replaces it is the honest shape of the wait: dosing is off, a pod round-trip
+            // is in flight, and it is quick — field-measured at ~2 s on the one real dead-watch
+            // run, chased every 2 s under a 5-minute ceiling. The verdict that follows is the
+            // loud one; this is only the "hold on" note before it.
+            deps.issueNotice(
+                NSLocalizedString("Watch Session Ended Without Hand-Back", comment: "Phone notice title after a force reclaim salvaged staged records"),
+                NSLocalizedString("Automatic dosing is paused while Loop checks the pod's insulin total. This usually takes seconds.", comment: "Phone notice body after a force reclaim salvaged staged records"))
         }
 
         // Arm the odometer audit BEFORE clearing staged — its `expected` is computed over
@@ -2621,8 +2738,8 @@ final class PodLoanPhoneController {
         guard let deliveredAtStart = baseline, let schedule = deps.settings().basalRateSchedule else {
             handbackDiag(epoch, "** R37 force-reclaim audit IMPOSSIBLE — no start odometer/schedule; loop OPENS on principle (cannot verify => do not resume) **")
             deps.openLoopForUncertainReconciliation()
-            deps.issueUrgentNotice("Watch Session Unverified",
-                                   "The pod is back, but insulin delivered during the watch session could not be verified. Automatic dosing is OFF — check your insulin on board before dosing.")
+            armOpenLoopReminder()
+            deps.issueUrgentNotice("Watch Session Unverified", Self.sessionUnverifiedBody)
             return false
         }
         let start = loanStartedAt ?? deps.now().addingTimeInterval(-.hours(2))
@@ -2663,7 +2780,9 @@ final class PodLoanPhoneController {
 
     // MARK: - Helpers
 
-    private func reclaimToOwner(alert: (title: String, body: String)) {
+    /// `alert: nil` reclaims silently — for the paths where the user has nothing to do and
+    /// the phone's own pod pill already says who holds it.
+    private func reclaimToOwner(alert: (title: String, body: String)?) {
         // Abandoning the loan retires any ladder with it; a rung firing afterwards would be
         // reasoning about a reclaim that no longer exists. The background hold ends here too:
         // this path never opens a settle window, so neither end-site below it would fire.
@@ -2672,7 +2791,7 @@ final class PodLoanPhoneController {
         (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
         state = .owner
         deps.setAutomaticDosingPaused(false)
-        deps.issueNotice(alert.title, alert.body)
+        if let alert = alert { deps.issueNotice(alert.title, alert.body) }
     }
 
     private func stage(events: [LoanEvent], tombstones: [UUID]) {
@@ -2726,11 +2845,100 @@ final class PodLoanPhoneController {
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])
     }
 
-    private func armPausedReminder() {
-        scheduleNotification(id: NotificationID.paused, title: "Automatic Dosing Paused",
-                             body: "Dosing has been paused since the pod loan ended without complete records. Reconcile or re-enable Closed Loop to override.",
-                             delay: .hours(1), repeats: true)
+    /// Both directions of a protocol skew — the watch sent something this build cannot decode,
+    /// or the watch nacked something this build sent — mean the same thing to the user, so they
+    /// share one notice. The cause is named with "may", because the decode failure is all that
+    /// was observed: a mismatched build is the designed reason (the envelope hard-guards
+    /// protocolVersion and throws rather than guessing) and by far the likeliest one, but a
+    /// corrupt payload produces the identical symptom. The check is worth naming because
+    /// installing the two halves is genuinely fiddly and a half-updated pair is the common
+    /// self-inflicted case.
+    ///
+    /// Latched once per skew and released on the first clean decode, for the reason the
+    /// records-not-saved warning is latched: offers resend every 15 s, and `issueNotice` mints
+    /// a fresh UUID per post, so an unlatched warning would stack a new banner every resend
+    /// rather than replacing the last one.
+    private func warnProtocolMismatch() {
+        os_log("Loan protocol skew — payload undecodable in this build", log: log, type: .error)
+        guard !hasWarnedProtocolMismatch else { return }
+        hasWarnedProtocolMismatch = true
+        deps.issueNotice(
+            NSLocalizedString("Watch Message Unreadable", comment: "Phone notice title when a loan message cannot be decoded"),
+            NSLocalizedString("Loop can't read a message from the watch. The apps may be on different builds — check both are current.", comment: "Phone notice body when a loan message cannot be decoded"))
     }
+
+    /// Shared by the three paths that end an unverifiable session: the pod never answered, it
+    /// answered without an insulin total, or there was no start-of-loan baseline to compare
+    /// against. Those are three internal reasons for one user-facing fact, and previously each
+    /// shipped its own wording — so the same situation read as three different problems. The
+    /// second sentence is the house phrasing already used elsewhere in this file for a latched
+    /// loop, which is what makes it accurate here: nothing reopens it automatically.
+    static let sessionUnverifiedBody = NSLocalizedString(
+        "Loop couldn't verify the watch's insulin delivery. Automatic dosing is off until you turn it back on.",
+        comment: "Phone notice when a watch session's insulin could not be verified after reclaim")
+
+    /// RETIRED (ruled 2026-08-15). It repeated hourly, forever, to say that automatic dosing was
+    /// paused — a state the user can see, and often one they chose. Worse, it was armed from four
+    /// sites where the thing actually worth standing over (a booked placeholder) did not exist.
+    /// Its two cancel sites survive as no-ops so an upgrade retires anything already scheduled.
+    private func armPausedReminder() {}
+
+    // MARK: - Standing reminders (ruled 2026-08-15)
+    //
+    // Two conditions can outlive the notice that announced them, and both stop mattering after
+    // the insulin action duration:
+    //
+    //   1. A PLACEHOLDER bolus stands in your IOB for insulin the pod proved it delivered and
+    //      no record explains. You may be able to correct it from memory — but only while the
+    //      dose is still within the manual-entry date picker's ±6 h reach, which is the same 6 h
+    //      after which it has decayed out anyway. Two rungs, then silence.
+    //   2. An AUDIT OPENED THE LOOP and nothing in this codebase closes it. One reminder only:
+    //      the first tells someone who missed the original notice; a second would be nagging
+    //      about a decision they have now made.
+
+    /// Arm the placeholder ladder. Cancelled wherever the booking retires.
+    private func armPlaceholderReminders(units: Double, bookedAt: Date) {
+        let amount = String(format: "%.2f", units)
+        let time = Self.reminderTimeFormatter.string(from: bookedAt)
+        for (index, delay) in ReminderLadder.placeholderRungs.enumerated() {
+            scheduleNotification(
+                id: NotificationID.placeholder(index),
+                title: NSLocalizedString("Estimated Insulin Still Booked", comment: "Phone reminder title while an unexplained gap bolus stands"),
+                body: String(format: NSLocalizedString("%1$@ U is booked as a bolus at %2$@ — the pod's total, not real timing. If you remember the session, correct it in Insulin Delivery.", comment: "Phone reminder body while an unexplained gap bolus stands (1: units, 2: time booked)"), amount, time),
+                delay: delay, repeats: false)
+        }
+    }
+
+    private func cancelPlaceholderReminders() {
+        for index in ReminderLadder.placeholderRungs.indices {
+            cancelNotification(id: NotificationID.placeholder(index))
+        }
+    }
+
+    /// Arm the single open-loop reminder. Best-effort cancelled: the phone cannot observe the
+    /// user flipping Closed Loop back on from outside its own work, so this is also cleared at
+    /// launch and at the next grant if dosing is already enabled by then. Worst case is one
+    /// stale reminder, which is why this is a single rung and not a ladder.
+    private func armOpenLoopReminder() {
+        scheduleNotification(
+            id: NotificationID.openLoop,
+            title: NSLocalizedString("Closed Loop Is Off", comment: "Phone reminder title after an audit opened the loop"),
+            body: NSLocalizedString("Loop couldn't verify the watch session's insulin, so it stopped dosing. Turn Closed Loop back on when you're ready.", comment: "Phone reminder body after an audit opened the loop"),
+            delay: ReminderLadder.openLoopDelay, repeats: false)
+    }
+
+    /// Clear the open-loop reminder if the user has already closed the loop themselves.
+    private func cancelOpenLoopReminderIfLoopClosed() {
+        guard deps.settings().dosingEnabled else { return }
+        cancelNotification(id: NotificationID.openLoop)
+    }
+
+    private static let reminderTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.timeStyle = .short
+        f.dateStyle = .none
+        return f
+    }()
 
     // MARK: - Staging persistence (trap-cell defense survives phone relaunch)
 
