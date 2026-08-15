@@ -6406,6 +6406,9 @@
         }
       }
     },
+    "all predicted values below target" : {
+      "comment" : "Watch bolus notice: the entire predicted curve is below target"
+    },
     "Amount Consumed" : {
       "comment" : "Label for carb quantity entry row on carb entry screen",
       "localizations" : {
@@ -8797,6 +8800,9 @@
           }
         }
       }
+    },
+    "below suspend threshold" : {
+      "comment" : "Watch bolus notice: glucose is at or below the suspend threshold"
     },
     "Bluetooth\nOff" : {
       "comment" : "Message to the user to that the bluetooth is off",
@@ -14229,6 +14235,9 @@
         }
       }
     },
+    "currently below target" : {
+      "comment" : "Watch bolus notice: current glucose is below target"
+    },
     "Custom Override" : {
       "comment" : "The title of the cell indicating a generic temporary override is enabled",
       "extractionState" : "manual",
@@ -19468,6 +19477,9 @@
         }
       }
     },
+    "Forcing Return…" : {
+      "comment" : "Title text for the pump tile while the phone takes the pod back without the watch's cooperation"
+    },
     "Forecasted blood glucose may still be higher than target range." : {
       "localizations" : {
         "da" : {
@@ -20715,6 +20727,9 @@
           }
         }
       }
+    },
+    "Handing over…" : {
+      "comment" : "Title text for the pump tile while the pod is being handed over to the watch"
     },
     "HARDWARE SOUNDS" : {
       "localizations" : {
@@ -23943,6 +23958,9 @@
           }
         }
       }
+    },
+    "Link slow… %.0fs" : {
+      "comment" : "Title text (with elapsed seconds) for the pump tile when the phone's reconnection to the pod is taking the slow path"
     },
     "Live activity" : {
       "comment" : "Alert Permissions live activity\nLive activity screen title",
@@ -29941,6 +29959,12 @@
     "Predicted Low Warnings" : {
       "comment" : "Title for low BG warning enablement"
     },
+    "predicted in range" : {
+      "comment" : "Watch bolus notice: no bolus needed, the prediction is already in range"
+    },
+    "predicted to go low" : {
+      "comment" : "Watch bolus notice: the predicted curve dips below target"
+    },
     "Predicted: %1$@\nActual: %2$@ (%3$@)" : {
       "comment" : "Format string describing retrospective glucose prediction comparison. (1: Predicted glucose)(2: Actual glucose)(3: difference)",
       "localizations" : {
@@ -32729,6 +32753,9 @@
           }
         }
       }
+    },
+    "Reconnect… %.0fs" : {
+      "comment" : "Title text (with elapsed seconds) for the pump tile while the phone re-establishes its own connection to the pod after a watch session"
     },
     "Remote Bolus Entry: %@ U" : {
       "comment" : "The notification title for a remote bolus. (1: Bolus amount)\nThe notification title for a remote failure. (1: Bolus amount)",
@@ -39930,6 +39957,9 @@
           }
         }
       }
+    },
+    "Watch Silent…" : {
+      "comment" : "Title text for the pump tile while a reclaim waits on a watch that has not been heard from"
     },
     "What are examples of Critical and Time Sensitive alerts?" : {
       "localizations" : {

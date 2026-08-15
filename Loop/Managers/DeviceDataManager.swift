@@ -877,9 +877,19 @@ extension DeviceDataManager {
     var isPodSettlingAfterReclaim: Bool {
         return watchManager?.podLoanController.isReclaimSettlingOnly ?? false
     }
-    /// Fraction of the expected phase-1 handover for the pump pill's fill, nil outside phase 1.
-    var podReclaimHandoverProgress: Double? {
-        return watchManager?.podLoanController.reclaimPhase1Progress
+    /// The reclaim's phase, deadline and elapsed time, covering BOTH the ownership handover and
+    /// the BLE settle that follows it. nil when neither is in flight. The phase drives the tile's
+    /// label; only the settle phase carries a fraction to draw.
+    var podReclaimProgress: PodLoanPhoneController.ReclaimProgress? {
+        return watchManager?.podLoanController.reclaimProgress
+    }
+    /// Fraction for the pump pill's determinate fill, non-nil ONLY while the phone is
+    /// re-establishing its own pod link after a watch session — the one part of the return long
+    /// enough to draw, against a 736 ms ownership handover. It restarts once mid-settle when the
+    /// bar re-baselines from its fast-mode stage to its slow-mode stage. nil leaves the pill on
+    /// its indeterminate sweep, which is what the handover gets.
+    var podReclaimFillFraction: Double? {
+        return podReclaimProgress?.fraction ?? nil
     }
 
     func enactBolus(units: Double, activationType: BolusActivationType, completion: @escaping (_ error: Error?) -> Void = { _ in }) {

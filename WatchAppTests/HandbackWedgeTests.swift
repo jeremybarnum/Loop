@@ -2,7 +2,7 @@
 //  HandbackWedgeTests.swift
 //  WatchAppTests
 //
-//  The #113 discriminator's full truth table. This shipped in build 275 with no tests, and it
+//  The hand-back wedge discriminator's full truth table. This shipped with no tests, and it
 //  decides which of two OPPOSITE instructions the user gets when a hand-back hangs: force-quit
 //  the watch app, or wait a minute. Getting it backwards sends them to the wrong device.
 //

@@ -44,7 +44,17 @@ extension DeviceDataManager {
             // PODLOAN: hand-back in flight — records draining + radio re-arming takes
             // a few seconds; show movement, not a frozen "on watch" (2026-07-18: the
             // ~5s frozen tile during hand-back read as ownership ambiguity).
-            return DeviceDataManager.podReclaimingStatusHighlight
+            //
+            // The label follows the reclaim's phase, because "Reclaiming…" over a watch that is
+            // not answering implies progress that is not happening. The dead branch says the
+            // watch is silent from the first second, which is the whole point of deciding the
+            // branch before the wait starts rather than after it.
+            //
+            // Read ONCE and passed whole: the phase and the elapsed seconds must describe the same
+            // instant, and two reads of a live accessor do not.
+            let progress = podReclaimProgress
+            return DeviceDataManager.podReclaimingStatusHighlight(phase: progress?.phase,
+                                                                  elapsed: progress?.elapsed)
         } else if isPodTakingOver {
             // PODLOAN #92 (2026-08-12): the grant is out but the watch has NOT confirmed it has
             // the pod. This branch MUST precede the one below: the grant releases the pod's BLE
@@ -92,14 +102,61 @@ extension DeviceDataManager {
         var state: DeviceStatusHighlightState = .normalPump
     }
 
-    static var podReclaimingStatusHighlight: PodReclaimingStatusHighlight {
-        return PodReclaimingStatusHighlight()
+    static func podReclaimingStatusHighlight(phase: PodLoanPhoneController.ReclaimProgress.Phase?,
+                                             elapsed: TimeInterval? = nil) -> PodReclaimingStatusHighlight {
+        return PodReclaimingStatusHighlight(phase: phase, elapsed: elapsed)
     }
 
     struct PodReclaimingStatusHighlight: DeviceStatusHighlight {
-        var localizedMessage: String = NSLocalizedString("Reclaiming…", comment: "Title text for the pump tile while the pod is coming back from the watch")
+        var localizedMessage: String
         var imageName: String = "arrow.triangle.2.circlepath"
         var state: DeviceStatusHighlightState = .normalPump
+
+        /// nil phase = the reclaim is inside the drain's store commit, which has no deadline to
+        /// name; plain "Reclaiming…" is the honest label for it.
+        ///
+        /// BOTH SETTLE CASES CARRY LIVE SECONDS, and they are different words on purpose. The
+        /// settle's measured distribution is bimodal — 70 of 91 reclaims logged between 2026-08-02
+        /// and 2026-08-14 finished in 1-11 s, the other 21 in 24-190 s, none in between — so a
+        /// settle still running once the fast mode's deadline has passed is a different situation
+        /// from the one the first label described, and repeating that label would be repeating a
+        /// promise that has already expired. The second says the link is slow, which is what it
+        /// is: the pod is fine and nothing has failed, the radio is just taking the long path.
+        ///
+        /// The seconds keep climbing even after the bar caps, and once it has capped they are the
+        /// only thing on this tile that can distinguish still-working from stuck. Both strings are
+        /// kept to the width the other labels here have proven, which is why they are
+        /// abbreviations rather than sentences.
+        init(phase: PodLoanPhoneController.ReclaimProgress.Phase? = nil, elapsed: TimeInterval? = nil) {
+            let seconds = max(elapsed ?? 0, 0)
+            switch phase {
+            case .forcing?, .forceReclaimingPod?:
+                // One label across the force rung AND the settle that follows it, so the force
+                // reads as a single timed operation rather than a chain of renamed waits. The
+                // dead branch enters this the instant the tap lands — it no longer waits on a
+                // watch that cannot answer — so this is the whole dead-reclaim experience: one
+                // label, one bar, a few seconds. The settle phase behind it carries the
+                // determinate bar; this string carries the clock.
+                localizedMessage = String(format: NSLocalizedString("Forcing… %.0fs", comment: "Title text (with elapsed seconds) for the pump tile while the phone force-reclaims the pod and verifies it"),
+                                          seconds)
+            case .reconnectingToPod?:
+                // Same string as the handover on purpose: to the user a live reclaim is ONE
+                // wait, and the bar behind it is one continuous fill from the tap — a label
+                // change at the handover/settle boundary would read as a phase they were never
+                // told about.
+                localizedMessage = String(format: NSLocalizedString("Reclaiming… %.0fs", comment: "Title text (with elapsed seconds) for the pump tile while the pod comes home and its round-trip is verified"),
+                                          seconds)
+            case .watchNotAnswering?:
+                // Static — the bar is capped and the next event is the force, so ticking
+                // seconds would count toward nothing the user was promised.
+                localizedMessage = NSLocalizedString("No watch reply…", comment: "Title text for the pump tile when the watch has not answered within the drain promise, shortly before the force")
+            case .draining?:
+                localizedMessage = String(format: NSLocalizedString("Reclaiming… %.0fs", comment: "Title text (with elapsed seconds) for the pump tile while the watch drains its records under the determinate bar"),
+                                          seconds)
+            case .none:
+                localizedMessage = NSLocalizedString("Reclaiming…", comment: "Title text for the pump tile while the pod is coming back from the watch")
+            }
+        }
     }
 
     var pumpStatusBadge: DeviceStatusBadge? {

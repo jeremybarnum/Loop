@@ -13,8 +13,8 @@ import Foundation
 import SwiftUI
 import WatchKit
 import WatchConnectivity
-import HealthKit   // #29 DOSING readout: HKQuantity glucose/eventual
-import LoopKit     // #29: the .milligramsPerDeciliter HKUnit convenience
+import HealthKit   // DOSING readout: HKQuantity glucose/eventual
+import LoopKit     // The .milligramsPerDeciliter HKUnit convenience
 import G7SensorKit // CGM HEALTH panel reads the stock manager directly
 
 final class LoanDebugController: WKHostingController<LoanDebugView> {
@@ -59,7 +59,7 @@ struct LoanDebugView: View {
     /// The loop's own IOB (Jeremy 2026-07-19: the dosing math is what matters —
     /// surface it here until the UI pass wires the main screens).
     @State private var iobText: String = "—"
-    /// #29 live dosing readout — "is it trying to dose?" made visible on-wrist.
+    /// Live dosing readout — "is it trying to dose?" made visible on-wrist.
     /// Refreshes on the same 2s timer as everything else.
     @State private var dosing: WatchLoopManager.GlanceData?
     @State private var cobText: String = "—"
@@ -74,10 +74,10 @@ struct LoanDebugView: View {
         NavigationStack {
         ScrollView {
             VStack(alignment: .leading, spacing: 4) {
-                // #29: the dosing decision, on-wrist. `recommend` vs `running` is the
+                // The dosing decision, on-wrist. `recommend` vs `running` is the
                 // tell — high recommend + baseline running + closed = it wants to dose
                 // but isn't enacting; matching = it dosed; loop OPEN = not dosing at all.
-                // Build tag, moved off the glance (Jeremy, 2026-08-12). "Which build is this?"
+                // Build tag, moved off the glance. "Which build is this?"
                 // is a diagnostic question, and this is the page you are already on when you ask.
                 Text("build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?")")
                     .font(.footnote).foregroundColor(.secondary)
@@ -154,24 +154,24 @@ struct LoanDebugView: View {
                 row("link", cgm?.linkState ?? "—")
                 row("state", cgm?.lifecycle ?? "—")
                 row("expires", cgm?.expiresIn ?? "—")
-                // "needs D2W: YES" removed (Jeremy, 2026-08-12). It was a hardcoded constant from
-                // when a non-D2W path still existed to contrast with; R34 retired that, so the row
-                // could only ever read YES. A diagnostic that cannot vary is not a diagnostic — it
-                // is a distraction on a screen read while something is wrong. The requirement now
-                // lives where it is actionable: the Series 6+ eligibility note for testers.
+                // "needs D2W: YES" removed. It was a hardcoded constant from when a non-D2W
+                // path still existed to contrast with; D2W is now the only glucose path, so the
+                // row could only ever read YES. A diagnostic that cannot vary is not a diagnostic
+                // — it is a distraction on a screen read while something is wrong. The requirement
+                // now lives where it is actionable: the Series 6+ eligibility note for testers.
 
-                // E4 toggle REMOVED (#101 phase 2, 2026-08-10). The link policy is automatic:
+                // Pod-link release toggle REMOVED. The link policy is automatic:
                 // orphan between doses, per-cycle reclaim gated on G7 acquisition state while
-                // un-adopted (StockLoopSession wiring + WatchLoopManager gate). The 2026-08-10
+                // un-adopted (StockLoopSession wiring + WatchLoopManager gate). The
                 // toggle experiment that settled it: held link = 0 adoptions in ~130 min;
                 // released = adoption within 7-10 min, twice for two.
 
-                // *** RE-ACQUIRE (BENCH) *** #101 (2026-08-10): forget the adopted sensor and
+                // *** RE-ACQUIRE (BENCH) *** Forget the adopted sensor and
                 // run a full COLD acquisition against the CURRENT sensor — scan, connect,
                 // service discovery, auth subscribe, adoption. This is the contested phase of
                 // the held-pod-link finding, and without this button it is testable only once
                 // per 10-day sensor. With it + the g7-ble radio census, held-vs-released link
-                // experiments are on demand. Ladybug-class: REMOVE PRE-PRODUCTION (#62 list).
+                // experiments are on demand. Ladybug-class: REMOVE PRE-PRODUCTION.
                 // Safe: worst case is a re-adoption delay while the relay covers, same as any
                 // new-sensor day; no therapy state is touched.
                 Button("Forget Sensor (re-acquire)") {
@@ -180,7 +180,7 @@ struct LoanDebugView: View {
                     lastAction = "G7 re-acquire started"
                 }
 
-                // RADIO STRESS (#83) RETIRED 2026-08-11 (Jeremy): the question it existed to
+                // RADIO STRESS RETIRED: the question it existed to
                 // answer — does a pod command every single cycle disturb the CGM? — came back
                 // negative, repeatedly. Contention lives in CONNECT ESTABLISHMENT, not in
                 // dosing traffic against an established link, and that is handled by the
@@ -188,12 +188,13 @@ struct LoanDebugView: View {
 
                 Divider().padding(.vertical, 2)
 
-                // Retired bench experiments (E1 standalone-G7, E2 clean-teardown, E4
-                // release-pod, Fake BG sweep, E5 random-temp) lived here through the
-                // 2026-07-24 diagnostics declutter. E4 is now the production default
-                // (StockLoopSession.init); the rest are one git revert away if a bench
-                // drill needs them again. Their plumbing (session methods, FakeGlucose,
-                // the flag reads) is intact — only the on-wrist toggles were removed.
+                // Retired bench experiments (standalone-G7, clean-teardown, release-pod,
+                // Fake BG sweep, random-temp) lived here through the
+                // diagnostics declutter. Releasing the pod link between doses is now the
+                // production default (StockLoopSession.init); the rest are one git revert
+                // away if a bench drill needs them again. Their plumbing (session methods,
+                // FakeGlucose, the flag reads) is intact — only the on-wrist toggles were
+                // removed.
 
                 NavigationLink("Logs") { LogView() }
                     .font(.caption)
@@ -210,19 +211,20 @@ struct LoanDebugView: View {
             session.loanController.refreshDebugSnapshot()
             snapshot = session.loanController.mirroredDebugSnapshot ?? snapshot
             cgm = CGMHealth(session.stack.cgmManager)
-            // #95 ROOT CAUSE (2026-08-07). The comment above says this tick was converted to
-            // mirrors — but only the LOAN-queue read was; this line stayed glanceData(), which is
+            // The comment above says this tick was converted to mirrors — but only the
+            // LOAN-queue read was; this line stayed glanceData(), which is
             // `dataAccessQueue.sync` (WatchLoopManager: "kept for the DEBUG page, which ... can
             // afford to wait"). It cannot afford to wait: this closure runs on a 2s MAIN-thread
             // timer, and watchOS keeps page views alive after they are first visited — so from
             // the first time the diagnostics page was ever opened, MAIN blocked on
             // dataAccessQueue every 2 seconds, forever, even with a different page frontmost.
-            // A post-carb cycle holds that queue for the whole enact (2-4s E4-off, ~7s E4-on):
-            // tick lands in the window -> multi-second UI freeze (the recovered 4.1s stall);
-            // E4-on window -> watchdog kill; and when the queue's work item itself waited on a
-            // main-bound completion, MAIN and the queue waited on each other forever (the 6.5
-            // minute wedge of 23:24, force-quit). Same mirror discipline as the glance now:
-            // kick the rebuild, render the last published mirror.
+            // A post-carb cycle holds that queue for the whole enact (2-4s when the pod link is
+            // held, ~7s when it must be reclaimed first): tick lands in the window ->
+            // multi-second UI freeze (the recovered 4.1s stall); the longer reclaim window ->
+            // watchdog kill; and when the queue's work item itself waited on a main-bound
+            // completion, MAIN and the queue waited on each other forever (a multi-minute wedge
+            // ending in a force-quit). Same mirror discipline as the glance now: kick the
+            // rebuild, render the last published mirror.
             RuntimeStateLog.mark("debug.tick")
             session.stack.loopManager.refreshGlanceData()
             if let gd = session.stack.loopManager.mirroredGlanceData {
@@ -239,19 +241,20 @@ struct LoanDebugView: View {
             session.loanController.refreshDebugSnapshot()
             snapshot = session.loanController.mirroredDebugSnapshot ?? snapshot
             cgm = CGMHealth(session.stack.cgmManager)
-            // #95 ROOT CAUSE (2026-08-07). The comment above says this tick was converted to
-            // mirrors — but only the LOAN-queue read was; this line stayed glanceData(), which is
+            // The comment above says this tick was converted to mirrors — but only the
+            // LOAN-queue read was; this line stayed glanceData(), which is
             // `dataAccessQueue.sync` (WatchLoopManager: "kept for the DEBUG page, which ... can
             // afford to wait"). It cannot afford to wait: this closure runs on a 2s MAIN-thread
             // timer, and watchOS keeps page views alive after they are first visited — so from
             // the first time the diagnostics page was ever opened, MAIN blocked on
             // dataAccessQueue every 2 seconds, forever, even with a different page frontmost.
-            // A post-carb cycle holds that queue for the whole enact (2-4s E4-off, ~7s E4-on):
-            // tick lands in the window -> multi-second UI freeze (the recovered 4.1s stall);
-            // E4-on window -> watchdog kill; and when the queue's work item itself waited on a
-            // main-bound completion, MAIN and the queue waited on each other forever (the 6.5
-            // minute wedge of 23:24, force-quit). Same mirror discipline as the glance now:
-            // kick the rebuild, render the last published mirror.
+            // A post-carb cycle holds that queue for the whole enact (2-4s when the pod link is
+            // held, ~7s when it must be reclaimed first): tick lands in the window ->
+            // multi-second UI freeze (the recovered 4.1s stall); the longer reclaim window ->
+            // watchdog kill; and when the queue's work item itself waited on a main-bound
+            // completion, MAIN and the queue waited on each other forever (a multi-minute wedge
+            // ending in a force-quit). Same mirror discipline as the glance now: kick the
+            // rebuild, render the last published mirror.
             RuntimeStateLog.mark("debug.tick")
             session.stack.loopManager.refreshGlanceData()
             if let gd = session.stack.loopManager.mirroredGlanceData {
@@ -264,7 +267,7 @@ struct LoanDebugView: View {
         }
     }
 
-    /// #86 (Jeremy 2026-07-31): the prediction's four components — INSULIN, carbs, momentum,
+    /// The prediction's four components — INSULIN, carbs, momentum,
     /// retrospection — on one line, arithmetically reconciled to the `eventual` row above it.
     ///
     ///     133 ins-4 carb+0 mom+6 RC+16 r+0 = 151
@@ -295,10 +298,10 @@ struct LoanDebugView: View {
                         s, ins, carb, mom, rc, r, ev))
                 .font(.system(size: 11, design: .monospaced))
                 .frame(maxWidth: .infinity, alignment: .leading)
-            // #46 (2026-08-04): say WHICH retrospective model produced that RC term. The watch
+            // Say WHICH retrospective model produced that RC term. The watch
             // adopts the phone's Integral toggle at takeover, so a mismatch here against the
             // phone's setting is the signature of the two devices predicting differently — the
-            // thing #46 existed to prevent, and previously only checkable in the log.
+            // thing that adoption exists to prevent, and previously only checkable in the log.
             Text(String(format: "RC model: %@ · %d discrepanc%@",
                         (dosing?.retrospectiveCorrectionIsIntegral ?? false) ? "Integral" : "Standard",
                         dosing?.retrospectiveDiscrepancyCount ?? 0,

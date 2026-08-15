@@ -293,11 +293,12 @@ final class WatchDataManager: NSObject {
                 self.deviceManager.loopManager.mutateSettings { $0.dosingEnabled = false }
             },
             issueUrgentNotice: { [weak self] title, body in
-                // R37: the watch is dead, so the phone is the only device that can get the
-                // user's attention — time-sensitive interruption, and an identifier prefix
-                // LoopAppManager grants a FOREGROUND banner (a plain notification is silent
-                // in-app, which is precisely when the user is staring at the screen after a
-                // force-reclaim).
+                // The urgent channel's distinction is TIME-SENSITIVE interruption: it breaks
+                // through Focus modes and gets lock-screen prominence, for messages where the
+                // phone is the only device able to get the user's attention (a dead-watch
+                // reclaim verdict, a rewritten IOB). Foreground banners are no longer this
+                // channel's job — LoopAppManager banners every notification in-app now, same
+                // as the daily-driver branches.
                 self?.log.error("PodLoan URGENT: %{public}@ - %{public}@", title, body)
                 let content = UNMutableNotificationContent()
                 content.title = title
@@ -324,9 +325,77 @@ final class WatchDataManager: NSObject {
                 self.deviceManager.doseStore.deleteDose(stub) { error in
                     completion(error == nil)
                 }
-            }
+            },
+            backfillDoses: { [weak self] doses, completion in
+                // e44: the pump-event path above cannot land a basal-shaped dose behind the
+                // delivery store's last immutable basal end date (DoseStore.swift:1174), which is
+                // how a late journal commit after a force-reclaim loses every temp. syncDoseEntries
+                // is stock's update-or-insert-by-syncIdentifier door, written for a remote
+                // authoritative store — the watch journal is exactly that — so it writes straight
+                // into the InsulinDeliveryStore with no boundary in the way.
+                guard let self = self else { completion(nil); return }
+                Task {
+                    do {
+                        try await self.deviceManager.doseStore.syncDoseEntries(doses)
+                        completion(nil)
+                    } catch {
+                        completion(error)
+                    }
+                }
+            },
+            // A2: the writes above all land BEHIND the loop's counteraction-effect frontier, and
+            // that memo is append-only — its bins over the loan window were computed against an
+            // insulin curve that did not yet contain these doses, so dynamic carb absorption goes
+            // on attributing the watch's insulin as unexplained glucose movement. Worse for the
+            // e44 path, which posts no store notification at all (syncDoseEntries reaches
+            // InsulinDeliveryStore, whose doseEntriesDidChange nothing in this app observes), so
+            // without this hook a backfill invalidates nothing whatsoever.
+            insulinHistoryRewritten: { [weak self] earliestStart in
+                guard let self = self else { return }
+                self.deviceManager.loopManager.insulinHistoryRewritten(startingAt: earliestStart)
+                // The memo refills lazily, at the next update(). If the status screen is not
+                // frontmost nothing calls getLoopState, so COB and IOB would stay wrong on the
+                // books for up to a full 5-minute cycle after the hand-back that corrected them.
+                // Nudge one update. Same serial dataAccessQueue as the prune, so it is ordered
+                // after it by construction.
+                self.deviceManager.loopManager.getLoopState { _, _ in }
+            },
+            // The two inputs the reclaim ladder branches on. Reachability is the positive-only
+            // signal (true proves the watch is awake; false is routinely true of a healthy
+            // backgrounded watch, which is why it cannot stand alone), and the contact timestamp
+            // is the real separator — the loan's 300 s log pulse means a live watch is never more
+            // than a few minutes stale.
+            // Stock's background-task idiom (LoopDataManager keeps the same shape for its
+            // persistence saves): begin ends any previous hold first, so the settle's re-begin
+            // after the tap's begin nets one live identifier. beginBackgroundTask is one of the
+            // few UIKit calls documented safe off the main thread, which is why these run
+            // directly on the controller's queue.
+            beginReclaimBackgroundTask: { [weak self] in self?.beginReclaimBackgroundTask() },
+            endReclaimBackgroundTask: { [weak self] in self?.endReclaimBackgroundTask() },
+            isWatchReachable: { [weak self] in self?.watchSession?.isReachable ?? false },
+            lastWatchContactAt: { [weak self] in self?.lockedLastWatchContact.value ?? nil }
         ))
     }()
+
+    /// ~30 s of continued execution across a reclaim, so tap-and-pocket completes ON SCHEDULE
+    /// instead of freezing the ladder and orphaning the pod until the next foreground.
+    private var reclaimBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+
+    private func beginReclaimBackgroundTask() {
+        endReclaimBackgroundTask()
+        reclaimBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "PodLoanReclaim") { [weak self] in
+            // Expiration: iOS is done waiting — release the hold or be killed. The wall-clock
+            // rungs then fire whatever is overdue at the next resume.
+            self?.endReclaimBackgroundTask()
+        }
+    }
+
+    private func endReclaimBackgroundTask() {
+        if reclaimBackgroundTask != .invalid {
+            UIApplication.shared.endBackgroundTask(reclaimBackgroundTask)
+            reclaimBackgroundTask = .invalid
+        }
+    }
 
     private let log = DiagnosticLog(category: "WatchDataManager")
 
@@ -346,6 +415,19 @@ final class WatchDataManager: NSObject {
         set { lockedContextDosingDecisions.value = newValue }
     }
     private var lockedContextDosingDecisions: Locked<[Date: BolusDosingDecision]> = Locked([:])
+
+    /// When the phone last heard ANYTHING from the watch. Written from every inbound
+    /// WatchConnectivity funnel (all four route through `noteWatchContact`), read from the loan
+    /// controller's own serial queue when a reclaim picks its branch — hence the same `Locked`
+    /// idiom the dosing-decision cache above uses, rather than a bare stored property.
+    ///
+    /// Deliberately NOT persisted: after a relaunch the phone genuinely has heard nothing from the
+    /// watch this launch, and nil is the honest answer. The cost is bounded and known — a reclaim
+    /// tapped in the first minutes after a relaunch runs the dead-watch ladder even if the watch is
+    /// alive; live reachability, and the promotion when reachability arrives mid-ladder, are what
+    /// recover that case. Persisting it instead would let a timestamp from a previous launch
+    /// vouch for a watch nobody has heard from since.
+    private let lockedLastWatchContact = Locked<Date?>(nil)
 
     private let contextDosingDecisionExpirationDuration: TimeInterval = -.minutes(5)
 
@@ -724,8 +806,19 @@ final class WatchDataManager: NSObject {
 
 
 extension WatchDataManager: WCSessionDelegate {
+
+    /// The single place every inbound WatchConnectivity delivery reports itself. Two consumers,
+    /// both of which need "the watch is alive" rather than "the watch said something specific":
+    /// the silence dead-man re-arms, and the timestamp feeds the reclaim ladder's branch — a
+    /// watch holding the pod transfers its log every 300 s, so contact age is what separates a
+    /// drain worth waiting for from a watch that is not going to answer.
+    private func noteWatchContact() {
+        lockedLastWatchContact.value = Date()
+        deviceManager.alertManager?.noteWatchContactDuringLoan()
+    }
+
     func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
-        deviceManager.alertManager?.noteWatchContactDuringLoan()   // #26: any watch traffic re-arms the silence dead-man
+        noteWatchContact()   // any watch traffic re-arms the silence dead-man
         switch message["name"] as? String {
         case PotentialCarbEntryUserInfo.name?:
             if let potentialCarbEntry = PotentialCarbEntryUserInfo(rawValue: message)?.carbEntry {
@@ -799,7 +892,7 @@ extension WatchDataManager: WCSessionDelegate {
     }
 
     func session(_ session: WCSession, didReceive file: WCSessionFile) {
-        deviceManager.alertManager?.noteWatchContactDuringLoan()   // #26: the 5-min log pulse is the loan's heartbeat
+        noteWatchContact()   // the 5-min log pulse is the loan's heartbeat
         // Watch diagnostics log → Documents, visible in the Files app (On My iPhone →
         // Loop) so it can be AirDropped from the PHONE (watchOS has no AirDrop; logs
         // were being texted). Copy immediately — the system deletes file.fileURL when
@@ -870,7 +963,7 @@ extension WatchDataManager: WCSessionDelegate {
     /// replyHandler variant above, which is only called when the sender supplied one — without
     /// this method the watch's urgent Start request would be silently dropped.
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
-        deviceManager.alertManager?.noteWatchContactDuringLoan()   // #26: re-arm the silence dead-man
+        noteWatchContact()   // re-arm the silence dead-man
         guard message[LoanProtocol.userInfoKey] != nil else {
             log.default("Ignoring unexpected sendMessage from watch: %{public}@", String(describing: message.keys))
             return
@@ -884,7 +977,7 @@ extension WatchDataManager: WCSessionDelegate {
     }
 
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
-        deviceManager.alertManager?.noteWatchContactDuringLoan()   // #26: loan protocol traffic re-arms the silence dead-man
+        noteWatchContact()   // loan protocol traffic re-arms the silence dead-man
         // The loan protocol rides its own single key. Unknown payloads are logged and ignored,
         // never asserted on: WatchConnectivity redelivers queued userInfo across reinstalls, so a
         // payload from an older build can always arrive.

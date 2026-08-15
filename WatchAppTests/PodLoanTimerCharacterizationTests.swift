@@ -98,7 +98,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
 
     override func tearDown() {
         // Never unlink a live store's directory synchronously — the async-init race answers
-        // later reads with zero rows (the #103 lesson). Unique names mean nothing collides.
+        // later reads with zero rows. Unique names mean nothing collides.
         cacheStore = nil; cacheDir = nil; journalDir = nil; defaults = nil; loopManager = nil
         super.tearDown()
     }
@@ -133,10 +133,32 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
                                       defaults: defaults)
     }
 
-    /// Let the controller's serial queue drain, so a guard that runs after the call under test
-    /// has actually run before we read the recorder.
+    /// Wait until the recorder has seen at least `count` armings.
+    ///
+    /// `drain` below sleeps a fixed interval, which is a race: the controller arms on its own
+    /// serial queue, and on a loaded machine that block may not have run yet. Observed
+    /// with a field loan running and a second session building — two tests read an
+    /// EMPTY recorder and failed against a pure code move that could not have changed behavior.
+    /// Wait for the value wherever the assertion is about something being present; `drain`
+    /// remains correct only for asserting an ABSENCE, which cannot be waited for.
+    private func waitForArmed(_ rec: TimerRecorder, atLeast count: Int, timeout: TimeInterval = 5) {
+        let e = expectation(description: "recorder saw \(count) arming(s)")
+        let deadline = Date().addingTimeInterval(timeout)
+        DispatchQueue.global().async {
+            while rec.armed.count < count {
+                guard Date() < deadline else { return }
+                usleep(10_000)
+            }
+            e.fulfill()
+        }
+        wait(for: [e], timeout: timeout + 1)
+    }
+
+    /// Settle for a fixed interval. Correct ONLY for asserting an absence — that a second tap
+    /// armed nothing — because there is no value to wait for. Every present-tense assertion
+    /// uses `waitForArmed` instead.
     private func drain(_ controller: PodLoanWatchController, _ seconds: TimeInterval = 0.3) {
-        let done = expectation(description: "queue drained")
+        let done = expectation(description: "queue settled")
         DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { done.fulfill() }
         wait(for: [done], timeout: seconds + 5)
     }
@@ -151,7 +173,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
         controller.send = { _ in }
 
         controller.requestLoan(watchBuild: "characterization")
-        drain(controller)
+        waitForArmed(rec, atLeast: 1)
 
         XCTAssertEqual(rec.armed, [.init(label: "request-timeout", delay: 25)])
     }
@@ -180,11 +202,11 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
         controller.send = { _ in }
 
         controller.requestLoan(watchBuild: "characterization")
-        drain(controller)
+        waitForArmed(rec, atLeast: 1)
         XCTAssertTrue(rec.fire("request-timeout"), "the timeout must have been armed")
 
         controller.requestLoan(watchBuild: "characterization")
-        drain(controller)
+        waitForArmed(rec, atLeast: 2)
 
         XCTAssertEqual(rec.labels, ["request-timeout", "request-timeout"],
                        "the recovered controller arms its own timeout rather than reusing the dead one")
@@ -205,7 +227,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
         controller.send = { _ in }
 
         controller.requestLoan(watchBuild: "characterization")
-        drain(controller)
+        waitForArmed(rec, atLeast: 2)
 
         XCTAssertEqual(rec.armed, [.init(label: "sim-grant", delay: 0.8),
                                    .init(label: "sim-active", delay: 2.4)],
@@ -213,7 +235,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
     }
 
     /// Firing both hops in order walks idle → requested → takingOver → active, and the
-    /// loan starts OPEN (R23). The phase guards are what make out-of-order firing safe.
+    /// loan starts OPEN. The phase guards are what make out-of-order firing safe.
     func testSimFlowHopsWalkToActiveAndOpenLoop() {
         let controller = makeController()
         defaults.set(true, forKey: "sim.fakeLoanFlow")
@@ -222,7 +244,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
         controller.send = { _ in }
 
         controller.requestLoan(watchBuild: "characterization")
-        drain(controller)
+        waitForArmed(rec, atLeast: 2)
         XCTAssertEqual(controller.phase, .requested)
 
         rec.fire("sim-grant")
@@ -231,7 +253,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
         rec.fire("sim-active")
         XCTAssertEqual(controller.phase, .active)
         XCTAssertFalse(loopManager.closedLoopEnabled,
-                       "R23: a loan starts OPEN — the wearer closes it deliberately")
+                       "a loan starts OPEN — the wearer closes it deliberately")
     }
 
     /// Out-of-order firing is inert: sim-active found the wrong phase and did nothing. This
@@ -245,7 +267,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
         controller.send = { _ in }
 
         controller.requestLoan(watchBuild: "characterization")
-        drain(controller)
+        waitForArmed(rec, atLeast: 2)
 
         rec.fire("sim-active")   // phase is .requested, not .takingOver
         XCTAssertEqual(controller.phase, .requested, "the guard held; no phase moved")
@@ -267,7 +289,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
         controller.send = { _ in }
 
         controller.requestLoan(watchBuild: "characterization")
-        drain(controller)
+        waitForArmed(rec, atLeast: 1)
         XCTAssertEqual(controller.phase, .requested)
 
         rec.fire("request-timeout")

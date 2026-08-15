@@ -716,3 +716,173 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   Also under this ruling: ANY alert that opens the loop — R32(b)'s regular hand-back
   verdict included — now rides the urgent channel. An alert that stops automatic dosing
   must never be a quiet list entry.
+
+- **R41 — Loop mode INHERITANCE reaffirmed: it travels with the pod, both directions, no change**
+  (2026-08-14, Jeremy, on a challenge — the alternative was considered and rejected.)
+
+  Closed on the phone at grant means closed on the wrist; closed on the wrist at hand-back
+  means closed on the phone — and identically for open. The ONLY exceptions are the force-
+  reclaim path and a large insulin discrepancy, whose verdicts open the loop loudly.
+
+  Context, so this is not re-proposed: a field test read as "phone reclaim opens the loop,
+  watch End doesn't." The code was already symmetric — both directions inherit the last mode —
+  and the variable was the wrist's own state: the user had opened the wrist loop during that
+  session's testing, and inheritance carried it home faithfully. (A "loans start OPEN" default
+  was cited during the discussion; that rule is DEAD on the device path — it survives only in
+  the simulator fake-flow driver. The real grant inherits the phone's mode.) The alternative
+  (restore the phone's pre-loan mode at normal end, dropping inheritance) was considered and
+  rejected. The user's last loop mode is the loop mode, wherever the pod happens to be.
+
+- **R40 — The dead branch forces immediately, and every reclaim gets one short determinate bar**
+  (2026-08-14, Jeremy, superseding R39's two-attempt wait on the dead branch — his own ruling,
+  overturned on his own evidence and framing.)
+
+  THE SETTLE'S SLOW MODE WAS A BUG, NOT PHYSICS. The bimodal distribution R39's bar was built
+  for (70 of 91 settles in 1-11 s, 21 in 24-190 s, nothing between) was diagnosed the same day:
+  the verification call skips the radio whenever the pump manager judges its data fresh (under
+  6 minutes) and returns the stale lastSync forever; 77 such calls in ~150 ms each over one
+  169 s settle, no radio involved. With the forced-read backoff in place, every settle on the
+  fixed build finished in 1-3 s with zero stale reads — six samples: one forced, two phone-tap,
+  three watch-End — and end-to-end tap-to-verified ran 3.2-7.1 s, phone-tap and watch-End
+  indistinguishable.
+
+  THE RULING, in three parts:
+
+  1. **Watch present: one 10 s determinate settle bar.** No two-stage re-baseline — the stage
+     boundary was calibrated to a distribution the bug produced. Overruns hold at the 0.95 cap
+     with seconds ticking, under the unchanged 5-minute ceiling. Known and accepted: one
+     afternoon of clean samples is evidence, not proof; a reclaim during an in-flight G7
+     acquisition is unsampled; the rare WCSession transport stall (~80 s once in 20) would hold
+     the bar at cap until the live ladder's 25 s force resolves it. Wrong-is-fine covers all
+     three — the cap-and-hold is the designed degradation.
+
+  2. **Watch absent: no wait at all.** The dead branch sends its revoke fire-and-forget and
+     forces immediately — tap to done in seconds instead of 20-plus. Jeremy's framing, which is
+     the honest justification: the realistic force-reclaim is a LOST watch or a DEAD BATTERY,
+     where nothing can answer; and the scenario that looks risky — a live watch in a bag —
+     cannot normally reach the dead branch, because an alive watch's 300 s log pulse (keepalive
+     holds the app awake; 283-302 s across 134 gaps) keeps it inside the liveness window and on
+     the live branch. The guard was always the pulse discriminator, never the wait. The
+     eight-for-eight unanswered dead-branch revokes are consistent but near-tautological (the
+     bench tests had the watch off by design) and are NOT the load-bearing argument. The revoke
+     still goes out: a returning watch consumes it from the queue, which arms the split-brain
+     guard and drives the booked-gap retirement — validated three times in the field the same
+     day. The force still defers behind an in-flight commit.
+
+  3. **Forced settle: a 15 s bar**, looser than the ordinary one because the clean forced
+     sample is n=1 (+1 s); the prior +45/+66/+70 s forced settles all carried the stale-read
+     signature of the bug. Tighten when the data says so.
+
+  Deleted with the wait: the dead branch's "Reaching watch…" / "Watch silent…" labels (no wait
+  left to label), the dead→live ladder promotion (no window left to promote in — a watch that
+  wakes after the force follows the ordinary returning-watch path), and the slow-mode settle
+  phase and its "Link slow…" copy. Reachability-triggered revoke resends still count against
+  the live ladder's two-attempt budget.
+
+- **R39 — The reclaim button tells the truth about time: two branches, two attempts, no flat wait**
+  (2026-08-13, Jeremy: "I'm skeptical of the need for the 45 second wait. Seems pedantic. I
+  think it's step 1 - check if watch visible. If yes, assume quick reclaim with a predictable
+  progress bar. If no, display something appropriate and try a couple of times before force
+  reclaiming, again with predictable timeline." Retry count ruled at TWO attempts.)
+
+  Reclaim Now sent a revoke and then waited a FLAT 45 SECONDS before force-reclaiming,
+  regardless of whether the watch was alive. With a dead watch the user watched an
+  indeterminate sweep for the full 45 s — measured in the simulator: tap 22:38:08, verdict
+  22:38:53. The wait was not a liveness probe. It was a DRAIN window, sized for the worst case
+  and charged to every case.
+
+  **The two regimes are separable BEFORE the wait starts, and the separator is the loan pulse,
+  not reachability.** The watch transfers its log every 300 s while a loan is active —
+  metronomic: n=134 gaps since 2026-08-08, range 283.1-301.4 s, ZERO excursions past 302 s. Age
+  of last watch contact therefore separates the six field revokes with enormous margin: the one
+  live revoke had a 6.5-SECOND-old pulse; the five dead ones had silences of 5.5, 6.1, 12.1,
+  14.8 and 21.2 MINUTES. Reachability alone would not do this — `isReachable` in this codebase
+  is a CHANNEL SELECTOR (urgent vs queued), never a liveness verdict, and it reads false for a
+  healthy watch whose app is merely backgrounded. It is admissible only as a positive signal:
+  reachable NOW proves alive, but not-reachable proves nothing.
+
+  **The branch, on tap:**
+
+  - **LIVE** (last contact younger than 330 s — one pulse period plus margin — OR reachable
+    now): expect a fast drain. Deadline 10 s, one retry, force at 25 s.
+  - **DEAD** (older, and not reachable): say so immediately and stop pretending. Deadline 8 s,
+    one retry, force at 20 s.
+
+  Both branches are TWO ATTEMPTS before forcing, per the ruling. The retry exists for the watch
+  that is merely asleep and wakes; it is not a hope that a dead watch will answer.
+
+  **Why 10 s covers the live case.** The drain is two urgent WatchConnectivity round trips plus
+  one Core Data commit, with NO pod round-trip on the critical path: the single field revoke
+  drained 9 doses in 2.32 s, and 20 current-era hand-backs (same machinery, same transport) put
+  trigger-to-final-ack at p50 1.0 s. 10 s covers 16/20 outright; the retry captures 19/20. The
+  20th was an 80 s WatchConnectivity transport failure — not a drain problem, and deliberately
+  surrendered to the force path rather than charged to everyone as a longer deadline.
+
+  **What the user is promised.** Whatever the branch, the pod round-trip is additive after the
+  drain: 3-9 s, p50 4 s, n=20/20 current era. So the honest live-case promise is ~5-15 s, and
+  the honest dead-case promise is ~20 s plus the pod. Both are determinate; both are stated on
+  screen. `DeviceStatusHUDView.setActivityFill` already exists and is public, and
+  `reclaimPhase1Progress` already computes a fraction with ZERO consumers — the determinate bar
+  is mostly a matter of publishing a phase and a real deadline instead of the hardcoded 25 s.
+
+  **What shortening the wait costs, stated plainly.** Reclaiming earlier makes it likelier that
+  a returning watch finds a NEWER loan already started, which makes its offer stale — and a
+  stale offer skips the e44 backfill by design, so its temps can vanish at the delivery-store
+  boundary again. Also lost on any early reclaim: the wrist's final loop-mode inheritance, and
+  one R32 calibration sample (force-reclaim residuals are not banked, by R32(c)). These are the
+  reason the LIVE branch stays generous enough for a real drain to finish rather than being
+  tuned to the p50.
+
+  **What made this safe to do at all** is that late-arriving records now land: the e44 backfill
+  upserts by store identity past the boundary, and it runs on the returning-watch offer path
+  regardless of loan state. Before that fix, shortening this wait would have been trading a
+  cosmetic annoyance for lost insulin records.
+
+  Two corrections this ruling makes to the record: the source comment calling this "the 45 s
+  reachability timeout", and the test that repeats the phrase, are both wrong — nothing read
+  reachability to decide that timer. It fired on `state == .reclaimPending` and nothing else.
+
+- **R38 — A comment must stand on its own where it sits**
+  (2026-08-13, Jeremy: "to the greatest possible extent, I'm trying to keep the code
+  standalone reasonable, which I know lives in tension with having the comments not be
+  too verbose").
+
+  A reader must be able to understand a piece of code without leaving the file. No comment
+  may lean on a reference the reader cannot resolve in front of them:
+
+  - **`#NNN` task numbers — removed.** They look like stock's `#123` but are not. Stock's
+    resolve to public GitHub issues; ours resolve to a backlog that exists only in chat
+    history, so the same syntax that informs an upstream reader informs nobody here.
+  - **`R-NN` ruling numbers — also removed from code**, which is the sharper half of this
+    rule. Being resolvable *in-repo* is not good enough: one directory away is still a hop,
+    and the citation goes stale the moment a ruling is amended. State the constraint, not
+    its docket number.
+  - **`TODO` / `FIXME` stay.** Stock uses them, they carry their whole meaning inline, and
+    they are a convention a Loop developer already reads fluently.
+
+  The transformation, where a reference is removed:
+
+  - If the reference DECORATED an otherwise complete explanation, delete it and stop. This
+    is most of them — e.g. `// MARK: - Glance surface (R23; display only — no dosing paths
+    read this)` already says what R23 requires, so the token is pure subtraction.
+  - If the reference WAS the explanation (`// #101: unconditional now`), replace it with one
+    sentence stating the constraint — what must hold and why the code is shaped that way.
+    Not the incident, not the date, not who said it.
+
+  Where a ruling's force is partly that it WAS ruled — R35's refusal to fall back, R32's
+  sign asymmetry — keep the imperative and drop the citation: write the prohibition
+  ("never substitute the raw schedule; refuse instead") so a future reader knows not to
+  casually undo it without needing to look up why.
+
+  **Runtime log strings are out of scope.** A `#NNN` inside a `SportLog.event(...)` body is
+  a field-diagnostic breadcrumb that appears in logs we grep; changing it alters observable
+  output and is not a comment edit. Left alone deliberately.
+
+  On the tension Jeremy names: **standalone wins, brevity is the constraint rather than the
+  goal.** A comment that is long because the thing is genuinely subtle is correct; a comment
+  that is long because it recounts how we found out is not. The test is whether a competent
+  reader who has never seen this project's history can act on it.
+
+  Note the irony and its limit: this is a ruling saying not to cite rulings. RULINGS.md
+  remains the register of DECISIONS — it is where a future session looks before
+  re-litigating something settled. It simply stops being a dependency for reading the code.

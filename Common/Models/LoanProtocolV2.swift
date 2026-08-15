@@ -4,8 +4,7 @@
 //  hand-maintained mirror decoder; the v1 mirror in WatchDataManager is a review finding)
 //
 //  Loan protocol v2 wire format. Spec: docs/DESIGN_LOAN_PROTOCOL_V2.md §2 (messages),
-//  §1 (epoch / event IDs / provenance). Rulings: docs/RULINGS.md — R6 (layers),
-//  R8 (alarm inventory), R11 (ringfence), R22 (fingerprints-only allocation).
+//  §1 (epoch / event IDs / provenance).
 //
 //  Wire shape: one WatchConnectivity userInfo/message dictionary key
 //  (LoanProtocol.userInfoKey) carrying JSON of `LoanEnvelope`. The envelope's `kind`
@@ -57,8 +56,8 @@ public enum LoanProtocolError: Error {
 
 // MARK: - Support types
 
-/// Provenance rides every event (§1.3, R6 layer 2 — the wire-format change that forces v2).
-/// Only `.assumed` events are ever negative-remainder allocation candidates (R22).
+/// Provenance rides every event (§1.3 — the wire-format change that forces v2).
+/// Only `.assumed` events are ever negative-remainder allocation candidates.
 public enum EventProvenance: Codable, Equatable {
     case confirmed
     case assumed(UncertainKind)
@@ -68,7 +67,7 @@ public enum EventProvenance: Codable, Equatable {
         case tempUncertain
         case resumeUncertain
         /// A real reduction the max-exposure rule declined to record (the C′ case);
-        /// EXPLAINS remainder at hand-back rather than being reduced (R22).
+        /// EXPLAINS remainder at hand-back rather than being reduced.
         case skippedReduction
     }
 
@@ -102,12 +101,12 @@ public struct LoanDoseRecord: Codable, Equatable {
     public enum Kind: String, Codable {
         case bolus
         case tempBasal
-        /// R3: suspend IS a bounded rate-0 temp; kept as its own kind so suspend
+        /// Suspend IS a bounded rate-0 temp; kept as its own kind so suspend
         /// windows stay first-class through hand-back/reclaim (spec §3, 46f16d01).
         case suspend
         case resume
         case carb
-        /// R30 (#89): the wrist DELETED a carb entry during the loan. `syncIdentifier` names the
+        /// The wrist DELETED a carb entry during the loan. `syncIdentifier` names the
         /// victim; every other payload field is nil. Not a dose — it carries no insulin and
         /// contributes nothing to the odometer audit — but it is journal-worthy for the same
         /// reason `.overrideChange` is: while the watch holds the pod it owns the carb store, and
@@ -120,14 +119,14 @@ public struct LoanDoseRecord: Codable, Equatable {
         case carbDeleted
         /// A temp-change that died after its committed safe-cancel (C1/C2/C10 port).
         case plumbingCancel
-        /// The phone's record-close of its running temp at the handover stamp (R2/C5).
+        /// The phone's record-close of its running temp at the handover stamp.
         case boundaryTruncation
-        /// The picker changed the dosing mode (R18/R20) — mode transitions are events.
+        /// The picker changed the dosing mode — mode transitions are events.
         case modeChange
-        /// #68 part B: the WRIST enacted (or cleared) a temporary schedule override during
+        /// The WRIST enacted (or cleared) a temporary schedule override during
         /// the loan. Not a dose — it carries no insulin and contributes nothing to the
         /// odometer audit — but it IS journal-worthy: while the watch holds the pod it owns
-        /// overrides (sovereignty ruling, 2026-07-31), so the override has to follow the pod
+        /// overrides, so the override has to follow the pod
         /// home. Riding the journal (rather than a bespoke WC message) is what makes a
         /// phone-ABSENT override survive: it inherits seq ordering, the commit cursor,
         /// resend-until-ack, and the hand-back drain for free. Payload lives in
@@ -141,7 +140,7 @@ public struct LoanDoseRecord: Codable, Equatable {
         /// in the journal — updating the phone drains it intact. So a new-watch/old-phone pair
         /// STRANDS the loan (loudly, recoverably via the escape-hatch reclaim) rather than
         /// losing data. This is the first kind minted since the protocol froze at v2, so the
-        /// hazard is real rather than theoretical; the alternative is a WS1/REAL-3-style
+        /// hazard is real rather than theoretical; the alternative is a
         /// capability flag in the grant, which would instead degrade SILENTLY (the override
         /// would work on the wrist but never follow the pod home). Loud-and-recoverable was
         /// chosen over silent-and-lossy. Revisit if watch/phone builds routinely diverge.
@@ -159,24 +158,24 @@ public struct LoanDoseRecord: Codable, Equatable {
     public let absorptionTime: TimeInterval?
     /// Free-form: mode names for .modeChange, cancellation context, etc.
     public let note: String?
-    /// #69 stable-syncId: the phone's OWN dose syncIdentifier. Carried so the watch seeds with a
+    /// Stable syncId: the phone's OWN dose syncIdentifier. Carried so the watch seeds with a
     /// STABLE identity — a re-seed across epochs then upsert-dedups (same identity → one row)
     /// instead of accumulating under fresh epoch-keyed ids, the class of bug behind the takeover
     /// IOB inflation. nil (older phone) → the watch falls back to its epoch-keyed id.
     public let syncIdentifier: String?
-    /// #69 insulin-model fidelity: the dose's insulin type, so the watch decays it on the SAME
+    /// Insulin-model fidelity: the dose's insulin type, so the watch decays it on the SAME
     /// model the phone used. Novolog resolves to rapid-acting-adult on both, but fiasp/lyumjev
     /// differ — without this the watch silently decays them on the adult curve. nil → typeless.
     public let insulinType: InsulinType?
-    /// #80 pulse fidelity: the pod's ACTUAL delivered units for this dose. Omnipod delivers only
+    /// Pulse fidelity: the pod's ACTUAL delivered units for this dose. Omnipod delivers only
     /// whole 0.05 U pulses, so OmniBLE FLOORS a superseded temp's units to the pulse boundary and
     /// LoopKit reads that via `deliveredUnits`. Without it on the wire the watch re-derives with
     /// `round(programmedUnits)` (DoseEntry.swift:147-153 — the Medtronic-era fallback), netting
-    /// +0.025 U per elapsed temp slice against the phone: the 2026-07-30 wire gap (phone 0.70 vs
+    /// +0.025 U per elapsed temp slice against the phone: the wire gap (phone 0.70 vs
     /// watch 1.00 over 33 slices; the `net=-0.008` decomp rows are its fingerprint). The BOLUS arm
     /// already carried actual units; this closes the temp arm. nil (older phone) → round fallback.
     public let deliveredUnits: Double?
-    /// #68 part B (.overrideChange only): the plist-encoded `TemporaryScheduleOverride.rawValue`
+    /// (.overrideChange only): the plist-encoded `TemporaryScheduleOverride.rawValue`
     /// the wrist enacted. nil ON AN `.overrideChange` RECORD MEANS CLEARED — the user turned the
     /// preset off — which is why this is a payload field and not a flag: "cleared" and "no
     /// override record at all" must stay distinguishable on the phone. Plist rather than the
@@ -204,7 +203,7 @@ public struct LoanDoseRecord: Codable, Equatable {
     }
 }
 
-// MARK: - #68 part B: override records
+// MARK: - Override records
 
 extension LoanDoseRecord {
 
@@ -277,7 +276,7 @@ extension LoanDoseRecord {
                              value: units, unit: .units, syncIdentifier: syncIdentifier, insulinType: insulinType)
         case .tempBasal, .boundaryTruncation:
             guard let rate = unitsPerHour, let end = endDate else { return nil }
-            // #80: carry the pod's floored actual delivery so the watch nets on the SAME quantum
+            // Carry the pod's floored actual delivery so the watch nets on the SAME quantum
             // the phone did (nil → LoopKit's round(programmedUnits) fallback, the pre-fix behavior).
             return DoseEntry(type: .tempBasal, startDate: startDate, endDate: end,
                              value: rate, unit: .unitsPerHour, deliveredUnits: deliveredUnits,
@@ -287,14 +286,14 @@ extension LoanDoseRecord {
             return DoseEntry(type: .tempBasal, startDate: startDate, endDate: end,
                              value: 0, unit: .unitsPerHour, deliveredUnits: deliveredUnits,
                              syncIdentifier: syncIdentifier, insulinType: insulinType)
-        // #68 part B: .overrideChange carries no insulin — it never seeds a dose.
+        // .overrideChange carries no insulin — it never seeds a dose.
         case .resume, .carb, .carbDeleted, .plumbingCancel, .modeChange, .overrideChange:
             return nil
         }
     }
 }
 
-/// #69 double-hex fix (build ~180): the `NewPumpEvent.raw` bytes a grant dose must be seeded under.
+/// The `NewPumpEvent.raw` bytes a grant dose must be seeded under.
 ///
 /// IDENTITY CONTRACT — why decoding matters: LoopKit's PumpEvent DISCARDS an incoming
 /// DoseEntry.syncIdentifier and derives dose identity as `raw.hexadecimalString`
@@ -309,7 +308,7 @@ extension LoanDoseRecord {
 /// the SAME delivery-store row (syncIdentifier constraint) instead of a second copy — and a
 /// re-seed across epochs upserts instead of accumulating EVEN IF the wipe misfires.
 ///
-/// The pre-180 bug: seeding raw = utf8(hexString) gave one physical dose two identities (hex vs
+/// The earlier bug: seeding raw = utf8(hexString) gave one physical dose two identities (hex vs
 /// hex-of-hex — log proof: seeded id=303561 vs pod-native id=33305a for one bolus), which blinded
 /// every stock dedup layer → the cycle-1 bolus echo (+1.15U, epoch 47) and cross-epoch IOB
 /// inflation (epoch 42/44/45). Non-hex identifiers (epoch-keyed fallback "loanv2-grant-…",
@@ -357,7 +356,7 @@ extension LoanGrant {
         var records = doseHistory
         if let boundary = boundaryRecord { records.append(boundary) }
         return records.enumerated().compactMap { index, record in
-            // #69 stable-syncId: prefer the phone's OWN dose syncIdentifier so a re-seed across
+            // Stable syncId: prefer the phone's OWN dose syncIdentifier so a re-seed across
             // epochs upsert-dedups (same identity → one row) instead of accumulating under fresh
             // epoch-keyed ids. Epoch-keyed fallback keeps older phones (no syncIdentifier) working
             // — and stays unique per (epoch,index) so their re-seeds still rely on the wipe.
@@ -366,7 +365,7 @@ extension LoanGrant {
         }
     }
 
-    /// #72 (build ~181): the seed carries FINISHED history only. A dose still DELIVERING at the
+    /// The seed carries FINISHED history only. A dose still DELIVERING at the
     /// takeover instant (the running temp; a mid-flight bolus) is split out as `live` and NOT
     /// seeded: the grant's podState blob already carries it, and the watch's own pump manager
     /// reports it as a MUTABLE dose on the first status read — stock ownership, exactly how the
@@ -375,7 +374,7 @@ extension LoanGrant {
     /// watch's IOB then TRACKS delivery in real time (0.50 → 0.57 over 5 min of a +1 U/hr net
     /// temp) and the eventual cancel/expiry finalization books actual units under the pod-native
     /// raw — with no seeded row to swallow it. (Supersedes Fix 2's trim-at-takeover, which — once
-    /// the #69 identity fix made dedup work — permanently froze the temp at the takeover instant
+    /// the seed-identity fix made dedup work — permanently froze the temp at the takeover instant
     /// and understated IOB for the temp's remaining life.)
     func seedDoseEntries(finishedBy instant: Date) -> (seed: [DoseEntry], live: [DoseEntry]) {
         let all = seedDoseEntries()
@@ -421,7 +420,7 @@ public struct LoanPodStatus: Codable, Equatable {
     }
 }
 
-/// The odometer audit pair (§1.4, R12): freshen-before-snapshot with the OQ-5 retry;
+/// The odometer audit pair (§1.4): freshen-before-snapshot with the OQ-5 retry;
 /// `freshenSucceeded` false means the audit is advisory-only this session.
 public struct LoanOdometerSnapshot: Codable, Equatable {
     public let deliveredAtStart: Double
@@ -435,13 +434,13 @@ public struct LoanOdometerSnapshot: Codable, Equatable {
     }
 }
 
-/// StatusReport dosing mode (R18/R20): the phone tile shows which world the watch is in.
+/// StatusReport dosing mode: the phone tile shows which world the watch is in.
 public enum LoanDosingMode: String, Codable {
     case closedDirect      // default: dosing from the watch's own direct-G7 stream
     case closedPhoneFed    // the picker's explicitly chosen, labeled degraded mode
     case cgmViewer         // first-class: glucose display, loop open, pod with phone
-    case pausedStale       // R9 lenient pause: stale anchor, no NEW temps
-    case suspended         // bounded rate-0 suspend running (R3)
+    case pausedStale       // Lenient pause: stale anchor, no NEW temps
+    case suspended         // bounded rate-0 suspend running
 }
 
 // MARK: - Messages (§2)
@@ -450,9 +449,9 @@ public enum LoanDosingMode: String, Codable {
 public struct LoanRequest: Codable, Equatable {
     public let watchBuild: String
     public let supportedVersions: [Int]
-    /// #42 (2026-08-02): identity for duplicate suppression. The transport may deliver the
+    /// Identity for duplicate suppression. The transport may deliver the
     /// SAME request twice — sendMessage reports a timeout without meaning "undelivered", so
-    /// the queued fallback re-sends a copy that also arrives (field 18:20:54 that day).
+    /// the queued fallback re-sends a copy that also arrives.
     ///
     /// Two copies milliseconds apart are NOT the same as a user double-tapping Start: the
     /// second lands while the phone is still in .grantOffered from the first, takes the
@@ -461,7 +460,7 @@ public struct LoanRequest: Codable, Equatable {
     /// for epoch 122 while the pod stayed on the phone (`released=false`), so its whole
     /// ladder read `no-peripheral` and the loan died.
     ///
-    /// Optional for back-compat: a pre-207 watch sends none, and the phone then behaves
+    /// Optional for back-compat: an older watch sends none, and the phone then behaves
     /// exactly as it did before (no dedupe).
     public let requestID: String?
 
@@ -479,7 +478,7 @@ public struct LoanRequest: Codable, Equatable {
 /// `OmniPumpManager(rawState:)` exactly as the phone does on relaunch — including
 /// `unfinalizedDoses` and any `unacknowledgedCommand`. Completeness is enforced
 /// phone-side before send (deny-on-missing, never defaulted) and watch-side by init
-/// failure → TakeoverFailed. R2: the phone does NOT cancel its running temp; its
+/// failure → TakeoverFailed. The phone does NOT cancel its running temp; its
 /// RECORD closes at the handover stamp (`boundaryRecord`, kind .boundaryTruncation).
 public struct LoanGrant: Codable, Equatable {
     public let epoch: Int
@@ -489,20 +488,20 @@ public struct LoanGrant: Codable, Equatable {
     public let pumpManagerRawState: Data
     /// Display/log sanity only — never a substitute for blob completeness.
     public let podAddress: UInt32
-    /// plist-encoded LoopSettings rawValue: the ONLY dosing limits (R1/R16);
+    /// plist-encoded LoopSettings rawValue: the ONLY dosing limits;
     /// frozen for the loan in `settingsTimeZoneID` (spec §8, mid-loan freeze APPROVED).
     public let therapySettingsRaw: Data
     public let settingsTimeZoneID: String
     /// 16 h context for the watch's stores (v1 `dh`, kept).
     public let doseHistory: [LoanDoseRecord]
     public let boundaryRecord: LoanDoseRecord?
-    /// WS1 capability gate (verify finding REAL-3, deployment skew): the watch sends
+    /// Capability gate (verify finding REAL-3, deployment skew): the watch sends
     /// INTERIM (released=false) hand-back offers only when the granting phone
     /// understands them — an old phone's decoder drops the unknown `released` key and
     /// would treat the first interim offer as a completed hand-back, reclaiming the
     /// pod while the watch is still dosing. nil (old phone) → legacy single-phase.
     public let supportsInterimHandback: Bool?
-    /// #68B skew gate: does the GRANTING phone understand `.overrideChange` records?
+    /// Skew gate: does the GRANTING phone understand `.overrideChange` records?
     /// The watch and phone apps install separately on this rig, so a watch newer than its
     /// phone is routine. Minting a kind the phone cannot decode makes the whole hand-back
     /// offer undecodable and STRANDS the loan until the builds match (escape-hatch reclaim
@@ -519,11 +518,10 @@ public struct LoanGrant: Codable, Equatable {
     public let integralRetrospectiveCorrectionEnabled: Bool?
     /// The phone's own loop mode (`LoopSettings.dosingEnabled`) at the moment of the grant.
     ///
-    /// R23 originally reset every loan to OPEN/advisory, and the R23 amendment (2026-07-18)
-    /// went further and removed any influence of the phone's mode on the wrist. OVERTURNED
-    /// 2026-08-04 (Jeremy): "if phone closed, watch closed. If phone open, watch open." The
-    /// rationale is intuitiveness for a second user rather than a change of confidence in the
-    /// fail-safe — a broader release may well revert to always-open.
+    /// The wrist INHERITS it: phone closed → watch closed, phone open → watch open. An
+    /// earlier design reset every loan to OPEN/advisory and ignored the phone's mode
+    /// entirely; inheritance is for intuitiveness to a second user rather than a change of
+    /// confidence in the fail-safe — a broader release may well revert to always-open.
     ///
     /// Optional for deployment skew, like the capability flags above: the watch and phone apps
     /// install separately on this rig, so a watch newer than its phone is routine. nil (older
@@ -641,7 +639,7 @@ public struct LoanPredictionSnapshot: Codable, Equatable {
     }
 }
 
-/// One carb entry seeded phone→watch at grant time (#49). Distinct from LoanDoseRecord —
+/// One carb entry seeded phone→watch at grant time. Distinct from LoanDoseRecord —
 /// carbs need the full sync identity (syncIdentifier + provenanceIdentifier + syncVersion)
 /// that LoopKit's CarbStore.syncCarbObjects dedups on, which the dose record does not carry.
 /// The watch reconstructs a SyncCarbObject from this and calls syncCarbObjects, so re-grants
@@ -701,7 +699,7 @@ public struct LoanGlucoseRecord: Codable, Equatable {
     }
 }
 
-/// 3a. watch→phone: only now does the phone commit LOANED (cancels T1 — R8's
+/// 3a. watch→phone: only now does the phone commit LOANED (cancels T1 — the
 /// "holdsPod push").
 public struct TakeoverComplete: Codable, Equatable {
     public let epoch: Int
@@ -750,12 +748,12 @@ public struct HandbackOffer: Codable, Equatable {
     public let events: [LoanEvent]
     public let tombstones: [UUID]
     public let recovered: Bool
-    /// WS1 (two-phase hand-back, ruled 2026-07-19): `false` = INTERIM drain — the
+    /// Two-phase hand-back: `false` = INTERIM drain — the
     /// watch is STILL DOSING and still owns the pod's connection; commit records +
     /// ack the cursor but do NOT reclaim. `true` = the watch has released the pod.
     /// nil (legacy senders, which only offered after stopping) = treat as released.
     public let released: Bool?
-    /// The wrist's loop mode at hand-back. R23 overturned 2026-08-04 (Jeremy): the phone
+    /// The wrist's loop mode at hand-back. The phone
     /// INHERITS the watch's state on the way back, mirroring the grant's outbound inheritance,
     /// rather than restoring the value captured before the loan. nil (older watch) → the phone
     /// keeps its captured pre-loan value, i.e. the previous restore behavior.
@@ -809,8 +807,8 @@ public struct StatusQuery: Codable, Equatable {
     }
 }
 
-/// 8b. watch→phone: sovereignty + mode (R18/R20), last event seq (reconcile progress),
-/// pod fault surfacing (§6). NO heartbeat semantics attach to this message (R8) —
+/// 8b. watch→phone: sovereignty + mode, last event seq (reconcile progress),
+/// pod fault surfacing (§6). NO heartbeat semantics attach to this message —
 /// its absence alarms nothing.
 public struct StatusReport: Codable, Equatable {
     public let epoch: Int
@@ -820,7 +818,7 @@ public struct StatusReport: Codable, Equatable {
     public let lastEventSeq: Int
     public let podFault: String?
     public let holdsPod: Bool
-    /// #108: does this watch know about the epoch it was asked about?
+    /// Does this watch know about the epoch it was asked about?
     ///
     /// `holdsPod: false` is ambiguous on its own — it is equally true of a watch that never
     /// received the grant and of a watch that received it and is thirty seconds into taking the
@@ -865,7 +863,7 @@ public struct LoanDenied: Codable, Equatable {
 
 /// The polymorphic carrier. Hand-rolled `kind` discriminator: unknown kinds throw
 /// (→ ProtocolNack), and the encoding is stable against enum reordering.
-/// A phone→watch diagnostic breadcrumb (#35, 2026-07-25). The phone doesn't mirror to
+/// A phone→watch diagnostic breadcrumb. The phone doesn't mirror to
 /// iCloud like the watch does, so its hand-back-offer handling is invisible in the logs —
 /// when the phone silently fails to ack, we can't see whether it received the offer, or
 /// stalled on the store write. The phone relays compact breadcrumbs (offer received / write
@@ -1008,7 +1006,7 @@ extension LoanMessage {
     /// the pump tile distinguishes "Taking over…" from "Pod on Watch" on the strength of it.
     /// Queued, that label can sit for minutes after a takeover has already finished. The honest
     /// tile REQUIRES this channel — do not move it back without reverting the tile.
-    /// Wire-kind name for logs (#113). Matches the envelope's `kind` string, so a watch RX line
+    /// Wire-kind name for logs. Matches the envelope's `kind` string, so a watch RX line
     /// and a phone SEND line for the same message read the same.
     public var kindLabel: String {
         switch self {
@@ -1039,7 +1037,7 @@ extension LoanMessage {
         }
     }
 
-    /// Transport-level kind peek (#120), on LoanMessage beside its sibling transport peek:
+    /// Transport-level kind peek, on LoanMessage beside its sibling transport peek:
     /// the wire `kind` string, or nil for anything not ours.
     /// Exists so the WATCH can identify which of its own QUEUED transfers are hand-back offers
     /// without decoding full envelopes — the supersede logic cancels only offers, because a
@@ -1055,7 +1053,7 @@ extension LoanMessage {
         // sendMessage caps payloads far below transferUserInfo. Anything unexpectedly large
         // takes the queue rather than burning a round-trip on a certain failure.
         //
-        // #61/#42 (2026-08-08): the gate was 24_000 — and a GRANT (pod state + seeded dose
+        // This gate was formerly 24_000 — and a GRANT (pod state + seeded dose
         // history + glucose warm-up) routinely exceeds that, so the single most
         // spinner-watched message in the protocol was being silently demoted to the queued
         // path this comment block exists to avoid. On the simulator the queue may not drain
@@ -1088,7 +1086,7 @@ extension LoanMessage {
     }
 }
 
-// MARK: - #74 ledger cutover: assumed-dose conversion
+// MARK: - Ledger cutover: assumed-dose conversion
 
 extension LoanDoseRecord {
     /// The DoseEntry a chase-pending ASSUMED record models, for the session ledger's
@@ -1110,7 +1108,7 @@ extension LoanDoseRecord {
                              endDate: endDate ?? startDate.addingTimeInterval(.minutes(30)),
                              value: rate, unit: .unitsPerHour,
                              insulinType: insulinType ?? self.insulinType)
-        // #68 part B: .overrideChange is a therapy-settings event, not a dose — the shadow
+        // .overrideChange is a therapy-settings event, not a dose — the shadow
         // ledger never books it (it changes the SCHEDULE the ledger nets against, which the
         // override history already handles for both books).
         case .resume, .carb, .carbDeleted, .plumbingCancel, .boundaryTruncation, .modeChange, .overrideChange:

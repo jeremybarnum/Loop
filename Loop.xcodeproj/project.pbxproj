@@ -198,6 +198,7 @@
 		43D0E4C32F1A000100000023 /* BolusNoticeWristText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4C12F1A000100000021 /* BolusNoticeWristText.swift */; };
 		43D0E5A12F1B00010000010A /* PhoneLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E5A02F1B000100000109 /* PhoneLog.swift */; };
 		43D0E5A29F2C4B7E88110002 /* LoanTwoSidedContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E5A19F2C4B7E88110001 /* LoanTwoSidedContractTests.swift */; };
+		FADE00040000000000000098 /* ICEInvalidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000097 /* ICEInvalidationTests.swift */; };
 		43D381621EBD9759007F8C8F /* HeaderValuesTableViewCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D381611EBD9759007F8C8F /* HeaderValuesTableViewCell.swift */; };
 		43D9001E21EB209400AF44BF /* LoopCore.h in Headers */ = {isa = PBXBuildFile; fileRef = 43D9FFD121EAE05D00AF44BF /* LoopCore.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		43D9002021EB209400AF44BF /* NSTimeInterval.swift in Sources */ = {isa = PBXBuildFile; fileRef = 439897341CD2F7DE00223065 /* NSTimeInterval.swift */; };
@@ -630,6 +631,8 @@
 		FADE00040000000000000035 /* RileyLinkKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000002 /* RileyLinkKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		FADE00040000000000000036 /* RileyLinkBLEKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000003 /* RileyLinkBLEKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		FADE00040000000000000092 /* LoanCarbListController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000091 /* LoanCarbListController.swift */; };
+		FADE00040000000000000094 /* WatchDoseEnactor.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000093 /* WatchDoseEnactor.swift */; };
+		FADE00040000000000000096 /* DeviceLogThrottle.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000095 /* DeviceLogThrottle.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -995,6 +998,7 @@
 		43D0E4C12F1A000100000021 /* BolusNoticeWristText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BolusNoticeWristText.swift; sourceTree = "<group>"; };
 		43D0E5A02F1B000100000109 /* PhoneLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneLog.swift; sourceTree = "<group>"; };
 		43D0E5A19F2C4B7E88110001 /* LoanTwoSidedContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanTwoSidedContractTests.swift; sourceTree = "<group>"; };
+		FADE00040000000000000097 /* ICEInvalidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ICEInvalidationTests.swift; sourceTree = "<group>"; };
 		43D381611EBD9759007F8C8F /* HeaderValuesTableViewCell.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = HeaderValuesTableViewCell.swift; sourceTree = "<group>"; };
 		43D533BB1CFD1DD7009E3085 /* WatchApp Extension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = "WatchApp Extension.entitlements"; sourceTree = "<group>"; };
 		43D848AF1E7DCBE100DADCBC /* Result.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Result.swift; sourceTree = "<group>"; };
@@ -1499,6 +1503,8 @@
 		FADE00040000000000000018 /* LoopStallWatchdog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LoopStallWatchdog.swift; sourceTree = "<group>"; };
 		FADE00040000000000000019 /* SportLog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SportLog.swift; sourceTree = "<group>"; };
 		FADE00040000000000000091 /* LoanCarbListController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LoanCarbListController.swift; sourceTree = "<group>"; };
+		FADE00040000000000000093 /* WatchDoseEnactor.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WatchDoseEnactor.swift; sourceTree = "<group>"; };
+		FADE00040000000000000095 /* DeviceLogThrottle.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = DeviceLogThrottle.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -2175,6 +2181,7 @@
 				253FAE509D95209395E23A42 /* WatchDosingLimitsTests.swift */,
 				253FAE509D95209395E23A43 /* WatchOverrideDosingTests.swift */,
 				43D0E5A19F2C4B7E88110001 /* LoanTwoSidedContractTests.swift */,
+				FADE00040000000000000097 /* ICEInvalidationTests.swift */,
 				43D0E4AA2F1A00010000000A /* PodLoanPhoneControllerTests.swift */,
 				C0FFEE000000000000000011 /* LoanEventJournalTests.swift */,
 				E93E86AC24DDE02C00FF40C8 /* Mock Stores */,
@@ -2810,6 +2817,8 @@
 			children = (
 				FADE00030000000000000002 /* WorkoutKeepalive.swift */,
 				FADE00040000000000000011 /* WatchLoopManager.swift */,
+				FADE00040000000000000093 /* WatchDoseEnactor.swift */,
+				FADE00040000000000000095 /* DeviceLogThrottle.swift */,
 				FADE00040000000000000012 /* StockLoopStack.swift */,
 				FADE00040000000000000013 /* LoanEventJournal.swift */,
 				FADE00040000000000000014 /* PodLoanWatchController.swift */,
@@ -3801,6 +3810,8 @@
 				FADE00040000000000000027 /* GlanceController.swift in Sources */,
 				FADE00040000000000000092 /* LoanCarbListController.swift in Sources */,
 				FADE00040000000000000028 /* LoopStallWatchdog.swift in Sources */,
+				FADE00040000000000000094 /* WatchDoseEnactor.swift in Sources */,
+				FADE00040000000000000096 /* DeviceLogThrottle.swift in Sources */,
 				FADE00040000000000000029 /* SportLog.swift in Sources */,
 				0D2DAE0D29B84EA4910B1837 /* FakeGlucose.swift in Sources */,
 				E3A9C09E7EC24D86B569C037 /* RuntimeStateLog.swift in Sources */,
@@ -3968,6 +3979,7 @@
 				49B8A19F8BBE91531BBE4A2E /* WatchDosingLimitsTests.swift in Sources */,
 				49B8A19F8BBE91532BBE4A2E /* WatchOverrideDosingTests.swift in Sources */,
 				43D0E5A29F2C4B7E88110002 /* LoanTwoSidedContractTests.swift in Sources */,
+				FADE00040000000000000098 /* ICEInvalidationTests.swift in Sources */,
 				43D0E4AB2F1A00010000000B /* PodLoanPhoneControllerTests.swift in Sources */,
 				C0FFEE000000000000000012 /* LoanEventJournalTests.swift in Sources */,
 				A9BD28E7272226B40071DF15 /* TestLocalizedError.swift in Sources */,

@@ -101,13 +101,20 @@ final class StatusTableViewController: LoopChartsTableViewController {
                     self?.registerPumpManager()
                     self?.configurePumpManagerHUDViews()
                     self?.updateToolbarItems()
-                    // #21 suppression wipes the IOB/COB series (setIOBValues([]) etc) while the
-                    // pod is on the watch, and restores them only `else if let iobValues = ...`
-                    // — i.e. only on a reload whose currentContext carries .insulin/.carbs. The
-                    // comment there claims "Reload re-fires on the loan transition via
-                    // .PumpManagerChanged"; it did not — this observer never reloaded chart data
-                    // at all. Field 2026-08-05: Active Insulin sat blank for ~2 min after a
-                    // hand-back while the phone was already looping. Make the claim true.
+                    // Loan suppression wipes the prediction, IOB and COB series to [] while the
+                    // pod is on the watch, and restores each one only on a reload whose context
+                    // carries the matching flag. So the transition has to ASK for all three:
+                    // a bare reloadData() returns at the `!refreshContext.isEmpty` guard and
+                    // redraws the wiped series, and even past that guard the COB fetch is gated
+                    // on .carbs and never runs.
+                    //
+                    // Adding the reload here (2026-08-05, Active Insulin blank ~2 min after a
+                    // hand-back) fixed only half of it. Insulin recovered because pump events
+                    // landing after a reclaim fire their own .insulin reload; carbs have no such
+                    // trigger, so the carb chart stayed blank until a carb entry or a force quit
+                    // while the COB NUMBER read correctly beside it — the number falls back to
+                    // the loop state's carbsOnBoard, which is fetched unconditionally.
+                    self?.refreshContext.formUnion([.status, .insulin, .carbs])
                     self?.reloadData(animated: true)
                 }
             },
@@ -1848,31 +1855,96 @@ final class StatusTableViewController: LoopChartsTableViewController {
     /// countdown would not be.
     /// True while the pump pill is sweeping for an in-flight reclaim.
     private var isPodReclaimSweeping = false
+    /// True while the pill is showing the BLE settle's DETERMINATE fill. Tracked rather than
+    /// derived, so the clear runs exactly once instead of on every status refresh for the rest of
+    /// the day.
+    private var isPodReclaimFilling = false
+    /// Redraw tick for the determinate fill. The BLE settle runs to a 12 s deadline and then, if
+    /// it is in the slow mode, to a re-baselined 105 s one, while the change signal this screen
+    /// listens to fires on STATE changes only — so without a tick the bar would be drawn once when
+    /// the settle opened and then sit still for the whole wait, the stage change would never be
+    /// noticed, and the label's elapsed seconds would never advance. Lives only as long as a
+    /// reclaim does — invalidated the moment one ends, so nothing polls a screen that has nothing
+    /// to animate.
+    private var podReclaimCountdownTimer: Timer?
+    private let podReclaimCountdownInterval = TimeInterval(0.5)
 
     // MARK: - Pod reclaim fill (2026-08-04)
 
-    /// Fills the pump pill's background left-to-right across the ownership handover.
+    /// Fills the pump pill's background left-to-right while the phone re-establishes its own pod
+    /// link after a watch session, and sweeps for everything else in the return.
     ///
-    /// Covers PHASE 1 ONLY, per Jeremy's ruling: "if the core thing is returning control to
-    /// the phone from the watch, and once that happens there's no doubt that the phone is in
-    /// control, it's just a matter of having the phone fully claim the pod, maybe the progress
-    /// bar would be phase one." Phase 2 (the BLE settle) is 2s..190s across 16 measured
-    /// reclaims — unpredictable enough that any bar over it would misrepresent half the time —
-    /// so it gets an explanatory refusal instead (presentPodSettlingNotice).
+    /// It used to be the other way round — determinate over the ownership handover, sweep over the
+    /// BLE settle — on the reading that the handover is the part that matters ("once that happens
+    /// there's no doubt that the phone is in control, it's just a matter of having the phone fully
+    /// claim the pod"). The 2026-08-14 measurements inverted it: the handover is 736 ms tapped and
+    /// sub-second on a watch-initiated hand-back, with dosing and prediction back on screen that
+    /// fast, while the settle behind it is the wait that runs to tens of seconds. So the bar was
+    /// drawn over the part nobody waits through, and the part they do wait through got the sweep.
+    /// The settle keeps its explanatory refusal (presentPodSettlingNotice) for anyone who taps the
+    /// pill during it.
     private func updatePodReclaimFill() {
         guard let hudView = hudView else { return }
-        // Sweep across the WHOLE reclaim, both phases. The phone's phase 1 is ~1s (measured:
-        // offer arrives state=loaned 15:28:02.215 -> state=owner 15:28:03.259), so a bar
-        // anchored to it was invisible; and phase 2 is 2s..190s, which no determinate bar can
-        // represent honestly. An indeterminate sweep is the only truthful option here.
-        if deviceManager.isPodLoanReclaiming {
+        // The same determinate bar on every route home — tapped reclaim, watch-initiated hand-back
+        // and forced return all open the same settle window. Its fraction restarts once mid-settle
+        // when the controller re-baselines from the fast mode's deadline to the slow mode's; that
+        // is a deliberate re-anchor rather than a glitch, and it is drawn as one because the pill
+        // animates whatever fraction it is handed. The sweep is what remains for the handover
+        // ahead of it, including the one handover that can genuinely take a while: a dead-watch
+        // reclaim waiting out its 20 s force, which is named by the "Watch Silent…" label rather
+        // than raced by a bar.
+        if let fraction = deviceManager.podReclaimFillFraction {
+            if isPodReclaimSweeping {
+                isPodReclaimSweeping = false
+                hudView.pumpStatusHUD.stopActivitySweep()
+            }
+            isPodReclaimFilling = true
+            hudView.pumpStatusHUD.setActivityFill(fraction, color: .systemOrange)
+            startPodReclaimCountdown()
+        } else if deviceManager.isPodLoanReclaiming {
+            isPodReclaimFilling = false
+            // The tick runs under the SWEEP too, even though a sweep animates itself. It is what
+            // moves the LABEL: a dead-branch reclaim relabels from "Watch Silent…" to
+            // "Forcing Return…" when its force rung fires, and a force deferred behind an
+            // in-flight commit changes no state for the screen's own change signal to notice. Held
+            // on the fraction alone, that relabel could wait for an unrelated refresh.
+            startPodReclaimCountdown()
             guard !isPodReclaimSweeping else { return }
             isPodReclaimSweeping = true
             hudView.pumpStatusHUD.startActivitySweep(color: .systemOrange)
-        } else if isPodReclaimSweeping {
-            isPodReclaimSweeping = false
-            hudView.pumpStatusHUD.stopActivitySweep()
+        } else {
+            stopPodReclaimCountdown()
+            if isPodReclaimSweeping {
+                isPodReclaimSweeping = false
+                hudView.pumpStatusHUD.stopActivitySweep()   // also clears the fill
+                isPodReclaimFilling = false
+            } else if isPodReclaimFilling {
+                isPodReclaimFilling = false
+                hudView.pumpStatusHUD.setActivityFill(nil)
+            }
         }
+    }
+
+    private func startPodReclaimCountdown() {
+        guard podReclaimCountdownTimer == nil else { return }
+        podReclaimCountdownTimer = Timer.scheduledTimer(withTimeInterval: podReclaimCountdownInterval, repeats: true) { [weak self] timer in
+            // A repeating timer outlives a weak reference that went nil, so it has to retire
+            // itself — invalidating from `stopPodReclaimCountdown` is unreachable without a self.
+            guard let self = self else { timer.invalidate(); return }
+            guard let hudView = self.hudView else { self.stopPodReclaimCountdown(); return }
+            // Re-present the highlight on every tick, not just the fill: the settle's label
+            // carries elapsed seconds that only advance if the text is rebuilt, and the phase can
+            // move under the bar as the settle ends. presentStatusHighlight rewrites the message
+            // on every call (DeviceStatusHUDView assigns messageLabel.text before the add-to-stack
+            // call that early-returns), so a tick is enough to move the counter.
+            hudView.pumpStatusHUD.presentStatusHighlight(self.deviceManager.pumpStatusHighlight)
+            self.updatePodReclaimFill()
+        }
+    }
+
+    private func stopPodReclaimCountdown() {
+        podReclaimCountdownTimer?.invalidate()
+        podReclaimCountdownTimer = nil
     }
 
     private func presentPodSettlingNotice() {

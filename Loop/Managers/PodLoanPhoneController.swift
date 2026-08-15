@@ -4,7 +4,7 @@
 //
 //  The phone half of loan protocol v2 (docs/DESIGN_LOAN_PROTOCOL_V2.md §3.1, §10).
 //  Persisted state machine (podLoanedToWatch is DERIVED from this state, never a
-//  volatile flag), epoch minting, grant assembly with deny-on-missing, the R8 alarm
+//  volatile flag), epoch minting, grant assembly with deny-on-missing, the alarm
 //  inventory (exactly: T1 start-confirmation 5 min / loan-duration 6 h / paused-dosing
 //  1 h repeating — deliberately NO heartbeat), record staging (the trap-cell defense),
 //  and reconcile-commit-ack ordering (ack ONLY after the store writes commit).
@@ -27,50 +27,124 @@ final class PodLoanPhoneController {
         case owner, grantOffered, loaned, reconciling, reclaimPending
     }
 
+    /// What a reclaim is doing right now — published so the tile can name the situation instead of
+    /// implying progress that isn't happening, and so the pump pill can draw a DETERMINATE bar for
+    /// the one part of the return that is long enough to be worth drawing.
+    ///
+    /// ONLY THE SETTLE CARRIES A FRACTION, and it was not the half this started as. The ownership
+    /// handover — the drain and, failing that, the force — was measured at 736 ms for a
+    /// phone-tapped reclaim on 2026-08-14 and runs sub-second on a watch-initiated hand-back;
+    /// dosing and prediction are back on the phone's screen that fast. A bar over a sub-second
+    /// event is a flash, so the handover phases publish a nil `fraction` and the pill sweeps
+    /// through them. The BLE settle behind it — the phone re-establishing its own pod link and
+    /// proving it with one round-trip — is the wait the user actually sits through, and it gets
+    /// the bar (see `reclaimSettleExpectation` for the promise and its evidence).
+    struct ReclaimProgress: Equatable {
+        enum Phase: Equatable {
+            /// The watch was heard from within one log-pulse period, or is reachable now: its
+            /// records are draining and the wait is a real drain window. Carries a determinate
+            /// fraction against the drain promise — the sweep is retired.
+            case draining
+            /// The drain promise expired without an answer: the bar holds at its cap and the
+            /// label concedes the trouble, twelve to fifteen seconds before the force resolves
+            /// it. Deliberately entered at the same moment the second revoke goes out, so the
+            /// concession and the last attempt are one event.
+            case watchNotAnswering
+            /// Taking the pod back without the watch's cooperation. The dead branch enters this
+            /// the moment it is chosen — it waits for nothing — and a force deferred behind an
+            /// in-flight commit stays described by it.
+            case forcing
+            /// Ownership is already back on the phone, but the phone has not yet completed the pod
+            /// round-trip that proves the pod is home — it is re-establishing the BLE session.
+            /// Reached identically from a tapped reclaim and from a watch-initiated hand-back,
+            /// which is why it hangs off the settle window rather than off the tapped-reclaim
+            /// ladder: a regularly ended session arms no ladder and lands in exactly this wait.
+            ///
+            /// One stage, no slow-mode re-baseline. The two-stage split existed for a bimodal
+            /// settle whose slow mode turned out to be verification calls that skipped the radio
+            /// when the manager judged its data fresh; with the forced read in place, every
+            /// watch-present settle measured on the fixed build landed in 2-3 s with zero stale
+            /// reads. An overrun holds at the cap under the 5-minute ceiling, as ever.
+            case reconnectingToPod
+            /// The settle that follows a FORCE reclaim, presented as one operation with one
+            /// deadline — a bar that re-baselined mid-force would read as a second failure.
+            /// Ruled in the field: users understand a force takes a while, so a generous
+            /// promise that is occasionally wrong beats a renamed wait.
+            case forceReclaimingPod
+        }
+        let phase: Phase
+        /// When the whole wait began — the reclaim tap for a handover, the settle window opening
+        /// for a settle. It does NOT move when the settle re-baselines into its second stage, so
+        /// `elapsed` below stays a continuous count of how long the user has been waiting.
+        let startedAt: Date
+        /// The moment the user has been promised an answer by: the force deadline during the
+        /// ownership handover, the end of stage one during a fast settle, the end of stage two
+        /// once that has expired. Never a ceiling — overrunning it holds the bar at its cap
+        /// rather than ending the wait.
+        let expectedBy: Date
+        /// 0...0.95 within the CURRENT STAGE — or NIL when this phase is too short to draw, which
+        /// is every phase except the settle. Deliberately not `startedAt`-to-`expectedBy`: the
+        /// settle's second stage is re-baselined at its own entry, so the bar restarts there and
+        /// climbs against the slow mode's deadline instead of crawling against a total. Holds at
+        /// 0.95 rather than completing, because completion is the tile changing, not the bar
+        /// filling.
+        ///
+        /// A nil here is what leaves the pill on its indeterminate sweep, which is the right
+        /// affordance for the one handover that can genuinely take a while: a dead-watch reclaim
+        /// waits out the ladder's 20 s force with nothing to report but its labels — "Reaching
+        /// Watch…" while the first revoke is out, "Can't Reach Watch" from the resend deadline.
+        let fraction: Double?
+        /// How long the whole wait has been running, on the controller's own clock, as of the
+        /// moment this was read. Published rather than re-derived at the call site so the label's
+        /// ticking seconds and the bar's fill can never disagree about when the wait started, and
+        /// continuous across the settle's stage change so the counter never appears to reset.
+        let elapsed: TimeInterval
+    }
+
     struct Dependencies {
         /// The current pump manager, if any (conditionally cast for lending).
         var pumpManager: () -> PumpManager?
         /// The live therapy settings (snapshot travels in the grant).
         var settings: () -> LoopSettings
-        /// Pause/resume the phone's automatic dosing (loan-gated, R7).
+        /// Pause/resume the phone's automatic dosing (loan-gated).
         var setAutomaticDosingPaused: (Bool) -> Void
         /// Transport out (WCSession.transferUserInfo at integration).
         var send: ([String: Any]) -> Void
         /// Store writes. Loan insulin goes through the pump-event path (not addDoses) so
         /// it lands in the PumpEvent table (Event History), is run through stock
         /// InsulinMath.reconciled() at the store (overlap truncation), and mirrors into
-        /// InsulinDeliveryStore/HealthKit — behaving exactly like real pump insulin (#69/#52).
+        /// InsulinDeliveryStore/HealthKit — behaving exactly like real pump insulin.
         var addPumpEvents: ([NewPumpEvent], _ lastReconciliation: Date?, @escaping (Error?) -> Void) -> Void
-        /// R36: the String is the watch journal event UUID — the identity the store
+        /// The String is the watch journal event UUID — the identity the store
         /// inserts-if-absent on. Every redelivery of the same event carries the same string.
         var addCarb: (NewCarbEntry, String, @escaping (Error?) -> Void) -> Void
-        /// R30 (#89): remove a carb the WRIST deleted during the loan. Matched on the phone's
+        /// Remove a carb the WRIST deleted during the loan. Matched on the phone's
         /// syncIdentifier when the watch knew one (phone-originated carbs, which are the only
         /// ones that reach here — watch-entered add/delete pairs cancel in the reconciler), and
         /// on (startDate, grams) otherwise. Default is a no-op so tests and older wiring are
         /// unaffected.
         var deleteCarb: (LoanReconciler.DeletedCarb, @escaping (Error?) -> Void) -> Void = { _, done in done(nil) }
-        /// #68 part B: apply a WATCH-enacted temporary schedule override to the phone's
-        /// LoopSettings (nil = the wrist cleared it). Sovereignty ruling (2026-07-31): while
+        /// Apply a WATCH-enacted temporary schedule override to the phone's
+        /// LoopSettings (nil = the wrist cleared it). Sovereignty: while
         /// the watch holds the pod it OWNS overrides, so this is a straight assignment — there
         /// is no merge with whatever the phone thought, and no user prompt. The phone's own
-        /// override UI already funnels to a reclaim prompt during a loan (#71), so a competing
+        /// override UI already funnels to a reclaim prompt during a loan, so a competing
         /// phone-side edit cannot exist. Default no-op keeps the state-machine tests (and any
         /// caller that doesn't care about overrides) constructing unchanged.
         var applyScheduleOverride: (TemporaryScheduleOverride?) -> Void = { _ in }
-        /// R23 OVERTURNED 2026-08-04 (Jeremy): "the loop should inherit the watch state" on the
+        /// The loop inherits the watch's state on the
         /// way back, mirroring the grant's outbound inheritance. Records the WRIST's final loop
         /// mode so the reclaim restores THAT rather than the value captured before the loan.
         /// Default no-op keeps the state-machine tests constructing unchanged.
         var noteWatchClosedLoop: (Bool) -> Void = { _ in }
         /// 16 h insulin history for the grant.
         var doseHistory: (_ start: Date, _ completion: @escaping ([DoseEntry]) -> Void) -> Void
-        /// Active carb entries for the grant (#49) — seeded so the watch predicts with COB.
+        /// Active carb entries for the grant — seeded so the watch predicts with COB.
         var carbHistory: (_ start: Date, _ completion: @escaping ([LoanCarbRecord]) -> Void) -> Void = { _, done in done([]) }
         /// ~3 h of recent glucose for the grant — seeded so the watch's momentum + retrospective
         /// correction warm from the first post-takeover cycle instead of a cold empty store.
         var glucoseHistory: (_ start: Date, _ completion: @escaping ([LoanGlucoseRecord]) -> Void) -> Void = { _, done in done([]) }
-        /// INSTRUMENTATION ONLY (#45): the phone's last-computed prediction, decomposed, carried in
+        /// INSTRUMENTATION ONLY: the phone's last-computed prediction, decomposed, carried in
         /// the grant so the watch can diff its first post-takeover prediction against the phone.
         /// Reads already-cached effect arrays only (no recompute, no dosing). Default nil keeps the
         /// state machine + existing tests green with no live LoopDataManager.
@@ -84,34 +158,72 @@ final class PodLoanPhoneController {
         /// True when the loaned pump's connection is truly back after a reclaim (post-hand-back).
         /// Default true so a pump lacking the capability never gets stuck in the settling tile.
         var isConnectionReady: () -> Bool = { true }
-        /// R33 (2026-08-11): cancel the temp the WATCH left running, the instant the reclaim
+        /// Cancel the temp the WATCH left running, the instant the reclaim
         /// round-trip proves we can reach the pod. Stock's own off-cycle `.cancel` idiom — see
         /// LoopDataManager.cancelTempBasalAfterPodReturn. Default no-op keeps the state-machine
         /// tests constructing unchanged.
         var cancelTempBasalAfterPodReturn: (@escaping (Error?) -> Void) -> Void = { $0(nil) }
-        /// R32(b) (2026-08-11): the pod's odometer disagrees with our books by more than noise —
+        /// The pod's odometer disagrees with our books by more than noise —
         /// stop automatic dosing and LEAVE it stopped until the user decides otherwise.
         ///
         /// Deliberately NOT `setAutomaticDosingPaused(true)`. That call pairs with a matching
-        /// `(false)` at the next loan's end, which would silently re-close the loop R32 just
+        /// `(false)` at the next loan's end, which would silently re-close the loop this just
         /// opened — the implementation must also clear the pre-loan capture so no later restore
         /// can undo this. Default no-op keeps the state-machine tests constructing unchanged.
         var openLoopForUncertainReconciliation: () -> Void = {}
-        /// R37: escalated surfacing for the dead-watch reclaim — time-sensitive interruption and
+        /// Escalated surfacing for the dead-watch reclaim — time-sensitive interruption and
         /// a foreground banner, where `issueNotice` is a quiet list entry. The watch is dead, so
         /// the phone is the only device that can get the user's attention.
         var issueUrgentNotice: (_ title: String, _ body: String) -> Void = { _, _ in }
-        /// R37: book the odometer-gap placeholder as a MANUALLY-ENTERED dose. Deliberately not
+        /// Book the odometer-gap placeholder as a MANUALLY-ENTERED dose. Deliberately not
         /// the pump-event path: manual doses keep their `syncIdentifier` as their store identity
         /// (pump events overwrite it with hex-of-raw), which is what lets the placeholder be
         /// deleted by that same identifier when the watch's real records arrive.
         var bookGapDose: (_ entry: DoseEntry, _ completion: @escaping (Bool) -> Void) -> Void = { _, done in done(false) }
-        /// R37: retire the placeholder by its syncIdentifier.
+        /// Retire the placeholder by its syncIdentifier.
         var deleteGapDose: (_ syncIdentifier: String, _ completion: @escaping (Bool) -> Void) -> Void = { _, done in done(false) }
+        /// e44 (2026-08-13): UPSERT reconciled loan doses into the delivery store by their store
+        /// identity (update-or-insert on syncIdentifier). The only write that can land a loan dose
+        /// BEHIND the store's basal boundary — the pump-event path above cannot, which is how a
+        /// force-reclaim followed by a late journal commit silently loses every temp. See the call
+        /// site in `handleHandbackOffer` for the mechanism. Default no-op keeps the state-machine
+        /// tests constructing unchanged.
+        var backfillDoses: (_ doses: [DoseEntry], _ completion: @escaping (Error?) -> Void) -> Void = { _, done in done(nil) }
+        /// A2: doses just landed BEHIND the phone's counteraction-effect frontier. That memo is
+        /// append-only, so the bins covering the loan window still carry the insulin's effect as
+        /// if it were unexplained glucose movement, and dynamic carb absorption over-attributes
+        /// COB from them until the app relaunches. Prune the memo from the earliest rewritten
+        /// dose start and recompute — the same idiom `addReservoirValue` has always used for a
+        /// reservoir-inferred dose. Default no-op keeps the state-machine tests constructing
+        /// unchanged.
+        var insulinHistoryRewritten: (_ earliestDoseStart: Date) -> Void = { _ in }
+        /// True when the watch app is reachable RIGHT NOW (WCSession.isReachable at integration).
+        /// Admissible only as a POSITIVE signal: reachable proves the watch is alive, but false
+        /// proves nothing — in this codebase the flag is a channel selector (urgent vs queued) and
+        /// reads false for a healthy watch whose app is merely backgrounded. Default false, so a
+        /// caller that does not wire it falls back to the contact-age evidence below.
+        /// Hold background execution across a reclaim (tap through verified), stock's own
+        /// background-task idiom. Without it, tap-and-pocket freezes the ladder mid-flight and
+        /// the pod sits ORPHANED — released by the watch, not yet taken by the phone, nobody
+        /// dosing — until the user next looks at the phone. iOS grants ~30 s after
+        /// backgrounding, which covers the whole live ladder (force at 25 s) plus a typical
+        /// settle; the wall-clock rungs remain the backstop for anything longer. Defaults are
+        /// no-ops so tests and harnesses are unaffected.
+        var beginReclaimBackgroundTask: () -> Void = {}
+        var endReclaimBackgroundTask: () -> Void = {}
+        var isWatchReachable: () -> Bool = { false }
+        /// When the phone last heard ANYTHING from the watch — any inbound WatchConnectivity
+        /// funnel. This, not reachability, is what separates a live watch from a dead one at
+        /// reclaim time: a watch holding the pod transfers its log every 300 s, metronomically
+        /// (n=134 gaps since 2026-08-08, range 283.1-301.4 s, zero excursions past 302 s), while
+        /// the five dead revokes on record had silences of 5.5 to 21.2 MINUTES. nil = nothing
+        /// heard, which the reclaim ladder treats as dead. Default nil keeps the state-machine
+        /// tests constructing unchanged.
+        var lastWatchContactAt: () -> Date? = { nil }
         var now: () -> Date = { Date() }
     }
 
-    /// R37, code-level configuration: when a force-reclaim's odometer audit finds insulin the
+    /// Code-level configuration: when a force-reclaim's odometer audit finds insulin the
     /// records cannot explain, book that gap as a bolus timestamped AT RECLAIM — zero decay, so
     /// IOB over-counts rather than under-counts until the truth arrives. `false` still opens the
     /// loop and alerts; it only skips the booking.
@@ -121,7 +233,7 @@ final class PodLoanPhoneController {
     private let queue = DispatchQueue(label: "com.loopkit.Loop.PodLoanPhoneController", qos: .utility)
     private var deps: Dependencies
 
-    // MARK: - Loan → pump-event conversion (#69/#52)
+    // MARK: - Loan → pump-event conversion
 
     /// Wrap reconciled loan DoseEntries as NewPumpEvents for DoseStore.addPumpEvents.
     /// The identity must live in `raw` — NewPumpEvent.init overwrites dose.syncIdentifier
@@ -135,6 +247,89 @@ final class PodLoanPhoneController {
                                 dose: dose,
                                 raw: Data(syncID.utf8),
                                 title: Self.pumpEventTitle(for: dose.type))
+        }
+    }
+
+    /// e44: the overlap truncation the STORE does on the way into the delivery store, done here
+    /// because the backfill upsert deliberately bypasses that path.
+    ///
+    /// NOT optional. The watch journals a temp with its PROGRAMMED end (PodLoanWatchController
+    /// `loanWillEnactTempBasal`: `endDate = now + duration`), so a 5-minutely dose cycle leaves
+    /// half a dozen 30-minute temps overlapping — the watch's own log calls that untruncated sum
+    /// "NOT a meaningful commanded total" (:2222). LoanReconciler leaves them that way on purpose
+    /// (LoanReconciler.swift:182-188) because `DoseStore.addPumpEvents` runs stock
+    /// `InsulinMath.reconciled()` before the delivery-store insert (DoseStore.swift:1174). An
+    /// upsert that carried the untruncated spans would REPLACE the store's own truncated rows
+    /// with them and inflate IOB on every hand-back, healthy ones included.
+    ///
+    /// `reconciled()` is internal to LoopKit, so this is its rate-record arm restated against the
+    /// only two dose types that can appear here: a rate record ends where the next one starts, a
+    /// fully superseded one is dropped, boluses pass through. The suspend/resume arms are
+    /// unreachable — LoanReconciler mints suspends as rate-0 `.tempBasal` (:200-211) and never
+    /// emits `.suspend`/`.resume` DoseEntries.
+    private func truncatingOverlaps(_ doses: [DoseEntry]) -> [DoseEntry] {
+        var out: [DoseEntry] = []
+        var lastRate: DoseEntry?
+        for dose in doses.sorted(by: { $0.startDate < $1.startDate }) {
+            guard dose.type != .bolus else {
+                out.append(dose)
+                continue
+            }
+            if let last = lastRate {
+                let end = Swift.min(last.endDate, dose.startDate)
+                if end > last.startDate {
+                    out.append(last.trimmed(from: nil, to: end, syncIdentifier: last.syncIdentifier))
+                }
+            }
+            lastRate = dose
+        }
+        // Stock's tail guard verbatim (InsulinMath.swift:514): a zero-duration final record is
+        // dropped there, so appending it here would upsert a stray row the clean path never wrote.
+        if let last = lastRate, last.endDate > last.startDate { out.append(last) }
+        return out
+    }
+
+    /// The other half of what the store's path does that the upsert bypasses:
+    /// `reconciled()` ends with `resolvingDelivery` (InsulinMath.swift:345-365, fileprivate),
+    /// which stamps `deliveredUnits` on every immutable dose — pulse-quantized for temps.
+    /// Without this, an upserted row REPLACES a clean row that had `deliveredUnits` set with
+    /// one that has nil, and downstream math falls back to un-quantized programmed figures —
+    /// sub-pulse drift, but rows the backfill corrects must be indistinguishable from rows
+    /// the clean path wrote.
+    private static func resolvedDeliveredUnits(for dose: DoseEntry) -> Double? {
+        guard !dose.isMutable else { return nil }
+        switch dose.type {
+        case .bolus:     return dose.programmedUnits
+        case .tempBasal: return dose.unitsInDeliverableIncrements
+        default:         return nil
+        }
+    }
+
+    /// e44: the same reconciled doses, restated under the identity the STORE gave them.
+    ///
+    /// `NewPumpEvent.init` DISCARDS `dose.syncIdentifier` and derives the stored one as
+    /// `raw.hexadecimalString` (NewPumpEvent.swift:33), so a dose upserted by syncIdentifier has
+    /// to carry hex(utf8("loanv2-<uuid>")) or it inserts a SECOND row instead of correcting the
+    /// one the pump-event path already wrote. Rebuilt rather than mutated: `syncIdentifier` is
+    /// `internal(set)` outside LoopKit, and `value` is not readable at all — recovered through
+    /// the unit-appropriate public accessor.
+    private func storeIdentifiedDoses(from doses: [DoseEntry]) -> [DoseEntry] {
+        doses.compactMap { dose in
+            guard let syncID = dose.syncIdentifier else { return nil }
+            return DoseEntry(type: dose.type,
+                             startDate: dose.startDate,
+                             endDate: dose.endDate,
+                             value: dose.unit == .unitsPerHour ? dose.unitsPerHour : dose.programmedUnits,
+                             unit: dose.unit,
+                             deliveredUnits: dose.deliveredUnits ?? Self.resolvedDeliveredUnits(for: dose),
+                             description: dose.description,
+                             syncIdentifier: Data(syncID.utf8).hexadecimalString,
+                             scheduledBasalRate: dose.scheduledBasalRate,
+                             insulinType: dose.insulinType,
+                             automatic: dose.automatic,
+                             manuallyEntered: dose.manuallyEntered,
+                             isMutable: dose.isMutable,
+                             wasProgrammedByPumpUI: dose.wasProgrammedByPumpUI)
         }
     }
 
@@ -156,18 +351,6 @@ final class PodLoanPhoneController {
             // user-visible — crude parity: it pushed every phase, and the 5s frozen
             // tile during hand-back read as ambiguity).
             if oldValue != state {
-                // Phase-1 anchor for the pump pill's fill (2026-08-04). Phase 1 is the
-                // ownership handover — bounded, and the only half worth drawing a bar for.
-                // Measured across 51 real hand-backs: median 6s, p75 24s, p85 61s. Phase 2
-                // (the BLE settle) is deliberately NOT covered: 2s to 190s with no way to
-                // predict which, so a bar there would be a lie about half the time.
-                let inPhase1 = (state == .reconciling || state == .reclaimPending)
-                let wasPhase1 = (oldValue == .reconciling || oldValue == .reclaimPending)
-                if inPhase1 && !wasPhase1 {
-                    reclaimPhase1StartedAt = deps.now()
-                } else if !inPhase1 {
-                    reclaimPhase1StartedAt = nil
-                }
                 deps.ownershipDidChange()
                 // A reclaim just landed us in .owner, but reclaimConnection() only re-armed
                 // the BLE bid — the pod isn't actually back for ~2 min. Open the settle window
@@ -179,20 +362,93 @@ final class PodLoanPhoneController {
         }
     }
 
-    /// When the ownership handover (phase 1) began, or nil if not in it.
-    private var reclaimPhase1StartedAt: Date?
-
-    /// Fraction 0...0.95 of the expected phase-1 handover, or nil when phase 1 is not running.
+    /// The reclaim's phase, its real deadline, and — for the settle alone — a fraction to draw.
+    /// nil when nothing is in flight.
     ///
-    /// Calibrated PESSIMISTICALLY at 25s, the p75 of 51 measured hand-backs (median 6s), so
-    /// three quarters of reclaims beat the bar — the same "make the good case a pleasant
-    /// surprise" rule Jeremy set for the takeover bar. Holds at 0.95 rather than completing,
-    /// because completion is the tile changing, not the bar filling.
-    var reclaimPhase1Progress: Double? {
-        return queue.sync {
-            guard let started = reclaimPhase1StartedAt else { return nil }
-            let elapsed = deps.now().timeIntervalSince(started)
-            return min(max(elapsed, 0) / 25.0, 0.95)
+    /// Two windows, one accessor, and only the settle draws. The tapped handover still publishes
+    /// its phase and the ladder's own force deadline, because the tile's label comes from that phase
+    /// ("Reaching Watch…" the moment a dead branch is decided, not after the wait — and
+    /// "Can't Reach Watch" from the resend deadline, so the verdict lands before the force).
+    /// What it no longer publishes is a fraction: at 736 ms tapped and sub-second on a
+    /// hand-back, a bar over the handover is a flash, and a dead-watch handover is better
+    /// served by the sweep plus a label that names the problem than by a bar racing a 20 s force.
+    ///
+    /// The settle arm is deliberately NOT gated on a ladder. A watch-initiated hand-back arms no
+    /// ladder and still lands in the same settle, so gating on one is what left a regularly ended
+    /// session with an indeterminate sweep for the whole of its wait. Every route into `.owner`
+    /// opens the settle window, so every route — tapped, watch-initiated, forced — draws a
+    /// settle bar. A settle that follows a FORCE runs one stage against its own promise; the
+    /// others run the two-stage fast/slow split.
+    ///
+    /// nil during a watch-initiated hand-back's own store commit, which no tap promised anything
+    /// about, and nil again the moment the settle's round-trip verifies.
+    var reclaimProgress: ReclaimProgress? {
+        // Return type spelled out: the closure has two `return`s of different shapes plus a nil,
+        // and leaving it to inference is a compile error waiting on the next edit.
+        return queue.sync { () -> ReclaimProgress? in
+            let now = deps.now()
+            // `.reconciling` is part of the tapped handover, not a gap in it: the drain's records
+            // are being written, and the label the user is reading was chosen by this ladder's
+            // branch. Guarding on `.reclaimPending` alone dropped the phase for the length of one
+            // Core Data write, which relabels a dead-watch reclaim from its branch label to the
+            // generic "Reclaiming…" mid-write and then back.
+            if let ladder = reclaimLadder, state == .reclaimPending || state == .reconciling {
+                let elapsed = max(now.timeIntervalSince(ladder.startedAt), 0)
+                // The live handover draws a determinate bar against the drain promise — the
+                // sweep is retired (field ruling). Past the promise the phase concedes and the
+                // bar holds at cap; the force at 25 s is what actually resolves it. The forcing
+                // phase (dead branch, or a live force mid-deferral) keeps a nil fraction: its
+                // own settle bar arrives within a second.
+                var phase = ladder.phase
+                var fraction: Double?
+                if phase == .draining {
+                    fraction = min(elapsed / Self.liveHandoverExpectation, 0.95)
+                    if elapsed >= Self.liveHandoverExpectation { phase = .watchNotAnswering }
+                }
+                return ReclaimProgress(phase: phase, startedAt: ladder.startedAt,
+                                       expectedBy: phase == .draining
+                                           ? ladder.startedAt.addingTimeInterval(Self.liveHandoverExpectation)
+                                           : ladder.forceAt,
+                                       fraction: fraction,
+                                       elapsed: elapsed)
+            }
+            // The settle predicate is restated inline rather than read from `isReclaimSettling`:
+            // that accessor takes the same serial queue this block is already running on, and a
+            // nested sync onto a serial queue deadlocks. It is `isReclaimSettling` and not
+            // `isReclaimSettlingOnly` that it must match, ceiling term included — the pill draws
+            // this fraction BEFORE it checks whether a reclaim is in progress at all, so a bar
+            // that outlived the "Reclaiming…" tile would paint itself under some other label.
+            if state == .owner, let started = reclaimStartedAt, reclaimVerifiedAt == nil,
+               now.timeIntervalSince(started) < Self.reclaimSettleTimeout {
+                let elapsed = max(now.timeIntervalSince(started), 0)
+                // A settle that follows a FORCE reclaim is one operation to the user — the tile
+                // just told them the watch could not be reached — so it runs ONE stage against
+                // its own promise instead of the fast/slow re-baseline, which mid-force would
+                // read as a second failure. The audit flavor is the marker: the force path arms
+                // it before ownership flips, and it is consumed only after the verification this
+                // bar is waiting on.
+                if pendingHandbackAudit?.flavor == .forceReclaim {
+                    return ReclaimProgress(
+                        phase: .forceReclaimingPod, startedAt: started,
+                        expectedBy: started.addingTimeInterval(Self.reclaimForcedSettleExpectation),
+                        fraction: min(elapsed / Self.reclaimForcedSettleExpectation, 0.95),
+                        elapsed: elapsed)
+                }
+                // One stage, anchored where the USER'S wait began — the tap for a phone
+                // reclaim, the settle open for a watch-initiated one — so the bar is a single
+                // continuous fill across the handover and the settle. Caps at 0.95 and HOLDS
+                // there on an overrun: the settle's real bound is `reclaimSettleTimeout`, not
+                // the expectation, so a bar that has run out of deadline must read as
+                // nearly-done-and-still-working rather than as finished.
+                let anchor = reclaimDisplayAnchor ?? started
+                let waitElapsed = max(now.timeIntervalSince(anchor), 0)
+                return ReclaimProgress(
+                    phase: .reconnectingToPod, startedAt: anchor,
+                    expectedBy: anchor.addingTimeInterval(Self.reclaimSettleExpectation),
+                    fraction: min(waitElapsed / Self.reclaimSettleExpectation, 0.95),
+                    elapsed: waitElapsed)
+            }
+            return nil
         }
     }
 
@@ -211,7 +467,40 @@ final class PodLoanPhoneController {
     private var reclaimStartedAt: Date?
     private var reclaimSettleWork: DispatchWorkItem?
     private static let reclaimSettleTimeout: TimeInterval = .minutes(5)
-    /// #42 (2026-08-02): set when a pod ROUND-TRIP has completed since the reclaim began.
+    /// The settle bar's single-stage promise, watch-present and watch-initiated alike.
+    ///
+    /// This replaced a two-stage bar (12 s, then a 105 s re-baseline) that was calibrated to a
+    /// BIMODAL distribution: across 91 verified reclaims, 70 landed in 1-11 s and 21 in
+    /// 24-190 s with nothing between. The slow mode then turned out not to be radio physics at
+    /// all — the verification call skips the radio whenever the manager judges its pump data
+    /// fresh (under 6 minutes) and returns the old lastSync, which the settle rejects forever;
+    /// one field settle burned 77 such calls over 167 s. With the forced read in place, every
+    /// settle measured on the fixed build finished in 1-3 s with zero stale reads (six samples:
+    /// one forced, two phone-tap, three watch-End), and end-to-end tap-to-verified ran
+    /// 3.2-7.1 s. Ten seconds covers the worst of those by 40%.
+    ///
+    /// The slow mode has existed and could recur (one afternoon of clean samples is evidence,
+    /// not proof; a reclaim during an in-flight G7 acquisition is still unsampled). If it does,
+    /// the bar holds at the 0.95 cap with the elapsed seconds climbing — nearly-done and
+    /// visibly alive — under the unchanged 5-minute ceiling. Ruled in the field: an
+    /// occasionally-wrong promise beats a re-baseline that reads as a second failure.
+    private static let reclaimSettleExpectation: TimeInterval = 10
+
+    /// The FORCED settle's promise, a little looser than the ordinary one: the only forced
+    /// reclaim measured on the fixed build verified at +1 s, but that is n=1 — the earlier +45,
+    /// +66 and +70 s forced settles all carried the stale-read signature of the freshness bug
+    /// rather than force physics, so the true clean distribution is thin. Fifteen seconds is
+    /// generous against the evidence and cheap to be wrong about: an overrun holds at the 0.95
+    /// cap; the real bound stays `reclaimSettleTimeout`.
+    private static let reclaimForcedSettleExpectation: TimeInterval = 15
+
+    /// How often the settle forces a REAL pod round-trip past the freshness optimization. The
+    /// first one goes out as soon as the link is up; this spaces the rest. Twelve seconds is
+    /// picked to bound the radio cost — about 25 forced reads across the whole five-minute
+    /// ceiling, against roughly 150 if every 2 s tick forced one — while still ending a stalled
+    /// settle in seconds rather than the 167 s measured before this existed.
+    private static let reclaimForcedReadInterval: TimeInterval = 12
+    /// Set when a pod ROUND-TRIP has completed since the reclaim began.
     /// This — not the peripheral's Bluetooth state — is what "the pod is back" means.
     /// Field measurement: after a hand-back the pod advertises immediately, the phone's
     /// standing bid connects within seconds, and isConnectionReady() flips true long before
@@ -220,7 +509,25 @@ final class PodLoanPhoneController {
     /// Every recorded failure sat inside that window; every success outside it.
     private var reclaimVerifiedAt: Date?
     private var reclaimVerifyInFlight = false
-    /// #42 (2026-08-02): last request identity handled, for transport-redelivery suppression.
+    /// The two halves of a settle, so the single elapsed number stops hiding which one it was.
+    /// `reclaimLinkUpAt` is when the peripheral first reached CoreBluetooth "connected";
+    /// `reclaimStaleReads` counts status round-trips that came back without advancing lastSync
+    /// after that. Measured across 91 settles, the wait is bimodal — 70 land in 1-11 s, 21 in
+    /// 24-190 s, and NOTHING lands in the 12-23 s band — so something discrete decides the
+    /// mode, and these two fields are what say whether it is the link or the read. Nil/zero
+    /// outside a settle window.
+    private var reclaimLinkUpAt: Date?
+    private var reclaimStaleReads = 0
+    /// When the settle last forced a real pod round-trip, so the backoff can space them.
+    private var reclaimLastForcedReadAt: Date?
+    /// Where the USER'S wait began, for the bar alone — the tap for a phone-initiated reclaim,
+    /// the settle open for a watch-initiated one. The bar must be ONE continuous fill across
+    /// the handover and the settle (a bar that restarts at the phase boundary reads as a second
+    /// failure — the same ruling as the forced path), but the settle's own metrics keep
+    /// measuring from the settle open so the verified "+Ns (link, reads)" corpus stays
+    /// comparable across builds. Display state only; never read by any timing decision.
+    private var reclaimDisplayAnchor: Date?
+    /// Last request identity handled, for transport-redelivery suppression.
     /// sendMessage can report a timeout WITHOUT meaning undelivered, so the queued fallback
     /// sends a second copy that also lands. See handleRequest for what that cost in the field.
     private var lastRequestID: String?
@@ -232,7 +539,7 @@ final class PodLoanPhoneController {
     /// until the pod is genuinely reachable, without ever sticking (the ceiling clears it).
     /// Runs on `queue` (state is queue-confined, as the sync accessors below assume).
     ///
-    /// #42: the window now also CHASES completion instead of waiting for it. Left alone, the
+    /// The window also CHASES completion instead of waiting for it. Left alone, the
     /// first post-reclaim pod round-trip is whenever the phone's 5-minute cycle next runs —
     /// or, on a locked phone, whenever iOS feels like it (one hand-back completed the moment
     /// an unrelated notification woke the phone). ensureCurrentPumpData is fired as soon as
@@ -243,13 +550,30 @@ final class PodLoanPhoneController {
         reclaimStartedAt = started
         reclaimVerifiedAt = nil
         reclaimVerifyInFlight = false
+        reclaimLinkUpAt = nil
+        reclaimStaleReads = 0
+        reclaimLastForcedReadAt = nil
+        // Keep a RECENT tap anchor so the bar continues across the handover-to-settle boundary
+        // instead of restarting; adopt the settle's own start otherwise. The 60 s staleness
+        // bound is structural protection: an anchor left behind by an abandoned reclaim must
+        // never stretch a later, unrelated settle's bar.
+        if let anchor = reclaimDisplayAnchor, started.timeIntervalSince(anchor) < 60 {
+            // continuous bar from the user's tap
+        } else {
+            reclaimDisplayAnchor = started
+        }
+        // Re-begin rather than assume the tap's hold is still alive: the watch-initiated route
+        // has no tap, and re-beginning is stock's own idiom (end-then-begin, one identifier).
+        deps.beginReclaimBackgroundTask()
         reclaimSettleWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self = self, self.reclaimStartedAt == started else { return }
             os_log("Reclaim settle CEILING reached (%.0fs) without a verified round-trip — clearing anyway",
                    log: self.log, type: .error, Self.reclaimSettleTimeout)
             self.reclaimStartedAt = nil            // ceiling reached — stop settling
-            // R37: a force-reclaim audit that never got its round-trip is an UNVERIFIED
+            self.reclaimDisplayAnchor = nil
+            self.deps.endReclaimBackgroundTask()
+            // A force-reclaim audit that never got its round-trip is an UNVERIFIED
             // session, and dosing is still held from the reclaim. Unverified opens; it never
             // quietly resumes.
             if let pending = self.pendingHandbackAudit, pending.flavor == .forceReclaim {
@@ -263,7 +587,9 @@ final class PodLoanPhoneController {
             self.deps.ownershipDidChange()         // final re-render that clears the tile
         }
         reclaimSettleWork = work
-        queue.asyncAfter(deadline: .now() + Self.reclaimSettleTimeout, execute: work)
+        // Wall clock for the same reason as the ladder rungs: a suspension must not stretch
+        // the ceiling past its promise.
+        queue.asyncAfter(wallDeadline: .now() + Self.reclaimSettleTimeout, execute: work)
         chaseReclaimVerification(started: started)
     }
 
@@ -272,7 +598,36 @@ final class PodLoanPhoneController {
     /// the ceiling, or a grant taking us out of .owner).
     private func chaseReclaimVerification(started: Date, attempt: Int = 0) {
         guard reclaimStartedAt == started, reclaimVerifiedAt == nil else { return }
-        attemptReclaimVerificationNow(started: started)
+        // Stamp the link-up edge exactly once. Everything before it is the peripheral coming
+        // back; everything after it is us failing to get a word in over a link that is already
+        // up. The tick number rides along because a slow link and a slow FIRST poll look
+        // identical in an elapsed time on its own.
+        if reclaimLinkUpAt == nil, deps.isConnectionReady() {
+            let up = deps.now()
+            reclaimLinkUpAt = up
+            let waited = up.timeIntervalSince(started)
+            // handbackDiag, not a bare diag send: the dead-watch force reclaim is the case
+            // that most needs this line, and that is exactly the case where the watch-bound
+            // diag channel queues until the watch returns — the first field run of this
+            // instrumentation (2026-08-14) left the phone's own file with no settle record
+            // at all. The phone file must carry its own account.
+            handbackDiag(epoch, String(format: "settle: link up +%.1fs (tick %d)", waited, attempt))
+        }
+        // Force a REAL round-trip on the first tick after the link comes up, then on a slow
+        // cadence — because the cheap call does not always talk to the pod at all.
+        // `ensureCurrentPumpData` skips the radio entirely when the manager judges its data
+        // fresh (under 6 minutes old) and hands back the EXISTING lastSync, which this settle's
+        // `lastSync > started` test then rejects. Field 2026-08-14: 77 consecutive such calls
+        // returned in ~150 ms each — far too fast for pod BLE — and the settle sat at 169 s
+        // until a manual status check from the pod screen broke it.
+        //
+        // Deliberately NOT forced on every tick: at 2 s that would be up to 150 real round
+        // trips across a five-minute settle, which is reclaim speed bought with G7 radio time.
+        // First-plus-backoff removes the stall for a handful of reads.
+        let forced = reclaimLinkUpAt != nil && (reclaimLastForcedReadAt.map {
+            deps.now().timeIntervalSince($0) >= Self.reclaimForcedReadInterval
+        } ?? true)
+        attemptReclaimVerificationNow(started: started, forced: forced)
         queue.asyncAfter(deadline: .now() + 2) { [weak self] in
             self?.chaseReclaimVerification(started: started, attempt: attempt + 1)
         }
@@ -280,12 +635,30 @@ final class PodLoanPhoneController {
 
     /// One verification attempt, no rescheduling. Also called EAGERLY from the grant-deny
     /// path: a premature Start is the strongest possible signal the user wants the pod back,
-    /// so their tap accelerates the very check their retry is waiting on.
-    private func attemptReclaimVerificationNow(started: Date) {
+    /// so their tap accelerates the very check their retry is waiting on — and forces a real
+    /// read, for the same reason their tap on the pod status screen ends a stalled settle.
+    ///
+    /// `forced` routes through `refreshLentDeviceStatus`, which bypasses the freshness
+    /// optimization; the cheap path is left for the ticks in between.
+    private func attemptReclaimVerificationNow(started: Date, forced: Bool = true) {
         guard reclaimStartedAt == started, reclaimVerifiedAt == nil else { return }
         if deps.isConnectionReady(), !reclaimVerifyInFlight, let pump = deps.pumpManager() {
             reclaimVerifyInFlight = true
-            pump.ensureCurrentPumpData { [weak self] lastSync in
+            let read: (@escaping (Date?) -> Void) -> Void
+            if forced, let lendable = pump as? PumpConnectionLendable {
+                reclaimLastForcedReadAt = deps.now()
+                // Force the round-trip, then ask the ordinary way for the answer. The forced
+                // read updates the manager's report date, so the follow-up takes the cheap
+                // no-radio path and hands back the NOW-ADVANCED lastSync — one round-trip, and
+                // the verification still keys on the completion's date rather than on a
+                // property read, which is the contract the rest of this method is written to.
+                read = { done in
+                    lendable.refreshLentDeviceStatus { _ in pump.ensureCurrentPumpData { done($0) } }
+                }
+            } else {
+                read = { done in pump.ensureCurrentPumpData { done($0) } }
+            }
+            read { [weak self] lastSync in
                 guard let self = self else { return }
                 self.queue.async {
                     self.reclaimVerifyInFlight = false
@@ -298,18 +671,41 @@ final class PodLoanPhoneController {
                         self.reclaimVerifiedAt = self.deps.now()
                         self.reclaimSettleWork?.cancel()
                         self.reclaimStartedAt = nil
-                        os_log("Reclaim VERIFIED — pod round-trip complete %.0fs after reclaim began",
-                               log: self.log, type: .default, elapsed)
-                        // Ride the existing diag channel so the unified watch/iCloud log
-                        // carries the completion time — the measurement #42 was missing.
-                        self.sendMessage(.diag(LoanDiag(epoch: self.epoch,
-                            text: String(format: "reclaim VERIFIED — pod round-trip complete +%.0fs", elapsed))))
+                        self.reclaimDisplayAnchor = nil
+                        self.deps.endReclaimBackgroundTask()
+                        // Split the wait. A missing link stamp means the link and the read
+                        // landed inside one tick, so charge the whole thing to the link rather
+                        // than inventing a read time.
+                        let linkWait = self.reclaimLinkUpAt.map { $0.timeIntervalSince(started) } ?? elapsed
+                        let readWait = max(elapsed - linkWait, 0)
+                        // handbackDiag = the phone's own file AND the watch-bound diag echo. The
+                        // leading phrase is unchanged on purpose: 91 historical samples are
+                        // parsed off it, so the split appends rather than replaces.
+                        self.handbackDiag(self.epoch,
+                            String(format: "reclaim VERIFIED — pod round-trip complete +%.0fs (link +%.1fs, stale reads %d, read +%.1fs)",
+                                   elapsed, linkWait, self.reclaimStaleReads, readWait))
                         self.deps.ownershipDidChange()
                         // The pod is provably reachable RIGHT NOW. This is the only moment in the
                         // whole hand-back where that is true, so it is where both jobs that need
                         // the pod happen: read the real end-of-loan odometer, and cancel the temp
                         // the watch left running.
                         self.finishPendingHandbackAudit(elapsed: elapsed)
+                    } else {
+                        // The link was up enough to attempt a read and the read still did not
+                        // advance lastSync. Counting these is the whole point: a slow settle
+                        // with zero of them is the pod failing to come back, and a slow settle
+                        // with several is the pod being back and refusing to answer.
+                        self.reclaimStaleReads += 1
+                        os_log("Settle: status read %d did not advance lastSync — link %{public}@",
+                               log: self.log, type: .default, self.reclaimStaleReads,
+                               self.reclaimLinkUpAt == nil ? "still down" : "already up")
+                        // Phone file only — no diag: a slow settle produces ~30 of these on a
+                        // 2 s tick, and flooding the queued channel at a dead watch buys
+                        // nothing. Their timing says when the reads started failing and when
+                        // they stopped, which the end-of-settle count alone cannot.
+                        PhoneLog.event("loan", String(format: "e%d settle: read %d stale — link %@",
+                                                      self.epoch, self.reclaimStaleReads,
+                                                      self.reclaimLinkUpAt == nil ? "still down" : "already up"))
                     }
                 }
             }
@@ -317,7 +713,7 @@ final class PodLoanPhoneController {
     }
 
     /// The two things that require a live pod link at the end of a loan, done at the one instant
-    /// we know we have one: the verified reclaim round-trip (item 1, 2026-08-11).
+    /// we know we have one: the verified reclaim round-trip.
     ///
     /// 1. THE AUTHORITATIVE AUDIT. `ensureCurrentPumpData` just completed a real conversation with
     ///    the pod, so `lentDeviceInsulinDelivered` is the odometer as of seconds ago. Paired with
@@ -325,7 +721,7 @@ final class PodLoanPhoneController {
     ///    odometer reading the watch takes while it definitely holds the link — that is a clean
     ///    measurement of the loan's whole delivery, bracketed by two fresh readings.
     ///
-    /// 2. THE INHERITED TEMP. R33: no automatic program crosses the boundary. The watch cannot
+    /// 2. THE INHERITED TEMP. No automatic program crosses the boundary. The watch cannot
     ///    enforce that (no link); the phone can, and does it here with stock's bare-`.cancel`
     ///    idiom. The pod falls back to the user's schedule until the phone's next reading.
     ///
@@ -356,15 +752,24 @@ final class PodLoanPhoneController {
                 drift.map { String(format: "%+.3f", $0) } ?? "n/a",
                 pending.watchFreshened ? "Y" : "N"))
             UserDefaults.standard.set(delivered, forKey: Keys.deliveredAuthoritative)
-            bankResidual(residual, epoch: pending.epoch)
             switch pending.flavor {
             case .handback:
+                // BANKED ONLY ON A CLEAN HAND-BACK (2026-08-13). The bank exists to describe the
+                // residual of a loan whose records are COMPLETE, because that is the distribution
+                // the ±0.20 U bounds are calibrated against. A force-reclaim's residual measures
+                // the opposite — a dead watch's missing records — so banking it poisons the very
+                // statistics the next threshold review reads: two of them (+0.800, +0.850) had
+                // already moved the banked max from +0.000 to +0.850. Force-reclaim residuals stay
+                // visible in the reconcile[FORCE-RECLAIM] line above; they just are not evidence
+                // about hand-backs. Consequence, intended: a force-reclaim audit prints no bank
+                // line, so the "N more for a re-review" countdown counts clean samples only.
+                bankResidual(residual, epoch: pending.epoch)
                 applyReconciliationVerdict(residual: residual, epoch: pending.epoch)
             case .forceReclaim:
                 applyForceReclaimVerdict(residual: residual, epoch: pending.epoch)
             }
         } else if pending.flavor == .forceReclaim {
-            // R37: a verified round-trip that reports no odometer cannot verify the session.
+            // A verified round-trip that reports no odometer cannot verify the session.
             // Unverified is not clean — open, loudly.
             handbackDiag(pending.epoch, "** R37: reclaim round-trip landed but no odometer — session UNVERIFIED, loop OPENS **")
             deps.setAutomaticDosingPaused(false)
@@ -375,7 +780,7 @@ final class PodLoanPhoneController {
             handbackDiag(pending.epoch, "reconcile[AUTHORITATIVE]: pod reachable but reported no odometer — keeping the provisional line")
         }
 
-        // R33: cancel the watch's temp now that we can actually reach the pod.
+        // Cancel the watch's temp now that we can actually reach the pod.
         deps.cancelTempBasalAfterPodReturn { [weak self] error in
             guard let self = self else { return }
             self.queue.async {
@@ -391,11 +796,11 @@ final class PodLoanPhoneController {
         }
     }
 
-    // MARK: - R32(b): what a reconciliation difference actually DOES
+    // MARK: - What a reconciliation difference actually DOES
 
     /// A positive residual — the pod delivered MORE than our books say — beyond this opens the
-    /// loop. **0.20 U, set FROM DATA on 2026-08-13** (Jeremy: "make it warn and open loop
-    /// asymmetrically … when the difference is more than .20 units"), replacing the deliberately
+    /// loop.
+    /// **0.20 U, set FROM DATA**, replacing the deliberately
     /// loose +0.5 U that had to be chosen when every residual available had been measured against
     /// the watch's stale endpoint — i.e. against the wrong interval.
     ///
@@ -403,7 +808,7 @@ final class PodLoanPhoneController {
     /// min −0.200, max +0.000. Note WHERE THE MASS SITS — every sample is at or below zero, so the
     /// open-loop direction has never once been observed. Tightening 2.5× therefore costs nothing
     /// in false trips against the measured distribution, while catching a real over-delivery six
-    /// pulses sooner. Four pulses (0.20 U) is still well clear of quantization, which #107 showed
+    /// pulses sooner. Four pulses (0.20 U) is still well clear of quantization, which
     /// tops out around half a pulse per temp replacement.
     private static let openLoopPositiveResidual: Double = 0.20
 
@@ -417,7 +822,7 @@ final class PodLoanPhoneController {
     /// precisely where we WANT early visibility while the residual's true distribution fills in.
     private static let warnNegativeResidual: Double = 0.20
 
-    /// R32(b), sign-aware. The two directions are not the same failure and do not deserve the
+    /// Sign-aware. The two directions are not the same failure and do not deserve the
     /// same response:
     ///
     /// POSITIVE (pod delivered more than recorded) — there is insulin in the body that the
@@ -426,12 +831,12 @@ final class PodLoanPhoneController {
     ///
     /// NEGATIVE (pod delivered less than recorded) — the books carry phantom IOB. The algorithm
     /// believes there is more insulin working than there is, so it doses LESS: the error is
-    /// self-limiting, it decays out within DIA, and R22's annulment already retires the
+    /// self-limiting, it decays out within DIA, and annulment already retires the
     /// identifiable cases. Opening the loop here would make the actual failure (under-treatment)
-    /// worse, not better — the one direction where R32's remedy is the wrong medicine. So: warn,
+    /// worse, not better — the one direction where opening the loop is the wrong medicine. So: warn,
     /// keep looping.
     ///
-    /// Warned once per event, never once per retry (#102's alarm-fatigue finding).
+    /// Warned once per event, never once per retry (alarm fatigue).
     private func applyReconciliationVerdict(residual: Double, epoch: Int) {
         if residual > Self.openLoopPositiveResidual {
             handbackDiag(epoch, String(format:
@@ -440,7 +845,7 @@ final class PodLoanPhoneController {
             deps.openLoopForUncertainReconciliation()
             // URGENT on either flavor: an alert that stops automatic dosing must never be a
             // quiet list entry. The one alert left on the plain channel is the negative warn
-            // below, which keeps looping — caution, not action (#102 alarm-fatigue).
+            // below, which keeps looping — caution, not action (alarm fatigue).
             deps.issueUrgentNotice("Loop Open — Unexplained Insulin",
                              String(format: "The pod delivered %.2f U more than the watch session's records account for. Automatic dosing is off until you turn it back on. Check your insulin on board before dosing.", residual))
         } else if residual < -Self.warnNegativeResidual {
@@ -452,8 +857,8 @@ final class PodLoanPhoneController {
         }
     }
 
-    /// R37: the force-reclaim verdict. Same bounds and sign asymmetry as R32(b) — a dead watch
-    /// is the limiting case of incomplete books, not a different protocol — but the RESPONSE
+    /// The force-reclaim verdict. Same bounds and sign asymmetry as the verdict above — a dead
+    /// watch is the limiting case of incomplete books, not a different protocol — but the RESPONSE
     /// escalates, because the counterparty that would normally explain a residual is dead, and
     /// because dosing has been held since the reclaim waiting on exactly this answer.
     private func applyForceReclaimVerdict(residual: Double, epoch: Int) {
@@ -463,18 +868,24 @@ final class PodLoanPhoneController {
                 "** R37 OPEN LOOP — force-reclaim residual %+.3f U exceeds +%.2f: the pod delivered insulin the records cannot explain (watch died mid-session?). Automatic dosing STOPPED. **",
                 residual, Self.openLoopPositiveResidual))
             deps.openLoopForUncertainReconciliation()
+            // Written to survive a BANNER, which is where this is actually read. The previous
+            // wording ran past four lines and truncated mid-sentence on the field screenshot
+            // (2026-08-14), cutting off at "its real records w" — so the reader lost the one
+            // clause that says the situation resolves itself. Order is deliberate: the number
+            // and the dosing state first, because those are what a truncated banner must still
+            // carry, then the reassurance. The ~2 min figure is the measured lag from the watch
+            // reconnecting to its records landing and the estimate retiring.
             var body = String(format:
-                "The pod delivered %.2f U during the watch session that its records don't account for. Automatic dosing is OFF until you turn it back on.", residual)
+                "%.2f U on the pod isn't in the watch's records, so automatic dosing is OFF.", residual)
             if Self.bookUnattributedInsulinOnForceReclaim {
                 bookGapDose(units: residual, epoch: epoch)
-                body += String(format:
-                    " That %.2f U was logged as a bolus just now, so your IOB stays conservative. If the watch comes back, its real records will replace the estimate.", residual)
+                body += " It's booked as a bolus to keep IOB conservative; the watch's real records replace it about 2 min after it returns."
             } else {
                 body += " Check your insulin on board before dosing."
             }
             deps.issueUrgentNotice("Loop Open — Unverified Insulin", body)
         } else if residual < -Self.warnNegativeResidual {
-            // Same asymmetry as R32(b): phantom IOB under-doses and decays out, so opening
+            // Same asymmetry as the verdict above: phantom IOB under-doses and decays out, so opening
             // the loop would worsen the actual failure. Warn — but urgently, since a dead-watch
             // session earns attention either way.
             handbackDiag(epoch, String(format:
@@ -488,7 +899,7 @@ final class PodLoanPhoneController {
         }
     }
 
-    /// R37: the placeholder for insulin the odometer proved but no record explains. Timestamped
+    /// The placeholder for insulin the odometer proved but no record explains. Timestamped
     /// NOW (the reclaim) — zero decay, maximum IOB, the conservative direction — and manually
     /// entered with a deterministic syncIdentifier so the watch's return can retire it.
     private func bookGapDose(units: Double, epoch: Int) {
@@ -514,7 +925,7 @@ final class PodLoanPhoneController {
 
     private static func gapSyncIdentifier(epoch: Int) -> String { "PODLOAN-ODOGAP-e\(epoch)" }
 
-    /// R37: retry a gap delete that failed on a previous launch. `retireGapBookingIfExplained`
+    /// Retry a gap delete that failed on a previous launch. `retireGapBookingIfExplained`
     /// only runs from inside an offer's write completion, and the hand-back ack that stops the
     /// watch's 15 s resend loop goes out BEFORE that retire attempt — so a delete that fails on
     /// its one shot can outlive the offer that would have retried it, with no other trigger left
@@ -531,6 +942,13 @@ final class PodLoanPhoneController {
             self.queue.async {
                 if ok {
                     UserDefaults.standard.removeObject(forKey: Keys.gapBooking)
+                    // A2: a delete is an insulin-history rewrite like any other — the placeholder
+                    // was booked AT the reclaim, which by the time this launch-retry runs is well
+                    // behind the frontier. Without the prune the counteraction memo keeps the
+                    // deleted units baked into its bins.
+                    if let bookedAt = (gap["bookedAt"] as? TimeInterval).map(Date.init(timeIntervalSince1970:)) {
+                        self.deps.insulinHistoryRewritten(bookedAt)
+                    }
                     self.handbackDiag(gapEpoch, String(format: "R37 gap RETIRED on launch retry — %.2f U placeholder cleared", booked))
                 } else {
                     self.handbackDiag(gapEpoch, String(format: "** R37 gap DELETE FAILED AGAIN at launch — %.2f U placeholder still stands; will retry next launch or the next matching offer **", booked))
@@ -539,7 +957,7 @@ final class PodLoanPhoneController {
         }
     }
 
-    /// R37: the watch came back. Its offer just committed the REAL records behind the gap, so
+    /// The watch came back. Its offer just committed the REAL records behind the gap, so
     /// the placeholder retires — full replacement, not a partial offset: the store now carries
     /// the truth-bearing account (validated in aggregate by the odometer at reclaim), and any
     /// residue left is ordinary reconcile noise. Runs AFTER the real doses are written, so the
@@ -547,23 +965,46 @@ final class PodLoanPhoneController {
     /// direction; a gap of neither is not). Keyed on persisted state: duplicate redeliveries
     /// find nothing and no-op. A failed delete keeps the state (retried on the next offer and
     /// at launch) and says so, because a silent failure here is a double-counted IOB.
-    private func retireGapBookingIfExplained(offerEpoch: Int, dosesJustCommitted: Int, unitsJustCommitted: Double, carbsJustCommitted: Int) {
+    private func retireGapBookingIfExplained(offerEpoch: Int, dosesJustCommitted: [DoseEntry], carbsJustCommitted: Int) {
         guard let gap = UserDefaults.standard.dictionary(forKey: Keys.gapBooking),
               let gapEpoch = gap["epoch"] as? Int, gapEpoch == offerEpoch,
               let booked = gap["units"] as? Double else { return }
-        guard dosesJustCommitted > 0 else { return }   // an empty offer explains nothing
+        guard !dosesJustCommitted.isEmpty else { return }   // an empty offer explains nothing
+        // The array, not a pre-summed total: `booked` is a bolus-shaped, odometer-derived number,
+        // so only bolus units are comparable to it. LoanReconciler mints every dose without
+        // deliveredUnits (:193-198, :205-210), which made the old single total ALWAYS gross
+        // programmed — rate × FULL clamped window, un-netted against the schedule and untruncated
+        // against the next temp. That is the "implied Σ" over-count this file already deleted once
+        // (see the note above forceReclaimToOwner), printed here against a real delivered figure.
+        // `deliveredUnits ??` survives on the BOLUS sum only: inert today, right the day a record
+        // carries one. Rate records get their own column, labelled gross on its face.
+        let boluses = dosesJustCommitted.filter { $0.type == .bolus }
+        let bolusUnits = boluses.reduce(0.0) { $0 + ($1.deliveredUnits ?? $1.programmedUnits) }
+        let rateCount = dosesJustCommitted.count - boluses.count
+        let rateGross = dosesJustCommitted.filter { $0.type != .bolus }.reduce(0.0) { $0 + $1.programmedUnits }
         let sync = Self.gapSyncIdentifier(epoch: gapEpoch)
         deps.deleteGapDose(sync) { [weak self] ok in
             guard let self = self else { return }
             self.queue.async {
                 if ok {
                     UserDefaults.standard.removeObject(forKey: Keys.gapBooking)
+                    // A2: the placeholder is gone from the books, so the counteraction bins that
+                    // were computed with it in the insulin curve are wrong from `bookedAt` on.
+                    // Same prune as the doses that just replaced it — the pair is one rewrite.
+                    if let bookedAt = (gap["bookedAt"] as? TimeInterval).map(Date.init(timeIntervalSince1970:)) {
+                        self.deps.insulinHistoryRewritten(bookedAt)
+                    }
                     self.handbackDiag(gapEpoch, String(format:
-                        "R37 gap RETIRED — the watch returned with %d real dose(s) (%.2f U) and %d carb(s); the %.2f U estimate is replaced by actual timing",
-                        dosesJustCommitted, unitsJustCommitted, carbsJustCommitted, booked))
-                    self.deps.issueNotice("Watch Records Recovered",
+                        "R37 gap RETIRED — the watch returned with %d real dose(s): %.2f U bolus + %d rate record(s) (%.2f U gross programmed, pre-truncation) and %d carb(s); the %.2f U estimate is replaced by actual timing",
+                        dosesJustCommitted.count, bolusUnits, rateCount, rateGross, carbsJustCommitted, booked))
+                    // URGENT (field request 2026-08-14): this fires when the returning watch
+                    // replaces the placeholder estimate with real records — IOB and COB just
+                    // changed under the user's feet. Urgent buys time-sensitive interruption,
+                    // so the message breaks through a Focus mode and gets lock-screen
+                    // prominence rather than filing quietly into the list.
+                    self.deps.issueUrgentNotice("Watch Records Recovered",
                                           String(format: "The watch is back. Its records (%d doses, %d carbs) replaced the estimated %.2f U bolus — your IOB and COB now reflect actual timing.",
-                                                 dosesJustCommitted, carbsJustCommitted, booked))
+                                                 dosesJustCommitted.count, carbsJustCommitted, booked))
                 } else {
                     self.handbackDiag(gapEpoch, String(format:
                         "** R37 gap DELETE FAILED — the %.2f U placeholder AND the real records are both booked; IOB is over-counted until this retries **", booked))
@@ -627,7 +1068,7 @@ final class PodLoanPhoneController {
         return queue.sync {
             guard state == .owner, let started = reclaimStartedAt else { return false }
             if deps.now().timeIntervalSince(started) >= Self.reclaimSettleTimeout { return false }
-            // #42: settling until a pod ROUND-TRIP has landed, not until the peripheral shows
+            // Settling until a pod ROUND-TRIP has landed, not until the peripheral shows
             // .connected — the Bluetooth state flips true seconds after hand-back while the
             // actual return conversation hasn't happened. This is what kept "Reclaiming…"
             // honest AND sticky before; now it clears the moment the round-trip completes,
@@ -643,11 +1084,11 @@ final class PodLoanPhoneController {
     }
     /// Committed event IDs for the CURRENT epoch (secondary idempotency; the cursor
     /// is primary). Bounded: cleared when a loan fully closes.
-    /// #102: latch so a repeatedly-failing hand-back write warns ONCE, not once per 15 s resend.
+    /// Latch so a repeatedly-failing hand-back write warns ONCE, not once per 15 s resend.
     /// Deliberately not persisted — a relaunch is a fresh chance to tell the user.
     private var hasWarnedRecordsNotSaved = false
 
-    /// R33/item-1 (2026-08-11): everything the odometer audit needs EXCEPT the end reading, held
+    /// Everything the odometer audit needs EXCEPT the end reading, held
     /// from the final drain until the phone's own reclaim round-trip lands (seconds later) and can
     /// supply that reading first-hand. See `finishPendingHandbackAudit`.
     private struct PendingHandbackAudit {
@@ -663,7 +1104,7 @@ final class PodLoanPhoneController {
     }
     private var pendingHandbackAudit: PendingHandbackAudit? {
         didSet {
-            // R37: only the force flavor persists. A restart between the force-reclaim and the
+            // Only the force flavor persists. A restart between the force-reclaim and the
             // verified round-trip must re-arm the audit rather than quietly resume dosing —
             // whether the loop closes again should depend on the pod's answer, not on whether
             // the app happened to relaunch first.
@@ -677,21 +1118,21 @@ final class PodLoanPhoneController {
         }
     }
 
-    /// #118 (e27, 2026-08-12): true from write START until its completion runs, both paths.
+    /// True from write START until its completion runs, both paths.
     /// While set, incoming offers COALESCE below instead of launching concurrent Core Data
     /// writes, and a force-reclaim defers. Events only enter `committedIDs` in the write's
     /// completion, so without this latch every duplicate copy of an offer arriving mid-write
-    /// saw them as uncommitted and started its own write — e27 logged 12 receipts for 3 sends
-    /// and ELEVEN concurrent writes (3-19 s each) for one 0.15 U dose. Self-amplifying: slow
-    /// writes delay the ack, the watch resends, more writes.
+    /// saw them as uncommitted and started its own write — one field session logged 12 receipts
+    /// for 3 sends and ELEVEN concurrent writes (3-19 s each) for one 0.15 U dose.
+    /// Self-amplifying: slow writes delay the ack, the watch resends, more writes.
     private var commitInFlight = false
-    /// #118: offers that arrived during an in-flight write — latest per epoch, and a FINAL is
+    /// Offers that arrived during an in-flight write — latest per epoch, and a FINAL is
     /// never displaced by an interim. Replayed one-per-completion by `drainAfterCommit`, at
     /// which point `committedIDs` makes a duplicate a cheap re-ack. §2.9: never drop a message.
     private var coalescedOffers: [Int: HandbackOffer] = [:]
-    /// #118: a force-reclaim requested mid-write. It used to run immediately, read the
+    /// A force-reclaim requested mid-write. It used to run immediately, read the
     /// not-yet-updated `committedIDs`, and re-commit the same staged records — insulin
-    /// survives (raw dedup at the store) but CARBS HAVE NO IDENTITY and double (#66's family).
+    /// survives (raw dedup at the store) but CARBS HAVE NO IDENTITY and double.
     private var pendingForceReclaimReason: String?
     private var committedIDs: Set<UUID>
     /// Staged (received, not-yet-committed) events for the current epoch — persisted
@@ -704,6 +1145,85 @@ final class PodLoanPhoneController {
     }
     private var t1WorkItem: DispatchWorkItem?
     private var reclaimTimeoutWork: DispatchWorkItem?
+    private var reclaimResendWork: DispatchWorkItem?
+
+    // MARK: - Reclaim ladder (2026-08-13)
+
+    /// The state of a tapped reclaim: which branch the evidence chose, when it started, and the
+    /// two deadlines it is running to. One ladder at a time; nil means no reclaim is in flight.
+    private struct ReclaimLadder {
+        enum Branch: String { case live = "LIVE", dead = "DEAD" }
+        var branch: Branch
+        let startedAt: Date
+        /// The rung that resends the revoke — the second and last attempt.
+        var resendAt: Date
+        /// The rung that gives up on the watch and takes the pod back.
+        var forceAt: Date
+        /// Revokes sent for this reclaim, counting the one the tap itself sent. Capped at two:
+        /// a retry exists for a watch that is merely asleep, and a third would only delay the
+        /// force. Any resend counts — including the one a reachability change fires.
+        var attempts: Int
+        /// The force rung has run. NOT the same as finished: a force lands on
+        /// `pendingForceReclaimReason` when a hand-back commit is mid-write, so this ladder can
+        /// outlive its own last rung and must keep describing the situation until state moves.
+        var forced: Bool
+        var phase: ReclaimProgress.Phase {
+            // The dead branch IS the force from the moment it is chosen — it waits for nothing —
+            // so it reads as forcing even in the instant before the rung runs, and through a
+            // force deferred behind an in-flight commit.
+            if forced || branch == .dead { return .forcing }
+            return .draining
+        }
+    }
+    private var reclaimLadder: ReclaimLadder?
+
+    /// A watch holding the pod transfers its log every 300 s. Measured across 134 gaps since
+    /// 2026-08-08: 283.1 s to 301.4 s, zero excursions past 302 s. One pulse period plus margin
+    /// therefore separates a live watch from a dead one with enormous headroom — the one live
+    /// revoke on record had a 6.5-second-old pulse, the five dead ones 5.5 to 21.2 minutes.
+    private static let watchContactLivenessWindow: TimeInterval = 330
+
+    /// Live branch: the drain is two urgent WatchConnectivity round trips plus one Core Data
+    /// commit, with NO pod round-trip on the critical path. The one field revoke drained 9 doses
+    /// in 2.32 s, and 20 current-era hand-backs put trigger-to-final-ack at p50 1.0 s. 10 s covers
+    /// 16 of those 20 outright; the resend captures 19. The 20th was an 80 s WatchConnectivity
+    /// transport failure — surrendered to the force path on purpose rather than charged to every
+    /// reclaim as a longer wait.
+    private static let liveResendDelay: TimeInterval = 10
+    private static let liveForceDelay: TimeInterval = 25
+
+    /// The live handover's drain promise: the bar fills to here, and past it the label concedes
+    /// ("No watch reply…") while the bar holds at cap until the force resolves things at 25 s.
+    /// Ten seconds is the resend deadline ON PURPOSE — the concession and the second revoke are
+    /// one event — and it covers the measured drains with room: every answered revoke on record
+    /// drained in under 5 s (p50 1.0 s across 20 hand-backs). Field-ruled: a bar that fills and
+    /// concedes beats a sweep that promises nothing, and the unsure-if-reachable scenario the
+    /// sweep hedged against is not realistic.
+    private static let liveHandoverExpectation: TimeInterval = 10
+
+    // The dead branch has no delay constants: it forces immediately. See armReclaimLadder for
+    // the reasoning — nothing that lands on that branch can answer, and the pulse discriminator
+    // above is what keeps an alive watch off it.
+
+    /// The scheduling seam for the ladder's rungs. nil (production) runs them on `queue` at their
+    /// real deadlines; a test substitutes a virtual clock and fires a rung inline, which is what
+    /// makes a 25-second geometry assertable without waiting 25 real seconds. The label crosses
+    /// too, so a test can assert WHICH rung armed at which deadline rather than merely how many.
+    var scheduler: ((_ delay: TimeInterval, _ label: String, _ work: DispatchWorkItem) -> Void)?
+
+    private func scheduleLadderRung(after delay: TimeInterval, label: String, execute work: DispatchWorkItem) {
+        if let scheduler = scheduler {
+            scheduler(delay, label, work)
+        } else {
+            // WALL clock, not the monotonic default. Dispatch's `.now() + delay` freezes while
+            // iOS suspends the app, and the suspension is APPENDED to the wait: a reclaim's
+            // force rung due at +25 s fired at +85 s in the field because the phone was locked
+            // between the tap and the deadline — the resend at +11 s ran on time, which
+            // brackets the suspension. A wall deadline fires the overdue rung the moment the
+            // app resumes instead of restarting its remaining wait.
+            queue.asyncAfter(wallDeadline: .now() + delay, execute: work)
+        }
+    }
 
     private enum Keys {
         static let state = "PodLoanPhoneController.state"
@@ -716,31 +1236,32 @@ final class PodLoanPhoneController {
         static let deliveredAtGrant = "PodLoanPhoneController.deliveredAtGrant"
         static let expectedUnits = "PodLoanPhoneController.expectedUnits"
         static let watchAuditRan = "PodLoanPhoneController.watchAuditRan"
-        /// R37: the watch's post-takeover odometer, sent in takeoverComplete while the watch is
+        /// The watch's post-takeover odometer, sent in takeoverComplete while the watch is
         /// still alive — which is what makes the end-of-loan audit possible after it dies.
         static let deliveredAtTakeover = "PodLoanPhoneController.deliveredAtTakeover"
-        /// R37: the booked odometer-gap placeholder {epoch, units, bookedAt} awaiting the
+        /// The booked odometer-gap placeholder {epoch, units, bookedAt} awaiting the
         /// watch's real records.
         static let gapBooking = "PodLoanPhoneController.gapBooking"
-        /// R37: a force-reclaim audit armed but not yet resolved (restart survival).
+        /// A force-reclaim audit armed but not yet resolved (restart survival).
         static let pendingForceAudit = "PodLoanPhoneController.pendingForceAudit"
         /// Item 1: the last loan's delivered total measured against a PHONE-read end odometer.
         static let deliveredAuthoritative = "PodLoanPhoneController.deliveredAuthoritative"
-        /// R32(b): every authoritative residual, so the loose thresholds get tightened from data.
+        /// Every authoritative residual, so the loose thresholds get tightened from data.
         static let residualHistory = "PodLoanPhoneController.residualHistory"
+        /// One-shot repair flag for the residuals banked before the bank was scoped to clean
+        /// hand-backs. Date-suffixed on purpose: this names a specific 2026-08-13 field-data
+        /// repair, not a standing rule, so nobody reads it as a recurring purge.
+        static let residualHistoryPurged = "PodLoanPhoneController.residualHistoryPurged.2026-08-13"
     }
 
     private enum NotificationID {
-        static let t1 = "podloan.t1"           // start-confirmation, 5 min (R8)
-        static let duration = "podloan.6h"     // loan-duration reminder, 6 h (R8)
-        static let paused = "podloan.paused1h" // paused-dosing reminder, 1 h repeating (R8)
-        /// Silent informational notice carrying the bench reclaim action — NOT an
-        /// alarm (R8's inventory governs alarms); replaced by real UI later.
-        static let onLoan = "podloan.onloan"
+        static let t1 = "podloan.t1"           // start-confirmation, 5 min
+        static let duration = "podloan.6h"     // loan-duration reminder, 6 h
+        static let paused = "podloan.paused1h" // paused-dosing reminder, 1 h repeating
     }
 
     /// Derived — what v1 kept as the volatile `podLoanedToWatch` flag (:480/:697).
-    /// #92/#109: the grant is out but the watch has NOT confirmed it has the pod. Distinct from
+    /// The grant is out but the watch has NOT confirmed it has the pod. Distinct from
     /// `podIsOnLoan`, which is true here too — this is the narrower "in transit, outbound" window
     /// the tile shows as "Handing over…". Ends when `.takeoverComplete` arrives (state -> .loaned)
     /// or the loan is abandoned.
@@ -769,7 +1290,26 @@ final class PodLoanPhoneController {
         }
         loadStaged()
 
-        // R37: a restart between a force-reclaim and its verified round-trip must not lose the
+        // One-shot: two force-reclaim residuals (+0.800, +0.850) were banked before
+        // bankResidual was scoped to `.handback`, and they are what the next threshold review
+        // would read as the worst clean hand-backs on record. No clean hand-back can exceed
+        // +0.5 U — it is 2.5× the open-loop bound above, and the banked legit distribution tops
+        // out at +0.000 — so that is the cut. Deliberately NOT the +0.20 bound: a legitimate
+        // hand-back above it opens the loop loudly and its residual is still authentic calibration
+        // data. Runs here rather than in bankResidual so the stats stop lying now, instead of
+        // at whenever the next hand-back happens to be.
+        if !UserDefaults.standard.bool(forKey: Keys.residualHistoryPurged) {
+            if var history = UserDefaults.standard.array(forKey: Keys.residualHistory) as? [Double] {
+                let before = history.count
+                history.removeAll { $0 > 0.5 }
+                if history.count != before {
+                    UserDefaults.standard.set(history, forKey: Keys.residualHistory)
+                }
+            }
+            UserDefaults.standard.set(true, forKey: Keys.residualHistoryPurged)
+        }
+
+        // A restart between a force-reclaim and its verified round-trip must not lose the
         // audit — the loop is being held open waiting on the pod's answer, and forgetting the
         // question would leave it that way (or worse, resume on unverified books). Re-arm from
         // the persisted inputs; the settle window re-runs the chase.
@@ -787,7 +1327,7 @@ final class PodLoanPhoneController {
             }
         }
 
-        // R37: a gap placeholder whose delete failed has no other trigger once the watch's
+        // A gap placeholder whose delete failed has no other trigger once the watch's
         // resend loop has been acked off — see retryPersistedGapDeleteIfAny for why. Independent
         // of the audit re-arm above: this fires on every launch that finds ANY persisted
         // booking, whether or not a force-reclaim is currently in flight.
@@ -804,7 +1344,7 @@ final class PodLoanPhoneController {
             // Transient states (reconciling / reclaim-pending / grant-offered) should
             // resolve quickly; a relaunch still sitting in one means it stranded, so
             // give it a bounded self-heal to OWNER (records preserved). LOANED is NOT
-            // healed — a relaunch during a real multi-hour loan is normal (R8); its
+            // healed — a relaunch during a real multi-hour loan is normal; its
             // recovery is a new request or the escape hatch, never a timer.
             if state == .reconciling || state == .reclaimPending {
                 armPausedReminder()
@@ -860,16 +1400,16 @@ final class PodLoanPhoneController {
     // MARK: - Grant (§2.2)
 
     private func handleRequest(_ request: LoanRequest) {
-        // #42 (2026-08-02): suppress a TRANSPORT redelivery of the same request. This is not
+        // Suppress a TRANSPORT redelivery of the same request. This is not
         // the same as a user tapping Start twice — a second tap arrives seconds later against
         // settled state, whereas a redelivered copy arrives milliseconds later while the FIRST
-        // is still in flight. Field 18:20:54 that day: copy 1 granted epoch 122 and released
+        // is still in flight. Seen in the field: copy 1 granted the epoch and released
         // the pod; copy 2 landed in .grantOffered, took the stale-state recovery below,
         // force-reclaimed the pod it had just released (`released=false`) and re-granted —
         // which the reclaim-settle guard then denied. The watch was left holding a grant for a
         // pod still on the phone, so every ladder read returned `no-peripheral` and the loan
-        // died. Genuine retries carry a fresh ID and are unaffected; a pre-207 watch sends no
-        // ID and behaves exactly as before.
+        // died. Genuine retries carry a fresh ID and are unaffected; a watch build that sends
+        // no ID behaves exactly as before.
         if let id = request.requestID, id == lastRequestID,
            let seenAt = lastRequestAt,
            deps.now().timeIntervalSince(seenAt) < Self.requestDedupeWindow {
@@ -927,14 +1467,14 @@ final class PodLoanPhoneController {
             return
         }
 
-        // #42: don't hand a still-returning pod to the watch. After a reclaim the phone
+        // Don't hand a still-returning pod to the watch. After a reclaim the phone
         // enters .owner but the pod BLE isn't truly back for up to ~2 min — reclaimConnection()
         // only re-arms the bid. Granting inside that settle window releases a half-reconnected
         // pod, and the watch's takeover then races the phone's in-flight link → takeover fails
         // (the "rapid hand-back → re-takeover" bug). Deny-and-retry until the pod is genuinely
         // reachable (isConnectionReady) or the settle ceiling clears — conservative: it never
         // grants a not-ready pod, and the user's next Start succeeds once it's home.
-        // #42 (2026-08-02): readiness = a completed pod ROUND-TRIP since the reclaim began,
+        // Readiness = a completed pod ROUND-TRIP since the reclaim began,
         // NOT the peripheral state. isConnectionReady() flips true within seconds of hand-back
         // (baseband connect) while the pod's actual return work hasn't happened; grants issued
         // on that signal released a half-returned pod and the watch takeover flapped against it
@@ -951,7 +1491,7 @@ final class PodLoanPhoneController {
             return
         }
 
-        // Deny-on-missing (R1/R16): the grant is refused, never defaulted.
+        // Deny-on-missing: the grant is refused, never defaulted.
         let settings = deps.settings()
         guard settings.basalRateSchedule != nil,
               settings.insulinSensitivitySchedule != nil,
@@ -963,7 +1503,7 @@ final class PodLoanPhoneController {
             return
         }
 
-        // Fix 1 (#69, field-confirmed boundaryDup=YES): DO NOT emit a boundaryRecord.
+        // Fix 1 (field-confirmed boundaryDup=YES): DO NOT emit a boundaryRecord.
         // The running temp is (near-always) already in `doseHistory` — getNormalizedDoseEntries
         // returns the open mutable temp, fetched below AFTER releaseConnection (which only
         // truncates the in-memory pod state via cancel(at:), never the dose store). A separate
@@ -985,7 +1525,7 @@ final class PodLoanPhoneController {
         } else {
             UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
         }
-        // R37: the LAST loan's takeover odometer must not leak into this one. If a force-reclaim
+        // The LAST loan's takeover odometer must not leak into this one. If a force-reclaim
         // fires before this loan's takeoverComplete arrives, the audit's baseline fallback is the
         // fresh grant capture above — a stale takeover value would put the whole previous loan's
         // delivery inside the "unexplained" window and book a wildly wrong bolus.
@@ -995,7 +1535,7 @@ final class PodLoanPhoneController {
 
         // Pause dosing, then stop bidding for the pod (C5 truncation happens inside).
         deps.setAutomaticDosingPaused(true)
-        // #42 diagnosis: if the phone doesn't actually drop the pod BLE here, the watch's
+        // If the phone doesn't actually drop the pod BLE here, the watch's
         // takeover reads "pod unreachable" (a pod is a single-central peripheral). Relay the
         // release state to the watch's iCloud log — before, and a +3s confirm (release is async).
         let releaseEpoch = epoch + 1
@@ -1024,7 +1564,7 @@ final class PodLoanPhoneController {
         committedCursor = 0
         committedIDs = []
         persistCommittedIDs()
-        // #118: a new grant supersedes any deferred force-reclaim — running it later would
+        // A new grant supersedes any deferred force-reclaim — running it later would
         // stomp this fresh loan straight back to .owner — and any coalesced old-epoch offers:
         // the watch resends whatever went unacked, and those take the stale-offer path.
         pendingForceReclaimReason = nil
@@ -1037,7 +1577,7 @@ final class PodLoanPhoneController {
 
         let grantEpoch = epoch
         let historyStart = handedOverAt.addingTimeInterval(-.hours(16))
-        // Fetch insulin AND carb history before building the grant (#49). Nested so both
+        // Fetch insulin AND carb history before building the grant. Nested so both
         // are in hand at construction; the same 16h window that seeds IOB now seeds COB.
         // 3 h of glucose (the Integral RC look-back) seeds momentum + RC; the 16 h window seeds
         // IOB and COB. Nested so all three are in hand at construction.
@@ -1048,7 +1588,7 @@ final class PodLoanPhoneController {
                 guard let self = self else { return }
                 self.deps.glucoseHistory(glucoseStart) { [weak self] glucose in
                     guard let self = self else { return }
-                    // INSTRUMENTATION ONLY (#45): capture the phone's last-computed prediction
+                    // INSTRUMENTATION ONLY: capture the phone's last-computed prediction
                     // decomposition (cached read, no recompute) as a fourth nested fetch, so it
                     // rides in the grant. Default nil closure ⇒ this is a no-op for tests / old builds.
                     self.deps.predictionSnapshot { [weak self] snapshot in
@@ -1069,13 +1609,13 @@ final class PodLoanPhoneController {
                             settingsTimeZoneID: settings.basalRateSchedule?.timeZone.identifier ?? TimeZone.current.identifier,
                             doseHistory: history.compactMap(Self.loanRecord(from:)),
                             boundaryRecord: nil,   // Fix 1: running temp already lives in doseHistory (see above)
-                            supportsInterimHandback: true,   // WS1 capability gate (REAL-3)
-                            supportsOverrideRecords: true,   // #68B: this phone decodes .overrideChange
+                            supportsInterimHandback: true,   // two-phase hand-back capability gate (REAL-3)
+                            supportsOverrideRecords: true,   // this phone decodes .overrideChange
                             // Same source LoopDataManager:458 reads. Without this the watch runs
                             // Standard RC while this phone may be running Integral — different
                             // predictions from identical inputs, silently (audit 2026-07-22).
                             integralRetrospectiveCorrectionEnabled: UserDefaults.standard.integralRetrospectiveCorrectionEnabled,
-                            // R23 OVERTURNED 2026-08-04 (Jeremy): the wrist follows the phone's
+                            // The wrist follows the phone's
                             // loop mode instead of resetting to OPEN each loan. Snapshotted at
                             // the grant like the therapy settings, so a later phone-side toggle
                             // does not reach through to a loan already in flight.
@@ -1098,26 +1638,26 @@ final class PodLoanPhoneController {
         reclaimToOwner(alert: ("Pod Loan Failed", "The loan could not start (\(reason)). The phone kept the pod."))
     }
 
-    /// T1 (R8): 5 min start-confirmation, cancelled by TakeoverComplete. Row 4:
+    /// T1: 5 min start-confirmation, cancelled by TakeoverComplete. Row 4:
     /// query-before-reclaim — a watch whose TakeoverComplete was lost gets one chance
     /// to prove it holds the pod before auto-reclaim.
-    /// #108: how long to wait before ASKING whether the hand-over arrived. Not how long to wait
+    /// How long to wait before ASKING whether the hand-over arrived. Not how long to wait
     /// before acting — those got conflated, and only the acting needed to be patient.
     ///
-    /// A normal takeover completes in ~13 s (field 2026-08-11), so by 20 s a healthy loan has
+    /// A normal takeover completes in ~13 s, so by 20 s a healthy loan has
     /// already left `.grantOffered` and this never fires. A slow-but-fine takeover answers
     /// "yes I have the grant" and nothing happens. Only an explicit "I never got it" acts.
     private static let grantLostProbeDelay: TimeInterval = 20
 
-    /// #108: probe once, early, for a hand-over that never landed.
+    /// Probe once, early, for a hand-over that never landed.
     ///
     /// The failure it catches: the phone has already stopped dosing and already released the pod
     /// (it must, so the watch can take it) when the grant is lost in transit. Nobody then holds
     /// the pod. It keeps delivering its last program on its own — no hazard — but no loop is
-    /// adjusting anything on either device, and until 2026-08-11 that lasted 5 min 15 s.
+    /// adjusting anything on either device, and that used to last 5 min 15 s.
     ///
-    /// Jeremy hit it installing build 267 (Start tapped ~4 s after install, before the watch
-    /// messaging channel had finished waking); he force-quit rather than wait it out.
+    /// Seen in the field when Start is tapped seconds after an install, before the watch
+    /// messaging channel has finished waking.
     ///
     /// SILENCE IS NOT "NO". An unreachable watch that is perfectly fine and mid-takeover looks
     /// identical, from here, to a watch that never heard anything. So this only sends a question;
@@ -1155,7 +1695,7 @@ final class PodLoanPhoneController {
         guard complete.epoch == epoch, state == .grantOffered else { return }
         t1WorkItem?.cancel()
         cancelNotification(id: NotificationID.t1)
-        // R37: bank the watch's post-takeover odometer NOW, while the watch is alive to send it.
+        // Bank the watch's post-takeover odometer NOW, while the watch is alive to send it.
         // This is what lets the end-of-loan audit run even if the watch is dead by then — the
         // normal audit's baseline arrives in the hand-back offer, which a dead watch never sends.
         if let atTakeover = complete.firstPodStatus.deliveredUnits {
@@ -1166,13 +1706,11 @@ final class PodLoanPhoneController {
                              body: "The pod has been on the watch for 6 hours.",
                              delay: .hours(6), repeats: false)
 
-        // Silent on-loan notice with the escape-hatch action (long-press → Reclaim
-        // Pod). The bench trigger for drills 12/13; the UI phase replaces it.
-        let content = UNMutableNotificationContent()
-        content.title = "Pod Is On the Watch"
-        content.body = "The watch is running the loop. Long-press for the escape hatch."
-        content.categoryIdentifier = NotificationManager.podLoanCategoryIdentifier
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: NotificationID.onLoan, content: content, trigger: nil))
+        // No on-loan notification. One existed here — a designed-silent notice carrying the
+        // bench-era escape-hatch action — until the blanket foreground-banner change promoted
+        // it to a banner announcing what the pump tile already says. Field-ruled clutter, and
+        // its escape-hatch role was superseded by the real UI (the tile's reclaim affordances)
+        // long ago, as its own comment admitted.
     }
 
     private func handleTakeoverFailed(_ failed: TakeoverFailed) {
@@ -1188,7 +1726,7 @@ final class PodLoanPhoneController {
         if state == .grantOffered, report.holdsPod {
             handleTakeoverComplete(TakeoverComplete(epoch: report.epoch, firstPodStatus: LoanPodStatus(timestamp: deps.now(), deliveredUnits: nil, reservoirLevel: nil, isSuspended: false, faultCode: report.podFault)))
         }
-        // #108: the watch says outright that the hand-over never reached it. Take the pod back
+        // The watch says outright that the hand-over never reached it. Take the pod back
         // now rather than in five more minutes — the phone released it for a takeover that is
         // never going to start, so every second after this answer is time nobody is looping.
         //
@@ -1223,7 +1761,7 @@ final class PodLoanPhoneController {
         stage(events: batch.events, tombstones: batch.tombstones)
     }
 
-    /// #35: relay a phone-side hand-back breadcrumb to the watch (which mirrors to iCloud)
+    /// Relay a phone-side hand-back breadcrumb to the watch (which mirrors to iCloud)
     /// AND os_log it, so the phone's offer→write→ack path is visible when the phone
     /// silently fails to ack. Purely diagnostic.
     private func handbackDiag(_ epoch: Int, _ text: String) {
@@ -1242,7 +1780,7 @@ final class PodLoanPhoneController {
         // stale so the sender stops retrying. Dead loans cannot speak.
         let isStale = offer.epoch < epoch
         guard offer.epoch == epoch || isStale else {
-            // #35 liveness: the offer is AHEAD of this phone's epoch (the watch is on a
+            // Liveness: the offer is AHEAD of this phone's epoch (the watch is on a
             // higher epoch than this phone ever minted — e.g. a phone reinstall reset the
             // persisted epoch while WC redelivered a queued offer, failure-matrix row 17).
             // This USED TO return silently, which strands the loan: the phone never acks,
@@ -1257,7 +1795,7 @@ final class PodLoanPhoneController {
         }
         handbackDiag(offer.epoch, "offer RX ev=\(offer.events.count) released=\(offer.released.map { $0 ? "final" : "interim" } ?? "nil") stale=\(isStale) state=\(state.rawValue)")
 
-        // #118: one commit in flight at a time — see the property doc. Coalesce, never drop.
+        // One commit in flight at a time — see the property doc. Coalesce, never drop.
         if commitInFlight {
             let storedIsFinal = coalescedOffers[offer.epoch]?.released == true
             if !(storedIsFinal && offer.released != true) {
@@ -1267,7 +1805,7 @@ final class PodLoanPhoneController {
             return
         }
 
-        // WS1 (two-phase hand-back): an INTERIM offer (released == false) means the
+        // Two-phase hand-back: an INTERIM offer (released == false) means the
         // watch is still dosing and still owns the pod — commit + ack ONLY; no state
         // change, no reclaim, tile stays "Pod on Watch". Legacy senders (released
         // nil) only offered after stopping, so nil = final.
@@ -1296,18 +1834,18 @@ final class PodLoanPhoneController {
         // offer. A duplicate final (routine: 15s resends vs ack latency) arrives
         // after finishLoanAfterCommit cleared `staged` — its re-staged tail is a
         // SUBSET of the loan, and auditing the whole-loan odometer against it mints
-        // phantom remainders (the R1 bug, reintroduced via this path). Interim
+        // phantom remainders. Interim
         // offers carry freshened=false anyway; this makes the skip explicit.
         let auditThisOffer = !isStale && isFinal && state == .reconciling
 
         stage(events: offer.events, tombstones: offer.tombstones)
         // Round-4 fix: dedup by EVENT ID only. The seq>cursor condition assumed a
-        // gapless cursor; WS1 withholding creates gaps (an in-flight command's seq
+        // gapless cursor; two-phase withholding creates gaps (an in-flight command's seq
         // can arrive AFTER later events were acked), and it would silently discard
         // the late-classified event. committedIDs is persisted — the ID filter is
         // the true exactly-once invariant.
         //
-        // #102 (field 2026-08-11 00:16): A MESSAGE MAY ONLY CAUSE WORK RELATED TO ITSELF.
+        // A MESSAGE MAY ONLY CAUSE WORK RELATED TO ITSELF.
         //
         // The transport guarantees delivery, not timeliness and not exactly-once — a copy of an
         // offer can arrive an hour after the original was handled. The protocol is built for
@@ -1327,7 +1865,7 @@ final class PodLoanPhoneController {
             .filter { !stagedTombstones.contains($0.id) && !committedIDs.contains($0.id) }
             .filter { ownEventIDs?.contains($0.id) ?? true }
             .sorted { $0.seq < $1.seq }
-        // WS1: the odometer audit must see the WHOLE loan's journal, not the tail —
+        // The odometer audit must see the WHOLE loan's journal, not the tail —
         // interim-committed temps/suspends are real recorded insulin, not schedule.
         let allStagedEvents = staged.values
             .filter { !stagedTombstones.contains($0.id) }
@@ -1341,8 +1879,8 @@ final class PodLoanPhoneController {
             schedule: deps.settings().basalRateSchedule,
             loanStart: loanStart,
             loanEnd: offer.handedBackAt,
-            // Interim WS1 drain (watch still dosing): don't clamp a still-open temp to
-            // this drain instant — that would orphan its post-drain delivery (#69).
+            // Interim drain (watch still dosing): don't clamp a still-open temp to
+            // this drain instant — that would orphan its post-drain delivery.
             isFinalHandback: isFinal)
         let outcome = LoanReconciler.reconcile(input)
 
@@ -1354,20 +1892,20 @@ final class PodLoanPhoneController {
             UserDefaults.standard.set(expected, forKey: Keys.expectedUnits)
             UserDefaults.standard.set(offer.odometer?.freshenSucceeded == true, forKey: Keys.watchAuditRan)
 
-            // THE AUDIT (2026-08-11, Jeremy's design): does the pod's own odometer agree with the
+            // THE AUDIT: does the pod's own odometer agree with the
             // delivery history the watch claims to have executed?
             //
             //   delivered = the pod's cumulative-delivered DELTA over the loan — an independent,
             //               pulse-counted physical measurement we did not compute.
             //   expected  = expectedInsulin(ALL staged events + the basal schedule filling every
             //               uncovered gap) — i.e. the odometer reading implied by our own records.
-            //   residual  = delivered - expected. THIS is the number the R32 open-loop decision
+            //   residual  = delivered - expected. THIS is the number the open-loop decision
             //               keys on. Tolerance is ONE PULSE (0.05 U) plus any bolus mid-delivery:
             //               both sides are pulse-quantized (supported rates are multiples of 0.05),
             //               so the only genuine ambiguity is whether the pulse due at the boundary
             //               has fired yet. That makes the threshold principled rather than guessed.
             //
-            // WHY THIS LINE CHANGED (field 2026-08-11, twice): it used to print cmdCont/cmdFloor
+            // WHY THIS LINE CHANGED: it used to print cmdCont/cmdFloor
             // from `outcome.doses` — the doses committed in THIS drain — against `delivered`, which
             // spans the WHOLE loan. After an interim drain the final offer carries no events, so the
             // line read "delivered=6.000 cmdFloor=0.000 remFloor=+6.000" and again "delivered=1.400
@@ -1377,7 +1915,7 @@ final class PodLoanPhoneController {
             // answer. The drain-scoped figures are kept, clearly labelled, because they are still
             // useful for "what did THIS drain write".
             //
-            // Still NO user-facing action here (R32's warning + the IOB valve remain unwired) —
+            // Still NO user-facing action here (the warning + the IOB valve remain unwired) —
             // this is the measurement that has to come before the threshold.
             let delivered = offer.odometer.map { $0.deliveredLatest - $0.deliveredAtStart }
             let drainCont = outcome.doses.reduce(0.0) { $0 + $1.programmedUnits }
@@ -1390,7 +1928,7 @@ final class PodLoanPhoneController {
                 drainCont, drainFloor,
                 loanMin, allStagedEvents.count, offer.odometer?.freshenSucceeded == true ? "Y" : "N"))
 
-            // …and hold the audit open for a FIRST-HAND end reading (item 1, 2026-08-11).
+            // …and hold the audit open for a FIRST-HAND end reading.
             //
             // The line above is provisional because its end reading comes from the watch, and at
             // hand-back the watch cannot read the pod: it released the BLE link after its last dose
@@ -1399,7 +1937,7 @@ final class PodLoanPhoneController {
             // said at the last dose — up to ~5 minutes and one temp's delivery ago.
             //
             // The phone, meanwhile, does a real pod round-trip within seconds of reclaim to verify
-            // the pod is home (#42's chase). It was already reading the odometer and throwing the
+            // the pod is home (the settle-window chase). It was already reading the odometer and throwing the
             // value away. Take it: same audit, same tolerance, an endpoint that is actually the end.
             if isFinal, let start = offer.odometer?.deliveredAtStart {
                 pendingHandbackAudit = PendingHandbackAudit(
@@ -1410,14 +1948,14 @@ final class PodLoanPhoneController {
             }
         }
 
-        // No additional insulin is added at hand-back (Jeremy 2026-07-27): the R6 positive-remainder
+        // No additional insulin is added at hand-back: the positive-remainder
         // IOB valve is disabled for now. IOB comes purely from the streamed reconciled records — stock-
         // like trust; stock never injects odometer-derived IOB. outcome.positiveRemainderUnits is still
         // computed (and captured above) but no longer consumed. Re-enable if/when the reconciliation
         // warning is redesigned with a proper threshold.
         let doses = outcome.doses
 
-        // WS1: the still-open temp (outcome.openEventID) is skipped by the reconciler and
+        // The still-open temp (outcome.openEventID) is skipped by the reconciler and
         // kept out of committedIDs, so it re-drains and is written (clamped, immutable) on
         // the final drain. But we STILL ack its seq (newCursor below uses `events`, not
         // `committable`) so the watch's finalize gate (unackedEvents empty) can clear —
@@ -1428,10 +1966,10 @@ final class PodLoanPhoneController {
         // reconciling, 1 h reminder repeats (row 11) — never dose on incomplete records.
         // Loan insulin goes through addPumpEvents (PumpEvent table + stock reconciled() +
         // HealthKit); lastReconciliation = handedBackAt (the finalized-through watermark).
-        // #102 belt-and-braces: never hand the store a dose that ends before it starts.
+        // Belt-and-braces: never hand the store a dose that ends before it starts.
         //
         // The stale-offer scoping above removes the cause we know about, but this kills the
-        // whole class — and it is the class that is dangerous, because 2026-08-11 only surfaced
+        // whole class — and it is the class that is dangerous, because that failure only surfaced
         // by luck. Those durations were so wrong that Core Data refused the batch loudly. Shift
         // the timing slightly and the same defect yields durations that are merely WRONG, which
         // validate fine and quietly corrupt IOB. Drop the bad rows, keep the good ones, and say
@@ -1445,24 +1983,27 @@ final class PodLoanPhoneController {
 
         let writeStart = deps.now()
         handbackDiag(offer.epoch, "write START \(sane.count) dose(s) (final=\(isFinal))")
-        commitInFlight = true   // #118: cleared first thing in the completion, both paths
+        // Held until BOTH store writes are done (pump events, then the e44 backfill) —
+        // the latch's job is to keep a second Core Data write from starting, and the backfill
+        // is one. Cleared on every exit path below.
+        commitInFlight = true
         deps.addPumpEvents(newPumpEvents(from: sane), offer.handedBackAt) { [weak self] error in
             guard let self = self else { return }
             self.queue.async {
-                self.commitInFlight = false
                 if let error = error {
+                    self.commitInFlight = false
                     self.handbackDiag(offer.epoch, "write FAILED: \(String(describing: error))")
                     os_log("Reconcile write failed: %{public}@", log: self.log, type: .fault, String(describing: error))
-                    // #102: ONCE per failing state, not once per retry. Offers resend every 15 s,
-                    // so the 2026-08-11 wedge produced 10-12 identical "Watch Records Not Saved"
-                    // warnings on the wrist for a single phone-side bug. A wall of identical
+                    // ONCE per failing state, not once per retry. Offers resend every 15 s,
+                    // so one phone-side bug can produce 10-12 identical "Watch Records Not Saved"
+                    // warnings on the wrist. A wall of identical
                     // alarms for one fault is how people learn to ignore alarms.
                     if !self.hasWarnedRecordsNotSaved {
                         self.hasWarnedRecordsNotSaved = true
                         self.deps.issueNotice("Watch Records Not Saved", "The watch session's records could not be saved. Dosing stays paused; will retry on the next hand-back attempt.")
                     }
                     self.armPausedReminder()
-                    // #118: no coalesced replay on failure — the watch's 15 s resend is the
+                    // No coalesced replay on failure — the watch's 15 s resend is the
                     // retry, and a hot local replay of the same failing write would spin. A
                     // deferred force-reclaim DOES run: it is the loan's only way out, and its
                     // own path re-attempts the staged records.
@@ -1474,77 +2015,162 @@ final class PodLoanPhoneController {
                 }
                 self.hasWarnedRecordsNotSaved = false   // recovered — a future failure is news again
 
-                // #66 (2026-08-04): gate carbs on !isStale, matching the override change below.
-                // The commit used to run unconditionally while committedIDs.formUnion sat inside
-                // the `if !isStale` block at the bottom of this closure — so a stale redelivery
-                // committed the carbs and recorded nothing, and every resend added another copy.
-                // Insulin is immune (NewPumpEvent.raw dedupes at the store); carbs have no
-                // identity at all, so the cursor is the only guard and it was being skipped.
-                if !isStale {
-                    for carb in outcome.carbs {
-                        self.deps.addCarb(carb.entry, carb.eventID.uuidString) { _ in }  // R36: insert-if-absent on the wire identity
-                    }
-                    // R30 (#89): deletions ride the same staleness gate as adds — a dead loan
-                    // may not mutate the carb store in either direction.
-                    for gone in outcome.deletedCarbs {
-                        self.handbackDiag(offer.epoch, String(format: "carb DELETE from wrist — %.0f g @ %@ sync=%@", gone.grams, String(describing: gone.startDate), gone.syncIdentifier.map { String($0.prefix(8)) } ?? "nil"))
-                        self.deps.deleteCarb(gone) { error in
-                            // Outcome, always — a delete that silently missed is how a carb
-                            // survives to the next grant and "resurrects" on the wrist.
-                            self.handbackDiag(offer.epoch, error == nil
-                                ? String(format: "carb DELETE applied on phone — %.0f g", gone.grams)
-                                : String(format: "carb DELETE MISSED on phone — %.0f g: %@", gone.grams, String(describing: error!)))
+                // A2: the earliest dose the e44 backfill restated, filled in by the branch below
+                // and read back inside finishCommit. Declared ahead of the closure because the
+                // backfill is decided after it — the prune must span BOTH writes, and the
+                // backfill routinely reaches further back than the pump-event batch (it restates
+                // the whole loan window, including temps the boundary dropped).
+                var backfillEarliestStart: Date? = nil
+
+                // Everything downstream of the store writes — carbs, overrides, the ack, the gap
+                // retire — held in one closure so the e44 backfill below can fail the whole commit
+                // the way a failed pump-event write already does: nothing committed past the
+                // insulin, and no ack.
+                let finishCommit: (Error?) -> Void = { [weak self] backfillError in
+                    guard let self = self else { return }
+                    self.queue.async {
+                        self.commitInFlight = false
+                        if let backfillError = backfillError {
+                            // Same treatment as a failed write, and for the same reason: the ack is
+                            // what stops the watch's 15 s resend, so acking a half-landed commit
+                            // retires the only retry we have. The upsert is idempotent, so the
+                            // resend costs nothing.
+                            self.handbackDiag(offer.epoch, "backfill FAILED: \(String(describing: backfillError))")
+                            os_log("Loan dose backfill failed: %{public}@", log: self.log, type: .fault, String(describing: backfillError))
+                            if !self.hasWarnedRecordsNotSaved {
+                                self.hasWarnedRecordsNotSaved = true
+                                self.deps.issueNotice("Watch Records Not Saved", "The watch session's records could not be saved. Dosing stays paused; will retry on the next hand-back attempt.")
+                            }
+                            self.armPausedReminder()
+                            if let reason = self.pendingForceReclaimReason {
+                                self.pendingForceReclaimReason = nil
+                                self.forceReclaimToOwner(reason: reason)
+                            }
+                            return
                         }
+
+                        // Gate carbs on !isStale, matching the override change below.
+                        // The commit used to run unconditionally while committedIDs.formUnion sat inside
+                        // the `if !isStale` block at the bottom of this closure — so a stale redelivery
+                        // committed the carbs and recorded nothing, and every resend added another copy.
+                        // Insulin is immune (NewPumpEvent.raw dedupes at the store); carbs have no
+                        // identity at all, so the cursor is the only guard and it was being skipped.
+                        if !isStale {
+                            for carb in outcome.carbs {
+                                self.deps.addCarb(carb.entry, carb.eventID.uuidString) { _ in }  // insert-if-absent on the wire identity
+                            }
+                            // Deletions ride the same staleness gate as adds — a dead loan
+                            // may not mutate the carb store in either direction.
+                            for gone in outcome.deletedCarbs {
+                                self.handbackDiag(offer.epoch, String(format: "carb DELETE from wrist — %.0f g @ %@ sync=%@", gone.grams, String(describing: gone.startDate), gone.syncIdentifier.map { String($0.prefix(8)) } ?? "nil"))
+                                self.deps.deleteCarb(gone) { error in
+                                    // Outcome, always — a delete that silently missed is how a carb
+                                    // survives to the next grant and "resurrects" on the wrist.
+                                    self.handbackDiag(offer.epoch, error == nil
+                                        ? String(format: "carb DELETE applied on phone — %.0f g", gone.grams)
+                                        : String(format: "carb DELETE MISSED on phone — %.0f g: %@", gone.grams, String(describing: error!)))
+                                }
+                            }
+                        } else if !outcome.carbs.isEmpty {
+                            self.handbackDiag(offer.epoch, "stale offer — \(outcome.carbs.count) carb(s) NOT committed (a dead loan cannot add carbs)")
+                        }
+
+                        // The watch owned overrides for the loan, so a drained override
+                        // record lands on the phone here — after the store write commits, alongside
+                        // carbs, and touching NO dose accounting. Stale offers are excluded: a dead
+                        // loan cannot change live therapy settings.
+                        if !isStale, let change = outcome.overrideChange {
+                            self.applyWatchOverride(change, epoch: offer.epoch, isFinal: isFinal)
+                        }
+
+                        // Over/under delivery warning removed for now (Jeremy 2026-07-27): the hand-back is
+                        // silent — records committed, delta captured in the [phone] reconcile line above, no
+                        // user notice. outcome.residualShortfallUnits is still computed but no longer surfaced;
+                        // the warning returns once a threshold is chosen from the captured field data.
+
+                        let newCursor = events.map(\.seq).max() ?? self.committedCursor
+                        if !isStale {
+                            self.committedCursor = max(self.committedCursor, newCursor)
+                            self.committedIDs.formUnion(committable.map(\.id))
+                            self.persistCommittedIDs()
+                            self.sendMessage(.handbackAck(HandbackAck(epoch: self.epoch, committedCursor: self.committedCursor)))
+                            self.handbackDiag(self.epoch, String(format: "write DONE %.0fms → ACK cursor %d", self.deps.now().timeIntervalSince(writeStart) * 1000, self.committedCursor))
+                            if isFinal, self.state == .reconciling {
+                                // Only the transition-owning offer finishes; a duplicate final
+                                // offer post-.owner just committed any unseen tail + re-acked.
+                                self.finishLoanAfterCommit()
+                            } else if !isFinal {
+                                os_log("Interim drain committed to cursor %d — watch still dosing", log: self.log, type: .default, self.committedCursor)
+                            }
+                        } else {
+                            self.sendMessage(.handbackAck(HandbackAck(epoch: offer.epoch, committedCursor: newCursor, stale: true)))
+                        }
+                        // A2: every dose this commit just wrote sits behind the phone's counteraction
+                        // frontier — that is what a loan window IS — so the memo must be pruned back
+                        // to the earliest of them or COB keeps attributing the loan's insulin as
+                        // unexplained glucose movement. Outside the staleness gate for the same
+                        // reason the retire below is: a stale offer still writes its doses, so it
+                        // still rewrites insulin history. Both writes count — the pump-event batch
+                        // (`sane`) and the e44 backfill.
+                        if let earliest = (sane.map(\.startDate) + (backfillEarliestStart.map { [$0] } ?? [])).min() {
+                            self.deps.insulinHistoryRewritten(earliest)
+                        }
+                        // Outside the staleness gate ON PURPOSE — a watch that comes back after a
+                        // NEW loan has started re-offers its old epoch as stale, and stale offers still
+                        // write their doses ("historical truth" above). If those doses explain a gap
+                        // booking, the placeholder retires regardless of loan-state bookkeeping.
+                        self.retireGapBookingIfExplained(
+                            offerEpoch: offer.epoch,
+                            dosesJustCommitted: sane,
+                            carbsJustCommitted: isStale ? 0 : outcome.carbs.count)
+                        self.drainAfterCommit()   // replay one coalesced offer, or run a deferred force-reclaim
                     }
-                } else if !outcome.carbs.isEmpty {
-                    self.handbackDiag(offer.epoch, "stale offer — \(outcome.carbs.count) carb(s) NOT committed (a dead loan cannot add carbs)")
                 }
 
-                // #68 part B: the watch owned overrides for the loan, so a drained override
-                // record lands on the phone here — after the store write commits, alongside
-                // carbs, and touching NO dose accounting. Stale offers are excluded: a dead
-                // loan cannot change live therapy settings.
-                if !isStale, let change = outcome.overrideChange {
-                    self.applyWatchOverride(change, epoch: offer.epoch, isFinal: isFinal)
-                }
-
-                // Over/under delivery warning removed for now (Jeremy 2026-07-27): the hand-back is
-                // silent — records committed, delta captured in the [phone] reconcile line above, no
-                // user notice. outcome.residualShortfallUnits is still computed but no longer surfaced;
-                // the warning returns once a threshold is chosen from the captured field data.
-
-                let newCursor = events.map(\.seq).max() ?? self.committedCursor
-                if !isStale {
-                    self.committedCursor = max(self.committedCursor, newCursor)
-                    self.committedIDs.formUnion(committable.map(\.id))
-                    self.persistCommittedIDs()
-                    self.sendMessage(.handbackAck(HandbackAck(epoch: self.epoch, committedCursor: self.committedCursor)))
-                    self.handbackDiag(self.epoch, String(format: "write DONE %.0fms → ACK cursor %d", self.deps.now().timeIntervalSince(writeStart) * 1000, self.committedCursor))
-                    if isFinal, self.state == .reconciling {
-                        // Only the transition-owning offer finishes; a duplicate final
-                        // offer post-.owner just committed any unseen tail + re-acked.
-                        self.finishLoanAfterCommit()
-                    } else if !isFinal {
-                        os_log("Interim drain committed to cursor %d — watch still dosing", log: self.log, type: .default, self.committedCursor)
+                // e44 (field, −0.25 U): the pump-event write above CANNOT land a
+                // basal-shaped dose that starts before the delivery store's last immutable basal
+                // end date — DoseStore.swift:1174 drops it from the InsulinDeliveryStore sync,
+                // with a bolus-only escape. After a force-reclaim the salvage's clamped tail AND
+                // the phone's own resumed records sit ahead of the entire loan window, so a
+                // journal that comes back late writes its PumpEvent rows fine and NONE of its
+                // temps reach the books: the bolus survives, the temps vanish, IOB under-counts.
+                // That asymmetry is the field signature exactly.
+                //
+                // So restate the WHOLE loan's doses under their store identity and upsert them
+                // (DoseStore.syncDoseEntries — update-or-insert on syncIdentifier, built for a
+                // remote authoritative store, which is what the watch journal is). Inserts the
+                // dropped temps, no-op-updates the clean path's rows, and corrects the
+                // salvage-clamped extension to the journal's true end: same event UUID, same
+                // identity, so "real records replace estimates" happens as an
+                // upsert-correction instead of a delete.
+                //
+                // STALE OFFERS SKIP IT: a dead loan speaks only for its own records, and
+                // reconciling the whole staged set against a stale `handedBackAt` is exactly the
+                // defect that wrote temps ending before they started.
+                let backfillOutcome = LoanReconciler.reconcile(LoanReconciler.Input(
+                    events: allStagedEvents,
+                    odometer: nil,
+                    schedule: self.deps.settings().basalRateSchedule,
+                    loanStart: loanStart,
+                    loanEnd: offer.handedBackAt,
+                    isFinalHandback: isFinal))
+                let backfill = self.storeIdentifiedDoses(from: self.truncatingOverlaps(
+                    backfillOutcome.doses.filter { $0.endDate >= $0.startDate }))
+                if isStale || backfill.isEmpty {
+                    if isStale {
+                        self.handbackDiag(offer.epoch, "backfill SKIPPED — a stale offer speaks only for its own records (#102)")
                     }
+                    finishCommit(nil)
                 } else {
-                    self.sendMessage(.handbackAck(HandbackAck(epoch: offer.epoch, committedCursor: newCursor, stale: true)))
+                    self.handbackDiag(offer.epoch, "backfill \(backfill.count) loan-window dose(s) by store identity (e44 boundary)")
+                    backfillEarliestStart = backfill.map(\.startDate).min()   // A2: read by finishCommit
+                    self.deps.backfillDoses(backfill, finishCommit)
                 }
-                // R37: outside the staleness gate ON PURPOSE — a watch that comes back after a
-                // NEW loan has started re-offers its old epoch as stale, and stale offers still
-                // write their doses ("historical truth" above). If those doses explain a gap
-                // booking, the placeholder retires regardless of loan-state bookkeeping.
-                self.retireGapBookingIfExplained(
-                    offerEpoch: offer.epoch,
-                    dosesJustCommitted: sane.count,
-                    unitsJustCommitted: sane.reduce(0.0) { $0 + ($1.deliveredUnits ?? $1.programmedUnits) },
-                    carbsJustCommitted: isStale ? 0 : outcome.carbs.count)
-                self.drainAfterCommit()   // #118
             }
         }
     }
 
-    /// #118: runs on `queue` after a successful commit. The deferred force-reclaim goes first
+    /// Runs on `queue` after a successful commit. The deferred force-reclaim goes first
     /// (it writes any remaining staged tail itself, now against an up-to-date committedIDs);
     /// then ONE coalesced offer replays — one per completion, so a storm drains serially.
     private func drainAfterCommit() {
@@ -1557,7 +2183,7 @@ final class PodLoanPhoneController {
         }
     }
 
-    // MARK: - #68 part B: watch-enacted overrides landing on the phone
+    // MARK: - Watch-enacted overrides landing on the phone
 
     /// Apply (or clear) a watch-enacted override on this phone, idempotently.
     ///
@@ -1628,9 +2254,11 @@ final class PodLoanPhoneController {
     }
 
     private func finishLoanAfterCommit() {
+        // The drain landed — whatever rungs a reclaim tap left armed have nothing left to do, and
+        // a resend firing now would push a revoke at a watch that has already handed back.
+        cancelReclaimLadder()
         cancelNotification(id: NotificationID.duration)
         cancelNotification(id: NotificationID.paused)
-        cancelNotification(id: NotificationID.onLoan)
         (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
         pendingRevoke = false
         state = .owner
@@ -1665,9 +2293,9 @@ final class PodLoanPhoneController {
         }
     }
 
-    /// The post-reclaim re-audit. DIAGNOSTIC-ONLY as of 2026-07-27 (Jeremy): it re-reads
+    /// The post-reclaim re-audit. DIAGNOSTIC-ONLY: it re-reads
     /// the pod's odometer ~90 s after reclaim and os_log's delivered-vs-expected, but takes
-    /// NO user-facing action — the R6 IOB valve and the over/under notices are both disabled
+    /// NO user-facing action — the IOB valve and the over/under notices are both disabled
     /// (deferred until a proper warning threshold is chosen). The dose-integrity commit path
     /// and the [phone] reconcile capture at the drain audit are the trustworthy signals; this
     /// is a rough breadcrumb only (its `expected` is the biased continuous estimate and its
@@ -1707,37 +2335,147 @@ final class PodLoanPhoneController {
         }
     }
 
-    // MARK: - Escape hatch (§3.1 RECLAIM_PENDING, R7)
+    // MARK: - Escape hatch (§3.1 RECLAIM_PENDING)
 
     func reclaimNow() {
         queue.async {
             guard self.podIsOnLoan else { return }
+            self.reclaimDisplayAnchor = self.deps.now()   // the user's wait starts at the tap
+            // Hold background execution from the tap: without it, tap-and-pocket freezes the
+            // ladder and orphans the pod until the user next looks at the phone.
+            self.deps.beginReclaimBackgroundTask()
             self.pendingRevoke = true
-            self.cancelNotification(id: NotificationID.onLoan)
             self.sendMessage(.revoke(Revoke(epoch: self.epoch)))
             (self.deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
             self.state = .reclaimPending
             self.armPausedReminder()
             // §5.3.3 dead-watch path: audit against the schedule, notice-only.
             self.schedulePostReclaimReAudit(recordsCommitted: false)
-            // R7 override, made real: if the watch never drains within 45 s (dead /
-            // gone / already handed off), force back to OWNER so we never strand.
-            self.reclaimTimeoutWork?.cancel()
-            let work = DispatchWorkItem { [weak self] in
-                guard let self = self, self.state == .reclaimPending else { return }
-                self.forceReclaimToOwner(reason: "reclaim timed out — watch did not drain")
-            }
-            self.reclaimTimeoutWork = work
-            self.queue.asyncAfter(deadline: .now() + 45, execute: work)
+            self.armReclaimLadder()
         }
     }
 
-    /// The R7 explicit override, made real: abandon a stuck/stale loan and return to
+    /// Two attempts, then force — on a deadline chosen ONCE, here, from the evidence available at
+    /// the tap.
+    ///
+    /// The two regimes are separable before the wait starts, and the separator is the loan pulse
+    /// rather than reachability: a watch holding the pod checks in every 300 s like a metronome,
+    /// so the age of the last contact says whether there is a drain to wait for. Reachability
+    /// only ever ADDS to the live side — it is a channel selector in this codebase, false for a
+    /// healthy backgrounded watch, so it can prove life but never absence.
+    ///
+    /// Resending the revoke is safe: it carries only the epoch, and the watch guards on epoch
+    /// plus phase, so the second copy is either the first one the watch ever sees or a no-op.
+    ///
+    /// The cost of the shorter wait, stated where it is paid: reclaiming earlier makes it likelier
+    /// that a returning watch finds a NEWER loan already started, and a stale offer forfeits the
+    /// wrist's final loop-mode inheritance and one calibration sample. That is why the live branch
+    /// stays generous enough for a real drain to finish instead of being tuned to the p50.
+    private func armReclaimLadder() {
+        cancelReclaimLadder()
+
+        let reachable = deps.isWatchReachable()
+        let lastContact = deps.lastWatchContactAt()
+        let contactAge = lastContact.map { deps.now().timeIntervalSince($0) }
+        let heardRecently = (contactAge ?? .greatestFiniteMagnitude) < Self.watchContactLivenessWindow
+        let branch: ReclaimLadder.Branch = (reachable || heardRecently) ? .live : .dead
+
+        // The DEAD branch does not wait (field ruling, 2026-08-14). The reclaims that land here
+        // are, realistically: a lost watch, or a watch out of battery — and in both, nothing can
+        // answer a revoke, so a wait is ceremony. The scenario that LOOKS risky — the watch is
+        // actually alive in a bag and the user just wants the pod back on the phone — cannot
+        // normally reach this branch at all: an alive watch with the app running pulses its log
+        // every 300 s (the keepalive holds it awake for the whole loan; 283-302 s across 134
+        // measured gaps), so it is heardRecently and lands LIVE. The guard for that scenario is
+        // the pulse discriminator above, not a wait; the wait never protected anything.
+        //
+        // An earlier version waited out two revoke attempts here. No dead-branch revoke was
+        // ever answered — though honestly, the bench tests had the watch off by design, so that
+        // record is close to tautological. The structural argument is the one that holds: a
+        // watch silent past the liveness window either cannot answer or is not running, and in
+        // both cases its records come home the same way whenever it returns — the queued revoke
+        // is consumed at relaunch, the watch offers what it has, and the booked gap retires.
+        // Waiting changed none of that; it only delayed the force.
+        //
+        // The revoke is still SENT — it arms the split-brain guard on any watch that later
+        // wakes, and the returning-watch record flow rides on it. Fire, and force now. The
+        // force itself still defers behind an in-flight commit, unchanged.
+        let resendDelay: TimeInterval? = branch == .live ? Self.liveResendDelay : nil
+        let forceDelay: TimeInterval = branch == .live ? Self.liveForceDelay : 0
+
+        let started = deps.now()
+        reclaimLadder = ReclaimLadder(branch: branch,
+                                      startedAt: started,
+                                      resendAt: started.addingTimeInterval(resendDelay ?? 0),
+                                      forceAt: started.addingTimeInterval(forceDelay),
+                                      attempts: 1,          // the tap's own revoke
+                                      forced: false)
+
+        // The evidence, not just the verdict: a field log has to be auditable after the fact for
+        // whether the branch this reclaim took was the right one.
+        let ageText = contactAge.map { String(format: "%.1fs ago", $0) } ?? "never"
+        let planText = branch == .live
+            ? String(format: "resend +%.0fs, force +%.0fs", Self.liveResendDelay, Self.liveForceDelay)
+            : "force NOW (dead branch waits for nothing; the revoke is fire-and-forget)"
+        handbackDiag(epoch, String(format: "reclaim ladder %@ — last watch contact %@, reachable %d · %@",
+                                   branch.rawValue, ageText, reachable ? 1 : 0, planText))
+
+        scheduleRungs(resendIn: resendDelay, forceIn: forceDelay)
+    }
+
+    /// Arm (or re-arm) the two rungs. Delays are measured from NOW, so a caller that moves a
+    /// deadline passes the remaining time rather than the original budget.
+    private func scheduleRungs(resendIn resendDelay: TimeInterval?, forceIn forceDelay: TimeInterval) {
+        reclaimResendWork?.cancel()
+        reclaimTimeoutWork?.cancel()
+
+        if let resendDelay = resendDelay {
+            let resend = DispatchWorkItem { [weak self] in
+                guard let self = self, self.state == .reclaimPending,
+                      var ladder = self.reclaimLadder, !ladder.forced else { return }
+                // Two attempts is the whole budget. A reachability change can already have spent
+                // the second one — better timed than this rung, since the watch was awake for it.
+                guard ladder.attempts < 2 else { return }
+                self.sendMessage(.revoke(Revoke(epoch: self.epoch)))
+                ladder.attempts += 1
+                self.reclaimLadder = ladder
+                self.handbackDiag(self.epoch, "reclaim revoke RESENT (attempt \(ladder.attempts) of 2) — no drain yet on the \(ladder.branch.rawValue) branch")
+            }
+            reclaimResendWork = resend
+            scheduleLadderRung(after: max(resendDelay, 0), label: "reclaim-resend", execute: resend)
+        } else {
+            reclaimResendWork = nil
+        }
+
+        let force = DispatchWorkItem { [weak self] in
+            guard let self = self, self.state == .reclaimPending, let ladder = self.reclaimLadder else { return }
+            // Mark BEFORE forcing: a force can be deferred behind an in-flight hand-back commit,
+            // and while it waits the tile must say what is actually happening.
+            self.reclaimLadder?.forced = true
+            self.forceReclaimToOwner(reason: "reclaim ladder spent on the \(ladder.branch.rawValue) branch — \(ladder.attempts) revoke attempt(s), watch did not drain")
+        }
+        reclaimTimeoutWork = force
+        scheduleLadderRung(after: max(forceDelay, 0), label: "reclaim-force", execute: force)
+    }
+
+    /// Kill every pending rung and forget the ladder. Called wherever a reclaim stops being in
+    /// flight — a completed drain, a force that landed, a fresh tap, an abandoned loan — so no
+    /// rung can resend a revoke into a loan that is already over, and so the determinate bar
+    /// stops the moment the handover does.
+    private func cancelReclaimLadder() {
+        reclaimResendWork?.cancel()
+        reclaimResendWork = nil
+        reclaimTimeoutWork?.cancel()
+        reclaimTimeoutWork = nil
+        reclaimLadder = nil
+    }
+
+    /// The explicit override, made real: abandon a stuck/stale loan and return to
     /// OWNER unconditionally. Records are NOT dropped blindly — any staged events are
     /// written to the store first (records are truth; never understate IOB), then the
     /// pod is reclaimed and dosing restored. Used when a new request proves the old
     /// loan is dead, when reclaim times out, or on a relaunch into a stranded state.
-    // (Removed logReconciledDoses — the #69 forensic dump built on `programmedUnits` = rate×FULL
+    // (Removed logReconciledDoses — the forensic dump built on `programmedUnits` = rate×FULL
     // temp window, the untruncated "implied Σ" over-count. It was os_log-only, fed no logic, and its
     // sum was physically impossible as delivery (exceeded max basal), so it consistently misled.
     // The trustworthy commanded number is the floored reconciled dose total; the real hand-back
@@ -1745,14 +2483,13 @@ final class PodLoanPhoneController {
 
     func forceReclaimToOwner(reason: String) {
         os_log("Force reclaim to OWNER: %{public}@", log: log, type: .default, reason)
-        // #118: never mid-write — see pendingForceReclaimReason's doc. drainAfterCommit runs it.
+        // Never mid-write — see pendingForceReclaimReason's doc. drainAfterCommit runs it.
         if commitInFlight {
             handbackDiag(epoch, "force reclaim DEFERRED (#118) — a hand-back commit is writing; runs when it lands")
             pendingForceReclaimReason = reason
             return
         }
-        reclaimTimeoutWork?.cancel()
-        cancelNotification(id: NotificationID.onLoan)
+        cancelReclaimLadder()
         cancelNotification(id: NotificationID.paused)
         cancelNotification(id: NotificationID.duration)
 
@@ -1775,22 +2512,39 @@ final class PodLoanPhoneController {
             // delivered-but-unstreamed BOLUS was in this set at reclaim time or arrived minutes
             // later with the returning watch — the difference between complete books and the
             // loop resuming while under-counting IOB. One line answers it.
-            // deliveredUnits ?? programmedUnits — same convention as the LoanDoseRecord mapping
-            // (:1642): report what actually went in, falling back to what was commanded.
-            let salvagedUnits = outcome.doses.reduce(0.0) { $0 + ($1.deliveredUnits ?? $1.programmedUnits) }
+            // SPLIT, because one number cannot answer that question. The old line claimed to
+            // "report what actually went in" via `deliveredUnits ?? programmedUnits`, but
+            // LoanReconciler mints every dose with deliveredUnits nil (:193-198, :205-210), so the
+            // `??` never fired and the total was ALWAYS gross programmed — rate × FULL clamped
+            // window, un-netted against the schedule and untruncated against the next temp. That
+            // is the very "implied Σ" over-count removed above, and with temps dominating it can
+            // read 1.53 U for 0.85 U of real delivery, burying the bolus this line exists to
+            // surface. Bolus units stand alone; rate records get a column labelled gross on its
+            // face. (`deliveredUnits ??` kept on the bolus sum only — inert today, right the day a
+            // record carries one.)
+            let boluses = outcome.doses.filter { $0.type == .bolus }
+            let bolusUnits = boluses.reduce(0.0) { $0 + ($1.deliveredUnits ?? $1.programmedUnits) }
+            let rateGross = outcome.doses.filter { $0.type != .bolus }.reduce(0.0) { $0 + $1.programmedUnits }
             handbackDiag(epoch, String(format:
-                "force reclaim SALVAGE — %d staged event(s) → %d dose(s) totalling %.3f U, %d carb(s), %d delete(s); loop resumes CLOSED on these books (no odometer check — OBS-9)",
-                events.count, outcome.doses.count, salvagedUnits, outcome.carbs.count, outcome.deletedCarbs.count))
+                "force reclaim SALVAGE — %d staged event(s) → %d dose(s): %.3f U bolus + %d rate record(s) (%.3f U gross programmed), %d carb(s), %d delete(s); loop resumes CLOSED on these books (no odometer check — OBS-9)",
+                events.count, outcome.doses.count, bolusUnits, outcome.doses.count - boluses.count,
+                rateGross, outcome.carbs.count, outcome.deletedCarbs.count))
             deps.addPumpEvents(newPumpEvents(from: outcome.doses), deps.now()) { _ in }
+            // A2: the salvage is the fourth back-dated dose write on this file's books — these
+            // doses span the loan from `loanStart`, entirely behind the frontier. `bookGapDose`
+            // below needs no prune: its placeholder is timestamped at reclaim-now, ahead of it.
+            if let earliest = outcome.doses.map(\.startDate).min() {
+                deps.insulinHistoryRewritten(earliest)
+            }
             for carb in outcome.carbs { deps.addCarb(carb.entry, carb.eventID.uuidString) { _ in } }
-            for gone in outcome.deletedCarbs {   // R30 (#89)
+            for gone in outcome.deletedCarbs {   // carbs the wrist deleted during the loan
                 deps.deleteCarb(gone) { error in
                     self.handbackDiag(self.epoch, error == nil
                         ? String(format: "carb DELETE applied on phone (recovery) — %.0f g", gone.grams)
                         : String(format: "carb DELETE MISSED on phone (recovery) — %.0f g: %@", gone.grams, String(describing: error!)))
                 }
             }
-            // #66 (2026-08-04): RECORD what we just committed. This path read committedIDs in
+            // RECORD what we just committed. This path read committedIDs in
             // the filter above but never added to it, and it sends no handbackAck — so the
             // watch's 15 s resend loop kept redelivering the same offer against an unchanged
             // set, and each delivery committed the carbs again.
@@ -1798,14 +2552,14 @@ final class PodLoanPhoneController {
             // Insulin survived this because NewPumpEvent carries `raw`, which the store dedupes
             // on. Carbs cannot: NewCarbEntry has no identity field and CarbStore mints a fresh
             // syncIdentifier per addCarbEntry, so the cursor IS the only guard. Duplicate carbs
-            // here then mirror into every later grant via wipe-then-replace — the #65
+            // here then mirror into every later grant via wipe-then-replace — the
             // phantom-COB failure mode with the phone as the source.
             //
-            // Reached whenever a watch goes unreachable mid-loan: the 45 s reachability timeout,
-            // a stranded-state relaunch, or a fresh request while still loaned.
+            // Reached whenever a watch goes unreachable mid-loan: the reclaim ladder spending both
+            // of its attempts, a stranded-state relaunch, or a fresh request while still loaned.
             committedIDs.formUnion(events.map(\.id))
             persistCommittedIDs()
-            // LIVELOCK FIX (2026-08-12). This used to record the IDs and stop, leaving
+            // LIVELOCK FIX. This used to record the IDs and stop, leaving
             // `committedCursor` where it was — usually 0, because a force-reclaim happens when
             // the watch went quiet and no offer ever completed.
             //
@@ -1815,7 +2569,7 @@ final class PodLoanPhoneController {
             // unchanged cursor 0. `PodLoanWatchController.handleAck` only closes when
             // `journal.unackedEvents()` is empty, which cursor 0 can never make true, so the
             // 15 s resend loop runs forever: battery, log noise, a loan the wrist cannot end,
-            // and possibly a spurious #67 stuck-hand-back alert.
+            // and possibly a spurious stuck-hand-back alert.
             //
             // Measured before the fix (LoanTwoSidedContractTests): ack cursor 0, stale=false,
             // watch journal still holding seq [1,2].
@@ -1831,7 +2585,7 @@ final class PodLoanPhoneController {
             deps.issueNotice("Sport Mode Reset", "A previous watch loan was ended without a clean hand-back; its records were saved. Check Event History and the pod.")
         }
 
-        // R37: arm the odometer audit BEFORE clearing staged — its `expected` is computed over
+        // Arm the odometer audit BEFORE clearing staged — its `expected` is computed over
         // everything the phone holds for this loan, and silence counts as zero. Uses the whole
         // staged set (not just the uncommitted salvage above), matching how the normal path's
         // expected spans the loan.
@@ -1840,7 +2594,7 @@ final class PodLoanPhoneController {
         (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
         pendingRevoke = false
         state = .owner
-        // R37: automatic dosing does NOT resume here. The old behavior — resume CLOSED on
+        // Automatic dosing does NOT resume here. The old behavior — resume CLOSED on
         // whatever records happened to have streamed — is exactly what the watch-battery-dies
         // test exposed: a bolus the watch delivered but never streamed was invisible, and the
         // loop closed on books missing real insulin. The audit's verdict resumes dosing (clean),
@@ -1856,7 +2610,7 @@ final class PodLoanPhoneController {
         persistStaged()
     }
 
-    /// R37: everything the audit needs except the end odometer, which the verified reclaim
+    /// Everything the audit needs except the end odometer, which the verified reclaim
     /// round-trip supplies seconds later (`finishPendingHandbackAudit`). Returns false when no
     /// baseline exists — in which case the loop has already been opened and the user told,
     /// because "cannot verify" must never quietly become "assume fine".
@@ -1885,11 +2639,24 @@ final class PodLoanPhoneController {
         return true
     }
 
-    /// Re-send a parked revoke on any sign of watch life (kept from v1).
+    /// Re-send a parked revoke on any sign of watch life (kept from v1), and record it against
+    /// a waiting ladder's two-attempt budget so the resend rung never buys a third — this
+    /// wake-up revoke is the best-timed attempt available, going out while the watch is
+    /// provably awake.
+    ///
+    /// A dead-branch promotion used to live here (a dead ladder that got proof of life moved
+    /// onto the live deadlines). It went with the dead branch's wait: a dead ladder now forces
+    /// immediately, so there is no window left in which a waking watch could promote one — and
+    /// a watch that wakes after the force follows the ordinary returning-watch path, records
+    /// and all.
     func watchDidBecomeReachable() {
         queue.async {
-            if self.pendingRevoke {
-                self.sendMessage(.revoke(Revoke(epoch: self.epoch)))
+            guard self.pendingRevoke else { return }
+            self.sendMessage(.revoke(Revoke(epoch: self.epoch)))
+            if var ladder = self.reclaimLadder, self.state == .reclaimPending, !ladder.forced,
+               ladder.attempts < 2 {
+                ladder.attempts += 1
+                self.reclaimLadder = ladder
             }
         }
     }
@@ -1897,7 +2664,11 @@ final class PodLoanPhoneController {
     // MARK: - Helpers
 
     private func reclaimToOwner(alert: (title: String, body: String)) {
-        cancelNotification(id: NotificationID.onLoan)
+        // Abandoning the loan retires any ladder with it; a rung firing afterwards would be
+        // reasoning about a reclaim that no longer exists. The background hold ends here too:
+        // this path never opens a settle window, so neither end-site below it would fire.
+        cancelReclaimLadder()
+        deps.endReclaimBackgroundTask()
         (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
         state = .owner
         deps.setAutomaticDosingPaused(false)
@@ -1916,7 +2687,7 @@ final class PodLoanPhoneController {
     }
 
     private static func loanRecord(from dose: DoseEntry) -> LoanDoseRecord? {
-        // #69: carry the phone's stable syncIdentifier (so the watch's re-seeds upsert-dedup instead
+        // Carry the phone's stable syncIdentifier (so the watch's re-seeds upsert-dedup instead
         // of accumulating) and insulinType (so the watch decays on the same model). Both flow through
         // seedDoseEntry → the seeded DoseEntry.
         switch dose.type {
@@ -1924,9 +2695,9 @@ final class PodLoanPhoneController {
             return LoanDoseRecord(kind: .bolus, startDate: dose.startDate, endDate: dose.endDate, amount: dose.deliveredUnits ?? dose.programmedUnits,
                                   syncIdentifier: dose.syncIdentifier, insulinType: dose.insulinType)
         case .tempBasal:
-            // #80: send the pod's ACTUAL floored delivery (the bolus arm above already does) —
+            // Send the pod's ACTUAL floored delivery (the bolus arm above already does) —
             // without it the watch re-derives with round() and over-states IOB by ~0.025 U per
-            // elapsed temp slice (field 2026-07-30: phone 0.70 vs watch 1.00 over 33 slices).
+            // elapsed temp slice (measured: phone 0.70 vs watch 1.00 over 33 slices).
             return LoanDoseRecord(kind: .tempBasal, startDate: dose.startDate, endDate: dose.endDate, unitsPerHour: dose.unitsPerHour,
                                   syncIdentifier: dose.syncIdentifier, insulinType: dose.insulinType,
                                   deliveredUnits: dose.deliveredUnits)
@@ -1939,7 +2710,7 @@ final class PodLoanPhoneController {
         }
     }
 
-    // MARK: - R8 notifications (the COMPLETE alarm inventory)
+    // MARK: - Notifications (the COMPLETE alarm inventory)
 
     private func scheduleNotification(id: String, title: String, body: String, delay: TimeInterval, repeats: Bool) {
         let content = UNMutableNotificationContent()

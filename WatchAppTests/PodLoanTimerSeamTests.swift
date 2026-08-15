@@ -38,7 +38,7 @@ final class PodLoanTimerSeamTests: XCTestCase {
 
     override func tearDown() {
         // Never unlink a live store's directory synchronously — the async-init race answers
-        // later reads with zero rows (the #103 lesson from the iOS suites). Unique names mean
+        // later reads with zero rows (a lesson from the iOS suites). Unique names mean
         // nothing collides; the OS reclaims temp.
         cacheStore = nil
         cacheDir = nil

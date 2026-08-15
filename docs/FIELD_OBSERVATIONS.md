@@ -889,6 +889,93 @@ since "the watch vanished mid-loan" is the definition of an unclean hand-back �
 says the loop goes open when a hand-back "cannot be established as complete", and this one
 cannot be, however good the records look.
 
+## 2026-08-13 21:16-21:20 (e49, build 278) — THE BATCH FIELD-VALIDATED in one genuine dead-watch run
+
+The first dead-watch run on 278 was the real thing: the watch took the loan at 10% battery and
+died mid-session with a 1.00 U bolus and a 10 g carb aboard, phone off. Every fix in the batch
+executed on its first field opportunity, phone log timestamps:
+
+    21:16:43  SALVAGE — 2 dose(s): 0.000 U bolus + 2 rate record(s) (0.460 U gross programmed)
+    21:16:45  reconcile[FORCE-RECLAIM] delivered=1.050 expected=0.150 residual=+0.900 · odometer +2s
+    21:16:45  R37 OPEN LOOP · gap BOOKED 0.90 U — ONCE (e42/e44 printed it twice)
+    (no residual-bank line — the +0.900 stayed OUT of the R32 calibration set)
+    21:20:03  watch returns · write 3 dose(s) · backfill 5 loan-window dose(s) (e44 boundary) · ACK
+    21:20:03  gap RETIRED — 3 real dose(s): 1.00 U bolus + 2 rate record(s) (0.72 U gross
+              programmed, pre-truncation) + 1 carb; the 0.90 U estimate replaced
+    21:20:05  duplicate offer (WC redelivery) → write 0 dose(s), backfill re-ran in 6 ms, re-ACK
+              — the upsert's idempotency proven under real transport redelivery
+
+The arithmetic closes: pod measured 1.050 U in the phone-absent window; the salvage expected
+0.150; the placeholder banked the 0.900 gap; the journal's real records (1.00 bolus + temp
+pulses) replace it and the books land on the odometer. The e44 failure mode — books 0.600 vs
+pod 0.850, temps silently dropped at the boundary — did not recur: the backfill line is it
+being prevented, live. The salvage line's bolus/rate split answered "was the bolus in the
+set?" at a glance (no), which is precisely what OBS-9 built it for.
+
+R37's hold also showed its shape: dosing stopped from the 21:16:45 verdict until the user
+re-enables — the 3.3-minute watch-dead window ran with the loop OPEN, no dosing on unverified
+books.
+
+Remaining boxes, both passive: the phone-vs-watch Eventually agreement (A2's screen proof —
+no log line by design) and the next loan's SEED-IN dump, which will enumerate the healed rows.
+B6 separately confirmed: the 277-era session and both 278 sessions survived as stamped
+archives — the first phone-log history this project has ever retained across a relaunch.
+
+## 2026-08-13 evening — the dead-watch review: three defects found, batch fixed, two earlier
+## readings corrected
+
+The full-day review of loans e41-e47 (three parallel forensic/trace agents, adversarial
+verification, then implementation) closed out the dead-watch test campaign. What it found,
+beyond what OBS-9/R37 already recorded:
+
+**1. e44's retirement UNDER-counted — journal temps silently lost at commit (fixed: the
+backfill upsert).** DoseStore's HealthKit sync drops any basal-shaped dose starting before
+`getLastImmutableBasalEndDate` (boluses have an escape clause). After a force-reclaim the
+salvage write and the phone's own resumed records move that boundary past the loan window, so
+the returning watch's temps commit as pump events but never reach the delivery store, IOB, or
+dosing. e44: books 0.600 U vs pod 0.850 — and the 0.85 placeholder R37 deleted was MORE
+accurate than the records that replaced it. The commit path now re-reconciles the full loan
+and upserts through `syncDoseEntries` (identity-keyed, boundary-immune), with the store's
+truncation and delivered-units resolution restated locally so backfilled rows are
+indistinguishable from clean-path rows.
+
+**2. The phone's stale prediction was ICE-memo staleness, and it REACHED DOSING (fixed: the
+reservoir-idiom prune).** `insulinCounteractionEffects` is an append-only memo of
+observed-minus-insulin-modeled velocity. Stock invalidates it for back-dated glucose and
+reservoir rewrites; back-dated DOSE writes — which every hand-back commits 30 minutes of —
+never pruned it. Carbs are downstream of ICE (re-attributed wholesale on every carb change,
+which is why Jeremy's "carb edits are the common case and stock must handle them" was exactly
+right — they need no ICE invalidation at all), so the poisoned memo inflated COB and the
+prediction until relaunch. `insulinHistoryRewritten(startingAt:)` now restates the reservoir
+prune (keep bins through doseStart+10 min, the model-delay window) at every back-dated dose
+write: offer commit, backfill, gap retirement, salvage.
+
+**CORRECTION to the earlier "quiescence" reading: the engine did NOT stand down at 15:11.**
+The 15:17 grant seed shows a SECOND max-rate temp (3.55 U/hr) issued at 15:11:47 — the 11-min
+continuation-interval re-issue slot — running until the takeover pulled the pod at ~15:17:51.
+Its ~0.36 U IS the "unexplained 0.3-0.4 U odometer gap" from the earlier entry: explained,
+booked late because the mutable segment was still live when the pod left. Consequence, stated
+plainly: the 14:51:44 automatic temp WAS computed on the poisoned prediction (there is no
+separate render cache — the engine and the UI read the same LoopDataManager state), and the
+engine max-temped for ~26 minutes (~1.5 U gross, vs a correct-books recommendation of
+roughly zero) until an external event stopped it. Water pod; on a body this would have been
+the anti-conservative direction twice over (under-counted IOB from defect 1 stacking with
+inflated COB from defect 2).
+
+**3. Assorted, same batch:** stock LoopKit's `addDoses` fired its completion twice per success
+(the duplicate "gap BOOKED" lines; latent false "NOT in the books — dose by hand" alarm on an
+HK sync failure) — single-fire now, with the old test tolerance turned into a tripwire. The
+retire/salvage lines summed gross programmed temp content as if delivered (e44's impossible
+"1.53 U" — historic logs before this date carry that overstatement; read them as gross
+programmed). The R32 residual bank was banking force-reclaim gaps (+0.800/+0.850) into the
+clean-hand-back calibration set — handback-only now, contaminants purged one-shot. The phone
+log mirror destroyed its previous session at every launch (twice on this date; the second
+destruction hid the second temp above) — stamped archives now, keep 20.
+
+Validation: the ICE tests pin the statelessness contract mechanically (T3: pruned-and-
+recomputed == cold rebuild — the force-quit heal, as an assertion); the backfill tests
+reproduce the e44 signature and assert the healed books row by row.
+
 ## 2026-08-13 — the 19-second post-wake write EXPLAINED: it is a HealthKit sync, not Core Data
 
 Twice measured (e27 19.3 s, e31 18,989 ms), both on a freshly-woken phone, and recorded twice
@@ -1248,3 +1335,185 @@ Dosing never depended on this either way: the watch doses off
 `carbsOnBoard`. COB here is display plus this diff check.
 
 Log label and code comments corrected to say "observation freshness, not a model split".
+
+## 2026-08-14 — the BLE settle is BIMODAL, not variable; and a CORRECTION to my own regression call
+
+**CORRECTION FIRST.** Earlier today I told Jeremy the settle looked like a build-279
+regression, on the strength of a clean-looking split: 08-13 samples (builds 277/278) were
++7, +4, +1, +4, +2 s and 08-14 samples (build 279) were +39, +53, +54, +24 s. That was an
+artifact of reading only the two newest log files. Pulling `reclaim VERIFIED — pod
+round-trip complete +Ns` from the WHOLE corpus (2026-08-02 onward, n=91) shows slow
+settles have been present since the first day of records: +188 s and +190 s on 08-02/08-03,
+long before any of this build's code existed. **There is no 279 regression.** The mistake
+was the same one as the R37 "path not exercised" call — concluding from a truncated slice.
+
+**The measurement (n=91, all logs, 2026-08-02 → 2026-08-14):**
+
+    p50 = 5 s    p75 = 9 s    p90 = 68 s    p95 = 101 s    max = 190 s
+
+The percentiles undersell the shape. The distribution is **strictly bimodal with an empty
+gap**:
+
+    fast mode   70/91 (77%)   1-11 s
+    slow mode   21/91 (23%)   24-190 s
+    NO SAMPLES AT ALL between 12 s and 23 s
+
+Slow-mode values in full: 24, 31, 35, 37, 39, 44, 52, 53, 57, 59, 66, 68, 75, 87, 92, 99,
+101, 161, 186, 188, 190.
+
+An empty gap that wide in 91 samples is not noise. Something discrete decides which mode a
+reclaim lands in, and it costs at least ~13 s when it goes the wrong way.
+
+**What has been RULED OUT.** Loan duration and cycle count do not predict it. Of the 34
+settles that also carry an AUTHORITATIVE reconcile line (the only ones with `loanMin`/
+`cycles` attached), the 32 fast ones span loanMin 2-118 and cycles 0-28 — the full range —
+and there is a 7 s settle at loanMin=1 cycles=1, the exact shape of the slow pair. A short
+loan does not cause a slow settle. Jeremy's cold/new-build hypothesis is also out, by the
+corpus.
+
+**Why the root cause CANNOT be read off the current logs — the real finding.**
+`isConnectionReady` resolves to `podLoanConnectionStateDescription == "connected"`, i.e.
+the raw CoreBluetooth peripheral state (OmniPumpManager+PodLoan.swift:287). The settle
+therefore has two sub-phases that the log conflates into one opaque number:
+
+  (a) waiting for the phone's standing CB connect to land after the watch releases, and
+  (b) `ensureCurrentPumpData` round-trips that return a stale `lastSync` — connected
+      already, but the status read failing and being retried on the 2 s tick.
+
+`chaseReclaimVerification` / `attemptReclaimVerificationNow` log NOTHING between reclaim
+start and success: no tick count, no moment `isConnectionReady()` first went true, no
+failed-read record. (Its `attempt` parameter is threaded through and incremented but never
+read — dead.) The phone log across the +39 s settle at 08:30:28-08:31:07 is entirely
+silent, which is consistent with either sub-phase.
+
+The two point at opposite fixes: (a) is the pod's advertising behaviour after a disconnect
+and is probably not ours to fix, so the UI should simply be honest about it; (b) IS ours
+and would be worth fixing. **Split the settle into its two halves and log each tick** —
+the same move that resolved the 19-second write in one build by splitting it into Core
+Data and HealthKit halves. Until that ships, any named cause is a guess.
+
+**Consequence for the UI, already sent to the implementation in flight:** a single
+determinate bar to one deadline is wrong at both ends. For the 77% it creeps to ~18% of a
+60 s bar and teleports to done; and 11 of the 21 slow settles exceed 60 s anyway. The
+honest shape is two stages — 12 s, then re-baseline to ~105 s — because the 12-23 s gap is
+a real physical boundary rather than a chosen cutoff.
+
+## 2026-08-14 10:10-10:46 (build 280) — the settle split's first outing ANSWERS the question;
+## e60 validates the dead-watch chain end to end
+
+**The settle verdict.** Four settles in one session, and the new split leaves no ambiguity
+about which half owns the slow mode:
+
+    10:18   +66s   link +0.0s   stale reads 30   read 65.5s
+    10:24    +2s   link +2.2s   stale reads  0   read  0.2s
+    10:35    +5s   link +4.4s   stale reads  0   read  0.6s
+    10:46   +70s   link +0.0s   stale reads 32   read 70.3s   (e60, dead watch)
+
+In both slow settles the pod link was CONNECTED BEFORE THE FIRST 2-SECOND TICK RAN, and
+then ~30 consecutive status reads failed over that up link for 65-70 s before one landed.
+In both fast ones the link took 2-4 s to come up and the FIRST read succeeded. The slow
+mode is not the pod failing to come home — it is the phone failing to get a word through a
+link that looks up. That is OURS. The old source comment claiming the link flips ready
+"long before the phone has actually TALKED to the pod" is now a measurement.
+
+Suggestive, not conclusive: today's two slow settles were both FORCE/revoke reclaims and
+both fast ones watch-initiated — but e50 (08-14 08:30, build 279) was watch-initiated and
+settled +39 s, so initiation type is not the whole story. Also visible: both slow settles
+stamped "link up" TWICE — the settle window was armed twice on the force path. Probably
+benign; check while hunting the read failures.
+
+**The red-ring decision this gates (deferred by Jeremy, same day).** A stale-ring settle
+presentation is worth building only if the slow tail survives. The tail now looks fixable
+(software-side read failures, not radio physics), so: fix first; decorate only if the fix
+fails. The settle bar, "Link slow…" copy and the bolus gate cover the interim.
+
+**e60 — the full dead-watch chain, live, one run:**
+
+    10:42:14  ladder DEAD — last contact never · resend +8s, force +20s  (ruled timings, exact)
+    10:42:23  revoke RESENT (attempt 2 of 2)
+    10:42:36  force SALVAGE — 2 staged events; audit armed, expected 0.100 U
+    10:43:46  reconcile: delivered=2.000 expected=0.100 residual=+1.900 → OPEN LOOP, loud
+    10:43:46  gap BOOKED — 1.90 U (PODLOAN-ODOGAP-e60)
+    10:46:32  watch returns → gap RETIRED — real 2.00 U bolus replaces the estimate
+
+The off-grid watch bolus was caught by the odometer, dosing stopped loudly, the estimate
+was booked under a deterministic identity, and the returning watch's real records replaced
+it. Reading note: every e60 diag line in the watch log carries the 10:46:32 delivery stamp
+because the queued channel held them while the watch was dead — event times are inside the
+text, not the line stamps.
+
+**Two instrumentation gaps found by this run, both fixed in the next build:** the settle
+split rode only the watch-bound diag channel, so the phone's own file had NO settle record
+for e60 (a never-returning watch would have lost the sample) — the lines now go through
+the phone file as well, plus a per-read stale line (phone file only; no diag flood at a
+dead watch). And the glance repaint marks never ship in the log pipeline at all, so the
+frozen-glance report could not be checked from logs — the fix (one-shot repaint at loan
+end, no timer re-arm) went in on the code asymmetry instead.
+
+## 2026-08-14 14:48 (e68, build 281) — the slow settle ROOT-CAUSED: the verification call
+## never reaches the radio
+
+**The sample.** `reclaim VERIFIED — pod round-trip complete +169s (link +2.2s, stale reads 77,
+read +166.9s)`. Jeremy watched the pill reach "Link slow… 162s", tapped through to the pod
+status screen (which reported the pod's last comms as 2 s old), and on returning the pill was
+normal. The pill was NOT stale — the settle really was still running, and it verified at +169 s,
+about seven seconds after the tap. **His manual pod-status check succeeded where 77 consecutive
+automated reads had failed.**
+
+**The mechanism, from the code.** `OmniPumpManager.ensureCurrentPumpData` (:2498) only touches
+the radio when `state.isPumpDataStale`; otherwise it takes
+
+    case false?:
+        log.default("Skipping status update because pumpData is fresh")
+        completion?(self.lastSync)
+
+and returns the EXISTING lastSync without any pod contact. `isPumpDataStale`
+(OmniPumpManagerState :414) is simply `lastPumpDataReportDate` older than 6 minutes. The settle's
+success test is `lastSync > started`, so every skipped call is rejected and re-tried on the 2 s
+tick. The chase was not failing to reach the pod; it was never asking.
+
+**The timing proves it rather than merely fitting it.** Stale reads 75, 76 and 77 landed at
+14:50:49.385, 14:50:51.514 and 14:50:53.712 — 2.13 s and 2.20 s apart on a 2 s tick, so each
+call returned in roughly 150 ms. No pod BLE round-trip completes in 150 ms. Those reads never
+went near the radio.
+
+**The fix has an existing seam.** `refreshLentDeviceStatus` (PumpManager protocol :293,
+implemented in OmnipodKit +PodLoan :403 as `podLoanReadStatus`) is documented as "force a real
+status round-trip (bypassing freshness optimizations)". The R37 odometer audit already uses it.
+The settle chase is the one path that does not.
+
+**Why the fix is NOT a straight swap.** The chase ticks every 2 s, so routing it through the
+forced read would mean up to 150 real pod round-trips across a 5-minute settle where today most
+are free skips — buying reclaim speed with G7 radio time, which the standing rule forbids.
+Proposed instead: force a real read on the first tick, then back off to a slower forced cadence
+(~10-15 s) with the cheap check in between. That removes the 167-second case while adding a
+handful of round-trips rather than 150.
+
+**What is still NOT explained.** What keeps `lastPumpDataReportDate` fresh across a hand-back,
+and why the durations land where they do. A naive "the phone has not touched the pod during the
+loan, so its data is already 6 minutes stale" story predicts fast settles after long loans, but
+e62 ran a 60-minute loan and still went slow (+45 s, 17 stale reads). The proposed fix does not
+depend on resolving this, since it bypasses the optimization outright — but the model is
+incomplete and should not be written up as though it were settled.
+
+**Initiation type is not the variable**, despite looking like it twice. Build 281 samples:
+watch-initiated End +4, +7, +7 s (1, 1, 2 stale reads); phone tap +1, +7 and +169 s (0, 1, 77);
+forced +45 s (17). A phone tap produced both the fastest settle of the day and the slowest.
+
+## 2026-08-14 16:49-17:36 (build 282, the forced-read build) — six settles, zero stale reads,
+## and the evidence that retired the two-stage bar and the dead branch's wait
+
+    e71  forced (watch never seen)   settle +1s   0 stale   (~22s total, 20s of it the old ladder wait)
+    e72  phone tap, live             settle +3s   0 stale   4.3s tap-to-verified
+    e73  watch End                   settle +3s   0 stale   4.3s
+    e74  watch End (6-event drain)   settle +3s   0 stale   7.1s
+    e75  phone tap, live             settle +2s   0 stale   3.2s
+    e76  watch End                   settle +3s   0 stale   6.7s
+
+Phone-tap and watch-End are indistinguishable — both run the same drain and the same settle —
+and the one forced reclaim's settle matched the live ones once the freshness bug stopped
+starving it. Jeremy's read, adopted as the ruling above (R40): 10 s determinate bar watch-
+present, zero-wait force watch-absent with a 15 s bar. His caution, kept on the record: the
+eight-for-eight unanswered dead-branch revokes are near-tautological evidence, since every
+bench test had the watch off by design; the structural argument (the pulse discriminator keeps
+an alive watch off the dead branch) is the one that holds.

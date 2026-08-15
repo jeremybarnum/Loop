@@ -125,6 +125,13 @@ supervised session *if* that session is short and watched. Jeremy sets the final
   Mac automatically (2026-07-24: watch→phone loan-pulse worked; phone→iCloud hop did
   not — manual upload was needed). Optional: add an idle-state log pulse for pre-loan/
   warmup visibility.
+- **D5. Per-phone notification settings (user-only; no API can set these).** On each
+  phone that runs the app, in Settings → Notifications → Loop: **Banner Style →
+  Persistent** (default Temporary auto-dismisses; a dosing banner should stay until
+  read — Jeremy set this on his phone 2026-08-14 and it must be repeated on Caitlin's),
+  and leave Time Sensitive notifications ON (the in-app permissions checker already
+  nags if they're off, but only after the fact). Banner style is invisible to the app,
+  so nothing can nag for it — this checklist line is the only guard.
 
 ---
 

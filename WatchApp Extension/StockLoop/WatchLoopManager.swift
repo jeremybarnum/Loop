@@ -49,13 +49,12 @@ enum WatchLoopError: Error {
     case configurationError(String)
     /// A data input is missing.
     case missingDataError(String)
-    /// #97/#98 (2026-08-08): the dose was computed but the PUMP REFUSED OR COULD NOT BE
-    /// REACHED. Previously wrapped as `.missingDataError`, which is wrong twice over: it is
+    /// The dose was computed but the PUMP REFUSED OR COULD NOT BE
+    /// REACHED. Never wrap this as `.missingDataError`, which is wrong twice over: it is
     /// not a data problem, and the cycle-verdict logger deliberately suppresses
     /// missingDataError (it is logged separately as "NOT DOSING — prediction missing X"), so
-    /// every failed enact produced NO cycle verdict at all. Field 2026-08-08 00:36/00:41/
-    /// 00:46/00:56: four consecutive cycles whose temp enact failed podNotConnected logged
-    /// neither "cycle OK" nor "cycle ended with error" — the loop looked silent, not broken.
+    /// every failed enact would produce NO cycle verdict at all — a loop that looks silent
+    /// rather than broken.
     case enactFailed(String)
     /// Glucose data is too old to dose from (`LoopError.glucoseTooOld`).
     case glucoseTooOld(date: Date)
@@ -118,15 +117,15 @@ final class WatchLoopManager {
     /// `updatePredictedGlucoseAndRecommendedDose` — the no-fallback rule. Settings plumbing
     /// from the stock watch session arrives with M5 integration.
     ///
-    /// #41 ROOT CAUSE (found via build 142's "NOT DOSING — prediction missing carbEffect",
-    /// 2026-07-21 22:17): the stores were built schedule-less (StockLoopStack.makeStores)
+    /// ROOT CAUSE of a "NOT DOSING — prediction missing carbEffect" loop: the stores
+    /// were built schedule-less (StockLoopStack.makeStores)
     /// and NOTHING propagated the grant's schedules to them — so CarbStore.getGlucoseEffects
     /// and DoseStore.getGlucoseEffects failed .notConfigured EVERY cycle, carbEffect/
     /// insulinEffect stayed nil, and the automatic loop never once recommended a dose
     /// (the phone's LoopDataManager does this same store sync in its settings didSet).
     /// Propagate here so EVERY settings application — grant, future mid-session pushes —
     /// keeps the stores consistent. All four store setters are Locked<> (any-queue safe).
-    /// #68 overrides: the SAME history instance both stores were constructed with, so
+    /// Overrides: the SAME history instance both stores were constructed with, so
     /// recording here re-resolves basal / ISF / carb ratio through
     /// basalProfileApplyingOverrideHistory et al. Mirrors the phone's
     /// LoopDataManager.overrideHistory (:346) and its record site (:270).
@@ -159,7 +158,7 @@ final class WatchLoopManager {
             _grantedMaximumBolus = settings.maximumBolus
             grantedMaximumBolusLock.unlock()
 
-            // #68: mirror LoopDataManager :269-270 — an override only takes effect through
+            // Mirror LoopDataManager :269-270 — an override only takes effect through
             // the HISTORY, not the settings object. Without this the watch resolves every
             // schedule UNSCALED during a loan (basal, ISF, carb ratio) and nets historical
             // temps against the wrong baseline, which reads exactly like an IOB bug.
@@ -217,8 +216,8 @@ final class WatchLoopManager {
     /// implements. nil in M4: assembly is proven, dosing is not.
     /// Wiring a live pump manager happens via the loan protocol v2 controller
     /// (DESIGN_LOAN_PROTOCOL_V2.md §10): the grant's PodState snapshot constructs the
-    /// OmniPumpManager and hands it here. The ruling dependencies are discharged (R16:
-    /// therapy-settings-only limits; max-temp = therapy max-basal) — the remaining gate
+    /// OmniPumpManager and hands it here. The ruling dependencies are discharged
+    /// (therapy-settings-only limits; max-temp = therapy max-basal) — the remaining gate
     /// is the protocol itself, never a direct assignment from app code.
     var pumpManager: PumpManager?
     /// True when the POD itself will beep for a manual bolus, making the watch's success
@@ -226,7 +225,7 @@ final class WatchLoopManager {
     /// silenced — then the haptic is the ONLY confirmation and must stay.
     ///
     /// A closure, not a cast: this file works against the `PumpManager` protocol and does not
-    /// import OmnipodKit. Wired in StockLoopSession alongside e4ReclaimPodForDose.
+    /// import OmnipodKit. Wired in StockLoopSession alongside reclaimPodForDose.
     var podBeepsOnManualBolusProbe: (() -> Bool)?
     var podBeepsOnManualBolus: Bool { podBeepsOnManualBolusProbe?() ?? false }
 
@@ -238,26 +237,23 @@ final class WatchLoopManager {
     }
 
 
-    /// E4 Stage 2 (task #40): reclaim the orphaned pod before a dose, release after.
+    /// Reclaim the orphaned pod before a dose, release after.
     /// Forwarded to the enactor (automatic path); enactManualBolus uses them directly.
     /// Wired by StockLoopSession to the loan controller (which owns the OmniPumpManager);
-    /// no-op / immediate-connected when E4 is off.
-    /// #94: device-log storm dedupe (see logEventForDeviceIdentifier). Any thread may log.
-    private let deviceLogDedupeLock = NSLock()
-    private var lastDeviceLogLine = ""
-    private var lastDeviceLogAt = Date.distantPast
-    private var suppressedDeviceLogCount = 0
+    /// no-op / immediate-connected when the pod link is held continuously instead.
+    /// Device-log storm dedupe (see logEventForDeviceIdentifier). Any thread may log.
+    private let deviceLogThrottle = DeviceLogThrottle()
 
     private let manualBolusLock = NSLock()
     private var _manualBolusInFlight = false
-    /// True from the moment a manual bolus begins its E4 pod reclaim until it resolves.
+    /// True from the moment a manual bolus begins its pod reclaim until it resolves.
     ///
-    /// Field 2026-08-05: a manual bolus took ~29s wall-clock — 24s of it waiting for the G7 to
-    /// release the radio, then 4s reclaiming the pod, then 1.3s delivering. The bolus flow
+    /// A manual bolus can take ~29s wall-clock — up to 24s of it waiting for the G7 to
+    /// release the radio, then ~4s reclaiming the pod, then ~1.3s delivering. The bolus flow
     /// auto-dismisses after 1s and shows NOTHING for the rest, so the wrist looks idle while the
-    /// dose is very much in progress. Jeremy read that silence as a hang and tapped End three
-    /// separate times, and End cancels the in-flight reclaim — the user's impatience silently
-    /// destroyed their own dose. The glance reads this so the wait is legible.
+    /// dose is very much in progress. A user who reads that silence as a hang taps End, and End
+    /// cancels the in-flight reclaim — impatience silently destroys the dose. The glance reads
+    /// this so the wait is legible.
     var manualBolusInFlight: Bool {
         manualBolusLock.lock(); defer { manualBolusLock.unlock() }; return _manualBolusInFlight
     }
@@ -268,7 +264,7 @@ final class WatchLoopManager {
         return _manualBolusInFlight ? _manualBolusStartedAt : nil
     }
     private var _manualBolusStartedAt: Date?
-    /// #91: the amount being attempted, so the glance can NAME it during the pre-acceptance
+    /// The amount being attempted, so the glance can NAME it during the pre-acceptance
     /// wait ("starting 0.90 U…") instead of describing our plumbing ("reaching pod…").
     private var _manualBolusPendingUnits: Double?
     var manualBolusPendingUnits: Double? {
@@ -283,10 +279,10 @@ final class WatchLoopManager {
         manualBolusLock.unlock()
     }
 
-    /// #91 DELIVERY WINDOW — the half of a manual bolus that used to be invisible.
+    /// DELIVERY WINDOW — the half of a manual bolus that is otherwise invisible.
     ///
-    /// `manualBolusInFlight` ends at ACCEPTANCE (the pod acking the command), measured at 1.2s
-    /// on 2026-08-08. The pod then spends ~1.5 U/min actually pushing the dose — 36s for 0.90 U —
+    /// `manualBolusInFlight` ends at ACCEPTANCE (the pod acking the command), ~1.2s in.
+    /// The pod then spends ~1.5 U/min actually pushing the dose — 36s for 0.90 U —
     /// with nothing on the wrist, which is exactly where stock's PHONE starts narrating
     /// ("Bolused X of Y U" + ring, StatusTableViewController). docs/BOLUS_ANNOUNCEMENT.md.
     ///
@@ -307,22 +303,22 @@ final class WatchLoopManager {
         manualBolusLock.unlock()
     }
 
-    var e4ReclaimPodForDose: ((@escaping (Bool) -> Void) -> Void)? {
-        get { doseEnactor.e4ReclaimPodForDose }
-        set { doseEnactor.e4ReclaimPodForDose = newValue }
+    var reclaimPodForDose: ((@escaping (Bool) -> Void) -> Void)? {
+        get { doseEnactor.reclaimPodForDose }
+        set { doseEnactor.reclaimPodForDose = newValue }
     }
-    var e4ReleasePodAfterDose: (() -> Void)? {
-        get { doseEnactor.e4ReleasePodAfterDose }
-        set { doseEnactor.e4ReleasePodAfterDose = newValue }
+    var releasePodAfterDose: (() -> Void)? {
+        get { doseEnactor.releasePodAfterDose }
+        set { doseEnactor.releasePodAfterDose = newValue }
     }
 
-    /// Per-session watch-local closed-loop opt-in (R23 confidence model). Each loan
+    /// Per-session watch-local closed-loop opt-in. Each loan
     /// starts OPEN (advisory — the loop computes and drives the glance display but does
     /// NOT enact); the user deliberately closes the loop from the glance screen.
-    /// RULED 2026-07-18 (Jeremy, amending R23): the watch is SOVEREIGN once a loan is
+    /// RULED: the watch is SOVEREIGN once a loan is
     /// granted — the phone's own loop mode does NOT gate the wrist's per-session close.
-    /// Therapy settings (frozen in the grant) are the only dosing limits (R1/R16); the
-    /// old AND with the phone's dosingEnabled produced an untappable dead control when
+    /// Therapy settings (frozen in the grant) are the only dosing limits; never AND this
+    /// with the phone's dosingEnabled — that produced an untappable dead control when
     /// the phone happened to run open loop. Read/written on the dataAccessQueue.
     private var _closedLoopEnabled = false
     var closedLoopEnabled: Bool {
@@ -330,7 +326,7 @@ final class WatchLoopManager {
     }
     /// Lock-guarded mirror of `_closedLoopEnabled` for callers that MUST NOT block on
     /// `dataAccessQueue`. The loan controller's queue is one: a `sync` from there onto
-    /// dataAccessQueue is the #64 deadlock direction (apparent success at the crown, crash
+    /// dataAccessQueue is the deadlock direction (apparent success at the crown, crash
     /// 0-40s later, no insulin delivered), and the hand-back offer is built on that queue.
     private let closedLoopMirrorLock = NSLock()
     private var _closedLoopMirror = false
@@ -340,27 +336,68 @@ final class WatchLoopManager {
         return _closedLoopMirror
     }
 
-    /// `reason` exists so the log distinguishes a wrist tap from the grant-inherited mode
-    /// (R23 overturned 2026-08-04) — otherwise every field log claims the user did it.
+    /// Silent per-session reset, called at loan end. Loop mode is a PER-SESSION concept — the
+    /// next grant re-asserts it from the phone's inheritance — so a "closed" left over from the
+    /// previous session must not survive into the next one: with it stale, a grant inheriting
+    /// OPEN reads as a closed→open transition and fires the temp cancel below during grant
+    /// intake, aimed at a pod mid-takeover. (Today that shot goes wide — the pump is not wired
+    /// yet at the inheritance call — but a race that merely misses is still a race.) No cancel
+    /// here by construction: the session is over, there is no pod on the wrist to command.
+    func resetClosedLoopForSessionEnd() {
+        closedLoopMirrorLock.lock()
+        _closedLoopMirror = false
+        closedLoopMirrorLock.unlock()
+        dataAccessQueue.async {
+            self._closedLoopEnabled = false
+        }
+    }
+
+    /// `reason` exists so the log distinguishes a wrist tap from the grant-inherited mode —
+    /// otherwise every field log claims the user did it.
     func setClosedLoopEnabled(_ enabled: Bool, reason: String = "by user") {
         // Mirror synchronously so a hand-back offer built immediately after a wrist tap
         // carries the value the user just chose, not the one before it.
         closedLoopMirrorLock.lock()
+        let wasEnabled = _closedLoopMirror
         _closedLoopMirror = enabled
         closedLoopMirrorLock.unlock()
 
         dataAccessQueue.async {
             self._closedLoopEnabled = enabled
             SportLog.event("loop", enabled ? "CLOSED \(reason) — the watch will adjust basal" : "OPENED \(reason) — advisory only, no dosing")
+
+            // Opening the loop CANCELS the running temp, exactly as the phone does — stock
+            // subscribes to its automatic-dosing flag and cancels on every transition to off
+            // (LoopDataManager, alongside clearing the pre-meal override). Without this the
+            // wrist stopped issuing new temps but left the last one delivering for up to its
+            // full 30 minutes, so "open loop" on the watch and on the phone meant different
+            // amounts of insulin.
+            //
+            // Guarded on a REAL transition, which is what makes it safe at grant intake: a
+            // loan that inherits an open loop calls this with the flag already false, and a
+            // cancel there would fire at a pod the watch has only just taken over.
+            //
+            // Failure is logged, not escalated: the enactor answers `.pumpManagerUnconnected`
+            // when there is no loan, and a cancel can only ever move toward LESS insulin, so a
+            // failed one leaves the pod running the rate it already had until the temp expires
+            // on its own.
+            guard wasEnabled, !enabled else { return }
+            let recommendation = AutomaticDoseRecommendation(basalAdjustment: .cancel)
+            self.recommendedAutomaticDose = (recommendation: recommendation, date: self.now())
+            if let error = self.enactRecommendedAutomaticDose() {
+                SportLog.event("loop", "OPEN: temp cancel FAILED — \(String(describing: error)); the pod keeps its current rate until the temp expires")
+            } else {
+                SportLog.event("loop", "OPEN: running temp cancelled — pod reverts to the user's schedule")
+            }
         }
     }
 
-    // MARK: - #68 part B: wrist-enacted overrides
+    // MARK: - Wrist-enacted overrides
 
     /// Apply an override the USER just selected on the wrist to this loan's DOSING settings.
     ///
     /// This is the whole watch-side mechanism: assigning `settings.scheduleOverride` runs the
-    /// part-A didSet above, which records into the shared `overrideHistory` — and THAT is what
+    /// didSet above, which records into the shared `overrideHistory` — and THAT is what
     /// rescales basal / ISF / carb ratio and invalidates the cached effects, so the very next
     /// cycle doses under the override. Nothing else is needed, and nothing here is conditional
     /// on the phone: the point of Sport Mode is that the phone is usually absent.
@@ -392,11 +429,11 @@ final class WatchLoopManager {
         settings.scheduleOverride = override
     }
 
-    // MARK: - Glance surface (R23; display only — no dosing paths read this)
+    // MARK: - Glance surface (display only — no dosing paths read this)
 
-    /// #86 (Jeremy 2026-07-31: "add the prediction components to the diagnostic screen —
-    /// INSULIN, carbs, momentum, retrospection … one line with an arithmetic reconciliation
-    /// to the eventual BG"). DISPLAY + LOGGING ONLY — nothing here is read by any dosing path.
+    /// The prediction components for the diagnostic screen — insulin, carbs, momentum,
+    /// retrospection — as one line with an arithmetic reconciliation to the eventual BG.
+    /// DISPLAY + LOGGING ONLY — nothing here is read by any dosing path.
     ///
     /// An EXACT decomposition of `eventual − start`, produced by mirroring
     /// `LoopMath.predictGlucose`'s OWN accounting (LoopKit/LoopMath.swift:118-175) rather than
@@ -440,15 +477,14 @@ final class WatchLoopManager {
         let insulinRawTailMgdl: Double?
         /// −ISF × IOB. Compare against `insulinRawTailMgdl`, NEVER against `insulinMgdl`.
         ///
-        /// 2026-08-01: an earlier version of this row compared it against the blended term and
-        /// called the difference a "GAP", which manufactured a discrepancy that cost a morning.
+        /// Comparing it against the BLENDED term instead manufactures a false "GAP".
         /// Note also that this quantity is NOT expected to match exactly when a temp is running:
         /// `insulinOnBoard` counts the temp's full remaining programmed delivery while
         /// `glucoseEffects` trims at `basalDosingEnd = now()`. Stock does the same — measured on
-        /// the phone's own issue report the same day: IOB 2.5954 U against an insulinEffect tail
+        /// the phone's own issue report: IOB 2.5954 U against an insulinEffect tail
         /// of −124.02 mg/dL at ISF 70, a 0.82 U difference, which was exactly the 15 minutes
         /// still to run on a 4.5 U/hr temp. So a residual here is expected; a term that does not
-        /// TRACK IOB at all is the real alarm (that was #84).
+        /// TRACK IOB at all is the real alarm.
         let insulinExpectedMgdl: Double?
         let isfMgdlPerU: Double?
         let iobUnits: Double?
@@ -490,38 +526,38 @@ final class WatchLoopManager {
         /// The phone-frozen dosing permission: when false the watch CANNOT close the
         /// loop (the phone had Closed Loop off at grant).
         let dosingAllowedByPhone: Bool
-        /// #29 dosing observability (display-only): the temp DoseMath recommends THIS
+        /// Dosing observability (display-only): the temp DoseMath recommends THIS
         /// cycle (nil = none), vs `tempRate` (what the pod is actually running) — the
         /// gap between them is the "is it enacting?" tell. `lastLoopErrorText` is the
         /// last cycle's error (nil = clean), so a stalled/erroring loop is visible.
         let recommendedTempRate: Double?
         let lastLoopErrorText: String?
-        /// #86 display-only: last cycle's exact prediction decomposition (nil until the first
+        /// Display-only: last cycle's exact prediction decomposition (nil until the first
         /// successful prediction of the session). Cached at cycle end — NEVER computed here.
         let predictionBreakdown: PredictionBreakdown?
-        /// #46 (Jeremy 2026-08-04): which retrospective-correction model is actually running,
+        /// Which retrospective-correction model is actually running,
         /// and how much data it has. The watch adopts the PHONE's Integral toggle from the grant
         /// (PodLoanWatchController:431), so this is the readout that proves the two devices are
-        /// predicting with the same algorithm — the divergence #46 was opened for. It was only
+        /// predicting with the same algorithm. It was only
         /// ever visible in the log line `[rc] type=… · discrepancies=…`; on the wrist there was
         /// no way to tell Integral from Standard while looking at a suspicious eventual.
         let retrospectiveCorrectionIsIntegral: Bool
         let retrospectiveDiscrepancyCount: Int
-        /// Active override, as "<symbol> <name>" (#68 follow-up, 2026-08-12). The glance shows
+        /// Active override, as "<symbol> <name>". The glance shows
         /// this in the top row: an override silently rescales ISF AND the basal baseline, so a
         /// number on this screen means something different depending on it. nil = none active.
         let overrideLabel: String?
     }
 
 
-    /// #50: the temp basal the pod is running, as best the watch can know it — the live
+    /// The temp basal the pod is running, as best the watch can know it — the live
     /// `basalDeliveryState` while the pod is connected, otherwise the temp we last enacted
-    /// until its programmed end. E4 orphans the pod, so `basalDeliveryState` goes nil within
-    /// seconds even though the pod keeps delivering. Read on `dataAccessQueue`.
-    /// R33 hand-back half: is a LOOP temp still executing on the pod right now? The loan
-    /// controller needs this at hand-back and cannot ask `basalDeliveryState`, because E4
-    /// has orphaned the link by then and that state reads nil — which is exactly why the
-    /// DESIGN-5 cancel in finalizeHandback had been silently dead (field 2026-08-11: no pod
+    /// until its programmed end. The link is released between doses, so `basalDeliveryState`
+    /// goes nil within seconds even though the pod keeps delivering. Read on `dataAccessQueue`.
+    /// Hand-back half: is a LOOP temp still executing on the pod right now? The loan
+    /// controller needs this at hand-back and cannot ask `basalDeliveryState`, because the
+    /// link is orphaned by then and that state reads nil — which is exactly why the
+    /// DESIGN-5 cancel in finalizeHandback had been silently dead (no pod
     /// command at all between "drain complete" and the release, at both hand-backs).
     /// Thread-safe by hopping the data queue; nil when nothing is running.
     func runningTempBasalForHandback() -> DoseEntry? {
@@ -609,12 +645,12 @@ final class WatchLoopManager {
                 // publishHUDContext (:324). The glance renders this with a forced sign
                 // ("%+.2f"), so net makes it meaningful: + above schedule, − a reduction,
                 // 0 at schedule. (Was the ABSOLUTE rate, so a low-temp rendered as a
-                // meaningless "+0.00" that read as "no action" — 2026-07-25.)
+                // meaningless "+0.00" that read as "no action".)
                 //
-                // #68 (2026-08-01): net against the OVERRIDE-APPLIED schedule, not the raw one.
+                // Net against the OVERRIDE-APPLIED schedule, not the raw one.
                 // Netting against raw 0.70 under a 60% override rendered "+0.00" while the pod ran
-                // 1.67x the override's intended basal — Jeremy read exactly that "0" as "not
-                // low-temping". Under the override a suspend is −0.42 and raw-schedule is +0.28,
+                // 1.67x the override's intended basal, which reads as "not low-temping". Under the
+                // override a suspend is −0.42 and raw-schedule is +0.28,
                 // and the wrist must say so. Same fix, same accessor as the DoseMath guards.
                 let scheduled = (doseStore.basalProfileApplyingOverrideHistory ?? settings.basalRateSchedule)?.value(at: now()) ?? 0
                 tempRate = dose.unitsPerHour - scheduled
@@ -623,11 +659,11 @@ final class WatchLoopManager {
             // IOB evaluated at `now()` instead of read from the loop's cache. `insulinOnBoard`
             // is written only by updateCachedEffects, which runs only inside a loop cycle — and
             // loop() is CGM-triggered (:2523), so a sensor dropout stops IOB recomputation
-            // outright. Field 2026-08-05: the rail held a flat 1.13 U for 28 minutes across a
+            // outright. In the field the rail held a flat 1.13 U for 28 minutes across a
             // G7 outage and then fell 0.53 in one step when readings resumed, which reads as an
             // insulin EVENT rather than as the arithmetic catching up.
             //
-            // Unlike the prediction — which #48 deliberately MARKS stale rather than blanking,
+            // Unlike the prediction — which is deliberately MARKED stale rather than blanked,
             // because it genuinely cannot be recomputed without glucose — IOB is a pure function
             // of the dose timeline and the clock. So the honest fix is to evaluate it, not to
             // gate it: stock's HUD blanks stale insulin (ChartHUDController:165) because its
@@ -644,15 +680,20 @@ final class WatchLoopManager {
                 directG7At: sources.direct,
                 phoneRelayAt: sources.phone,
                 trend: (latest as? StoredGlucoseSample)?.trend,
-                // #48 (Jeremy 2026-07-24): keep the eventual VISIBLE; the glance grades its
+                // Keep the eventual VISIBLE; the glance grades its
                 // freshness (fresh/aging/stale on the loop dot — stock's HUDInterfaceController
-                // convention) rather than BLANKING it. The old binary gate hid the number when
-                // cycles failed, but a blank reads as "no prediction," which is its own lie.
+                // convention) rather than BLANKING it. A binary gate that hid the number when
+                // cycles failed reads as "no prediction," which is its own lie.
                 // `lastLoopCompleted` is already in GlanceData, so activeState MARKS a stale
-                // prediction instead of dropping it (field 2026-07-22: eventual sat at 120 for
-                // 25 min across failed cycles — it now stays shown while the dot goes
-                // amber→red, so it never looks authoritative once old).
-                eventual: predictedGlucose?.last?.quantity,
+                // prediction instead of dropping it — a stale eventual stays shown while the
+                // dot goes amber→red, so it never looks authoritative once old.
+                // The pending-inclusive curve, matching the phone's "Eventually" — which reads
+                // the same one. The dosing curve stamped just below credits nothing for a temp
+                // the instant it is enacted, so the wrist and the phone disagreed by ISF times
+                // the net remaining span: measured in the field at 493 on the phone against
+                // ~490 on the wrist within a minute of a net -3.3 U/hr enact. Dosing is
+                // unaffected — DoseMath consumes the no-pending curve, deliberately.
+                eventual: predictedGlucoseIncludingPendingInsulin?.last?.quantity,
                 iob: liveIOB,
                 tempRate: tempRate,
                 lastLoopCompleted: lastLoopCompleted,
@@ -667,7 +708,7 @@ final class WatchLoopManager {
                 // 2026-07-22: eventual ~200 with a blank recommend).
                 recommendedTempRate: lastRecommendation?.basalAdjustment?.unitsPerHour,
                 lastLoopErrorText: lastLoopError.map { String(describing: $0) },
-                // #86: READ the cached value. Computing it here would run a full per-source
+                // READ the cached value. Computing it here would run a full per-source
                 // replay of LoopMath on the MAIN thread every 2 s (this whole closure is
                 // `dataAccessQueue.sync` from the debug page's timer) — cache at cycle end,
                 // read at render.
@@ -724,9 +765,9 @@ final class WatchLoopManager {
     private func publishHUDContext() {   // dataAccessQueue
         guard pumpManager != nil else { return }   // loan active only — otherwise the phone owns the HUD
         let ctx = WatchContext()
-        ctx.isWatchAuthored = true   // #47: outranks the phone's relay of the same reading
-        // #47: the stock chart's prediction line reads context.predictedGlucose and was never
-        // populated here, so it sat empty for the whole loan (field 2026-08-05).
+        ctx.isWatchAuthored = true   // Outranks the phone's relay of the same reading
+        // The stock chart's prediction line reads context.predictedGlucose and was never
+        // populated here, so it sat empty for the whole loan.
         ctx.predictedGlucose = predictedGlucose.flatMap { WatchPredictedGlucose(values: $0) }
         let latest = glucoseStore.latestGlucose
         ctx.glucose = latest?.quantity
@@ -736,7 +777,7 @@ final class WatchLoopManager {
         ctx.loopLastRunDate = lastLoopCompleted
         ctx.isClosedLoop = _closedLoopEnabled
         if let dose = runningTempBasal() {
-            // #68 (2026-08-01): override-applied schedule, matching the glance fix above.
+            // Override-applied schedule, matching the glance fix above.
             let scheduled = (doseStore.basalProfileApplyingOverrideHistory ?? settings.basalRateSchedule)?.value(at: now()) ?? 0
             ctx.lastNetTempBasalDose = dose.unitsPerHour - scheduled
             ctx.lastNetTempBasalDate = dose.startDate
@@ -760,7 +801,7 @@ final class WatchLoopManager {
                 loopDataManager.updateContext(ctx)
                 NotificationCenter.default.post(name: LoopDataManager.didUpdateContextNotification, object: loopDataManager)
             }
-            // #47: the stock carb/bolus flow reads context.recommendedBolusDose, which only the
+            // The stock carb/bolus flow reads context.recommendedBolusDose, which only the
             // phone ever set — hence a blank recommendation for the whole loan. Fill it from the
             // watch's own DoseMath.
             //
@@ -825,10 +866,10 @@ final class WatchLoopManager {
         self.carbStore = carbStore
         self.overrideHistory = overrideHistory
         self.settings = settings
-        // #50: cache each accepted temp so runningTempBasal() can report what the pod is
-        // running while E4 has it orphaned (basalDeliveryState is nil then). Built here so the
+        // Cache each accepted temp so runningTempBasal() can report what the pod is
+        // running while the link is orphaned (basalDeliveryState is nil then). Built here so the
         // DoseEntry uses this manager's testable clock; the cache is dataAccessQueue-isolated.
-        // #73/#74 shadow ledger: enactor-accepted doses flow into the session timeline.
+        // Shadow ledger: enactor-accepted doses flow into the session timeline.
         doseEnactor.ledgerRecord = { [weak self] dose in self?.ledgerRecordEnact(dose) }
         doseEnactor.onTempBasalEnacted = { [weak self] unitsPerHour, duration in
             guard let self = self else { return }
@@ -837,9 +878,9 @@ final class WatchLoopManager {
             self.dataAccessQueue.async { self.cachedEnactedTempBasal = enacted }
         }
         #if !targetEnvironment(simulator)
-        // #39: phone-BG fallback. Every phone context update, during a loan, mirror the phone's
+        // Phone-BG fallback. Every phone context update, during a loan, mirror the phone's
         // relayed CGM into the DOSING store (device only; the simulator drives it via the
-        // #61 timer — simStartGlucoseFeed — to avoid a synthetic-vs-real syncId double-ingest).
+        // simStartGlucoseFeed timer instead, to avoid a synthetic-vs-real syncId double-ingest).
         NotificationCenter.default.addObserver(forName: LoopDataManager.didUpdateContextNotification,
                                                object: nil, queue: .main) { [weak self] _ in
             self?.ingestPhoneGlucoseFromContext()
@@ -859,7 +900,7 @@ final class WatchLoopManager {
     }
     private var carbEffect: [GlucoseEffect]? {
         didSet {
-            // RC-freeze fix (#69/#46): re-calculate retrospective correction when carb effects
+            // RC-freeze fix: re-calculate retrospective correction when carb effects
             // change (carb data may be back-dated). The port DROPPED the phone's
             // LoopDataManager.carbEffect.didSet (:352-358); without it,
             // retrospectiveGlucoseDiscrepancies — set to [] at cold-start takeover (empty glucose
@@ -869,7 +910,7 @@ final class WatchLoopManager {
             //
             // We deliberately do NOT also nil predictedGlucose (the phone does). On the watch
             // predictedGlucose is read only for DISPLAY (glance eventual), never for dosing
-            // (DoseMath uses the locally-computed prediction), and #48 (2026-07-24) intentionally
+            // (DoseMath uses the locally-computed prediction), and the glance intentionally
             // KEEPS the last eventual visible + grades its freshness rather than blanking it on a
             // failed cycle. Nil-ing it here would re-blank the glance on failed post-reading cycles.
             retrospectiveGlucoseDiscrepancies = nil
@@ -882,7 +923,7 @@ final class WatchLoopManager {
     private let bgSourceLock = NSLock()
     private var _lastDirectG7At: Date?
     private var _lastPhoneRelayAt: Date?
-    /// #101 phase 2: last sensorID written by cgmManagerDidUpdateState (extension can't hold
+    /// Last sensorID written by cgmManagerDidUpdateState (extension can't hold
     /// storage) — the persist itself runs every state change; this only rate-limits the log line.
     var lastPersistedSensorID: String?
     private func noteGlucoseSource(directG7: Bool) {
@@ -912,11 +953,11 @@ final class WatchLoopManager {
         bgSourceLock.lock(); defer { bgSourceLock.unlock() }
         return (_lastDirectG7At, _lastPhoneRelayAt)
     }
-    /// #29: the last cycle's binding-constraint summary, for the diagnostic screen. Our screen
+    /// The last cycle's binding-constraint summary, for the diagnostic screen. Our screen
     /// only — never annotated onto a stock surface (the stock-parity ruling).
     private(set) var lastDosingDerivation: String?
 
-    // MARK: - Override-applied schedules (stock parity, #112)
+    // MARK: - Override-applied schedules (stock parity)
     //
     // Copied verbatim from LoopDataManager :561-573, including WHICH STORE each one reads.
     // The split looks arbitrary and isn't ours to redesign: DoseStoreProtocol exposes only
@@ -927,7 +968,7 @@ final class WatchLoopManager {
     //
     // WHY THESE EXIST AT ALL. The watch had no manager-level accessor and instead inlined
     // `doseStore.<accessor> ?? settings.<raw>` at seven call sites — our own dialect, with a
-    // fallback the phone does not have anywhere. That dialect is what let #112 through: the
+    // fallback the phone does not have anywhere. That dialect is how a real defect got in: the
     // manual-bolus path simply read `settings.insulinSensitivitySchedule` and nobody noticed it
     // was the odd one out, because there was no single place where "the schedule dosing uses"
     // was defined. One accessor per schedule, used everywhere, makes the next omission visible.
@@ -947,8 +988,8 @@ final class WatchLoopManager {
         return carbStore.insulinSensitivityScheduleApplyingOverrideHistory
     }
 
-    /// R35: refuse loudly, once per distinct reason — not once per glance tick, and never by
-    /// silently switching the dosing source (that silent switch is precisely what R35 bans).
+    /// Refuse loudly, once per distinct reason — not once per glance tick, and never by
+    /// silently switching the dosing source; that silent switch is banned outright.
     private func logLedgerRefusal(_ what: String) {
         let reason = "\(what): ledger=\(sessionLedger != nil ? "ok" : "NIL") isf=\(insulinSensitivityScheduleApplyingOverrideHistory != nil ? "ok" : "NIL") basal=\(basalRateScheduleApplyingOverrideHistory != nil ? "ok" : "NIL")"
         guard reason != lastLedgerRefusalLogged else { return }
@@ -956,9 +997,9 @@ final class WatchLoopManager {
         SportLog.event("ledger", "REFUSED \(reason) — R35: no store fallback; the cycle fails loudly")
     }
 
-    /// R35: the pump-data recency clock, owned directly. It was `doseStore.lastAddedPumpData`,
+    /// The pump-data recency clock, owned directly. It must never be `doseStore.lastAddedPumpData`,
     /// which advanced as a side effect of writing dose rows into a store that never persists
-    /// them (#111). Same lock idiom as the glucose source stamps.
+    /// them. Same lock idiom as the glucose source stamps.
     private let pumpDataLock = NSLock()
     private var _lastPumpDataDate: Date?
     var lastPumpDataDate: Date? {
@@ -970,8 +1011,8 @@ final class WatchLoopManager {
         if (_lastPumpDataDate ?? .distantPast) < date { _lastPumpDataDate = date }
     }
 
-    /// #50: the temp basal we last successfully enacted, cached so the watch knows what the
-    /// pod is running without querying it. E4 orphans the pod after each dose, so
+    /// The temp basal we last successfully enacted, cached so the watch knows what the
+    /// pod is running without querying it. The pod link is orphaned after each dose, so
     /// `pumpManager.status.basalDeliveryState` reverts to nil within seconds even though the
     /// pod keeps delivering the accepted temp for its full programmed duration. dataAccessQueue.
     private var cachedEnactedTempBasal: DoseEntry?
@@ -980,7 +1021,7 @@ final class WatchLoopManager {
     /// Mirrors LoopDataManager's buffer multiplier for combining retrospective discrepancies.
     private let retrospectiveCorrectionGroupingIntervalMultiplier = 1.01
 
-    /// Carb entries behind the current `carbEffect`, kept for the #47 potential-entry branch.
+    /// Carb entries behind the current `carbEffect`, kept for the potential-entry branch.
     /// Read/written on `dataAccessQueue` like every other cached effect.
     private var recentCarbEntries: [StoredCarbEntry]?
 
@@ -1022,13 +1063,13 @@ final class WatchLoopManager {
     private var predictedGlucose: [PredictedGlucoseValue]?
     private var predictedGlucoseIncludingPendingInsulin: [PredictedGlucoseValue]?
 
-    /// #86 INSTRUMENTATION ONLY: last cycle's exact prediction decomposition, computed once at
+    /// INSTRUMENTATION ONLY: last cycle's exact prediction decomposition, computed once at
     /// the end of `logPredictionBreakdown` and read (never computed) by `glanceData()`.
     private var lastPredictionBreakdown: PredictionBreakdown?
 
     private var recommendedAutomaticDose: (recommendation: AutomaticDoseRecommendation, date: Date)?
 
-    /// INSTRUMENTATION ONLY (#45): the phone's prediction decomposition carried in the grant,
+    /// INSTRUMENTATION ONLY: the phone's prediction decomposition carried in the grant,
     /// stashed at takeover so `[predict-diff]` can subtract the watch's first post-takeover prediction
     /// against it, term by term. Self-expires after 20 min (checked at the diff) so a stale grant
     /// snapshot never keeps diffing against a moved-on watch.
@@ -1037,7 +1078,7 @@ final class WatchLoopManager {
         dataAccessQueue.async { self.phonePredictionSnapshotAtGrant = snapshot }
     }
 
-    /// INSTRUMENTATION ONLY (#69): the three IOB values that should agree at takeover — phone-at-grant,
+    /// INSTRUMENTATION ONLY: the three IOB values that should agree at takeover — phone-at-grant,
     /// watch SEED-IN anchor, watch first-cycle computed — captured so `[iob-diff]` can localize the
     /// ~0.3U leak. Set at SEED-IN, consumed (and cleared) at the first post-takeover cycle.
     private var takeoverIOBAnchors: (phone: Double?, phoneDate: Date?, seed: Double, at: Date)?
@@ -1054,13 +1095,13 @@ final class WatchLoopManager {
 
     /// Mirrors DeviceDataManager.lastCGMLoopTrigger (deviceQueue only).
     private var lastCGMLoopTrigger: Date = .distantPast
-    /// #39 storm latch: last phone-fallback syncId attempted (serial deviceQueue only).
+    /// Storm latch: last phone-fallback syncId attempted (serial deviceQueue only).
     var lastPhoneFallbackSyncId: String?
 
-    // MARK: - #73/#74 SessionInsulinLedger (SHADOW MODE)
+    // MARK: - SessionInsulinLedger (SHADOW MODE)
 
     /// The single-owner session dose timeline (see SessionInsulinLedger.swift for the full
-    /// rationale). dataAccessQueue-confined; since R35 it is the ONLY insulin book —
+    /// rationale). dataAccessQueue-confined; it is the ONLY insulin book —
     /// dosing and display still read the DoseStore. Reverting = delete these hooks.
     private var sessionLedger: SessionInsulinLedger?
 
@@ -1069,10 +1110,10 @@ final class WatchLoopManager {
     /// diff isolates STORAGE behavior, not math.
     func ledgerSeed(finished: [DoseEntry], live: [DoseEntry]) {
         dataAccessQueue.async {
-            // #112: the ledger no longer freezes a schedule at seed — both schedules are
-            // resolved override-applied at READ time, so the old "no basal profile yet →
-            // seed SKIPPED" failure (which silently left the STORE driving dosing) is gone.
-            // A missing schedule now surfaces at read as an R35 refusal instead.
+            // The ledger does not freeze a schedule at seed — both schedules are
+            // resolved override-applied at READ time, so a "no basal profile yet →
+            // seed SKIPPED" failure (which would silently leave the STORE driving dosing)
+            // cannot arise. A missing schedule surfaces at read as a loud refusal instead.
             var ledger = SessionInsulinLedger(
                 insulinModelProvider: self.doseStore.insulinModelProvider,
                 longestEffectDuration: self.doseStore.longestEffectDuration)
@@ -1082,21 +1123,21 @@ final class WatchLoopManager {
         }
     }
 
-    // g7.ledgerCutover DELETED (R35, 2026-08-11). The flag was the one-line revert to the
-    // store dosing path — and #111 established that path was never trustworthy on the watch
-    // (isReadOnly store: saves silently no-op, purges can't clear). Jeremy: "no fallback at
-    // all." A missing ledger input now refuses the cycle loudly; the rollback is the previous
+    // g7.ledgerCutover DELETED. The flag was the one-line revert to the
+    // store dosing path — and that path was never trustworthy on the watch
+    // (isReadOnly store: saves silently no-op, purges can't clear). There is no fallback at
+    // all: a missing ledger input refuses the cycle loudly, and the rollback is the previous
     // TestFlight build, not a hidden second book.
 
-    /// R35: one refusal log per distinct reason, not one per 2s glance tick.
+    /// One refusal log per distinct reason, not one per 2s glance tick.
     private var lastLedgerRefusalLogged: String?
 
-    /// #84: the ledger's counterpart to the phone's `clearCachedInsulinEffects()`
+    /// The ledger's counterpart to the phone's `clearCachedInsulinEffects()`
     /// (LoopDataManager.swift:472). Stock reaches it through a DoseStore notification observer
     /// (LoopDataManager.swift:206-219) that fires on EVERY dosing change; under the ledger
     /// cutover our doses never touch DoseStore, so that observer never fires and the cached
     /// insulin effects went stale for the whole epoch — the prediction kept the array built at
-    /// takeover and every subsequent temp basal was invisible to it (measured 2026-07-31: the
+    /// takeover and every subsequent temp basal was invisible to it (measured: the
     /// predicted-minimum horizon pinned to one absolute wall-clock time for 11 consecutive
     /// cycles, and the insulin term reading −4 mg/dL against IOB 1.33 U at ISF 70, where the
     /// invariant demands −ISF × IOB ≈ −93). The loop then stacked insulin onto a prediction that
@@ -1113,12 +1154,12 @@ final class WatchLoopManager {
         // NOT predictedGlucose — the watch deliberately diverges from the phone here, and the
         // first cut of this method broke it. Stock's clearCachedInsulinEffects() also nils
         // predictedGlucose; on the watch that value is DISPLAY-ONLY (the glance/diagnostic
-        // "eventually N" row — DoseMath uses the locally-computed prediction), and #48 rules that
-        // the last eventual stays visible with a freshness grade rather than blanking on a failed
+        // "eventually N" row — DoseMath uses the locally-computed prediction), and the glance keeps
+        // the last eventual visible with a freshness grade rather than blanking on a failed
         // cycle. See the identical note at the carbEffect didSet (~:552). Because this method now
         // runs on EVERY ledger write, nil-ing it here blanked the eventual after every enact —
-        // observed on the wrist 2026-07-31, with the reconciliation row still rendering 106
-        // because it is cached separately at predict time. The stale array was the #84 bug;
+        // observed on the wrist, with the reconciliation row still rendering 106
+        // because it is cached separately at predict time. The stale array was the bug;
         // predictedGlucose was never part of it and is recomputed each cycle regardless.
     }
 
@@ -1126,15 +1167,40 @@ final class WatchLoopManager {
     func ledgerRecordEnact(_ dose: DoseEntry) {
         dataAccessQueue.async {
             self.sessionLedger?.recordEnact(dose)
-            self.clearCachedInsulinEffects()   // #84 — the dose must reach the next prediction
+            self.clearCachedInsulinEffects()   // The dose must reach the next prediction
+            // ...and the DISPLAY curve must reach the wrist now, not next cycle. This is the
+            // half of stock's dosing-change observer that had no analogue here: stock clears
+            // the same two caches and then posts `notify(forChange: .insulin)`, and the status
+            // screen's recompute off that notification is why the phone's "Eventually" credits
+            // a temp within seconds of enacting it. The watch stamps its curves once per cycle,
+            // BEFORE the enactor runs, so without this the wrist showed a figure computed
+            // before the dose it had just delivered — the disagreement Jeremy measured at ~100
+            // mg/dL against the phone, side by side.
+            //
+            // Effects first, curve second, and in that order: predictGlucose READS the caches
+            // that were just nil-ed and does not rebuild them, so predicting here without the
+            // refresh would produce a curve with no insulin in it at all.
+            //
+            // Only the pending-inclusive array is re-stamped. Nothing dosing reads it — DoseMath
+            // consumes the locally-computed curve — so this cannot reach delivery, and no
+            // recommendation is produced off-cycle.
+            _ = self.updateCachedEffects()
+            if let updated = try? self.predictGlucose(includingPendingInsulin: true) {
+                self.predictedGlucoseIncludingPendingInsulin = updated
+            }
+            // No explicit glance poke: the glance's own tick rebuilds its mirror, and leaving a
+            // failed predict on the previous value is the same choice made for the eventual
+            // everywhere else on the wrist — a stale figure carrying a freshness grade beats a
+            // blank one, which is why clearCachedInsulinEffects deliberately does not nil the
+            // display curve the way stock's does.
         }
     }
 
-    /// #74: a chase verdict REFUTED a previously booked assumed dose — reverse it.
+    /// A chase verdict REFUTED a previously booked assumed dose — reverse it.
     func ledgerRemoveDose(type: DoseType, startingAt: Date) {
         dataAccessQueue.async {
             if self.sessionLedger?.removeDose(type: type, startingAt: startingAt) == true {
-                self.clearCachedInsulinEffects()   // #84 — a reversal changes the curve too
+                self.clearCachedInsulinEffects()   // A reversal changes the curve too
                 SportLog.event("ledger", "assumed dose REMOVED (chase refuted) — \(type) @ \(startingAt)")
             }
         }
@@ -1163,16 +1229,16 @@ final class WatchLoopManager {
     /// :2468 checks `state.isPumpDataStale`) and fetches pod status only when needed,
     /// so we inherit stock's threshold rather than inventing one.
     ///
-    /// Field 2026-07-22 07:16-07:42: every closed-loop cycle died on
-    /// `pumpDataTooOld(06:57:51)` — the last E5 dose, i.e. the last pod contact. Under
-    /// E4 the pod is orphaned, so status only refreshed when we dosed, and the loop
-    /// wouldn't dose without fresh status: a permanent deadlock after 15 minutes.
+    /// Without it every closed-loop cycle dies on `pumpDataTooOld` dated at the last pod
+    /// contact: the pod link is orphaned between doses, so status only refreshes when we
+    /// dose, and the loop won't dose without fresh status — a permanent deadlock after
+    /// 15 minutes.
     ///
-    /// E4 deviation (necessary, and the only one): a status fetch needs the BLE link
+    /// The one necessary deviation: a status fetch needs the BLE link
     /// back, so reclaim → assert → loop → release. Skipped while our own view of the
-    /// data is still fresh, because under E4 a reclaim costs pod contact that stock
-    /// never pays. With E4 off the reclaim closure returns immediately and this
-    /// collapses to the stock call.
+    /// data is still fresh, because a reclaim costs pod contact that stock
+    /// never pays. When the link is held continuously the reclaim closure returns
+    /// immediately and this collapses to the stock call.
     /// OBS-8: latched so the no-pod state logs once per transition, not once per reading.
     private var loggedIdleNoPump = false
 
@@ -1206,7 +1272,7 @@ final class WatchLoopManager {
             }
         }
 
-        let age = now().timeIntervalSince(lastPumpDataDate ?? .distantPast)   // R35: owned stamp
+        let age = now().timeIntervalSince(lastPumpDataDate ?? .distantPast)   // Owned stamp
         // WARM CADENCE (157, E5 parity). E5's overnight proof — 84/84 reclaims, 2-4 reads
         // each — touched the pod EVERY cycle (an enact every reading). This threshold was
         // inputDataRecencyInterval/2 (7.5 min), so any quiet cycle (NO CHANGE verdict, data
@@ -1217,15 +1283,15 @@ final class WatchLoopManager {
         // cycle = exactly the cadence E5 proved all night. Recovery from a genuinely
         // missed cycle is the scan escalation's job; this keeps the miss from happening.
         guard age > .minutes(4),
-              let reclaim = e4ReclaimPodForDose else {
+              let reclaim = reclaimPodForDose else {
             assertThenLoop({})
             return
         }
 
         SportLog.event("loan", String(format: "pump data %.0f min old — reclaiming pod to refresh status before the cycle", age / 60))
-        // #101 phase 2: this reclaim fires ~100ms after reading arrival — while un-adopted
+        // This reclaim fires ~100ms after reading arrival — while un-adopted
         // that is the exact moment the D2W ride appears, and the pod scan kills the G7
-        // connect (2026-08-10 23:31:48). Hold the pod radio until the ride resolves.
+        // connect. Hold the pod radio until the ride resolves.
         // Steady state (fresh direct G7) passes straight through.
         deferPodRadioWhileG7AcquisitionResolves {
             self.reclaimForRefresh(reclaim, assertThenLoop: assertThenLoop)
@@ -1241,14 +1307,14 @@ final class WatchLoopManager {
                 // Radio back to the G7. The +12s settle comfortably outlasts a
                 // same-cycle enact, whose own reclaim is a no-op because the link
                 // is already up.
-                self.e4ReleasePodAfterDose?()
+                self.releasePodAfterDose?()
             }
         }
     }
 
     /// The fragile phase is G7 CONNECT/AUTH ESTABLISHMENT, ~1.5 s straddling the grid point. An
     /// ESTABLISHED link coexists with pod traffic perfectly well — backfill and live reads land
-    /// during pod handshakes — and the #81 forensics say the same from the pod's side. So the
+    /// during pod handshakes — and the forensics say the same from the pod's side. So the
     /// gate keys on live acquisition state, not the clock:
     ///
     /// - Direct G7 fresh (< 6.5 min): the read that triggered this cycle already completed —
@@ -1302,34 +1368,34 @@ final class WatchLoopManager {
                 error = self.updatePredictedGlucoseAndRecommendedDose()
             }
 
-            // #41 observability: a PREDICTION-stage missingDataError is otherwise
+            // Observability: a PREDICTION-stage missingDataError is otherwise
             // swallowed — the cycle-end handler suppresses missingDataError to avoid
             // double-logging enact radio-defers (which reach the loop as a wrapped
             // missingDataError too). Logging HERE, before enact, surfaces which of the
             // five inputs is nil (glucose / momentumEffect / carbEffect / insulinEffect
             // / activeInsulin) without touching the radio-defer path. This is exactly
-            // the failure that made a silently non-dosing loop invisible on 2026-07-21.
+            // the failure that made a silently non-dosing loop invisible.
             if case .missingDataError(let what)? = error {
                 SportLog.event("loop", "NOT DOSING — prediction missing \(what)")
             }
 
-            // #98 (2026-08-08): the dead-man refresh MOVED to after the enact — see the
-            // verdict block below. It used to fire here, on a healthy PREDICTION alone, which
-            // is a deviation from stock: stock's finishLoop takes enactRecommendedAutomaticDose's
+            // The dead-man refresh belongs AFTER the enact — see the
+            // verdict block below. Firing it here, on a healthy PREDICTION alone, deviates
+            // from stock: stock's finishLoop takes enactRecommendedAutomaticDose's
             // error AS the loop's error (LoopDataManager.swift:888-905), so a cycle that cannot
             // reach the pump is a FAILED loop and never advances lastLoopCompleted. Ours already
             // matched stock for lastLoopCompleted/the ring; only the watchdog was wrong, and it
-            // is the one surface whose whole job is to notice. Field 2026-08-08: 25 minutes of
-            // podNotConnected enacts kept re-arming the dead-man because the prediction was fine.
+            // is the one surface whose whole job is to notice — otherwise a run of
+            // podNotConnected enacts keeps re-arming the dead-man because the prediction is fine.
 
             // Enact only when the user has closed the loop on the watch THIS session
-            // (R23 as amended 2026-07-18: watch sovereign — the phone's own loop mode
-            // no longer gates the wrist). Open = advisory: prediction + recommendation
+            // (watch sovereign — the phone's own loop mode
+            // does not gate the wrist). Open = advisory: prediction + recommendation
             // computed above (glance display live), nothing sent to the pod.
             // Snapshot the recommendation BEFORE enacting. enactRecommendedAutomaticDose
             // clears `recommendedAutomaticDose` on success, and the cycle logging below
             // runs after it — so in CLOSED loop the log always read "rec none" no matter
-            // what was decided (field 2026-07-22 08:48). The decision has to be captured
+            // what was decided. The decision has to be captured
             // while it still exists.
             let decided = self.recommendedAutomaticDose?.recommendation
             self.lastRecommendation = decided   // survives the enact's clear, for the DOSING panel
@@ -1341,7 +1407,7 @@ final class WatchLoopManager {
 
             self.lastLoopError = error
 
-            // #98 CYCLE VERDICT — exactly one line per cycle, always. The question "did this
+            // CYCLE VERDICT — exactly one line per cycle, always. The question "did this
             // cycle actually dose?" had no greppable answer: a failed enact logged nothing at
             // all (mis-typed as .missingDataError, which is suppressed below), so 25 minutes of
             // podNotConnected looked identical to a quiet healthy night.
@@ -1377,7 +1443,7 @@ final class WatchLoopManager {
             if let error {
                 self.log.error("Loop ended with error: %{public}@", String(describing: error))
                 // Radio defers are logged at the defer site; don't double-log those.
-                // #98: .enactFailed is NOT suppressed — that suppression is why a failed enact
+                // .enactFailed is NOT suppressed — that suppression is why a failed enact
                 // was invisible. Only missingDataError stays quiet (it has its own line above).
                 if case .missingDataError = error {} else {
                     SportLog.event("loop", "cycle ended with error: \(error)")
@@ -1400,7 +1466,7 @@ final class WatchLoopManager {
     /// Recompute the cached effects + the prediction WITHOUT enacting — called right after a
     /// takeover so the glance shows a fresh eventual (WITH the seeded carbs) and IOB immediately,
     /// instead of the stale pre-loan cached values until the next G7 reading drives a full cycle.
-    /// #69 field: carbs seeded at takeover weren't in the glance eventual (it stayed the last
+    /// In the field, carbs seeded at takeover weren't in the glance eventual (it stayed the last
     /// pre-loan insulin-only prediction because no cycle had run), and IOB read ~0 while the seed
     /// store held the real value — both because the glance reads CACHED IOB/eventual that only a
     /// completed cycle refreshes. This is DISPLAY-ONLY: it never enacts (enact-only-on-fresh-reading
@@ -1457,7 +1523,7 @@ final class WatchLoopManager {
         } else {
             rec = "none"
         }
-        // #3 (2026-07-25): the dose keys on EVENTUAL, with the predicted MIN + suspend
+        // The dose keys on EVENTUAL, with the predicted MIN + suspend
         // threshold as the safety brake. Put all three on the decision line so "eventual <
         // target ⇒ reduce" (and "why temp 0") reads without cross-referencing [curve].
         let mgdlU = HKUnit.milligramsPerDeciliter
@@ -1471,13 +1537,13 @@ final class WatchLoopManager {
         SportLog.event("predict", "eventual \(eventual) · min \(minPredicted) · suspendThr \(suspendThr) · net effects: carbs \(net(carbEffect)), insulin \(net(insulinEffect)), momentum \(net(glucoseMomentumEffect)), RC \(rc) · rec \(rec)")
         SportLog.event("curve", curveSummary(predictedGlucose))
         emitPredictionSnapshotAndDiff()
-        // #86: the third decomposition — the one that ADDS UP — plus the cache the DOSING
+        // The third decomposition — the one that ADDS UP — plus the cache the DOSING
         // panel renders. Last, so `[predict]` / `[predict-snapshot]` / `[predict-recon]` read
         // raw → marginal → exact in that order for any one cycle.
         emitPredictionReconciliation()
     }
 
-    /// INSTRUMENTATION ONLY (#45): three lines appended each cycle after `[predict]`/`[curve]` —
+    /// INSTRUMENTATION ONLY: three lines appended each cycle after `[predict]`/`[curve]` —
     /// `[predict-snapshot]` (leave-one-out per-effect impact on the eventual), `[predict-diff]` (that
     /// same decomposition minus the phone's grant snapshot, term by term — the ~58 mg/dL takeover gap
     /// localized with zero manual arithmetic), and `[freshness]` (a diagnostic verdict that gates
@@ -1503,7 +1569,7 @@ final class WatchLoopManager {
         let startV = glucoseStore.latestGlucose?.quantity.doubleValue(for: mgdl)
         let glucoseDate = glucoseStore.latestGlucose?.startDate
         let glucoseAge = glucoseDate.map { now().timeIntervalSince($0) }
-        let pumpAge = now().timeIntervalSince(lastPumpDataDate ?? .distantPast)   // R35: owned stamp
+        let pumpAge = now().timeIntervalSince(lastPumpDataDate ?? .distantPast)   // Owned stamp
 
         SportLog.event("predict-snapshot", String(format:
             "start=%@@%@s eventual=%@ | impact[loo]: mom %@ ins %@ carb %@ RC %@ | IOB=%@ | momPts=%d rcDisc=%d | pumpAge=%.0fs",
@@ -1549,7 +1615,7 @@ final class WatchLoopManager {
     /// velocity cap + provenance + calibration guards still bound it.
     static let sportMomentumWindow: TimeInterval = .minutes(25)
 
-    /// INSTRUMENTATION ONLY (#45/#51): probe which of stock `linearMomentumEffect`'s gates the
+    /// INSTRUMENTATION ONLY: probe which of stock `linearMomentumEffect`'s gates the
     /// watch's glucose window passes right now — so "momentum over 0 pts" is explained, not guessed.
     /// Uses the SAME window + relaxed-continuity rule the live call uses (`sportMomentumWindow`,
     /// `requireContinuous: false`), so `avail`/`stockPts` match the real momentum. `cont(info)` is
@@ -1594,7 +1660,7 @@ final class WatchLoopManager {
         }
     }
 
-    /// INSTRUMENTATION ONLY (#69): the three-way IOB reconciliation at the first post-takeover cycle.
+    /// INSTRUMENTATION ONLY: the three-way IOB reconciliation at the first post-takeover cycle.
     /// Leg 1 (seed − phone) isolates wire/seed fidelity (only measurable now that the grant carries
     /// phone IOB); Leg 2 (cycle1 − seed) isolates the post-status-read reconciliation. `dt` and
     /// `phoneIOBAge` contextualize the aging so a stale phone stamp can be decay-corrected offline.
@@ -1604,7 +1670,7 @@ final class WatchLoopManager {
         let leg2 = cycle1.map { String(format: "%+.2f", $0 - anchors.seed) } ?? "—"
         let dt = now().timeIntervalSince(anchors.at)
         let phoneAge = anchors.phoneDate.map { String(format: "%.0f", now().timeIntervalSince($0)) } ?? "—"
-        let lastPumpAge = lastPumpDataDate.map { String(format: "%.0fs", now().timeIntervalSince($0)) } ?? "nil"   // R35: owned stamp; lastReconAge dropped with the store book
+        let lastPumpAge = lastPumpDataDate.map { String(format: "%.0fs", now().timeIntervalSince($0)) } ?? "nil"   // Owned stamp; lastReconAge dropped with the store book
         SportLog.event("iob-diff", String(format:
             "phoneIOB=%@ seedIOB=%.2f cycle1=%@ · Δ(seed−phone)=%@[wire] · Δ(cycle1−seed)=%@[reconcile] · dt(seed→cycle1)=%.0fs · phoneIOBAge=%@s · lastPumpAge=%@",
             anchors.phone.map { String(format: "%.2f", $0) } ?? "—", anchors.seed,
@@ -1612,14 +1678,14 @@ final class WatchLoopManager {
             leg1, leg2, dt, phoneAge, lastPumpAge))
     }
 
-    /// INSTRUMENTATION ONLY (#69): per-dose IOB decomposition at a labeled instant (SEED-IN vs
+    /// INSTRUMENTATION ONLY: per-dose IOB decomposition at a labeled instant (SEED-IN vs
     /// CYCLE1), so a re-timed / superseded / added dose between the seed and the first pod-status read
     /// is visible — the mechanism behind the ~0.3U SEED-IN→first-cycle drop. One-shot; never per-cycle.
     /// `netBasalUnits` already folds in `scheduledBasalRate`, so the SAME window showing a different
     /// net between labels is the scheduled-basal-netting signature (H2); a re-timed/added row is H1.
     func dumpIOBDecomp(_ label: String, at t: Date) {
         dataAccessQueue.async {
-            // R35: the decomp reads the LEDGER — the only book that holds doses now. Annotated
+            // The decomp reads the LEDGER — the only book that holds doses now. Annotated
             // with the override-applied schedule, so the rows show the same netting dosing uses.
             guard let ledger = self.sessionLedger,
                   let basal = self.basalRateScheduleApplyingOverrideHistory else {
@@ -1637,7 +1703,7 @@ final class WatchLoopManager {
                     netSum += d.netBasalUnits
                     let sched = d.scheduledBasalRate.map { String(format: "%.2f", $0.doubleValue(for: uhr)) } ?? "nil"
                     let id = d.syncIdentifier.map { String($0.suffix(6)) } ?? "—"
-                    // #80: `del=` shows whether the pod's ACTUAL delivery rode the wire.
+                    // `del=` shows whether the pod's ACTUAL delivery rode the wire.
                     // del=nil means LoopKit falls back to round(programmedUnits) — the
                     // rounding path that over-states IOB ~0.025 U per temp slice. Post-fix,
                     // pod-native seeded temps must show a number here, not "nil".
@@ -1712,9 +1778,9 @@ final class WatchLoopManager {
                 case .success(let samples):
                     let effects = samples.linearMomentumEffect(requireContinuous: false)
                     self.glucoseMomentumEffect = effects
-                    // #3 momentum input (2026-07-25): the net is in [predict]; this exposes
+                    // Momentum input: the net is in [predict]; this exposes
                     // whether it's built from FRESH, sufficient glucose. Sparse/stale input
-                    // (gappy G7, #15) makes momentum lag or overshoot — invisible in the net.
+                    // (a gappy G7) makes momentum lag or overshoot — invisible in the net.
                     let mgdlM = HKUnit.milligramsPerDeciliter
                     let mDelta = (effects.first != nil && effects.last != nil)
                         ? String(format: "%+.0f", effects.last!.quantity.doubleValue(for: mgdlM) - effects.first!.quantity.doubleValue(for: mgdlM))
@@ -1724,7 +1790,7 @@ final class WatchLoopManager {
                 }
                 updateGroup.leave()
             }
-            // INSTRUMENTATION ONLY (#45/#51): whenever momentum is (re)computed — every takeover and
+            // INSTRUMENTATION ONLY: whenever momentum is (re)computed — every takeover and
             // every glucose invalidation — probe EXACTLY which stock gate the window passes/fails, so
             // "over 0 pts" stops being a mystery. FIRE-AND-FORGET: a pure diagnostic must NOT sit inside
             // the dosing cycle's DispatchGroup wait (it reads nothing from the cycle), so it can never
@@ -1734,18 +1800,18 @@ final class WatchLoopManager {
         }
 
         if insulinEffect == nil || insulinEffect?.first?.startDate ?? .distantFuture > insulinEffectStartDate {
-            // R35 + #112: the session ledger IS the insulin book — same public InsulinMath,
+            // The session ledger IS the insulin book — same public InsulinMath,
             // same basalDosingEnd trim-at-now contract (canon: no forward credit for temps).
             // BOTH schedules are override-applied and resolved per read (stock's DoseStore
-            // behavior); the store fallback that used to sit in the else branch is GONE —
-            // #111 proved it was never a trustworthy book on the watch, and R35 rules that a
-            // missing input refuses loudly rather than silently switching source of truth.
+            // behavior); there is deliberately NO store fallback in the else branch —
+            // the store was never a trustworthy book on the watch, and a
+            // missing input must refuse loudly rather than silently switch source of truth.
             if let ledger = sessionLedger,
                let isf = insulinSensitivityScheduleApplyingOverrideHistory,
                let basal = basalRateScheduleApplyingOverrideHistory {
                 // filterDateRange mirrors the store path exactly; keep it.
                 //
-                // #84 CORRECTION (2026-07-31): the comment that stood here claimed this call
+                // CORRECTION: an earlier comment here claimed this call
                 // "re-arms the recompute gate above every cycle". It does not, and the freeze it
                 // warned about is exactly what shipped. The gate only fires when the cached array
                 // starts LATER than the needed start, i.e. when EARLIER data is wanted; it cannot
@@ -1800,7 +1866,7 @@ final class WatchLoopManager {
                     self.carbEffect = nil
                     self.recentCarbEntries = nil
                 case .success(let (entries, effects)):
-                    // #47: the port discarded these entries. The potential-carb-entry prediction
+                    // The port discarded these entries. The potential-carb-entry prediction
                     // needs them to pick a branch: a new entry whose effect is INDEPENDENT of what
                     // is already on board can simply be summed onto `carbEffect`, but a back-dated
                     // entry overlaps observed glucose, so dynamic absorption and retrospective
@@ -1813,12 +1879,12 @@ final class WatchLoopManager {
             }
         }
 
-        // R35: dosing + display IOB from the ledger, or nothing. The store fetch, the
-        // storeIOBShadow, and the [ledger-diff] line are DELETED (Jeremy: "drop ledger-diff,
-        // the odometer audit is better") — the independent check on the books is now the
+        // Dosing + display IOB from the ledger, or nothing. The store fetch, the
+        // storeIOBShadow, and the [ledger-diff] line are DELETED — the independent check on
+        // the books is now the
         // pod's own pulse counter, read first-hand by the phone at hand-back
         // (reconcile[AUTHORITATIVE]), a physical measurement instead of a derived shadow
-        // that #111 showed was corrupted by a store that never persists.
+        // corrupted by a store that never persists.
         if let ledger = sessionLedger, let basal = basalRateScheduleApplyingOverrideHistory {
             self.insulinOnBoard = InsulinValue(startDate: now(), value: ledger.insulinOnBoard(at: now(), basalSchedule: basal))
         } else {
@@ -1828,7 +1894,7 @@ final class WatchLoopManager {
 
         _ = updateGroup.wait(timeout: .distantFuture)
 
-        // INSTRUMENTATION ONLY (#69): the FIRST post-takeover cycle — now that this cycle's IOB is
+        // INSTRUMENTATION ONLY: the FIRST post-takeover cycle — now that this cycle's IOB is
         // computed, reconcile phone-IOB (grant snapshot) vs SEED-IN anchor vs cycle-1 computed, and
         // dump the per-dose decomposition once. One-shot: consuming the anchors clears them.
         if let anchors = takeoverIOBAnchors {
@@ -1889,11 +1955,11 @@ final class WatchLoopManager {
             correctionRange: correctionRange,
             retrospectiveCorrectionGroupingInterval: LoopMath.retrospectiveCorrectionGroupingInterval
         )
-        // #46/#3 RC input (2026-07-25): surfaces the active RC TYPE plus how much RC is
-        // contributing. (#46 CLOSED 2026-07-28: the watch DOES track the phone's Integral
+        // RC input: surfaces the active RC TYPE plus how much RC is
+        // contributing. The watch DOES track the phone's Integral
         // toggle — set at takeover from the grant; the setter shares this serial queue and is
         // enqueued before the first prediction, so no first-cycle Standard→Integral jump.
-        // See setIntegralRetrospectiveCorrection + docs/PREDICTION_FIDELITY.md.)
+        // See setIntegralRetrospectiveCorrection + docs/PREDICTION_FIDELITY.md.
         let rcType = retrospectiveCorrection is IntegralRetrospectiveCorrection ? "Integral" : "Standard"
         let mgdlRC = HKUnit.milligramsPerDeciliter
         let rcNet = (retrospectiveGlucoseEffect.first != nil && retrospectiveGlucoseEffect.last != nil)
@@ -1943,7 +2009,7 @@ final class WatchLoopManager {
         )
     }
 
-    /// - Parameter potentialCarbEntry: #47 — a carb entry the user is CONSIDERING but has not
+    /// - Parameter potentialCarbEntry: a carb entry the user is CONSIDERING but has not
     ///   saved. Folding it into the prediction here is what lets the watch recommend a meal bolus
     ///   on its own; without it the carb flow had to ask the phone, whose answer is computed from
     ///   the phone's own books and is therefore blind to everything the watch has done since the
@@ -1956,7 +2022,7 @@ final class WatchLoopManager {
             throw WatchLoopError.missingDataError("glucose")
         }
 
-        let pumpStatusDate = lastPumpDataDate ?? .distantPast   // R35: owned stamp, not the store's
+        let pumpStatusDate = lastPumpDataDate ?? .distantPast   // Owned stamp, not the store's
         let lastGlucoseDate = glucose.startDate
 
         // Recency gating, same constants as the phone (LoopCoreConstants).
@@ -1990,7 +2056,7 @@ final class WatchLoopManager {
         var effects: [[GlucoseEffect]] = []
         var retrospectiveEffect = self.retrospectiveGlucoseEffect
 
-        // #47 potential carb entry. Ported branch-for-branch from LoopDataManager:1266-1307 —
+        // Potential carb entry. Ported branch-for-branch from LoopDataManager:1266-1307 —
         // the two cases are NOT interchangeable and the split is the whole point.
         if let potentialCarbEntry = potentialCarbEntry {
             let retrospectiveStart = lastGlucoseDate.addingTimeInterval(-type(of: retrospectiveCorrection).retrospectionInterval)
@@ -2052,10 +2118,10 @@ final class WatchLoopManager {
         return prediction
     }
 
-    /// INSTRUMENTATION ONLY (#45). Which effect to leave out of a counterfactual eventual.
+    /// INSTRUMENTATION ONLY. Which effect to leave out of a counterfactual eventual.
     private enum CFDrop { case none, momentum, insulin, carb, rc }
 
-    /// INSTRUMENTATION ONLY (#45): a literal read-only mirror of `predictGlucose(:896)` that omits
+    /// INSTRUMENTATION ONLY: a literal read-only mirror of `predictGlucose(:896)` that omits
     /// exactly ONE effect input, so per-effect impact on the eventual is measurable as a leave-one-out
     /// counterfactual — impact(X) = eventual(.none) − eventual(dropX). It deliberately skips the
     /// recency guards and the pump-authority log (those belong to the real dosing path) and is NEVER
@@ -2078,7 +2144,7 @@ final class WatchLoopManager {
         return prediction.last?.quantity.doubleValue(for: .milligramsPerDeciliter)
     }
 
-    /// #86 INSTRUMENTATION ONLY (display + logging; no dosing path reads this). Build the EXACT
+    /// INSTRUMENTATION ONLY (display + logging; no dosing path reads this). Build the EXACT
     /// per-source decomposition of `eventual − start` described on `PredictionBreakdown`.
     ///
     /// This is a per-contributor restatement of `LoopMath.predictGlucose` (LoopMath.swift:118-175)
@@ -2188,7 +2254,7 @@ final class WatchLoopManager {
             computedAt: now())
     }
 
-    /// #86: cache the exact decomposition for the DOSING panel and emit it as a greppable
+    /// Cache the exact decomposition for the DOSING panel and emit it as a greppable
     /// `[predict-recon]` line. Unlike `[predict]` (raw array deltas, anchored at now) and
     /// `[predict-snapshot]` (MARGINAL leave-one-out impacts), this one ADDS UP — so a run of
     /// cycles can be grepped and summed without re-deriving the momentum blend by hand.
@@ -2209,10 +2275,10 @@ final class WatchLoopManager {
         let shown = PredictionBreakdown.round0(ev - (s + ins + carb + mom + rc))
 
         // The invariant check, against the RAW tail — never against the blended term above.
-        // Reads as its own sentence so nobody has to reconstruct this morning's argument to
+        // Reads as its own sentence so nobody has to reconstruct the argument to
         // interpret it: raw tail, what -ISF x IOB says it should be, and the residual in UNITS
         // (mg/dL is unreadable across different ISFs). A residual of roughly the running temp's
-        // remaining delivery is EXPECTED and stock; a raw tail that ignores IOB is #84 again.
+        // remaining delivery is EXPECTED and stock; a raw tail that ignores IOB is the bug.
         let invariant: String
         if let raw = b.insulinRawTailMgdl, let e = b.insulinExpectedMgdl, let isf = b.isfMgdlPerU, let iob = b.iobUnits {
             invariant = String(format: " | raw ins tail %+.1f vs −ISF×IOB %+.1f (ISF %.0f × IOB %.2f) resid %+.3f U",
@@ -2292,7 +2358,7 @@ final class WatchLoopManager {
                 return self.pumpManager?.roundToSupportedBasalRate(unitsPerHour: rate) ?? rate
             }
 
-            // #50: prefer the cached enacted temp when the pod is orphaned, so DoseMath's
+            // Prefer the cached enacted temp when the pod is orphaned, so DoseMath's
             // continuation logic sees the running temp and does not re-issue an identical one
             // every cycle (and the [dosemath] `running` field reads true instead of "none").
             let lastTempBasal: DoseEntry? = runningTempBasal()
@@ -2307,7 +2373,7 @@ final class WatchLoopManager {
 
             switch settings.automaticDosingStrategy {
             case .automaticBolus:
-                // RULED (R16, 2026-07-17): the watch strategy is temp basals only — every
+                // RULED: the watch strategy is temp basals only — every
                 // bolus is human-confirmed. The denial is explicit, not a silent fallback
                 // to tempBasalOnly, so a phone-pushed automaticBolus setting is surfaced
                 // rather than quietly reinterpreted.
@@ -2315,7 +2381,7 @@ final class WatchLoopManager {
 
             case .tempBasalOnly:
                 // The same DoseMath entry point, same argument surface as the phone (:1858).
-                // RULED (R16, 2026-07-17): maxBasal is the raw therapy maximumBasalRatePerHour
+                // RULED: maxBasal is the raw therapy maximumBasalRatePerHour
                 // — the only configured limit, exactly as on the phone. No watch-side
                 // companion cap; stock DoseMath clamp + driver rounding + pod ceiling are
                 // the layers.
@@ -2359,7 +2425,7 @@ final class WatchLoopManager {
                     settings.suspendThreshold?.quantity.doubleValue(for: mgdl).description ?? "none",
                     temp.map { String(format: "temp %.2f U/hr x %.0f min", $0.unitsPerHour, $0.duration / 60) } ?? "NO CHANGE"))
 
-                // #29 THE BINDING CONSTRAINT. The line above says what DoseMath saw and what it
+                // THE BINDING CONSTRAINT. The line above says what DoseMath saw and what it
                 // decided; this says WHICH LIMIT actually produced that number — the piece that
                 // was missing every time a rate had to be reconciled by hand. Six answers:
                 // inRange / aboveRange / entirelyBelowRange / suspend on the correction axis, and
@@ -2396,12 +2462,12 @@ final class WatchLoopManager {
     /// The stock recency-validated manual-bolus path: glucose/pump staleness gates and no
     /// fabricated glucose placeholder (the crude version's 100 mg/dL stand-in is a review
     /// finding and does not return).
-    /// RULED (R17, 2026-07-17): a recency denial surfaces as an explicit "No recent
+    /// RULED: a recency denial surfaces as an explicit "No recent
     /// glucose — no recommendation" notice in the recommendation slot; the dial stays
     /// usable for a manual bolus under therapy maxBolus and carbs still log. The notice
     /// rendering lands with the bolus-flow UI integration; this method supplies policy
     /// only (the thrown recency error is the notice's trigger).
-    /// - Parameter potentialCarbEntry: #47 — when non-nil the recommendation is a MEAL bolus for
+    /// - Parameter potentialCarbEntry: when non-nil the recommendation is a MEAL bolus for
     ///   an entry the user has not saved yet. Two things change, both of them stock's doing:
     ///   the entry joins the prediction, and the target range switches to the pre-meal range
     ///   (`presumingMealEntry:`), which is exactly why passing it matters rather than just
@@ -2428,9 +2494,9 @@ final class WatchLoopManager {
                 guard let glucoseTargetRange = self.settings.effectiveGlucoseTargetRangeSchedule(presumingMealEntry: potentialCarbEntry != nil) else {
                     throw WatchLoopError.configurationError("glucoseTargetRangeSchedule")
                 }
-                // #112 FIELD-CONFIRMED 2026-08-11 (Jeremy, 50% override): this used the RAW
+                // MUST be the OVERRIDE-APPLIED schedule. Using the RAW
                 // schedule — `settings.insulinSensitivitySchedule` — while the prediction it
-                // corrects was built with the OVERRIDE-APPLIED one (:1691). One computation,
+                // corrects is built with the OVERRIDE-APPLIED one (:1691) is one computation,
                 // two different sensitivities.
                 //
                 // The measurement: ISF 70, 50% override ⇒ effective 140. Eventual 118 against a
@@ -2442,7 +2508,7 @@ final class WatchLoopManager {
                 // Direction matters: a reduced-needs override means MORE sensitivity, so LESS
                 // insulin. Recommending off the raw schedule roughly DOUBLES the dose, and does
                 // so precisely when an exercise override is active — when hypo risk is already
-                // elevated. This is the same defect #68 fixed for temp basals (:2223); it
+                // elevated. This is the same defect already fixed for temp basals (:2223); it
                 // survived on the bolus path because nothing tested it.
                 guard let insulinSensitivity = self.insulinSensitivityScheduleApplyingOverrideHistory else {
                     throw WatchLoopError.configurationError("insulinSensitivitySchedule")
@@ -2472,9 +2538,9 @@ final class WatchLoopManager {
         }
     }
 
-    /// R5 manual bolus: the user is PRESENT — never defers to the radio arbiter
+    /// Manual bolus: the user is PRESENT — never defers to the radio arbiter
     /// (unlike the automatic path), capped by the granted therapy maximumBolus
-    /// (R1/R16: therapy settings are the only limits), journaled through the same
+    /// (therapy settings are the only limits), journaled through the same
     /// loan hooks as automatic doses. Completion on main.
     func enactManualBolus(units: Double, activationType: BolusActivationType, completion: @escaping (Error?) -> Void) {
         dataAccessQueue.async {
@@ -2491,22 +2557,22 @@ final class WatchLoopManager {
                 return
             }
             let rounded = pumpManager.roundToSupportedBolusVolume(units: units)
-            // The delivery itself, factored so it can run after an E4 pod reclaim.
+            // The delivery itself, factored so it can run after a pod reclaim.
             let deliverBolus = {
                 SportLog.event("loan", String(format: "MANUAL BOLUS %.2f U — enacting on the watch pump", rounded))
                 let eventID = self.doseEnactor.loanRecorder?.loanWillEnactBolus(units: rounded)
                 pumpManager.enactBolus(units: rounded, activationType: activationType) { error in
                     self.doseEnactor.loanRecorder?.loanDidEnact(eventID: eventID, error: error)
-                    self.e4ReleasePodAfterDose?()   // E4 Stage 2: re-release the pod after the bolus
+                    self.releasePodAfterDose?()   // Re-release the pod after the bolus
                     if let error = error {
                         SportLog.event("loan", "MANUAL BOLUS FAILED — \(String(describing: error))")
                     } else {
-                        // #73/#74 shadow ledger: point-ish event; DASH delivers ~1.5 U/min.
+                        // Shadow ledger: point-ish event; DASH delivers ~1.5 U/min.
                         let acceptedAt = self.now()
                         let deliveryEndsAt = acceptedAt.addingTimeInterval(rounded / 1.5 * 60)
                         SportLog.event("loan", String(format: "MANUAL BOLUS delivering %.2f U — estimated done in %.0fs",
                                                       rounded, deliveryEndsAt.timeIntervalSince(acceptedAt)))
-                        // #91: hand the glance the window so it can narrate the delivery the way
+                        // Hand the glance the window so it can narrate the delivery the way
                         // stock's phone does. Estimate only — same contract as
                         // PodDoseProgressEstimator, no pod query, no radio.
                         self.setManualBolusDelivering(units: rounded, from: acceptedAt, to: deliveryEndsAt)
@@ -2528,13 +2594,13 @@ final class WatchLoopManager {
                 }
             }
             self.setManualBolusInFlight(true, units: rounded)
-            // E4 Stage 2: the pod is orphaned for G7 — reclaim it before the bolus.
-            // User is PRESENT, so a few seconds' reconnect is fine; on failure FAIL
-            // LOUDLY (never a silent no-bolus). No-op immediate when E4 is off.
-            if let reclaim = self.e4ReclaimPodForDose {
+            // The pod link is orphaned so the G7 can use the radio — reclaim it before the
+            // bolus. User is PRESENT, so a few seconds' reconnect is fine; on failure FAIL
+            // LOUDLY (never a silent no-bolus). No-op immediate when the link is already held.
+            if let reclaim = self.reclaimPodForDose {
                 reclaim { ok in
                     if ok {
-                        // #64 ROOT CAUSE (2026-07-29): this completion runs ON the loan
+                        // ROOT CAUSE of a crown-tap deadlock: this completion runs ON the loan
                         // controller's serial queue (reclaimPodForDose wraps every path in
                         // queue.async, including the still-connected short-circuit), and
                         // deliverBolus → loanWillEnactBolus → mintIntent does queue.sync
@@ -2543,9 +2609,9 @@ final class WatchLoopManager {
                         // 0-40s later, NO insulin delivered). The automatic enactor never
                         // hits this because it re-enters from its own dosingQueue — mirror
                         // that discipline: hop off the loan queue before delivering.
-                        // (.async is load-bearing: with E4 off, the reclaim closure
-                        // completes SYNCHRONOUSLY on dataAccessQueue — a .sync hop would
-                        // deadlock on itself. Adversarial-review verified.)
+                        // (.async is load-bearing: when the pod link is held rather than
+                        // orphaned, the reclaim closure completes SYNCHRONOUSLY on
+                        // dataAccessQueue — a .sync hop would deadlock on itself.)
                         let hopStart = self.now()
                         self.dataAccessQueue.async {
                             // Visibility: a manual bolus queued behind a full automatic
@@ -2558,7 +2624,7 @@ final class WatchLoopManager {
                             deliverBolus()
                         }
                     } else {
-                        self.e4ReleasePodAfterDose?()
+                        self.releasePodAfterDose?()
                         SportLog.event("loan", "MANUAL BOLUS FAILED — the pod did not reconnect in time. If Sport Mode was just ended, the hand-back cancelled it (see the E4 reclaim ABORTED line above) — that is NOT a pod fault.")
                         self.setManualBolusInFlight(false)
                         DispatchQueue.main.async { completion(WatchLoopError.pumpManagerUnconnected) }
@@ -2571,10 +2637,10 @@ final class WatchLoopManager {
     }
 
     /// Loan-time carb entry: lands in the WATCH's carb store so THIS loop's COB and
-    /// dosing see it immediately (stores are isolated — R19 HK-off; the phone still
+    /// dosing see it immediately (stores are isolated, HealthKit off; the phone still
     /// receives the stock relay as the durable record).
     /// Force the next cycle to recompute carbEffect. Used after seeding the phone's carbs
-    /// at grant (#49): carbEffect is cached and updateCachedEffects only recomputes it when
+    /// at grant: carbEffect is cached and updateCachedEffects only recomputes it when
     /// nil, so without this the seeded COB would be ignored until the next CGM-triggered
     /// invalidation. Deliberately does NOT force a loop() — takeover has no glucose yet; the
     /// first reading-triggered cycle (within ~5 min) recomputes and doses.
@@ -2611,13 +2677,13 @@ final class WatchLoopManager {
     /// refreshes it. The seed populates the dose store but not this cache. `insulinOnBoard` feeds
     /// the glance (glanceData), the stock HUD (publishHUDContext), and dosing — priming it fixes
     /// all three consistently and single-sourced; the glance COB already reads its store live, so
-    /// this brings IOB to parity (#69 glance consistency). The next cycle overwrites it with the
+    /// this brings IOB to parity for glance consistency. The next cycle overwrites it with the
     /// fully-reconciled value (e.g. after the first pod-status read trims the seeded open temp).
     func primeInsulinOnBoard(_ value: InsulinValue?) {
         dataAccessQueue.async { self.insulinOnBoard = value }
     }
 
-    /// R35: the takeover SEED-IN anchor comes from the LEDGER (the store no longer holds
+    /// The takeover SEED-IN anchor comes from the LEDGER (the store no longer holds
     /// doses). Completion reports the primed value for the [iob-diff] anchors + SEED-IN log.
     func primeIOBFromLedger(at date: Date, _ completion: @escaping (Double?) -> Void) {
         dataAccessQueue.async {
@@ -2652,11 +2718,11 @@ final class WatchLoopManager {
         }
     }
 
-    /// R30 (#89): the mirror image of `addLoanCarbEntry` — remove a carb the wrist deleted and
+    /// The mirror image of `addLoanCarbEntry` — remove a carb the wrist deleted and
     /// re-predict immediately.
     ///
     /// The invalidate-and-loop is not optional for the same reason it is not optional on the add
-    /// path (134): `carbEffect` is invalidated only by new CGM data, because the port dropped the
+    /// path: `carbEffect` is invalidated only by new CGM data, because the port dropped the
     /// stock phone loop's carb-store observer. Without this the deleted carb keeps driving the
     /// prediction until the next reading — the user would watch the row vanish and the eventual
     /// BG not move, which is precisely the "did that do anything?" failure the delete is meant to
@@ -2738,8 +2804,8 @@ final class WatchLoopManager {
         updateGroup.enter()
         var enactError: WatchLoopError?
 
-        // RADIO STRESS (#83) REMOVED 2026-08-11 (Jeremy): "we've thoroughly established that
-        // there is no radio contention when dosing happens." It forced a pulse-step temp on
+        // RADIO STRESS REMOVED — it established that there is no radio contention when
+        // dosing happens. The tool forced a pulse-step temp on
         // cycles DoseMath would have left alone, so every 5-min cycle exercised reading +
         // enact — the heaviest realistic contention load we could apply. It did its job and
         // the answer came back negative, repeatedly.
@@ -2752,7 +2818,7 @@ final class WatchLoopManager {
         // In git: the tool, its jitter alternator, and its debug toggle are at 37d7219d.
         doseEnactor.enact(recommendation: recommendedDose.recommendation, with: pumpManager) { error in
             if let error = error {
-                // #98: .enactFailed, NOT .missingDataError — see the case's own note.
+                // .enactFailed, NOT .missingDataError — see the case's own note.
                 enactError = .enactFailed(String(describing: error))
             }
             updateGroup.leave()
@@ -2766,9 +2832,9 @@ final class WatchLoopManager {
         return enactError
     }
 
-    // MARK: - E5 bench concurrency driver (task #43, 2026-07-21)
+    // MARK: - E5 bench concurrency driver
 
-    /// A random temp-basal generator: drives the full E4 reclaim→enact→re-release
+    /// A random temp-basal generator: drives the full reclaim→enact→re-release
     /// choreography with a genuine pod command on EVERY reading — pure BT-contention
     /// testing, zero dependence on the prediction pipeline (debugged separately in
     /// the sim, Track B). Gates: bench flag; loan pump present; loop OPEN — the
@@ -2814,7 +2880,7 @@ final class WatchLoopManager {
     }
 }
 
-// MARK: - #68 override telemetry helper
+// MARK: - Override telemetry helper
 
 extension TemporaryScheduleOverride.Context {
     /// Greppable preset identity for the [override] lines — the name is what Jeremy will
@@ -2825,150 +2891,6 @@ extension TemporaryScheduleOverride.Context {
         case .legacyWorkout: return "workout(legacy)"
         case .preset(let preset): return "\(preset.symbol) \(preset.name)"
         case .custom: return "custom"
-        }
-    }
-}
-
-// MARK: - Dose enactor (mirrors Loop/Managers/DoseEnactor.swift)
-
-/// Same sequencing as the phone's DoseEnactor: temp-basal adjustment first, wait, then any
-/// automatic bolus — all through stock `PumpManager` protocol methods, so pulse-grid
-/// snapping, cancel-before-program, busy handling, and uncertain-delivery classification are
-/// the stock driver's (OmniPumpManager, M2), not ours.
-final class WatchDoseEnactor {
-
-    /// Test coverage plan item 2: this class records dose timestamps into the ledger, so it
-    /// needs its own clock seam — it is a separate type from WatchLoopManager and cannot
-    /// reach that one. WatchLoopManager keeps the two in sync when it builds the enactor.
-    var now: () -> Date = Date.init
-
-    private let dosingQueue = DispatchQueue(label: "com.loopkit.Loop.WatchDoseEnactor", qos: .utility)
-
-    private let log = OSLog(category: "WatchDoseEnactor")
-
-    /// M5: the loan controller's intent-minting hooks (spec §1.2). nil outside a loan;
-    /// the enact calls themselves are unchanged stock PumpManager methods either way.
-    weak var loanRecorder: WatchLoanDoseRecording?
-
-    /// Fix B (radio arbiter, c6c9e18f port): BG wins the single watch radio. When the
-    /// G7 is mid-handshake (the heavy ~8-10s burst), a LOOP enact yields instead of
-    /// colliding ("Empty Value") — the stock-shaped loop retries naturally on the next
-    /// reading, which is exactly the fresh BG landing. Only the automatic path runs
-    /// through this enactor today; a future manual path must NOT defer (user present —
-    /// the crude loudDrop==true analog).
-
-    /// E4 Stage 2 (task #40): while E4 time-separation is active the pod BLE is
-    /// orphaned for G7's sake. reclaim it just before dosing; release it just after.
-    /// reclaim's completion(true) = pod connected & ready; (false) = couldn't
-    /// reconnect in the bounded window → SKIP this automatic dose (pod keeps running
-    /// its baseline, loop retries next cycle). Both nil / no-op when E4 is off.
-    var e4ReclaimPodForDose: ((@escaping (Bool) -> Void) -> Void)?
-    var e4ReleasePodAfterDose: (() -> Void)?
-
-    /// #50: fired with the (rate, duration) the pod just accepted for a temp basal, so the
-    /// owner can cache what is running without querying the pod — E4 orphans it seconds later.
-    var onTempBasalEnacted: ((_ unitsPerHour: Double, _ duration: TimeInterval) -> Void)?
-    /// #73/#74 shadow ledger: pod-ACCEPTED doses flow to the owner's session timeline.
-    var ledgerRecord: ((DoseEntry) -> Void)?
-
-    func enact(recommendation: AutomaticDoseRecommendation, with pumpManager: PumpManager, completion: @escaping (PumpManagerError?) -> Void) {
-        dosingQueue.async {
-            // BG still wins the radio — but WAIT for the handshake instead of throwing the
-            // dose cycle away on a millisecond-scale collision.
-            //
-            // E4: reclaim the orphaned pod before dosing (bounded). Safe-fallback on
-            // failure: skip the dose — never block, never dose against a pod that
-            // isn't confirmed connected. Runs on dosingQueue (not the loop's
-            // dataAccessQueue), so the bounded wait can't stall the loop cycle.
-            if let reclaim = self.e4ReclaimPodForDose {
-                let group = DispatchGroup()
-                group.enter()
-                var connected = false
-                reclaim { ok in connected = ok; group.leave() }
-                if group.wait(timeout: .now() + 25) == .timedOut || !connected {
-                    SportLog.event("radio", "E4: pod not reconnected — automatic dose SKIPPED (pod runs baseline; loop retries next cycle)")
-                    self.e4ReleasePodAfterDose?()
-                    completion(.communication(nil))   // benign: the loop re-enacts next reading
-                    return
-                }
-            }
-            // Always re-release the pod on the way out, whatever the dose result.
-            let finish: (PumpManagerError?) -> Void = { err in
-                self.e4ReleasePodAfterDose?()
-                completion(err)
-            }
-
-            let doseDispatchGroup = DispatchGroup()
-
-            var tempBasalError: PumpManagerError? = nil
-            var bolusError: PumpManagerError? = nil
-
-            if let basalAdjustment = recommendation.basalAdjustment {
-                self.log.default("Enacting recommended basal change")
-                // What the pod is ACTUALLY being told, and whether it took it. Without
-                // this the field log showed a reclaim and a released pod with no way to
-                // tell whether a command went out at all (2026-07-22 08:48) — E5 had
-                // this line, the real dosing path did not.
-                SportLog.event("dose", String(format: "enacting temp %.2f U/hr × %.0f min", basalAdjustment.unitsPerHour, basalAdjustment.duration / 60))
-                doseDispatchGroup.enter()
-                let eventID = self.loanRecorder?.loanWillEnactTempBasal(unitsPerHour: basalAdjustment.unitsPerHour, duration: basalAdjustment.duration)
-                pumpManager.enactTempBasal(unitsPerHour: basalAdjustment.unitsPerHour, for: basalAdjustment.duration) { error in
-                    self.loanRecorder?.loanDidEnact(eventID: eventID, error: error)
-                    if let error = error {
-                        tempBasalError = error
-                        SportLog.event("dose", "temp enact FAILED — \(String(describing: error))")
-                    } else {
-                        SportLog.event("dose", String(format: "temp %.2f U/hr ACCEPTED by pod", basalAdjustment.unitsPerHour))
-                        // #50: hand the accepted temp to the owner so it can cache what the pod
-                        // is running once E4 orphans it (basalDeliveryState goes nil seconds
-                        // after release).
-                        self.onTempBasalEnacted?(basalAdjustment.unitsPerHour, basalAdjustment.duration)
-                        // #73/#74 shadow ledger: the accepted temp enters the single-owner
-                        // timeline (truncating its open predecessor — the journal's rule).
-                        let acceptedAt = self.now()
-                        self.ledgerRecord?(DoseEntry(
-                            type: .tempBasal, startDate: acceptedAt,
-                            endDate: acceptedAt.addingTimeInterval(basalAdjustment.duration),
-                            value: basalAdjustment.unitsPerHour, unit: .unitsPerHour,
-                            insulinType: pumpManager.status.insulinType))
-                    }
-                    doseDispatchGroup.leave()
-                }
-            } else {
-                // The silent case that made 08:48 unreadable: DoseMath ran and chose to
-                // leave the running basal alone. That is a decision, and it gets a line.
-                SportLog.event("dose", "no temp change recommended — leaving the running basal as-is")
-            }
-
-            doseDispatchGroup.wait()
-
-            guard tempBasalError == nil else {
-                finish(tempBasalError)
-                return
-            }
-
-            if let bolusUnits = recommendation.bolusUnits, bolusUnits > 0 {
-                self.log.default("Enacting recommended bolus dose")
-                doseDispatchGroup.enter()
-                let eventID = self.loanRecorder?.loanWillEnactBolus(units: bolusUnits)
-                pumpManager.enactBolus(units: bolusUnits, activationType: .automatic) { error in
-                    self.loanRecorder?.loanDidEnact(eventID: eventID, error: error)
-                    if let error = error {
-                        bolusError = error
-                    } else {
-                        // #73/#74 shadow ledger: point-ish event; DASH delivers ~1.5 U/min.
-                        let acceptedAt = self.now()
-                        self.ledgerRecord?(DoseEntry(
-                            type: .bolus, startDate: acceptedAt,
-                            endDate: acceptedAt.addingTimeInterval(bolusUnits / 1.5 * 60),
-                            value: bolusUnits, unit: .units,
-                            insulinType: pumpManager.status.insulinType))
-                    }
-                    doseDispatchGroup.leave()
-                }
-            }
-            doseDispatchGroup.wait()
-            finish(bolusError)
         }
     }
 }
@@ -2998,13 +2920,13 @@ extension WatchLoopManager: CGMManagerDelegate {
                 // looping (DeviceDataManager.checkPumpDataAndLoop) — the port called
                 // loop() bare, which is what stranded the cycle on pumpDataTooOld.
                 self.checkPumpDataAndLoop()
-                // E5 (task #43): same post-catch trigger geometry as a real dose —
+                // E5: same post-catch trigger geometry as a real dose —
                 // the command lands in the gap after this reading and contends with
                 // the NEXT window, exactly like production timing. No-op unless the
                 // bench flag is on.
                 self.e5FireRandomTempIfEnabled()
             }
-            // WS4b: every direct reading re-defers the sensor-blackout dead-man —
+            // Every direct reading re-defers the sensor-blackout dead-man —
             // but only DURING a loan (pumpManager is loan-scoped): a reading that
             // lands after loan-end must not resurrect a disarmed repeating alert.
             if case .newData = readingResult, self.pumpManager != nil {
@@ -3019,8 +2941,8 @@ extension WatchLoopManager: CGMManagerDelegate {
         }
     }
 
-    /// WS4c sovereignty signal: age of the newest stored glucose (direct-only during
-    /// a loan — R18/R19), nil before any reading.
+    /// Sovereignty signal: age of the newest stored glucose (direct-only during
+    /// a loan — the watch's stores are isolated from the phone's), nil before any reading.
     var latestGlucoseAge: TimeInterval? {
         return glucoseStore.latestGlucose.map { self.now().timeIntervalSince($0.startDate) }
     }
@@ -3044,9 +2966,9 @@ extension WatchLoopManager: CGMManagerDelegate {
     private func processCGMReadingResult(_ manager: CGMManager, readingResult: CGMReadingResult, completion: @escaping () -> Void) {
         switch readingResult {
         case .newData(let rawValues):
-            // BENCH-ONLY (#33/R29): substitute scripted values AFTER a successful real read.
+            // BENCH-ONLY: substitute scripted values AFTER a successful real read.
             // Deliberately here and not upstream — the G7 connect/handshake already happened,
-            // so radio contention and E4 timing stay genuine and a MISSED window stays
+            // so radio contention and pod-link timing stay genuine and a MISSED window stays
             // missed. Everything downstream (store, momentum, prediction, DoseMath, the pod
             // command) is real. No-op unless the bench flag is on.
             let values: [NewGlucoseSample]
@@ -3055,7 +2977,7 @@ extension WatchLoopManager: CGMManagerDelegate {
             } else {
                 values = rawValues
             }
-            // #83: the phone relay may already have filed this exact reading under its own name
+            // The phone relay may already have filed this exact reading under its own name
             // tag. Same sensor stamp = same reading; first writer wins.
             dropAlreadyStored(values) { kept in
             // 2026-08-03: this choke point — the ONLY place direct-G7 samples enter the store —
@@ -3090,7 +3012,7 @@ extension WatchLoopManager: CGMManagerDelegate {
                 if case .failure(let error) = result {
                     self.log.error("Failure adding glucose samples: %{public}@", String(describing: error))
                 }
-                // #51: new glucose invalidates the momentum effect (it is glucose-derived).
+                // New glucose invalidates the momentum effect (it is glucose-derived).
                 // Stock LoopDataManager nils momentum on every glucose update; this port only
                 // reset it on a fetch-FAILURE (updateCachedEffects), so it was computed once at
                 // init — when the store was still empty — and then frozen, because the
@@ -3118,7 +3040,7 @@ extension WatchLoopManager: CGMManagerDelegate {
         log.default("CGM event(s): %{public}d", events.count)
     }
 
-    /// #39 (2026-07-28): phone-BG fallback. During a loan, mirror the phone's relayed CGM into
+    /// Phone-BG fallback. During a loan, mirror the phone's relayed CGM into
     /// the DOSING glucose store so the closed loop survives a direct-G7 dropout. The relayed
     /// sample carries the phone's REAL G7 syncIdentifier (WatchContext.newGlucoseSample), so when
     /// direct G7 also has this grid point the store auto-dedups by syncId — this only fills GAPS.
@@ -3129,13 +3051,13 @@ extension WatchLoopManager: CGMManagerDelegate {
     /// the boundary — accepted, per design.)
     func ingestPhoneGlucoseFromContext() {
         guard pumpManager != nil else { return }   // active loan only — the watch is the dosing controller
-        // #47: read the PHONE's relay explicitly. activeContext is watch-authored during a loan
+        // Read the PHONE's relay explicitly. activeContext is watch-authored during a loan
         // now, so reading it here would hand this method the watch's own reading back and the
         // fallback would never ingest anything.
         guard let ctx = ExtensionDelegate.shared().loopManager.phoneRelayContext,
               let sample = ctx.newGlucoseSample else { return }
         deviceQueue.async {
-            // Same-sample repeat latch (#39, field 2026-07-29: the same sample ingested 3× in
+            // Same-sample repeat latch (the same sample can be ingested 3× in
             // 12 ms — one didUpdateContextNotification per context-adjacent update, and the
             // latestGlucose freshness guard below reads BEFORE the async add commits, so storms
             // slip past it; the store's syncId constraint absorbed the duplicate rows but the
@@ -3147,13 +3069,13 @@ extension WatchLoopManager: CGMManagerDelegate {
             // direct-G7 read wins). syncId dedup in the store is the belt for the exact-overlap case.
             if let latest = self.glucoseStore.latestGlucose?.startDate, latest >= sample.date { return }
             self.dropAlreadyStored([sample]) { kept in
-            guard !kept.isEmpty else { return }   // #83: direct G7 already filed this reading
+            guard !kept.isEmpty else { return }   // Direct G7 already filed this reading
             self.glucoseStore.addGlucoseSamples(kept) { result in
                 if case .failure(let error) = result {
                     self.log.error("phone-BG fallback add failed: %{public}@", String(describing: error))
                     return
                 }
-                self.dataAccessQueue.async { self.glucoseMomentumEffect = nil }   // #51 parity
+                self.dataAccessQueue.async { self.glucoseMomentumEffect = nil }   // Momentum-invalidation parity
                 let mgdl = Int(sample.quantity.doubleValue(for: .milligramsPerDeciliter))
                 self.noteGlucoseSource(directG7: false)
                 SportLog.event("glucose",
@@ -3169,7 +3091,7 @@ extension WatchLoopManager: CGMManagerDelegate {
         }
     }
 
-    // MARK: - #83: one physical reading, one row
+    // MARK: - One physical reading, one row
 
     /// The part of a G7 syncIdentifier that BOTH devices agree on.
     ///
@@ -3235,7 +3157,7 @@ extension WatchLoopManager: CGMManagerDelegate {
     }
 
     #if targetEnvironment(simulator)
-    /// SIMULATOR-ONLY (task #61 stage 2): inject the phone's stock CGM-simulator BG (relayed
+    /// SIMULATOR-ONLY: inject the phone's stock CGM-simulator BG (relayed
     /// in WatchContext) into the REAL glucose store + trigger the REAL loop, so
     /// prediction/DoseMath run for real without a G7. Compiled OUT of device builds. The watch
     /// accumulates its own history from these, so the prediction sharpens over a few readings —
@@ -3260,7 +3182,7 @@ extension WatchLoopManager: CGMManagerDelegate {
                 if case .failure(let error) = result {
                     self.log.error("SIM glucose add failed: %{public}@", String(describing: error))
                 }
-                self.dataAccessQueue.async { self.glucoseMomentumEffect = nil }   // #51 parity
+                self.dataAccessQueue.async { self.glucoseMomentumEffect = nil }   // Momentum-invalidation parity
                 let now = self.now()
                 if now.timeIntervalSince(self.lastCGMLoopTrigger) > .minutes(4.2) {
                     self.lastCGMLoopTrigger = now
@@ -3276,12 +3198,12 @@ extension WatchLoopManager: CGMManagerDelegate {
         log.default("CGM manager requested deletion (ignored on watch)")
     }
 
-    /// #101 phase 2: where the persisted G7 state lives. StockLoopStack.assemble reads it
+    /// Where the persisted G7 state lives. StockLoopStack.assemble reads it
     /// back at construction (`G7CGMManager(rawState:)` — the stock phone pattern).
     static let cgmStateDefaultsKey = "g7.cgmManagerRawState"
 
     func cgmManagerDidUpdateState(_ manager: CGMManager) {
-        // #101 phase 2: persist exactly as the stock phone does on this callback. The old
+        // Persist exactly as the stock phone does on this callback. The old
         // no-op here ("part of M5 integration") is why every launch constructed a blank
         // G7CGMManager and reran the acquisition lottery — the watch had the adoption and
         // threw it away on exit.
@@ -3355,31 +3277,23 @@ extension WatchLoopManager: CGMManagerDelegate {
         // truth, so use it rather than pattern-matching "DXCM" against a peripheral name, which
         // would be another label asserting something it cannot actually verify.
         let source = manager is G7CGMManager ? "cgm" : "pod-ble"
-        // #94 (2026-08-07): DEDUPE THE STORM. A Code=11 connect-retry loop pushed ~2,000
-        // IDENTICAL lines/second through here (1051 in 0.52s, field 16:09:26) — each one a
+        // DEDUPE THE STORM. A Code=11 connect-retry loop pushed ~2,000
+        // IDENTICAL lines/second through here (1051 in 0.52s) — each one a
         // synchronous NSLog plus a file-append — jamming syslogd and the log queue hard enough
         // to starve MAIN (the reproducible glance freeze) and rotate all real evidence out of
         // the log inside a second. The BLE-layer backoff makes the storm cold; this makes even
         // a future storm cheap AND readable: an identical repeat within 2s is counted, not
         // written, and the count is flushed on the next DIFFERENT line. Distinct lines pass
         // through untouched.
-        deviceLogDedupeLock.lock()
         let line = "\(type) \(deviceIdentifier ?? "—"): \(message)"
-        let now = self.now()
-        if line == lastDeviceLogLine, now.timeIntervalSince(lastDeviceLogAt) < 2.0 {
-            suppressedDeviceLogCount += 1
-            lastDeviceLogAt = now
-            deviceLogDedupeLock.unlock()
+        switch deviceLogThrottle.admit(line, at: now()) {
+        case .suppress:
             completion?(nil)
             return
-        }
-        let suppressed = suppressedDeviceLogCount
-        suppressedDeviceLogCount = 0
-        lastDeviceLogLine = line
-        lastDeviceLogAt = now
-        deviceLogDedupeLock.unlock()
-        if suppressed > 0 {
-            SportLog.event(source, "(previous line repeated ×\(suppressed) — suppressed)")
+        case .write(let flushing):
+            if flushing > 0 {
+                SportLog.event(source, "(previous line repeated ×\(flushing) — suppressed)")
+            }
         }
         SportLog.event(source, line)
         completion?(nil)

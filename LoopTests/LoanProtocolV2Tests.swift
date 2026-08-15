@@ -3,7 +3,7 @@
 //  LoopTests
 //
 //  Loan protocol v2 unit coverage (DESIGN_LOAN_PROTOCOL_V2.md §10): wire-format
-//  round-trip + version skew (never-silently-discard), and the R22 fingerprints-only
+//  round-trip + version skew (never-silently-discard), and the fingerprints-only
 //  allocation properties (never reduce confirmed, exact-match preference with
 //  latest-on-tie, skipped-reduction window fit, ambiguity touches nothing, one-way
 //  valve). Controller-level flows (epoch race D22, resend/ack ordering) are exercised
@@ -158,7 +158,7 @@ final class LoanProtocolV2Tests: XCTestCase {
 
     /// KNOWN_RESIDUALS §16 (test debt): released-flag decode with the key ABSENT.
     ///
-    /// A pre-WS1 watch only ever offered after it had stopped dosing and released the pod,
+    /// A legacy watch only ever offered after it had stopped dosing and released the pod,
     /// so its payload carries no `released` key at all. Passing `released: nil` in Swift is
     /// NOT the same wire shape — the encoder can still emit an explicit null — so this test
     /// strips the key from the encoded JSON to produce the genuine legacy payload. `nil`
@@ -179,7 +179,7 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertEqual(decoded.epoch, 7, "the rest of the payload still decodes")
     }
 
-    // MARK: - #107 pulse model
+    // MARK: - Pulse model
 
     /// The pod delivers whole 0.05 U pulses spaced 3600×0.05/rate apart, and restarts that clock
     /// on every new command — so a temp truncated before its next pulse loses it. `expectedInsulin`
@@ -266,7 +266,7 @@ final class LoanProtocolV2Tests: XCTestCase {
         return removed
     }
 
-    // MARK: - R22 allocation fixtures
+    // MARK: - Allocation fixtures
 
     private let loanStart = Date(timeIntervalSinceReferenceDate: 700_000_000)
     private var loanEnd: Date { loanStart.addingTimeInterval(7200) }  // 2 h loan
@@ -291,7 +291,7 @@ final class LoanProtocolV2Tests: XCTestCase {
             schedule: flatSchedule, loanStart: loanStart, loanEnd: loanEnd))
     }
 
-    // MARK: - R22 properties
+    // MARK: - Allocation properties
 
     /// The designed case: one false max-exposure assumption, exact-size shortfall.
     func testExactSizeFingerprintAnnulsTheAssumedEvent() {
@@ -353,7 +353,7 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertNil(outcome.residualShortfallUnits)
     }
 
-    /// The R6 one-way valve, positive side: timed-late entry, never subtraction.
+    /// The one-way valve, positive side: timed-late entry, never subtraction.
     func testPositiveRemainderEntersTimedLate() {
         let outcome = reconcile(events: [], delivered: 2.5)  // expected 2.0
         XCTAssertEqual(outcome.positiveRemainderUnits ?? 0, 0.5, accuracy: 0.01)
@@ -387,7 +387,7 @@ final class LoanProtocolV2Tests: XCTestCase {
     }
 
     func testExpectedInsulinSuspendCountsAsZero() {
-        // R3 suspend = rate-0 temp for hour 1: expected = 0 + 1.0 = 1.0.
+        // Suspend = rate-0 temp for hour 1: expected = 0 + 1.0 = 1.0.
         let suspend = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
                                 record: LoanDoseRecord(kind: .suspend, startDate: loanStart,
                                                        endDate: loanStart.addingTimeInterval(3600), unitsPerHour: 0),
@@ -396,7 +396,7 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertEqual(expected, 1.0, accuracy: 0.01)
     }
 
-    // MARK: - #69/#52: pump-event reroute
+    // MARK: - Pump-event reroute
     // The reconciler no longer truncates overlaps — routing through DoseStore.addPumpEvents
     // runs stock InsulinMath.reconciled() at the store, which collapses them. The reconciler
     // now only finalizes/clamps for a final hand-back and WITHHOLDS the interim open temp
@@ -432,7 +432,7 @@ final class LoanProtocolV2Tests: XCTestCase {
         }
     }
 
-    /// Interim WS1 drain: the still-open trailing temp is reported via openEventID and
+    /// Interim drain: the still-open trailing temp is reported via openEventID and
     /// WITHHELD from the write (it re-drains and is written on the final drain). The
     /// controller still acks its seq so the watch can finalize; keeping it out of the write
     /// and committedIDs is what lets it re-drain. The superseded temps are written immutable
@@ -465,7 +465,7 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertEqual(outcome.doses[0].programmedUnits, 1.0, accuracy: 0.01)  // 2.0 × 0.5h, unclamped
     }
 
-    // MARK: - LoanSeedIdentity (#69 double-hex fix)
+    // MARK: - LoanSeedIdentity (double-hex fix)
 
     /// The seed's raw must round-trip the phone's hex syncIdentifier back to the ORIGINAL bytes,
     /// so the watch row's derived syncIdentifier (hex of raw) equals the phone's — one identity
@@ -488,7 +488,7 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertEqual(LoanSeedIdentity.raw(forSyncIdentifier: ""), Data(), "empty stays empty via fallback")
     }
 
-    // MARK: - #72: the seed carries finished history only; live doses belong to the pod
+    // MARK: - The seed carries finished history only; live doses belong to the pod
 
     func testSeedDoseEntriesSplitsLiveFromFinished() {
         let now = Date()
@@ -512,7 +512,7 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertEqual(seed.count + live.count, grant.seedDoseEntries().count)
     }
 
-    // MARK: - #109 channel classification
+    // MARK: - Channel classification
 
     /// `.takeoverComplete` MUST ride the immediate channel. It moved there on 2026-08-12 because
     /// the pump tile now shows "Taking over…" until it arrives — on `transferUserInfo` that label
@@ -523,7 +523,7 @@ final class LoanProtocolV2Tests: XCTestCase {
     func testTakeoverCompleteRidesTheImmediateChannel() {
         let status = LoanPodStatus(timestamp: Date(), deliveredUnits: 1, reservoirLevel: nil, isSuspended: false, faultCode: nil)
         XCTAssertTrue(LoanMessage.takeoverComplete(TakeoverComplete(epoch: 1, firstPodStatus: status)).isInteractiveHandshake,
-                      "the tile's 'Taking over…' state depends on this arriving promptly (#109/#92)")
+                      "the tile's 'Taking over…' state depends on this arriving promptly")
     }
 
     /// The other side of the rule, so the fix cannot be over-applied: background bookkeeping stays
@@ -534,12 +534,12 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertFalse(LoanMessage.diag(LoanDiag(epoch: 1, text: "x")).isInteractiveHandshake)
     }
 
-    // MARK: - #120 transport kind peek
+    // MARK: - Transport kind peek
 
     /// The watch's queued-offer supersede cancels ONLY hand-back offers, identified by this
     /// peek. A false positive cancels a one-shot message (a record stream is not resent until
-    /// the next cycle); a false negative just leaves a duplicate in the queue for #118 to
-    /// coalesce. So: exact kind for an offer, nil for everything not ours.
+    /// the next cycle); a false negative just leaves a duplicate in the queue to be
+    /// coalesced. So: exact kind for an offer, nil for everything not ours.
     func testPeekKindIdentifiesOffersAndRejectsForeignPayloads() throws {
         let offer = HandbackOffer(epoch: 3, handedBackAt: Date(), finalStatus: nil, odometer: nil,
                                   events: [], tombstones: [], recovered: false, released: false)

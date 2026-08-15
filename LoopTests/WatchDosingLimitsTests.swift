@@ -2,7 +2,7 @@
 //  WatchDosingLimitsTests.swift
 //  LoopTests
 //
-//  R29 / task #33: the dosing-limit coverage Jeremy's own physiology cannot produce.
+//  The dosing-limit coverage Jeremy's own physiology cannot produce.
 //
 //  Field BG on the bench rig is narrow euglycemia, so the interesting DoseMath
 //  verdicts — maxBasal saturation, the IOB clamp, the high-basal-threshold guard,
@@ -13,7 +13,7 @@
 //
 //  It deliberately does NOT re-test DoseMath internals — LoopKit's DoseMathTests
 //  own those. What is pinned here is the CONTRACT the watch depends on, including
-//  the two rules that were misread during the 2026-07-22 field session.
+//  the two rules that were misread during a field session.
 //
 //  Settings mirror Jeremy's real therapy settings from that session so the
 //  expectations can be checked against the field log directly.
