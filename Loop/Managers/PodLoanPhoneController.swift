@@ -524,6 +524,15 @@ final class PodLoanPhoneController {
     /// mode, and these two fields are what say whether it is the link or the read. Nil/zero
     /// outside a settle window.
     private var reclaimLinkUpAt: Date?
+
+    /// Grace period before a stalled reclaim escalates from the manager's gentle reconnect to its
+    /// scan-and-adopt. 20s because the takeover budget calls a connect "typically ~17s": inside
+    /// that, a normal reconnect is still landing and escalating would only add radio contention;
+    /// past it, waiting is not working. Field settles that stalled ran 224.2s and 237.0s.
+    private static let reclaimEscalateAfter: TimeInterval = 20
+
+    /// One escalation per reclaim. Re-armed with each new settle window.
+    private var reclaimEscalated = false
     private var reclaimStaleReads = 0
     /// When the settle last forced a real pod round-trip, so the backoff can space them.
     private var reclaimLastForcedReadAt: Date?
@@ -555,6 +564,7 @@ final class PodLoanPhoneController {
     private func beginReclaimSettleWindow() {
         let started = deps.now()
         reclaimStartedAt = started
+        reclaimEscalated = false
         reclaimVerifiedAt = nil
         reclaimVerifyInFlight = false
         reclaimLinkUpAt = nil
@@ -623,6 +633,19 @@ final class PodLoanPhoneController {
             // instrumentation (2026-08-14) left the phone's own file with no settle record
             // at all. The phone file must carry its own account.
             handbackDiag(epoch, String(format: "settle: link up +%.1fs (tick %d)", waited, attempt))
+        }
+        // The link has NOT come up and the grace period is gone: stop waiting to hear the pod
+        // and go looking for it. `reclaimConnection()` only re-armed a bare pending-connect, which
+        // against an idle pod is probabilistic; the scan-and-adopt this escalates to is what the
+        // takeover path uses. Once per settle, and never once the link is up — at that point the
+        // pod is back and the remaining wait is getting a word in, which a scan would not help.
+        if reclaimLinkUpAt == nil, !reclaimEscalated,
+           deps.now().timeIntervalSince(started) >= Self.reclaimEscalateAfter,
+           let lendable = deps.pumpManager() as? PumpConnectionLendable {
+            reclaimEscalated = true
+            handbackDiag(epoch, String(format: "settle: link still down at +%.0fs — escalating to scan-adopt",
+                                       deps.now().timeIntervalSince(started)))
+            lendable.escalateConnectionReclaim()
         }
         // Force a REAL round-trip on the first tick after the link comes up, then on a slow
         // cadence — because the cheap call does not always talk to the pod at all.
