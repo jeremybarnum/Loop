@@ -42,7 +42,7 @@ final class StockLoopSession {
 
     private let log = OSLog(subsystem: "com.loopkit.Loop", category: "StockLoopSession")
 
-    init() async {
+    init?() async {
         // Link policy is automatic: orphan the pod between doses, reclaim every
         // cycle, and gate that reclaim on G7 acquisition state while the sensor is un-adopted.
         // Replaced a user toggle whose two arms were each wrong for acquisition — evidence in
@@ -53,7 +53,8 @@ final class StockLoopSession {
         FakeGlucose.setEnabled(false)
         UserDefaults.standard.set(false, forKey: "g7.e5RandomTemp")
 
-        stack = await StockLoopStack.assemble()
+        guard let assembled = await StockLoopStack.assemble() else { return nil }
+        stack = assembled
         loanController = PodLoanWatchController(loopManager: stack.loopManager)
 
         // Route the pod BLE layer into the watch's mirrored log. OmnipodKit logs via os_log,

@@ -55,8 +55,9 @@ enum StockLoopStack {
     /// begins scanning as soon as Bluetooth powers on, exactly as it does on the phone; the sensor
     /// authenticates the DEVICE, so the Dexcom watch app's session is what admits us. Our only job
     /// is to be running when a reading arrives — see StockLoopSession's keepalive.
-    static func assemble() async -> Stack {
-        let stores = await makeStores()
+    static func assemble() async -> Stack? {
+        SportLog.event("session", "stack: assembling")
+        guard let stores = await makeStores() else { return nil }
 
         let loopManager = WatchLoopManager(
             doseStore: stores.doseStore,
@@ -82,6 +83,7 @@ enum StockLoopStack {
             cgmManager = G7CGMManager()
             SportLog.event("cgm", "G7 state fresh — no persisted sensor; acquisition will run (new install or pre-#101 build)")
         }
+        SportLog.event("session", "stack: cgm wired")
         cgmManager.delegateQueue = loopManager.deviceQueue
         cgmManager.cgmManagerDelegate = loopManager
 
@@ -100,12 +102,17 @@ enum StockLoopStack {
     /// NOTE (unchanged from M1): must not be invoked while the stock watch LoopDataManager is
     /// live — it would open a second PersistenceController against the same local directory.
     /// M5 integration resolves this by unifying store ownership (one PersistenceController).
-    static func makeStores() async -> (doseStore: DoseStore, glucoseStore: GlucoseStore, carbStore: CarbStore, overrideHistory: TemporaryScheduleOverrideHistory) {
+    static func makeStores() async -> (doseStore: DoseStore, glucoseStore: GlucoseStore, carbStore: CarbStore, overrideHistory: TemporaryScheduleOverrideHistory)? {
         // M5 integration: a DISTINCT directory from the stock watch LoopDataManager's
         // controllerInLocalDirectory() store — resolves the M1/M4 caveat about two
         // PersistenceControllers on one directory, so assemble() can safely run beside
         // the stock manager. Full store unification remains a future cleanup.
-        let documents = try! FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        // NOT try!: a documents directory this app cannot reach is a reason for Sport Mode to be
+        // unavailable, not a reason for the whole watch app to die on launch.
+        guard let documents = try? FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true) else {
+            SportLog.event("session", "STACK UNAVAILABLE — no documents directory")
+            return nil
+        }
         // Same isReadOnly determination as LoopCore's controllerInLocalDirectory()
         // (its Bundle.isAppExtension helper is module-internal).
         let isAppExtension = Bundle.main.bundleURL.pathExtension == "appex"
@@ -120,6 +127,7 @@ enum StockLoopStack {
         // during a loan and historical temps net against the wrong baseline.
         let overrideHistory = TemporaryScheduleOverrideHistory()
 
+        SportLog.event("session", "stack: opening stores")
         let doseStore = await DoseStore(
             healthKitSampleStore: nil,
             cacheStore: cacheStore,
@@ -148,6 +156,7 @@ enum StockLoopStack {
         // resolve UNSCALED during a loan and historical temps net against the wrong
         // baseline. Overrides ARE active on the watch during a loan; do not assume
         // otherwise and drop this return value.
+        SportLog.event("session", "stack: stores open")
         return (doseStore, glucoseStore, carbStore, overrideHistory)
     }
 }

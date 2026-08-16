@@ -34,10 +34,22 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
     private func startStockLoopSession() {
         guard stockLoopSession == nil, !stockLoopSessionStarting else { return }
         stockLoopSessionStarting = true
-        Task { @MainActor in
-            self.stockLoopSession = await StockLoopSession()
-            self.stockLoopSessionStarting = false
-            self.stockLoopSession?.sessionDidActivate()
+        // Built OFF the main actor and hopped back only to publish the result. Opening three
+        // Core Data stores and a BLE central is not main-thread work, and on a watch the launch
+        // window is short enough that doing it there risks the app being killed for being
+        // unresponsive before it has drawn anything.
+        Task.detached(priority: .userInitiated) {
+            let session = await StockLoopSession()
+            await MainActor.run {
+                self.stockLoopSession = session
+                self.stockLoopSessionStarting = false
+                if session == nil {
+                    // Sport Mode is unavailable; the rest of the watch app is not affected.
+                    SportLog.event("session", "SPORT MODE UNAVAILABLE — stack did not assemble")
+                } else {
+                    session?.sessionDidActivate()
+                }
+            }
         }
     }
 
@@ -96,7 +108,9 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
     func applicationDidFinishLaunching() {
         // Start the loan stack HERE, not on first use: the loan's transport callbacks land on
         // this delegate, and a stack that only builds when something arrives would miss the
-        // message that was meant to build it.
+        // message that was meant to build it. It is built off-main and cannot fail the launch:
+        // if it does not assemble, Sport Mode is simply unavailable.
+        SportLog.event("session", "launch: starting Sport Mode stack")
         startStockLoopSession()
         UNUserNotificationCenter.current().delegate = self
         if #available(watchOSApplicationExtension 5.0, *) {
