@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		70E4E9FE2ABE49DDBDF4B0A9 /* StoredDataAlgorithmInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37485C37C7ED4485A1EDFB19 /* StoredDataAlgorithmInput.swift */; };
+		9D327AEC023D4304B936E605 /* TempBasalRecommendation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D49A0BC23884B9DB40301B5 /* TempBasalRecommendation.swift */; };
 		CE6DF9FAD8C24F7ABFAF31FF /* UserDefaults+LoopIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A973A0F6CF644FFAA48989FC /* UserDefaults+LoopIntents.swift */; };
 		2F17426EF105437983CDF0BC /* NSBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42BE0808089545E7BE6AE359 /* NSBundle.swift */; };
 		486CE113B97B462BB93FB253 /* FakeGlucose.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64F1E343CD1F4DBFA5E9CB3B /* FakeGlucose.swift */; };
@@ -825,6 +827,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		37485C37C7ED4485A1EDFB19 /* StoredDataAlgorithmInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "StoredDataAlgorithmInput.swift"; path = "Loop/Models/StoredDataAlgorithmInput.swift"; sourceTree = SOURCE_ROOT; };
+		7D49A0BC23884B9DB40301B5 /* TempBasalRecommendation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "TempBasalRecommendation.swift"; path = "Loop/Extensions/TempBasalRecommendation.swift"; sourceTree = SOURCE_ROOT; };
 		A973A0F6CF644FFAA48989FC /* UserDefaults+LoopIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "UserDefaults+LoopIntents.swift"; path = "Common/Extensions/UserDefaults+LoopIntents.swift"; sourceTree = SOURCE_ROOT; };
 		42BE0808089545E7BE6AE359 /* NSBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "NSBundle.swift"; path = "Common/Extensions/NSBundle.swift"; sourceTree = SOURCE_ROOT; };
 		64F1E343CD1F4DBFA5E9CB3B /* FakeGlucose.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "FakeGlucose.swift"; path = "WatchApp Extension/StockLoop/FakeGlucose.swift"; sourceTree = SOURCE_ROOT; };
@@ -3726,6 +3730,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				70E4E9FE2ABE49DDBDF4B0A9 /* StoredDataAlgorithmInput.swift in Sources */,
+				9D327AEC023D4304B936E605 /* TempBasalRecommendation.swift in Sources */,
 				CE6DF9FAD8C24F7ABFAF31FF /* UserDefaults+LoopIntents.swift in Sources */,
 				2F17426EF105437983CDF0BC /* NSBundle.swift in Sources */,
 				486CE113B97B462BB93FB253 /* FakeGlucose.swift in Sources */,

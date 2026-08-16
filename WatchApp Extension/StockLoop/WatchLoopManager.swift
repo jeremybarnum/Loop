@@ -409,7 +409,7 @@ final class WatchLoopManager {
             // failed one leaves the pod running the rate it already had until the temp expires
             // on its own.
             guard wasEnabled, !enabled else { return }
-            let recommendation = AutomaticDoseRecommendation(basalAdjustment: .cancel)
+            let recommendation = AutomaticDoseRecommendation(basalAdjustment: .cancel, direction: .decrease)
             self.recommendedAutomaticDose = (recommendation: recommendation, date: self.now())
             if let error = self.enactRecommendedAutomaticDose() {
                 SportLog.event("loop", "OPEN: temp cancel FAILED — \(String(describing: error)); the pod keeps its current rate until the temp expires")
@@ -529,7 +529,7 @@ final class WatchLoopManager {
     }
 
     struct GlanceData {
-        let glucose: HKQuantity?
+        let glucose: LoopQuantity?
         let glucoseDate: Date?
         /// OPTION C (Jeremy 2026-08-05): when each SOURCE last delivered a reading — the
         /// direct G7 link's own health, independent of which copy won the store.
@@ -543,12 +543,12 @@ final class WatchLoopManager {
         let directG7At: Date?
         let phoneRelayAt: Date?
         let trend: GlucoseTrend?
-        let eventual: HKQuantity?
+        let eventual: LoopQuantity?
         let iob: Double?
         /// nil = no temp running (pod on schedule).
         let tempRate: Double?
         let lastLoopCompleted: Date?
-        let suspendThreshold: HKQuantity?
+        let suspendThreshold: LoopQuantity?
         let closedLoopEnabled: Bool
         /// The phone-frozen dosing permission: when false the watch CANNOT close the
         /// loop (the phone had Closed Loop off at grant).
@@ -700,7 +700,7 @@ final class WatchLoopManager {
             // ledger is seeded, the cached value remains the only source.
             let liveIOB: Double? = basalRateScheduleApplyingOverrideHistory.flatMap { sched in
                 sessionLedger?.insulinOnBoard(at: now(), basalSchedule: sched)
-            } ?? insulinOnBoard?.value
+            } ?? activeInsulin
             return GlanceData(
                 glucose: latest?.quantity,
                 glucoseDate: latest?.startDate,
@@ -733,7 +733,7 @@ final class WatchLoopManager {
                 // when the truth was "erased before you could see it". Same defect 148 fixed
                 // for the log line; the panel was still reading the live value (field
                 // 2026-07-22: eventual ~200 with a blank recommend).
-                recommendedTempRate: lastRecommendation?.basalAdjustment?.unitsPerHour,
+                recommendedTempRate: lastRecommendation?.basalAdjustment.unitsPerHour,
                 lastLoopErrorText: lastLoopError.map { String(describing: $0) },
                 // READ the cached value. Computing it here would run a full per-source
                 // replay of LoopMath on the MAIN thread every 2 s (this whole closure is
@@ -766,15 +766,10 @@ final class WatchLoopManager {
         // were in the store (build 237, 23:41:47.583 -> 23:42:04.58). An already-completion-based
         // API has no reason to block its caller at all.
         dataAccessQueue.async { [weak self] in
-            guard let self = self else { return completion(nil) }
-            let velocities = self.insulinCounteractionEffects
-            self.carbStore.carbsOnBoard(at: self.now(), effectVelocities: velocities) { result in
-                if case .success(let value) = result {
-                    completion(value.quantity.doubleValue(for: .gram()))
-                } else {
-                    completion(nil)
-                }
-            }
+            // Straight off the last algorithm run rather than a fresh store query: the run
+            // already computed absorption from the same doses and readings the forecast used,
+            // so this cannot drift from what the wrist is dosing against.
+            completion(self?.activeCarbs)
         }
     }
 
@@ -814,12 +809,12 @@ final class WatchLoopManager {
         }
         // Same dynamic-absorption argument as the phone (:1110) — already on dataAccessQueue
         // here, so read the velocities directly.
-        carbStore.carbsOnBoard(at: now(), effectVelocities: insulinCounteractionEffects) { result in
-            if case .success(let value) = result {
-                let cob = value.quantity.doubleValue(for: .gram())
+        // Active carbs come off the same algorithm run the dose was decided from, so the HUD
+        // cannot disagree with the forecast it is displayed beside.
+        do {
+            if let cob = activeCarbs {
                 ctx.cob = cob
-                // Per-cycle COB trace (grams on board) — complements the [predict] carbEffect line
-                // so seeded/loan COB is verifiable through the loan. Non-trivial values only.
+                // Per-cycle COB trace, so seeded/loan COB is verifiable through the loan.
                 if cob > 0.05 { SportLog.event("loop", String(format: "COB %.1f g on board", cob)) }
             }
             DispatchQueue.main.async {
@@ -902,7 +897,7 @@ final class WatchLoopManager {
         doseEnactor.onTempBasalEnacted = { [weak self] unitsPerHour, duration in
             guard let self = self else { return }
             let start = self.now()
-            let enacted = DoseEntry(type: .tempBasal, startDate: start, endDate: start.addingTimeInterval(duration), value: unitsPerHour, unit: .unitsPerHour)
+            let enacted = DoseEntry(type: .tempBasal, startDate: start, endDate: start.addingTimeInterval(duration), value: unitsPerHour, unit: .unitsPerHour, decisionId: nil)
             self.dataAccessQueue.async { self.cachedEnactedTempBasal = enacted }
         }
         #if !targetEnvironment(simulator)
@@ -1081,15 +1076,23 @@ final class WatchLoopManager {
     /// first prediction reads it. See docs/PREDICTION_FIDELITY.md.
     func setIntegralRetrospectiveCorrection(_ enabled: Bool) {
         dataAccessQueue.async {
-            self.retrospectiveCorrection = enabled
-                ? IntegralRetrospectiveCorrection(effectDuration: LoopMath.retrospectiveCorrectionEffectDuration)
-                : StandardRetrospectiveCorrection(effectDuration: LoopMath.retrospectiveCorrectionEffectDuration)
+            self.integralRetrospectiveCorrectionEnabled = enabled
             SportLog.event("loan", "retrospective correction: \(enabled ? "INTEGRAL" : "standard") (from grant)")
         }
     }
 
+    /// Which retrospective correction the GRANTING phone runs, frozen at grant. The algorithm
+    /// selects the implementation itself; the wrist only carries the phone's choice across.
+    private var integralRetrospectiveCorrectionEnabled = false
+
     private var predictedGlucose: [PredictedGlucoseValue]?
     private var predictedGlucoseIncludingPendingInsulin: [PredictedGlucoseValue]?
+
+    /// Straight off the last algorithm run. Held rather than recomputed so that what the glance
+    /// shows is, by construction, what the dose was decided from.
+    private var activeInsulin: Double?
+    private var activeCarbs: Double?
+    private var lastAlgorithmEffects: LoopAlgorithmEffects<StoredCarbEntry>?
 
     /// INSTRUMENTATION ONLY: last cycle's exact prediction decomposition, computed once at
     /// the end of `logPredictionBreakdown` and read (never computed) by `glanceData()`.
@@ -1214,10 +1217,6 @@ final class WatchLoopManager {
             // Only the pending-inclusive array is re-stamped. Nothing dosing reads it — DoseMath
             // consumes the locally-computed curve — so this cannot reach delivery, and no
             // recommendation is produced off-cycle.
-            _ = self.updateCachedEffects()
-            if let updated = try? self.predictGlucose(includingPendingInsulin: true) {
-                self.predictedGlucoseIncludingPendingInsulin = updated
-            }
             // No explicit glance poke: the glance's own tick rebuilds its mirror, and leaving a
             // failed predict on the previous value is the same choice made for the eventual
             // everywhere else on the wrist — a stale figure carrying a freshness grade beats a
@@ -1393,7 +1392,7 @@ final class WatchLoopManager {
             self.lastLoopError = nil
             let startDate = self.now()
 
-            var error = self.updateCachedEffects()
+            var error: WatchLoopError? = nil
             if error == nil {
                 error = self.updatePredictedGlucoseAndRecommendedDose()
             }
@@ -1485,7 +1484,7 @@ final class WatchLoopManager {
                 // "no change" is a DECISION (DoseMath declined to alter the running
                 // basal), distinct from "nothing was decided" — conflating them is what
                 // made 08:48 unreadable.
-                let rec = decided.map { $0.basalAdjustment.map { String(format: "%.2f U/h", $0.unitsPerHour) } ?? "no change" } ?? "none"
+                let rec = decided.map { String(format: "%.2f U/h", $0.basalAdjustment.unitsPerHour) } ?? "none"
                 SportLog.event("loop", "cycle OK — BG \(bg), IOB \(self.insulinOnBoard.map { String(format: "%.2f", $0.value) } ?? "—"), temp \(rec)")
                 self.logPredictionBreakdown(decided: decided)
                 self.publishHUDContext()
@@ -1503,7 +1502,7 @@ final class WatchLoopManager {
     /// is enforced by loop()'s CGM-triggered callers), so dosing timing is unchanged.
     func refreshPredictionForGlance() {
         dataAccessQueue.async {
-            var error = self.updateCachedEffects()
+            var error: WatchLoopError? = nil
             if error == nil {
                 error = self.updatePredictedGlucoseAndRecommendedDose()
             }
@@ -1519,44 +1518,46 @@ final class WatchLoopManager {
         }
     }
 
-    /// 134 dosing-audit instrumentation (Jeremy 2026-07-20: "make sure prediction is
-    /// well instrumented in the logs so we can iterate to the answer as efficiently
-    /// as possible"). One line per cycle decomposing WHAT the dose math saw: each
-    /// cached effect's net mg/dL contribution over its horizon, the eventual BG, and
-    /// the recommendation. A missing input reads "—" — absence is a finding, not a
-    /// blank (the 20:31 carb-invalidation bug would have been one glance: COB present
-    /// on screen, "carbs —" here).
+    /// One line per cycle decomposing what the dose decision actually saw: each effect's net
+    /// contribution over its remaining horizon, the eventual BG, and the recommendation. A
+    /// missing input reads "—", because absence is a finding rather than a blank.
+    ///
+    /// Every number here comes off the last algorithm run rather than being recomputed, so the
+    /// log cannot disagree with the forecast the dose was taken from. The older leave-one-out
+    /// decomposition is gone with the hand-rolled pipeline it took apart; the algorithm reports
+    /// its own effects, which is the same evidence obtained more cheaply.
     private func logPredictionBreakdown(decided: AutomaticDoseRecommendation? = nil) {   // dataAccessQueue
-        // FORWARD-LOOKING from `now`, not across the whole stored array (Jeremy
-        // 2026-07-22): effect already realized is baked into the CURRENT BG and cannot
-        // move `eventual` — only effect still to come can. Anchoring at the array start
-        // reached hours back and reported the whole night's insulin (-783 mg/dL against
-        // 1.32 U IOB), which explained nothing and matched nothing. Anchored at now,
-        // the four contributions decompose `eventual − current`, so a line that doesn't
-        // add up is itself the bug signal.
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+
+        // Forward-looking from now, not across the whole stored array: effect already realized
+        // is baked into the CURRENT BG and cannot move `eventual` — only effect still to come
+        // can. Anchoring at the array start reaches hours back and reports the whole night's
+        // insulin, which explains nothing.
         func net(_ effects: [GlucoseEffect]?) -> String {
-            guard let effects, let last = effects.last else { return "—" }
-            let t = now()
-            guard let anchor = effects.last(where: { $0.startDate <= t }) ?? effects.first else { return "—" }
-            let delta = last.quantity.doubleValue(for: .milligramsPerDeciliter) - anchor.quantity.doubleValue(for: .milligramsPerDeciliter)
-            return String(format: "%+.0f", delta)
+            guard let effects, !effects.isEmpty else { return "—" }
+            let forward = effects.filter { $0.startDate >= now() }
+            guard let first = forward.first, let last = forward.last else { return "—" }
+            let mgdl = LoopUnit.milligramsPerDeciliter
+            return String(format: "%+.0f", last.quantity.doubleValue(for: mgdl) - first.quantity.doubleValue(for: mgdl))
         }
-        let eventual = predictedGlucose?.last.map { String(format: "%.0f", $0.quantity.doubleValue(for: .milligramsPerDeciliter)) } ?? "—"
-        let rc = retrospectiveGlucoseEffect.isEmpty ? "—" : net(retrospectiveGlucoseEffect)
+
+        let mgdlU = LoopUnit.milligramsPerDeciliter
+        let eventual = predictedGlucose?.last.map { String(format: "%.0f", $0.quantity.doubleValue(for: mgdlU)) } ?? "—"
+
         let rec: String
-        // Prefer the caller's pre-enact snapshot; `recommendedAutomaticDose` is already
-        // cleared by a successful enact in closed loop.
+        // Prefer the caller's pre-enact snapshot; `recommendedAutomaticDose` is already cleared
+        // by a successful enact in closed loop.
         if let r = decided ?? recommendedAutomaticDose?.recommendation {
-            let basal = r.basalAdjustment.map { String(format: "%.2f U/h", $0.unitsPerHour) } ?? "no basal change"
+            let basal = String(format: "%.2f U/h", r.basalAdjustment.unitsPerHour)
             let bolus = r.bolusUnits.map { String(format: " + auto-bolus %.2f U", $0) } ?? ""
             rec = basal + bolus
         } else {
             rec = "none"
         }
-        // The dose keys on EVENTUAL, with the predicted MIN + suspend
-        // threshold as the safety brake. Put all three on the decision line so "eventual <
-        // target ⇒ reduce" (and "why temp 0") reads without cross-referencing [curve].
-        let mgdlU = LoopUnit.milligramsPerDeciliter
+
+        // The dose keys on EVENTUAL, with the predicted MIN and the suspend threshold as the
+        // safety brake. All three on the decision line so "eventual < target ⇒ reduce" — and
+        // "why temp 0" — read without cross-referencing the curve.
         let minPredicted: String = {
             guard let fwd = predictedGlucose?.filter({ $0.startDate >= now() }), !fwd.isEmpty,
                   let m = fwd.min(by: { $0.quantity.doubleValue(for: mgdlU) < $1.quantity.doubleValue(for: mgdlU) })
@@ -1564,136 +1565,12 @@ final class WatchLoopManager {
             return String(format: "%.0f@%dm", m.quantity.doubleValue(for: mgdlU), Int(m.startDate.timeIntervalSince(now()) / 60))
         }()
         let suspendThr = settings.suspendThreshold.map { String(format: "%.0f", $0.quantity.doubleValue(for: mgdlU)) } ?? "—"
-        SportLog.event("predict", "eventual \(eventual) · min \(minPredicted) · suspendThr \(suspendThr) · net effects: carbs \(net(carbEffect)), insulin \(net(insulinEffect)), momentum \(net(glucoseMomentumEffect)), RC \(rc) · rec \(rec)")
+
+        let e = lastAlgorithmEffects
+        SportLog.event("predict", "eventual \(eventual) · min \(minPredicted) · suspendThr \(suspendThr) · net effects: carbs \(net(e?.carbs)), insulin \(net(e?.insulin)), momentum \(net(e?.momentum)), RC \(net(e?.retrospectiveCorrection)) · IOB \(activeInsulin.map { String(format: "%.2f", $0) } ?? "—") · COB \(activeCarbs.map { String(format: "%.0f", $0) } ?? "—") · momPts \(e?.momentum.count ?? 0) · rcDisc \(e?.retrospectiveGlucoseDiscrepancies.count ?? 0) · rec \(rec)")
         SportLog.event("curve", curveSummary(predictedGlucose))
-        emitPredictionSnapshotAndDiff()
-        // The third decomposition — the one that ADDS UP — plus the cache the DOSING
-        // panel renders. Last, so `[predict]` / `[predict-snapshot]` / `[predict-recon]` read
-        // raw → marginal → exact in that order for any one cycle.
-        emitPredictionReconciliation()
     }
 
-    /// INSTRUMENTATION ONLY: three lines appended each cycle after `[predict]`/`[curve]` —
-    /// `[predict-snapshot]` (leave-one-out per-effect impact on the eventual), `[predict-diff]` (that
-    /// same decomposition minus the phone's grant snapshot, term by term — the ~58 mg/dL takeover gap
-    /// localized with zero manual arithmetic), and `[freshness]` (a diagnostic verdict that gates
-    /// NOTHING). Impacts are MARGINAL (momentum blends non-linearly), so they need not sum to
-    /// `eventual − start`; the residual is expected and itself informative.
-    private func emitPredictionSnapshotAndDiff() {   // dataAccessQueue
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-        let mgdl = LoopUnit.milligramsPerDeciliter
-        func signed(_ v: Double?) -> String { v.map { String(format: "%+.0f", $0) } ?? "—" }
-        func plain(_ v: Double?) -> String { v.map { String(format: "%.0f", $0) } ?? "—" }
-        func ageS(_ d: Date?) -> String { d.map { String(format: "%.0f", now().timeIntervalSince($0)) } ?? "—" }
-
-        let base = counterfactualEventualMgdl(.none)
-        func impact(_ drop: CFDrop) -> Double? {
-            guard let base, let dropped = counterfactualEventualMgdl(drop) else { return nil }
-            return base - dropped
-        }
-        let impMom = impact(.momentum), impIns = impact(.insulin)
-        let impCarb = impact(.carb), impRC = impact(.rc)
-        let iob = insulinOnBoard?.value
-        let momPts = glucoseMomentumEffect?.count ?? 0
-        let rcDisc = retrospectiveGlucoseDiscrepancies?.count ?? 0
-        let startV = glucoseStore.latestGlucose?.quantity.doubleValue(for: mgdl)
-        let glucoseDate = glucoseStore.latestGlucose?.startDate
-        let glucoseAge = glucoseDate.map { now().timeIntervalSince($0) }
-        let pumpAge = now().timeIntervalSince(lastPumpDataDate ?? .distantPast)   // Owned stamp
-
-        SportLog.event("predict-snapshot", String(format:
-            "start=%@@%@s eventual=%@ | impact[loo]: mom %@ ins %@ carb %@ RC %@ | IOB=%@ | momPts=%d rcDisc=%d | pumpAge=%.0fs",
-            plain(startV), ageS(glucoseDate), plain(base),
-            signed(impMom), signed(impIns), signed(impCarb), signed(impRC),
-            iob.map { String(format: "%.2f", $0) } ?? "—", momPts, rcDisc, pumpAge))
-
-        // [predict-diff] — only while a fresh (<20 min) phone snapshot is stashed; else self-expire.
-        if let p = phonePredictionSnapshotAtGrant {
-            let snapAge = now().timeIntervalSince(p.snapshotAt)
-            if snapAge > 20 * 60 {
-                phonePredictionSnapshotAtGrant = nil
-            } else {
-                func diff(_ w: Double?, _ pv: Double) -> String { w.map { String(format: "%+.0f", $0 - pv) } ?? "—" }
-                SportLog.event("predict-diff", String(format:
-                    "vs phone@grant (snapAge %.0fm): dStart=%@ dEventual=%@ | dImpact: mom %@ ins %@ carb %@ RC %@ | dIOB=%@ | momPts w%d/p%d rcDisc w%d/p%d",
-                    snapAge / 60,
-                    diff(startV, p.startGlucoseMgdl), diff(base, p.eventualMgdl),
-                    diff(impMom, p.impactMomentumMgdl), diff(impIns, p.impactInsulinMgdl),
-                    diff(impCarb, p.impactCarbMgdl), diff(impRC, p.impactRCMgdl),
-                    iob.map { String(format: "%+.2f", $0 - p.iobUnits) } ?? "—",
-                    momPts, p.momentumPointCount, rcDisc, p.rcDiscrepancyCount))
-            }
-        }
-
-        // [freshness] — DIAGNOSTIC ONLY; gates neither display nor dosing.
-        let recency = LoopCoreConstants.inputDataRecencyInterval
-        let verdict: String
-        if let age = glucoseAge, age <= recency {
-            verdict = (momPts > 0 && rcDisc > 0) ? "fresh" : "warming"
-        } else {
-            verdict = "stale"
-        }
-        SportLog.event("freshness", String(format:
-            "%@ · momentum %d pts · latest glucose age %@s (recency %.0fm) · RC discrepancies %d",
-            verdict, momPts, ageS(glucoseDate), recency / 60, rcDisc))
-    }
-
-    /// Sport Mode's momentum look-back window. Wider than stock's 15 min (`GlucoseMath`) so the
-    /// seeded post-takeover history plus live reads clear the ≥3-sample floor; paired with
-    /// `requireContinuous: false` at the call site so a single missed G7 read (radio shared with the
-    /// pod) doesn't zero momentum for ~10 min — worst exactly during exercise. The 4 mg/dL/min
-    /// velocity cap + provenance + calibration guards still bound it.
-    static let sportMomentumWindow: TimeInterval = .minutes(25)
-
-    /// INSTRUMENTATION ONLY: probe which of stock `linearMomentumEffect`'s gates the
-    /// watch's glucose window passes right now — so "momentum over 0 pts" is explained, not guessed.
-    /// Uses the SAME window + relaxed-continuity rule the live call uses (`sportMomentumWindow`,
-    /// `requireContinuous: false`), so `avail`/`stockPts` match the real momentum. `cont(info)` is
-    /// reported for INSIGHT only — Sport Mode no longer requires continuity. `isContinuous`/
-    /// `hasSingleProvenance` are internal in LoopKit so they're recomputed locally (read-only);
-    /// `containsCalibrations()`/`linearMomentumEffect()` are public and reused as the cross-check.
-    private func emitMomentumGateDiagnostic(asOf date: Date, completion: @escaping () -> Void) {
-        let start = date.addingTimeInterval(-Self.sportMomentumWindow)
-        glucoseStore.getGlucoseSamples(start: start, end: nil) { result in
-            defer { completion() }
-            guard case .success(let samples) = result else {
-                SportLog.event("momentum-gate", "avail=NO (sample fetch failed)")
-                return
-            }
-            let n = samples.count
-            let countPass = n > 2
-            let span: TimeInterval = (samples.first != nil && samples.last != nil)
-                ? abs(samples.first!.startDate.timeIntervalSince(samples.last!.startDate)) : 0
-            let contThr = TimeInterval(minutes: 5) * Double(n)   // mirrors GlucoseMath.isContinuous(within: 5min)
-            let contPass = n > 0 && span < contThr
-            var maxGap: TimeInterval = 0
-            if samples.count > 1 {
-                for i in 1..<samples.count {
-                    maxGap = Swift.max(maxGap, samples[i].startDate.timeIntervalSince(samples[i-1].startDate))
-                }
-            }
-            let provs = Set(samples.map { $0.provenanceIdentifier })
-            let provPass = provs.count <= 1
-            let calibPass = !samples.containsCalibrations()
-            let stockPts = samples.linearMomentumEffect(requireContinuous: false).count   // matches the live Sport Mode call
-            let avail = stockPts > 0
-            let latestAge = samples.last.map { date.timeIntervalSince($0.startDate) }
-            let ids = provs.map { String($0.prefix(8)) }.joined(separator: ",")
-            SportLog.event("momentum-gate", String(format:
-                "avail=%@ (stockPts=%d) · count=%d %@ · cont(info)=%@ (span=%.1fmin thr=%.1fmin maxGap=%.1fmin) · provenance=%@ (%d distinct: [%@]) · calib=%@ · latest age %@s",
-                avail ? "YES" : "NO", stockPts,
-                n, countPass ? "PASS" : "FAIL",
-                contPass ? "PASS" : "FAIL", span / 60, contThr / 60, maxGap / 60,
-                provPass ? "PASS" : "FAIL", provs.count, ids,
-                calibPass ? "PASS" : "FAIL",
-                latestAge.map { String(format: "%.0f", $0) } ?? "—"))
-        }
-    }
-
-    /// INSTRUMENTATION ONLY: the three-way IOB reconciliation at the first post-takeover cycle.
-    /// Leg 1 (seed − phone) isolates wire/seed fidelity (only measurable now that the grant carries
-    /// phone IOB); Leg 2 (cycle1 − seed) isolates the post-status-read reconciliation. `dt` and
-    /// `phoneIOBAge` contextualize the aging so a stale phone stamp can be decay-corrected offline.
     private func emitIOBDiff(anchors: (phone: Double?, phoneDate: Date?, seed: Double, at: Date), cycle1: Double?) {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
         let leg1 = anchors.phone.map { String(format: "%+.2f", anchors.seed - $0) } ?? "—"
@@ -1723,24 +1600,30 @@ final class WatchLoopManager {
                 return
             }
             do {
-                let doses = ledger.doses.annotated(with: basal)
-                let uhr = LoopUnit.internationalUnit.unitDivided(by: .hour())
+                let window = (start: ledger.doses.map(\.startDate).min() ?? t,
+                              end: (ledger.doses.map(\.endDate).max() ?? t).addingTimeInterval(InsulinMath.defaultInsulinActivityDuration))
+                let basalTimeline = BasalRateSchedule.generateTimeline(
+                    schedules: [(date: .distantPast, schedule: basal)],
+                    startDate: window.start,
+                    endDate: window.end)
+                let doses = ledger.doses
+                    .map { $0.simpleDose(with: self.insulinModel(for: $0.insulinType)) }
+                    .annotated(with: basalTimeline)
+                let uhr = LoopUnit.internationalUnit.unitDivided(by: .hour)
                 let tf = DateFormatter()
                 tf.dateFormat = "HH:mm:ss"
                 var netSum = 0.0
                 var rows: [String] = []
                 for d in doses where abs(d.netBasalUnits) > 0.0001 || d.type == .bolus {
                     netSum += d.netBasalUnits
-                    let sched = d.scheduledBasalRate.map { String(format: "%.2f", $0.doubleValue(for: uhr)) } ?? "nil"
-                    let id = d.syncIdentifier.map { String($0.suffix(6)) } ?? "—"
-                    // `del=` shows whether the pod's ACTUAL delivery rode the wire.
-                    // del=nil means LoopKit falls back to round(programmedUnits) — the
-                    // rounding path that over-states IOB ~0.025 U per temp slice. Post-fix,
-                    // pod-native seeded temps must show a number here, not "nil".
-                    let del = d.deliveredUnits.map { String(format: "%.3f", $0) } ?? "nil"
-                    rows.append(String(format: "%@ %@..%@ net=%+.3f sched=%@ mut=%@ del=%@ id=%@",
+                    let sched = String(format: "%.2f", d.volume / max(d.duration / 3600, .ulpOfOne))
+                    let id = "—"
+                    // `vol=` is the volume attributed to this slice once it was netted
+                    // against the basal timeline — the number that actually enters IOB.
+                    let del = String(format: "%.3f", d.volume)
+                    rows.append(String(format: "%@ %@..%@ net=%+.3f sched=%@ vol=%@ id=%@",
                                        "\(d.type)", tf.string(from: d.startDate), tf.string(from: d.endDate),
-                                       d.netBasalUnits, sched, d.isMutable ? "Y" : "n", del, id))
+                                       d.netBasalUnits, sched, del, id))
                 }
                 SportLog.event("iob-decomp", "@\(label) Σnet=\(String(format: "%.3f", netSum))U n=\(rows.count) · " + rows.joined(separator: " | "))
             }
@@ -1770,721 +1653,239 @@ final class WatchLoopManager {
         return "min \(minV)@\(minOff)m · t0–120: \(samples)"
     }
 
-    // MARK: - Effect refresh (mirrors update(for:) — LoopDataManager.swift:963)
+    // MARK: - The algorithm
 
-    /// Same store entry points, same DispatchGroup shape as the phone's `update(for:)`:
-    /// momentum from GlucoseStore, insulin effects (with and without pending) from DoseStore,
-    /// counteraction from GlucoseStore, carb effects (dynamic absorption) from CarbStore,
-    /// IOB from DoseStore, then retrospective correction.
-    private func updateCachedEffects() -> WatchLoopError? {
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-
-        let updateGroup = DispatchGroup()
-
-        guard let latestGlucose = glucoseStore.latestGlucose else {
-            return .missingDataError("glucose")
-        }
-        let lastGlucoseDate = latestGlucose.startDate
-
-        let retrospectiveStart = lastGlucoseDate.addingTimeInterval(-type(of: retrospectiveCorrection).retrospectionInterval)
-        let earliestEffectDate = Date(timeInterval: .hours(-24), since: now())
-        let nextCounteractionEffectDate = insulinCounteractionEffects.last?.endDate ?? earliestEffectDate
-        let insulinEffectStartDate = nextCounteractionEffectDate.addingTimeInterval(.minutes(-5))
-
-        if glucoseMomentumEffect == nil {
-            updateGroup.enter()
-            // SPORT MODE momentum deviation (Jeremy 2026-07-26). This inlines stock
-            // `getRecentMomentumEffect` (fetch the look-back window → `linearMomentumEffect`) so both
-            // deviations are visible right here: a 25-min window (vs stock 15) and
-            // `requireContinuous: false`. Together they stop a single missed G7 read (radio shared
-            // with the pod) from zeroing momentum for ~10 min — worst exactly during exercise. Stock's
-            // other guards hold: ≥3 samples, single provenance, no calibrations, 4 mg/dL/min velocity
-            // cap. The phone/stock path is untouched (`getRecentMomentumEffect` and its defaults).
-            glucoseStore.getGlucoseSamples(start: now().addingTimeInterval(-Self.sportMomentumWindow), end: nil) { result in
-                switch result {
-                case .failure(let error):
-                    self.log.error("Failure getting recent momentum effect: %{public}@", String(describing: error))
-                    self.glucoseMomentumEffect = nil
-                case .success(let samples):
-                    let effects = samples.linearMomentumEffect(requireContinuous: false)
-                    self.glucoseMomentumEffect = effects
-                    // Momentum input: the net is in [predict]; this exposes
-                    // whether it's built from FRESH, sufficient glucose. Sparse/stale input
-                    // (a gappy G7) makes momentum lag or overshoot — invisible in the net.
-                    let mgdlM = LoopUnit.milligramsPerDeciliter
-                    let mDelta = (effects.first != nil && effects.last != nil)
-                        ? String(format: "%+.0f", effects.last!.quantity.doubleValue(for: mgdlM) - effects.first!.quantity.doubleValue(for: mgdlM))
-                        : "—"
-                    let mAge = self.glucoseStore.latestGlucose.map { String(format: "%.0fs", self.now().timeIntervalSince($0.startDate)) } ?? "—"
-                    SportLog.event("momentum", "effect Δ=\(mDelta) over \(effects.count) pts · latest glucose age \(mAge)")
-                }
-                updateGroup.leave()
-            }
-            // INSTRUMENTATION ONLY: whenever momentum is (re)computed — every takeover and
-            // every glucose invalidation — probe EXACTLY which stock gate the window passes/fails, so
-            // "over 0 pts" stops being a mystery. FIRE-AND-FORGET: a pure diagnostic must NOT sit inside
-            // the dosing cycle's DispatchGroup wait (it reads nothing from the cycle), so it can never
-            // add latency to, or share the unbounded blocking wait of, the dosing critical path. Its
-            // [momentum-gate] line may therefore land just after [predict] — cosmetic ordering only.
-            emitMomentumGateDiagnostic(asOf: now()) { }
-        }
-
-        if insulinEffect == nil || insulinEffect?.first?.startDate ?? .distantFuture > insulinEffectStartDate {
-            // The session ledger IS the insulin book — same public InsulinMath,
-            // same basalDosingEnd trim-at-now contract (canon: no forward credit for temps).
-            // BOTH schedules are override-applied and resolved per read (stock's DoseStore
-            // behavior); there is deliberately NO store fallback in the else branch —
-            // the store was never a trustworthy book on the watch, and a
-            // missing input must refuse loudly rather than silently switch source of truth.
-            if let ledger = sessionLedger,
-               let isf = insulinSensitivityScheduleApplyingOverrideHistory,
-               let basal = basalRateScheduleApplyingOverrideHistory {
-                // filterDateRange mirrors the store path exactly; keep it.
-                //
-                // CORRECTION: an earlier comment here claimed this call
-                // "re-arms the recompute gate above every cycle". It does not, and the freeze it
-                // warned about is exactly what shipped. The gate only fires when the cached array
-                // starts LATER than the needed start, i.e. when EARLIER data is wanted; it cannot
-                // re-arm as the clock advances, because insulinEffectStartDate moves FORWARD with
-                // each cycle while first.startDate stays put. Worse, after a takeover
-                // invalidateGlucoseDerivedEffects() empties insulinCounteractionEffects, so
-                // insulinEffectStartDate falls back to ~24 h in the past and the comparison can
-                // never be true again. What actually keeps this array fresh is
-                // clearCachedInsulinEffects() on every ledger mutation (see ledgerRecordEnact) —
-                // the ledger's stand-in for the DoseStore notification stock relies on. Do not
-                // re-derive freshness from this gate.
-                self.insulinEffect = ledger.glucoseEffects(insulinSensitivity: isf, basalSchedule: basal, basalDosingEnd: now(), from: insulinEffectStartDate, to: nil).filterDateRange(insulinEffectStartDate, nil)
-            } else {
-                self.insulinEffect = nil
-                logLedgerRefusal("insulin effects")
-            }
-        }
-
-        if insulinEffectIncludingPendingInsulin == nil {
-            if let ledger = sessionLedger,
-               let isf = insulinSensitivityScheduleApplyingOverrideHistory,
-               let basal = basalRateScheduleApplyingOverrideHistory {
-                self.insulinEffectIncludingPendingInsulin = ledger.glucoseEffects(insulinSensitivity: isf, basalSchedule: basal, basalDosingEnd: nil, from: insulinEffectStartDate, to: nil).filterDateRange(insulinEffectStartDate, nil)
-            } else {
-                self.insulinEffectIncludingPendingInsulin = nil
-                logLedgerRefusal("pending insulin effects")
-            }
-        }
-        _ = updateGroup.wait(timeout: .distantFuture)
-
-        if nextCounteractionEffectDate < lastGlucoseDate, let insulinEffect = insulinEffect {
-            updateGroup.enter()
-            glucoseStore.getCounteractionEffects(start: nextCounteractionEffectDate, end: nil, to: insulinEffect) { result in
-                switch result {
-                case .failure(let error):
-                    self.log.error("Failure getting counteraction effects: %{public}@", String(describing: error))
-                case .success(let velocities):
-                    self.insulinCounteractionEffects.append(contentsOf: velocities)
-                }
-                self.insulinCounteractionEffects = self.insulinCounteractionEffects.filterDateRange(earliestEffectDate, nil)
-                updateGroup.leave()
-            }
-            _ = updateGroup.wait(timeout: .distantFuture)
-        }
-
-        if carbEffect == nil {
-            updateGroup.enter()
-            carbStore.getGlucoseEffects(start: retrospectiveStart, end: nil, effectVelocities: insulinCounteractionEffects) { result in
-                switch result {
-                case .failure(let error):
-                    self.log.error("Failure getting carb effects: %{public}@", String(describing: error))
-                    self.carbEffect = nil
-                    self.recentCarbEntries = nil
-                case .success(let (entries, effects)):
-                    // The port discarded these entries. The potential-carb-entry prediction
-                    // needs them to pick a branch: a new entry whose effect is INDEPENDENT of what
-                    // is already on board can simply be summed onto `carbEffect`, but a back-dated
-                    // entry overlaps observed glucose, so dynamic absorption and retrospective
-                    // correction have to be recomputed across the whole set. Same discriminator
-                    // the phone uses (LoopDataManager:1270).
-                    self.recentCarbEntries = entries
-                    self.carbEffect = effects
-                }
-                updateGroup.leave()
-            }
-        }
-
-        // Dosing + display IOB from the ledger, or nothing. The store fetch, the
-        // storeIOBShadow, and the [ledger-diff] line are DELETED — the independent check on
-        // the books is now the
-        // pod's own pulse counter, read first-hand by the phone at hand-back
-        // (reconcile[AUTHORITATIVE]), a physical measurement instead of a derived shadow
-        // corrupted by a store that never persists.
-        if let ledger = sessionLedger, let basal = basalRateScheduleApplyingOverrideHistory {
-            self.insulinOnBoard = InsulinValue(startDate: now(), value: ledger.insulinOnBoard(at: now(), basalSchedule: basal))
-        } else {
-            self.insulinOnBoard = nil
-            logLedgerRefusal("IOB")
-        }
-
-        _ = updateGroup.wait(timeout: .distantFuture)
-
-        // INSTRUMENTATION ONLY: the FIRST post-takeover cycle — now that this cycle's IOB is
-        // computed, reconcile phone-IOB (grant snapshot) vs SEED-IN anchor vs cycle-1 computed, and
-        // dump the per-dose decomposition once. One-shot: consuming the anchors clears them.
-        if let anchors = takeoverIOBAnchors {
-            takeoverIOBAnchors = nil
-            emitIOBDiff(anchors: anchors, cycle1: insulinOnBoard?.value)
-            dumpIOBDecomp("CYCLE1", at: now())
-        }
-
-        if retrospectiveGlucoseDiscrepancies == nil {
-            do {
-                try updateRetrospectiveGlucoseEffect()
-            } catch {
-                self.log.error("Failure computing retrospective correction: %{public}@", String(describing: error))
-            }
-        }
-
-        return nil
-    }
-
-    // MARK: - Retrospective correction (mirrors updateRetrospectiveGlucoseEffect() — :1578)
-
-    /// Identical math; the one shape difference is guard-throw where the phone force-unwraps
-    /// settings (on the watch a nil schedule is a normal pre-push state and must deny, not
-    /// crash).
-    private func updateRetrospectiveGlucoseEffect() throws {
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-
-        guard let carbEffects = self.carbEffect else {
-            retrospectiveGlucoseDiscrepancies = nil
-            retrospectiveGlucoseEffect = []
-            throw WatchLoopError.missingDataError("carbEffect")
-        }
-
-        guard let glucose = glucoseStore.latestGlucose else {
-            retrospectiveGlucoseEffect = []
-            throw WatchLoopError.missingDataError("glucose")
-        }
-
-        guard let insulinSensitivitySchedule = settings.insulinSensitivitySchedule,
-              let basalRateSchedule = settings.basalRateSchedule,
-              let glucoseTargetRangeSchedule = settings.glucoseTargetRangeSchedule else {
-            retrospectiveGlucoseEffect = []
-            throw WatchLoopError.configurationError("retrospective correction schedules")
-        }
-
-        retrospectiveGlucoseDiscrepancies = insulinCounteractionEffects.subtracting(carbEffects, withUniformInterval: carbStore.delta)
-
-        let insulinSensitivity = insulinSensitivitySchedule.quantity(at: glucose.startDate)
-        let basalRate = basalRateSchedule.value(at: glucose.startDate)
-        let correctionRange = glucoseTargetRangeSchedule.quantityRange(at: glucose.startDate)
-
-        retrospectiveGlucoseEffect = retrospectiveCorrection.computeEffect(
-            startingAt: glucose,
-            retrospectiveGlucoseDiscrepanciesSummed: retrospectiveGlucoseDiscrepanciesSummed,
-            recencyInterval: LoopCoreConstants.inputDataRecencyInterval,
-            insulinSensitivity: insulinSensitivity,
-            basalRate: basalRate,
-            correctionRange: correctionRange,
-            retrospectiveCorrectionGroupingInterval: LoopMath.retrospectiveCorrectionGroupingInterval
-        )
-        // RC input: surfaces the active RC TYPE plus how much RC is
-        // contributing. The watch DOES track the phone's Integral
-        // toggle — set at takeover from the grant; the setter shares this serial queue and is
-        // enqueued before the first prediction, so no first-cycle Standard→Integral jump.
-        // See setIntegralRetrospectiveCorrection + docs/PREDICTION_FIDELITY.md.
-        let rcType = retrospectiveCorrection is IntegralRetrospectiveCorrection ? "Integral" : "Standard"
-        let mgdlRC = LoopUnit.milligramsPerDeciliter
-        let rcNet = (retrospectiveGlucoseEffect.first != nil && retrospectiveGlucoseEffect.last != nil)
-            ? String(format: "%+.0f", retrospectiveGlucoseEffect.last!.quantity.doubleValue(for: mgdlRC) - retrospectiveGlucoseEffect.first!.quantity.doubleValue(for: mgdlRC))
-            : "0"
-        SportLog.event("rc", "type=\(rcType) · discrepancies=\(retrospectiveGlucoseDiscrepancies?.count ?? 0) · effect net \(rcNet)")
-    }
-
-    // MARK: - Prediction (mirrors predictGlucose(using:) — :1228)
-
-    /// Same `LoopMath.predictGlucose(startingAt:momentum:effects:)` combination over the same
-    /// four effect inputs the phone enables by default (`PredictionInputEffect.all` with
-    /// `LoopConstants.retrospectiveCorrectionEnabled == true`). The phone's potential-bolus/
-    /// potential-carb-entry arms are meal-entry UI concerns and arrive with that flow.
-    /// Retrospective correction recomputed against a hypothetical carb effect, WITHOUT touching
-    /// `self.retrospectiveGlucoseEffect` — the cached one belongs to the loop, and a what-if the
-    /// user may still cancel must not disturb it. Mirrors LoopDataManager:1613-1630, with the
-    /// phone's force-unwrapped schedules replaced by guards: the watch reaches this from a UI
-    /// flow rather than from an already-validated dosing cycle, so a missing schedule must fail
-    /// loudly rather than trap.
+    /// Run an async piece of work from this manager's serial queue and wait for it.
     ///
-    /// Carries one inherited wart, deliberately un-fixed: `IntegralRetrospectiveCorrection` holds
-    /// accumulator state across calls, so evaluating a what-if perturbs it. Stock has exactly this
-    /// behaviour at the same call site, and diverging here would put the watch's RC on a different
-    /// trajectory from the phone's — a worse bug than the one it would fix. Flagged, not patched.
-    private func computeRetrospectiveGlucoseEffect(startingAt glucose: GlucoseValue, carbEffects: [GlucoseEffect]) -> [GlucoseEffect] {
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+    /// The loop cycle is a synchronous state machine on `dataAccessQueue`, while the stores it
+    /// reads are async. Blocking here is safe precisely because this is NOT the main queue and
+    /// the stores complete on their own queues; the alternative — making the whole cycle async —
+    /// would restructure the loan's ordering guarantees for no behavioural gain.
+    private func runBlocking<T>(_ work: @escaping () async throws -> T) throws -> T {
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: Result<T, Error>!
+        Task {
+            do { result = .success(try await work()) }
+            catch { result = .failure(error) }
+            semaphore.signal()
+        }
+        semaphore.wait()
+        return try result.get()
+    }
 
-        guard let insulinSensitivitySchedule = settings.insulinSensitivitySchedule,
-              let basalRateSchedule = settings.basalRateSchedule,
-              let glucoseTargetRangeSchedule = settings.glucoseTargetRangeSchedule else {
-            SportLog.event("predict", "#47 RC recompute SKIPPED — missing schedules; the potential carb effect stands without retrospective correction")
-            return []
+    /// Round to something the pod can actually deliver, so the recorded rate is the delivered one.
+    private func roundedBasalRate(_ unitsPerHour: Double) -> Double {
+        guard let supported = pumpManager?.supportedBasalRates, !supported.isEmpty else { return unitsPerHour }
+        return supported.enumerated().min(by: {
+            abs($0.element - unitsPerHour) < abs($1.element - unitsPerHour)
+        })?.element ?? unitsPerHour
+    }
+
+
+    /// Gather everything one forecast and dosing decision needs, in the shape the algorithm
+    /// takes. Mirrors `LoopDataManager.fetchData` — same queries, same order, same refusals —
+    /// with two differences that belong to a loan rather than to a phone:
+    ///
+    ///   * settings come from the grant, through `settingsProvider`, instead of a settings
+    ///     store that the wrist never writes to;
+    ///   * the override history is this manager's own, because the wrist resolves schedules
+    ///     while deciding a dose on its own queue.
+    ///
+    /// Every missing configuration element DENIES dosing rather than defaulting. A wrist that
+    /// invents a basal rate is worse than a wrist that refuses to dose.
+    private func fetchAlgorithmInput(at baseTime: Date, recommendationType: DoseRecommendationType) async throws -> StoredDataAlgorithmInput {
+        let dosesInputHistory = CarbMath.maximumAbsorptionTimeInterval + InsulinMath.defaultInsulinActivityDuration
+        var dosesStart = baseTime.addingTimeInterval(-dosesInputHistory)
+
+        let doses = try await doseStore.getNormalizedDoseEntries(start: dosesStart, end: baseTime)
+        dosesStart = min(dosesStart, doses.map { $0.startDate }.min() ?? dosesStart)
+        let dosesEnd = max(baseTime, doses.map { $0.endDate }.max() ?? baseTime)
+
+        let rawBasal = try await settingsProvider.getBasalHistory(startDate: dosesStart, endDate: dosesEnd)
+        guard !rawBasal.isEmpty else { throw WatchLoopError.configurationError("basalRateSchedule") }
+
+        // Collapse contiguous same-rate entries, as the phone does: the projection splits at
+        // every local midnight even when the rate does not change, and the continuous-delivery
+        // integrator does not rejoin the pieces perfectly across that boundary.
+        let basal: [AbsoluteScheduleValue<Double>] = rawBasal.reduce(into: []) { acc, entry in
+            if let last = acc.last, last.value == entry.value, last.endDate == entry.startDate {
+                acc[acc.count - 1] = AbsoluteScheduleValue(startDate: last.startDate, endDate: entry.endDate, value: last.value)
+            } else {
+                acc.append(entry)
+            }
         }
 
-        let discrepancies = insulinCounteractionEffects.subtracting(carbEffects, withUniformInterval: carbStore.delta)
-        let summed = discrepancies.combinedSums(of: LoopMath.retrospectiveCorrectionGroupingInterval * retrospectiveCorrectionGroupingIntervalMultiplier)
+        let forecastEndTime = baseTime.addingTimeInterval(InsulinMath.defaultInsulinActivityDuration).dateCeiledToTimeInterval(GlucoseMath.defaultDelta)
+        let carbsStart = baseTime.addingTimeInterval(CarbMath.maximumAbsorptionTimeInterval * -1)
 
-        return retrospectiveCorrection.computeEffect(
-            startingAt: glucose,
-            retrospectiveGlucoseDiscrepanciesSummed: summed,
-            recencyInterval: LoopCoreConstants.inputDataRecencyInterval,
-            insulinSensitivity: insulinSensitivitySchedule.quantity(at: glucose.startDate),
-            basalRate: basalRateSchedule.value(at: glucose.startDate),
-            correctionRange: glucoseTargetRangeSchedule.quantityRange(at: glucose.startDate),
-            retrospectiveCorrectionGroupingInterval: LoopMath.retrospectiveCorrectionGroupingInterval
+        let carbEntries = try await carbStore.getCarbEntries(start: carbsStart, end: forecastEndTime)
+            .filter { $0.userCreatedDate ?? $0.startDate < baseTime }
+
+        let carbRatio = try await settingsProvider.getCarbRatioHistory(startDate: carbsStart, endDate: forecastEndTime)
+        guard !carbRatio.isEmpty else { throw WatchLoopError.configurationError("carbRatioSchedule") }
+
+        let glucose = try await glucoseStore.getGlucoseSamples(start: carbsStart, end: baseTime)
+
+        let dosesWithModel = doses.map { $0.simpleDose(with: insulinModel(for: $0.insulinType)) }
+        let recommendationInsulinModel = insulinModel(for: pumpManager?.status.insulinType)
+
+        let neededSensitivityTimeline = LoopAlgorithm.timelineIntervalForSensitivity(
+            doses: dosesWithModel,
+            glucoseHistoryStart: glucose.first?.startDate ?? baseTime,
+            recommendationEffectInterval: DateInterval(start: baseTime, duration: recommendationInsulinModel.effectDuration)
+        )
+        let sensitivity = try await settingsProvider.getInsulinSensitivityHistory(
+            startDate: neededSensitivityTimeline.start,
+            endDate: neededSensitivityTimeline.end
+        )
+        guard !sensitivity.isEmpty else { throw WatchLoopError.configurationError("insulinSensitivitySchedule") }
+
+        let dosingLimits = try await settingsProvider.getDosingLimits(at: baseTime)
+        guard let maxBolus = dosingLimits.maxBolus else { throw WatchLoopError.configurationError("maximumBolus") }
+        guard let maxBasalRate = dosingLimits.maxBasalRate else { throw WatchLoopError.configurationError("maximumBasalRatePerHour") }
+        guard let suspendThreshold = dosingLimits.suspendThreshold else { throw WatchLoopError.configurationError("suspendThreshold") }
+
+        // Overrides scale the timelines themselves, which is what makes an override real: the
+        // target moves AND the basal / ISF / carb-ratio scales move with it. Moving the target
+        // alone would make every "neutral" temp a high temp in override terms.
+        let overrides = overrideHistory.getOverrideHistory(startDate: neededSensitivityTimeline.start, endDate: forecastEndTime)
+
+        var target: [AbsoluteScheduleValue<ClosedRange<LoopQuantity>>]
+        if let activeOverride = scheduleOverride, activeOverride.isActive(at: baseTime) {
+            guard let schedule = settings.glucoseTargetRangeSchedule else {
+                throw WatchLoopError.configurationError("glucoseTargetRangeSchedule")
+            }
+            let overridden = activeOverride.effectiveCorrectionRangeDuring(scheduledRange: schedule.quantityRange(at: baseTime))
+            target = [AbsoluteScheduleValue(startDate: baseTime, endDate: forecastEndTime, value: overridden)]
+        } else {
+            target = try await settingsProvider.getTargetRangeHistory(startDate: baseTime, endDate: forecastEndTime)
+        }
+        guard !target.isEmpty else { throw WatchLoopError.configurationError("glucoseTargetRangeSchedule") }
+
+        return StoredDataAlgorithmInput(
+            glucoseHistory: glucose,
+            doses: dosesWithModel,
+            carbEntries: carbEntries,
+            predictionStart: baseTime,
+            basal: overrides.applyBasal(over: basal),
+            sensitivity: overrides.applySensitivity(over: sensitivity),
+            carbRatio: overrides.applyCarbRatio(over: carbRatio),
+            target: target,
+            suspendThreshold: suspendThreshold,
+            maxBolus: maxBolus,
+            maxBasalRate: maxBasalRate,
+            useIntegralRetrospectiveCorrection: integralRetrospectiveCorrectionEnabled,
+            includePositiveVelocityAndRC: true,
+            carbAbsorptionModel: .piecewiseLinear,
+            recommendationInsulinModel: recommendationInsulinModel,
+            recommendationType: recommendationType
         )
     }
 
-    /// - Parameter potentialCarbEntry: a carb entry the user is CONSIDERING but has not
-    ///   saved. Folding it into the prediction here is what lets the watch recommend a meal bolus
-    ///   on its own; without it the carb flow had to ask the phone, whose answer is computed from
-    ///   the phone's own books and is therefore blind to everything the watch has done since the
-    ///   grant (and simply absent when the phone is out of range).
-    private func predictGlucose(includingPendingInsulin: Bool = false,
-                                potentialCarbEntry: NewCarbEntry? = nil) throws -> [PredictedGlucoseValue] {
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+    // MARK: - Recommendation
 
-        guard let glucose = glucoseStore.latestGlucose else {
-            throw WatchLoopError.missingDataError("glucose")
-        }
-
-        let pumpStatusDate = lastPumpDataDate ?? .distantPast   // Owned stamp, not the store's
-        let lastGlucoseDate = glucose.startDate
-
-        // Recency gating, same constants as the phone (LoopCoreConstants).
-        guard now().timeIntervalSince(lastGlucoseDate) <= LoopCoreConstants.inputDataRecencyInterval else {
-            throw WatchLoopError.glucoseTooOld(date: glucose.startDate)
-        }
-
-        guard lastGlucoseDate.timeIntervalSince(now()) <= LoopCoreConstants.futureGlucoseDataInterval else {
-            throw WatchLoopError.invalidFutureGlucose(date: lastGlucoseDate)
-        }
-
-        // LOAN AUTHORITY (157, Jeremy 2026-07-22, explicit go). Stock's stale-pump-data
-        // gate exists for pumps that can act unilaterally (user button presses, unknown
-        // boluses) — stale data there means IOB may be wrong, so don't compute a dose from
-        // it. A loaned pod has exactly ONE commander: this watch. It runs the last program
-        // we gave it and nothing else, so the books remain authoritative through a comms
-        // blackout and a fresh CGM should always yield a prediction and a recommendation.
-        // The one loan case where the books genuinely can diverge is a command sent but
-        // unacked — stock's own deliveryIsUncertain flag — so THAT still gates. The enact
-        // itself still requires a live link (physics, not policy); this only stops a comms
-        // hiccup from blacking out the math. Field: 22:58-23:08 cycles threw here with
-        // fresh CGM, sane IOB, and a blank eventual on the wrist.
-        if now().timeIntervalSince(pumpStatusDate) > LoopCoreConstants.inputDataRecencyInterval {
-            guard pumpManager != nil, pumpManager?.status.deliveryIsUncertain == false else {
-                throw WatchLoopError.pumpDataTooOld(date: pumpStatusDate)
-            }
-            SportLog.event("loop", String(format: "pump data %.0f min old — proceeding under loan authority (no uncertain command)", now().timeIntervalSince(pumpStatusDate) / 60))
-        }
-
-        var momentum: [GlucoseEffect] = []
-        var effects: [[GlucoseEffect]] = []
-        var retrospectiveEffect = self.retrospectiveGlucoseEffect
-
-        // Potential carb entry. Ported branch-for-branch from LoopDataManager:1266-1307 —
-        // the two cases are NOT interchangeable and the split is the whole point.
-        if let potentialCarbEntry = potentialCarbEntry {
-            let retrospectiveStart = lastGlucoseDate.addingTimeInterval(-type(of: retrospectiveCorrection).retrospectionInterval)
-
-            if potentialCarbEntry.startDate > lastGlucoseDate || recentCarbEntries?.isEmpty != false {
-                // The entry starts after the last reading (or nothing else is on board), so no
-                // observed glucose can have been influenced by it yet: its effect is independent
-                // of the cached one and the two simply sum.
-                if let carbEffect = self.carbEffect {
-                    effects.append(carbEffect)
-                }
-                effects.append(try carbStore.glucoseEffects(
-                    of: [potentialCarbEntry],
-                    startingAt: retrospectiveStart,
-                    endingAt: nil,
-                    effectVelocities: insulinCounteractionEffects))
-            } else {
-                // Back-dated into a window we have already observed. Summing here would
-                // double-count: the counteraction effects over that window ALREADY contain the
-                // meal's rise, and retrospective correction was computed against a carb effect
-                // that did not know about it. So recompute dynamic absorption across the whole
-                // set, then recompute RC against that.
-                var entries = (recentCarbEntries ?? []).map {
-                    NewCarbEntry(quantity: $0.quantity, startDate: $0.startDate, foodType: nil, absorptionTime: $0.absorptionTime)
-                }
-                entries.append(potentialCarbEntry)
-                entries.sort(by: { $0.startDate > $1.startDate })
-
-                let potentialCarbEffect = try carbStore.glucoseEffects(
-                    of: entries,
-                    startingAt: retrospectiveStart,
-                    endingAt: nil,
-                    effectVelocities: insulinCounteractionEffects)
-                effects.append(potentialCarbEffect)
-                retrospectiveEffect = computeRetrospectiveGlucoseEffect(startingAt: glucose, carbEffects: potentialCarbEffect)
-            }
-        } else if let carbEffect = self.carbEffect {
-            effects.append(carbEffect)
-        }
-
-        if let insulinEffect = includingPendingInsulin ? self.insulinEffectIncludingPendingInsulin : self.insulinEffect {
-            effects.append(insulinEffect)
-        }
-
-        if let momentumEffect = self.glucoseMomentumEffect {
-            momentum = momentumEffect
-        }
-
-        effects.append(retrospectiveEffect)
-
-        var prediction = LoopMath.predictGlucose(startingAt: glucose, momentum: momentum, effects: effects)
-
-        // Dosing requires prediction entries at least as long as the insulin model duration.
-        let finalDate = glucose.startDate.addingTimeInterval(doseStore.longestEffectDuration)
-        if let last = prediction.last, last.startDate < finalDate {
-            prediction.append(PredictedGlucoseValue(startDate: finalDate, quantity: last.quantity))
-        }
-
-        return prediction
-    }
-
-    /// INSTRUMENTATION ONLY. Which effect to leave out of a counterfactual eventual.
-    private enum CFDrop { case none, momentum, insulin, carb, rc }
-
-    /// INSTRUMENTATION ONLY: a literal read-only mirror of `predictGlucose(:896)` that omits
-    /// exactly ONE effect input, so per-effect impact on the eventual is measurable as a leave-one-out
-    /// counterfactual — impact(X) = eventual(.none) − eventual(dropX). It deliberately skips the
-    /// recency guards and the pump-authority log (those belong to the real dosing path) and is NEVER
-    /// fed to DoseMath. `counterfactualEventualMgdl(.none)` reproduces `predictedGlucose?.last`
-    /// (same inputs, same order, non-pending). Momentum blends non-linearly inside
-    /// `LoopMath.predictGlucose`, so these impacts are MARGINAL and need NOT sum to `eventual − start`.
-    private func counterfactualEventualMgdl(_ drop: CFDrop) -> Double? {
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-        guard let glucose = glucoseStore.latestGlucose else { return nil }
-        let momentum: [GlucoseEffect] = (drop == .momentum) ? [] : (glucoseMomentumEffect ?? [])
-        var effects: [[GlucoseEffect]] = []
-        if drop != .carb,    let c = carbEffect    { effects.append(c) }
-        if drop != .insulin, let i = insulinEffect { effects.append(i) }   // non-pending, matches dosing path
-        if drop != .rc { effects.append(retrospectiveGlucoseEffect) }
-        var prediction = LoopMath.predictGlucose(startingAt: glucose, momentum: momentum, effects: effects)
-        let finalDate = glucose.startDate.addingTimeInterval(doseStore.longestEffectDuration)
-        if let last = prediction.last, last.startDate < finalDate {
-            prediction.append(PredictedGlucoseValue(startDate: finalDate, quantity: last.quantity))
-        }
-        return prediction.last?.quantity.doubleValue(for: .milligramsPerDeciliter)
-    }
-
-    /// INSTRUMENTATION ONLY (display + logging; no dosing path reads this). Build the EXACT
-    /// per-source decomposition of `eventual − start` described on `PredictionBreakdown`.
+    /// Run the algorithm and turn its output into the dose this cycle will enact.
     ///
-    /// This is a per-contributor restatement of `LoopMath.predictGlucose` (LoopMath.swift:118-175)
-    /// over the SAME inputs, in the SAME order, as `predictGlucose()` (:1349-1361 — carb, insulin
-    /// non-pending, RC, with momentum blended). Instead of accumulating one Double per date, it
-    /// accumulates one Double PER SOURCE per date and runs the identical blend, so the four terms
-    /// necessarily sum to what the prediction moved.
+    /// This used to be several hundred lines: momentum, insulin and carb effects, counteraction,
+    /// retrospective correction, a prediction, and then DoseMath — each cached, each invalidated
+    /// by hand. All of it now happens inside `LoopAlgorithm.run`, which takes every input at once
+    /// and holds no state between cycles. That is not merely shorter: the cached-effect
+    /// invalidation was the source of a whole family of stale-forecast bugs on this watch, and a
+    /// function that cannot remember cannot go stale.
     ///
-    /// Runs once per cycle on `dataAccessQueue` (cheap: no `LoopMath.predictGlucose` calls at all,
-    /// unlike the leave-one-out counterfactuals at :1384 which run five predictions).
-    private func computePredictionBreakdown() -> PredictionBreakdown? {   // dataAccessQueue
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-        let unit = LoopUnit.milligramsPerDeciliter
-
-        guard let glucose = glucoseStore.latestGlucose,
-              let eventual = predictedGlucose?.last?.quantity.doubleValue(for: unit) else { return nil }
-
-        let startDate = glucose.startDate
-        let start = glucose.quantity.doubleValue(for: unit)
-
-        // Slot layout, fixed: [carb, insulin, RC, momentum].
-        let carbIdx = 0, insIdx = 1, rcIdx = 2, momIdx = 3
-        let emptySlot = [0.0, 0.0, 0.0, 0.0]
-        var byDate: [Date: [Double]] = [:]
-
-        // First-difference each timeline exactly as LoopMath.swift:122-130 does (the first entry
-        // contributes 0 — `previousEffectValue` is seeded from it).
-        func accumulate(_ timeline: [GlucoseEffect], _ idx: Int) {
-            var previous = timeline.first?.quantity.doubleValue(for: unit) ?? 0
-            for effect in timeline {
-                let value = effect.quantity.doubleValue(for: unit)
-                var slot = byDate[effect.startDate] ?? emptySlot
-                slot[idx] += value - previous
-                byDate[effect.startDate] = slot
-                previous = value
-            }
-        }
-
-        if let carbEffect = carbEffect { accumulate(carbEffect, carbIdx) }
-        if let insulinEffect = insulinEffect { accumulate(insulinEffect, insIdx) }   // non-pending, matches dosing
-        accumulate(retrospectiveGlucoseEffect, rcIdx)
-
-        // Momentum blend — LoopMath.swift:132-160, sliced by contributor. LoopMath writes
-        // `slot = (1 − split)·slot + split·Δ`; scaling EVERY source (momentum included, so a
-        // repeated date behaves identically) by (1 − split) and then adding the momentum share
-        // is the same number, attributed.
-        let momentum = glucoseMomentumEffect ?? []
-        if momentum.count > 1 {
-            var previous = momentum[0].quantity.doubleValue(for: unit)
-            let blendCount = momentum.count - 2
-            let timeDelta = momentum[1].startDate.timeIntervalSince(momentum[0].startDate)
-            let momentumOffset = startDate.timeIntervalSince(momentum[0].startDate)
-            let blendSlope = 1.0 / Double(blendCount)
-            let blendOffset = momentumOffset / timeDelta * blendSlope
-
-            for (index, effect) in momentum.enumerated() {
-                let value = effect.quantity.doubleValue(for: unit)
-                let change = value - previous
-                let split = min(1.0, max(0.0, Double(momentum.count - index) / Double(blendCount) - blendSlope + blendOffset))
-                var slot = byDate[effect.startDate] ?? emptySlot
-                for s in slot.indices { slot[s] *= (1.0 - split) }
-                slot[momIdx] += split * change
-                byDate[effect.startDate] = slot
-                previous = value
-            }
-        }
-
-        // Only dates strictly after the anchor move the prediction (LoopMath.swift:163).
-        var terms = emptySlot
-        for (date, slot) in byDate where date > startDate {
-            for s in terms.indices { terms[s] += slot[s] }
-        }
-        // Degenerate momentum arrays can make LoopMath's blend arithmetic non-finite
-        // (blendCount == 0 ⇒ 1/0). Never render NaN: zero the term and let the residual carry it.
-        for s in terms.indices where !terms[s].isFinite { terms[s] = 0 }
-
-        let isfSchedule = doseStore.insulinSensitivityScheduleApplyingOverrideHistory ?? settings.insulinSensitivitySchedule
-        let isf = isfSchedule?.quantity(at: startDate).doubleValue(for: unit)
-        let iob = insulinOnBoard?.value
-        let insulinExpected: Double? = (isf != nil && iob != nil) ? -(isf! * iob!) : nil
-
-        // The UNBLENDED tail — the quantity the −ISF × IOB invariant actually governs. Same
-        // anchor rule as `net()` (:824-830) and `[predict]`: last minus the last sample at or
-        // before now, falling back to the first sample when the whole series is in the future.
-        let rawTail: Double? = {
-            guard let effects = insulinEffect, let last = effects.last else { return nil }
-            let t = now()
-            guard let anchor = effects.last(where: { $0.startDate <= t }) ?? effects.first else { return nil }
-            return last.quantity.doubleValue(for: unit) - anchor.quantity.doubleValue(for: unit)
-        }()
-
-        let residual = eventual - (start + terms[carbIdx] + terms[insIdx] + terms[rcIdx] + terms[momIdx])
-
-        return PredictionBreakdown(
-            startMgdl: start,
-            eventualMgdl: eventual,
-            insulinMgdl: terms[insIdx],
-            carbMgdl: terms[carbIdx],
-            momentumMgdl: terms[momIdx],
-            retrospectiveMgdl: terms[rcIdx],
-            residualMgdl: residual,
-            insulinRawTailMgdl: rawTail,
-            insulinExpectedMgdl: insulinExpected,
-            isfMgdlPerU: isf,
-            iobUnits: iob,
-            momentumPointCount: momentum.count,
-            computedAt: now())
-    }
-
-    /// Cache the exact decomposition for the DOSING panel and emit it as a greppable
-    /// `[predict-recon]` line. Unlike `[predict]` (raw array deltas, anchored at now) and
-    /// `[predict-snapshot]` (MARGINAL leave-one-out impacts), this one ADDS UP — so a run of
-    /// cycles can be grepped and summed without re-deriving the momentum blend by hand.
-    private func emitPredictionReconciliation() {   // dataAccessQueue
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-        guard let b = computePredictionBreakdown() else {
-            lastPredictionBreakdown = nil
-            SportLog.event("predict-recon", "— (no prediction to reconcile)")
-            return
-        }
-        lastPredictionBreakdown = b
-
-        // Render from the SAME rounded integers the wrist shows, and close the line with the
-        // rounding remainder, so the logged row is literally the row on the watch.
-        let s = PredictionBreakdown.round0(b.startMgdl), ev = PredictionBreakdown.round0(b.eventualMgdl)
-        let ins = PredictionBreakdown.round0(b.insulinMgdl), carb = PredictionBreakdown.round0(b.carbMgdl)
-        let mom = PredictionBreakdown.round0(b.momentumMgdl), rc = PredictionBreakdown.round0(b.retrospectiveMgdl)
-        let shown = PredictionBreakdown.round0(ev - (s + ins + carb + mom + rc))
-
-        // The invariant check, against the RAW tail — never against the blended term above.
-        // Reads as its own sentence so nobody has to reconstruct the argument to
-        // interpret it: raw tail, what -ISF x IOB says it should be, and the residual in UNITS
-        // (mg/dL is unreadable across different ISFs). A residual of roughly the running temp's
-        // remaining delivery is EXPECTED and stock; a raw tail that ignores IOB is the bug.
-        let invariant: String
-        if let raw = b.insulinRawTailMgdl, let e = b.insulinExpectedMgdl, let isf = b.isfMgdlPerU, let iob = b.iobUnits {
-            invariant = String(format: " | raw ins tail %+.1f vs −ISF×IOB %+.1f (ISF %.0f × IOB %.2f) resid %+.3f U",
-                               raw, e, isf, iob, (raw - e) / isf)
-        } else if let e = b.insulinExpectedMgdl {
-            invariant = String(format: " | raw ins tail — · −ISF×IOB %+.1f", e)
-        } else {
-            invariant = " | raw ins tail — · −ISF×IOB — (no ISF/IOB)"
-        }
-
-        SportLog.event("predict-recon", String(format:
-            "%.0f ins %+.0f carb %+.0f mom %+.0f RC %+.0f r %+.0f = %.0f (Δ%+.0f) | blended: ins %+.1f carb %+.1f mom %+.1f RC %+.1f resid %+.2f%@ | momPts=%d",
-            s, ins, carb, mom, rc, shown, ev, ev - s,
-            b.insulinMgdl, b.carbMgdl, b.momentumMgdl, b.retrospectiveMgdl, b.residualMgdl,
-            invariant, b.momentumPointCount))
-    }
-
-    // MARK: - Recommendation (mirrors updatePredictedGlucoseAndRecommendedDose(with:) — :1695)
-
-    /// Configuration gates first (each missing element DENIES dosing — the design doc's
-    /// no-fabricated-defaults rule), then prediction, then the SAME DoseMath entry points the
-    /// phone calls, with the IOB clamp passed INSIDE the recommendation call
-    /// (`additionalActiveInsulinClamp`) — never applied post-hoc beside it.
+    /// The IOB clamp the fork used to pass into DoseMath by hand is now the algorithm's own
+    /// `maxActiveInsulinMultiplier`, applied inside the dosing decision where it belongs.
     private func updatePredictedGlucoseAndRecommendedDose() -> WatchLoopError? {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
 
         let startDate = now()
 
-        // Same configuration checks, same denial semantics as the phone (:1726-1753).
-        guard let glucoseTargetRange = settings.effectiveGlucoseTargetRangeSchedule() else {
-            return .configurationError("glucoseTargetRangeSchedule")
-        }
-        // DoseMath consumes the OVERRIDE-APPLIED schedules, as the phone does (LoopDataManager
-        // :1726ff). Passing the raw settings schedules instead moves the TARGET under an override
-        // but not the SCALES, which makes every "neutral" temp a high temp in override terms and
-        // over-delivers systematically under a reduced-needs override. The prediction path uses
-        // the applied ISF, so raw schedules here also put prediction and dosing in disagreement
-        // about the same override. The [dosemath] line below prints these locals, so the wrist
-        // telemetry is the field check.
-        //
-        // NO `?? settings.<raw>` fallback, matching stock: the phone treats a nil applied schedule
-        // as a configurationError and short-circuits the recommendation (:1763-1775). A raw
-        // fallback is most dangerous exactly when it fires — under an active override the raw
-        // schedule is the wrong one, so it would silently dose from settings the user overrode.
-        // Refuse rather than substitute.
-        guard let basalRateSchedule = basalRateScheduleApplyingOverrideHistory else {
-            return .configurationError("basalRateSchedule")
-        }
-        guard let insulinSensitivity = insulinSensitivityScheduleApplyingOverrideHistory else {
-            return .configurationError("insulinSensitivitySchedule")
-        }
-        guard carbRatioScheduleApplyingOverrideHistory != nil else {
-            return .configurationError("carbRatioSchedule")
-        }
-        guard let maxBasal = settings.maximumBasalRatePerHour else {
-            return .configurationError("maximumBasalRatePerHour")
-        }
-        guard let maxBolus = settings.maximumBolus else {
-            return .configurationError("maximumBolus")
+        // The watch doses by temp basal only; every bolus is human-confirmed. A phone-pushed
+        // automaticBolus setting is refused out loud rather than quietly reinterpreted.
+        guard settings.automaticDosingStrategy == .tempBasalOnly else {
+            return .configurationError("automaticDosingStrategy: automaticBolus is not supported on the watch (temps only)")
         }
 
-        // Same missing-effect checks (:1755-1773).
-        guard glucoseMomentumEffect != nil else { return .missingDataError("momentumEffect") }
-        guard carbEffect != nil else { return .missingDataError("carbEffect") }
-        guard insulinEffect != nil else { return .missingDataError("insulinEffect") }
-        guard let insulinOnBoard = insulinOnBoard else { return .missingDataError("activeInsulin") }
-
+        let input: StoredDataAlgorithmInput
         do {
-            let predictedGlucose = try predictGlucose()
-            self.predictedGlucose = predictedGlucose
-            self.predictedGlucoseIncludingPendingInsulin = try predictGlucose(includingPendingInsulin: true)
-
-            // Mirrors the phone's rateRounder: the pump manager's supported-rate rounding, or
-            // pass-through when absent (:1800). With rounding in place `ifNecessary`
-            // continuation works and the loop does not issue a cancel+set pair every reading.
-            let rateRounder = { (rate: Double) in
-                return self.pumpManager?.roundToSupportedBasalRate(unitsPerHour: rate) ?? rate
-            }
-
-            // Prefer the cached enacted temp when the pod is orphaned, so DoseMath's
-            // continuation logic sees the running temp and does not re-issue an identical one
-            // every cycle (and the [dosemath] `running` field reads true instead of "none").
-            let lastTempBasal: DoseEntry? = runningTempBasal()
-
-            let dosingRecommendation: AutomaticDoseRecommendation?
-
-            // automaticDosingIOBLimit calculated from the user-entered maxBolus, exactly as
-            // the phone (:1814-1816). The headroom is applied INSIDE recommendedTempBasal via
-            // additionalActiveInsulinClamp — DoseMath owns the clamp, not this file.
-            let automaticDosingIOBLimit = maxBolus * 2.0
-            let iobHeadroom = automaticDosingIOBLimit - insulinOnBoard.value
-
-            switch settings.automaticDosingStrategy {
-            case .automaticBolus:
-                // RULED: the watch strategy is temp basals only — every
-                // bolus is human-confirmed. The denial is explicit, not a silent fallback
-                // to tempBasalOnly, so a phone-pushed automaticBolus setting is surfaced
-                // rather than quietly reinterpreted.
-                return .configurationError("automaticDosingStrategy: automaticBolus is not supported on the watch (R16: temps only)")
-
-            case .tempBasalOnly:
-                // The same DoseMath entry point, same argument surface as the phone (:1858).
-                // RULED: maxBasal is the raw therapy maximumBasalRatePerHour
-                // — the only configured limit, exactly as on the phone. No watch-side
-                // companion cap; stock DoseMath clamp + driver rounding + pod ceiling are
-                // the layers.
-                var derivation: TempBasalDerivation?
-                let temp = predictedGlucose.recommendedTempBasal(
-                    to: glucoseTargetRange,
-                    at: predictedGlucose[0].startDate,
-                    suspendThreshold: settings.suspendThreshold?.quantity,
-                    sensitivity: insulinSensitivity,
-                    model: insulinModel(for: pumpManager?.status.insulinType),
-                    basalRates: basalRateSchedule,
-                    maxBasalRate: maxBasal,
-                    additionalActiveInsulinClamp: iobHeadroom,
-                    lastTempBasal: lastTempBasal,
-                    rateRounder: rateRounder,
-                    isBasalRateScheduleOverrideActive: scheduleOverride?.isBasalRateScheduleOverriden(at: startDate) == true,
-                    derivation: &derivation
-                )
-                dosingRecommendation = AutomaticDoseRecommendation(basalAdjustment: temp)
-
-                // THE DECISION, with every input DoseMath actually saw. Until now the log
-                // recorded the verdict but none of the evidence, so "no basal change" at a
-                // high eventual was unexplainable from a log — the exact question left open
-                // on 2026-07-22 (eventual ~200, nothing recommended). Any one of these can
-                // legitimately produce nil: eventual already inside target, a running temp
-                // that already matches, maxBasal reached, or the IOB clamp at zero headroom.
-                // Naming which one turns a mystery into a fact.
-                let tRange = glucoseTargetRange.quantityRange(at: startDate)
-                let mgdl = LoopUnit.milligramsPerDeciliter
-                SportLog.event("dosemath", String(
-                    format: "eventual %@ vs target %.0f-%.0f · running %@ · scheduled %.2f · maxBasal %.2f · ISF %.0f · IOB %.2f (clamp headroom %.2f) · suspendThr %@ => %@",
-                    predictedGlucose.last.map { String(format: "%.0f", $0.quantity.doubleValue(for: mgdl)) } ?? "—",
-                    tRange.lowerBound.doubleValue(for: mgdl),
-                    tRange.upperBound.doubleValue(for: mgdl),
-                    lastTempBasal.map { String(format: "%.2f U/hr", $0.unitsPerHour) } ?? "none(scheduled)",
-                    basalRateSchedule.value(at: startDate),
-                    maxBasal,
-                    insulinSensitivity.quantity(at: startDate).doubleValue(for: mgdl),
-                    insulinOnBoard.value,
-                    iobHeadroom,
-                    settings.suspendThreshold?.quantity.doubleValue(for: mgdl).description ?? "none",
-                    temp.map { String(format: "temp %.2f U/hr x %.0f min", $0.unitsPerHour, $0.duration / 60) } ?? "NO CHANGE"))
-
-                // THE BINDING CONSTRAINT. The line above says what DoseMath saw and what it
-                // decided; this says WHICH LIMIT actually produced that number — the piece that
-                // was missing every time a rate had to be reconciled by hand. Six answers:
-                // inRange / aboveRange / entirelyBelowRange / suspend on the correction axis, and
-                // minGuard / iobClamp / maxBasal on the ceiling axis, plus the ifNecessary
-                // suppression that turns a real recommendation into no pod command at all.
-                //
-                // `bindingPoint` is the prediction point the correction was computed against —
-                // the min over the curve, NOT `eventual`. Mistaking one for the other is the
-                // single commonest way the head-math disagrees with the wrist.
-                if let d = derivation {
-                    SportLog.event("dosemath-why", d.summary)
-                    lastDosingDerivation = d.summary
-                }
-            }
-
-            if let dosingRecommendation = dosingRecommendation {
-                self.log.default("Recommending dose: %{public}@ at %{public}@", String(describing: dosingRecommendation), String(describing: startDate))
-                recommendedAutomaticDose = (recommendation: dosingRecommendation, date: startDate)
-            } else {
-                self.log.default("No dose recommended.")
-                recommendedAutomaticDose = nil
-            }
+            input = try runBlocking { try await self.fetchAlgorithmInput(at: startDate, recommendationType: .tempBasal) }
         } catch let error as WatchLoopError {
             return error
         } catch {
             return .missingDataError(String(describing: error))
         }
 
-        return nil
+        let output = LoopAlgorithm.run(input: input)
+
+        // Everything the glance and the telemetry read comes off the same output, so what is
+        // displayed is by construction what was dosed from.
+        predictedGlucose = output.predictedGlucose
+        activeInsulin = output.activeInsulin
+        activeCarbs = output.activeCarbs
+        lastAlgorithmEffects = output.effects
+
+        switch output.recommendationResult {
+        case .failure(let error):
+            recommendedAutomaticDose = nil
+            SportLog.event("dosemath", "algorithm declined: \(String(describing: error))")
+            return .missingDataError(String(describing: error))
+
+        case .success(let recommendation):
+            guard var automatic = recommendation.automatic else {
+                recommendedAutomaticDose = nil
+                self.log.default("No dose recommended.")
+                return nil
+            }
+
+            // Whether a command actually needs to go out. The algorithm says what rate is
+            // right; this says whether the pod is already running it. Skipping the redundant
+            // command matters more on a wrist than on a phone — every pod command costs radio
+            // time the G7 is competing for.
+            var basal = automatic.basalAdjustment
+            basal.unitsPerHour = roundedBasalRate(basal.unitsPerHour)
+            let scheduledBasalRate = input.basal.closestPrior(to: startDate)?.value ?? 0
+            let adjusted = basal.adjustForCurrentDelivery(
+                at: startDate,
+                neutralBasalRate: scheduledBasalRate,
+                currentTempBasal: runningTempBasal(),
+                continuationInterval: .minutes(11),
+                neutralBasalRateMatchesPump: scheduleOverride == nil
+            )
+
+            guard let adjusted else {
+                // The pod is already delivering what the algorithm asked for.
+                recommendedAutomaticDose = nil
+                SportLog.event("dosemath", String(format: "no command needed — pod already at %.2f U/hr", basal.unitsPerHour))
+                return nil
+            }
+            automatic.basalAdjustment = adjusted
+
+            recommendedAutomaticDose = (recommendation: automatic, date: startDate)
+            lastDosingDerivation = algorithmSummary(input: input, output: output, enacting: adjusted)
+            SportLog.event("dosemath", lastDosingDerivation ?? "")
+            return nil
+        }
+    }
+
+    /// The decision, with the evidence behind it. A verdict without its inputs is unexplainable
+    /// hours later in a field log, which is exactly when it needs explaining.
+    private func algorithmSummary(input: StoredDataAlgorithmInput,
+                                  output: AlgorithmOutput<StoredCarbEntry>,
+                                  enacting: TempBasalRecommendation) -> String {
+        let mgdl = LoopUnit.milligramsPerDeciliter
+        let target = input.target.closestPrior(to: input.predictionStart)?.value
+        return String(
+            format: "eventual %@ vs target %@ · running %@ · scheduled %.2f · maxBasal %.2f · IOB %.2f · COB %.0f · suspendThr %@ => temp %.2f U/hr x %.0f min",
+            output.predictedGlucose.last.map { String(format: "%.0f", $0.quantity.doubleValue(for: mgdl)) } ?? "—",
+            target.map { String(format: "%.0f-%.0f", $0.lowerBound.doubleValue(for: mgdl), $0.upperBound.doubleValue(for: mgdl)) } ?? "—",
+            runningTempBasal().map { String(format: "%.2f U/hr", $0.unitsPerHour) } ?? "none(scheduled)",
+            input.basal.closestPrior(to: input.predictionStart)?.value ?? 0,
+            input.maxBasalRate,
+            output.activeInsulin ?? 0,
+            output.activeCarbs ?? 0,
+            input.suspendThreshold?.doubleValue(for: mgdl).description ?? "none",
+            enacting.unitsPerHour,
+            enacting.duration / 60)
     }
 
     // MARK: - Manual bolus (mirrors recommendBolusValidatingDataRecency — :1500 — and recommendManualBolus — :1537)
@@ -2506,62 +1907,42 @@ final class WatchLoopManager {
                               completion: @escaping (Swift.Result<ManualBolusRecommendation, Error>) -> Void) {
         dataAccessQueue.async {
             do {
-                if let error = self.updateCachedEffects() {
+                // Same algorithm, different question: `.manualBolus` asks what a person should
+                // take now, where `.tempBasal` asks what the pump should run. Everything that
+                // used to be assembled by hand here — the pending-insulin-inclusive prediction,
+                // the override-applied sensitivity, the pre-meal target — is now part of the
+                // input, which is what stops the recommendation and the forecast behind it from
+                // being computed two different ways.
+                var input = try self.runBlocking {
+                    try await self.fetchAlgorithmInput(at: self.now(), recommendationType: .manualBolus)
+                }
+
+                // An entry the user has typed but not saved joins the forecast, exactly as it
+                // does on the phone's bolus screen.
+                if let potentialCarbEntry {
+                    input.carbEntries += [StoredCarbEntry(
+                        startDate: potentialCarbEntry.startDate,
+                        quantity: potentialCarbEntry.quantity,
+                        foodType: potentialCarbEntry.foodType,
+                        absorptionTime: potentialCarbEntry.absorptionTime)]
+                }
+
+                let output = LoopAlgorithm.run(input: input)
+
+                self.predictedGlucose = output.predictedGlucose
+                self.activeInsulin = output.activeInsulin
+                self.activeCarbs = output.activeCarbs
+                self.lastAlgorithmEffects = output.effects
+
+                switch output.recommendationResult {
+                case .failure(let error):
                     throw error
+                case .success(let recommendation):
+                    guard let manual = recommendation.manual else {
+                        throw WatchLoopError.missingDataError("no manual bolus recommendation")
+                    }
+                    completion(.success(manual))
                 }
-
-                // Same gating chain as recommendBolusValidatingDataRecency (:1502-1531);
-                // the glucose/pump recency guards live in predictGlucose (identical
-                // constants, identical order).
-                guard self.glucoseMomentumEffect != nil else { throw WatchLoopError.missingDataError("momentumEffect") }
-                guard self.carbEffect != nil else { throw WatchLoopError.missingDataError("carbEffect") }
-                guard self.insulinEffect != nil else { throw WatchLoopError.missingDataError("insulinEffect") }
-
-                let prediction = try self.predictGlucose(includingPendingInsulin: true,
-                                                         potentialCarbEntry: potentialCarbEntry)
-
-                // Same configuration guards as recommendManualBolus (:1539-1547).
-                guard let glucoseTargetRange = self.settings.effectiveGlucoseTargetRangeSchedule(presumingMealEntry: potentialCarbEntry != nil) else {
-                    throw WatchLoopError.configurationError("glucoseTargetRangeSchedule")
-                }
-                // MUST be the OVERRIDE-APPLIED schedule. Using the RAW
-                // schedule — `settings.insulinSensitivitySchedule` — while the prediction it
-                // corrects is built with the OVERRIDE-APPLIED one (:1691) is one computation,
-                // two different sensitivities.
-                //
-                // The measurement: ISF 70, 50% override ⇒ effective 140. Eventual 118 against a
-                // 100 target is an 18 mg/dL drop, which at 140 is ~0.13 U. It recommended 0.35 —
-                // an ISF-70 number. Delivering it took the predicted eventual to 78, because the
-                // PREDICTION correctly used 140 and so showed the overshoot the recommendation
-                // had just caused.
-                //
-                // Direction matters: a reduced-needs override means MORE sensitivity, so LESS
-                // insulin. Recommending off the raw schedule roughly DOUBLES the dose, and does
-                // so precisely when an exercise override is active — when hypo risk is already
-                // elevated. This is the same defect already fixed for temp basals (:2223); it
-                // survived on the bolus path because nothing tested it.
-                guard let insulinSensitivity = self.insulinSensitivityScheduleApplyingOverrideHistory else {
-                    throw WatchLoopError.configurationError("insulinSensitivitySchedule")
-                }
-                guard let maxBolus = self.settings.maximumBolus else {
-                    throw WatchLoopError.configurationError("maximumBolus")
-                }
-
-                let volumeRounder = { (units: Double) in
-                    return self.pumpManager?.roundToSupportedBolusVolume(units: units) ?? units
-                }
-
-                let recommendation = prediction.recommendedManualBolus(
-                    to: glucoseTargetRange,
-                    at: self.now(),
-                    suspendThreshold: self.settings.suspendThreshold?.quantity,
-                    sensitivity: insulinSensitivity,
-                    model: self.insulinModel(for: self.pumpManager?.status.insulinType),
-                    pendingInsulin: 0,  // Pending insulin is already reflected in the prediction (:1569)
-                    maxBolus: maxBolus,
-                    volumeRounder: volumeRounder
-                )
-                completion(.success(recommendation))
             } catch {
                 completion(.failure(error))
             }
@@ -2591,7 +1972,7 @@ final class WatchLoopManager {
             let deliverBolus = {
                 SportLog.event("loan", String(format: "MANUAL BOLUS %.2f U — enacting on the watch pump", rounded))
                 let eventID = self.doseEnactor.loanRecorder?.loanWillEnactBolus(units: rounded)
-                pumpManager.enactBolus(units: rounded, activationType: activationType) { error in
+                pumpManager.enactBolus(decisionId: nil, units: rounded, activationType: activationType) { error in
                     self.doseEnactor.loanRecorder?.loanDidEnact(eventID: eventID, error: error)
                     self.releasePodAfterDose?()   // Re-release the pod after the bolus
                     if let error = error {
@@ -2610,13 +1991,11 @@ final class WatchLoopManager {
                             type: .bolus, startDate: acceptedAt,
                             endDate: deliveryEndsAt,
                             value: rounded, unit: .units,
+                            decisionId: nil,
                             insulinType: pumpManager.status.insulinType))
-                        // 134: fold the bolus into IOB/prediction/HUD NOW, not at the next
-                        // reading (field: 0.75 U showed no immediate IOB update anywhere).
-                        self.dataAccessQueue.async {
-                            self.insulinEffect = nil
-                            self.insulinEffectIncludingPendingInsulin = nil
-                        }
+                        // Fold the bolus into IOB / prediction / HUD now rather than at the next
+                        // reading. Nothing to invalidate any more — the cycle recomputes from the
+                        // stores, so running one is both necessary and sufficient.
                         self.loop()
                     }
                     self.setManualBolusInFlight(false)
@@ -2731,7 +2110,7 @@ final class WatchLoopManager {
         carbStore.addCarbEntry(entry) { result in
             switch result {
             case .success(let stored):
-                SportLog.event("loan", String(format: "carbs logged locally: %.0f g", stored.quantity.doubleValue(for: .gram())))
+                SportLog.event("loan", String(format: "carbs logged locally: %.0f g", stored.quantity.doubleValue(for: .gram)))
                 // 134 (field 2026-07-20 20:31): carbEffect is invalidated ONLY by new
                 // CGM data (insulinCounteractionEffects.didSet) — the stock phone loop
                 // observes carb-store changes for this, and the port dropped that
@@ -2761,7 +2140,7 @@ final class WatchLoopManager {
     /// Journaling is the CALLER's job (LoanCarbListController), so this stays a pure store+loop
     /// operation and the journal side-effect is visible at the UI layer where the ruling lives.
     func deleteLoanCarbEntry(_ entry: StoredCarbEntry, completion: @escaping (Bool) -> Void) {
-        let grams = entry.quantity.doubleValue(for: .gram())
+        let grams = entry.quantity.doubleValue(for: .gram)
         // IDENTITY DUMP before the attempt (field lesson, two releases deep: 258 died on the
         // method's authorship guard, 260 died on the LOOKUP's — each time the log named the
         // error but not the entry's identity, so the next gate was invisible). One line that
@@ -2788,10 +2167,10 @@ final class WatchLoopManager {
                 // "deleted but still showing" can never again be ambiguous between a failed
                 // delete and a stale view.
                 let start = min(Calendar.current.startOfDay(for: self.now()),
-                                Date(timeIntervalSinceNow: -self.carbStore.maximumAbsorptionTimeInterval))
+                                Date(timeIntervalSinceNow: -CarbMath.maximumAbsorptionTimeInterval))
                 self.carbStore.getCarbEntries(start: start) { readback in
                     if case .success(let remaining) = readback {
-                        let total = remaining.reduce(0.0) { $0 + $1.quantity.doubleValue(for: .gram()) }
+                        let total = remaining.reduce(0.0) { $0 + $1.quantity.doubleValue(for: .gram) }
                         SportLog.event("loan", String(format: "post-delete store: %d entr%@ remain, %.0f g total",
                                                       remaining.count, remaining.count == 1 ? "y" : "ies", total))
                     }
@@ -2898,7 +2277,7 @@ final class WatchLoopManager {
             let clock = DateFormatter(); clock.dateFormat = "HH:mm"
             self.defaults.set(String(format: "%+.2f @ %@", rate, clock.string(from: self.now())), forKey: "g7.e5LastCmd")
             SportLog.event("e5", String(format: "E5 random temp %.2f U/hr × 30 min (sched %.2f) — enacting", rate, scheduled))
-            let recommendation = AutomaticDoseRecommendation(basalAdjustment: TempBasalRecommendation(unitsPerHour: rate, duration: .minutes(30)))
+            let recommendation = AutomaticDoseRecommendation(basalAdjustment: TempBasalRecommendation(unitsPerHour: rate, duration: .minutes(30)), direction: .neutral)
             self.doseEnactor.enact(recommendation: recommendation, with: pumpManager) { error in
                 if let error = error {
                     SportLog.event("e5", "E5 enact FAILED — \(String(describing: error))")
@@ -2918,8 +2297,8 @@ extension TemporaryScheduleOverride.Context {
     var presetNameForLog: String {
         switch self {
         case .preMeal: return "pre-meal"
-        case .legacyWorkout: return "workout(legacy)"
         case .preset(let preset): return "\(preset.symbol) \(preset.name)"
+        case .activity(let preset): return "\(preset.activityType.symbol) \(preset.activityType.name)"
         case .custom: return "custom"
         }
     }
@@ -3038,17 +2417,16 @@ extension WatchLoopManager: CGMManagerDelegate {
             SportLog.event("glucose",
                 "INGEST src=direct-G7 stored=\(kept.count)/\(deliveredCount) · latest \(latestDesc)\(batchTag)")
             guard !kept.isEmpty else { completion(); return }
-            self.glucoseStore.addGlucoseSamples(kept) { result in
-                if case .failure(let error) = result {
+            Task {
+                do {
+                    _ = try await self.glucoseStore.addGlucoseSamples(kept)
+                } catch {
                     self.log.error("Failure adding glucose samples: %{public}@", String(describing: error))
                 }
-                // New glucose invalidates the momentum effect (it is glucose-derived).
-                // Stock LoopDataManager nils momentum on every glucose update; this port only
-                // reset it on a fetch-FAILURE (updateCachedEffects), so it was computed once at
-                // init — when the store was still empty — and then frozen, because the
-                // `if glucoseMomentumEffect == nil` guard never fired again. Every [predict]
-                // read `momentum —` while BG swung ±20/cycle, leaving the prediction trend-blind.
-                self.dataAccessQueue.async { self.glucoseMomentumEffect = nil }
+                // Nothing to invalidate: momentum is derived inside the algorithm from the
+                // glucose it is handed, so the next cycle picks these readings up by reading
+                // the store afresh. The old cached-momentum bug — computed once against an
+                // empty store and then frozen for the loan — is not expressible any more.
                 completion()
             }
             }
@@ -3079,6 +2457,7 @@ extension WatchLoopManager: CGMManagerDelegate {
     /// phone reading is NEWER than anything already stored, so a fresh direct G7 always wins and
     /// phone BG fills in only once direct goes stale. (Mixed provenance zeroes momentum briefly at
     /// the boundary — accepted, per design.)
+    @MainActor
     func ingestPhoneGlucoseFromContext() {
         guard pumpManager != nil else { return }   // active loan only — the watch is the dosing controller
         // Read the PHONE's relay explicitly. activeContext is watch-authored during a loan
@@ -3100,12 +2479,13 @@ extension WatchLoopManager: CGMManagerDelegate {
             if let latest = self.glucoseStore.latestGlucose?.startDate, latest >= sample.date { return }
             self.dropAlreadyStored([sample]) { kept in
             guard !kept.isEmpty else { return }   // Direct G7 already filed this reading
-            self.glucoseStore.addGlucoseSamples(kept) { result in
-                if case .failure(let error) = result {
+            Task {
+                do {
+                    _ = try await self.glucoseStore.addGlucoseSamples(kept)
+                } catch {
                     self.log.error("phone-BG fallback add failed: %{public}@", String(describing: error))
                     return
                 }
-                self.dataAccessQueue.async { self.glucoseMomentumEffect = nil }   // Momentum-invalidation parity
                 let mgdl = Int(sample.quantity.doubleValue(for: .milligramsPerDeciliter))
                 self.noteGlucoseSource(directG7: false)
                 SportLog.event("glucose",
@@ -3166,8 +2546,8 @@ extension WatchLoopManager: CGMManagerDelegate {
         // The stamp is unique per reading, so a short window is plenty; this only has to cover the
         // seconds between the relay and the direct read for the same grid point.
         let since = self.now().addingTimeInterval(-.minutes(30))
-        glucoseStore.getGlucoseSamples(start: since, end: nil) { result in
-            guard case .success(let stored) = result else {
+        Task {
+            guard let stored = try? await glucoseStore.getGlucoseSamples(start: since, end: nil) else {
                 completion(samples)   // fail open
                 return
             }
