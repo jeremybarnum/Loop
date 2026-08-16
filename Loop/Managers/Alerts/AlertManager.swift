@@ -278,6 +278,35 @@ public final class AlertManager {
         UserDefaults.appGroup?.loopNotRunningNotifications = stillPendingNotifications
     }
 
+    private enum WatchSilence {
+        static let category = "SportModeWatchSilent"
+        /// EMPTY by design — the phone-side "the watch has gone quiet" ladder was removed: the
+        /// condition it alarmed on is Sport Mode working as intended. The identifiers survive so
+        /// a build that shipped the ladder can still have its delivered/pending rungs cleared on
+        /// upgrade; nothing schedules them any more.
+        static let retiredIdentifiers = ["\(category)\(TimeInterval(minutes: 15))",
+                                         "\(category)\(TimeInterval(minutes: 30))"]
+    }
+
+    /// Deliberately does nothing. Kept as a call site so the loan's grant path still reads as
+    /// "decide what the phone should warn about", rather than silently having no opinion.
+    func armWatchSilenceNotifications() {}
+
+    func clearWatchSilenceNotifications() {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: WatchSilence.retiredIdentifiers)
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: WatchSilence.retiredIdentifiers)
+    }
+
+    /// Clear the Loop Failure ladder because the WATCH has taken the pod.
+    ///
+    /// Phone-side silence is the normal state during a loan — leaving the phone behind is the
+    /// point of the feature — so the pre-scheduled ladder would fire on a healthy session.
+    /// Clears the persisted list too, so a relaunch mid-loan does not re-arm what was cleared.
+    func clearLoopNotRunningNotificationsForLoanGrant() {
+        UserDefaults.appGroup?.loopNotRunningNotifications = []
+        Task { await clearLoopNotRunningNotifications() }
+    }
+
     func clearLoopNotRunningNotifications() async {
         await inferDeliveredLoopNotRunningNotifications()
 
