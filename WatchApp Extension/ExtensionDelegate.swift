@@ -60,6 +60,15 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         return WKApplication.shared().extensionDelegate
     }
 
+    /// The delegate, or nil if it is not installed yet.
+    ///
+    /// `shared()` returns an implicitly unwrapped optional and traps when the delegate has not
+    /// been set. SwiftUI can evaluate a `@StateObject` initializer before the application
+    /// delegate is installed, so anything reachable from view construction must ask this way.
+    static func sharedIfAvailable() -> ExtensionDelegate? {
+        return WKApplication.shared().delegate as? ExtensionDelegate
+    }
+
     let loopManager = LoopDataManager.shared
 
     override init() {

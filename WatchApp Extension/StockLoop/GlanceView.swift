@@ -153,9 +153,10 @@ final class GlanceViewModel: ObservableObject {
 
     init() {
         isPreview = false
-        // One refresh so the first render has data; the repeating tick is owned by the
-        // controller's visibility (startRefreshing / stopRefreshing).
-        refresh()
+        // Deliberately NO refresh() here. This initializer runs during SwiftUI view
+        // construction, which can happen before the application delegate is installed —
+        // and refresh() reaches the delegate. The first paint comes from startRefreshing()
+        // in .onAppear, which cannot run before the app is up.
         observeAppState()
     }
 
@@ -261,7 +262,7 @@ final class GlanceViewModel: ObservableObject {
         WKInterfaceDevice.current().play(.click)
         state.handbackPending = false
 
-        ExtensionDelegate.shared().stockLoopSession?.loanController.cancelHandback()
+        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.cancelHandback()
         // The cancel lands on the controller's queue — refresh after it drains so
         // the "ending…" UI doesn't linger a full timer tick.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
@@ -275,7 +276,7 @@ final class GlanceViewModel: ObservableObject {
         // direct install, the watch half did not actually ship and the loan is being driven
         // by stale extension code — the failure mode a version bump alone would hide.
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
-        guard let session = ExtensionDelegate.shared().stockLoopSession else { return }
+        guard let session = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession else { return }
         session.loanController.requestLoan(watchBuild: build)
         // Log pipeline v4: the Start tap itself ships a snapshot, and a +35s
         // follow-up captures the request's fate (grant/timeout) even when the
@@ -306,7 +307,7 @@ final class GlanceViewModel: ObservableObject {
         WKInterfaceDevice.current().play(.click)
         state.handbackPending = true
 
-        ExtensionDelegate.shared().stockLoopSession?.loanController.beginHandback()
+        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.beginHandback()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
     }
 
@@ -321,7 +322,7 @@ final class GlanceViewModel: ObservableObject {
             state.loopDotColor = closed ? .glanceGood : .clear
             return
         }
-        ExtensionDelegate.shared().stockLoopSession?.stack.loopManager.setClosedLoopEnabled(closed)
+        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.loopManager.setClosedLoopEnabled(closed)
         refresh()
     }
 
@@ -333,7 +334,7 @@ final class GlanceViewModel: ObservableObject {
     private func refresh(kickMirror: Bool = true) {
         guard !isPreview else { return }
         RuntimeStateLog.mark("glance.refresh(kick:\(kickMirror))")
-        guard let session = ExtensionDelegate.shared().stockLoopSession else { return }
+        guard let session = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession else { return }
         // Main-safe read: the loan queue doubles as the pump's delegate queue, so a sync
         // here blocked the whole UI for the length of any bolus / takeover / reclaim.
         RuntimeStateLog.mark("glance.refresh.debugSnap")
@@ -344,10 +345,10 @@ final class GlanceViewModel: ObservableObject {
 
         switch snap.phase {
         case .idle:
-            state = Self.idleState(context: ExtensionDelegate.shared().loopManager.activeContext,
+            state = Self.idleState(context: ExtensionDelegate.sharedIfAvailable()?.loopManager.activeContext,
                                    note: snap.lastIdleNote)
         case .requested, .takingOver:
-            state = Self.startingState(context: ExtensionDelegate.shared().loopManager.activeContext,
+            state = Self.startingState(context: ExtensionDelegate.sharedIfAvailable()?.loopManager.activeContext,
                                        takingOver: snap.phase == .takingOver,
                                        startedAt: snap.startedAt,
                                        now: Date())
@@ -387,7 +388,7 @@ final class GlanceViewModel: ObservableObject {
             guard let data = session.stack.loopManager.mirroredGlanceData else { return }
             RuntimeStateLog.mark("glance.refresh.activeStateBuild")
             var s = Self.activeState(data: data, cob: latestCOB, now: Date(),
-                                     phoneGlucoseDate: ExtensionDelegate.shared().loopManager.activeContext?.glucoseDate)
+                                     phoneGlucoseDate: ExtensionDelegate.sharedIfAvailable()?.loopManager.activeContext?.glucoseDate)
             if snap.handbackPending {
                 s.handbackPending = true
                 s.handbackStartedAt = snap.handbackStartedAt
