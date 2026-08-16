@@ -6,20 +6,25 @@
 	<string>development</string>
 	<key>com.apple.developer.healthkit</key>
 	<true/>
-	<key>com.apple.developer.icloud-container-identifiers</key>
-	<array>
-		<string>iCloud.$(CFBundleIdentifier)</string>
-	</array>
-	<key>com.apple.developer.icloud-services</key>
-	<array>
-		<string>CloudDocuments</string>
-	</array>
-	<key>com.apple.developer.ubiquity-container-identifiers</key>
-	<array>
-		<string>iCloud.$(CFBundleIdentifier)</string>
-	</array>
 	<key>com.apple.developer.healthkit.access</key>
 	<array/>
+	<!-- NO iCloud entitlements here, deliberately.
+
+	     The three iCloud keys the SportMode fork carries (icloud-container-identifiers,
+	     icloud-services=CloudDocuments, ubiquity-container-identifiers) were added here on
+	     2026-08-16 to let PhoneLog mirror its log to iCloud Drive, and they crash this app on
+	     launch. Declaring an iCloud container starts Core Data's CloudKit mirroring
+	     (NSCloudKitMirroringDelegate -> PFCloudKitSetupAssistant -> CKContainer), which then
+	     traps inside CloudKit — builds 62 and 63, identical stack on
+	     com.apple.coredata.cloudkit.queue. The fork tolerates the same keys; this branch's
+	     Core Data stack does not, and nothing in this workspace's own source asks for
+	     mirroring, so it is switched on by the entitlement alone.
+
+	     Do not re-add them to "fix logging". The phone log is written locally first and
+	     UIFileSharingEnabled/LSSupportsOpeningDocumentsInPlace expose it in
+	     Files -> On My iPhone -> Loop, which is the supported way to get it off the device.
+	     If the iCloud mirror is ever wanted back, it needs CloudKit in icloud-services and a
+	     provisioned container, and that is a deliberate piece of work, not a logging tweak. -->
 	<key>com.apple.developer.healthkit.background-delivery</key>
 	<true/>
 	<key>com.apple.developer.nfc.readersession.formats</key>
