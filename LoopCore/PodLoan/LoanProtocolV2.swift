@@ -553,6 +553,20 @@ public struct LoanGrant: Codable, Equatable {
     /// (leave-one-out via stock predictGlucose, no recompute). nil (older phone / stale caches)
     /// → the watch simply skips the diff lines.
     public let predictionSnapshot: LoanPredictionSnapshot?
+    /// The override ACTIVE ON THE PHONE at the moment of the grant, plist-encoded exactly like
+    /// `LoanDoseRecord.overrideRaw` (`TemporaryScheduleOverride.rawValue`).
+    ///
+    /// It rides separately for the same reason `integralRetrospectiveCorrectionEnabled` does: it
+    /// is not part of `LoopSettings`, so `therapySettingsRaw` does not carry it. An override takes
+    /// effect only through the override HISTORY, so a watch that never receives one resolves every
+    /// schedule UNSCALED — a loan handed over mid-exercise doses against 100% basal and ISF while
+    /// the phone believed it had asked for 60%. That is the OVER-delivery direction, during
+    /// exercise, which is the case this feature exists for.
+    ///
+    /// nil means "no override active", which is also what an older phone that never sends the
+    /// field looks like. The two are deliberately not distinguished: a fresh loan starts from no
+    /// override either way, so there is nothing for the watch to clear at takeover.
+    public let activeOverrideRaw: Data?
 
     public init(epoch: Int, expiresAt: Date, pumpManagerRawState: Data, podAddress: UInt32,
                 therapySettingsRaw: Data, settingsTimeZoneID: String,
@@ -563,7 +577,8 @@ public struct LoanGrant: Codable, Equatable {
                 phoneClosedLoopEnabled: Bool? = nil,
                 carbHistory: [LoanCarbRecord]? = nil,
                 glucoseHistory: [LoanGlucoseRecord]? = nil,
-                predictionSnapshot: LoanPredictionSnapshot? = nil) {
+                predictionSnapshot: LoanPredictionSnapshot? = nil,
+                activeOverrideRaw: Data? = nil) {
         self.epoch = epoch
         self.expiresAt = expiresAt
         self.pumpManagerRawState = pumpManagerRawState
@@ -579,6 +594,7 @@ public struct LoanGrant: Codable, Equatable {
         self.carbHistory = carbHistory
         self.glucoseHistory = glucoseHistory
         self.predictionSnapshot = predictionSnapshot
+        self.activeOverrideRaw = activeOverrideRaw
     }
 }
 

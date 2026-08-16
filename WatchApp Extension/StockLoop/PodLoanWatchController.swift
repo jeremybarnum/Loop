@@ -660,6 +660,24 @@ final class PodLoanWatchController {
         RuntimeStateLog.probeTimerDeferral("takeover-start")
         phase = .takingOver
         loopManager.settings = decodedSettings!
+        // Adopt the override the phone had running. Assigning it (rather than calling
+        // applyWristOverride) is deliberate: the didSet records it into the override history —
+        // which is the only thing that actually rescales basal, ISF and carb ratio — while
+        // minting no .overrideChange record, because the phone already holds this override and
+        // does not need it handed back. The log line the didSet emits names the resolved
+        // multipliers, so "did the override survive the grant?" is answerable from the watch log.
+        //
+        // A decode failure is treated as "no override" and said out loud: the alternative is
+        // refusing the loan, and a loan refused mid-exercise is worse than one that needs the
+        // preset re-tapped on the wrist.
+        if let raw = grant.activeOverrideRaw {
+            if let plist = (try? PropertyListSerialization.propertyList(from: raw, options: [], format: nil)) as? TemporaryScheduleOverride.RawValue,
+               let override = TemporaryScheduleOverride(rawValue: plist) {
+                loopManager.scheduleOverride = override
+            } else {
+                SportLog.event("override", "grant carried an override the watch could NOT decode — this loan doses UNSCALED; re-tap the preset on the wrist")
+            }
+        }
         // Frozen-at-grant like the therapy settings above: run the RC implementation the
         // GRANTING phone runs, instead of silently assuming Standard. nil (older phone) →
         // Standard, the pre-existing behavior.

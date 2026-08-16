@@ -213,6 +213,16 @@ final class WatchDataManager: NSObject {
                     }
                 }
             },
+            // The READ side of the override property, and it must be wired: the controller's
+            // apply path below is idempotent by comparing an incoming record against what the
+            // phone currently holds, so an unwired reader (the `{ nil }` default) does not merely
+            // lose an optimization — it reads "the phone holds no override" forever. That inverts
+            // the clear: `.cleared` is skipped when nothing is held, so a preset the user switched
+            // OFF on the wrist would never switch off on the phone, and the override would outlive
+            // the loan indefinitely. Same queue reasoning as the writer below.
+            scheduleOverride: { [weak self] in
+                self?.temporaryPresetsManager.scheduleOverride
+            },
             applyScheduleOverride: { [weak self] override in
                 // The watch's override lands through the same single door every other override uses —
                 // mutateSettings, whose didSet records it in the override history that actually rescales
@@ -989,6 +999,77 @@ extension WatchDataManager: WCSessionDelegate {
                 break
             @unknown default:
                 break
+            }
+        }
+    }
+
+    /// The watch's diagnostics log, transferred file-by-file.
+    ///
+    /// Without this method the transfers still SUCCEED on the watch side and are then dropped
+    /// here, so the wrist reports a healthy log pipeline while nothing is ever written — which is
+    /// the worst shape a diagnostics gap can take, because it looks like silence from the device
+    /// rather than a missing receiver.
+    ///
+    /// Two destinations, deliberately. Documents makes the file visible in Files (On My iPhone →
+    /// Loop) so it can be AirDropped from the PHONE — watchOS has no AirDrop, and the logs were
+    /// otherwise being texted. The iCloud mirror syncs it to the Mac with no Shortcuts step, and
+    /// works on cellular. The copy has to happen NOW: the system deletes `file.fileURL` as soon
+    /// as this method returns.
+    nonisolated func session(_ session: WCSession, didReceive file: WCSessionFile) {
+        lockedLastWatchContact.value = Date()   // the log pulse is the loan's heartbeat
+        guard file.metadata?["kind"] as? String == "g7watch.log" else { return }
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let stamped = docs.appendingPathComponent("g7watch-\(formatter.string(from: Date())).log")
+        try? FileManager.default.copyItem(at: file.fileURL, to: stamped)
+        let latest = docs.appendingPathComponent("g7watch-latest.log")
+        try? FileManager.default.removeItem(at: latest)
+        try? FileManager.default.copyItem(at: file.fileURL, to: latest)
+        // Retention: transfers arrive every reading (~5 min), so stamped copies accumulate fast.
+        // Keep the newest 20; the stamp is lexicographically sortable. latest is exempt.
+        if let entries = try? FileManager.default.contentsOfDirectory(at: docs, includingPropertiesForKeys: nil) {
+            let stampedLogs = entries
+                .filter { $0.pathExtension == "log" && $0.lastPathComponent.hasPrefix("g7watch-") && $0.lastPathComponent != "g7watch-latest.log" }
+                .sorted { $0.lastPathComponent > $1.lastPathComponent }
+            for old in stampedLogs.dropFirst(20) {
+                try? FileManager.default.removeItem(at: old)
+            }
+        }
+        // Mirrored from the durable local copy, not from file.fileURL, which is gone by the time
+        // the background queue runs.
+        Self.mirrorLogToICloud(from: stamped)
+        log.default("Watch log received: %{public}@", stamped.lastPathComponent)
+    }
+
+    /// SERIAL, not a global queue: a queued-transfer flush delivers several files back-to-back,
+    /// and concurrent mirrors interleave their remove/copy/prune steps — which is how
+    /// g7watch-latest.log ends up stale or missing in iCloud while newer sends exist. One mirror
+    /// at a time, in arrival order.
+    nonisolated private static let mirrorQueue = DispatchQueue(label: "com.loopkit.Loop.logMirror", qos: .utility)
+
+    nonisolated private static func mirrorLogToICloud(from localStamped: URL) {
+        mirrorQueue.async {
+            let fm = FileManager.default
+            guard let container = fm.url(forUbiquityContainerIdentifier: nil) else { return }   // iCloud off / not signed in
+            let dir = container.appendingPathComponent("Documents", isDirectory: true)
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            try? fm.copyItem(at: localStamped, to: dir.appendingPathComponent(localStamped.lastPathComponent))
+            let cloudLatest = dir.appendingPathComponent("g7watch-latest.log")
+            // Atomic replace, never remove-then-copy: a crash or race between those two steps is
+            // exactly how latest.log goes MISSING rather than merely stale.
+            let tmp = dir.appendingPathComponent(".g7watch-latest.tmp")
+            try? fm.removeItem(at: tmp)
+            if (try? fm.copyItem(at: localStamped, to: tmp)) != nil {
+                _ = try? fm.replaceItemAt(cloudLatest, withItemAt: tmp)
+            }
+            if let entries = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+                let stampedLogs = entries
+                    .filter { $0.pathExtension == "log" && $0.lastPathComponent.hasPrefix("g7watch-") && $0.lastPathComponent != "g7watch-latest.log" }
+                    .sorted { $0.lastPathComponent > $1.lastPathComponent }
+                for old in stampedLogs.dropFirst(20) {
+                    try? fm.removeItem(at: old)
+                }
             }
         }
     }

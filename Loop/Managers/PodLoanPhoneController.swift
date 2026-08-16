@@ -1682,6 +1682,32 @@ final class PodLoanPhoneController {
                             self.abortGrant(reason: "snapshot encoding failed")
                             return
                         }
+                        // The active override is NOT part of LoopSettings, so it cannot ride in
+                        // therapySettingsRaw and is encoded alongside it — same plist encoding the
+                        // hand-back's .overrideChange records use, so both directions agree. An
+                        // already-finished override is dropped rather than sent (the same filter the
+                        // phone applies before putting one in a WatchContext): seeding a dead
+                        // override would show a stale preset on the glance for the whole loan.
+                        // Encoding failure is NOT fatal here, unlike the settings blob above — a
+                        // loan that dosed unscaled is wrong, but a loan refused outright mid-exercise
+                        // is worse, and the log line below says which happened.
+                        let activeOverride = self.deps.scheduleOverride().flatMap {
+                            $0.hasFinished() ? nil : $0
+                        }
+                        let overrideData: Data? = activeOverride.flatMap { o in
+                            try? PropertyListSerialization.data(fromPropertyList: o.rawValue, format: .binary, options: 0)
+                        }
+                        if let o = activeOverride {
+                            if overrideData == nil {
+                                os_log("[override] grant: FAILED to encode active override %{public}@ — the wrist will dose UNSCALED",
+                                       log: self.log, type: .error, Self.overrideNameForLog(o))
+                            } else {
+                                os_log("[override] grant: carrying %{public}@ · insulin needs %.0f%% · sync %{public}@",
+                                       log: self.log, type: .default, Self.overrideNameForLog(o),
+                                       o.settings.effectiveInsulinNeedsScaleFactor * 100,
+                                       o.syncIdentifier.uuidString)
+                            }
+                        }
                         let grant = LoanGrant(
                             epoch: grantEpoch,
                             expiresAt: handedOverAt.addingTimeInterval(.minutes(5)),
@@ -1704,7 +1730,8 @@ final class PodLoanPhoneController {
                             phoneClosedLoopEnabled: settings.dosingEnabled,
                             carbHistory: carbs,
                             glucoseHistory: glucose,
-                            predictionSnapshot: snapshot)
+                            predictionSnapshot: snapshot,
+                            activeOverrideRaw: overrideData)
                         self.sendMessage(.grant(grant))
                         self.armT1(for: grantEpoch)
                     }
