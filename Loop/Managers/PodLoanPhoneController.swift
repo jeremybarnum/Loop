@@ -1721,12 +1721,17 @@ final class PodLoanPhoneController {
                         supplement["defaultRapidActingModel"] = settings.defaultRapidActingModel?.rawValue
                         let supplementData = supplement.isEmpty ? nil
                             : try? PropertyListSerialization.data(fromPropertyList: supplement, format: .binary, options: 0)
-                        os_log("[grant] settings supplement: basal=%{public}@ isf=%{public}@ cr=%{public}@ model=%{public}@",
+                        os_log("[grant] settings supplement: basal=%{public}@ isf=%{public}@ cr=%{public}@ model=%{public}@ bytes=%{public}d",
                                log: self.log, type: .default,
                                settings.basalRateSchedule == nil ? "MISSING" : "ok",
                                settings.insulinSensitivitySchedule == nil ? "MISSING" : "ok",
                                settings.carbRatioSchedule == nil ? "MISSING" : "ok",
-                               settings.defaultRapidActingModel.map { String(describing: $0) } ?? "MISSING (wrist will assume rapid-acting adult)")
+                               settings.defaultRapidActingModel.map { String(describing: $0) } ?? "MISSING (wrist will assume rapid-acting adult)",
+                               supplementData?.count ?? 0)
+                        // To the FILE too, and with the seed counts beside it: the grant's size is
+                        // dominated by the history it carries, so "how big is the supplement" is
+                        // only meaningful next to "how big was it already".
+                        self.handbackDiag(grantEpoch, "[grant] supplement \(supplementData?.count ?? 0)B · seeds: \(history.count) dose, \(carbs.count) carb, \(glucose.count) glucose · podState \(stateData.count)B · settings \(settingsData.count)B")
                         let grant = LoanGrant(
                             epoch: grantEpoch,
                             expiresAt: handedOverAt.addingTimeInterval(.minutes(5)),
