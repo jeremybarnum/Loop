@@ -955,6 +955,30 @@ extension WatchDataManager: WCSessionDelegate {
         }
     }
 
+    /// The URGENT channel with no reply handler — and the one the watch's Start actually uses.
+    ///
+    /// `sendMessage(_:replyHandler:nil)` is delivered HERE, not to the `replyHandler:` variant
+    /// above, which WatchConnectivity only calls when the sender supplied a reply handler. Without
+    /// this method the request is dropped by the framework with no error on either side: the watch
+    /// logs a successful send, the phone logs nothing at all, and the watch sits until its 25 s
+    /// timeout and reports "No response from iPhone". That is exactly what it looked like on the
+    /// wrist, and it is indistinguishable from a phone that is refusing or asleep.
+    ///
+    /// The queued path below is not a substitute. The watch only falls back to it when the phone
+    /// is UNREACHABLE, so this gap hides whenever the phone is present — the case that matters.
+    nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        Task { @MainActor in
+            guard (try? LoanMessage.decode(fromTransport: message)) != nil else {
+                log.default("Ignoring unexpected sendMessage from the watch: %{public}@",
+                            String(describing: Array(message.keys)))
+                return
+            }
+            lockedLastWatchContact.value = Date()
+            log.default("Loan sendMessage delivered (urgent path)")
+            podLoanController.handleIncoming(userInfo: message)
+        }
+    }
+
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
         // The pod loan protocol's QUEUED channel carries watch→phone traffic — streamed dose
         // records, status reports, hand-back offers — so this is no longer an impossible
