@@ -424,6 +424,10 @@ class LoopAppManager: NSObject {
             healthStore: healthStore
         )
 
+        // The pump tile needs to know whether the pod is on the watch, and to offer the reclaim.
+        // Weak, because the app manager owns the watch manager and this is only a lookup path.
+        deviceDataManager.watchManager = watchManager
+
         self.mealDetectionManager = MealDetectionManager(
             algorithmStateProvider: loopDataManager,
             settingsProvider: temporaryPresetsManager,
