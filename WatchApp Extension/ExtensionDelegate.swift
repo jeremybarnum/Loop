@@ -311,6 +311,35 @@ extension ExtensionDelegate: WCSessionDelegate {
         updateContext(applicationContext)
     }
 
+    /// The IMMEDIATE channel — and the one the phone's GRANT arrives on.
+    ///
+    /// `sendMessage(_:replyHandler:nil)` is delivered here, NOT to `didReceiveUserInfo`. Without
+    /// this method the interactive half of the loan handshake is dropped by WatchConnectivity with
+    /// no error on either side: the phone logs a grant sent and then reclaims the pod 20s later
+    /// having never been acked, and the wrist sits on "awaiting grant" until its own timeout and
+    /// reports the hand-over never arrived. Both devices behave correctly and the loan still
+    /// cannot start.
+    ///
+    /// Its fingerprint in the watch log is that EVERY inbound line reads `ch=queued` while the
+    /// watch's own sends read `path urgent` — i.e. the fast channel works outbound and silently
+    /// does not exist inbound.
+    ///
+    /// This is the exact mirror of the phone-side gap in WatchDataManager; both halves of the
+    /// urgent channel were lost in the port, and each one hides the other: fixing only the phone
+    /// moves the failure from "no response" to "hand-over never reached the watch".
+    func session(_ session: WCSession, didReceiveMessage message: [String : Any]) {
+        if let stockLoopSession {
+            if stockLoopSession.handleIncomingIfLoanMessage(message, channel: .urgent) { return }
+        } else if message[LoanProtocol.userInfoKey] != nil {
+            // Same recovery as the queued path: a grant that arrives before the stack is up is
+            // logged and the stack started, rather than silently discarded.
+            log.error("Loan payload arrived on the urgent channel before the Sport Mode stack finished starting")
+            startStockLoopSession()
+            return
+        }
+        log.default("Ignoring unexpected sendMessage: %{public}@", String(describing: Array(message.keys)))
+    }
+
     // This method is called on a background thread of your app
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any] = [:]) {
         // Loan traffic first: it is addressed to the loan controller, not to the context
