@@ -804,7 +804,7 @@ final class WatchLoopManager {
                 if cob > 0.05 { SportLog.event("loop", String(format: "COB %.1f g on board", cob)) }
             }
             DispatchQueue.main.async {
-                let loopDataManager = ExtensionDelegate.shared().loopManager
+                guard let loopDataManager = ExtensionDelegate.sharedIfAvailable()?.loopManager else { return }
                 ctx.displayGlucoseUnit = loopDataManager.activeContext?.displayGlucoseUnit ?? ctx.displayGlucoseUnit
                 loopDataManager.updateContext(ctx)
                 NotificationCenter.default.post(name: LoopDataManager.didUpdateContextNotification, object: loopDataManager)
@@ -824,7 +824,7 @@ final class WatchLoopManager {
                     SportLog.event("loan", String(format: "REC bolus %.2f U — published to the stock bolus flow", recommendation.amount))
                     DispatchQueue.main.async {
                         ctx.recommendedBolusDose = recommendation.amount
-                        let loopDataManager = ExtensionDelegate.shared().loopManager
+                        guard let loopDataManager = ExtensionDelegate.sharedIfAvailable()?.loopManager else { return }
                         NotificationCenter.default.post(name: LoopDataManager.didUpdateContextNotification, object: loopDataManager)
                     }
                 case .failure(let error):
@@ -2407,7 +2407,7 @@ extension WatchLoopManager: CGMManagerDelegate {
         // Read the PHONE's relay explicitly. activeContext is watch-authored during a loan
         // now, so reading it here would hand this method the watch's own reading back and the
         // fallback would never ingest anything.
-        guard let ctx = ExtensionDelegate.shared().loopManager.phoneRelayContext,
+        guard let ctx = ExtensionDelegate.sharedIfAvailable()?.loopManager.phoneRelayContext,
               let sample = ctx.newGlucoseSample else { return }
         deviceQueue.async {
             // Same-sample repeat latch (the same sample can be ingested 3× in
@@ -2520,7 +2520,7 @@ extension WatchLoopManager: CGMManagerDelegate {
     /// not enacted (advisory); a nil pump means checkPumpDataAndLoop just loops — no pod touched.
     @MainActor
     func simIngestPhoneGlucose() {
-        let ctx = ExtensionDelegate.shared().loopManager.activeContext
+        let ctx = ExtensionDelegate.sharedIfAvailable()?.loopManager.activeContext
         guard let quantity = ctx?.glucose, let date = ctx?.glucoseDate else { return }
         deviceQueue.async {
             if let latest = self.glucoseStore.latestGlucose?.startDate, latest >= date { return }   // dedup on date

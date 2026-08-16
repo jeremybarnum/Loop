@@ -52,7 +52,7 @@ final class LoanCarbListModel: ObservableObject {
 
     func reload() {
         guard !isPreview else { return }
-        guard let session = ExtensionDelegate.shared().stockLoopSession else { return }
+        guard let session = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession else { return }
         let store = session.stack.loopManager.carbStore
         // Same window stock uses: today, or one full absorption interval back, whichever is
         // earlier — so a long-absorbing breakfast is still deletable in the afternoon.
@@ -80,7 +80,7 @@ final class LoanCarbListModel: ObservableObject {
     /// even if the journal mint fails — and a mint failure is loud rather than silent.
     func delete(_ row: Row) {
         guard !isPreview else { rows.removeAll { $0.id == row.id }; return }
-        guard let session = ExtensionDelegate.shared().stockLoopSession else { return }
+        guard let session = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession else { return }
         let grams = row.entry.quantity.doubleValue(for: .gram)
         let syncIdentifier = row.entry.syncIdentifier
         let startDate = row.entry.startDate

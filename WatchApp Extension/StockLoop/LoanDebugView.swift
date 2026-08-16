@@ -54,7 +54,7 @@ struct LoanDebugView: View {
     /// nil until the stack finishes starting at launch; the readouts render "—" in that window
     /// rather than blocking on it.
     private var session: StockLoopSession? {
-        ExtensionDelegate.shared().stockLoopSession
+        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession
     }
 
     var body: some View {
@@ -163,7 +163,7 @@ struct LoanDebugView: View {
                 // new-sensor day; no therapy state is touched.
                 Button("Forget Sensor (re-acquire)") {
                     SportLog.event("g7-ble", "*** BENCH RE-ACQUIRE *** forgetting adopted sensor — cold acquisition starts now")
-                    ExtensionDelegate.shared().stockLoopSession?.stack.cgmManager.scanForNewSensor()
+                    ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager.scanForNewSensor()
                     lastAction = "G7 re-acquire started"
                 }
 
