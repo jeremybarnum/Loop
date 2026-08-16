@@ -1,5 +1,3 @@
-//  NOT YET IN THE TEST TARGET — port in progress.
-//
 //  The largest Sport Mode suite (1801 lines) and the one with the most next-dev drift: DoseEntry
 //  and UnfinalizedDose now take a decisionId, SessionInsulinLedger takes an insulinModel function
 //  instead of a model provider, and PresetInsulinModelProvider is gone. Roughly 58 sites.
@@ -58,7 +56,10 @@
 
 import XCTest
 import HealthKit
-import LoopKit
+// @testable rather than a plain import: the store-readiness handshake these tests block on
+// (`PersistenceController.onReady`) is internal to LoopKit. Handing a driver a store that has
+// not finished attaching is the zero-rows race described below, so waiting is not optional.
+@testable import LoopKit
 import LoopAlgorithm
 import LoopCore
 @testable import Loop
@@ -146,27 +147,19 @@ private final class LoanBooksDriver {
     private var foldedSession: [LoanDoseRecord] = []
     private var seedRecords: [LoanDoseRecord] = []
 
-    init(host: XCTestCase, cacheStore: PersistenceController, basalRate: Double) {
+    /// The store is built by `makeDriver`, which owns the `await`: `DoseStore.init` is async now,
+    /// and the store no longer carries a basal profile, sensitivity schedule or override history
+    /// at all. Schedules are applied at READ time by whoever is doing the math — which is the same
+    /// move the ledger already made, so both books in this harness now take the schedule per call
+    /// and the "two books, one schedule" comparison is a fairer one than it used to be.
+    init(host: XCTestCase, store: DoseStore, basalRate: Double) {
         self.host = host
         // Fixture construction (force-unwraps allowed here, per file convention).
-        let schedule = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: basalRate)])!
-        let overrideHistory = TemporaryScheduleOverrideHistory()
-        let doseStore = DoseStore(
-            healthKitSampleStore: nil,
-            cacheStore: cacheStore,
-            insulinModelProvider: PresetInsulinModelProvider(defaultRapidActingModel: nil),
-            longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration,
-            basalProfile: nil,
-            insulinSensitivitySchedule: nil,
-            overrideHistory: overrideHistory,
-            provenanceIdentifier: "LoanBooksHarnessTests")
-        // The WatchLoopManager.settings didSet path: schedule applied via the setter.
-        doseStore.basalProfile = schedule
-        self.store = doseStore
-        self.schedule = schedule
+        self.schedule = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: basalRate)])!
+        self.store = store
         // The ledger no longer owns a schedule — reads take it per call, as production does.
         self.ledger = SessionInsulinLedger(
-            insulinModelProvider: PresetInsulinModelProvider(defaultRapidActingModel: nil),
+            insulinModel: { _ in ExponentialInsulinModelPreset.rapidActingAdult },
             longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration)
     }
 
@@ -221,7 +214,7 @@ private final class LoanBooksDriver {
 
         ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: instant,
                                      endDate: instant.addingTimeInterval(duration),
-                                     value: rate, unit: .unitsPerHour))
+                                     value: rate, unit: .unitsPerHour, decisionId: nil))
     }
 
     /// A pod-ACCEPTED bolus, booked finalized on the next report (typical small bolus:
@@ -232,7 +225,7 @@ private final class LoanBooksDriver {
         let raw = podRaw(type: "bolus", value: units, start: instant)
         let dose = DoseEntry(type: .bolus, startDate: instant,
                              endDate: instant.addingTimeInterval(span),
-                             value: units, unit: .units)
+                             value: units, unit: .units, decisionId: nil)
         var batch = [NewPumpEvent(date: instant, dose: dose, raw: raw, title: "Bolus")]
         if let temp = runningTemp {
             batch.append(mutableEvent(for: temp))
@@ -307,8 +300,8 @@ private final class LoanBooksDriver {
     func normalizedDoses(start: Date, end: Date) -> [DoseEntry] {
         var out: [DoseEntry] = []
         let exp = host.expectation(description: "normalized dose read")
-        store.getNormalizedDoseEntries(start: start, end: end) { result in
-            if case .success(let doses) = result { out = doses }
+        Task {
+            out = (try? await self.store.getNormalizedDoseEntries(start: start, end: end)) ?? []
             exp.fulfill()
         }
         host.wait(for: [exp], timeout: 10)
@@ -316,30 +309,47 @@ private final class LoanBooksDriver {
     }
 
     func storeBolusCount(start: Date, end: Date) -> Int {
-        var count = -1
-        let exp = host.expectation(description: "normalized dose read")
-        store.getNormalizedDoseEntries(start: start, end: end) { result in
-            if case .success(let doses) = result {
-                count = doses.filter { $0.type == .bolus }.count
-            }
-            exp.fulfill()
-        }
-        host.wait(for: [exp], timeout: 10)
-        return count
+        return normalizedDoses(start: start, end: end).filter { $0.type == .bolus }.count
     }
 
+    /// IOB from the STORE's rows.
+    ///
+    /// `DoseStore.insulinOnBoard(at:)` no longer exists: the store holds rows, and the insulin
+    /// math is applied by the caller against a schedule the store never sees. So this is now the
+    /// store's ROWS run through the same public InsulinMath pipeline the ledger uses — annotate
+    /// against the basal schedule, take the on-board timeline, sample it stock's way (of the two
+    /// 5-min-grid values adjacent to `date`, the larger).
+    ///
+    /// This does NOT weaken the comparison these tests exist for. The two books were always meant
+    /// to differ in their ROWS, not their arithmetic — the bugs it has caught are truncated twins,
+    /// dead re-arms and duplicate seeds, all of which are row-level. Sharing one arithmetic path
+    /// makes a disagreement unambiguously a row disagreement, which is what the assertions claim.
     func storeIOB(at date: Date) -> Double {
-        var value = Double.nan
-        let exp = host.expectation(description: "insulinOnBoard")
-        store.insulinOnBoard(at: date) { result in
-            if case .success(let v) = result {
-                value = v.value
-            }
-            exp.fulfill()
+        let doses = normalizedDoses(start: date.addingTimeInterval(-.hours(24)),
+                                    end: date.addingTimeInterval(.hours(6)))
+        guard !doses.isEmpty else { return 0 }
+        return Self.insulinOnBoard(of: doses, at: date, schedule: schedule)
+    }
+
+    /// The shared arithmetic, so the store side and any hand-built expectation agree by
+    /// construction rather than by two copies of the same lines drifting apart.
+    static func insulinOnBoard(of doses: [DoseEntry], at date: Date, schedule: BasalRateSchedule) -> Double {
+        let duration = ExponentialInsulinModelPreset.rapidActingAdult.effectDuration
+        let start = doses.map { $0.startDate }.min() ?? date
+        let end = max(date, doses.map { $0.endDate }.max() ?? date).addingTimeInterval(duration)
+        let basal = schedule.between(start: start, end: end).map {
+            AbsoluteScheduleValue(startDate: $0.startDate, endDate: $0.endDate, value: $0.value)
         }
-        host.wait(for: [exp], timeout: 10)
-        XCTAssertFalse(value.isNaN, "insulinOnBoard must resolve")
-        return value
+        let timeline = doses
+            .map { $0.simpleDose(with: ExponentialInsulinModelPreset.rapidActingAdult) }
+            .annotated(with: basal)
+            .insulinOnBoardTimeline(
+                longestEffectDuration: duration,
+                from: date.addingTimeInterval(-.minutes(5)),
+                to: date.addingTimeInterval(.minutes(5)))
+        let before = timeline.last(where: { $0.startDate <= date })?.value
+        let after = timeline.first(where: { $0.startDate >= date })?.value
+        return max(before ?? 0, after ?? 0)
     }
 
     // MARK: Internals
@@ -349,7 +359,7 @@ private final class LoanBooksDriver {
     /// as OmniBLE's NewPumpEvent(UnfinalizedDose) does).
     private func mutableEvent(for temp: RunningTemp) -> NewPumpEvent {
         let dose = DoseEntry(type: .tempBasal, startDate: temp.start, endDate: temp.programmedEnd,
-                             value: temp.rate, unit: .unitsPerHour, isMutable: true)
+                             value: temp.rate, unit: .unitsPerHour, decisionId: nil, isMutable: true)
         return NewPumpEvent(date: temp.start, dose: dose, raw: temp.raw, title: "Temp Basal")
     }
 
@@ -360,7 +370,7 @@ private final class LoanBooksDriver {
         guard let temp = runningTemp else { return nil }
         let end = min(instant, temp.programmedEnd)
         let dose = DoseEntry(type: .tempBasal, startDate: temp.start, endDate: end,
-                             value: temp.rate, unit: .unitsPerHour)
+                             value: temp.rate, unit: .unitsPerHour, decisionId: nil)
         foldedSession.append(LoanDoseRecord(kind: .tempBasal, startDate: temp.start, endDate: end,
                                             unitsPerHour: temp.rate,
                                             syncIdentifier: hexString(temp.raw)))
@@ -373,9 +383,13 @@ private final class LoanBooksDriver {
         // Defensive, same as WatchStoreEffectsTests: some DoseStore paths double-invoke
         // completions; not our bug and not worth failing over.
         exp.assertForOverFulfill = false
-        store.addPumpEvents(events, lastReconciliation: lastReconciliation,
-                            replacePendingEvents: replacePendingEvents) { error in
-            XCTAssertNil(error)
+        Task {
+            do {
+                try await self.store.addPumpEvents(events, lastReconciliation: lastReconciliation,
+                                                   replacePendingEvents: replacePendingEvents)
+            } catch {
+                XCTFail("addPumpEvents threw: \(error)")
+            }
             exp.fulfill()
         }
         host.wait(for: [exp], timeout: 10)
@@ -420,17 +434,36 @@ final class LoanBooksHarnessTests: XCTestCase {
     private func makeDriver() -> LoanBooksDriver {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         cacheDirs.append(dir)
-        let store = PersistenceController(directoryURL: dir)
+        let cache = PersistenceController(directoryURL: dir)
         // The store attaches asynchronously; handing it to a driver that writes immediately is
         // the zero-rows race. Block until it is up — see the note in WatchStoreEffectsTests.
         let ready = expectation(description: "persistent store attached")
-        store.onReady { error in
+        cache.onReady { error in
             XCTAssertNil(error, "store failed to come up")
             ready.fulfill()
         }
         wait(for: [ready], timeout: 10)
+
+        // DoseStore.init is async now. `wait(for:)` pumps the run loop, so the task below makes
+        // progress while this call blocks — the same bridge every other async step in this file
+        // uses. Kept synchronous deliberately: making it async would push `async` onto all ~30
+        // test methods for no gain in what they assert.
+        var doseStore: DoseStore?
+        let built = expectation(description: "dose store built")
+        Task {
+            doseStore = await DoseStore(
+                healthKitSampleStore: nil,
+                cacheStore: cache,
+                longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration,
+                provenanceIdentifier: "LoanBooksHarnessTests")
+            built.fulfill()
+        }
+        wait(for: [built], timeout: 10)
+        guard let doseStore else {
+            fatalError("dose store must build")
+        }
         return LoanBooksDriver(host: self,
-                               cacheStore: store,
+                               store: doseStore,
                                basalRate: fieldBasalRate)
     }
 
@@ -473,11 +506,11 @@ final class LoanBooksHarnessTests: XCTestCase {
         // re-report ever arrives); ledger gets the full-span truth.
         let broken = makeDriver()
         broken.storeFinished(DoseEntry(type: .tempBasal, startDate: tempStart, endDate: t0,
-                                       value: 0.0, unit: .unitsPerHour),
+                                       value: 0.0, unit: .unitsPerHour, decisionId: nil),
                              raw: raw, lastReconciliation: t0)
         broken.ledgerSeed(finished: [],
                           live: [DoseEntry(type: .tempBasal, startDate: tempStart, endDate: tempEnd,
-                                           value: 0.0, unit: .unitsPerHour)])
+                                           value: 0.0, unit: .unitsPerHour, decisionId: nil)])
 
         let at5 = broken.tick(at: t0.addingTimeInterval(.minutes(5)))
         let at15 = broken.tick(at: t0.addingTimeInterval(.minutes(15)))
@@ -757,23 +790,20 @@ final class LoanBooksHarnessTests: XCTestCase {
 
     // MARK: - Carb-side helpers (tests 7-8)
 
-    /// One isolated CarbStore per side (watch/phone must never share a Core Data table),
-    /// built the WatchStoreEffectsTests "fixed" way: overrideHistory at init (the dynamic
-    /// COB path guards the *ApplyingOverrideHistory getters), schedules via the setters,
-    /// production absorption times (fast 30 min / medium 3 h / slow 5 h).
+    /// One isolated CarbStore per side (watch/phone must never share a Core Data table).
+    ///
+    /// The store no longer holds schedules, absorption times or an override history — it is a row
+    /// store, and every consumer supplies the schedules at read time. That is why `cob` and
+    /// `carbEffects` below take them as arguments now: the same change the DoseStore made, and the
+    /// reason both books in this file can be compared on rows alone.
     private func makeCarbStore() -> CarbStore {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         cacheDirs.append(dir)
-        let store = CarbStore(
+        return CarbStore(
             healthKitSampleStore: nil,
             cacheStore: PersistenceController(directoryURL: dir),
             cacheLength: .hours(24),
-            defaultAbsorptionTimes: LoopCoreConstants.defaultCarbAbsorptionTimes,
-            overrideHistory: TemporaryScheduleOverrideHistory(),
             provenanceIdentifier: "LoanBooksHarnessTests")
-        store.carbRatioSchedule = fieldCarbRatio
-        store.insulinSensitivitySchedule = fieldISF
-        return store
     }
 
     /// The store is the idempotency point for DELIVERED carbs. Real CarbStore, real
@@ -859,31 +889,54 @@ final class LoanBooksHarnessTests: XCTestCase {
         wait(for: [exp], timeout: 10)
     }
 
-    private func cob(_ store: CarbStore, at date: Date, velocities: [GlucoseEffectVelocity]?) -> Double {
-        var value = Double.nan
-        let exp = expectation(description: "carbsOnBoard")
-        store.carbsOnBoard(at: date, effectVelocities: velocities) { result in
-            if case .success(let v) = result {
-                value = v.value
-            }
+    /// Entries out of the store, which is all the store does now.
+    private func carbEntries(_ store: CarbStore, start: Date, end: Date) -> [StoredCarbEntry] {
+        var out: [StoredCarbEntry] = []
+        let exp = expectation(description: "getCarbEntries")
+        Task {
+            out = (try? await store.getCarbEntries(start: start, end: end)) ?? []
             exp.fulfill()
         }
         wait(for: [exp], timeout: 10)
-        XCTAssertFalse(value.isNaN, "carbsOnBoard must resolve")
-        return value
+        return out
+    }
+
+    /// The carb status the two carb reads below share, built the way `LoopDataManager.fetchData`
+    /// builds it — entries mapped against the counteraction velocities with the carb ratio and
+    /// sensitivity timelines supplied at read time. `CarbStore.carbsOnBoard` and
+    /// `getGlucoseEffects` are gone; this is where that math lives now.
+    private func carbStatus(_ store: CarbStore, start: Date, end: Date,
+                            velocities: [GlucoseEffectVelocity]) -> [CarbStatus<StoredCarbEntry>] {
+        let entries = carbEntries(store, start: start, end: end)
+        guard !entries.isEmpty else { return [] }
+        let spanStart = min(start, entries.map { $0.startDate }.min() ?? start)
+        let spanEnd = max(end, entries.map { $0.endDate }.max() ?? end)
+            .addingTimeInterval(CarbMath.maximumAbsorptionTimeInterval)
+        return entries.map(
+            to: velocities,
+            carbRatio: fieldCarbRatio.between(start: spanStart, end: spanEnd),
+            insulinSensitivity: fieldISF.quantitiesBetween(start: spanStart, end: spanEnd))
+    }
+
+    private func cob(_ store: CarbStore, at date: Date, velocities: [GlucoseEffectVelocity]?) -> Double {
+        let status = carbStatus(store,
+                                start: date.addingTimeInterval(-CarbMath.maximumAbsorptionTimeInterval),
+                                end: date,
+                                velocities: velocities ?? [])
+        guard !status.isEmpty else { return 0 }
+        return status.dynamicCarbsOnBoard(at: date, absorptionModel: PiecewiseLinearAbsorption())
     }
 
     private func carbEffects(_ store: CarbStore, start: Date, end: Date, velocities: [GlucoseEffectVelocity]) -> [GlucoseEffect] {
-        var effects: [GlucoseEffect] = []
-        let exp = expectation(description: "getGlucoseEffects")
-        store.getGlucoseEffects(start: start, end: end, effectVelocities: velocities) { result in
-            if case .success(let value) = result {
-                effects = value.effects
-            }
-            exp.fulfill()
-        }
-        wait(for: [exp], timeout: 10)
-        return effects
+        let status = carbStatus(store, start: start, end: end, velocities: velocities)
+        guard !status.isEmpty else { return [] }
+        let spanEnd = end.addingTimeInterval(InsulinMath.defaultInsulinActivityDuration)
+        return status.dynamicGlucoseEffects(
+            from: start,
+            to: spanEnd,
+            carbRatios: fieldCarbRatio.between(start: start, end: spanEnd),
+            insulinSensitivities: fieldISF.quantitiesBetween(start: start, end: spanEnd),
+            absorptionModel: PiecewiseLinearAbsorption())
     }
 
     /// The sinusoidal session BG: 140 + 40·sin(2π(t−45 min)/180 min) sampled every 5 min
@@ -1066,11 +1119,11 @@ final class LoanBooksHarnessTests: XCTestCase {
         let syncT3 = "loanv2-\(UUID().uuidString)"
 
         func tempDose(_ rate: Double, _ start: Date, _ end: Date) -> DoseEntry {
-            DoseEntry(type: .tempBasal, startDate: start, endDate: end, value: rate, unit: .unitsPerHour)
+            DoseEntry(type: .tempBasal, startDate: start, endDate: end, value: rate, unit: .unitsPerHour, decisionId: nil)
         }
         func bolusDose(_ units: Double, _ start: Date) -> DoseEntry {
             DoseEntry(type: .bolus, startDate: start, endDate: start.addingTimeInterval(38),
-                      value: units, unit: .units)
+                      value: units, unit: .units, decisionId: nil)
         }
         /// The controller's `newPumpEvents`: identity in `raw`, discarded from the dose.
         func loanEvent(_ dose: DoseEntry, _ sync: String) -> NewPumpEvent {
@@ -1081,7 +1134,7 @@ final class LoanBooksHarnessTests: XCTestCase {
         func upsert(_ dose: DoseEntry, _ sync: String) -> DoseEntry {
             DoseEntry(type: dose.type, startDate: dose.startDate, endDate: dose.endDate,
                       value: dose.unit == .unitsPerHour ? dose.unitsPerHour : dose.programmedUnits,
-                      unit: dose.unit, syncIdentifier: hexString(Data(sync.utf8)))
+                      unit: dose.unit, decisionId: nil, syncIdentifier: hexString(Data(sync.utf8)))
         }
 
         let driver = makeDriver()
@@ -1266,7 +1319,7 @@ final class LedgerRefuteRestoreTests: XCTestCase {
     }
     private func makeLedger(basalRate: Double = 0.70) -> SessionInsulinLedger {
         SessionInsulinLedger(
-            insulinModelProvider: PresetInsulinModelProvider(defaultRapidActingModel: nil),
+            insulinModel: { _ in ExponentialInsulinModelPreset.rapidActingAdult },
             longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration)
     }
 
@@ -1278,14 +1331,14 @@ final class LedgerRefuteRestoreTests: XCTestCase {
 
         // A 3.00 U/hr temp is running (well above the 0.70 schedule).
         ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: runningStart, endDate: runningEnd,
-                                     value: 3.00, unit: .unitsPerHour, syncIdentifier: "running"))
+                                     value: 3.00, unit: .unitsPerHour, decisionId: nil, syncIdentifier: "running"))
         let iobWithRunningTempIntact = ledger.insulinOnBoard(at: now.addingTimeInterval(.minutes(15)), basalSchedule: scheduleOf(0.70))
 
         // An uncertain enact books an assumed 4.00 U/hr dose, truncating the running temp.
         let assumedStart = now
         ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: assumedStart,
                                      endDate: assumedStart.addingTimeInterval(.minutes(30)),
-                                     value: 4.00, unit: .unitsPerHour, syncIdentifier: "assumed"))
+                                     value: 4.00, unit: .unitsPerHour, decisionId: nil, syncIdentifier: "assumed"))
         XCTAssertEqual(ledger.doses.count, 2)
         XCTAssertEqual(ledger.doses[0].endDate.timeIntervalSince1970,
                        assumedStart.timeIntervalSince1970, accuracy: 0.01,
@@ -1313,16 +1366,16 @@ final class LedgerRefuteRestoreTests: XCTestCase {
 
         ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: runningStart,
                                      endDate: runningStart.addingTimeInterval(.minutes(30)),
-                                     value: 3.00, unit: .unitsPerHour, syncIdentifier: "running"))
+                                     value: 3.00, unit: .unitsPerHour, decisionId: nil, syncIdentifier: "running"))
         let assumedStart = now
         ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: assumedStart,
                                      endDate: assumedStart.addingTimeInterval(.minutes(30)),
-                                     value: 4.00, unit: .unitsPerHour, syncIdentifier: "assumed"))
+                                     value: 4.00, unit: .unitsPerHour, decisionId: nil, syncIdentifier: "assumed"))
         // A later ACCEPTED command supersedes the assumed one.
         let acceptedStart = now.addingTimeInterval(.minutes(2))
         ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: acceptedStart,
                                      endDate: acceptedStart.addingTimeInterval(.minutes(30)),
-                                     value: 1.50, unit: .unitsPerHour, syncIdentifier: "accepted"))
+                                     value: 1.50, unit: .unitsPerHour, decisionId: nil, syncIdentifier: "accepted"))
 
         XCTAssertTrue(ledger.removeDose(type: .tempBasal, startingAt: assumedStart))
         // The running temp still ends where the ASSUMED dose cut it; extending it now would
@@ -1391,7 +1444,7 @@ final class LoanOverrideTests: XCTestCase {
 
     /// The fixture: "Exercise" — 60% insulin needs, target 140-160.
     private func exerciseOverride(start: Date, duration: TimeInterval = .hours(1)) -> TemporaryScheduleOverride {
-        let settings = TemporaryScheduleOverrideSettings(
+        let settings = TemporaryPresetSettings(
             unit: .milligramsPerDeciliter,
             targetRange: DoubleRange(minValue: 140, maxValue: 160),
             insulinNeedsScaleFactor: 0.6)
@@ -1442,60 +1495,108 @@ final class LoanOverrideTests: XCTestCase {
         let history = TemporaryScheduleOverrideHistory()
         history.recordOverride(exerciseOverride(start: overrideStart, duration: .hours(2)))
 
-        let store = DoseStore(
-            healthKitSampleStore: nil, cacheStore: cacheStore,
-            insulinModelProvider: PresetInsulinModelProvider(defaultRapidActingModel: nil),
-            longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration,
-            basalProfile: baseBasal, insulinSensitivitySchedule: baseISF,
-            overrideHistory: history, provenanceIdentifier: "LoanOverrideTests")
-
-        guard let scaled = store.basalProfileApplyingOverrideHistory else {
-            return XCTFail("the store must resolve a schedule through the history")
-        }
+        // Resolved off the history directly: the DoseStore no longer carries an override history
+        // or pre-scales a basal profile, so this is where the scaling the temp nets against is
+        // decided — and it is the same call the wrist makes before handing the algorithm its
+        // basal timeline.
+        let scaled = history.resolvingRecentBasalSchedule(baseBasal, relativeTo: now)
         XCTAssertEqual(scaled.value(at: now.addingTimeInterval(-.minutes(30))), 0.60, accuracy: 0.001,
                        "mid-override the effective basal is 0.60 — a 0.60 U/hr temp nets to ZERO, not -0.40")
     }
 
-    /// Round-trip through the wire the grant actually uses: LoopSettings.rawValue already
-    /// carries scheduleOverride and overridePresets, so phone->watch needs no protocol
-    /// change — only the recording the watch was missing.
-    func testOverrideSurvivesTheGrantSettingsRoundTrip() {
+    /// The active override must reach the wrist in the GRANT.
+    ///
+    /// This test used to assert the override rode inside `LoopSettings.rawValue`, which is how it
+    /// worked when `LoopSettings` owned `scheduleOverride`. It does not any more — the active
+    /// override lives on `TemporaryPresetsManager` and `therapySettingsRaw` cannot carry it. The
+    /// settings blob still carries the override PRESETS (the menu), which is a different thing
+    /// from the override in force and is not a substitute for it.
+    ///
+    /// So the first half of this test pins what actually broke: the settings blob is NOT the
+    /// override's transport. The second half pins the transport that replaced it. An override that
+    /// fails to arrive does not fail loudly — the wrist simply resolves every schedule unscaled and
+    /// doses ~100% where the phone asked for 60%, which is the over-delivery direction during
+    /// exercise.
+    func testOverrideReachesTheWristInTheGrant() {
         var settings = LoopSettings()
         settings.basalRateSchedule = baseBasal
         settings.insulinSensitivitySchedule = baseISF
         settings.carbRatioSchedule = baseCR
         let now = Date()
-        settings.scheduleOverride = exerciseOverride(start: now)
+        let active = exerciseOverride(start: now)
 
-        guard let decoded = LoopSettings(rawValue: settings.rawValue) else {
+        // The settings blob still round-trips the SCHEDULES the override scales; it simply has
+        // nowhere to put the override itself. Pinned so a future reader does not re-add an
+        // override field here and assume the wire picked it up.
+        guard let decodedSettings = LoopSettings(rawValue: settings.rawValue) else {
             return XCTFail("settings must round-trip")
         }
-        guard let override = decoded.scheduleOverride else {
-            return XCTFail("the active override must survive the grant blob")
+        XCTAssertNotNil(decodedSettings.basalRateSchedule, "schedules still ride in the settings blob")
+
+        // The transport: the grant's own field, encoded exactly as the hand-back records encode
+        // an override, so both directions of the wire agree on one format.
+        guard let raw = try? PropertyListSerialization.data(fromPropertyList: active.rawValue,
+                                                           format: .binary, options: 0) else {
+            return XCTFail("the active override must encode for the wire")
+        }
+        let grant = LoanGrant(
+            epoch: 1,
+            expiresAt: now.addingTimeInterval(.minutes(5)),
+            pumpManagerRawState: Data(),
+            podAddress: 0,
+            therapySettingsRaw: Data(),
+            settingsTimeZoneID: TimeZone.current.identifier,
+            doseHistory: [],
+            boundaryRecord: nil,
+            activeOverrideRaw: raw)
+
+        guard let carried = grant.activeOverrideRaw,
+              let plist = (try? PropertyListSerialization.propertyList(from: carried, options: [], format: nil)) as? TemporaryScheduleOverride.RawValue,
+              let override = TemporaryScheduleOverride(rawValue: plist) else {
+            return XCTFail("the active override must survive the grant")
         }
         XCTAssertEqual(override.settings.effectiveInsulinNeedsScaleFactor, 0.6, accuracy: 0.001)
         XCTAssertEqual(override.settings.targetRange?.lowerBound.doubleValue(for: .milligramsPerDeciliter) ?? 0,
                        140, accuracy: 0.1)
         XCTAssertEqual(override.settings.targetRange?.upperBound.doubleValue(for: .milligramsPerDeciliter) ?? 0,
                        160, accuracy: 0.1)
-        XCTAssertEqual(override.syncIdentifier, settings.scheduleOverride?.syncIdentifier,
+        XCTAssertEqual(override.syncIdentifier, active.syncIdentifier,
                        "identity must survive so the two devices can agree on WHICH override")
     }
 
-    /// Target range: the watch's DoseMath reads effectiveGlucoseTargetRangeSchedule(), so an
-    /// override must move the target it drives to — 140-160, not the base 100-115.
+    /// A grant from a phone that never sends the field (or that holds no override) must be a
+    /// clean "no override" rather than anything the watch has to special-case.
+    func testGrantWithoutAnOverrideCarriesNone() {
+        let grant = LoanGrant(
+            epoch: 1,
+            expiresAt: Date().addingTimeInterval(.minutes(5)),
+            pumpManagerRawState: Data(),
+            podAddress: 0,
+            therapySettingsRaw: Data(),
+            settingsTimeZoneID: TimeZone.current.identifier,
+            doseHistory: [],
+            boundaryRecord: nil)
+        XCTAssertNil(grant.activeOverrideRaw,
+                     "an absent field and 'no override active' are the same thing on the wire")
+    }
+
+    /// Target range: an override must move the target the loop drives to — 140-160, not the base
+    /// 100-115.
+    ///
+    /// The mechanism changed with the stateless algorithm. There is no
+    /// `LoopSettings.effectiveGlucoseTargetRangeSchedule()` any more; the watch resolves the
+    /// override against the scheduled range itself and hands the RESULT to the algorithm as a
+    /// target timeline (`WatchLoopManager.fetchAlgorithmInput`). This asserts that resolution,
+    /// which is the call the wrist actually makes.
     func testEffectiveTargetRangeFollowsTheOverride() {
-        var settings = LoopSettings()
-        settings.glucoseTargetRangeSchedule = GlucoseRangeSchedule(
+        let base = GlucoseRangeSchedule(
             unit: .milligramsPerDeciliter,
             dailyItems: [RepeatingScheduleValue(startTime: 0, value: DoubleRange(minValue: 100, maxValue: 115))])!
         let now = Date()
-        settings.scheduleOverride = exerciseOverride(start: now.addingTimeInterval(-.minutes(1)))
+        let override = exerciseOverride(start: now.addingTimeInterval(-.minutes(1)))
+        XCTAssertTrue(override.isActive(at: now), "the fixture must be running at the instant under test")
 
-        guard let effective = settings.effectiveGlucoseTargetRangeSchedule() else {
-            return XCTFail("an effective schedule must exist")
-        }
-        let range = effective.quantityRange(at: now)
+        let range = override.effectiveCorrectionRangeDuring(scheduledRange: base.quantityRange(at: now))
         XCTAssertEqual(range.lowerBound.doubleValue(for: .milligramsPerDeciliter), 140, accuracy: 0.1)
         XCTAssertEqual(range.upperBound.doubleValue(for: .milligramsPerDeciliter), 160, accuracy: 0.1)
     }
@@ -1510,7 +1611,7 @@ final class LoanOverrideTests: XCTestCase {
         TemporaryPreset(
             symbol: "🏃",
             name: "Exercise",
-            settings: TemporaryScheduleOverrideSettings(
+            settings: TemporaryPresetSettings(
                 unit: .milligramsPerDeciliter,
                 targetRange: DoubleRange(minValue: 140, maxValue: 160),
                 insulinNeedsScaleFactor: 0.6),
@@ -1697,31 +1798,28 @@ final class LoanOverrideTests: XCTestCase {
                        grantedHistory.resolvingRecentCarbRatioSchedule(baseCR, relativeTo: now).value(at: now),
                        accuracy: 0.0001, "carb ratio: wrist-set == granted")
 
-        // The stores the loop actually reads resolve through that same history instance —
-        // this is the wall: an override that isn't in the history changes nothing.
-        let store = DoseStore(
-            healthKitSampleStore: nil, cacheStore: cacheStore,
-            insulinModelProvider: PresetInsulinModelProvider(defaultRapidActingModel: nil),
-            longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration,
-            basalProfile: baseBasal, insulinSensitivitySchedule: baseISF,
-            overrideHistory: wristHistory, provenanceIdentifier: "LoanOverrideTests")
-        XCTAssertEqual(store.basalProfileApplyingOverrideHistory?.value(at: now) ?? -1, 0.60, accuracy: 0.001,
-                       "the watch's DoseStore nets temps against the WRIST-scaled basal")
-        XCTAssertEqual(store.insulinSensitivityScheduleApplyingOverrideHistory?.value(at: now) ?? -1,
+        // The schedules the loop actually doses against resolve through that same history
+        // instance — this is the wall: an override that isn't in the history changes nothing.
+        //
+        // This used to assert it through `DoseStore.basalProfileApplyingOverrideHistory`, because
+        // the store held the override history and pre-scaled its own schedules. It no longer holds
+        // either: schedules are resolved by the caller at read time and handed to the algorithm.
+        // So the wall is the same wall, checked one layer up — where the wrist now stands.
+        XCTAssertEqual(wristHistory.resolvingRecentBasalSchedule(baseBasal, relativeTo: now).value(at: now),
+                       0.60, accuracy: 0.001,
+                       "the wrist nets temps against the WRIST-scaled basal")
+        XCTAssertEqual(wristHistory.resolvingRecentInsulinSensitivitySchedule(baseISF, relativeTo: now).value(at: now),
                        50.0 / 0.6, accuracy: 0.01)
 
-        // And the target the watch's DoseMath drives to follows the wrist selection.
-        var settings = LoopSettings()
-        settings.glucoseTargetRangeSchedule = GlucoseRangeSchedule(
+        // And the target the watch drives to follows the wrist selection. Resolved the way
+        // `WatchLoopManager.fetchAlgorithmInput` resolves it, against the scheduled range.
+        let base = GlucoseRangeSchedule(
             unit: .milligramsPerDeciliter,
             dailyItems: [RepeatingScheduleValue(startTime: 0, value: DoubleRange(minValue: 100, maxValue: 115))])!
-        settings.scheduleOverride = wristOverride
-        guard let effective = settings.effectiveGlucoseTargetRangeSchedule() else {
-            return XCTFail("an effective schedule must exist")
-        }
-        XCTAssertEqual(effective.quantityRange(at: now).lowerBound.doubleValue(for: .milligramsPerDeciliter),
+        let effective = wristOverride.effectiveCorrectionRangeDuring(scheduledRange: base.quantityRange(at: now))
+        XCTAssertEqual(effective.lowerBound.doubleValue(for: .milligramsPerDeciliter),
                        140, accuracy: 0.1)
-        XCTAssertEqual(effective.quantityRange(at: now).upperBound.doubleValue(for: .milligramsPerDeciliter),
+        XCTAssertEqual(effective.upperBound.doubleValue(for: .milligramsPerDeciliter),
                        160, accuracy: 0.1)
     }
 }
@@ -1762,15 +1860,15 @@ private final class PhoneOverrideHarness {
 
         controller = PodLoanPhoneController(dependencies: .init(
             pumpManager: { nil },
-            settings: { [weak self] in
-                var s = settings
-                s.scheduleOverride = self?.phoneOverride
-                return s
-            },
+            settings: { settings },
             setAutomaticDosingPaused: { _ in },
             send: { _ in },
             addPumpEvents: { _, _, completion in completion(nil) },
             addCarb: { _, _, completion in completion(nil) },
+            // The phone's active override is its own dependency now rather than a field on
+            // LoopSettings — and this harness exists to exercise the controller's "already
+            // applied?" check, which is exactly what reads it.
+            scheduleOverride: { [weak self] in self?.phoneOverride },
             applyScheduleOverride: { [weak self] override in
                 guard let self = self else { return }
                 self.lock.lock()

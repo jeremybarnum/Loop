@@ -56,23 +56,43 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
     private var observers: [NSKeyValueObservation] = []
     private var notifications: [NSObjectProtocol] = []
 
+    /// The live delegate, registered by the delegate itself.
+    ///
+    /// Deliberately NOT `WKApplication.shared().delegate`. Under the SwiftUI application
+    /// lifecycle the delegate is created and owned by `@WKApplicationDelegateAdaptor`, and that
+    /// property is never populated — it reads nil for the whole life of the app even while THIS
+    /// object is receiving every lifecycle callback. The old WatchKit extension installed its
+    /// delegate from Info.plist, which is the only reason the same lookup worked there.
+    ///
+    /// The failure mode is worth remembering because it is silent: every view asking for the
+    /// delegate got nil, so `stockLoopSession` read nil, so the Start button and the diagnostics
+    /// controls did nothing whatsoever — no error, no log line, a UI that renders correctly and is
+    /// completely inert. The launch crash that preceded it was the same nil arriving through
+    /// `shared()`, which is implicitly unwrapped and therefore trapped instead of returning.
+    private static var installed: ExtensionDelegate?
+
     static func shared() -> ExtensionDelegate {
-        return WKApplication.shared().extensionDelegate
+        return sharedIfAvailable()!
     }
 
-    /// The delegate, or nil if it is not installed yet.
+    /// The delegate, or nil if it does not exist yet.
     ///
-    /// `shared()` returns an implicitly unwrapped optional and traps when the delegate has not
-    /// been set. SwiftUI can evaluate a `@StateObject` initializer before the application
-    /// delegate is installed, so anything reachable from view construction must ask this way.
+    /// Anything reachable from view construction must ask this way: `shared()` traps on nil, and
+    /// SwiftUI can evaluate a `@StateObject` initializer before the delegate is constructed.
     static func sharedIfAvailable() -> ExtensionDelegate? {
-        return WKApplication.shared().delegate as? ExtensionDelegate
+        return installed
     }
 
     let loopManager = LoopDataManager.shared
 
     override init() {
         super.init()
+
+        // Register FIRST, before any other setup: SwiftUI can construct a view — and a
+        // @StateObject initializer that reaches for the delegate — as soon as this object exists
+        // and before applicationDidFinishLaunching runs. That window is where the launch crash
+        // happened, and registering late would leave it open.
+        Self.installed = self
 
         let session = WCSession.default
         session.delegate = self
@@ -421,8 +441,7 @@ extension ExtensionDelegate {
 }
 
 
-fileprivate extension WKApplication {
-    var extensionDelegate: ExtensionDelegate! {
-        return delegate as? ExtensionDelegate
-    }
-}
+// `WKApplication.extensionDelegate` (which was `delegate as? ExtensionDelegate`) was deleted
+// rather than left unused. Under the SwiftUI lifecycle that lookup always yields nil, so keeping
+// it around is keeping a loaded gun: it reads like the obvious way to reach the delegate and
+// silently returns nothing. Use `ExtensionDelegate.sharedIfAvailable()`.

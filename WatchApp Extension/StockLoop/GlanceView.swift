@@ -276,7 +276,16 @@ final class GlanceViewModel: ObservableObject {
         // direct install, the watch half did not actually ship and the loan is being driven
         // by stale extension code — the failure mode a version bump alone would hide.
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
-        guard let session = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession else { return }
+        // A bare `return` here is how a dead STACK looks like a dead BUTTON: the tap does
+        // nothing, says nothing and leaves no trace, so the failure gets attributed to the UI
+        // instead of to a session that never assembled. Say which it is, on screen and in the log.
+        guard let session = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession else {
+            let why = ExtensionDelegate.sharedIfAvailable() == nil ? "no app delegate" : "no session"
+            SportLog.event("session", "START TAPPED but Sport Mode is unavailable (\(why)) — the stack never assembled · build \(build)")
+            state.idleNote = NSLocalizedString("Sport Mode didn't start up on this watch. Force-quit the watch app, open it again, and try Start.",
+                                               comment: "Glance: the loan stack failed to assemble, so Start cannot work")
+            return
+        }
         session.loanController.requestLoan(watchBuild: build)
         // Log pipeline v4: the Start tap itself ships a snapshot, and a +35s
         // follow-up captures the request's fate (grant/timeout) even when the
