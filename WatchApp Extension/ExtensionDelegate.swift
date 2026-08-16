@@ -22,6 +22,25 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
 
     private let log = OSLog(category: "ExtensionDelegate")
 
+    /// The Sport Mode stack: the watch's own loop, the loan controller, the CGM transport and
+    /// the workout keepalive that holds the app awake between doses.
+    ///
+    /// Optional rather than `lazy` because building it opens the dose store, which is async now.
+    /// It is started at launch — before any loan message can arrive — and a message that lands
+    /// in the gap is logged rather than dropped silently.
+    private(set) var stockLoopSession: StockLoopSession?
+    private var stockLoopSessionStarting = false
+
+    private func startStockLoopSession() {
+        guard stockLoopSession == nil, !stockLoopSessionStarting else { return }
+        stockLoopSessionStarting = true
+        Task { @MainActor in
+            self.stockLoopSession = await StockLoopSession()
+            self.stockLoopSessionStarting = false
+            self.stockLoopSession?.sessionDidActivate()
+        }
+    }
+
     private var observers: [NSKeyValueObservation] = []
     private var notifications: [NSObjectProtocol] = []
 
@@ -75,6 +94,10 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
     }
 
     func applicationDidFinishLaunching() {
+        // Start the loan stack HERE, not on first use: the loan's transport callbacks land on
+        // this delegate, and a stack that only builds when something arrives would miss the
+        // message that was meant to build it.
+        startStockLoopSession()
         UNUserNotificationCenter.current().delegate = self
         if #available(watchOSApplicationExtension 5.0, *) {
             INRelevantShortcutStore.default.registerShortcuts()
@@ -93,10 +116,23 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         // glucose we're missing.
         loopManager.requestContextUpdate()
         loopManager.requestGlucoseBackfillIfNecessary()
+
+        // Re-assert the workout session if anything still holds it. This is the one moment we
+        // KNOW we are executing — the only other re-assert path is a timer, which cannot fire
+        // while suspended. No-op when nothing holds it.
+        startStockLoopSession()
+        stockLoopSession?.ensureKeepalive()
+        NotificationCenter.default.post(name: Self.didBecomeActiveNotification, object: self)
     }
 
     func applicationWillResignActive() {
+        NotificationCenter.default.post(name: Self.willResignActiveNotification, object: self)
     }
+
+    /// Foreground transitions, as notifications. A SwiftUI page that only wants to work while
+    /// it is actually being looked at keys its refresh off these.
+    static let didBecomeActiveNotification = Notification.Name("com.loopkit.Loop.LoopWatch.didBecomeActive")
+    static let willResignActiveNotification = Notification.Name("com.loopkit.Loop.LoopWatch.willResignActive")
 
     // Presumably the main thread?
     func handle(_ backgroundTasks: Set<WKRefreshBackgroundTask>) {
@@ -220,6 +256,7 @@ extension ExtensionDelegate: WCSessionDelegate {
 
         if activationState == .activated {
             updateContext(session.receivedApplicationContext)
+            stockLoopSession?.sessionDidActivate()
             Task {
                 await loopManager.requestSettingsUpdate()
             }
@@ -233,6 +270,16 @@ extension ExtensionDelegate: WCSessionDelegate {
 
     // This method is called on a background thread of your app
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any] = [:]) {
+        // Loan traffic first: it is addressed to the loan controller, not to the context
+        // machinery below, and the switch's default arm would otherwise swallow it.
+        if let session = stockLoopSession {
+            if session.handleIncomingIfLoanMessage(userInfo, channel: .queued) { return }
+        } else if userInfo[LoanProtocol.userInfoKey] != nil {
+            log.error("Loan payload arrived before the Sport Mode stack finished starting")
+            startStockLoopSession()
+            return
+        }
+
         let name = userInfo["name"] as? String ?? "WatchContext"
 
         log.default("didReceiveUserInfo: %{public}@", name)
