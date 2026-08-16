@@ -80,6 +80,9 @@ class LoopDataManager {
     private let log = OSLog(category: "LoopDosingManager")
 
     // Main queue only
+    /// The last context the PHONE sent, regardless of what is currently active.
+    private(set) var phoneRelayContext: WatchContext?
+
     private(set) var activeContext: WatchContext? {
         didSet {
             rawWatchContext = activeContext?.rawValue
@@ -143,6 +146,15 @@ extension LoopDataManager {
 extension LoopDataManager {
     func updateContext(_ context: WatchContext) {
         dispatchPrecondition(condition: .onQueue(.main))
+
+        // Keep the phone's own relay separately from whatever is currently active. During a
+        // loan the active context is the WATCH's, so a caller that wants "what did the phone
+        // last tell us" — the glucose fallback, for one — would otherwise be handed the
+        // watch's own reading back and ingest nothing. `isWatchAuthored` is never encoded into
+        // rawValue, so anything arriving from the phone reads false here.
+        if !context.isWatchAuthored {
+            phoneRelayContext = context
+        }
 
         if activeContext == nil || context.shouldReplace(activeContext!) {
             if let newGlucoseSample = context.newGlucoseSample {
