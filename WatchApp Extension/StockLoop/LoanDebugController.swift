@@ -198,7 +198,14 @@ struct LoanDebugView: View {
 
                 NavigationLink("Logs") { LogView() }
                     .font(.caption)
-                #if DEBUG
+                // The glance demo cycles the glance through every state it can render, so the
+                // layouts can be judged without waiting for the real conditions. It sits on its
+                // own compile condition rather than DEBUG because a clone is built in Debug and
+                // run by someone who has no way to know that a screenful of invented pod and
+                // insulin state is a mockup. Add GLANCE_DEMO to SWIFT_ACTIVE_COMPILATION_CONDITIONS
+                // in a local LoopConfigOverride.xcconfig to get it back; nothing defines it by
+                // default, so it is absent from every build a receiver can make.
+                #if GLANCE_DEMO
                 NavigationLink("Glance demo") { GlanceDemoView() }
                     .font(.caption)
                 #endif

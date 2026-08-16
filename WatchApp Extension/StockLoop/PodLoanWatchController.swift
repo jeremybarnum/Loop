@@ -357,11 +357,18 @@ final class PodLoanWatchController {
         }
     }
 
+    /// Fires from `init` on a relaunch that found undrained records — so the session did not
+    /// "end" in front of the user, the app died mid-loan and this is the first they hear of it.
+    /// The old copy claimed records "are being returned", a present progressive describing a
+    /// drain that has not started yet and may not succeed; "may not be on the phone yet" is the
+    /// honest form, and "yet" does the work of stock's authorise-waiting clause in one word.
     private func issueSessionEndedAlert() {
+        let title = NSLocalizedString("Sport Mode Ended", comment: "Watch alert title on relaunch after the app died mid-loan")
+        let body = NSLocalizedString("The watch app restarted. Insulin and carb records may not be on the phone yet.", comment: "Watch alert body on relaunch after the app died mid-loan")
         loopManager.issueAlert(Alert(
             identifier: Alert.Identifier(managerIdentifier: "PodLoan", alertIdentifier: "sessionEnded"),
-            foregroundContent: Alert.Content(title: "Session Ended", body: "The watch loop session ended. Records are being returned to the phone.", acknowledgeActionButtonLabel: "OK"),
-            backgroundContent: Alert.Content(title: "Session Ended", body: "The watch loop session ended. Records are being returned to the phone.", acknowledgeActionButtonLabel: "OK"),
+            foregroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
+            backgroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
             trigger: .immediate))
     }
 
@@ -376,10 +383,12 @@ final class PodLoanWatchController {
         do {
             message = try LoanMessage.decode(fromTransport: userInfo)
         } catch {
-            // §2.9: never ack-and-drop. Nack + loud surfacing.
+            // §2.9: never ack-and-drop — nack so the sender learns, and log at fault level.
+            // The user-facing alert was removed: a build-version mismatch is not something
+            // the wearer can act on mid-session, and the loan simply will not start, which
+            // is its own visible signal.
             os_log("Undecodable v2 payload: %{public}@", log: log, type: .fault, String(describing: error))
             sendMessage(.nack(ProtocolNack(seenVersion: nil)))
-            issueProtocolAlert(body: "The phone sent a message this watch build cannot read. Update one of the builds.")
             return
         }
         guard let message = message else { return }  // not a v2 payload
@@ -410,7 +419,9 @@ final class PodLoanWatchController {
         case .statusQuery(let query):
             handleStatusQuery(query)
         case .nack:
-            issueProtocolAlert(body: "The phone could not read this watch's messages. Update one of the builds.")
+            // Logged, not alerted: the mirror of the undecodable case above, and equally
+            // unactionable on the wrist.
+            SportLog.event("loan", "phone NACKed our payload — build mismatch; the loan will not start")
         case .denied(let denied):
             // The phone refused — show why instead of hanging on "requesting…".
             requestTimeoutWork?.cancel()
@@ -1585,11 +1596,18 @@ final class PodLoanWatchController {
         }
         switch wedge {
         case .sessionReestablishing:
-            issueProtocolAlert(body: "The connection to the iPhone is re-establishing — replies usually resume within a minute or two. Try End again shortly. Restart the Watch app only if this keeps happening. The pod is still safe on the watch.")
+            // No alert: this variant resolves on its own, and HandbackStuckAlert has already
+            // told the user End did not complete. A second, softer notice on top of it added
+            // words without adding an action.
+            SportLog.event("loan", "hand-back wedge variant B (session re-establishing) — no alert; expected to clear on its own")
         case .oneWay:
-            // Tell the user the ONE thing that fixes variant A: the generic "iPhone never
-            // acked" points at the phone, which is exactly the wrong device to go poke at.
-            issueProtocolAlert(body: "The iPhone is reachable but its replies are not arriving. Force-quit and reopen the Watch app to restore the connection. The pod is still safe on the watch.")
+            // Reachability is read live at the classify site, so "is reachable" is observed.
+            // The remedy no longer names ONE device: this was written when the wedge was
+            // believed to be watch-side only, and 2026-08-15 produced a PHONE-side instance
+            // where restarting the watch app did nothing and only reinstalling the phone app
+            // cleared it. The classifier cannot tell the two apart, so the copy must not either.
+            issueProtocolAlert(title: "End Not Confirmed",
+                               body: "Your iPhone is reachable but hasn't confirmed. Reopening Loop on both devices usually clears this.")
         case .none:
             break
         }
@@ -2082,11 +2100,13 @@ final class PodLoanWatchController {
         send?(dictionary)
     }
 
-    private func issueProtocolAlert(body: String) {
+    /// Title is a parameter now: "Loan Protocol Error" named an internal layer rather than the
+    /// user's situation, and the only surviving caller is about a hand-back that did not confirm.
+    private func issueProtocolAlert(title: String, body: String) {
         loopManager.issueAlert(Alert(
             identifier: Alert.Identifier(managerIdentifier: "PodLoan", alertIdentifier: "protocolNack"),
-            foregroundContent: Alert.Content(title: "Loan Protocol Error", body: body, acknowledgeActionButtonLabel: "OK"),
-            backgroundContent: Alert.Content(title: "Loan Protocol Error", body: body, acknowledgeActionButtonLabel: "OK"),
+            foregroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
+            backgroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
             trigger: .immediate))
     }
 
@@ -2154,18 +2174,23 @@ final class PodLoanWatchController {
                         // Reverse the ledger's assumed booking BEFORE annulling
                         // (the record lookup needs the event still present). A
                         // skipped-reduction was never booked → removeDose no-ops.
+                        var refutedUnits: Double?
                         if let event = self.journal.unackedEvents().first(where: { $0.id == eventID }),
                            case .assumed(let kind) = event.provenance, kind != .skippedReduction,
                            let dose = event.record.podLoanLedgerDoseEntry(insulinType: nil) {
                             // skippedReduction was never booked — removing would rely on
                             // "no ±2s neighbor" luck (adversarial review); guard explicitly.
                             self.loopManager.ledgerRemoveDose(type: dose.type, startingAt: dose.startDate)
+                            // Captured here, while the event is still present, so the alert can
+                            // name the amount that did NOT go in. Nil for anything without a
+                            // dose to name; the title then omits the number rather than lying.
+                            if dose.type == .bolus { refutedUnits = dose.programmedUnits }
                         }
                         self.journal.annul(id: eventID)
                         self.pendingUncertainEventID = nil
                         self.streamRecords()
                         SportLog.event("verdict", "REFUTED \(kind) — command never reached the pod, record annulled")
-                        self.alertRefuted(kind: kind)
+                        self.alertRefuted(kind: kind, units: refutedUnits)
                     case .unreachable:
                         self.scheduleChase(attempt: attempt + 1)
                     }
@@ -2176,22 +2201,35 @@ final class PodLoanWatchController {
         schedule(after: delays[attempt], label: "verdict-chase-\(attempt + 1)", execute: work)
     }
 
-    private func alertRefuted(kind: OmniPumpManager.PodLoanPendingKind) {
+    /// This is the ONE path entitled to assert non-delivery: the pod's own state proved the
+    /// command never arrived. The old copy then said "Bolus again if you still need it" — an
+    /// insulin instruction, which stock never puts in notification text. Removing it costs
+    /// nothing, because the sentence that replaces it does the same work better: the record was
+    /// just annulled, so active insulin no longer counts the dose, and the bolus calculator
+    /// will now recommend accordingly. Attribution ("the pod reports") rather than assertion,
+    /// per stock's voice.
+    private func alertRefuted(kind: OmniPumpManager.PodLoanPendingKind, units: Double? = nil) {
         switch kind {
         case .bolus:
             WKInterfaceDevice.current().play(.failure)
+            let title = units.map {
+                String(format: NSLocalizedString("Bolus Not Delivered: %@ U", comment: "Watch alert title when the pod proved a bolus never arrived (1: units)"),
+                       NumberFormatter.localizedString(from: NSNumber(value: $0), number: .decimal))
+            } ?? NSLocalizedString("Bolus Not Delivered", comment: "Watch alert title when the pod proved a bolus never arrived")
+            let body = NSLocalizedString("The pod reports no delivery. Active insulin no longer includes it.", comment: "Watch alert body when the pod proved a bolus never arrived")
             loopManager.issueAlert(Alert(
                 identifier: Alert.Identifier(managerIdentifier: "PodLoan", alertIdentifier: "refutedBolus"),
-                foregroundContent: Alert.Content(title: "Bolus Did Not Deliver", body: "The pod never received the bolus. Bolus again if you still need it.", acknowledgeActionButtonLabel: "OK"),
-                backgroundContent: Alert.Content(title: "Bolus Did Not Deliver", body: "The pod never received the bolus. Bolus again if you still need it.", acknowledgeActionButtonLabel: "OK"),
+                foregroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
+                backgroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
                 trigger: .immediate))
         case .resume:
-            WKInterfaceDevice.current().play(.failure)
-            loopManager.issueAlert(Alert(
-                identifier: Alert.Identifier(managerIdentifier: "PodLoan", alertIdentifier: "refutedResume"),
-                foregroundContent: Alert.Content(title: "Resume Did Not Apply", body: "Delivery is still suspended. Resume again.", acknowledgeActionButtonLabel: "OK"),
-                backgroundContent: Alert.Content(title: "Resume Did Not Apply", body: "Delivery is still suspended. Resume again.", acknowledgeActionButtonLabel: "OK"),
-                trigger: .immediate))
+            // Dead three ways over, so it is logged rather than surfaced. The watch never
+            // programs a basal schedule, so `.resume` cannot arise here at all; the watch's
+            // `issueAlert` is a log-only stub, so nothing would reach the wrist even if it did;
+            // and "Resume again" named a control the watch does not have. Kept as a case so a
+            // future watch-side resume path lands somewhere visible instead of falling silently
+            // into `default`.
+            SportLog.event("verdict", "REFUTED resume — unreachable on this build; logged only")
         default:
             break
         }

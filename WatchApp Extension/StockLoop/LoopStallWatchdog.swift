@@ -88,13 +88,35 @@ enum SensorBlackoutAlert {
 
     private static let identifier = "sportmode.sensorBlackout"
 
+    private static let sinceFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.timeStyle = .short
+        f.dateStyle = .none
+        return f
+    }()
+
     /// Arm, or push forward after a fresh direct reading.
+    ///
+    /// The body names the TIME of the last reading rather than an elapsed duration, because the
+    /// trigger REPEATS: "for 20 minutes" is a lie from the second firing onward, while "since
+    /// 14:05" stays true however long the blackout runs. It is stamped here, at the moment of
+    /// that reading, which is the only place the fact is known — the notification itself is
+    /// composed 20 minutes before it lands.
+    ///
+    /// It no longer blames sensor geometry. All the watch observes is silence; the causes it
+    /// cannot distinguish include a post-takeover G7 stand-down that self-recovers, a held pod
+    /// link starving acquisition, and a sensor session that simply ended. Dexcom's own watch app
+    /// reads the same sensor independently, so it is the one check that tells the user whether
+    /// the sensor stopped or only Sport Mode's link to it did — which is worth naming while this
+    /// build is young and "is it me or the app?" is the live question.
     static func refresh() {
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: [identifier])
         let content = UNMutableNotificationContent()
-        content.title = NSLocalizedString("No G7 Readings", comment: "Sensor-blackout alert title")
-        content.body = NSLocalizedString("No direct G7 reading for 20 minutes. Sport Mode won't dose without readings — check the watch's position relative to the sensor.", comment: "Sensor-blackout alert body")
+        content.title = NSLocalizedString("No Direct G7 Readings", comment: "Sensor-blackout alert title")
+        content.body = String(
+            format: NSLocalizedString("Nothing since %@. May clear on its own — check Dexcom's app to see if the sensor is reporting.", comment: "Sensor-blackout alert body (1: time of the last direct reading)"),
+            sinceFormatter.string(from: Date()))
         content.sound = .default
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: true)
         center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))

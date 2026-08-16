@@ -272,11 +272,11 @@ public final class AlertManager {
     /// funnels; cleared at every loan end (all reclaim paths funnel through the unpause closure).
     private enum WatchSilence {
         static let category = "SportModeWatchSilent"
-        static let ladder: [(interval: TimeInterval, isCritical: Bool)] = [
-            (TimeInterval(minutes: 15), false),
-            (TimeInterval(minutes: 30), true),
-        ]
-        static func identifier(_ interval: TimeInterval) -> String { "\(category)\(interval)" }
+        /// EMPTY — the ladder was removed 2026-08-15 (see clearWatchSilenceNotifications).
+        /// The identifiers survive so a build that shipped the ladder can still have its
+        /// delivered/pending rungs cleared on upgrade; nothing schedules them any more.
+        static let retiredIdentifiers = ["\(category)\(TimeInterval(minutes: 15))",
+                                         "\(category)\(TimeInterval(minutes: 30))"]
     }
 
     /// Grant-time variant of clearLoopNotRunningNotifications (#26): also drops the bookkeeping
@@ -289,60 +289,30 @@ public final class AlertManager {
         UserDefaults.appGroup?.loopNotRunningNotifications = []
     }
 
-    /// Watch traffic arrived while a loan is active → the session is alive; push the dead-man out.
-    /// Hops to main before the gate: (a) keeps the gate's `queue.sync` off the WCSession delegate
-    /// thread, and (b) serializes gate+arm against the loan-end clear (also main-hopped), so a
-    /// receipt racing the hand-back re-checks the gate AFTER the state flip and cannot re-arm a
-    /// phantom dead-man (adversarial-review TOCTOU).
-    func noteWatchContactDuringLoan() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.podOnLoanProvider() else { return }
-            self.armWatchSilenceNotifications()
-        }
-    }
+    /// REMOVED 2026-08-15. This was the "replace" half of suppressing stock's Loop Failure
+    /// ladder during a loan: a pre-scheduled 15-min / 30-min-critical pair that fired when the
+    /// PHONE had not heard from the watch.
+    ///
+    /// The condition it alarmed on is Sport Mode working as intended. Leaving the phone behind
+    /// is the point of the feature, so phone-side silence is the normal state, not a fault —
+    /// and because iOS mirrors phone notifications to the paired watch, the alert was delivered
+    /// TO the device it claimed to have lost contact with, while that device was looping
+    /// happily and knew it. Reading it on the wrist disproved it. Field-observed 2026-08-15.
+    ///
+    /// The honest version of this alarm already exists and lives on the right device: the
+    /// watch's own pre-scheduled dead-man (LoopStallWatchdog, "Sport Mode Loop Stopped" at
+    /// 15 min), which fires from outside a suspended watch app and is armed by real loop
+    /// cycles rather than by radio contact with a phone in another room.
+    ///
+    /// Kept as a no-op clear so an upgrade from a build that scheduled the ladder retires any
+    /// rung still pending or delivered.
+    func noteWatchContactDuringLoan() {}
 
-    /// Ungated arm — called at grant (loan state hasn't flipped yet) and by the gated refresh.
-    func armWatchSilenceNotifications() {
-        clearWatchSilenceNotifications()
-        let formatter = DateComponentsFormatter()
-        formatter.maximumUnitCount = 1
-        formatter.allowedUnits = [.hour, .minute]
-        formatter.unitsStyle = .full
-        for (interval, isCritical) in WatchSilence.ladder {
-            let content = UNMutableNotificationContent()
-            content.title = NSLocalizedString("Sport Mode: Watch Silent", comment: "Notification title when the watch has not been heard from during a loan")
-            if let intervalString = formatter.string(from: interval)?.localizedLowercase {
-                content.body = String(format: NSLocalizedString("Nothing heard from your Apple Watch in %@ while it holds the pod. Check that Sport Mode is still looping.", comment: "Notification body for watch silence during a loan. Parameter is the silence duration"), intervalString)
-            }
-            let shouldMuteAlert = alertMuter.shouldMuteAlert(scheduledAt: interval)
-            if isCritical, FeatureFlags.criticalAlertsEnabled {
-                if #available(iOS 15.0, *) {
-                    content.interruptionLevel = .critical
-                }
-                content.sound = shouldMuteAlert ? .defaultCriticalSound(withAudioVolume: 0.0) : .defaultCritical
-            } else {
-                if #available(iOS 15.0, *) {
-                    content.interruptionLevel = .timeSensitive
-                }
-                content.sound = shouldMuteAlert ? nil : .default
-            }
-            content.categoryIdentifier = WatchSilence.category
-            content.threadIdentifier = WatchSilence.category
-            let request = UNNotificationRequest(
-                identifier: WatchSilence.identifier(interval),
-                content: content,
-                trigger: UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: false)
-            )
-            UNUserNotificationCenter.current().add(request)
-        }
-    }
+    func armWatchSilenceNotifications() {}
 
     func clearWatchSilenceNotifications() {
-        let identifiers = WatchSilence.ladder.map { WatchSilence.identifier($0.interval) }
-        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
-        // A fired silence alert must leave Notification Center once the watch resumes contact
-        // (or the loan ends) — pending-only removal left it lingering (adversarial review).
-        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: identifiers)
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: WatchSilence.retiredIdentifiers)
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: WatchSilence.retiredIdentifiers)
     }
 
     func inferDeliveredLoopNotRunningNotifications() {
