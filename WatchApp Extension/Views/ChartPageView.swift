@@ -224,7 +224,15 @@ struct ChartPageView: View {
             updateGlucoseChart()
         }
         .sheet(isPresented: $isShowingCarbList) {
-            CarbList()
+            // Same entry point, different list during a loan: the loan stack's carb store is the
+            // authoritative one then, and the list gains swipe-to-delete because the phone is not
+            // there to edit on. The branch lives here rather than inside the stock list so that
+            // backing the feature out is deleting one file and this `if`.
+            if ExtensionDelegate.shared().stockLoopSession?.loanController.isLoanActive == true {
+                LoanCarbListView(model: LoanCarbListModel())
+            } else {
+                CarbList()
+            }
         }
     }
 
