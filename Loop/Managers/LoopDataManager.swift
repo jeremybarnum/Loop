@@ -39,6 +39,18 @@ final class LoopDataManager {
     
     private var absorptionRatio = 1.0
 
+    /// True while the pod is loaned to the watch. Wired by DeviceDataManager, which owns the loan
+    /// state; defaults to false so nothing changes for a phone that never lends the pod.
+    /// Used only to stand the predicted-low warning down — no dosing decision reads it.
+    var podOnLoanProvider: () -> Bool = { false }
+
+    /// The last predicted-low warning this device posted, handed to the watch in the grant so the
+    /// snooze survives takeover, and refreshed from the watch at hand-back.
+    var lastLowBGWarningNotificationTime: Date? {
+        get { lastNotificationTime }
+        set { lastNotificationTime = newValue }
+    }
+
     private let doseStore: DoseStoreProtocol
 
     let dosingDecisionStore: DosingDecisionStoreProtocol
@@ -1277,6 +1289,17 @@ extension LoopDataManager {
                 self.logger.info("Skipping warnings due to compression low: BG drop of %.1f mg/dL", bgDrop)
                 skipWarnings = true
             }
+        }
+
+        // While the pod is on loan to the watch, the WATCH owns the predicted-low warning and this
+        // side stands down. Not a tidiness rule: during a loan these books are missing every dose
+        // the watch has enacted since the grant, so a warning computed here is wrong in both
+        // directions — it over-warns while the watch is low-temping, because the phone still
+        // believes scheduled basal was delivered, and under-warns after a wrist bolus. iOS also
+        // mirrors phone notifications onto the paired watch, so leaving this on would put a stale
+        // second opinion next to the live one. Same predicate the Loop Failure ladder uses.
+        if podOnLoanProvider() {
+            skipWarnings = true
         }
 
         if !skipWarnings {
@@ -2874,12 +2897,18 @@ extension LoopDataManager {
         // let currentCOB: Double? // Can be added if needed for message wording
     }
 
+    /// `considerEditingCarbsUpToAvoidUnnecessarySuspend` was removed 2026-08-15. It could never
+    /// fire: it required P2 not to cross the warning level, and the "observed absorption does not
+    /// cross, no warning needed" guard returns before this table is consulted. Making it reachable
+    /// would have meant giving it a separate timing anchor — the sooner/later window is measured
+    /// from P2's crossing, which by definition does not exist for that case — and a separate
+    /// snooze, or the advisory would suppress a real low warning for the whole snooze interval.
+    /// Ruled not worth it: it was the only class that was not about a low.
     enum PotentialWarningType {
         case none
         case carbsDefinitelyNeeded
         case rescueCarbsLikelyNeeded
         case mayAvoidRescueCarbsWithEditing
-        case considerEditingCarbsUpToAvoidUnnecessarySuspend
     }
     
     
@@ -3107,7 +3136,13 @@ extension LoopDataManager {
            isNightTime = now >= nightStart || now <= nightEnd
         }
         
-        guard !isNightTime || UserDefaults.standard.bool(forKey: "com.loopkit.Loop.nightwarningEnabled") else { return (.none, nil) }
+        // Reads the accessor the Alert Management toggle actually writes. It previously read a
+        // raw key, "com.loopkit.Loop.nightwarningEnabled", that nothing in the app ever wrote —
+        // the toggle writes "...nightLowBGNotificationsEnabled". bool(forKey:) answers false for an
+        // unwritten key, so the overnight branch was closed no matter how the switch read, and no
+        // night warning had ever been delivered. The accessor also carries the toggle's own
+        // default (true), so the setting now means what the screen says.
+        guard !isNightTime || UserDefaults.standard.nightLowBGNotificationsEnabled else { return (.none, nil) }
         
         guard let suspendThresholdQuantity = settings.suspendThreshold?.quantity,
               let displayUnit = settings.glucoseUnit,
@@ -3272,14 +3307,11 @@ extension LoopDataManager {
                 return (.rescueCarbsLikelyNeeded, context)
             case (false, true, false): // observed absorption sends you low and low temping might help
                 return (.mayAvoidRescueCarbsWithEditing, context)
-            case (true, false, false), (true, false, true): // underdeclaring carbs means that carbs will absorb as more than loop expects and so loop's low temping may not be needed.  It's not really a low BG situation.  TFT is an essentially impossible corner case.
-                return (.considerEditingCarbsUpToAvoidUnnecessarySuspend, context)
-            case (false, false, true): // essentialy impossible corner case
-                decisionLogger.info("Unexpected prediction pattern (F,F,T) - only P3 crossed. No warning issued.")
-                return (.none, nil)
-            case (false, false, false):
-                return (.none, nil)
             default:
+                // Every remaining pattern needs P2 not to cross, and the guard above already
+                // returned for that — so these are unreachable, not merely rare. The two
+                // (T,F,*) rows used to return an "edit carbs up" advisory here; that case was
+                // removed rather than made reachable (see PotentialWarningType).
                 return (.none, nil)
             }
         }
@@ -3318,12 +3350,6 @@ extension LoopDataManager {
                 title: "Probable low in \(timeToLow) mins",
                 body: "Check and consider editing. Low temping may avoid need for rescue carbs. Carbs absorbing at \(ratio)% of expectation",
                 nsMessage: "Conf 3. Time to low: \(timeToLow). Min BG: \(minBG). Time to min: \(timeToMinBG). Ratio:(\(ratio)%. Rec \(rescueCarbMessageStr)g."
-            )
-        case .considerEditingCarbsUpToAvoidUnnecessarySuspend:
-            return (
-                title: "Consider editing up carbs.",
-                body: "Weird situation.  Loop thinks you'll go low and is low temping but you probably won't, based on carb absorption.",
-                nsMessage: "High absorption. Ratio:(\(ratio)%."
             )
         }
     }

@@ -1440,6 +1440,16 @@ final class WatchLoopManager {
                                           watchdogRefreshed ? "refreshed" : "HELD",
                                           sinceCompleted.map { "\($0)s" } ?? "never"))
 
+            // Predicted-low warning. INFORMATION ONLY, and deliberately the LAST thing in the
+            // cycle: it runs after the enact has already returned, so the extra predictions cannot
+            // add latency ahead of a pod command or hold the radio window. Gated on a successful
+            // compute because the warning reads the same cached effects the prediction did — if
+            // those were missing, there is nothing to reason about. Nothing it does is visible to
+            // the next cycle's dosing.
+            if computeSucceeded {
+                self.evaluateLowGlucoseWarning()
+            }
+
             if let error {
                 self.log.error("Loop ended with error: %{public}@", String(describing: error))
                 // Radio defers are logged at the defer site; don't double-log those.
@@ -2142,6 +2152,235 @@ final class WatchLoopManager {
             prediction.append(PredictedGlucoseValue(startDate: finalDate, quantity: last.quantity))
         }
         return prediction.last?.quantity.doubleValue(for: .milligramsPerDeciliter)
+    }
+
+    // MARK: - Predicted-low warning (INFORMATION ONLY)
+
+    /// Everything in this section exists to decide whether to post a notification. None of it is
+    /// reachable from dosing: `predictGlucose()` is untouched, the two extra effects below are
+    /// appended ONLY inside `warningPrediction(extraEffects:)`, and `absorptionRatio` is message
+    /// text. The phone enforces the same separation by keeping these out of `PredictionInputEffect.all`.
+    private let observedAbsorptionManager = ObservedAbsorptionManager()
+
+    /// The amount to add to the carb effect so absorption continues at the OBSERVED rate rather
+    /// than the declared one. Warning predictions only.
+    private var observedAbsorptionEffect: [GlucoseEffect] = []
+
+    /// Observed ÷ expected carb velocity. Message text and logging; never an input to a calculation.
+    private var absorptionRatio: Double = 1.0
+
+    /// The glucose effect of zero-temping from now to the end of insulin action. Warning predictions only.
+    private var suspendInsulinDeliveryEffect: [GlucoseEffect] = []
+
+    /// Inherited from the phone at grant. nil = this phone said nothing, so the wrist stays silent.
+    var lowBGWarningSettings: LoanLowBGWarningSettings?
+
+    /// Snooze anchor. Seeded from the grant so takeover does not reset the phone's clock, and read
+    /// back at hand-back so the phone does not immediately repeat what the wrist just said.
+    /// Written on `dataAccessQueue` with the rest of the warning state.
+    var lastLowBGWarningTime: Date? {
+        didSet {
+            lowBGWarningMirrorLock.lock()
+            _lastLowBGWarningMirror = lastLowBGWarningTime
+            lowBGWarningMirrorLock.unlock()
+        }
+    }
+
+    /// Lock-guarded mirror for the hand-back offer, which is built on the loan controller's queue.
+    /// A `sync` from there onto `dataAccessQueue` is the deadlock direction — the same reason
+    /// `closedLoopEnabledNonBlocking` exists — and this value is read at exactly that moment.
+    private let lowBGWarningMirrorLock = NSLock()
+    private var _lastLowBGWarningMirror: Date?
+    var lastLowBGWarningTimeNonBlocking: Date? {
+        lowBGWarningMirrorLock.lock()
+        defer { lowBGWarningMirrorLock.unlock() }
+        return _lastLowBGWarningMirror
+    }
+
+    /// The previous reading, kept solely for the compression-low check below.
+    private var previousGlucoseForCompressionCheck: (date: Date, value: Double)?
+
+    /// The phone's hardcoded compression threshold (LoopDataManager, `bgDropThreshold`), mg/dL.
+    private static let compressionLowDropThreshold = 10.0
+
+    /// Two readings farther apart than this are not a consecutive pair, so the artifact test does
+    /// not apply. One G7 interval is 5 min; this allows a little jitter without spanning a gap.
+    private static let compressionCheckMaximumGap: TimeInterval = 6 * 60
+
+    /// A read-only mirror of `predictGlucose()` that can append extra effect timelines. Same
+    /// inputs, same order, same tail extension — the only difference is what is added and that it
+    /// never throws. Uses the pending-insulin effect because the phone's warning arm does
+    /// (`usePendingInsulin = true`): a bolus already commanded should count against a predicted low.
+    private func warningPrediction(extraEffects: [[GlucoseEffect]]) -> [PredictedGlucoseValue] {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+        guard let glucose = glucoseStore.latestGlucose else { return [] }
+
+        var effects: [[GlucoseEffect]] = []
+        if let carbEffect = self.carbEffect { effects.append(carbEffect) }
+        if let insulinEffect = self.insulinEffectIncludingPendingInsulin { effects.append(insulinEffect) }
+        effects.append(retrospectiveGlucoseEffect)
+        effects.append(contentsOf: extraEffects)
+
+        let momentum = self.glucoseMomentumEffect ?? []
+
+        var prediction = LoopMath.predictGlucose(startingAt: glucose, momentum: momentum, effects: effects)
+        let finalDate = glucose.startDate.addingTimeInterval(doseStore.longestEffectDuration)
+        if let last = prediction.last, last.startDate < finalDate {
+            prediction.append(PredictedGlucoseValue(startDate: finalDate, quantity: last.quantity))
+        }
+        return prediction
+    }
+
+    /// Mirrors the phone's `updateObservedAbsorptionEffect()`. Very recent and future carb entries
+    /// are excluded because they are usually rescue carbs — scaling those down by an observed
+    /// shortfall would argue for treating a low that is already being treated.
+    private func updateObservedAbsorptionEffect() {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+
+        guard let recentCarbEntries = recentCarbEntries,
+              let carbEffect = self.carbEffect, !carbEffect.isEmpty else {
+            observedAbsorptionEffect = []
+            absorptionRatio = 1.0
+            return
+        }
+
+        let cutoff = now().addingTimeInterval(-ObservedAbsorptionSettings.recentAndFutureCarbExclusionWindow)
+        let entries = recentCarbEntries.filter { $0.startDate <= cutoff }
+        guard !entries.isEmpty else {
+            observedAbsorptionEffect = []
+            absorptionRatio = 1.0
+            return
+        }
+
+        do {
+            let carbEffectStart = now().addingTimeInterval(-carbStore.maximumAbsorptionTimeInterval)
+            let effectsToScale = try carbStore.glucoseEffects(
+                of: entries,
+                startingAt: carbEffectStart,
+                endingAt: nil,
+                effectVelocities: insulinCounteractionEffects)
+
+            let ratio = observedAbsorptionManager.computeObservedAbsorptionRatio(
+                insulinCounteractionEffects: insulinCounteractionEffects,
+                expectedCarbEffects: carbEffect)
+
+            observedAbsorptionEffect = observedAbsorptionManager.generateObservedAbsorptionEffects(
+                absorptionRatio: ratio, carbEffects: effectsToScale)
+            absorptionRatio = ratio
+        } catch {
+            // Warning-only: a failure here costs a warning, never a dose.
+            observedAbsorptionEffect = []
+            absorptionRatio = 1.0
+            SportLog.event("lowbg", "observed absorption effect failed — \(error)")
+        }
+    }
+
+    /// Mirrors the phone: synthesize the negative-basal doses that a full suspend would represent
+    /// over one insulin action duration, and turn them into a glucose effect. These doses are
+    /// hypothetical — they are never enacted, stored, or shown to the ledger.
+    private func updateSuspendInsulinDeliveryEffect() {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+
+        guard let basalRateSchedule = settings.basalRateSchedule,
+              let insulinSensitivity = insulinSensitivityScheduleApplyingOverrideHistory else {
+            suspendInsulinDeliveryEffect = []
+            return
+        }
+
+        let model = doseStore.insulinModelProvider.model(for: pumpManager?.status.insulinType)
+        let startSuspend = now()
+        let endSuspend = startSuspend.addingTimeInterval(model.effectDuration)
+
+        var suspendDoses: [DoseEntry] = []
+        let basalItems = basalRateSchedule.between(start: startSuspend, end: endSuspend)
+
+        for (index, basalItem) in basalItems.enumerated() {
+            let start = index == 0 ? startSuspend : basalItem.startDate
+            let end = index == basalItems.count - 1 ? endSuspend : basalItems[index + 1].startDate
+            suspendDoses.append(DoseEntry(type: .tempBasal, startDate: start, endDate: end,
+                                          value: -basalItem.value, unit: DoseUnit.unitsPerHour))
+        }
+
+        suspendInsulinDeliveryEffect = suspendDoses.glucoseEffects(
+            insulinModelProvider: doseStore.insulinModelProvider,
+            longestEffectDuration: doseStore.longestEffectDuration,
+            insulinSensitivity: insulinSensitivity).filterDateRange(startSuspend, endSuspend)
+    }
+
+    /// Build the three warning predictions and, if the pattern warrants it, post the notification.
+    /// Called at the end of a completed cycle. Everything it touches is warning-only state, so a
+    /// failure anywhere here leaves the dose that was just enacted exactly as it was.
+    func evaluateLowGlucoseWarning() {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+
+        guard let settingsForWarning = lowBGWarningSettings, settingsForWarning.enabled else { return }
+
+        // Compression-low guard, ported from the phone: a sensor artifact drops BG fast enough to
+        // trip every threshold at once, and warning on it trains the user to ignore the warning.
+        //
+        // The phone reads its last two historical samples; the watch has no synchronous accessor
+        // for that and the momentum fetch discards its samples, so the warning keeps its own
+        // two-reading memory rather than reaching into the dosing path to cache them. The check
+        // only applies when the two readings are genuinely CONSECUTIVE — after a cycle gap the
+        // pair spans more than one interval, where a large fall is real rather than an artifact,
+        // and suppressing there would hide exactly the low worth warning about.
+        if let latest = glucoseStore.latestGlucose {
+            let mgdl = HKUnit.milligramsPerDeciliter
+            let value = latest.quantity.doubleValue(for: mgdl)
+            if let previous = previousGlucoseForCompressionCheck, previous.date < latest.startDate {
+                let gap = latest.startDate.timeIntervalSince(previous.date)
+                if gap <= Self.compressionCheckMaximumGap, previous.value - value >= Self.compressionLowDropThreshold {
+                    previousGlucoseForCompressionCheck = (latest.startDate, value)
+                    SportLog.event("lowbg", String(format: "skip — looks like a compression low (%.0f mg/dL drop over %.0fs)", previous.value - value, gap))
+                    return
+                }
+            }
+            if previousGlucoseForCompressionCheck?.date != latest.startDate {
+                previousGlucoseForCompressionCheck = (latest.startDate, value)
+            }
+        }
+
+        updateObservedAbsorptionEffect()
+        updateSuspendInsulinDeliveryEffect()
+
+        let p1 = warningPrediction(extraEffects: [suspendInsulinDeliveryEffect])
+        let p2 = warningPrediction(extraEffects: [observedAbsorptionEffect])
+        let p3 = warningPrediction(extraEffects: [observedAbsorptionEffect, suspendInsulinDeliveryEffect])
+
+        // Resolved by comparison rather than `HKUnit(from:)`, which raises on an unrecognised
+        // string — a crash on the device currently driving the pod.
+        let unit: HKUnit = settingsForWarning.glucoseUnitString == HKUnit.millimolesPerLiter.unitString
+            ? .millimolesPerLiter
+            : .milligramsPerDeciliter
+
+        // Raw schedules, matching the phone's warning arm. The dosing path applies override history;
+        // this deliberately does not, so a warning reads the same on both devices.
+        let currentDate = now()
+        let correctionTarget = settings.glucoseTargetRangeSchedule?
+            .quantityRange(at: currentDate.addingTimeInterval(30 * 60)).lowerBound.doubleValue(for: unit)
+
+        let inputs = WatchLowGlucoseWarning.Inputs(
+            predictionWithZeroTemp: p1,
+            predictionWithObservedAbsorption: p2,
+            predictionWithObservedAbsorptionAndZeroTemp: p3,
+            absorptionRatio: absorptionRatio,
+            suspendThreshold: settings.suspendThreshold?.quantity,
+            displayUnit: unit,
+            insulinSensitivity: settings.insulinSensitivitySchedule?.value(at: currentDate),
+            carbRatio: settings.carbRatioSchedule?.value(at: currentDate),
+            correctionTarget: correctionTarget,
+            mostRecentCarbEntryDate: recentCarbEntries?.last?.startDate,
+            lastNotificationTime: lastLowBGWarningTime ?? settingsForWarning.lastNotificationTime,
+            now: currentDate,
+            settings: settingsForWarning)
+
+        let (outcome, context) = WatchLowGlucoseWarning.evaluate(inputs)
+        guard outcome != .none, let context = context,
+              let message = WatchLowGlucoseWarning.messages(for: outcome, context: context) else { return }
+
+        WatchLowGlucoseWarning.post(title: message.title, body: message.body)
+        lastLowBGWarningTime = currentDate
+        SportLog.event("lowbg", "WARNED · \(message.title)")
     }
 
     /// INSTRUMENTATION ONLY (display + logging; no dosing path reads this). Build the EXACT

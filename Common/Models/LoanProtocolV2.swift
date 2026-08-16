@@ -553,6 +553,20 @@ public struct LoanGrant: Codable, Equatable {
     /// → the watch simply skips the diff lines.
     public let predictionSnapshot: LoanPredictionSnapshot?
 
+    /// The phone's predicted-low warning configuration, inherited for the life of the loan.
+    ///
+    /// The warning is a phone feature whose settings live in the phone's `UserDefaults`, which the
+    /// watch has no access to. Rather than give the wrist its own copy to drift, the phone hands
+    /// over what it would have used and the watch evaluates with it — so turning the feature off,
+    /// or widening the window, takes effect on both devices from the next grant.
+    ///
+    /// nil means "this phone said nothing about low warnings", and the watch stays SILENT. That is
+    /// the correct reading for an older phone that predates the field: silence is what the user
+    /// already experiences today during a loan, whereas inventing defaults would start warning
+    /// someone who never asked for it. `lastNotificationTime` rides inside so the snooze survives
+    /// takeover instead of resetting and double-warning minutes after the phone just fired.
+    public let lowBGWarningSettings: LoanLowBGWarningSettings?
+
     public init(epoch: Int, expiresAt: Date, pumpManagerRawState: Data, podAddress: UInt32,
                 therapySettingsRaw: Data, settingsTimeZoneID: String,
                 doseHistory: [LoanDoseRecord], boundaryRecord: LoanDoseRecord?,
@@ -562,7 +576,8 @@ public struct LoanGrant: Codable, Equatable {
                 phoneClosedLoopEnabled: Bool? = nil,
                 carbHistory: [LoanCarbRecord]? = nil,
                 glucoseHistory: [LoanGlucoseRecord]? = nil,
-                predictionSnapshot: LoanPredictionSnapshot? = nil) {
+                predictionSnapshot: LoanPredictionSnapshot? = nil,
+                lowBGWarningSettings: LoanLowBGWarningSettings? = nil) {
         self.epoch = epoch
         self.expiresAt = expiresAt
         self.pumpManagerRawState = pumpManagerRawState
@@ -578,6 +593,84 @@ public struct LoanGrant: Codable, Equatable {
         self.carbHistory = carbHistory
         self.glucoseHistory = glucoseHistory
         self.predictionSnapshot = predictionSnapshot
+        self.lowBGWarningSettings = lowBGWarningSettings
+    }
+}
+
+/// The phone's predicted-low warning configuration, snapshotted into the grant.
+///
+/// INFORMATION ONLY. Nothing here reaches dosing on either device — these values decide whether a
+/// notification is posted and what it says, nothing more.
+///
+/// The offsets travel as doubles already expressed in `glucoseUnitString`, and the night window
+/// travels as minutes-since-midnight rather than as `Date`s, so neither depends on the two devices
+/// agreeing about a calendar. All durations are seconds.
+public struct LoanLowBGWarningSettings: Codable, Equatable {
+    /// The phone's master switch. False means the user turned the feature off; the watch honours
+    /// that rather than warning on its own initiative.
+    public let enabled: Bool
+    /// Whether warnings are allowed during the night window at all.
+    public let nightWarningsEnabled: Bool
+    /// Subtracted from the suspend threshold to get the warning level, in `glucoseUnitString`.
+    public let dayWarningOffset: Double
+    public let nightWarningOffset: Double
+    /// Minimum gap between two warnings.
+    public let warningSnooze: TimeInterval
+    /// Don't warn about a low that is closer than this — too late to act on usefully.
+    public let dontWarnIfSooner: TimeInterval
+    /// ...or farther away than this — too speculative.
+    public let dontWarnIfLater: TimeInterval
+    /// Suppress most classes for this long after a carb entry, so declaring a meal doesn't
+    /// immediately warn about the low it is already treating.
+    public let delayAfterCarbEntry: TimeInterval
+    /// Night window as minutes since local midnight. Wrapping past midnight is expected and
+    /// handled by `isNightTime(at:)`.
+    public let nightStartMinutes: Int
+    public let nightEndMinutes: Int
+    /// The unit the offsets are expressed in, as `HKUnit.unitString`.
+    public let glucoseUnitString: String
+    /// When the phone last posted a warning, so the snooze carries across takeover. nil = never.
+    public let lastNotificationTime: Date?
+
+    public init(enabled: Bool, nightWarningsEnabled: Bool,
+                dayWarningOffset: Double, nightWarningOffset: Double,
+                warningSnooze: TimeInterval, dontWarnIfSooner: TimeInterval,
+                dontWarnIfLater: TimeInterval, delayAfterCarbEntry: TimeInterval,
+                nightStartMinutes: Int, nightEndMinutes: Int,
+                glucoseUnitString: String, lastNotificationTime: Date?) {
+        self.enabled = enabled
+        self.nightWarningsEnabled = nightWarningsEnabled
+        self.dayWarningOffset = dayWarningOffset
+        self.nightWarningOffset = nightWarningOffset
+        self.warningSnooze = warningSnooze
+        self.dontWarnIfSooner = dontWarnIfSooner
+        self.dontWarnIfLater = dontWarnIfLater
+        self.delayAfterCarbEntry = delayAfterCarbEntry
+        self.nightStartMinutes = nightStartMinutes
+        self.nightEndMinutes = nightEndMinutes
+        self.glucoseUnitString = glucoseUnitString
+        self.lastNotificationTime = lastNotificationTime
+    }
+
+    /// Mirrors the phone's night test, including the wrap case where the window crosses midnight.
+    public func isNightTime(at date: Date, calendar: Calendar = .current) -> Bool {
+        let comps = calendar.dateComponents([.hour, .minute], from: date)
+        let minutes = (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
+        if nightStartMinutes <= nightEndMinutes {
+            return minutes >= nightStartMinutes && minutes <= nightEndMinutes
+        } else {
+            return minutes >= nightStartMinutes || minutes <= nightEndMinutes
+        }
+    }
+
+    /// A copy carrying a new snooze anchor, for the hand-back leg.
+    public func withLastNotificationTime(_ date: Date?) -> LoanLowBGWarningSettings {
+        LoanLowBGWarningSettings(enabled: enabled, nightWarningsEnabled: nightWarningsEnabled,
+                                 dayWarningOffset: dayWarningOffset, nightWarningOffset: nightWarningOffset,
+                                 warningSnooze: warningSnooze, dontWarnIfSooner: dontWarnIfSooner,
+                                 dontWarnIfLater: dontWarnIfLater, delayAfterCarbEntry: delayAfterCarbEntry,
+                                 nightStartMinutes: nightStartMinutes, nightEndMinutes: nightEndMinutes,
+                                 glucoseUnitString: glucoseUnitString, lastNotificationTime: date)
     }
 }
 
@@ -759,9 +852,18 @@ public struct HandbackOffer: Codable, Equatable {
     /// keeps its captured pre-loan value, i.e. the previous restore behavior.
     public let watchClosedLoopEnabled: Bool?
 
+    /// When the WRIST last posted a predicted-low warning, returned so the snooze survives the
+    /// hand-back in the same way the grant carries it outbound. Without it the phone resumes
+    /// warning with a clean clock and can repeat, within a minute or two, what the user just read
+    /// on their wrist — the same duplicate the grant's anchor prevents on the way out.
+    /// nil = the wrist never warned, or an older watch that does not send it; either way the
+    /// phone keeps whatever anchor it already had.
+    public let lastLowBGWarningAt: Date?
+
     public init(epoch: Int, handedBackAt: Date, finalStatus: LoanPodStatus?,
                 odometer: LoanOdometerSnapshot?, events: [LoanEvent], tombstones: [UUID],
-                recovered: Bool, released: Bool? = nil, watchClosedLoopEnabled: Bool? = nil) {
+                recovered: Bool, released: Bool? = nil, watchClosedLoopEnabled: Bool? = nil,
+                lastLowBGWarningAt: Date? = nil) {
         self.epoch = epoch
         self.handedBackAt = handedBackAt
         self.finalStatus = finalStatus
@@ -771,6 +873,7 @@ public struct HandbackOffer: Codable, Equatable {
         self.recovered = recovered
         self.released = released
         self.watchClosedLoopEnabled = watchClosedLoopEnabled
+        self.lastLowBGWarningAt = lastLowBGWarningAt
     }
 }
 

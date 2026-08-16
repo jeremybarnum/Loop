@@ -54,7 +54,7 @@ final class WatchDataManager: NSObject {
 
     private(set) lazy var podLoanController: PodLoanPhoneController = {
         let dosingKey = "PodLoanPhoneController.dosingEnabledBeforeLoan"
-        return PodLoanPhoneController(dependencies: .init(
+        let controller = PodLoanPhoneController(dependencies: .init(
             pumpManager: { [weak self] in self?.deviceManager.pumpManager },
             settings: { [weak self] in self?.deviceManager.loopManager.settings ?? LoopSettings() },
             setAutomaticDosingPaused: { [weak self] paused in
@@ -375,6 +375,16 @@ final class WatchDataManager: NSObject {
             isWatchReachable: { [weak self] in self?.watchSession?.isReachable ?? false },
             lastWatchContactAt: { [weak self] in self?.lockedLastWatchContact.value ?? nil }
         ))
+        // The predicted-low snooze rides in the grant so takeover does not reset the phone's clock
+        // and warn again minutes after this side just did. Read through rather than copied, so the
+        // grant carries the value as of the hand-over.
+        controller.lowBGWarningLastNotificationTime = { [weak self] in
+            self?.deviceManager.loopManager.lastLowBGWarningNotificationTime
+        }
+        controller.setLowBGWarningLastNotificationTime = { [weak self] date in
+            self?.deviceManager.loopManager.lastLowBGWarningNotificationTime = date
+        }
+        return controller
     }()
 
     /// ~30 s of continued execution across a reclaim, so tap-and-pocket completes ON SCHEDULE

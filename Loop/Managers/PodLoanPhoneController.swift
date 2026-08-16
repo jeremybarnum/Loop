@@ -1697,7 +1697,12 @@ final class PodLoanPhoneController {
                             phoneClosedLoopEnabled: settings.dosingEnabled,
                             carbHistory: carbs,
                             glucoseHistory: glucose,
-                            predictionSnapshot: snapshot)
+                            predictionSnapshot: snapshot,
+                            // The predicted-low warning follows the pod. Snapshotted here like the
+                            // therapy settings, so the wrist evaluates with what this phone would
+                            // have used and a mid-loan settings change does not reach through.
+                            lowBGWarningSettings: Self.lowBGWarningSettingsForGrant(
+                                lastNotificationTime: self.lowBGWarningLastNotificationTime?()))
                         self.sendMessage(.grant(grant))
                         self.armT1(for: grantEpoch)
                     }
@@ -1933,6 +1938,18 @@ final class PodLoanPhoneController {
             if let watchClosed = offer.watchClosedLoopEnabled {
                 deps.noteWatchClosedLoop(watchClosed)
                 handbackDiag(offer.epoch, "loop mode INHERITED from the wrist — phone will resume \(watchClosed ? "CLOSED" : "OPEN")")
+            }
+            // The predicted-low snooze comes home with the pod. Only ever moved FORWARD: hand-back
+            // offers are resent every 15 s against ack latency, so an older duplicate must not
+            // rewind the clock and let the phone repeat a warning the wrist already delivered.
+            if let wristWarnedAt = offer.lastLowBGWarningAt {
+                let existing = lowBGWarningLastNotificationTime?()
+                if let existing = existing, existing >= wristWarnedAt {
+                    handbackDiag(offer.epoch, "low-BG snooze anchor kept — the phone's is already newer")
+                } else {
+                    setLowBGWarningLastNotificationTime?(wristWarnedAt)
+                    handbackDiag(offer.epoch, "low-BG snooze anchor INHERITED from the wrist")
+                }
             }
         }
         // Round-2 fix: the odometer audit runs ONLY on the transition-owning final
@@ -2381,6 +2398,47 @@ final class PodLoanPhoneController {
     /// shrinking the dead-watch blind window. Override for tests; the default runs
     /// the real audit 90 s after reclaim (BLE session re-establishment time).
     var postReclaimReAudit: (() -> Void)?
+
+    /// Reads the phone's last predicted-low warning time, so the snooze can ride along in the
+    /// grant instead of resetting at takeover. Injected because that clock lives in
+    /// LoopDataManager. nil provider = no anchor, which the watch reads as "never warned".
+    var lowBGWarningLastNotificationTime: (() -> Date?)?
+
+    /// Writes the phone's snooze anchor when a hand-back returns one from the wrist.
+    var setLowBGWarningLastNotificationTime: ((Date) -> Void)?
+
+    /// Snapshot the phone's predicted-low warning configuration for the grant.
+    ///
+    /// INFORMATION ONLY — these values decide whether a notification is posted on the wrist and
+    /// what it says. The defaults mirror the phone's own accessors exactly, so an unset preference
+    /// behaves identically on both devices.
+    ///
+    /// The night window is hardcoded 22:30–06:30 in LoopDataManager rather than being a setting,
+    /// so it is reproduced here as minutes-since-midnight instead of invented.
+    ///
+    /// KNOWN PHONE DEFECT, deliberately NOT reproduced: the phone gates night warnings on
+    /// `com.loopkit.Loop.nightwarningEnabled`, a key nothing in the app ever writes — the Alert
+    /// Management toggle writes `...nightLowBGNotificationsEnabled`. `bool(forKey:)` returns false
+    /// for the unwritten key, so night warnings never fire on the phone no matter how the toggle
+    /// reads. The grant carries what the TOGGLE says, because propagating a typo to a second
+    /// device would bake it in. Flagged for a ruling rather than fixed here, since fixing the
+    /// phone changes behaviour Jeremy has been living with.
+    static func lowBGWarningSettingsForGrant(lastNotificationTime: Date?) -> LoanLowBGWarningSettings {
+        let defaults = UserDefaults.standard
+        return LoanLowBGWarningSettings(
+            enabled: defaults.lowBGNotificationsEnabled,
+            nightWarningsEnabled: defaults.nightLowBGNotificationsEnabled,
+            dayWarningOffset: Double(defaults.dayWarningOffset),
+            nightWarningOffset: Double(defaults.nightWarningOffset),
+            warningSnooze: TimeInterval(defaults.warningSnooze) * 60,
+            dontWarnIfSooner: TimeInterval(defaults.dontWarnIfSooner) * 60,
+            dontWarnIfLater: TimeInterval(defaults.dontWarnIfLater) * 60,
+            delayAfterCarbEntry: TimeInterval(defaults.delayAfterCarbEntry) * 60,
+            nightStartMinutes: 22 * 60 + 30,
+            nightEndMinutes: 6 * 60 + 30,
+            glucoseUnitString: HKUnit.milligramsPerDeciliter.unitString,
+            lastNotificationTime: lastNotificationTime)
+    }
     private func schedulePostReclaimReAudit(recordsCommitted: Bool) {
         queue.asyncAfter(deadline: .now() + 90) { [weak self] in
             guard let self = self else { return }

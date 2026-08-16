@@ -411,6 +411,12 @@ final class DeviceDataManager {
         loopManager.presetActivationObservers.append(alertManager)
         loopManager.presetActivationObservers.append(analyticsServicesManager)
 
+        // While the pod is on loan the watch owns the predicted-low warning, so this side stands
+        // down — the phone's books lack every dose the watch has enacted since the grant, which
+        // makes a warning computed here wrong in both directions. Same predicate the Loop Failure
+        // ladder already uses; nothing in dosing reads it.
+        loopManager.podOnLoanProvider = { [weak self] in self?.isPodLoanedToWatch ?? false }
+
         watchManager = WatchDataManager(deviceManager: self, healthStore: healthStore)   // PODLOAN consumer: see reclaimPodLoanFromWatch()
 
         let remoteDataServicesManager = RemoteDataServicesManager(

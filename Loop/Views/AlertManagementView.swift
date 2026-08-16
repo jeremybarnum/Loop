@@ -523,8 +523,12 @@ extension UserDefaults {
         get { object(forKey: Key.delayAfterCarbEntry.rawValue) as? Int ?? 30 }
         set { set(newValue, forKey: Key.delayAfterCarbEntry.rawValue) }
     }
+    /// Defaults OFF. The overnight branch was dead until the key mismatch was fixed, so no build
+    /// has ever delivered a night warning; defaulting it on would have turned that into a run of
+    /// 22:30–06:30 alerts nobody opted into, on the first launch after the fix. Off means the
+    /// first overnight warning anyone gets is one they asked for.
     var nightLowBGNotificationsEnabled: Bool {
-        get { object(forKey: Key.nightLowBGNotificationsEnabled.rawValue) as? Bool ?? true }
+        get { object(forKey: Key.nightLowBGNotificationsEnabled.rawValue) as? Bool ?? false }
         set { set(newValue, forKey: Key.nightLowBGNotificationsEnabled.rawValue) }
     }
     

@@ -650,6 +650,15 @@ final class PodLoanWatchController {
         // GRANTING phone runs, instead of silently assuming Standard. nil (older phone) →
         // Standard, the pre-existing behavior.
         loopManager.setIntegralRetrospectiveCorrection(grant.integralRetrospectiveCorrectionEnabled ?? false)
+        // Predicted-low warning: inherited wholesale, and nil means an older phone that said
+        // nothing — the wrist then stays silent rather than warning on invented defaults. The
+        // snooze anchor travels inside, so a warning the phone posted moments before the hand-over
+        // still suppresses the wrist's first cycle.
+        loopManager.lowBGWarningSettings = grant.lowBGWarningSettings
+        loopManager.lastLowBGWarningTime = grant.lowBGWarningSettings?.lastNotificationTime
+        SportLog.event("lowbg", grant.lowBGWarningSettings.map {
+            "inherited · enabled=\($0.enabled) night=\($0.nightWarningsEnabled) offsets \(Int($0.dayWarningOffset))/\(Int($0.nightWarningOffset)) · snooze \(Int($0.warningSnooze / 60))m · window \(Int($0.dontWarnIfSooner / 60))-\(Int($0.dontWarnIfLater / 60))m"
+        } ?? "no settings in grant — wrist warnings stay OFF")
         // The wrist inherits the phone's loop mode: if the phone is closed the watch is
         // closed, if the phone is open the watch is open. An earlier rule reset every loan
         // to OPEN/advisory regardless; it was superseded for the sake of a second user's
@@ -1739,7 +1748,11 @@ final class PodLoanWatchController {
             // the way back, mirroring the grant's outbound inheritance. Read through the
             // NON-BLOCKING mirror: this runs on `queue`, and `closedLoopEnabled` would sync
             // onto dataAccessQueue — the deadlock direction.
-            watchClosedLoopEnabled: loopManager.closedLoopEnabledNonBlocking)
+            watchClosedLoopEnabled: loopManager.closedLoopEnabledNonBlocking,
+            // Hands the snooze anchor back, so the phone resuming its own warnings does not
+            // repeat within minutes what the user just read on their wrist. Same non-blocking
+            // mirror discipline as the loop mode above — this is built on `queue`.
+            lastLowBGWarningAt: loopManager.lastLowBGWarningTimeNonBlocking)
         if offer.released == true, finalOfferSentAt == nil { finalOfferSentAt = self.now() }
         handbackResendCount += 1
         // Self-documenting limbo (a wait can run to 97 silent minutes of 15s resends):
