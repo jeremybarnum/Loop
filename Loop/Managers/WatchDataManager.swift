@@ -123,18 +123,33 @@ final class WatchDataManager: NSObject {
                 // otherwise indistinguishable from one that worked.
                 let kind: String? = (dictionary[LoanProtocol.userInfoKey] as? Data)
                     .flatMap { try? JSONDecoder().decode(LoanKindPeek.self, from: $0) }?.kind
+                // SIZE IS LOGGED ON BOTH PATHS, and to the FILE, not just os_log.
+                //
+                // These lines previously went only to os_log, so the phone's log file recorded a
+                // confident "GRANT" with no way to tell whether the send actually left the device.
+                // The watch logs every send it makes; the phone logged none, and that asymmetry is
+                // why a grant that the phone believed it sent and the watch never saw could not be
+                // told apart from a grant that failed on the way out.
+                //
+                // Bytes matter specifically: sendMessage has a payload ceiling that
+                // transferUserInfo does not, and the grant grows with the dose/carb/glucose
+                // history it seeds. A grant that outgrows the urgent channel fails HERE, and
+                // without the number there is nothing to correlate against.
+                let size = (dictionary[LoanProtocol.userInfoKey] as? Data)?.count ?? 0
                 guard LoanMessage.isInteractiveHandshake(transport: dictionary),
                       session.isReachable else {
-                    let size = (dictionary[LoanProtocol.userInfoKey] as? Data)?.count ?? 0
                     self?.log.default("Loan send kind=%{public}@ path=queued (interactive=%{public}@ reachable=%{public}@ bytes=%{public}d)",
                                       kind ?? "?", String(describing: LoanMessage.isInteractiveHandshake(transport: dictionary)),
                                       String(describing: session.isReachable), size)
+                    PhoneLog.event("wc", "send \(kind ?? "?") path=queued bytes=\(size) (interactive=\(LoanMessage.isInteractiveHandshake(transport: dictionary)) reachable=\(session.isReachable))")
                     session.transferUserInfo(dictionary)
                     return
                 }
-                self?.log.default("Loan send kind=%{public}@ path=urgent", kind ?? "?")
+                self?.log.default("Loan send kind=%{public}@ path=urgent bytes=%{public}d", kind ?? "?", size)
+                PhoneLog.event("wc", "send \(kind ?? "?") path=urgent bytes=\(size)")
                 session.sendMessage(dictionary, replyHandler: nil, errorHandler: { [weak self] error in
                     self?.log.error("Loan urgent send FAILED kind=%{public}@ — %{public}@ — falling back to queued", kind ?? "?", String(describing: error))
+                    PhoneLog.event("wc", "urgent send FAILED \(kind ?? "?") bytes=\(size) — \(error.localizedDescription) — falling back to queued")
                     session.transferUserInfo(dictionary)
                 })
             },
