@@ -116,7 +116,24 @@ enum StockLoopStack {
         // Same isReadOnly determination as LoopCore's controllerInLocalDirectory()
         // (its Bundle.isAppExtension helper is module-internal).
         let isAppExtension = Bundle.main.bundleURL.pathExtension == "appex"
-        let cacheStore = PersistenceController(directoryURL: documents.appendingPathComponent("com.loopkit.LoopKit.StockLoop"), isReadOnly: isAppExtension)
+        // The directory name carries the LoopKit MODEL VERSION, and must keep doing so.
+        //
+        // This branch and the SportMode fork ship under the SAME bundle identifier, so installing
+        // one over the other inherits the other's store — and their LoopKit models are not the
+        // same (the fork is at Modelv4, this branch at Modelv6, which changed the optionality of
+        // CachedGlucoseObject attributes). Reading a v4 row through v6's non-optional accessors
+        // traps inside StoredGlucoseSample(managedObject:), which is a crash on the glucose
+        // INGEST path — i.e. every few minutes, forever, with no way to get back into the app.
+        //
+        // Versioning the path sidesteps migration entirely rather than betting on lightweight
+        // migration across two branches that evolve independently. It is safe to strand the old
+        // directory: everything here is a CACHE. Doses, carbs and glucose are re-seeded from the
+        // grant at every takeover, and the G7 refills glucose within minutes. The one piece of
+        // loan state that must survive — the event journal — is a separate JSON file in
+        // Application Support (PodLoanJournalV2.json) and is untouched by this.
+        let storeName = "com.loopkit.LoopKit.StockLoop.Modelv6"
+        let cacheStore = PersistenceController(directoryURL: documents.appendingPathComponent(storeName), isReadOnly: isAppExtension)
+        SportLog.event("session", "stack: store \(storeName)")
         let provenanceIdentifier = HKSource.default().bundleIdentifier
 
         // The override history no longer belongs to the stores — they hold data, not therapy

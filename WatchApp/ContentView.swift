@@ -20,17 +20,35 @@ struct ContentView: View {
     /// user here, and a bare `2` at that call site would be a silent dependency on page order.
     private static let sportPage = 2
 
+    /// Stock's onboarding gate, applied per PAGE instead of to the whole app.
+    ///
+    /// The stock pages have nothing to show until the phone reports both managers onboarded, so
+    /// they still show stock's prompt. Sport Mode and diagnostics stay reachable regardless: the
+    /// wrist has its own stores, its own CGM and its own log, and the diagnostics page is how you
+    /// find out WHY the phone says onboarding is incomplete. Gating it behind the very flag you
+    /// are trying to debug is the wrong way round.
+    private var isOnboarded: Bool {
+        loopManager.activeContext?.isOnboardingCompleted == true
+    }
+
     var body: some View {
         VStack {
             // TabView for swipeable pages
             TabView(selection: $selectedPage) {
-                WatchActionsView()
+                // Gated pages keep their slots whether or not they are gated — the page indices
+                // below are load-bearing (see sportPage), and a page that vanishes renumbers
+                // the ones beside it.
+                Group {
+                    if isOnboarded { WatchActionsView() } else { CompleteOnboardingView() }
+                }
                     .tag(0)
                     .task {
                         loopManager.requestContextUpdate {}
                     }
 
-                ChartPageView()
+                Group {
+                    if isOnboarded { ChartPageView() } else { CompleteOnboardingView() }
+                }
                     .tag(1)
                     .task {
                         loopManager.requestContextUpdate {}
