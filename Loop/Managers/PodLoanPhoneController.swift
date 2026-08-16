@@ -1708,6 +1708,25 @@ final class PodLoanPhoneController {
                                        o.syncIdentifier.uuidString)
                             }
                         }
+                        // What LoopSettings.rawValue drops on this branch, carried alongside it.
+                        // The schedules are the ONLY dosing limits the wrist has, and the insulin
+                        // model decides its forecast — encoding failure here is therefore not a
+                        // detail: the watch refuses the loan on missing schedules (loud), but a
+                        // missing insulin model would silently downgrade it to rapid-acting-adult.
+                        // So the model is logged when it is carried, and its absence is logged too.
+                        var supplement: [String: Any] = [:]
+                        supplement["basalRateSchedule"] = settings.basalRateSchedule?.rawValue
+                        supplement["insulinSensitivitySchedule"] = settings.insulinSensitivitySchedule?.rawValue
+                        supplement["carbRatioSchedule"] = settings.carbRatioSchedule?.rawValue
+                        supplement["defaultRapidActingModel"] = settings.defaultRapidActingModel?.rawValue
+                        let supplementData = supplement.isEmpty ? nil
+                            : try? PropertyListSerialization.data(fromPropertyList: supplement, format: .binary, options: 0)
+                        os_log("[grant] settings supplement: basal=%{public}@ isf=%{public}@ cr=%{public}@ model=%{public}@",
+                               log: self.log, type: .default,
+                               settings.basalRateSchedule == nil ? "MISSING" : "ok",
+                               settings.insulinSensitivitySchedule == nil ? "MISSING" : "ok",
+                               settings.carbRatioSchedule == nil ? "MISSING" : "ok",
+                               settings.defaultRapidActingModel.map { String(describing: $0) } ?? "MISSING (wrist will assume rapid-acting adult)")
                         let grant = LoanGrant(
                             epoch: grantEpoch,
                             expiresAt: handedOverAt.addingTimeInterval(.minutes(5)),
@@ -1731,7 +1750,8 @@ final class PodLoanPhoneController {
                             carbHistory: carbs,
                             glucoseHistory: glucose,
                             predictionSnapshot: snapshot,
-                            activeOverrideRaw: overrideData)
+                            activeOverrideRaw: overrideData,
+                            therapySettingsSupplementRaw: supplementData)
                         self.sendMessage(.grant(grant))
                         self.armT1(for: grantEpoch)
                     }
