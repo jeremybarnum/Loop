@@ -540,7 +540,11 @@ final class PodLoanWatchController {
         simStopGlucoseFeed()
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 1, repeating: 30)
-        timer.setEventHandler { [weak self] in self?.loopManager.simIngestPhoneGlucose() }
+        // Hops to main because the injection reads the watch's shared context, which is
+        // main-actor state; the timer itself stays on the loan queue.
+        timer.setEventHandler { [weak self] in
+            Task { @MainActor in self?.loopManager.simIngestPhoneGlucose() }
+        }
         timer.resume()
         simGlucoseTimer = timer
     }

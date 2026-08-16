@@ -2518,6 +2518,7 @@ extension WatchLoopManager: CGMManagerDelegate {
     /// exactly as it does from a real G7. Mirrors processCGMReadingResult(.newData) + the loop
     /// trigger, minus the CGMManager plumbing. In OPEN loop the recommendation is computed but
     /// not enacted (advisory); a nil pump means checkPumpDataAndLoop just loops — no pod touched.
+    @MainActor
     func simIngestPhoneGlucose() {
         let ctx = ExtensionDelegate.shared().loopManager.activeContext
         guard let quantity = ctx?.glucose, let date = ctx?.glucoseDate else { return }
@@ -2532,11 +2533,14 @@ extension WatchLoopManager: CGMManagerDelegate {
                 isDisplayOnly: false,
                 wasUserEntered: false,
                 syncIdentifier: "sim-\(Int(date.timeIntervalSince1970))")
-            self.glucoseStore.addGlucoseSamples([sample]) { result in
-                if case .failure(let error) = result {
+            Task {
+                do {
+                    _ = try await self.glucoseStore.addGlucoseSamples([sample])
+                } catch {
                     self.log.error("SIM glucose add failed: %{public}@", String(describing: error))
                 }
-                self.dataAccessQueue.async { self.glucoseMomentumEffect = nil }   // Momentum-invalidation parity
+                // Nothing to invalidate — the algorithm derives momentum from the glucose it is
+                // handed on each run, so the next cycle picks this reading up by itself.
                 let now = self.now()
                 if now.timeIntervalSince(self.lastCGMLoopTrigger) > .minutes(4.2) {
                     self.lastCGMLoopTrigger = now
