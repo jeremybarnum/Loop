@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		95C7AE061FC149ADB8D1928D /* PhoneLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C9DDCE80C384964BDDF1C8B /* PhoneLog.swift */; };
+		9F0BBEE28E9F45FC8DB3D8C9 /* LoanReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDBF9B08E9314F23AB94CF5A /* LoanReconciler.swift */; };
+		D6201CDD83934B508AC33A24 /* PodLoanPhoneController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE577A60A96B49F3A608001B /* PodLoanPhoneController.swift */; };
 		70E4E9FE2ABE49DDBDF4B0A9 /* StoredDataAlgorithmInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37485C37C7ED4485A1EDFB19 /* StoredDataAlgorithmInput.swift */; };
 		9D327AEC023D4304B936E605 /* TempBasalRecommendation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D49A0BC23884B9DB40301B5 /* TempBasalRecommendation.swift */; };
 		CE6DF9FAD8C24F7ABFAF31FF /* UserDefaults+LoopIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A973A0F6CF644FFAA48989FC /* UserDefaults+LoopIntents.swift */; };
@@ -826,6 +829,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		7C9DDCE80C384964BDDF1C8B /* PhoneLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "PhoneLog.swift"; path = "Loop/Managers/PhoneLog.swift"; sourceTree = SOURCE_ROOT; };
+		EDBF9B08E9314F23AB94CF5A /* LoanReconciler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LoanReconciler.swift"; path = "Loop/Managers/LoanReconciler.swift"; sourceTree = SOURCE_ROOT; };
+		BE577A60A96B49F3A608001B /* PodLoanPhoneController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "PodLoanPhoneController.swift"; path = "Loop/Managers/PodLoanPhoneController.swift"; sourceTree = SOURCE_ROOT; };
 		37485C37C7ED4485A1EDFB19 /* StoredDataAlgorithmInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "StoredDataAlgorithmInput.swift"; path = "Loop/Models/StoredDataAlgorithmInput.swift"; sourceTree = SOURCE_ROOT; };
 		7D49A0BC23884B9DB40301B5 /* TempBasalRecommendation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "TempBasalRecommendation.swift"; path = "Loop/Extensions/TempBasalRecommendation.swift"; sourceTree = SOURCE_ROOT; };
 		A973A0F6CF644FFAA48989FC /* UserDefaults+LoopIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "UserDefaults+LoopIntents.swift"; path = "Common/Extensions/UserDefaults+LoopIntents.swift"; sourceTree = SOURCE_ROOT; };
@@ -3462,6 +3468,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				95C7AE061FC149ADB8D1928D /* PhoneLog.swift in Sources */,
+				9F0BBEE28E9F45FC8DB3D8C9 /* LoanReconciler.swift in Sources */,
+				D6201CDD83934B508AC33A24 /* PodLoanPhoneController.swift in Sources */,
 				7DF84FAADBC24ABEA2C0829E /* LoopUpdateContext.swift in Sources */,
 				0514DEEA3C0A404FBA775CD7 /* SettingsProvider.swift in Sources */,
 				C17824A51E1AD4D100D9D25C /* ManualBolusRecommendation.swift in Sources */,
