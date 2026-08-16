@@ -7,6 +7,27 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		CE6DF9FAD8C24F7ABFAF31FF /* UserDefaults+LoopIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A973A0F6CF644FFAA48989FC /* UserDefaults+LoopIntents.swift */; };
+		2F17426EF105437983CDF0BC /* NSBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42BE0808089545E7BE6AE359 /* NSBundle.swift */; };
+		486CE113B97B462BB93FB253 /* FakeGlucose.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64F1E343CD1F4DBFA5E9CB3B /* FakeGlucose.swift */; };
+		9D70FCCAA141489A9E49ADA6 /* RuntimeStateLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F520419E66CD453A809324D1 /* RuntimeStateLog.swift */; };
+		0580A71C73134CBC9DE309C5 /* LoopStallWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8B06DC011B54C348CC2A48F /* LoopStallWatchdog.swift */; };
+		7DF84FAADBC24ABEA2C0829E /* LoopUpdateContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0291A8F31C4B68ACE34BFC /* LoopUpdateContext.swift */; };
+		A2439AB6D2CE4F36A2C75F11 /* LoopUpdateContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3F641189FC64AA2B92246C7 /* LoopUpdateContext.swift */; };
+		A72567C5546B4E6FBFACA3CB /* SimpleInsulinDose.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4971DDDFFE8B43BB86B4696D /* SimpleInsulinDose.swift */; };
+		0514DEEA3C0A404FBA775CD7 /* SettingsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CB27CFCF9F0424FBB930CFF /* SettingsProvider.swift */; };
+		0929161C5DEB4DFB9F0826AE /* SettingsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A28F30399B460CABF4EDD2 /* SettingsProvider.swift */; };
+		54CB774C12C6459DB3AFF5C2 /* DeviceLogThrottle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A40BA18B2486452C8083B70A /* DeviceLogThrottle.swift */; };
+		CDF3506125404EE4B35ED4F3 /* WatchSettingsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47ED7BDEE1B2443E910FF0BA /* WatchSettingsProvider.swift */; };
+		5369A0D029FD4E84B4FAF69C /* SessionInsulinLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F8854DCF0F74B638B60C995 /* SessionInsulinLedger.swift */; };
+		4EBEFA1A38224E7E8CE432A7 /* WatchLoopManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B9D276E492E4C55A6858278 /* WatchLoopManager.swift */; };
+		F06FDE1F67AF4011937B1529 /* SportLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C940C6F431E6435B971D98B2 /* SportLog.swift */; };
+		CC344F6DE0F4450CAAB8E79D /* LoanEventJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BE52FFEB9514DF393401630 /* LoanEventJournal.swift */; };
+		DBA92856969B47C19B2BD581 /* WorkoutKeepalive.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C77C38CD576410EA92A5B9A /* WorkoutKeepalive.swift */; };
+		1A353D3E971442118DD6956C /* WatchDoseEnactor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3F9328E659A49159A47F646 /* WatchDoseEnactor.swift */; };
+		C5A82FBEC2AE43769A416B01 /* PodLoanWatchController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 036B897A66F14CAA9CD5CAD0 /* PodLoanWatchController.swift */; };
+		BC5C47547CCB49F9BA618108 /* StockLoopSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D15E99F644E4E50A306CA01 /* StockLoopSession.swift */; };
+		335CB5BBEBED4922B20C0CEC /* StockLoopStack.swift in Sources */ = {isa = PBXBuildFile; fileRef = F23412C23E024F9A9399C435 /* StockLoopStack.swift */; };
 		7B29B5CF4AAA4DA0B6E2F1A9 /* LoanProtocolV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0861EE8E371426287E4542F /* LoanProtocolV2.swift */; };
 		7CC4501AABA3438A9291A003 /* LoanProtocolV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0861EE8E371426287E4542F /* LoanProtocolV2.swift */; };
 		FA2B53E0B7A546DB996D8B5E /* RileyLinkBLEKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C03823C4CE664226A1EDAF41 /* RileyLinkBLEKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -804,6 +825,27 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A973A0F6CF644FFAA48989FC /* UserDefaults+LoopIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "UserDefaults+LoopIntents.swift"; path = "Common/Extensions/UserDefaults+LoopIntents.swift"; sourceTree = SOURCE_ROOT; };
+		42BE0808089545E7BE6AE359 /* NSBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "NSBundle.swift"; path = "Common/Extensions/NSBundle.swift"; sourceTree = SOURCE_ROOT; };
+		64F1E343CD1F4DBFA5E9CB3B /* FakeGlucose.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "FakeGlucose.swift"; path = "WatchApp Extension/StockLoop/FakeGlucose.swift"; sourceTree = SOURCE_ROOT; };
+		F520419E66CD453A809324D1 /* RuntimeStateLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "RuntimeStateLog.swift"; path = "WatchApp Extension/StockLoop/RuntimeStateLog.swift"; sourceTree = SOURCE_ROOT; };
+		C8B06DC011B54C348CC2A48F /* LoopStallWatchdog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LoopStallWatchdog.swift"; path = "WatchApp Extension/StockLoop/LoopStallWatchdog.swift"; sourceTree = SOURCE_ROOT; };
+		DD0291A8F31C4B68ACE34BFC /* LoopUpdateContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LoopUpdateContext.swift"; path = "Loop/Managers/LoopUpdateContext.swift"; sourceTree = SOURCE_ROOT; };
+		E3F641189FC64AA2B92246C7 /* LoopUpdateContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LoopUpdateContext.swift"; path = "Loop/Managers/LoopUpdateContext.swift"; sourceTree = SOURCE_ROOT; };
+		4971DDDFFE8B43BB86B4696D /* SimpleInsulinDose.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "SimpleInsulinDose.swift"; path = "Loop/Models/SimpleInsulinDose.swift"; sourceTree = SOURCE_ROOT; };
+		0CB27CFCF9F0424FBB930CFF /* SettingsProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "SettingsProvider.swift"; path = "Loop/Managers/SettingsProvider.swift"; sourceTree = SOURCE_ROOT; };
+		00A28F30399B460CABF4EDD2 /* SettingsProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "SettingsProvider.swift"; path = "Loop/Managers/SettingsProvider.swift"; sourceTree = SOURCE_ROOT; };
+		A40BA18B2486452C8083B70A /* DeviceLogThrottle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "DeviceLogThrottle.swift"; path = "WatchApp Extension/StockLoop/DeviceLogThrottle.swift"; sourceTree = SOURCE_ROOT; };
+		47ED7BDEE1B2443E910FF0BA /* WatchSettingsProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchSettingsProvider.swift"; path = "WatchApp Extension/StockLoop/WatchSettingsProvider.swift"; sourceTree = SOURCE_ROOT; };
+		2F8854DCF0F74B638B60C995 /* SessionInsulinLedger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "SessionInsulinLedger.swift"; path = "WatchApp Extension/StockLoop/SessionInsulinLedger.swift"; sourceTree = SOURCE_ROOT; };
+		7B9D276E492E4C55A6858278 /* WatchLoopManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchLoopManager.swift"; path = "WatchApp Extension/StockLoop/WatchLoopManager.swift"; sourceTree = SOURCE_ROOT; };
+		C940C6F431E6435B971D98B2 /* SportLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "SportLog.swift"; path = "WatchApp Extension/StockLoop/SportLog.swift"; sourceTree = SOURCE_ROOT; };
+		1BE52FFEB9514DF393401630 /* LoanEventJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LoanEventJournal.swift"; path = "WatchApp Extension/StockLoop/LoanEventJournal.swift"; sourceTree = SOURCE_ROOT; };
+		8C77C38CD576410EA92A5B9A /* WorkoutKeepalive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WorkoutKeepalive.swift"; path = "WatchApp Extension/StockLoop/WorkoutKeepalive.swift"; sourceTree = SOURCE_ROOT; };
+		F3F9328E659A49159A47F646 /* WatchDoseEnactor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "WatchDoseEnactor.swift"; path = "WatchApp Extension/StockLoop/WatchDoseEnactor.swift"; sourceTree = SOURCE_ROOT; };
+		036B897A66F14CAA9CD5CAD0 /* PodLoanWatchController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "PodLoanWatchController.swift"; path = "WatchApp Extension/StockLoop/PodLoanWatchController.swift"; sourceTree = SOURCE_ROOT; };
+		4D15E99F644E4E50A306CA01 /* StockLoopSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "StockLoopSession.swift"; path = "WatchApp Extension/StockLoop/StockLoopSession.swift"; sourceTree = SOURCE_ROOT; };
+		F23412C23E024F9A9399C435 /* StockLoopStack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "StockLoopStack.swift"; path = "WatchApp Extension/StockLoop/StockLoopStack.swift"; sourceTree = SOURCE_ROOT; };
 		D0861EE8E371426287E4542F /* LoanProtocolV2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LoanProtocolV2.swift"; path = "LoopCore/PodLoan/LoanProtocolV2.swift"; sourceTree = SOURCE_ROOT; };
 		D225A7D23EA74B1E8286A377 /* PortLinkSpike.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "PortLinkSpike.swift"; path = "WatchApp Extension/StockLoop/PortLinkSpike.swift"; sourceTree = SOURCE_ROOT; };
 		C03823C4CE664226A1EDAF41 /* RileyLinkBLEKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = RileyLinkBLEKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -3418,6 +3460,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7DF84FAADBC24ABEA2C0829E /* LoopUpdateContext.swift in Sources */,
+				0514DEEA3C0A404FBA775CD7 /* SettingsProvider.swift in Sources */,
 				C17824A51E1AD4D100D9D25C /* ManualBolusRecommendation.swift in Sources */,
 				897A5A9624C2175B00C4E71D /* BolusEntryView.swift in Sources */,
 				4F70C2131DE90339006380B7 /* StatusExtensionContext.swift in Sources */,
@@ -3682,6 +3726,25 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CE6DF9FAD8C24F7ABFAF31FF /* UserDefaults+LoopIntents.swift in Sources */,
+				2F17426EF105437983CDF0BC /* NSBundle.swift in Sources */,
+				486CE113B97B462BB93FB253 /* FakeGlucose.swift in Sources */,
+				9D70FCCAA141489A9E49ADA6 /* RuntimeStateLog.swift in Sources */,
+				0580A71C73134CBC9DE309C5 /* LoopStallWatchdog.swift in Sources */,
+				A2439AB6D2CE4F36A2C75F11 /* LoopUpdateContext.swift in Sources */,
+				A72567C5546B4E6FBFACA3CB /* SimpleInsulinDose.swift in Sources */,
+				0929161C5DEB4DFB9F0826AE /* SettingsProvider.swift in Sources */,
+				54CB774C12C6459DB3AFF5C2 /* DeviceLogThrottle.swift in Sources */,
+				CDF3506125404EE4B35ED4F3 /* WatchSettingsProvider.swift in Sources */,
+				5369A0D029FD4E84B4FAF69C /* SessionInsulinLedger.swift in Sources */,
+				4EBEFA1A38224E7E8CE432A7 /* WatchLoopManager.swift in Sources */,
+				F06FDE1F67AF4011937B1529 /* SportLog.swift in Sources */,
+				CC344F6DE0F4450CAAB8E79D /* LoanEventJournal.swift in Sources */,
+				DBA92856969B47C19B2BD581 /* WorkoutKeepalive.swift in Sources */,
+				1A353D3E971442118DD6956C /* WatchDoseEnactor.swift in Sources */,
+				C5A82FBEC2AE43769A416B01 /* PodLoanWatchController.swift in Sources */,
+				BC5C47547CCB49F9BA618108 /* StockLoopSession.swift in Sources */,
+				335CB5BBEBED4922B20C0CEC /* StockLoopStack.swift in Sources */,
 				97FE483500394B2C98B4C8F8 /* PortLinkSpike.swift in Sources */,
 				C1275DD62E808E2F0013B99D /* LoopWatchApp.swift in Sources */,
 				894F6DDD243C0A2300CCE676 /* CarbAmountLabel.swift in Sources */,

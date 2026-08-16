@@ -82,17 +82,9 @@ protocol DosingManagerDelegate {
     func didMakeDosingDecision(_ decision: StoredDosingDecision)
 }
 
-enum LoopUpdateContext: Int {
-    case insulin
-    case carbs
-    case glucose
-    case preferences
-    case forecast
-}
-
 @MainActor
 final class LoopDataManager: ObservableObject {
-    nonisolated static let LoopUpdateContextKey = "com.loudnate.Loop.LoopDataManager.LoopUpdateContext"
+    nonisolated static let LoopUpdateContextKey = LoopUpdateContext.notificationKey
 
     // Represents the current state of the loop algorithm for display
     var displayState = AlgorithmDisplayState()
@@ -1253,7 +1245,6 @@ extension StoredDataAlgorithmInput {
 }
 
 extension Notification.Name {
-    static let LoopDataUpdated = Notification.Name(rawValue: "com.loopkit.Loop.LoopDataUpdated")
     static let LoopRunning = Notification.Name(rawValue: "com.loopkit.Loop.LoopRunning")
     static let LoopCycleCompleted = Notification.Name(rawValue: "com.loopkit.Loop.LoopCycleCompleted")
 }
