@@ -31,6 +31,13 @@ final class WatchDataManager: NSObject {
     private unowned let temporaryPresetsManager: TemporaryPresetsManager
     private unowned let alertManager: AlertManager
 
+    /// Where inbound pod-loan messages go. Installed by the loan controller when Sport Mode is
+    /// wired up, and nil in a stock build — which is what keeps this feature's traffic from
+    /// being a hard dependency of the WatchConnectivity plumbing. Nil with a message arriving
+    /// is a real fault (the watch believes a loan exists and the phone has no owner for it),
+    /// so it logs rather than being silently tolerated.
+    var podLoanMessageReceiver: ((LoanMessage) -> Void)?
+
     init(
         deviceManager: DeviceDataManager,
         settingsManager: SettingsManager,
@@ -543,7 +550,31 @@ extension WatchDataManager: WCSessionDelegate {
     }
 
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
-        assertionFailure("We currently don't expect any userInfo messages transferred from the watch side")
+        // The pod loan protocol's QUEUED channel carries watch→phone traffic — streamed dose
+        // records, status reports, hand-back offers — so this is no longer an impossible
+        // callback. It previously asserted, which would take the app down on the first such
+        // message, and during a loan that is the worst possible moment: the watch is holding
+        // the pump and the phone is the side that has to commit its records.
+        //
+        // Three outcomes, none of them a silent drop (loan protocol: never ack-and-drop).
+        // Ours → route it. Not ours → log, because stock genuinely sends nothing here and a
+        // new sender is worth seeing. Undecodable-but-ours → log loudly; the sender's own
+        // nack path handles recovery.
+        Task { @MainActor in
+            do {
+                if let message = try LoanMessage.decode(fromTransport: userInfo) {
+                    guard let receiver = podLoanMessageReceiver else {
+                        log.error("Pod loan message with no receiver installed: %{public}@", message.kindLabel)
+                        return
+                    }
+                    receiver(message)
+                    return
+                }
+                log.default("Unexpected userInfo from the watch: %{public}@", String(describing: Array(userInfo.keys)))
+            } catch {
+                log.error("Undecodable pod loan payload from the watch: %{public}@", String(describing: error))
+            }
+        }
     }
 
     nonisolated func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
