@@ -567,6 +567,26 @@ public struct LoanGrant: Codable, Equatable {
     /// field looks like. The two are deliberately not distinguished: a fresh loan starts from no
     /// override either way, so there is nothing for the watch to clear at takeover.
     public let activeOverrideRaw: Data?
+    /// The parts of the therapy settings that `LoopSettings.rawValue` NO LONGER CARRIES, as a
+    /// plist dict keyed by the names that rawValue used to use.
+    ///
+    /// `therapySettingsRaw` is `LoopSettings.rawValue`, and on this branch that serialization
+    /// silently drops `basalRateSchedule`, `insulinSensitivitySchedule`, `carbRatioSchedule` and
+    /// `defaultRapidActingModel` — the struct still has the properties, so the phone sets them and
+    /// everything compiles, but they never reach the wire. The first three make the watch refuse
+    /// the loan outright ("basal schedule didn't arrive from the phone"), which is at least loud.
+    /// The fourth does not: without it the wrist silently falls back to rapid-acting-adult while
+    /// the phone may be dosing on a different insulin model, so identical inputs produce different
+    /// forecasts with no error — the same failure shape as the RC-flag divergence above.
+    ///
+    /// Carried as a supplement rather than by re-adding the keys to `LoopSettings.rawValue`: that
+    /// serialization is upstream's and is used for persistence elsewhere, and widening it to suit
+    /// this protocol would be a deviation in a shared type. This keeps the deviation on the wire,
+    /// where it belongs, and follows the pattern the flags above already set.
+    ///
+    /// nil (older phone) → the watch validates the decoded settings as before and refuses if they
+    /// are incomplete, which is the pre-existing behavior.
+    public let therapySettingsSupplementRaw: Data?
 
     public init(epoch: Int, expiresAt: Date, pumpManagerRawState: Data, podAddress: UInt32,
                 therapySettingsRaw: Data, settingsTimeZoneID: String,
@@ -578,7 +598,8 @@ public struct LoanGrant: Codable, Equatable {
                 carbHistory: [LoanCarbRecord]? = nil,
                 glucoseHistory: [LoanGlucoseRecord]? = nil,
                 predictionSnapshot: LoanPredictionSnapshot? = nil,
-                activeOverrideRaw: Data? = nil) {
+                activeOverrideRaw: Data? = nil,
+                therapySettingsSupplementRaw: Data? = nil) {
         self.epoch = epoch
         self.expiresAt = expiresAt
         self.pumpManagerRawState = pumpManagerRawState
@@ -595,6 +616,7 @@ public struct LoanGrant: Codable, Equatable {
         self.glucoseHistory = glucoseHistory
         self.predictionSnapshot = predictionSnapshot
         self.activeOverrideRaw = activeOverrideRaw
+        self.therapySettingsSupplementRaw = therapySettingsSupplementRaw
     }
 }
 

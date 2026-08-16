@@ -610,6 +610,28 @@ final class PodLoanWatchController {
         if let raw = (try? PropertyListSerialization.propertyList(from: grant.therapySettingsRaw, options: [], format: nil)) as? LoopSettings.RawValue {
             decodedSettings = LoopSettings(rawValue: raw)
         }
+        // Put back what LoopSettings.rawValue dropped. On this branch that serialization does not
+        // carry the three schedules or the insulin model, so `decodedSettings` above is complete
+        // only in the fields upstream still bothers to encode — and the schedules are the ONLY
+        // dosing limits the wrist has. Applied BEFORE the completeness check below, which is what
+        // was refusing the loan with "basal schedule didn't arrive from the phone".
+        if var s = decodedSettings, let data = grant.therapySettingsSupplementRaw,
+           let supplement = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any] {
+            if let raw = supplement["basalRateSchedule"] as? BasalRateSchedule.RawValue {
+                s.basalRateSchedule = BasalRateSchedule(rawValue: raw)
+            }
+            if let raw = supplement["insulinSensitivitySchedule"] as? InsulinSensitivitySchedule.RawValue {
+                s.insulinSensitivitySchedule = InsulinSensitivitySchedule(rawValue: raw)
+            }
+            if let raw = supplement["carbRatioSchedule"] as? CarbRatioSchedule.RawValue {
+                s.carbRatioSchedule = CarbRatioSchedule(rawValue: raw)
+            }
+            if let raw = supplement["defaultRapidActingModel"] as? ExponentialInsulinModelPreset.RawValue {
+                s.defaultRapidActingModel = ExponentialInsulinModelPreset(rawValue: raw)
+            }
+            decodedSettings = s
+            SportLog.event("loan", "grant settings supplement applied — basal \(s.basalRateSchedule == nil ? "MISSING" : "ok"), ISF \(s.insulinSensitivitySchedule == nil ? "MISSING" : "ok"), CR \(s.carbRatioSchedule == nil ? "MISSING" : "ok"), model \(s.defaultRapidActingModel.map { String(describing: $0) } ?? "default")")
+        }
         let missing: String? = {
             guard let s = decodedSettings else { return "settings snapshot" }
             if s.basalRateSchedule == nil { return "basal schedule" }
