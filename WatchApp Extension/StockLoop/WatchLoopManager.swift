@@ -168,15 +168,6 @@ final class WatchLoopManager {
             // schedules with the active override.
             settingsProvider.update(with: settings)
 
-            // Schedule changes invalidate cached effects so the next cycle recomputes under
-            // the new schedules instead of serving stale ones. Runs unconditionally rather
-            // than diffed against oldValue: a grant applies once per loan, so the extra
-            // invalidation costs nothing and a mid-session re-push behaves identically.
-            dataAccessQueue.async {
-                self.carbEffect = nil
-                self.insulinEffect = nil
-                self.insulinEffectIncludingPendingInsulin = nil
-            }
         }
     }
 
@@ -214,11 +205,6 @@ final class WatchLoopManager {
                 SportLog.event("override", "CLEARED — schedules resolve unscaled again")
             }
 
-            dataAccessQueue.async {
-                self.carbEffect = nil
-                self.insulinEffect = nil
-                self.insulinEffectIncludingPendingInsulin = nil
-            }
         }
     }
 
@@ -743,7 +729,7 @@ final class WatchLoopManager {
                 // Same queue as the rest of this closure, so these are consistent with the
                 // prediction being rendered rather than a torn read from another cycle.
                 retrospectiveCorrectionIsIntegral: retrospectiveCorrection is IntegralRetrospectiveCorrection,
-                retrospectiveDiscrepancyCount: retrospectiveGlucoseDiscrepancies?.count ?? 0,
+                retrospectiveDiscrepancyCount: lastAlgorithmEffects?.retrospectiveGlucoseDiscrepancies.count ?? 0,
                 overrideLabel: {
                     guard let o = scheduleOverride, o.isActive() else { return nil }
                     return o.context.presetNameForLog
@@ -795,7 +781,7 @@ final class WatchLoopManager {
         ctx.glucose = latest?.quantity
         ctx.glucoseDate = latest?.startDate
         ctx.glucoseTrend = (latest as? StoredGlucoseSample)?.trend
-        ctx.iob = insulinOnBoard?.value
+        ctx.iob = activeInsulin
         ctx.loopLastRunDate = lastLoopCompleted
         ctx.isClosedLoop = _closedLoopEnabled
         if let dose = runningTempBasal() {
@@ -911,35 +897,6 @@ final class WatchLoopManager {
         #endif
     }
 
-    // MARK: Cached effects (mirrors LoopDataManager's cached-effect properties; dataAccessQueue only)
-
-    private var glucoseMomentumEffect: [GlucoseEffect]?
-    private var insulinEffect: [GlucoseEffect]?
-    private var insulinEffectIncludingPendingInsulin: [GlucoseEffect]?
-    private var insulinCounteractionEffects: [GlucoseEffectVelocity] = [] {
-        didSet {
-            carbEffect = nil
-        }
-    }
-    private var carbEffect: [GlucoseEffect]? {
-        didSet {
-            // RC-freeze fix: re-calculate retrospective correction when carb effects
-            // change (carb data may be back-dated). The port DROPPED the phone's
-            // LoopDataManager.carbEffect.didSet (:352-358); without it,
-            // retrospectiveGlucoseDiscrepancies — set to [] at cold-start takeover (empty glucose
-            // store) — was never nil'd again, and updateRetrospectiveGlucoseEffect() only runs
-            // when it's nil (:780), so RC froze at the empty value for the WHOLE loan ("RC —" on
-            // every [predict] line). Nil-ing it here restores per-cycle RC recomputation.
-            //
-            // We deliberately do NOT also nil predictedGlucose (the phone does). On the watch
-            // predictedGlucose is read only for DISPLAY (glance eventual), never for dosing
-            // (DoseMath uses the locally-computed prediction), and the glance intentionally
-            // KEEPS the last eventual visible + grades its freshness rather than blanking it on a
-            // failed cycle. Nil-ing it here would re-blank the glance on failed post-reading cycles.
-            retrospectiveGlucoseDiscrepancies = nil
-        }
-    }
-    private var insulinOnBoard: InsulinValue?
     /// Last-seen adapter delivery count, for producer attribution on the INGEST line. Touched only
     /// on the CGM delegate queue (processCGMReadingResult), so no lock of its own.
 
@@ -1042,18 +999,6 @@ final class WatchLoopManager {
     private var retrospectiveGlucoseEffect: [GlucoseEffect] = []
 
     /// Mirrors LoopDataManager's buffer multiplier for combining retrospective discrepancies.
-    private let retrospectiveCorrectionGroupingIntervalMultiplier = 1.01
-
-    /// Carb entries behind the current `carbEffect`, kept for the potential-entry branch.
-    /// Read/written on `dataAccessQueue` like every other cached effect.
-    private var recentCarbEntries: [StoredCarbEntry]?
-
-    private var retrospectiveGlucoseDiscrepancies: [GlucoseEffect]? {
-        didSet {
-            retrospectiveGlucoseDiscrepanciesSummed = retrospectiveGlucoseDiscrepancies?.combinedSums(of: LoopMath.retrospectiveCorrectionGroupingInterval * retrospectiveCorrectionGroupingIntervalMultiplier)
-        }
-    }
-    private var retrospectiveGlucoseDiscrepanciesSummed: [GlucoseChange]?
 
     /// Selected from the loan grant so the watch runs the SAME implementation the phone
     /// would (`LoopDataManager.retrospectiveCorrection:457`). Frozen for the loan like the
@@ -1182,8 +1127,9 @@ final class WatchLoopManager {
     /// queue that could land after the next cycle has already read the stale array.
     private func clearCachedInsulinEffects() {   // dataAccessQueue
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-        insulinEffect = nil
-        insulinEffectIncludingPendingInsulin = nil
+        // Nothing to clear: the algorithm holds no effects between cycles, so the next run
+        // reads the rebuilt books directly. Kept as a call site so the ledger mutations that
+        // used to depend on it still read as deliberate.
         // NOT predictedGlucose — the watch deliberately diverges from the phone here, and the
         // first cut of this method broke it. Stock's clearCachedInsulinEffects() also nils
         // predictedGlucose; on the watch that value is DISPLAY-ONLY (the glance/diagnostic
@@ -1485,7 +1431,7 @@ final class WatchLoopManager {
                 // basal), distinct from "nothing was decided" — conflating them is what
                 // made 08:48 unreadable.
                 let rec = decided.map { String(format: "%.2f U/h", $0.basalAdjustment.unitsPerHour) } ?? "none"
-                SportLog.event("loop", "cycle OK — BG \(bg), IOB \(self.insulinOnBoard.map { String(format: "%.2f", $0.value) } ?? "—"), temp \(rec)")
+                SportLog.event("loop", "cycle OK — BG \(bg), IOB \(self.activeInsulin.map { String(format: "%.2f", $0) } ?? "—"), temp \(rec)")
                 self.logPredictionBreakdown(decided: decided)
                 self.publishHUDContext()
             }
@@ -1511,7 +1457,7 @@ final class WatchLoopManager {
             } else if error == nil {
                 // Cache the recommendation for the DOSING panel (as loop() does), but do NOT enact.
                 self.lastRecommendation = self.recommendedAutomaticDose?.recommendation
-                SportLog.event("loop", "takeover prediction refresh — IOB \(self.insulinOnBoard.map { String(format: "%.2f U", $0.value) } ?? "—"), eventual + carbs refreshed (no enact)")
+                SportLog.event("loop", "takeover prediction refresh — IOB \(self.activeInsulin.map { String(format: "%.2f U", $0) } ?? "—"), eventual + carbs refreshed (no enact)")
                 self.logPredictionBreakdown(decided: self.recommendedAutomaticDose?.recommendation)
             }
             self.publishHUDContext()
@@ -2054,17 +2000,16 @@ final class WatchLoopManager {
     /// invalidation. Deliberately does NOT force a loop() — takeover has no glucose yet; the
     /// first reading-triggered cycle (within ~5 min) recomputes and doses.
     func invalidateCarbEffect() {
-        dataAccessQueue.async { self.carbEffect = nil }
+        // No-op by construction now — carb effects are computed inside each run from the
+        // entries then in the store, so a seeded entry is picked up by the next cycle without
+        // anything being dropped first.
     }
 
     /// IOB dedup (2026-07-22): after the grant wipe-then-seed rebuilds the insulin books,
     /// drop the cached insulin effects so the next cycle recomputes from the clean store
     /// instead of riding the pre-wipe curve (IOB itself refetches every cycle already).
     func invalidateInsulinEffect() {
-        dataAccessQueue.async {
-            self.insulinEffect = nil
-            self.insulinEffectIncludingPendingInsulin = nil
-        }
+        // No-op by construction now — see invalidateCarbEffect.
     }
 
     /// After the grant seeds ~3 h of glucose, drop the glucose-derived caches so the next cycle
@@ -2074,11 +2019,10 @@ final class WatchLoopManager {
     /// momentum and discrepancies directly so nothing rides a stale cold-start value. No forced
     /// loop(): the first live glucose reading drives the first cycle (mirrors invalidateCarbEffect).
     func invalidateGlucoseDerivedEffects() {
-        dataAccessQueue.async {
-            self.glucoseMomentumEffect = nil
-            self.insulinCounteractionEffects = []
-            self.retrospectiveGlucoseDiscrepancies = nil
-        }
+        // No-op by construction now. This one is worth a note: the cold-start freeze it was
+        // written to break — momentum computed once against an empty store, retrospective
+        // correction stuck at an empty value for a whole loan — cannot happen to a function
+        // that keeps nothing between calls.
     }
 
     /// Prime the cached IOB AT takeover, from the seed's own IOB read, so the glance shows the
@@ -2089,7 +2033,9 @@ final class WatchLoopManager {
     /// this brings IOB to parity for glance consistency. The next cycle overwrites it with the
     /// fully-reconciled value (e.g. after the first pod-status read trims the seeded open temp).
     func primeInsulinOnBoard(_ value: InsulinValue?) {
-        dataAccessQueue.async { self.insulinOnBoard = value }
+        // Show the seed's own IOB immediately rather than leaving the glance blank until the
+        // first cycle lands; the next run overwrites it with the reconciled value.
+        dataAccessQueue.async { self.activeInsulin = value?.value }
     }
 
     /// The takeover SEED-IN anchor comes from the LEDGER (the store no longer holds
@@ -2101,7 +2047,7 @@ final class WatchLoopManager {
                 completion(nil); return
             }
             let iob = ledger.insulinOnBoard(at: date, basalSchedule: basal)
-            self.insulinOnBoard = InsulinValue(startDate: date, value: iob)
+            self.activeInsulin = iob
             completion(iob)
         }
     }
@@ -2119,7 +2065,6 @@ final class WatchLoopManager {
                 // with 20 g COB on board). Invalidate + re-run the loop NOW: the
                 // prediction, recommendation, and HUD update within seconds of the
                 // entry, independent of CGM timing — stock parity restored.
-                self.dataAccessQueue.async { self.carbEffect = nil }
                 self.loop()
             case .failure(let error):
                 SportLog.event("loan", "carb store add FAILED — \(String(describing: error))")
@@ -2161,7 +2106,6 @@ final class WatchLoopManager {
             switch result {
             case .success:
                 SportLog.event("loan", String(format: "carb DELETED locally: %.0f g · lookup: %@", grams, lookupDiag))
-                self.dataAccessQueue.async { self.carbEffect = nil }
                 self.loop()
                 // POST-DELETE VERIFICATION: read the store back and say what remains, so
                 // "deleted but still showing" can never again be ambiguous between a failed
