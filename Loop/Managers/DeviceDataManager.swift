@@ -43,6 +43,11 @@ protocol UploadEventListener {
 @MainActor
 final class DeviceDataManager {
 
+    /// Set by LoopAppManager. Weak: the app manager owns it; this is a lookup path so the pump
+    /// tile can ask about a loan and offer the reclaim.
+    weak var watchManager: WatchDataManager?
+
+
     private let log = DiagnosticLog(category: "DeviceDataManager")
 
     let pluginManager: PluginManager
@@ -1485,5 +1490,37 @@ extension DeviceDataManager: DeviceStatusProvider {}
 extension DeviceDataManager: BolusStateProvider {
     var bolusState: LoopKit.PumpManagerStatus.BolusState? {
         return pumpManager?.status.bolusState
+    }
+}
+
+
+// MARK: - Pod loan (client API)
+
+extension DeviceDataManager {
+    /// Revoke the watch's loan and bring the pod home. Dosing stays paused until the records
+    /// the watch is holding have been reconciled.
+    func reclaimPodLoanFromWatch() {
+        watchManager?.podLoanController.reclaimNow()
+    }
+
+    /// Any non-owner state — the pod is not this phone's to command.
+    var isPodLoanedToWatch: Bool {
+        watchManager?.podLoanController.isPodLoanedOut ?? false
+    }
+
+    /// Grant sent, takeover not yet confirmed: the outbound half of the handover.
+    var isPodTakeoverInProgress: Bool {
+        watchManager?.podLoanController.isPodTakeoverInProgress ?? false
+    }
+
+    /// Actively coming home. Extends through the settle window — state can read `.owner` while
+    /// the pod's BLE link is still re-establishing, and clearing the indicator at that instant
+    /// would claim control the phone does not yet have.
+    var isPodLoanReclaiming: Bool {
+        watchManager?.podLoanController.isReclaimSettlingOnly ?? false
+    }
+
+    var podReclaimProgress: PodLoanPhoneController.ReclaimProgress? {
+        watchManager?.podLoanController.reclaimProgress
     }
 }

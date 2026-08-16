@@ -1761,9 +1761,41 @@ final class StatusTableViewController: LoopChartsTableViewController {
     }
 
     @objc private func pumpStatusTapped(_ sender: UIGestureRecognizer) {
+        // While the pod is on the watch, the pump tile's normal destination is the pump manager's
+        // own settings — which would let someone command a pod this phone is not holding. Offer
+        // the reclaim instead, and say plainly why the usual screen is not available.
+        if deviceManager.isPodLoanedToWatch {
+            presentPodLoanReclaimPrompt()
+            return
+        }
+        if deviceManager.isPodLoanReclaiming {
+            presentPodSettlingNotice()
+            return
+        }
         if let pumpStatusView = sender.view as? PumpStatusHUDView {
             executeHUDTapAction(deviceManager.didTapOnPumpStatus(pumpStatusView.pumpManagerProvidedHUD), from: sender.view)
         }
+    }
+
+    private func presentPodLoanReclaimPrompt() {
+        let alert = UIAlertController(
+            title: NSLocalizedString("Pod Is on the Watch", comment: "Title of the reclaim prompt when tapping the pump tile during a loan"),
+            message: NSLocalizedString("Reclaim the pod to this phone? The watch's Sport Mode session will end and its records will be collected.", comment: "Message of the reclaim prompt"),
+            preferredStyle: .actionSheet)
+        alert.addAction(UIAlertAction(title: NSLocalizedString("Reclaim Now", comment: "Button to reclaim the pod from the watch"), style: .default) { [weak self] _ in
+            self?.deviceManager.reclaimPodLoanFromWatch()
+        })
+        alert.addAction(UIAlertAction(title: NSLocalizedString("Cancel", comment: "Cancel the reclaim prompt"), style: .cancel))
+        present(alert, animated: true)
+    }
+
+    private func presentPodSettlingNotice() {
+        let alert = UIAlertController(
+            title: NSLocalizedString("Finishing Pod Handover", comment: "Title shown when the phone owns the pod but its connection is not re-established"),
+            message: NSLocalizedString("Sport Mode has ended and this phone is back in control, but it is still reconnecting to the pod. Try again in a moment.", comment: "Message shown while the phone is re-establishing the pod connection after a reclaim"),
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: NSLocalizedString("OK", comment: "Dismiss the pod-settling notice"), style: .default))
+        present(alert, animated: true)
     }
 
     @objc private func cgmStatusTapped( _ sender: UIGestureRecognizer) {
