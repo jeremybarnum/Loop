@@ -36,7 +36,6 @@
 		5E16C423E6FB4551BA3BCAD2 /* RileyLinkKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = ACC381BA270149C9B0DDCB01 /* RileyLinkKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		101AA7370B0E499FBD88BB9F /* G7SensorKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = F8760AF31E3C43F6AFBA1BE7 /* G7SensorKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		0FA5104ABA1346E891F759AD /* OmnipodKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A60E55AC77554C50A4196482 /* OmnipodKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		97FE483500394B2C98B4C8F8 /* PortLinkSpike.swift in Sources */ = {isa = PBXBuildFile; fileRef = D225A7D23EA74B1E8286A377 /* PortLinkSpike.swift */; };
 		D96C7D3C9C4B414AAEAB3339 /* RileyLinkBLEKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C03823C4CE664226A1EDAF41 /* RileyLinkBLEKit.framework */; };
 		D6A12EF6F5AD4B4CAABDD49B /* RileyLinkKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = ACC381BA270149C9B0DDCB01 /* RileyLinkKit.framework */; };
 		921B7FAE002E40EFAB3F50C6 /* G7SensorKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F8760AF31E3C43F6AFBA1BE7 /* G7SensorKit.framework */; };
@@ -851,7 +850,6 @@
 		4D15E99F644E4E50A306CA01 /* StockLoopSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "StockLoopSession.swift"; path = "WatchApp Extension/StockLoop/StockLoopSession.swift"; sourceTree = SOURCE_ROOT; };
 		F23412C23E024F9A9399C435 /* StockLoopStack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "StockLoopStack.swift"; path = "WatchApp Extension/StockLoop/StockLoopStack.swift"; sourceTree = SOURCE_ROOT; };
 		D0861EE8E371426287E4542F /* LoanProtocolV2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "LoanProtocolV2.swift"; path = "LoopCore/PodLoan/LoanProtocolV2.swift"; sourceTree = SOURCE_ROOT; };
-		D225A7D23EA74B1E8286A377 /* PortLinkSpike.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "PortLinkSpike.swift"; path = "WatchApp Extension/StockLoop/PortLinkSpike.swift"; sourceTree = SOURCE_ROOT; };
 		C03823C4CE664226A1EDAF41 /* RileyLinkBLEKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = RileyLinkBLEKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		ACC381BA270149C9B0DDCB01 /* RileyLinkKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = RileyLinkKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		F8760AF31E3C43F6AFBA1BE7 /* G7SensorKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = G7SensorKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -3751,7 +3749,6 @@
 				C5A82FBEC2AE43769A416B01 /* PodLoanWatchController.swift in Sources */,
 				BC5C47547CCB49F9BA618108 /* StockLoopSession.swift in Sources */,
 				335CB5BBEBED4922B20C0CEC /* StockLoopStack.swift in Sources */,
-				97FE483500394B2C98B4C8F8 /* PortLinkSpike.swift in Sources */,
 				C1275DD62E808E2F0013B99D /* LoopWatchApp.swift in Sources */,
 				894F6DDD243C0A2300CCE676 /* CarbAmountLabel.swift in Sources */,
 				B455C7352BD14E30002B847E /* Comparable.swift in Sources */,
