@@ -30,8 +30,15 @@ struct ContentView: View {
     /// wrist has its own stores, its own CGM and its own log, and the diagnostics page is how you
     /// find out WHY the phone says onboarding is incomplete. Gating it behind the very flag you
     /// are trying to debug is the wrong way round.
+    /// A LIVE LOAN OPENS THE GATE ON ITS OWN. The flag this consults is the PHONE's — it is set
+    /// from the phone's own CGM and pump onboarding state and reaches the wrist inside a context
+    /// update. During a loan the phone may be switched off entirely, so that flag cannot arrive
+    /// and cannot go stale in the user's favour: waiting for it blanks precisely the screens the
+    /// wrist needs while it is the one holding the pod. The watch is authoritative then, with its
+    /// own stores and its own CGM, so the phone's readiness is not the question being asked.
     private var isOnboarded: Bool {
-        loopManager.activeContext?.isOnboardingCompleted == true
+        if glanceModel.wantsFocus { return true }
+        return loopManager.activeContext?.isOnboardingCompleted == true
     }
 
     var body: some View {
