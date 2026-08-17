@@ -1944,7 +1944,19 @@ final class PodLoanPhoneController {
     }
 
     private func armT1(for grantEpoch: Int) {
-        if grantOfferedAt == nil { grantOfferedAt = deps.now() }
+        // STAMPED PER GRANT, unconditionally. The old `if grantOfferedAt == nil` guard meant a
+        // FAILED takeover — which never clears this — leaked its anchor into the next grant, so
+        // the elapsed this feeds kept growing across attempts: field 2026-08-17, e59 reported
+        // "takeover IN PROGRESS at +145s" 21 s after its own grant, quoting e58's clock.
+        //
+        // That is not just a wrong number in a log line. `handleStatusReport` compares this
+        // elapsed against `takeoverProgressCeiling`, and past the ceiling it stops extending the
+        // dead-man and reclaims at once — so the longer a session ran, the sooner its takeovers
+        // were abandoned.
+        //
+        // Safe at both call sites: the grant path wants a fresh anchor, and the relaunch path
+        // finds this nil regardless (it is not persisted) so its behaviour is unchanged.
+        grantOfferedAt = deps.now()
         armGrantLostProbe(for: grantEpoch)
         // Pre-scheduled, so its text is fixed FIVE MINUTES before it lands and cannot describe
         // anything that happens in between. It therefore states only what is certain at the
@@ -3028,6 +3040,9 @@ final class PodLoanPhoneController {
         // this path never opens a settle window, so neither end-site below it would fire.
         cancelReclaimLadder()
         deps.endReclaimBackgroundTask()
+        // The takeover this anchored is over, however it ended. Leaving it set is what let a
+        // failed attempt's clock follow the NEXT grant around.
+        grantOfferedAt = nil
         (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
         state = .owner
         deps.setAutomaticDosingPaused(false)
