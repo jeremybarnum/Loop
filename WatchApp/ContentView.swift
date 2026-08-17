@@ -15,13 +15,16 @@ struct ContentView: View {
     @State private var presetToConfirm: SelectablePreset? = nil
     @State private var selectedPage = UserDefaults.standard.startOnChartPage ? 1 : 0
     @StateObject private var glanceModel = GlanceViewModel()
-    /// Owned here, like the glance model: the list reloads from the loan's own carb store on
-    /// appear, so it must outlive a swipe away and back rather than being rebuilt each time.
-    @StateObject private var loanCarbModel = LoanCarbListModel()
 
     /// The glance's page index. Named rather than written inline because a live loan lands the
     /// user here, and a bare `2` at that call site would be a silent dependency on page order.
     private static let sportPage = 2
+
+    /// Mirrored into plain state rather than read from `glanceModel` inside `body`. Reading the
+    /// model here would subscribe THE ROOT VIEW to a timer-driven object on the loan path, so
+    /// every glance tick would invalidate the whole app — and a publish that arrives off the main
+    /// thread would do it from the wrong thread, which SwiftUI does not survive.
+    @State private var loanIsLive = false
 
     /// Stock's onboarding gate, applied per PAGE instead of to the whole app.
     ///
@@ -30,18 +33,13 @@ struct ContentView: View {
     /// wrist has its own stores, its own CGM and its own log, and the diagnostics page is how you
     /// find out WHY the phone says onboarding is incomplete. Gating it behind the very flag you
     /// are trying to debug is the wrong way round.
-    /// A LIVE LOAN OPENS THE GATE ON ITS OWN. The flag this consults is the PHONE's — it is set
-    /// from the phone's own CGM and pump onboarding state and reaches the wrist inside a context
-    /// update. During a loan the phone may be switched off entirely, so that flag cannot arrive
-    /// and cannot go stale in the user's favour: waiting for it blanks precisely the screens the
-    /// wrist needs while it is the one holding the pod. The watch is authoritative then, with its
-    /// own stores and its own CGM, so the phone's readiness is not the question being asked.
-    /// Mirrored into plain state rather than read from `glanceModel` inside `body`. Reading the
-    /// model here would subscribe THE ROOT VIEW to a timer-driven object on the loan path, so
-    /// every glance tick would invalidate the whole app — and a publish that arrives off the main
-    /// thread would do it from the wrong thread, which SwiftUI does not survive.
-    @State private var loanIsLive = false
-
+    ///
+    /// A LIVE LOAN OPENS THE GATE ON ITS OWN. The flag this consults is the PHONE's — set from the
+    /// phone's own CGM and pump onboarding state, and reaching the wrist inside a context update.
+    /// During a loan the phone may be switched off entirely, so it cannot arrive: waiting for it
+    /// blanks precisely the screens the wrist needs while it is the one holding the pod. The watch
+    /// is authoritative then, with its own stores and its own CGM, so the phone's readiness is not
+    /// the question being asked.
     private var isOnboarded: Bool {
         if loanIsLive { return true }
         return loopManager.activeContext?.isOnboardingCompleted == true
@@ -77,16 +75,14 @@ struct ContentView: View {
                 GlanceView(model: glanceModel)
                     .tag(Self.sportPage)
 
-                // The loan's own carb list — the wrist's only way to see and RETRACT carbs it
-                // entered while holding the pod. It sits next to Sport Mode rather than with the
-                // stock pages because during a loan the watch owns the carb store; the stock
-                // list reads the phone's.
-                LoanCarbListView(model: loanCarbModel)
-                    .tag(Self.sportPage + 1)
-
                 // Diagnostics. Last, so a swipe never lands here by accident.
+                //
+                // Retracting a loan-time carb lives in the STOCK Active Carbs list (CarbList),
+                // reached by tapping through from the chart page — not on a page of its own. It
+                // is the same list either way; during a loan it reads the loan's store and gains
+                // swipe-to-delete.
                 LoanDebugView()
-                    .tag(Self.sportPage + 2)
+                    .tag(Self.sportPage + 1)
             }
             .tabViewStyle(.page)
             .indexViewStyle(.page(backgroundDisplayMode: .automatic))
