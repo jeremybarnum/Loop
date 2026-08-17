@@ -135,6 +135,22 @@ final class WatchDataManager: NSObject {
                     session.sendMessage(dictionary, replyHandler: nil, errorHandler: { _ in })
                     return
                 }
+
+                // REACHABILITY IS RECORDED HERE, AT SEND TIME, IN THE PHONE'S OWN FILE.
+                //
+                // Every previous diagnosis of a lost grant has been inferred from the reclaim
+                // ladder's "reachable N", which is sampled MINUTES later — after the watch has
+                // timed out, gone idle and let its screen sleep. That is a reading about the
+                // wrong moment, and reasoning from it produced two wrong explanations.
+                //
+                // Note what isReachable means on iOS: the WATCH APP IS IN THE FOREGROUND. It is
+                // not a statement about Bluetooth, WiFi, proximity or battery. Both devices can
+                // be inches apart, charged and connected, and this is still false.
+                let bytes = (dictionary[LoanProtocol.userInfoKey] as? Data)?.count ?? 0
+                let reachableNow = session.isReachable
+                let interactive = LoanMessage.isInteractiveHandshake(transport: dictionary)
+                PhoneLog.event("wc", "send \(kind ?? "?") path=\(interactive && reachableNow ? "urgent" : "queued") "
+                                   + "bytes=\(bytes) (interactive=\(interactive) reachable=\(reachableNow))")
                 guard LoanMessage.isInteractiveHandshake(transport: dictionary),
                       session.isReachable else {
                     let size = (dictionary[LoanProtocol.userInfoKey] as? Data)?.count ?? 0
@@ -147,6 +163,7 @@ final class WatchDataManager: NSObject {
                 self?.log.default("Loan send kind=%{public}@ path=urgent", kind ?? "?")
                 session.sendMessage(dictionary, replyHandler: nil, errorHandler: { [weak self] error in
                     self?.log.error("Loan urgent send FAILED kind=%{public}@ — %{public}@ — falling back to queued", kind ?? "?", String(describing: error))
+                    PhoneLog.event("wc", "send \(kind ?? "?") URGENT FAILED — \(String(describing: error)) — falling back to queued")
                     session.transferUserInfo(dictionary)
                 })
             },
@@ -1056,6 +1073,17 @@ extension WatchDataManager: WCSessionDelegate {
     func session(_ session: WCSession, didFinish userInfoTransfer: WCSessionUserInfoTransfer, error: Error?) {
         if let error = error {
             log.error("%{public}@", String(describing: error))
+
+            // Into the FILE as well, because this is where a lost grant would surface and until
+            // now it surfaced only in os_log — invisible to every after-the-fact investigation.
+            // The retry switch below covers settings and bolus volumes; LOAN traffic is not
+            // handled by it at all, so a queued grant that fails here is dropped silently and
+            // the watch simply times out with no grant and no explanation on either side.
+            // `userInfo` is documented-unreliable on failure (see the note below), so the count
+            // of still-outstanding transfers is logged as the more dependable signal.
+            PhoneLog.event("wc", "transferUserInfo FAILED — \(String(describing: error)) "
+                               + "· outstanding=\(session.outstandingUserInfoTransfers.count) "
+                               + "· name=\(userInfoTransfer.userInfo["name"] as? String ?? "nil(loan or unknown)")")
 
             // This might be useless, as userInfoTransfer.userInfo seems to be nil when error is non-nil.
             switch userInfoTransfer.userInfo["name"] as? String {
