@@ -1504,23 +1504,26 @@ extension DeviceDataManager {
     }
 
     /// Any non-owner state — the pod is not this phone's to command.
+    /// The TILE's read — never blocks on the loan queue. See `PodLoanPhoneController.UISnapshot`:
+    /// this is drawn from the main thread, and a stalled reclaim holding that queue would freeze
+    /// the whole interface behind it.
     var isPodLoanedToWatch: Bool {
-        watchManager?.podLoanController.isPodLoanedOut ?? false
+        watchManager?.podLoanController.isPodLoanedOutForUI ?? false
     }
 
     /// Grant sent, takeover not yet confirmed: the outbound half of the handover.
     var isPodTakeoverInProgress: Bool {
-        watchManager?.podLoanController.isPodTakeoverInProgress ?? false
+        watchManager?.podLoanController.isPodTakeoverInProgressForUI ?? false
     }
 
     /// Actively coming home. Extends through the settle window — state can read `.owner` while
     /// the pod's BLE link is still re-establishing, and clearing the indicator at that instant
     /// would claim control the phone does not yet have.
     var isPodLoanReclaiming: Bool {
-        watchManager?.podLoanController.isReclaimSettlingOnly ?? false
+        watchManager?.podLoanController.isReclaimSettlingOnlyForUI ?? false
     }
 
     var podReclaimProgress: PodLoanPhoneController.ReclaimProgress? {
-        watchManager?.podLoanController.reclaimProgress
+        watchManager?.podLoanController.reclaimProgressForUI
     }
 }
