@@ -156,6 +156,37 @@ extension LoopDataManager {
             phoneRelayContext = context
         }
 
+        // DURING A LOAN THE PHONE'S CONTEXT MUST NOT BECOME `activeContext`.
+        //
+        // `shouldReplace` compares ONLY glucoseDate, with `>=`. The phone relays the same
+        // physical reading the watch just took, so its context arrives carrying an EQUAL
+        // timestamp and wins — silently discarding the watch-authored prediction, IOB, COB, temp
+        // and loop mode. Whether that happens depends on whether a phone context lands after the
+        // watch's, which is why the symptom is intermittent rather than constant: the prediction
+        // goes missing in certain corner cases and not others.
+        //
+        // One cause, several symptoms that read as separate bugs — a blank prediction line, the
+        // ring showing the PHONE's loop mode, a blank recommended bolus.
+        //
+        // The watch is the dosing controller here, so its context is authoritative and the
+        // phone's is stale by construction. Refuse it outright rather than merging: there is no
+        // field on it the watch does not know better.
+        let onLoan = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.isLoanActiveNonBlocking ?? false
+        if onLoan, !context.isWatchAuthored {
+            // NOT an early return on its own — two things still have to happen, and skipping
+            // them kills the BACKUP GLUCOSE SOURCE during exactly the window it exists for:
+            //   1. the relayed reading still belongs in the store, and
+            //   2. the notification must still fire, because the ingest path hangs off it and it
+            //      is normally posted by `activeContext`'s didSet, which we deliberately skip.
+            if let newGlucoseSample = context.newGlucoseSample {
+                Task {
+                    try? await self.glucoseStore?.addGlucoseSamples([newGlucoseSample])
+                }
+            }
+            NotificationCenter.default.post(name: LoopDataManager.didUpdateContextNotification, object: self)
+            return
+        }
+
         if activeContext == nil || context.shouldReplace(activeContext!) {
             if let newGlucoseSample = context.newGlucoseSample {
                 Task {
