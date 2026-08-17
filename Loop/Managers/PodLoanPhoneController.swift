@@ -1895,7 +1895,7 @@ final class PodLoanPhoneController {
         // the user cannot act on, and the pod never left the phone.
         os_log("Grant aborted: %{public}@", log: log, type: .error, reason)
         sendMessage(.denied(LoanDenied(reason: "The loan could not start (\(reason)). The phone kept the pod.")))
-        reclaimToOwner(alert: nil)
+        reclaimToOwner(alert: nil, reason: "grant ABORTED before it left the phone: \(reason)")
     }
 
     /// T1: 5 min start-confirmation, cancelled by TakeoverComplete. Row 4:
@@ -1964,7 +1964,7 @@ final class PodLoanPhoneController {
                 // Reclaims silently: the watch never confirmed, so in the common case nothing
                 // ever left the phone and there is nothing for the user to do. The phone's own
                 // pill already shows it holds the pod.
-                self.reclaimToOwner(alert: nil)
+                self.reclaimToOwner(alert: nil, reason: "dead-man T1 expired — the watch never confirmed the takeover")
             }
             self.t1WorkItem = confirm
             self.queue.asyncAfter(deadline: .now() + 15, execute: confirm)
@@ -2008,7 +2008,7 @@ final class PodLoanPhoneController {
         // shows the reason in its idle note — with better wording and the retry affordance the
         // phone banner lacked. iOS mirrors phone notices to that same wrist, so posting here put
         // the worse copy on top of the better one.
-        reclaimToOwner(alert: nil)
+        reclaimToOwner(alert: nil, reason: "watch reported takeover FAILED: \(failed.reason)")
     }
 
     private func handleStatusReport(_ report: StatusReport) {
@@ -2050,7 +2050,7 @@ final class PodLoanPhoneController {
                     self.sendMessage(.statusQuery(StatusQuery(epoch: grantEpoch)))
                     let confirm = DispatchWorkItem { [weak self] in
                         guard let self = self, self.state == .grantOffered, self.epoch == grantEpoch else { return }
-                        self.reclaimToOwner(alert: nil)
+                        self.reclaimToOwner(alert: nil, reason: "dead-man expired after the in-progress EXTENSION — takeover never completed")
                     }
                     self.t1WorkItem = confirm
                     self.queue.asyncAfter(deadline: .now() + 15, execute: confirm)
@@ -2071,7 +2071,7 @@ final class PodLoanPhoneController {
             // it was the grant that went missing — and points the user at the wrong device.
             // With the reason routed, the glance shows it where the user is already looking.
             sendMessage(.denied(LoanDenied(reason: "The hand-over never reached the watch. The phone kept the pod. Tap Start again.")))
-            reclaimToOwner(alert: nil)
+            reclaimToOwner(alert: nil, reason: "grant CONFIRMED LOST by the watch")
         }
         if report.podFault != nil {
             // No notice. This line could never do what its title claimed: a StatusReport is only
@@ -3016,7 +3016,13 @@ final class PodLoanPhoneController {
 
     /// `alert: nil` reclaims silently — for the paths where the user has nothing to do and
     /// the phone's own pod pill already says who holds it.
-    private func reclaimToOwner(alert: (title: String, body: String)?) {
+    ///
+    /// SILENT TO THE USER IS NOT SILENT TO THE LOG. Every route in here abandons a loan, and
+    /// until 2026-08-17 none of them wrote a line: a failed takeover left a ~90 s hole between
+    /// "extending the dead-man" and the settle, with nothing saying what moved the phone back to
+    /// .owner. `reason` is required rather than defaulted so a new call site cannot reopen it.
+    private func reclaimToOwner(alert: (title: String, body: String)?, reason: String) {
+        handbackDiag(epoch, "loan ABANDONED — back to phone control: \(reason)")
         // Abandoning the loan retires any ladder with it; a rung firing afterwards would be
         // reasoning about a reclaim that no longer exists. The background hold ends here too:
         // this path never opens a settle window, so neither end-site below it would fire.
