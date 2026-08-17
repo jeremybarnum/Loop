@@ -132,6 +132,51 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             maximumBolus: 5.0)
     }
 
+    // MARK: - Dosing strategy is overridden for the loan, never on the phone
+
+    /// The watch doses by temp basal only. Before this, a phone on automaticBolus made the wrist
+    /// refuse EVERY cycle — field-confirmed on the first live run: the watch held the pod and never
+    /// dosed at all, for a user whose therapy is a continuous stream of small automatic boluses.
+    func testGrantCarriesTempBasalOnlyWhenThePhoneRunsAutomaticBolus() {
+        settings.automaticDosingStrategy = .automaticBolus
+        let controller = makeController()
+        let grant = establishLoan(controller)
+
+        guard let carried = LoopSettings(rawValue: try! PropertyListSerialization.propertyList(
+                from: grant.therapySettingsRaw, options: [], format: nil) as! LoopSettings.RawValue) else {
+            return XCTFail("grant's therapy settings did not decode")
+        }
+        XCTAssertEqual(carried.automaticDosingStrategy, .tempBasalOnly,
+                       "the wrist must receive temps-only, or it refuses every cycle and doses nothing")
+    }
+
+    /// The whole reason the override lives in the SNAPSHOT rather than in the phone's stored
+    /// setting: there is nothing to restore, so no failed restore can strand her on temps forever.
+    /// A relaunch mid-loan, a force reclaim, a dead watch or a killed app would each have skipped a
+    /// restore step — and that would be a lasting therapy change from a bookkeeping miss.
+    func testOverridingForTheLoanDoesNotTouchThePhonesOwnSetting() {
+        settings.automaticDosingStrategy = .automaticBolus
+        let controller = makeController()
+        establishLoan(controller)
+
+        XCTAssertEqual(settings.automaticDosingStrategy, .automaticBolus,
+                       "the phone's own strategy must survive the loan untouched")
+    }
+
+    /// A phone already on temps is unaffected — no override, nothing to log, same grant as before.
+    func testTempBasalOnlyPhoneIsPassedThroughUnchanged() {
+        settings.automaticDosingStrategy = .tempBasalOnly
+        let controller = makeController()
+        let grant = establishLoan(controller)
+
+        guard let carried = LoopSettings(rawValue: try! PropertyListSerialization.propertyList(
+                from: grant.therapySettingsRaw, options: [], format: nil) as! LoopSettings.RawValue) else {
+            return XCTFail("grant's therapy settings did not decode")
+        }
+        XCTAssertEqual(carried.automaticDosingStrategy, .tempBasalOnly)
+        XCTAssertEqual(settings.automaticDosingStrategy, .tempBasalOnly)
+    }
+
     /// The two reclaim-ladder inputs are parameters rather than mutable test state because the
     /// branch is decided ONCE, at the tap — a test that could change them afterwards would be
     /// describing a controller this one is not. Defaults reproduce a phone that has heard nothing
