@@ -703,6 +703,7 @@
 		9A7CE02D302D82A800A03F53 /* PodLoanTimerSeamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE019302D82A800A03F53 /* PodLoanTimerSeamTests.swift */; };
 		9A7CE02E302D82A800A03F53 /* WatchAppTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE01A302D82A800A03F53 /* WatchAppTests.swift */; };
 		9A7CE02F302D82A800A03F53 /* WatchdogArmingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE01B302D82A800A03F53 /* WatchdogArmingTests.swift */; };
+		9A7CE031302D82A800A03F53 /* LoanContextPrecedenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE030302D82A800A03F53 /* LoanContextPrecedenceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1577,6 +1578,7 @@
 		9A7CE01A302D82A800A03F53 /* WatchAppTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAppTests.swift; sourceTree = "<group>"; };
 		9A7CE01B302D82A800A03F53 /* WatchdogArmingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchdogArmingTests.swift; sourceTree = "<group>"; };
 		9A7CE002302D82A800A03F53 /* WatchAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WatchAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		9A7CE030302D82A800A03F53 /* LoanContextPrecedenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanContextPrecedenceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -2921,6 +2923,7 @@
 		9A7CE003302D82A800A03F53 /* WatchAppTests */ = {
 			isa = PBXGroup;
 			children = (
+				9A7CE030302D82A800A03F53 /* LoanContextPrecedenceTests.swift */,
 				9A7CE014302D82A800A03F53 /* DeviceLogThrottleTests.swift */,
 				9A7CE015302D82A800A03F53 /* HandbackWedgeTests.swift */,
 				9A7CE016302D82A800A03F53 /* LowGlucoseWarningTests.swift */,
@@ -4156,6 +4159,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9A7CE031302D82A800A03F53 /* LoanContextPrecedenceTests.swift in Sources */,
 				9A7CE028302D82A800A03F53 /* DeviceLogThrottleTests.swift in Sources */,
 				9A7CE029302D82A800A03F53 /* HandbackWedgeTests.swift in Sources */,
 				9A7CE02B302D82A800A03F53 /* PodLoanEpochScopingTests.swift in Sources */,
