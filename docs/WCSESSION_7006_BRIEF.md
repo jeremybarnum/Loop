@@ -91,9 +91,28 @@ message that arrived *from* the allegedly absent app.
 
 ## Leading hypothesis, untested
 
-**Direct `devicectl` installs bypass the companion registration.** Every install today pushed the
-watch app straight to the watch, so the phone's Watch app never registered it — precisely where
-iOS's record of "the watch app is installed" can diverge. Supporting, but circumstantial:
+**A one-off corruption of the companion registration, caused by the delete — NOT by direct
+installs as such.**
+
+An earlier version of this brief blamed `devicectl` installs generally. That is now contradicted:
+the watch app was `devicectl`-installed at least five times on the evening of 2026-08-16, and those
+builds field-tested fine. Direct installs are therefore not sufficient to cause this, and the
+workflow they support is not implicated.
+
+What is distinctive about 2026-08-17 is narrower:
+
+1. The watch app was **DELETED** at ~11:25 — the first time — forced by an unrelated
+   incompatibility (next-dev's extensionless watch app cannot be replaced in place by
+   production-merge's extension-based one; `MIInstallerErrorDomain 153`).
+2. Before that, the same bundle id was occupied by a **structurally different app** — next-dev's
+   single SwiftUI target rather than an app+extension pair.
+
+So the hypothesis is that the delete, and/or that period of a different app shape under one
+identity, left iOS's companion registration inconsistent, and every direct install since has
+INHERITED that state rather than caused it.
+
+This predicts something testable and much less disruptive: **one clean repair fixes it
+permanently**, after which routine direct installs are fine again. Supporting, but circumstantial:
 
 - The watch app was **deleted and reinstalled via `devicectl`** at ~11:25 today (forced by an
   unrelated incompatibility: next-dev's extensionless watch app cannot be replaced in place by
