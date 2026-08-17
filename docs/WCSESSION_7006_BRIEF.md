@@ -111,14 +111,14 @@ So the hypothesis is that the delete, and/or that period of a different app shap
 identity, left iOS's companion registration inconsistent, and every direct install since has
 INHERITED that state rather than caused it.
 
-This predicts something testable and much less disruptive: **one clean repair fixes it
-permanently**, after which routine direct installs are fine again. Supporting, but circumstantial:
+Problems begin after that delete and not before. Builds 289-291, field-tested for weeks with loan
+start/end/reclaim reported as excellent, were TestFlight installs.
 
-- The watch app was **deleted and reinstalled via `devicectl`** at ~11:25 today (forced by an
-  unrelated incompatibility: next-dev's extensionless watch app cannot be replaced in place by
-  production-merge's extension-based one). Problems begin after this.
-- Builds 289–291, field-tested successfully for weeks with loan start/end/reclaim reported as
-  excellent, were **TestFlight** installs — i.e. the companion flow.
+This predicts something testable and much less disruptive than the earlier version: **one clean
+repair fixes it permanently**, after which routine direct installs are fine again. TestFlight would
+then be a one-time repair rather than a workflow change — which matters, because TestFlight costs a
+reinstall every three months and marks the app icon, and those are real reasons to prefer direct
+installs.
 
 **If this holds, Caitlin cannot hit it**, because her build arrives by TestFlight, and this whole
 day is a bench-rig artifact rather than a product defect. That is the single most consequential
