@@ -193,6 +193,7 @@
 		43D0E4AB2F1A00010000000B /* PodLoanPhoneControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4AA2F1A00010000000A /* PodLoanPhoneControllerTests.swift */; };
 		43D0E4B22F1A000100000012 /* SessionInsulinLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4B12F1A000100000011 /* SessionInsulinLedger.swift */; };
 		43D0E4B32F1A000100000013 /* SessionInsulinLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4B12F1A000100000011 /* SessionInsulinLedger.swift */; };
+		FADE00040000000000000135 /* LoanCarbDeleteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000134 /* LoanCarbDeleteTests.swift */; };
 		43D0E4B72F1A000100000017 /* LoanBooksHarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4B82F1A000100000018 /* LoanBooksHarnessTests.swift */; };
 		43D0E4C22F1A000100000022 /* BolusNoticeWristText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4C12F1A000100000021 /* BolusNoticeWristText.swift */; };
 		43D0E4C32F1A000100000023 /* BolusNoticeWristText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4C12F1A000100000021 /* BolusNoticeWristText.swift */; };
@@ -992,6 +993,7 @@
 		43D0E4A82F1A000100000008 /* LoanProtocolV2Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanProtocolV2Tests.swift; sourceTree = "<group>"; };
 		43D0E4AA2F1A00010000000A /* PodLoanPhoneControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanPhoneControllerTests.swift; sourceTree = "<group>"; };
 		43D0E4B12F1A000100000011 /* SessionInsulinLedger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionInsulinLedger.swift; sourceTree = "<group>"; };
+		FADE00040000000000000134 /* LoanCarbDeleteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanCarbDeleteTests.swift; sourceTree = "<group>"; };
 		43D0E4B82F1A000100000018 /* LoanBooksHarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanBooksHarnessTests.swift; sourceTree = "<group>"; };
 		43D0E4C12F1A000100000021 /* BolusNoticeWristText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BolusNoticeWristText.swift; sourceTree = "<group>"; };
 		43D0E5A02F1B000100000109 /* PhoneLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneLog.swift; sourceTree = "<group>"; };
@@ -2172,6 +2174,7 @@
 				8968B113240C55F10074BB48 /* LoopSettingsTests.swift */,
 				43D0E4A82F1A000100000008 /* LoanProtocolV2Tests.swift */,
 				732DA97BFF3C44B3A0A3D63F /* WatchStoreEffectsTests.swift */,
+				FADE00040000000000000134 /* LoanCarbDeleteTests.swift */,
 				43D0E4B82F1A000100000018 /* LoanBooksHarnessTests.swift */,
 				253FAE509D95209395E23A42 /* WatchDosingLimitsTests.swift */,
 				253FAE509D95209395E23A43 /* WatchOverrideDosingTests.swift */,
@@ -3959,6 +3962,7 @@
 				8968B114240C55F10074BB48 /* LoopSettingsTests.swift in Sources */,
 				43D0E4A92F1A000100000009 /* LoanProtocolV2Tests.swift in Sources */,
 				33A29C3ED5AD4D4195A88A85 /* WatchStoreEffectsTests.swift in Sources */,
+				FADE00040000000000000135 /* LoanCarbDeleteTests.swift in Sources */,
 				43D0E4B72F1A000100000017 /* LoanBooksHarnessTests.swift in Sources */,
 				49B8A19F8BBE91531BBE4A2E /* WatchDosingLimitsTests.swift in Sources */,
 				49B8A19F8BBE91532BBE4A2E /* WatchOverrideDosingTests.swift in Sources */,

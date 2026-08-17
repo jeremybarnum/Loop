@@ -54,6 +54,37 @@ enum LoanReconciler {
         let grams: Double
     }
 
+    /// Which stored carb a wrist deletion names — identity first, natural key second.
+    ///
+    /// TWO PASSES, not one predicate. The obvious one-predicate form asks each entry in turn
+    /// "same syncIdentifier, or failing that same (startDate, grams)?", and that quietly means
+    /// something different: an entry carrying a DIFFERENT syncIdentifier answers "no" outright
+    /// and never gets its natural key considered. So the moment the wrist's identity matches
+    /// nothing in the store, every identified entry is excluded and the fallback the design
+    /// promises can only ever inspect entries whose syncIdentifier happens to be nil. A carb
+    /// whose identity moved out from under the wrist — re-minted by an edit, resynced from
+    /// HealthKit under a new identity — is then a hard MISS despite matching on time and grams
+    /// exactly, and a missed delete is not inert: `ingestGrantCarbs` mirrors the phone at every
+    /// takeover, so the carb the user deleted comes back on the wrist and keeps driving dosing.
+    ///
+    /// Splitting the passes is what makes "falling back" true. Identity is checked across the
+    /// whole candidate set first, so it still wins wherever it exists; only when it names
+    /// nothing does the natural key get a look, and then at every entry rather than a subset.
+    ///
+    /// A natural-key tie takes the first candidate deliberately. The key IS (startDate within a
+    /// second, grams within a hundredth) — entries that tie on it are the same carb as far as
+    /// anything downstream can tell, so there is no wrong one to pick.
+    static func matchDeletedCarb(_ gone: DeletedCarb, among entries: [StoredCarbEntry]) -> StoredCarbEntry? {
+        if let id = gone.syncIdentifier,
+           let byIdentity = entries.first(where: { $0.syncIdentifier == id }) {
+            return byIdentity
+        }
+        return entries.first { entry in
+            abs(entry.startDate.timeIntervalSince(gone.startDate)) < 1
+                && abs(entry.quantity.doubleValue(for: .gram()) - gone.grams) < 0.01
+        }
+    }
+
     /// A carb plus the wire identity it travels under.
     struct IdentifiedCarb: Equatable {
         let eventID: UUID
