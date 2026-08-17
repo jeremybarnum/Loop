@@ -112,6 +112,29 @@ final class WatchDataManager: NSObject {
                 // otherwise indistinguishable from one that worked.
                 let kind: String? = (dictionary[LoanProtocol.userInfoKey] as? Data)
                     .flatMap { try? JSONDecoder().decode(LoanKindPeek.self, from: $0) }?.kind
+                // DIAGNOSTICS NEVER TAKE THE GUARANTEED QUEUE.
+                //
+                // handbackDiag already writes every line to the phone's own file and says of the
+                // watch relay: "only while the watch is reachable and only as a [phone] echo. The
+                // file is the phone's independent account." That is the correct contract; the
+                // transport was not honouring it. Falling through to transferUserInfo below made
+                // each diag a guaranteed, ORDERED delivery — and handbackDiag has 60 call sites,
+                // so one hand-back can enqueue dozens.
+                //
+                // Why that is not merely wasteful: transferUserInfo preserves order, and a GRANT
+                // issued while the watch is unreachable takes that same queue. It then waits
+                // behind every diag already in it, while the watch gives up after 25 s. Measured
+                // 2026-08-17: bursts of 22-23 diag messages landing at an idle watch immediately
+                // before each of two wedges, several within the same millisecond — the signature
+                // of a backlog draining, not of live traffic.
+                //
+                // So: send when the watch is there, drop when it is not, and never queue. Nothing
+                // is lost — the phone's file already holds every line.
+                if kind == "diag" {
+                    guard session.isReachable else { return }
+                    session.sendMessage(dictionary, replyHandler: nil, errorHandler: { _ in })
+                    return
+                }
                 guard LoanMessage.isInteractiveHandshake(transport: dictionary),
                       session.isReachable else {
                     let size = (dictionary[LoanProtocol.userInfoKey] as? Data)?.count ?? 0
