@@ -358,6 +358,8 @@ final class PodLoanPhoneController {
             // user-visible — crude parity: it pushed every phase, and the 5s frozen
             // tile during hand-back read as ambiguity).
             if oldValue != state {
+                // Mirror FIRST, notify second — the notification causes the read.
+                syncUIMirror()
                 deps.ownershipDidChange()
                 // A reclaim just landed us in .owner, but reclaimConnection() only re-armed
                 // the BLE bid — the pod isn't actually back for ~2 min. Open the settle window
@@ -444,6 +446,20 @@ final class PodLoanPhoneController {
         s.auditIsForceReclaim = pendingHandbackAudit?.flavor == .forceReclaim
         s.displayAnchor = reclaimDisplayAnchor
         return s
+    }
+
+    /// Writes the mirror from data the caller already holds. MUST be called on `queue`.
+    ///
+    /// EVERY transition the tile draws must call this BEFORE it notifies. The async refresh below
+    /// is not enough on its own: a re-render triggered by the state change would read the mirror
+    /// before the async write lands, draw the PREVIOUS state, and then sit there — nothing
+    /// re-renders a second time. Field-seen on 2026-08-16: the watch went live while the phone
+    /// kept saying "Handing over…" until the user swiped, which forced an unrelated redraw.
+    private func syncUIMirror() {
+        let s = uiSnapshot()
+        uiMirrorLock.lock()
+        uiMirror = s
+        uiMirrorLock.unlock()
     }
 
     /// Refreshes the mirror from the queue. Cheap and idempotent; safe to call from anywhere.
@@ -647,6 +663,7 @@ final class PodLoanPhoneController {
         reclaimStartedAt = started
         reclaimEscalated = false
         reclaimVerifiedAt = nil
+        syncUIMirror()
         reclaimVerifyInFlight = false
         reclaimLinkUpAt = nil
         reclaimStaleReads = 0
@@ -669,6 +686,7 @@ final class PodLoanPhoneController {
             os_log("Reclaim settle CEILING reached (%.0fs) without a verified round-trip — clearing anyway",
                    log: self.log, type: .error, Self.reclaimSettleTimeout)
             self.reclaimStartedAt = nil            // ceiling reached — stop settling
+            self.syncUIMirror()
             self.reclaimDisplayAnchor = nil
             self.deps.endReclaimBackgroundTask()
             // A force-reclaim audit that never got its round-trip is an UNVERIFIED
@@ -786,6 +804,7 @@ final class PodLoanPhoneController {
                         self.reclaimVerifiedAt = self.deps.now()
                         self.reclaimSettleWork?.cancel()
                         self.reclaimStartedAt = nil
+                        self.syncUIMirror()
                         self.reclaimDisplayAnchor = nil
                         self.deps.endReclaimBackgroundTask()
                         // Split the wait. A missing link stamp means the link and the read
