@@ -479,6 +479,7 @@ final class WatchDataManager: NSObject {
         // Constructed eagerly so a relaunch mid-loan restores the persisted state machine —
         // dosing stays paused, reminders re-arm — before any message arrives.
         _ = podLoanController
+        startLinkCensus()
     }
 
     private let log = DiagnosticLog(category: "WatchDataManager")
@@ -1085,6 +1086,29 @@ extension WatchDataManager: WCSessionDelegate {
     /// and concurrent mirrors interleave their remove/copy/prune steps — which is how
     /// g7watch-latest.log ends up stale or missing in iCloud while newer sends exist. One mirror
     /// at a time, in arrival order.
+    /// LINK CENSUS — one line a minute saying whether this PHONE can see the watch.
+    ///
+    /// The mirror of the watch's census. Reachability otherwise appears only as a side effect of
+    /// a send, so the record is silent precisely when nothing is being sent — and a phone that
+    /// could not reach the watch looks identical to a phone with nothing to say. Both directions
+    /// are logged because they are not the same question and have disagreed in the field: the
+    /// watch has reported `reachable true` while the phone logged `reachable=false` acking the
+    /// same hand-back.
+    nonisolated private static let linkCensusQueue = DispatchQueue(label: "com.loopkit.Loop.linkCensus", qos: .utility)
+    nonisolated(unsafe) private static var linkCensusTimer: DispatchSourceTimer?
+
+    nonisolated private func startLinkCensus() {
+        let t = DispatchSource.makeTimerSource(queue: Self.linkCensusQueue)
+        t.schedule(deadline: .now() + 60, repeating: 60, leeway: .seconds(5))
+        t.setEventHandler {
+            guard WCSession.isSupported() else { return }
+            let s = WCSession.default
+            PhoneLog.event("link", "watch reachable=\(s.isReachable) activation=\(s.activationState.rawValue) paired=\(s.isPaired) appInstalled=\(s.isWatchAppInstalled)")
+        }
+        t.resume()
+        Self.linkCensusTimer = t
+    }
+
     nonisolated private static let mirrorQueue = DispatchQueue(label: "com.loopkit.Loop.logMirror", qos: .utility)
 
     nonisolated private static func mirrorLogToICloud(from localStamped: URL) {

@@ -219,6 +219,7 @@ final class StockLoopSession {
 
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         SportLog.event("session", "Sport Mode ready — build \(build); tap Start to request a loan")
+        startLinkCensus()
         // Name the policy at launch: a log that does not say which policy produced it cannot be
         // compared across builds.
         SportLog.event("policy", "link policy AUTOMATIC (#101): pod orphaned between doses, reclaim per cycle, acquisition-gated while un-adopted")
@@ -291,6 +292,29 @@ final class StockLoopSession {
 
     /// Called on WCSession activation: a relaunch with undrained records sends the
     /// recovered hand-back (data-first; the session itself is never resurrected).
+    /// LINK CENSUS — one line a minute saying whether this watch can see the phone.
+    ///
+    /// Reachability is only ever logged today as a side effect of a SEND, so the record has
+    /// gaps exactly where nothing was being sent — and "the watch went quiet" and "the watch
+    /// could not reach the phone" are indistinguishable in the log. A fixed cadence makes the
+    /// link's state readable across a whole session, including the stretches where nothing
+    /// happened, which is what a correlation against takeover and settle timings needs.
+    ///
+    /// Deliberately unconditional on a loan: the interesting window includes before Start and
+    /// after hand-back.
+    private var linkCensusTimer: DispatchSourceTimer?
+
+    private func startLinkCensus() {
+        let t = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        t.schedule(deadline: .now() + 60, repeating: 60, leeway: .seconds(5))
+        t.setEventHandler {
+            let s = WCSession.default
+            SportLog.event("link", "phone reachable=\(s.isReachable) activation=\(s.activationState.rawValue) companionInstalled=\(s.isCompanionAppInstalled)")
+        }
+        t.resume()
+        linkCensusTimer = t
+    }
+
     func sessionDidActivate() {
         loanController.drainRecoveredIfNeeded()
     }
