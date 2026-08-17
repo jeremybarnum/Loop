@@ -1935,6 +1935,61 @@ extension PodLoanPhoneControllerTests {
         XCTAssertGreaterThanOrEqual(begins, 1, "the reclaim held background execution for its wait")
         XCTAssertEqual(ends, begins, "every hold released once the wait resolved")
     }
+
+    // MARK: - Grant anchor (2026-08-17)
+
+    /// A FAILED TAKEOVER MUST NOT LEAK ITS CLOCK INTO THE NEXT GRANT.
+    ///
+    /// `grantOfferedAt` was stamped only when nil and cleared only on a SUCCESSFUL takeover, so an
+    /// abandoned attempt left its anchor behind and the next grant inherited it. Field 2026-08-17:
+    /// e59 reported "takeover IN PROGRESS at +145s" twenty-one seconds after its own grant — it was
+    /// quoting e58's clock.
+    ///
+    /// Not a cosmetic log defect. `handleStatusReport` measures that elapsed against
+    /// `takeoverProgressCeiling`, and past the ceiling it stops extending the dead-man and reclaims
+    /// at once. The anchor drifts further out with every failure, so each abandoned takeover makes
+    /// the next likelier to be abandoned too.
+    func testANewGrantDoesNotInheritAFailedTakeoversClock() throws {
+        clock = Date()
+        let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
+
+        // Grant once, then abandon it the way the field did: the watch says the grant never
+        // arrived, which reclaims to owner — and under the old code never cleared the anchor.
+        let g1 = offerGrant(controller)
+        controller.handleIncoming(userInfo: try LoanMessage.statusReport(
+            StatusReport(epoch: g1.epoch, mode: .closedDirect, lastDirectGlucoseAge: nil,
+                         lastEventSeq: 0, podFault: nil, holdsPod: false, knowsGrant: false)
+        ).transportDictionary())
+        waitForState(controller, .owner)
+
+        // Two minutes pass, then a second loan is granted.
+        clock = clock.addingTimeInterval(120)
+        lock.lock(); diags.removeAll(); lock.unlock()
+        let g2 = offerGrant(controller)
+        XCTAssertNotEqual(g1.epoch, g2.epoch)
+
+        // Ten seconds into the SECOND takeover, the watch reports progress.
+        clock = clock.addingTimeInterval(10)
+        controller.handleIncoming(userInfo: try LoanMessage.statusReport(
+            StatusReport(epoch: g2.epoch, mode: .closedDirect, lastDirectGlucoseAge: nil,
+                         lastEventSeq: 0, podFault: nil, holdsPod: false, knowsGrant: true)
+        ).transportDictionary())
+
+        waitUntil(timeout: 5, "in-progress diag") {
+            self.lock.lock(); defer { self.lock.unlock() }
+            return self.diags.contains { $0.contains("takeover IN PROGRESS") }
+        }
+        lock.lock()
+        let line = diags.first { $0.contains("takeover IN PROGRESS") } ?? ""
+        lock.unlock()
+
+        // Measured from THIS grant (10 s), not from the abandoned one (130 s).
+        XCTAssertTrue(line.contains("+10s"),
+                      "elapsed must be measured from the second grant; got: \(line)")
+        XCTAssertFalse(line.contains("+130s"),
+                       "the abandoned takeover's clock leaked into the new grant: \(line)")
+    }
+
 }
 
 /// Holds the reclaim ladder's rungs still. The controller schedules them through `scheduler`, so
@@ -1989,4 +2044,5 @@ final class ReclaimLadderRecorder {
         }
         return work?.isCancelled ?? false
     }
+
 }
