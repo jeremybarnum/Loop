@@ -708,10 +708,28 @@ class LoopAppManager: NSObject {
     // MARK: - Deeplinking
     
     func handle(_ url: URL) -> Bool {
+        #if DEBUG_FEATURES_ENABLED
+        // Checked BEFORE deeplinks, and returns unconditionally, so a bench URL can never fall
+        // through and be reinterpreted as a navigation link. An unknown verb is refused, not
+        // guessed at — the whole point of this channel is that its vocabulary is closed.
+        if BenchRemoteControl.isBenchURL(url) {
+            switch BenchRemoteControl.command(from: url) {
+            case .reclaim:
+                log.default("bench: reclaim")
+                PhoneLog.event("BENCH", "reclaim requested via URL")
+                deviceDataManager?.reclaimPodLoanFromWatch()
+            case nil:
+                log.error("bench: refused unrecognised command %{public}@", url.absoluteString)
+                PhoneLog.event("BENCH", "refused \(url.absoluteString)")
+            }
+            return true
+        }
+        #endif
+
         guard let deeplink = Deeplink(url: url) else {
             return false
         }
-        
+
         switch deeplink {
         case let .carbEntry(carbEntryLink):
             if let carbEntryLink {
