@@ -137,10 +137,10 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// The watch doses by temp basal only. Before this, a phone on automaticBolus made the wrist
     /// refuse EVERY cycle — field-confirmed on the first live run: the watch held the pod and never
     /// dosed at all, for a user whose therapy is a continuous stream of small automatic boluses.
-    func testGrantCarriesTempBasalOnlyWhenThePhoneRunsAutomaticBolus() {
+    func testGrantCarriesTempBasalOnlyWhenThePhoneRunsAutomaticBolus() throws {
         settings.automaticDosingStrategy = .automaticBolus
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
 
         guard let carried = LoopSettings(rawValue: try! PropertyListSerialization.propertyList(
                 from: grant.therapySettingsRaw, options: [], format: nil) as! LoopSettings.RawValue) else {
@@ -154,20 +154,20 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// setting: there is nothing to restore, so no failed restore can strand her on temps forever.
     /// A relaunch mid-loan, a force reclaim, a dead watch or a killed app would each have skipped a
     /// restore step — and that would be a lasting therapy change from a bookkeeping miss.
-    func testOverridingForTheLoanDoesNotTouchThePhonesOwnSetting() {
+    func testOverridingForTheLoanDoesNotTouchThePhonesOwnSetting() throws {
         settings.automaticDosingStrategy = .automaticBolus
         let controller = makeController()
-        establishLoan(controller)
+        try establishLoan(controller)
 
         XCTAssertEqual(settings.automaticDosingStrategy, .automaticBolus,
                        "the phone's own strategy must survive the loan untouched")
     }
 
     /// A phone already on temps is unaffected — no override, nothing to log, same grant as before.
-    func testTempBasalOnlyPhoneIsPassedThroughUnchanged() {
+    func testTempBasalOnlyPhoneIsPassedThroughUnchanged() throws {
         settings.automaticDosingStrategy = .tempBasalOnly
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
 
         guard let carried = LoopSettings(rawValue: try! PropertyListSerialization.propertyList(
                 from: grant.therapySettingsRaw, options: [], format: nil) as! LoopSettings.RawValue) else {
@@ -323,15 +323,27 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                   loggedAt: start)
     }
 
+    /// Setup that could not complete. Thrown rather than fatal — see below.
+    enum SetupFailure: Error { case noGrant }
+
     /// Drives a controller into LOANED at epoch 1, returning the grant it sent.
+    ///
+    /// THROWS RATHER THAN CRASHING when the grant does not arrive. This used to trap, and since
+    /// 45 tests come through here, one soft timing failure took the whole runner down with it —
+    /// every suite scheduled behind it reported failed, so a single flaky denial read as a
+    /// six-test catastrophe and the ship gate's known-flake retry never engaged (it retries only
+    /// when EVERY failure is on its list, and collateral never is). Observed 2026-08-17: a grant
+    /// refused by the reclaim-settle guard killed the run here and failed five unrelated tests
+    /// behind it. Same pathology this file's own tearDown comment records fixing once before.
+    /// A throw fails exactly the test that hit it and lets the rest of the bundle run.
     @discardableResult
-    func establishLoan(_ controller: PodLoanPhoneController) -> LoanGrant {
+    func establishLoan(_ controller: PodLoanPhoneController) throws -> LoanGrant {
         let grantSent = expectSend()
         controller.handleIncoming(userInfo: try! LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
         wait(for: [grantSent], timeout: 5)
         guard case .grant(let grant)? = lastSent() else {
             XCTFail("expected a grant, got \(String(describing: lastSent()))")
-            fatalError()
+            throw SetupFailure.noGrant
         }
         let status = LoanPodStatus(timestamp: Date(), deliveredUnits: 10, reservoirLevel: nil, isSuspended: false, faultCode: nil)
         controller.handleIncoming(userInfo: try! LoanMessage.takeoverComplete(TakeoverComplete(epoch: grant.epoch, firstPodStatus: status)).transportDictionary())
@@ -349,7 +361,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
     func testGrantFlowReachesLoanedAndPausesDosing() throws {
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
 
         XCTAssertEqual(grant.epoch, 1)
         XCTAssertTrue(MockPumpManager.testConnectionReleased, "grant must release the pod connection")
@@ -397,7 +409,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         // way to strand in reclaimPending now, since the dead branch forces on its own. The
         // watch then never drains, which is the strand.
         let controller = makeController(lastWatchContact: { Date() })
-        establishLoan(controller)
+        try establishLoan(controller)
         controller.reclaimNow()
         waitForState(controller, .reclaimPending)
 
@@ -517,7 +529,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// with quantity, start time and absorption interval intact.
     func testWatchCarbRoundTripsToThePhoneOnHandback() throws {
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
         let mealAt = Date().addingTimeInterval(-.minutes(20))
 
         let acked = expectSend()
@@ -544,7 +556,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// failure mode arriving by a different door.
     func testRedeliveredCarbCommitsOnlyOnce() throws {
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
         let mealAt = Date().addingTimeInterval(-.minutes(10))
         let event = carbEvent(seq: 1, grams: 30, at: mealAt, absorption: .hours(2))
 
@@ -567,7 +579,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// interfere with the other.
     func testMixedCarbAndBolusDrainLandsInBothStores() throws {
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
         let at = Date().addingTimeInterval(-.minutes(5))
 
         let acked = expectSend()
@@ -594,7 +606,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// NewCarbEntry has no identity, so the cursor is the only guard.
     func testForceReclaimThenRedeliveryCommitsCarbOnce() throws {
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
         let mealAt = Date().addingTimeInterval(-.minutes(15))
         let event = carbEvent(seq: 1, grams: 25, at: mealAt, absorption: .hours(3))
 
@@ -627,7 +639,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// inconsistency rather than a deliberate choice: a dead loan cannot add carbs either.
     func testStaleOfferDoesNotCommitCarbs() throws {
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
         let mealAt = Date().addingTimeInterval(-.minutes(15))
 
         // Close the loan cleanly so the epoch advances; a later offer on the OLD epoch is stale.
@@ -653,7 +665,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// The override: forceReclaimToOwner returns to owner and restores dosing.
     func testForceReclaimReturnsToOwner() throws {
         let controller = makeController()
-        establishLoan(controller)
+        try establishLoan(controller)
         // No contact on record and unreachable = the dead branch, which forces on its own —
         // the tap IS the force now, no separate call needed.
         controller.reclaimNow()
@@ -672,7 +684,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// takeover). Once the pod is truly back (isConnectionReady), the next request grants.
     func testGrantDeferredWhilePodStillReturningFromReclaim() throws {
         let controller = makeController()
-        establishLoan(controller)
+        try establishLoan(controller)
         connectionReady = false                       // pod's BLE not truly back yet
         // Dead branch: the tap forces on its own and opens the settle window.
         controller.reclaimNow()
@@ -719,7 +731,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
     func testHandbackCommitsThenAcksThenRestoresOwner() throws {
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
 
         let event = makeEvent(seq: 1, units: 1.0, at: Date())
         let ackSent = expectSend()
@@ -750,7 +762,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// measuring the wrong interval, which is why the residuals never quite closed.
     func testHandbackAuditUsesThePhonesOwnOdometerNotTheWatchsStaleOne() throws {
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
 
         // The watch's endpoint: stale, and it knows it (freshenSucceeded false).
         let handedBackAt = Date()
@@ -785,7 +797,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// pod is provably reachable. The watch cannot do this itself; its link is down by then.
     func testInheritedTempIsCancelledOnTheVerifiedReclaimRoundTrip() throws {
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
 
         connectionReady = false          // pod not back yet
         MockPumpManager.testOdometer = 12.0
@@ -819,7 +831,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     func testFailedInheritedTempCancelIsLoggedAndDoesNotBlockTheReclaim() throws {
         struct Boom: Error {}
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
         cancelError = Boom()
         MockPumpManager.testOdometer = 11.0
 
@@ -842,7 +854,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// provisional line stands, and nothing leaks into the NEXT loan's audit.
     func testNoAuthoritativeAuditWhenThePodNeverComesBack() throws {
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
         connectionReady = false
 
         let ackSent = expectSend()
@@ -865,13 +877,13 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     // MARK: - A hand-over lost in transit
 
     /// Drives a controller into `.grantOffered` (grant sent, watch has not confirmed).
-    private func offerGrant(_ controller: PodLoanPhoneController) -> LoanGrant {
+    private func offerGrant(_ controller: PodLoanPhoneController) throws -> LoanGrant {
         let grantSent = expectSend()
         controller.handleIncoming(userInfo: try! LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
         wait(for: [grantSent], timeout: 5)
         guard case .grant(let grant)? = lastSent() else {
             XCTFail("expected a grant, got \(String(describing: lastSent()))")
-            fatalError()
+            throw SetupFailure.noGrant
         }
         return grant
     }
@@ -879,7 +891,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// The fix: an explicit "I never got it" reclaims immediately instead of after 5 min 15 s.
     func testExplicitGrantLostReportReclaimsImmediately() throws {
         let controller = makeController()
-        let grant = offerGrant(controller)
+        let grant = try offerGrant(controller)
         XCTAssertTrue(MockPumpManager.testConnectionReleased, "the phone releases the pod to hand over")
 
         let report = StatusReport(epoch: grant.epoch, mode: .closedDirect, lastDirectGlucoseAge: nil,
@@ -897,7 +909,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// lost" would snatch the pod back mid-takeover, which is worse than the bug being fixed.
     func testMidTakeoverReportIsNotMistakenForALostGrant() throws {
         let controller = makeController()
-        let grant = offerGrant(controller)
+        let grant = try offerGrant(controller)
 
         let report = StatusReport(epoch: grant.epoch, mode: .closedDirect, lastDirectGlucoseAge: nil,
                                   lastEventSeq: 0, podFault: nil, holdsPod: false, knowsGrant: true)
@@ -915,7 +927,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// timer, never be read as a denial.
     func testUnansweredKnowsGrantDoesNotReclaim() throws {
         let controller = makeController()
-        let grant = offerGrant(controller)
+        let grant = try offerGrant(controller)
 
         let report = StatusReport(epoch: grant.epoch, mode: .closedDirect, lastDirectGlucoseAge: nil,
                                   lastEventSeq: 0, podFault: nil, holdsPod: false)   // knowsGrant nil
@@ -959,7 +971,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// `expected` for an eventless loan is the basal schedule (1.0 U/hr) over the loan window,
     /// which the helper keeps at ~0 by handing back immediately — so `delivered` IS the residual.
     private func runLoanToAudit(_ controller: PodLoanPhoneController, deliveredDuringLoan: Double) throws {
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
         MockPumpManager.testOdometer = 10.0 + deliveredDuringLoan
         let ackSent = expectSend()
         let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil,
@@ -989,7 +1001,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// it would make the real failure — under-treatment — worse. Warn, keep looping.
     func testLargeNegativeResidualWarnsButKeepsLooping() throws {
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
 
         // The books say a 2 U bolus was delivered; the pod's odometer says nothing moved.
         // (A bolus, not a temp: bolus units enter `expected` exactly, independent of the loan
@@ -1034,12 +1046,16 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         let controller = makeController()
         try runLoanToAudit(controller, deliveredDuringLoan: 0.10)
 
-        let bank = diagMatching("residual bank:")
-        XCTAssertNotNil(bank, "each audit must bank its residual and say how many exist")
-        XCTAssertTrue(bank!.contains("n=1"), "got: \(bank!)")
-        XCTAssertTrue(bank!.contains("39 more for a re-review"), "got: \(bank!)")
-        XCTAssertFalse(bank!.contains("set with none"),
-                       "the first review HAPPENED — this line must not keep claiming otherwise: \(bank!)")
+        // XCTUnwrap, not assert-then-force-unwrap: the `!` form traps on nil AFTER the assertion
+        // has already recorded the failure, which turns one missing diag line into a dead runner
+        // and a bundle of unrelated red — see establishLoan. Unwrapping throws instead, so this
+        // test fails alone.
+        let bank = try XCTUnwrap(diagMatching("residual bank:"),
+                                 "each audit must bank its residual and say how many exist")
+        XCTAssertTrue(bank.contains("n=1"), "got: \(bank)")
+        XCTAssertTrue(bank.contains("39 more for a re-review"), "got: \(bank)")
+        XCTAssertFalse(bank.contains("set with none"),
+                       "the first review HAPPENED — this line must not keep claiming otherwise: \(bank)")
         XCTAssertEqual((UserDefaults.standard.array(forKey: "PodLoanPhoneController.residualHistory") as? [Double])?.count, 1)
     }
 
@@ -1082,7 +1098,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// writes NOTHING new.
     func testOfferRedeliveryIsIdempotent() throws {
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
         let event = makeEvent(seq: 1, units: 1.0, at: Date())
         let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil,
                                   odometer: nil, events: [event], tombstones: [], recovered: false)
@@ -1105,7 +1121,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// loan state — the active loan is untouched and the ack says stale.
     func testStaleEpochOfferDrainsButCannotTouchState() throws {
         let controller = makeController()
-        let grant1 = establishLoan(controller)
+        let grant1 = try establishLoan(controller)
 
         // Close loan 1 normally.
         let ack1 = expectSend()
@@ -1116,7 +1132,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         waitForState(controller, .owner)
 
         // Open loan 2.
-        let grant2 = establishLoan(controller)
+        let grant2 = try establishLoan(controller)
         XCTAssertEqual(grant2.epoch, grant1.epoch + 1)
 
         // A late loan-1 offer arrives (WC redelivery). Its record still drains, the
@@ -1144,7 +1160,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// ack-cursor / committedIDs decoupling that the earlier reroute got wrong.
     func testInterimDrainAcksOpenTempButDefersWriteToFinal() throws {
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
         let now = Date()
         // A temp still running: its 30-min window extends well past handedBackAt (now).
         let openTemp = tempEvent(seq: 1, rate: 1.5, start: now.addingTimeInterval(-60), durationMinutes: 30)
@@ -1185,7 +1201,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// .loaned with dosing paused indefinitely.
     func testLegacyOfferWithoutReleasedKeyFinalizesTheLoan() throws {
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
         let event = makeEvent(seq: 1, units: 1.0, at: Date())
 
         var dict = try LoanMessage.handbackOffer(HandbackOffer(
@@ -1211,7 +1227,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// paused, and would be invisible in a test that only counts store writes.
     func testFinalOfferWithNoEventsStillAcksAndReturnsToOwner() throws {
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
 
         let ackSent = expectSend()
         controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(HandbackOffer(
@@ -1249,7 +1265,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// XCTExpectFailure when the fix lands; if the test then passes, the fix is real.
     func testStaleOfferMustNotClampALaterEpochsDosesToItsOwnHandbackTime() throws {
         let controller = makeController()
-        let grant1 = establishLoan(controller)
+        let grant1 = try establishLoan(controller)
         let epoch1HandedBackAt = Date().addingTimeInterval(-.minutes(30))
 
         // Close loan 1 cleanly (this is the offer that gets redelivered later).
@@ -1263,7 +1279,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
         // Loan 2 starts and streams a temp that is still running NOW — i.e. it both starts
         // and ends well AFTER epoch 1's hand-back instant.
-        let grant2 = establishLoan(controller)
+        let grant2 = try establishLoan(controller)
         let liveTempStart = Date().addingTimeInterval(-.minutes(2))
         let liveTemp = tempEvent(seq: 1, rate: 1.3, start: liveTempStart, durationMinutes: 30)
         controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
@@ -1347,7 +1363,7 @@ extension PodLoanPhoneControllerTests {
     /// must open the loop, alert urgently, and book the gap under a deterministic identity.
     func testForceReclaimWithUnstreamedInsulinOpensLoopAndBooksTheGap() throws {
         let controller = makeController()
-        let grant = establishLoan(controller)   // takeoverComplete banks deliveredAtStart = 10
+        let grant = try establishLoan(controller)   // takeoverComplete banks deliveredAtStart = 10
 
         MockPumpManager.testOdometer = 12.5     // 2.5 U the phone has no records for
 
@@ -1376,7 +1392,7 @@ extension PodLoanPhoneControllerTests {
     /// The clean case: the odometer matches the books. Dosing resumes, nothing books, no alarm.
     func testForceReclaimWithMatchingOdometerResumesQuietly() throws {
         let controller = makeController()
-        establishLoan(controller)
+        try establishLoan(controller)
 
         MockPumpManager.testOdometer = 10.05    // within the 0.20 bound of expected ≈ 0
 
@@ -1400,7 +1416,7 @@ extension PodLoanPhoneControllerTests {
     /// loop run on books missing a real bolus.
     func testDosingIsHeldUntilTheAuditVerdictArrives() throws {
         let controller = makeController()
-        establishLoan(controller)
+        try establishLoan(controller)
         MockPumpManager.testOdometer = 12.5
 
         lock.lock(); connectionReady = false; lock.unlock()   // the pod is not back yet
@@ -1425,7 +1441,7 @@ extension PodLoanPhoneControllerTests {
     /// not partial offset.
     func testReturningWatchRetiresTheGapBooking() throws {
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
         MockPumpManager.testOdometer = 12.5
 
         controller.forceReclaimToOwner(reason: "test: watch dead")
@@ -1459,7 +1475,7 @@ extension PodLoanPhoneControllerTests {
     /// insulin while the real tail is still missing.
     func testRedeliveredPreDeathOfferDoesNotRetireTheGap() throws {
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
 
         // The watch streams ONE event, then dies. The salvage commits it.
         let streamed = tempEvent(seq: 1, rate: 2.0, start: Date().addingTimeInterval(-.minutes(20)), durationMinutes: 10)
@@ -1560,7 +1576,7 @@ extension PodLoanPhoneControllerTests {
     /// double-counted IOB (placeholder + real records both in the books).
     func testFailedGapDeleteKeepsStateAndSaysSo() throws {
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
         MockPumpManager.testOdometer = 12.5
 
         controller.forceReclaimToOwner(reason: "test: watch dead")
@@ -1593,7 +1609,7 @@ extension PodLoanPhoneControllerTests {
     /// pulse, so there is a real drain to wait for.
     func testLiveBranchArmsLiveDeadlinesAndForcesOnlyAfterTwoAttempts() throws {
         let controller = makeController(lastWatchContact: { Date().addingTimeInterval(-30) })
-        establishLoan(controller)
+        try establishLoan(controller)
         let ladder = ReclaimLadderRecorder()
         ladder.install(on: controller)
 
@@ -1625,7 +1641,7 @@ extension PodLoanPhoneControllerTests {
     func testLiveHandoverBarConcedesAtTheDrainPromise() throws {
         let controller = makeController(lastWatchContact: { [weak self] in (self?.clock ?? Date()).addingTimeInterval(-30) },
                                         now: { [weak self] in self?.clock ?? Date() })
-        establishLoan(controller)
+        try establishLoan(controller)
         let ladder = ReclaimLadderRecorder()
         ladder.install(on: controller)
 
@@ -1658,7 +1674,7 @@ extension PodLoanPhoneControllerTests {
     func testDeadBranchForcesImmediatelyWithoutWaitingOnTheWatch() throws {
         let controller = makeController(watchReachable: { false },
                                         lastWatchContact: { Date().addingTimeInterval(-.minutes(12)) })
-        establishLoan(controller)
+        try establishLoan(controller)
         let ladder = ReclaimLadderRecorder()
         ladder.install(on: controller)
 
@@ -1687,7 +1703,7 @@ extension PodLoanPhoneControllerTests {
         let controller = makeController(watchReachable: { false },
                                         lastWatchContact: { nil },
                                         now: { [weak self] in self?.clock ?? Date() })
-        establishLoan(controller)
+        try establishLoan(controller)
         connectionReady = false                    // nothing verifies — the settle stays open
         let ladder = ReclaimLadderRecorder()
         ladder.install(on: controller)
@@ -1720,7 +1736,7 @@ extension PodLoanPhoneControllerTests {
     /// and a force would fire against a phone that is already the owner.
     func testDrainBeforeTheFirstDeadlineCancelsTheLadder() throws {
         let controller = makeController(lastWatchContact: { Date().addingTimeInterval(-30) })
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
         let ladder = ReclaimLadderRecorder()
         ladder.install(on: controller)
 
@@ -1755,7 +1771,7 @@ extension PodLoanPhoneControllerTests {
     /// forces immediately, so there is no window left for a waking watch to promote.)
     func testReachabilityResendOnALiveLadderSpendsTheSecondAttempt() throws {
         let controller = makeController(lastWatchContact: { Date().addingTimeInterval(-10) })
-        establishLoan(controller)
+        try establishLoan(controller)
         let ladder = ReclaimLadderRecorder()
         ladder.install(on: controller)
 
@@ -1779,7 +1795,7 @@ extension PodLoanPhoneControllerTests {
     /// ladder this path never has.
     func testWatchInitiatedHandbackPublishesSettleProgress() throws {
         let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
         let ladder = ReclaimLadderRecorder()
         ladder.install(on: controller)
         connectionReady = false            // the pod's link is not back, so the settle stays open
@@ -1815,7 +1831,7 @@ extension PodLoanPhoneControllerTests {
     func testTappedReclaimCarriesThePhaseFromDrainThroughSettleWithoutGoingNil() throws {
         let controller = makeController(lastWatchContact: { [weak self] in (self?.clock ?? Date()).addingTimeInterval(-30) },
                                         now: { [weak self] in self?.clock ?? Date() })
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
         let ladder = ReclaimLadderRecorder()
         ladder.install(on: controller)
         connectionReady = false
@@ -1864,7 +1880,7 @@ extension PodLoanPhoneControllerTests {
     /// promise, held.
     func testSettleFractionCapsAndHoldsWhenTheSettleOverruns() throws {
         let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
         connectionReady = false
 
         let ackSent = expectSend()
@@ -1912,7 +1928,7 @@ extension PodLoanPhoneControllerTests {
     func testSettleForcesARealReadEarlyThenBacksOff() throws {
         clock = Date().addingTimeInterval(.hours(1))
         let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
         connectionReady = true              // the link is up, so the settle can force from tick 0
 
         let ackSent = expectSend()
@@ -1957,7 +1973,7 @@ extension PodLoanPhoneControllerTests {
         // settle's start, and a frozen clock would be asserting against MockPumpManager's stamp
         // rather than against the controller.
         let controller = makeController()
-        let grant = establishLoan(controller)
+        let grant = try establishLoan(controller)
         connectionReady = false
 
         let ackSent = expectSend()
