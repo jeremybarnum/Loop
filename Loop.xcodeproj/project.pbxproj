@@ -696,6 +696,13 @@
 		FEEDB0000000000000000003 /* Statistics/AGPChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEEDF0000000000000000003 /* Statistics/AGPChartView.swift */; };
 		FEEDB0000000000000000004 /* Statistics/TimeInRangeBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEEDF0000000000000000004 /* Statistics/TimeInRangeBar.swift */; };
 		FEEDB0000000000000000005 /* GlucoseStatisticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEEDF0000000000000000005 /* GlucoseStatisticsTests.swift */; };
+		9A7CE028302D82A800A03F53 /* DeviceLogThrottleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE014302D82A800A03F53 /* DeviceLogThrottleTests.swift */; };
+		9A7CE029302D82A800A03F53 /* HandbackWedgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE015302D82A800A03F53 /* HandbackWedgeTests.swift */; };
+		9A7CE02B302D82A800A03F53 /* PodLoanEpochScopingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE017302D82A800A03F53 /* PodLoanEpochScopingTests.swift */; };
+		9A7CE02C302D82A800A03F53 /* PodLoanTimerCharacterizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE018302D82A800A03F53 /* PodLoanTimerCharacterizationTests.swift */; };
+		9A7CE02D302D82A800A03F53 /* PodLoanTimerSeamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE019302D82A800A03F53 /* PodLoanTimerSeamTests.swift */; };
+		9A7CE02E302D82A800A03F53 /* WatchAppTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE01A302D82A800A03F53 /* WatchAppTests.swift */; };
+		9A7CE02F302D82A800A03F53 /* WatchdogArmingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE01B302D82A800A03F53 /* WatchdogArmingTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -761,6 +768,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = E9B07F7B253BBA6500BAD8F8;
 			remoteInfo = "Loop Intent Extension";
+		};
+		9A7CE008302D82A800A03F53 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 43776F841B8022E90074EA36 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 43A943711B926B7B0051FA24;
+			remoteInfo = WatchApp;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -1554,6 +1568,15 @@
 		FEEDF0000000000000000003 /* Statistics/AGPChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Statistics/AGPChartView.swift; sourceTree = "<group>"; };
 		FEEDF0000000000000000004 /* Statistics/TimeInRangeBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Statistics/TimeInRangeBar.swift; sourceTree = "<group>"; };
 		FEEDF0000000000000000005 /* GlucoseStatisticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlucoseStatisticsTests.swift; sourceTree = "<group>"; };
+		9A7CE014302D82A800A03F53 /* DeviceLogThrottleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceLogThrottleTests.swift; sourceTree = "<group>"; };
+		9A7CE015302D82A800A03F53 /* HandbackWedgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandbackWedgeTests.swift; sourceTree = "<group>"; };
+		9A7CE016302D82A800A03F53 /* LowGlucoseWarningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LowGlucoseWarningTests.swift; sourceTree = "<group>"; };
+		9A7CE017302D82A800A03F53 /* PodLoanEpochScopingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanEpochScopingTests.swift; sourceTree = "<group>"; };
+		9A7CE018302D82A800A03F53 /* PodLoanTimerCharacterizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanTimerCharacterizationTests.swift; sourceTree = "<group>"; };
+		9A7CE019302D82A800A03F53 /* PodLoanTimerSeamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanTimerSeamTests.swift; sourceTree = "<group>"; };
+		9A7CE01A302D82A800A03F53 /* WatchAppTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAppTests.swift; sourceTree = "<group>"; };
+		9A7CE01B302D82A800A03F53 /* WatchdogArmingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchdogArmingTests.swift; sourceTree = "<group>"; };
+		9A7CE002302D82A800A03F53 /* WatchAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WatchAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1640,6 +1663,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		E9B07F79253BBA6500BAD8F8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		9A7CE005302D82A800A03F53 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -1844,6 +1874,7 @@
 				14B1736128AED9EC006CCD7C /* Loop Widget Extension */,
 				A900531928D60852000BC15B /* Shortcuts */,
 				968DCD53F724DE56FFE51920 /* Frameworks */,
+				9A7CE003302D82A800A03F53 /* WatchAppTests */,
 				43776F8D1B8022E90074EA36 /* Products */,
 				B4C6D2412EA7E38C006F5755 /* LocalizablePlural.xcstrings */,
 				437D9BA11D7B5203007245E8 /* Loop.xcconfig */,
@@ -1855,6 +1886,7 @@
 		43776F8D1B8022E90074EA36 /* Products */ = {
 			isa = PBXGroup;
 			children = (
+				9A7CE002302D82A800A03F53 /* WatchAppTests.xctest */,
 				43776F8C1B8022E90074EA36 /* Loop.app */,
 				43A943721B926B7B0051FA24 /* WatchApp.app */,
 				43E2D90B1D20C581004DA55F /* LoopTests.xctest */,
@@ -2886,6 +2918,21 @@
 			path = Fixtures;
 			sourceTree = "<group>";
 		};
+		9A7CE003302D82A800A03F53 /* WatchAppTests */ = {
+			isa = PBXGroup;
+			children = (
+				9A7CE014302D82A800A03F53 /* DeviceLogThrottleTests.swift */,
+				9A7CE015302D82A800A03F53 /* HandbackWedgeTests.swift */,
+				9A7CE016302D82A800A03F53 /* LowGlucoseWarningTests.swift */,
+				9A7CE017302D82A800A03F53 /* PodLoanEpochScopingTests.swift */,
+				9A7CE018302D82A800A03F53 /* PodLoanTimerCharacterizationTests.swift */,
+				9A7CE019302D82A800A03F53 /* PodLoanTimerSeamTests.swift */,
+				9A7CE01A302D82A800A03F53 /* WatchAppTests.swift */,
+				9A7CE01B302D82A800A03F53 /* WatchdogArmingTests.swift */,
+			);
+			path = WatchAppTests;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXHeadersBuildPhase section */
@@ -3086,6 +3133,24 @@
 			productReference = E9B07F7C253BBA6500BAD8F8 /* Loop Intent Extension.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		9A7CE001302D82A800A03F53 /* WatchAppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9A7CE00B302D82A800A03F53 /* Build configuration list for PBXNativeTarget "WatchAppTests" */;
+			buildPhases = (
+				9A7CE004302D82A800A03F53 /* Sources */,
+				9A7CE005302D82A800A03F53 /* Frameworks */,
+				9A7CE006302D82A800A03F53 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				9A7CE007302D82A800A03F53 /* PBXTargetDependency */,
+			);
+			name = WatchAppTests;
+			productName = WatchAppTests;
+			productReference = 9A7CE002302D82A800A03F53 /* WatchAppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -3096,6 +3161,10 @@
 				LastUpgradeCheck = 2600;
 				ORGANIZATIONNAME = "LoopKit Authors";
 				TargetAttributes = {
+					9A7CE001302D82A800A03F53 = {
+						CreatedOnToolsVersion = 26.0;
+						TestTargetID = 43A943711B926B7B0051FA24;
+					};
 					14B1735B28AED9EC006CCD7C = {
 						CreatedOnToolsVersion = 13.4.1;
 					};
@@ -3204,6 +3273,7 @@
 				43D9001A21EB209400AF44BF /* LoopCore-watchOS */,
 				4F75288A1DFE1DC600C322D6 /* LoopUI */,
 				43E2D90A1D20C581004DA55F /* LoopTests */,
+				9A7CE001302D82A800A03F53 /* WatchAppTests */,
 			);
 		};
 /* End PBXProject section */
@@ -3327,6 +3397,13 @@
 			files = (
 				B66D1F312E6A5D6600471149 /* InfoPlist.xcstrings in Resources */,
 				B66D1F2D2E6A5D6600471149 /* Localizable.xcstrings in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		9A7CE006302D82A800A03F53 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -4075,6 +4152,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		9A7CE004302D82A800A03F53 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9A7CE028302D82A800A03F53 /* DeviceLogThrottleTests.swift in Sources */,
+				9A7CE029302D82A800A03F53 /* HandbackWedgeTests.swift in Sources */,
+				9A7CE02B302D82A800A03F53 /* PodLoanEpochScopingTests.swift in Sources */,
+				9A7CE02C302D82A800A03F53 /* PodLoanTimerCharacterizationTests.swift in Sources */,
+				9A7CE02D302D82A800A03F53 /* PodLoanTimerSeamTests.swift in Sources */,
+				9A7CE02E302D82A800A03F53 /* WatchAppTests.swift in Sources */,
+				9A7CE02F302D82A800A03F53 /* WatchdogArmingTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -4122,6 +4213,11 @@
 			isa = PBXTargetDependency;
 			target = E9B07F7B253BBA6500BAD8F8 /* Loop Intent Extension */;
 			targetProxy = E9B07F92253BBA6500BAD8F8 /* PBXContainerItemProxy */;
+		};
+		9A7CE007302D82A800A03F53 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 43A943711B926B7B0051FA24 /* WatchApp */;
+			targetProxy = 9A7CE008302D82A800A03F53 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -5252,6 +5348,45 @@
 			};
 			name = Release;
 		};
+		9A7CE009302D82A800A03F53 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.loopkit.WatchAppTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WatchApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/WatchApp";
+				WATCHOS_DEPLOYMENT_TARGET = 10.6;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+			};
+			name = Debug;
+		};
+		9A7CE00A302D82A800A03F53 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.loopkit.WatchAppTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WatchApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/WatchApp";
+				WATCHOS_DEPLOYMENT_TARGET = 10.6;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -5341,6 +5476,15 @@
 				E9B07F95253BBA6500BAD8F8 /* Debug */,
 				B4E7CF972AD00A39009B4DF2 /* Testflight */,
 				E9B07F96253BBA6500BAD8F8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		9A7CE00B302D82A800A03F53 /* Build configuration list for PBXNativeTarget "WatchAppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9A7CE009302D82A800A03F53 /* Debug */,
+				9A7CE00A302D82A800A03F53 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
