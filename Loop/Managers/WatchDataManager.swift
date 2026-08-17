@@ -152,21 +152,22 @@ final class WatchDataManager: NSObject {
             // swipe-to-delete uses, so COB and the prediction invalidate identically.
             //
             // The entry is matched against the store rather than reconstructed from the wire —
-            // syncIdentifier first, falling back to (startDate, grams) within a second. A miss
-            // is logged and dropped: deleting the wrong carb because a key was ambiguous is far
-            // worse than failing to delete, and a carb that wrongly survives keeps driving
-            // dosing visibly.
+            // syncIdentifier first, falling back to (startDate, grams) within a second. That rule
+            // now lives in `LoanReconciler.matchDeletedCarb`, where it can be tested; written
+            // inline here it read as the fallback it is not, and the difference is a real miss
+            // (see that function). A miss is logged and dropped: deleting the wrong carb because
+            // a key was ambiguous is far worse than failing to delete, and a carb that wrongly
+            // survives keeps driving dosing visibly.
+            //
+            // The lower bound is the DELETED carb's own start minus an hour, so an entry from
+            // hours before the loan is still a candidate — the wrist lists back to the start of
+            // the day, so the carb a user reaches for is routinely older than the loan.
             deleteCarb: { [weak self] gone, completion in
                 guard let self = self else { completion(nil); return }
                 let window = gone.startDate.addingTimeInterval(-.hours(1))
                 self.deviceManager.carbStore.getCarbEntries(start: window) { result in
                     guard case .success(let entries) = result else { completion(nil); return }
-                    let match = entries.first { entry in
-                        if let id = gone.syncIdentifier, let entryID = entry.syncIdentifier { return id == entryID }
-                        return abs(entry.startDate.timeIntervalSince(gone.startDate)) < 1
-                            && abs(entry.quantity.doubleValue(for: .gram()) - gone.grams) < 0.01
-                    }
-                    guard let victim = match else {
+                    guard let victim = LoanReconciler.matchDeletedCarb(gone, among: entries) else {
                         // A miss must be LOUD and carry the candidate set — "no match" without
                         // the near-misses is how the 258/260 failures took a release each to
                         // localize. The error surfaces through the controller's handbackDiag,
