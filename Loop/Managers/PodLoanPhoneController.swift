@@ -390,73 +390,146 @@ final class PodLoanPhoneController {
     /// nil during a watch-initiated hand-back's own store commit, which no tap promised anything
     /// about, and nil again the moment the settle's round-trip verifies.
     var reclaimProgress: ReclaimProgress? {
-        // Return type spelled out: the closure has two `return`s of different shapes plus a nil,
-        // and leaving it to inference is a compile error waiting on the next edit.
-        return queue.sync { () -> ReclaimProgress? in
-            let now = deps.now()
-            // `.reconciling` is part of the tapped handover, not a gap in it: the drain's records
-            // are being written, and the label the user is reading was chosen by this ladder's
-            // branch. Guarding on `.reclaimPending` alone dropped the phase for the length of one
-            // Core Data write, which relabels a dead-watch reclaim from its branch label to the
-            // generic "Reclaiming…" mid-write and then back.
-            if let ladder = reclaimLadder, state == .reclaimPending || state == .reconciling {
-                let elapsed = max(now.timeIntervalSince(ladder.startedAt), 0)
-                // The live handover draws a determinate bar against the drain promise — the
-                // sweep is retired (field ruling). Past the promise the phase concedes and the
-                // bar holds at cap; the force at 25 s is what actually resolves it. The forcing
-                // phase (dead branch, or a live force mid-deferral) keeps a nil fraction: its
-                // own settle bar arrives within a second.
-                var phase = ladder.phase
-                var fraction: Double?
-                if phase == .draining {
-                    fraction = min(elapsed / Self.liveHandoverExpectation, 0.95)
-                    if elapsed >= Self.liveHandoverExpectation { phase = .watchNotAnswering }
-                }
-                return ReclaimProgress(phase: phase, startedAt: ladder.startedAt,
-                                       expectedBy: phase == .draining
-                                           ? ladder.startedAt.addingTimeInterval(Self.liveHandoverExpectation)
-                                           : ladder.forceAt,
-                                       fraction: fraction,
-                                       elapsed: elapsed)
-            }
-            // The settle predicate is restated inline rather than read from `isReclaimSettling`:
-            // that accessor takes the same serial queue this block is already running on, and a
-            // nested sync onto a serial queue deadlocks. It is `isReclaimSettling` and not
-            // `isReclaimSettlingOnly` that it must match, ceiling term included — the pill draws
-            // this fraction BEFORE it checks whether a reclaim is in progress at all, so a bar
-            // that outlived the "Reclaiming…" tile would paint itself under some other label.
-            if state == .owner, let started = reclaimStartedAt, reclaimVerifiedAt == nil,
-               now.timeIntervalSince(started) < Self.reclaimSettleTimeout {
-                let elapsed = max(now.timeIntervalSince(started), 0)
-                // A settle that follows a FORCE reclaim is one operation to the user — the tile
-                // just told them the watch could not be reached — so it runs ONE stage against
-                // its own promise instead of the fast/slow re-baseline, which mid-force would
-                // read as a second failure. The audit flavor is the marker: the force path arms
-                // it before ownership flips, and it is consumed only after the verification this
-                // bar is waiting on.
-                if pendingHandbackAudit?.flavor == .forceReclaim {
-                    return ReclaimProgress(
-                        phase: .forceReclaimingPod, startedAt: started,
-                        expectedBy: started.addingTimeInterval(Self.reclaimForcedSettleExpectation),
-                        fraction: min(elapsed / Self.reclaimForcedSettleExpectation, 0.95),
-                        elapsed: elapsed)
-                }
-                // One stage, anchored where the USER'S wait began — the tap for a phone
-                // reclaim, the settle open for a watch-initiated one — so the bar is a single
-                // continuous fill across the handover and the settle. Caps at 0.95 and HOLDS
-                // there on an overrun: the settle's real bound is `reclaimSettleTimeout`, not
-                // the expectation, so a bar that has run out of deadline must read as
-                // nearly-done-and-still-working rather than as finished.
-                let anchor = reclaimDisplayAnchor ?? started
-                let waitElapsed = max(now.timeIntervalSince(anchor), 0)
-                return ReclaimProgress(
-                    phase: .reconnectingToPod, startedAt: anchor,
-                    expectedBy: anchor.addingTimeInterval(Self.reclaimSettleExpectation),
-                    fraction: min(waitElapsed / Self.reclaimSettleExpectation, 0.95),
-                    elapsed: waitElapsed)
-            }
-            return nil
+        return Self.reclaimProgress(from: queue.sync { uiSnapshot() }, now: deps.now())
+    }
+
+    // MARK: - Non-blocking UI reads
+
+    /// THE PUMP TILE MUST NEVER TAKE THE LOAN QUEUE. It draws on the main thread, and this queue
+    /// is the one doing BLE work, store commits and reconcile — so a `queue.sync` from a tile
+    /// refresh puts the main thread behind whatever the reclaim is currently doing. Field-proven
+    /// on 2026-08-16: a settle that stalled held the queue, the tile blocked main behind it, and
+    /// the ENTIRE phone UI froze until the app was force-quit. The pod was fine throughout; only
+    /// the interface was gone.
+    ///
+    /// So the tile reads a mirror under a plain lock, refreshed opportunistically from the queue.
+    /// The mirror caches the reclaim's INPUTS (its anchors and phase), never a finished
+    /// `ReclaimProgress` — the derivation is re-run against a fresh `now` on every read, so the
+    /// elapsed counter keeps ticking truthfully even while the queue is wedged and the snapshot
+    /// itself is stale. That is exactly the case where the seconds matter most: they are the only
+    /// thing distinguishing still-working from stuck.
+    struct UISnapshot: Equatable {
+        var isLoanedOut = false
+        var isTakeoverInProgress = false
+        var isSettlingOnly = false
+        var ladderIsRunning = false
+        var ladderStartedAt: Date?
+        var ladderPhase: ReclaimProgress.Phase = .draining
+        var ladderForceAt: Date?
+        var isOwner = true
+        var reclaimStartedAt: Date?
+        var reclaimVerified = true
+        var auditIsForceReclaim = false
+        var displayAnchor: Date?
+    }
+
+    private let uiMirrorLock = NSLock()
+    private var uiMirror = UISnapshot()
+
+    /// Captures the fields the tile derives from. MUST be called on `queue`.
+    private func uiSnapshot() -> UISnapshot {
+        var s = UISnapshot()
+        s.isLoanedOut = state != .owner
+        s.isTakeoverInProgress = state == .grantOffered
+        s.isSettlingOnly = state == .owner && reclaimStartedAt != nil && reclaimVerifiedAt == nil
+        if let ladder = reclaimLadder {
+            s.ladderIsRunning = state == .reclaimPending || state == .reconciling
+            s.ladderStartedAt = ladder.startedAt
+            s.ladderPhase = ladder.phase
+            s.ladderForceAt = ladder.forceAt
         }
+        s.isOwner = state == .owner
+        s.reclaimStartedAt = reclaimStartedAt
+        s.reclaimVerified = reclaimVerifiedAt != nil
+        s.auditIsForceReclaim = pendingHandbackAudit?.flavor == .forceReclaim
+        s.displayAnchor = reclaimDisplayAnchor
+        return s
+    }
+
+    /// Refreshes the mirror from the queue. Cheap and idempotent; safe to call from anywhere.
+    func refreshUIMirror() {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let s = self.uiSnapshot()
+            self.uiMirrorLock.lock()
+            self.uiMirror = s
+            self.uiMirrorLock.unlock()
+        }
+    }
+
+    /// The tile's read. Never blocks: it returns the last mirror and asks for a fresh one.
+    var uiState: UISnapshot {
+        refreshUIMirror()
+        uiMirrorLock.lock()
+        defer { uiMirrorLock.unlock() }
+        return uiMirror
+    }
+
+    /// The single derivation, shared by the blocking accessor and the tile's non-blocking one, so
+    /// the two can never drift into describing the same reclaim differently.
+    static func reclaimProgress(from s: UISnapshot, now: Date) -> ReclaimProgress? {
+        // `.reconciling` is part of the tapped handover, not a gap in it: the drain's records
+        // are being written, and the label the user is reading was chosen by this ladder's
+        // branch. Guarding on `.reclaimPending` alone dropped the phase for the length of one
+        // Core Data write, which relabels a dead-watch reclaim from its branch label to the
+        // generic "Reclaiming…" mid-write and then back.
+        if s.ladderIsRunning, let ladderStartedAt = s.ladderStartedAt {
+            let elapsed = max(now.timeIntervalSince(ladderStartedAt), 0)
+            // The live handover draws a determinate bar against the drain promise — the
+            // sweep is retired (field ruling). Past the promise the phase concedes and the
+            // bar holds at cap; the force at 25 s is what actually resolves it. The forcing
+            // phase (dead branch, or a live force mid-deferral) keeps a nil fraction: its
+            // own settle bar arrives within a second.
+            var phase = s.ladderPhase
+            var fraction: Double?
+            if phase == .draining {
+                fraction = min(elapsed / Self.liveHandoverExpectation, 0.95)
+                if elapsed >= Self.liveHandoverExpectation { phase = .watchNotAnswering }
+            }
+            return ReclaimProgress(phase: phase, startedAt: ladderStartedAt,
+                                   expectedBy: phase == .draining
+                                       ? ladderStartedAt.addingTimeInterval(Self.liveHandoverExpectation)
+                                       : (s.ladderForceAt ?? ladderStartedAt),
+                                   fraction: fraction,
+                                   elapsed: elapsed)
+        }
+        // The settle predicate is restated inline rather than read from `isReclaimSettling`:
+        // that accessor takes the same serial queue this block is already running on, and a
+        // nested sync onto a serial queue deadlocks. It is `isReclaimSettling` and not
+        // `isReclaimSettlingOnly` that it must match, ceiling term included — the pill draws
+        // this fraction BEFORE it checks whether a reclaim is in progress at all, so a bar
+        // that outlived the "Reclaiming…" tile would paint itself under some other label.
+        if s.isOwner, let started = s.reclaimStartedAt, !s.reclaimVerified,
+           now.timeIntervalSince(started) < Self.reclaimSettleTimeout {
+            let elapsed = max(now.timeIntervalSince(started), 0)
+            // A settle that follows a FORCE reclaim is one operation to the user — the tile
+            // just told them the watch could not be reached — so it runs ONE stage against
+            // its own promise instead of the fast/slow re-baseline, which mid-force would
+            // read as a second failure. The audit flavor is the marker: the force path arms
+            // it before ownership flips, and it is consumed only after the verification this
+            // bar is waiting on.
+            if s.auditIsForceReclaim {
+                return ReclaimProgress(
+                    phase: .forceReclaimingPod, startedAt: started,
+                    expectedBy: started.addingTimeInterval(Self.reclaimForcedSettleExpectation),
+                    fraction: min(elapsed / Self.reclaimForcedSettleExpectation, 0.95),
+                    elapsed: elapsed)
+            }
+            // One stage, anchored where the USER'S wait began — the tap for a phone
+            // reclaim, the settle open for a watch-initiated one — so the bar is a single
+            // continuous fill across the handover and the settle. Caps at 0.95 and HOLDS
+            // there on an overrun: the settle's real bound is `reclaimSettleTimeout`, not
+            // the expectation, so a bar that has run out of deadline must read as
+            // nearly-done-and-still-working rather than as finished.
+            let anchor = s.displayAnchor ?? started
+            let waitElapsed = max(now.timeIntervalSince(anchor), 0)
+            return ReclaimProgress(
+                phase: .reconnectingToPod, startedAt: anchor,
+                expectedBy: anchor.addingTimeInterval(Self.reclaimSettleExpectation),
+                fraction: min(waitElapsed / Self.reclaimSettleExpectation, 0.95),
+                elapsed: waitElapsed)
+        }
+        return nil
     }
 
     /// True during the post-handover BLE settle: the phone owns the pod but cannot yet command
@@ -464,6 +537,14 @@ final class PodLoanPhoneController {
     /// so a bolus tapped now would be aimed at a link that is not up.
     var isReclaimSettlingOnly: Bool {
         return queue.sync { state == .owner && reclaimStartedAt != nil && reclaimVerifiedAt == nil }
+    }
+
+    /// Non-blocking twins of the predicates above, for the tile. See `UISnapshot`.
+    var isReclaimSettlingOnlyForUI: Bool { return uiState.isSettlingOnly }
+    var isPodLoanedOutForUI: Bool { return uiState.isLoanedOut }
+    var isPodTakeoverInProgressForUI: Bool { return uiState.isTakeoverInProgress }
+    var reclaimProgressForUI: ReclaimProgress? {
+        return Self.reclaimProgress(from: uiState, now: Date())
     }
 
     // MARK: Reclaim settle window (post-hand-back "Reclaiming…" until the pod is truly back)
