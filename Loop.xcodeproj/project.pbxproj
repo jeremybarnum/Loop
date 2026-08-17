@@ -631,6 +631,7 @@
 		FADE00040000000000000036 /* RileyLinkBLEKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000003 /* RileyLinkBLEKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		FADE00040000000000000061 /* WatchLowGlucoseWarning.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000060 /* WatchLowGlucoseWarning.swift */; };
 		FADE00040000000000000069 /* WristAlertScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000068 /* WristAlertScheduler.swift */; };
+		FADE0004000000000000006B /* WristAlertScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE0004000000000000006A /* WristAlertScheduler.swift */; };
 		FADE00040000000000000063 /* WatchDiagnosticLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000062 /* WatchDiagnosticLog.swift */; };
 		FADE00040000000000000064 /* ObservedAbsorptionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991346FE2AE6D1350067EE27 /* ObservedAbsorptionManager.swift */; };
 		FADE00040000000000000065 /* ObservedAbsorptionSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991347002AE6D1490067EE27 /* ObservedAbsorptionSettings.swift */; };
@@ -1508,6 +1509,7 @@
 		FADE00040000000000000019 /* SportLog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SportLog.swift; sourceTree = "<group>"; };
 		FADE00040000000000000060 /* WatchLowGlucoseWarning.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WatchLowGlucoseWarning.swift; sourceTree = "<group>"; };
 		FADE00040000000000000068 /* WristAlertScheduler.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WristAlertScheduler.swift; sourceTree = "<group>"; };
+		FADE0004000000000000006A /* WristAlertScheduler.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WristAlertScheduler.swift; sourceTree = "<group>"; };
 		FADE00040000000000000062 /* WatchDiagnosticLog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WatchDiagnosticLog.swift; sourceTree = "<group>"; };
 		FADE00040000000000000091 /* LoanCarbListController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LoanCarbListController.swift; sourceTree = "<group>"; };
 		FADE00040000000000000093 /* WatchDoseEnactor.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WatchDoseEnactor.swift; sourceTree = "<group>"; };
@@ -2836,6 +2838,7 @@
 				FADE00040000000000000091 /* LoanCarbListController.swift */,
 				FADE00040000000000000060 /* WatchLowGlucoseWarning.swift */,
 				FADE00040000000000000068 /* WristAlertScheduler.swift */,
+				FADE0004000000000000006A /* WristAlertScheduler.swift */,
 				FADE00040000000000000062 /* WatchDiagnosticLog.swift */,
 				FADE00040000000000000018 /* LoopStallWatchdog.swift */,
 				FADE00040000000000000019 /* SportLog.swift */,
@@ -3822,6 +3825,7 @@
 				FADE00040000000000000092 /* LoanCarbListController.swift in Sources */,
 				FADE00040000000000000061 /* WatchLowGlucoseWarning.swift in Sources */,
 				FADE00040000000000000069 /* WristAlertScheduler.swift in Sources */,
+				FADE0004000000000000006B /* WristAlertScheduler.swift in Sources */,
 				FADE00040000000000000063 /* WatchDiagnosticLog.swift in Sources */,
 				FADE00040000000000000064 /* ObservedAbsorptionManager.swift in Sources */,
 				FADE00040000000000000065 /* ObservedAbsorptionSettings.swift in Sources */,
