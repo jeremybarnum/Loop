@@ -11,6 +11,7 @@ import Combine
 import LoopAlgorithm
 import WatchKit
 import WatchConnectivity
+import UserNotifications
 import LoopKit
 import LoopCore
 
@@ -183,7 +184,79 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
         try await sendSetBolusUserInfo(carbEntry: carbEntryUnderConsideration, bolus: bolusAmount)
     }
 
+    /// Shared so a verdict path can retract this once the pod's answer is in.
+    static let bolusUnconfirmedNotificationID = "loan.bolus.failure"
+
+    /// A bolus the wrist could not confirm. The pod beeps only when it ACCEPTS, so a bolus that
+    /// never reached it is SILENT — and silence would otherwise mean both "still working" and
+    /// "it failed". This is the one signal nothing else carries.
+    private static func notifyBolusFailure(units: Double, carbGrams: Double?, error: Swift.Error) {
+        let content = UNMutableNotificationContent()
+        let unitsText = NumberFormatter.localizedString(from: NSNumber(value: units), number: .decimal)
+        content.title = String(
+            format: NSLocalizedString("Bolus Unconfirmed: %@ U", comment: "Watch notification title for a loan-time bolus whose delivery could not be confirmed (1: units)"),
+            unitsText)
+        if let carbGrams = carbGrams {
+            content.body = String(
+                format: NSLocalizedString("%@ g was saved. Loop couldn't confirm delivery. You can wait to see if it resolves.", comment: "Watch notification body when carbs were saved but bolus delivery is unconfirmed (1: grams)"),
+                NumberFormatter.localizedString(from: NSNumber(value: Int(carbGrams.rounded())), number: .none))
+        } else {
+            // The error text goes to the LOG, not the lock screen: these are PodCommsError /
+            // PumpManagerError values whose localizedDescription is developer copy of
+            // unpredictable length.
+            content.body = NSLocalizedString("Loop couldn't confirm delivery. You can wait to see if it resolves.", comment: "Watch notification body when a loan-time bolus delivery is unconfirmed")
+        }
+        content.sound = .default
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: Self.bolusUnconfirmedNotificationID, content: content, trigger: nil))
+    }
+
     private func sendSetBolusUserInfo(carbEntry: NewCarbEntry?, bolus: Double) async throws {
+        // PODLOAN: during an active loan the PHONE has RELEASED its pod link, so a bolus relayed
+        // there dies undelivered — found on the wrist 2026-07-18, and again on this branch
+        // 2026-08-16 when two boluses entered from these screens reached neither the pod nor the
+        // phone's books. Deliver on the WATCH's pump instead.
+        //
+        // Carbs take both paths deliberately: the LOCAL store so this loop's COB sees them on the
+        // very next cycle, and the loan JOURNAL — resend-until-ack — as the durable record that
+        // reaches the phone even while it is unreachable, which is the entire point of Sport Mode.
+        // The stock WC relay is skipped, not merely zeroed: it cannot deliver and its carb write
+        // would race the journal's.
+        if let session = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession,
+           session.loanController.isLoanActive {
+            let activationType: BolusActivationType = .activationTypeFor(recommendedAmount: recommendedBolusAmount, bolusAmount: bolus)
+            if let carbEntry = carbEntry {
+                session.stack.loopManager.addLoanCarbEntry(carbEntry)
+                session.loanController.loanDidRecordCarbs(carbEntry)
+            }
+            if bolus > 0 {
+                let units = bolus
+                session.stack.loopManager.enactManualBolus(units: units, activationType: activationType) { error in
+                    if let error = error {
+                        // FAILURE always buzzes — see notifyBolusFailure. Deliberately does NOT
+                        // re-open the send window: the carbs are already journaled, so a re-tap
+                        // would double-log them.
+                        WKInterfaceDevice.current().play(.failure)
+                        SportLog.event("bolus-ui", String(
+                            format: "USER ALERTED 'Bolus Unconfirmed' — %.2f U did not confirm%@ · reason: %@ · haptic=failure",
+                            units,
+                            carbEntry.map { String(format: " (%.0f g ALREADY logged)", $0.quantity.doubleValue(for: .gram)) } ?? "",
+                            error.localizedDescription))
+                        Self.notifyBolusFailure(units: units,
+                                                carbGrams: carbEntry?.quantity.doubleValue(for: .gram),
+                                                error: error)
+                    } else if !session.stack.loopManager.podBeepsOnManualBolus {
+                        // Success haptic ONLY when the pod is silent. With beeps on, the pod's
+                        // acknowledgement fires at this same instant and says the same thing.
+                        WKInterfaceDevice.current().play(.success)
+                    }
+                }
+            } else if carbEntry != nil {
+                WKInterfaceDevice.current().play(.success)
+            }
+            return
+        }
+
         let bolus = SetBolusUserInfo(value: bolus, startDate: Date(), contextDate: self.contextDate, carbEntry: carbEntry, activationType: .activationTypeFor(recommendedAmount: recommendedBolusAmount, bolusAmount: bolus))
         let updatedContext = try await WCSession.default.sendBolusMessage(bolus)
         if bolus.carbEntry != nil {

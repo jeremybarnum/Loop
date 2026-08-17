@@ -15,6 +15,9 @@ struct ContentView: View {
     @State private var presetToConfirm: SelectablePreset? = nil
     @State private var selectedPage = UserDefaults.standard.startOnChartPage ? 1 : 0
     @StateObject private var glanceModel = GlanceViewModel()
+    /// Owned here, like the glance model: the list reloads from the loan's own carb store on
+    /// appear, so it must outlive a swipe away and back rather than being rebuilt each time.
+    @StateObject private var loanCarbModel = LoanCarbListModel()
 
     /// The glance's page index. Named rather than written inline because a live loan lands the
     /// user here, and a bare `2` at that call site would be a silent dependency on page order.
@@ -61,9 +64,16 @@ struct ContentView: View {
                 GlanceView(model: glanceModel)
                     .tag(Self.sportPage)
 
+                // The loan's own carb list — the wrist's only way to see and RETRACT carbs it
+                // entered while holding the pod. It sits next to Sport Mode rather than with the
+                // stock pages because during a loan the watch owns the carb store; the stock
+                // list reads the phone's.
+                LoanCarbListView(model: loanCarbModel)
+                    .tag(Self.sportPage + 1)
+
                 // Diagnostics. Last, so a swipe never lands here by accident.
                 LoanDebugView()
-                    .tag(Self.sportPage + 1)
+                    .tag(Self.sportPage + 2)
             }
             .tabViewStyle(.page)
             .indexViewStyle(.page(backgroundDisplayMode: .automatic))
