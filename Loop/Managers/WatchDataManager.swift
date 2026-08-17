@@ -149,8 +149,14 @@ final class WatchDataManager: NSObject {
                 let bytes = (dictionary[LoanProtocol.userInfoKey] as? Data)?.count ?? 0
                 let reachableNow = session.isReachable
                 let interactive = LoanMessage.isInteractiveHandshake(transport: dictionary)
+                // isReachable is only the SYMPTOM. The cause we are chasing is isWatchAppInstalled
+                // going false — an app iOS is simultaneously receiving messages FROM — after which
+                // every send fails WCErrorDomain 7006 and nothing queues. Record all four flags so
+                // the send line alone says which layer failed.
                 PhoneLog.event("wc", "send \(kind ?? "?") path=\(interactive && reachableNow ? "urgent" : "queued") "
-                                   + "bytes=\(bytes) (interactive=\(interactive) reachable=\(reachableNow))")
+                                   + "bytes=\(bytes) (interactive=\(interactive) reachable=\(reachableNow) "
+                                   + "installed=\(session.isWatchAppInstalled) paired=\(session.isPaired) "
+                                   + "activation=\(session.activationState.rawValue))")
                 guard LoanMessage.isInteractiveHandshake(transport: dictionary),
                       session.isReachable else {
                     let size = (dictionary[LoanProtocol.userInfoKey] as? Data)?.count ?? 0
@@ -1052,6 +1058,25 @@ extension WatchDataManager: WCSessionDelegate {
         log.default("Ignoring unexpected userInfo from watch: %{public}@", String(describing: userInfo.keys))
     }
 
+    /// iOS calls this whenever isPaired / isWatchAppInstalled change — i.e. the exact moment the
+    /// system decides the watch app has appeared or vanished. It was not implemented, so the flip
+    /// that breaks a loan happened invisibly and could only be inferred, hours later, from sends
+    /// that had already failed.
+    ///
+    /// The open question this exists to answer: does `isWatchAppInstalled` go false and STAY false
+    /// until the app is reinstalled, or does it recover on its own? The answer decides whether the
+    /// remedy is prevention alone or prevention plus a recovery path, and no amount of reading the
+    /// send failures can settle it — only watching the transition can.
+    func sessionWatchStateDidChange(_ session: WCSession) {
+        PhoneLog.event("wc", "WATCH STATE CHANGED — installed=\(session.isWatchAppInstalled) "
+                           + "paired=\(session.isPaired) activation=\(session.activationState.rawValue) "
+                           + "reachable=\(session.isReachable)")
+        log.default("Watch state changed: installed=%{public}@ paired=%{public}@ reachable=%{public}@",
+                    String(describing: session.isWatchAppInstalled),
+                    String(describing: session.isPaired),
+                    String(describing: session.isReachable))
+    }
+
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
         switch activationState {
         case .activated:
@@ -1081,7 +1106,11 @@ extension WatchDataManager: WCSessionDelegate {
             // the watch simply times out with no grant and no explanation on either side.
             // `userInfo` is documented-unreliable on failure (see the note below), so the count
             // of still-outstanding transfers is logged as the more dependable signal.
-            PhoneLog.event("wc", "transferUserInfo FAILED — \(String(describing: error)) "
+            let wc = error as NSError
+            let named = (wc.domain == "WCErrorDomain" && wc.code == 7006)
+                ? "WATCH APP NOT INSTALLED (7006) — iOS believes the watch app is absent; sends fail and nothing queues. "
+                : ""
+            PhoneLog.event("wc", "transferUserInfo FAILED — \(named)\(String(describing: error)) "
                                + "· outstanding=\(session.outstandingUserInfoTransfers.count) "
                                + "· name=\(userInfoTransfer.userInfo["name"] as? String ?? "nil(loan or unknown)")")
 
