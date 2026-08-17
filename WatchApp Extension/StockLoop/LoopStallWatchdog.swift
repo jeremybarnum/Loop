@@ -62,15 +62,15 @@ enum LoopStallWatchdog {
         content.sound = useCriticalAlert ? .defaultCritical : .default
         content.threadIdentifier = identifier
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: false)
-        UNUserNotificationCenter.current().add(
+        WristAlerts.scheduler.add(
             UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
     }
 
     /// Disarm — a clean end / hand-back / revoke. The loop is stopping on purpose.
     static func disarm() {
-        let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: [identifier])
-        center.removeDeliveredNotifications(withIdentifiers: [identifier])
+        let center = WristAlerts.scheduler
+        center.removePendingRequests(withIdentifiers: [identifier])
+        center.removeDeliveredRequests(withIdentifiers: [identifier])
     }
 }
 
@@ -110,8 +110,8 @@ enum SensorBlackoutAlert {
     /// the sensor stopped or only Sport Mode's link to it did — which is worth naming while this
     /// build is young and "is it me or the app?" is the live question.
     static func refresh() {
-        let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: [identifier])
+        let center = WristAlerts.scheduler
+        center.removePendingRequests(withIdentifiers: [identifier])
         let content = UNMutableNotificationContent()
         content.title = NSLocalizedString("No Direct G7 Readings", comment: "Sensor-blackout alert title")
         content.body = String(
@@ -123,9 +123,9 @@ enum SensorBlackoutAlert {
     }
 
     static func disarm() {
-        let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: [identifier])
-        center.removeDeliveredNotifications(withIdentifiers: [identifier])
+        let center = WristAlerts.scheduler
+        center.removePendingRequests(withIdentifiers: [identifier])
+        center.removeDeliveredRequests(withIdentifiers: [identifier])
     }
 }
 
@@ -146,8 +146,8 @@ enum HandbackStuckAlert {
     private static let identifier = "sportmode.handbackStuck"
 
     static func arm() {
-        let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: [identifier])
+        let center = WristAlerts.scheduler
+        center.removePendingRequests(withIdentifiers: [identifier])
         let content = UNMutableNotificationContent()
         content.title = NSLocalizedString("Couldn't End Sport Mode", comment: "Hand-back-stuck alert title")
         content.body = NSLocalizedString("The iPhone didn't respond, so Sport Mode is still running on your watch. Tap End to try again.", comment: "Hand-back-stuck alert body")
@@ -159,8 +159,8 @@ enum HandbackStuckAlert {
     }
 
     static func disarm() {
-        let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: [identifier])
-        center.removeDeliveredNotifications(withIdentifiers: [identifier])
+        let center = WristAlerts.scheduler
+        center.removePendingRequests(withIdentifiers: [identifier])
+        center.removeDeliveredRequests(withIdentifiers: [identifier])
     }
 }

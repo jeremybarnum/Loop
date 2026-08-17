@@ -198,7 +198,6 @@
 		43D0E4C32F1A000100000023 /* BolusNoticeWristText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4C12F1A000100000021 /* BolusNoticeWristText.swift */; };
 		43D0E5A12F1B00010000010A /* PhoneLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E5A02F1B000100000109 /* PhoneLog.swift */; };
 		43D0E5A29F2C4B7E88110002 /* LoanTwoSidedContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E5A19F2C4B7E88110001 /* LoanTwoSidedContractTests.swift */; };
-		FADE00040000000000000098 /* ICEInvalidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000097 /* ICEInvalidationTests.swift */; };
 		43D381621EBD9759007F8C8F /* HeaderValuesTableViewCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D381611EBD9759007F8C8F /* HeaderValuesTableViewCell.swift */; };
 		43D9001E21EB209400AF44BF /* LoopCore.h in Headers */ = {isa = PBXBuildFile; fileRef = 43D9FFD121EAE05D00AF44BF /* LoopCore.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		43D9002021EB209400AF44BF /* NSTimeInterval.swift in Sources */ = {isa = PBXBuildFile; fileRef = 439897341CD2F7DE00223065 /* NSTimeInterval.swift */; };
@@ -622,10 +621,6 @@
 		FADE00040000000000000025 /* StockLoopSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000015 /* StockLoopSession.swift */; };
 		FADE00040000000000000026 /* LoanDebugController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000016 /* LoanDebugController.swift */; };
 		FADE00040000000000000027 /* GlanceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000017 /* GlanceController.swift */; };
-		FADE00040000000000000061 /* WatchLowGlucoseWarning.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000060 /* WatchLowGlucoseWarning.swift */; };
-		FADE00040000000000000063 /* WatchDiagnosticLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000062 /* WatchDiagnosticLog.swift */; };
-		FADE00040000000000000064 /* ObservedAbsorptionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991346FE2AE6D1350067EE27 /* ObservedAbsorptionManager.swift */; };
-		FADE00040000000000000065 /* ObservedAbsorptionSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991347002AE6D1490067EE27 /* ObservedAbsorptionSettings.swift */; };
 		FADE00040000000000000028 /* LoopStallWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000018 /* LoopStallWatchdog.swift */; };
 		FADE00040000000000000029 /* SportLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000019 /* SportLog.swift */; };
 		FADE00040000000000000031 /* OmnipodKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000001 /* OmnipodKit.framework */; };
@@ -634,9 +629,15 @@
 		FADE00040000000000000034 /* OmnipodKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000001 /* OmnipodKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		FADE00040000000000000035 /* RileyLinkKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000002 /* RileyLinkKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		FADE00040000000000000036 /* RileyLinkBLEKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000003 /* RileyLinkBLEKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		FADE00040000000000000061 /* WatchLowGlucoseWarning.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000060 /* WatchLowGlucoseWarning.swift */; };
+		FADE00040000000000000069 /* WristAlertScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000068 /* WristAlertScheduler.swift */; };
+		FADE00040000000000000063 /* WatchDiagnosticLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000062 /* WatchDiagnosticLog.swift */; };
+		FADE00040000000000000064 /* ObservedAbsorptionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991346FE2AE6D1350067EE27 /* ObservedAbsorptionManager.swift */; };
+		FADE00040000000000000065 /* ObservedAbsorptionSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991347002AE6D1490067EE27 /* ObservedAbsorptionSettings.swift */; };
 		FADE00040000000000000092 /* LoanCarbListController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000091 /* LoanCarbListController.swift */; };
 		FADE00040000000000000094 /* WatchDoseEnactor.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000093 /* WatchDoseEnactor.swift */; };
 		FADE00040000000000000096 /* DeviceLogThrottle.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000095 /* DeviceLogThrottle.swift */; };
+		FADE00040000000000000098 /* ICEInvalidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000097 /* ICEInvalidationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1002,7 +1003,6 @@
 		43D0E4C12F1A000100000021 /* BolusNoticeWristText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BolusNoticeWristText.swift; sourceTree = "<group>"; };
 		43D0E5A02F1B000100000109 /* PhoneLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneLog.swift; sourceTree = "<group>"; };
 		43D0E5A19F2C4B7E88110001 /* LoanTwoSidedContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoanTwoSidedContractTests.swift; sourceTree = "<group>"; };
-		FADE00040000000000000097 /* ICEInvalidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ICEInvalidationTests.swift; sourceTree = "<group>"; };
 		43D381611EBD9759007F8C8F /* HeaderValuesTableViewCell.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = HeaderValuesTableViewCell.swift; sourceTree = "<group>"; };
 		43D533BB1CFD1DD7009E3085 /* WatchApp Extension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = "WatchApp Extension.entitlements"; sourceTree = "<group>"; };
 		43D848AF1E7DCBE100DADCBC /* Result.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Result.swift; sourceTree = "<group>"; };
@@ -1202,9 +1202,9 @@
 		89F9119324358E4500ECCAF3 /* CarbAbsorptionTime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarbAbsorptionTime.swift; sourceTree = "<group>"; };
 		89F9119524358E6900ECCAF3 /* BolusPickerValues.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BolusPickerValues.swift; sourceTree = "<group>"; };
 		89FE21AC24AC57E30033F501 /* Collection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Collection.swift; sourceTree = "<group>"; };
-		997DDB47302D82A800A03F53 /* WatchAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WatchAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		991346FE2AE6D1350067EE27 /* ObservedAbsorptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservedAbsorptionManager.swift; sourceTree = "<group>"; };
 		991347002AE6D1490067EE27 /* ObservedAbsorptionSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservedAbsorptionSettings.swift; sourceTree = "<group>"; };
+		997DDB47302D82A800A03F53 /* WatchAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WatchAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A900531A28D60862000BC15B /* Loop.shortcut */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop.shortcut; sourceTree = "<group>"; };
 		A900531B28D608CA000BC15B /* Cancel Override.shortcut */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Cancel Override.shortcut"; sourceTree = "<group>"; };
 		A900531C28D6090D000BC15B /* Loop Remote Overrides.shortcut */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop Remote Overrides.shortcut"; sourceTree = "<group>"; };
@@ -1504,13 +1504,15 @@
 		FADE00040000000000000015 /* StockLoopSession.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = StockLoopSession.swift; sourceTree = "<group>"; };
 		FADE00040000000000000016 /* LoanDebugController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LoanDebugController.swift; sourceTree = "<group>"; };
 		FADE00040000000000000017 /* GlanceController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = GlanceController.swift; sourceTree = "<group>"; };
-		FADE00040000000000000060 /* WatchLowGlucoseWarning.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WatchLowGlucoseWarning.swift; sourceTree = "<group>"; };
-		FADE00040000000000000062 /* WatchDiagnosticLog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WatchDiagnosticLog.swift; sourceTree = "<group>"; };
 		FADE00040000000000000018 /* LoopStallWatchdog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LoopStallWatchdog.swift; sourceTree = "<group>"; };
 		FADE00040000000000000019 /* SportLog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SportLog.swift; sourceTree = "<group>"; };
+		FADE00040000000000000060 /* WatchLowGlucoseWarning.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WatchLowGlucoseWarning.swift; sourceTree = "<group>"; };
+		FADE00040000000000000068 /* WristAlertScheduler.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WristAlertScheduler.swift; sourceTree = "<group>"; };
+		FADE00040000000000000062 /* WatchDiagnosticLog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WatchDiagnosticLog.swift; sourceTree = "<group>"; };
 		FADE00040000000000000091 /* LoanCarbListController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LoanCarbListController.swift; sourceTree = "<group>"; };
 		FADE00040000000000000093 /* WatchDoseEnactor.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WatchDoseEnactor.swift; sourceTree = "<group>"; };
 		FADE00040000000000000095 /* DeviceLogThrottle.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = DeviceLogThrottle.swift; sourceTree = "<group>"; };
+		FADE00040000000000000097 /* ICEInvalidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ICEInvalidationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -2563,6 +2565,15 @@
 			name = Frameworks;
 			sourceTree = "<group>";
 		};
+		991347022AE6D15D0067EE27 /* ObservedAbsorption */ = {
+			isa = PBXGroup;
+			children = (
+				991346FE2AE6D1350067EE27 /* ObservedAbsorptionManager.swift */,
+				991347002AE6D1490067EE27 /* ObservedAbsorptionSettings.swift */,
+			);
+			path = ObservedAbsorption;
+			sourceTree = "<group>";
+		};
 		99914BBD300B44B0001F9BC6 /* Recovered References */ = {
 			isa = PBXGroup;
 			children = (
@@ -2572,15 +2583,6 @@
 				FADE00040000000000000003 /* RileyLinkBLEKit.framework */,
 			);
 			name = "Recovered References";
-			sourceTree = "<group>";
-		};
-		991347022AE6D15D0067EE27 /* ObservedAbsorption */ = {
-			isa = PBXGroup;
-			children = (
-				991346FE2AE6D1350067EE27 /* ObservedAbsorptionManager.swift */,
-				991347002AE6D1490067EE27 /* ObservedAbsorptionSettings.swift */,
-			);
-			path = ObservedAbsorption;
 			sourceTree = "<group>";
 		};
 		A900531928D60852000BC15B /* Shortcuts */ = {
@@ -2833,6 +2835,7 @@
 				FADE00040000000000000017 /* GlanceController.swift */,
 				FADE00040000000000000091 /* LoanCarbListController.swift */,
 				FADE00040000000000000060 /* WatchLowGlucoseWarning.swift */,
+				FADE00040000000000000068 /* WristAlertScheduler.swift */,
 				FADE00040000000000000062 /* WatchDiagnosticLog.swift */,
 				FADE00040000000000000018 /* LoopStallWatchdog.swift */,
 				FADE00040000000000000019 /* SportLog.swift */,
@@ -3818,6 +3821,7 @@
 				FADE00040000000000000027 /* GlanceController.swift in Sources */,
 				FADE00040000000000000092 /* LoanCarbListController.swift in Sources */,
 				FADE00040000000000000061 /* WatchLowGlucoseWarning.swift in Sources */,
+				FADE00040000000000000069 /* WristAlertScheduler.swift in Sources */,
 				FADE00040000000000000063 /* WatchDiagnosticLog.swift in Sources */,
 				FADE00040000000000000064 /* ObservedAbsorptionManager.swift in Sources */,
 				FADE00040000000000000065 /* ObservedAbsorptionSettings.swift in Sources */,
