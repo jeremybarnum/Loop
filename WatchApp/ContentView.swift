@@ -36,8 +36,14 @@ struct ContentView: View {
     /// and cannot go stale in the user's favour: waiting for it blanks precisely the screens the
     /// wrist needs while it is the one holding the pod. The watch is authoritative then, with its
     /// own stores and its own CGM, so the phone's readiness is not the question being asked.
+    /// Mirrored into plain state rather than read from `glanceModel` inside `body`. Reading the
+    /// model here would subscribe THE ROOT VIEW to a timer-driven object on the loan path, so
+    /// every glance tick would invalidate the whole app — and a publish that arrives off the main
+    /// thread would do it from the wrong thread, which SwiftUI does not survive.
+    @State private var loanIsLive = false
+
     private var isOnboarded: Bool {
-        if glanceModel.wantsFocus { return true }
+        if loanIsLive { return true }
         return loopManager.activeContext?.isOnboardingCompleted == true
     }
 
@@ -103,8 +109,18 @@ struct ContentView: View {
         // A loan activating takes the user to the glance — it is the surface that says what the
         // watch is doing while it holds the pump. Replaces the WatchKit page-navigation call the
         // session used to make directly.
-        .onReceive(NotificationCenter.default.publisher(for: .podLoanPhaseDidChange)) { _ in
-            if glanceModel.wantsFocus { selectedPage = Self.sportPage }
+        // `.receive(on:)` is load-bearing, not tidiness: the phase notification is posted from
+        // the loan's own queue, and both statements below mutate view state.
+        .onReceive(NotificationCenter.default.publisher(for: .podLoanPhaseDidChange).receive(on: RunLoop.main)) { _ in
+            let live = glanceModel.wantsFocus
+            loanIsLive = live
+            if live { selectedPage = Self.sportPage }
+        }
+        .task {
+            // The gate also has to be right on a COLD LAUNCH into a live loan — relaunching
+            // mid-session posts no phase change, and that is exactly when the watch is holding
+            // the pod and needs these pages.
+            loanIsLive = glanceModel.wantsFocus
         }
     }
 }
