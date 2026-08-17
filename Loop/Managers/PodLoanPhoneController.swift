@@ -643,9 +643,9 @@ final class PodLoanPhoneController {
            deps.now().timeIntervalSince(started) >= Self.reclaimEscalateAfter,
            let lendable = deps.pumpManager() as? PumpConnectionLendable {
             reclaimEscalated = true
-            handbackDiag(epoch, String(format: "settle: link still down at +%.0fs — escalating to scan-adopt",
-                                       deps.now().timeIntervalSince(started)))
-            lendable.escalateConnectionReclaim()
+            let outcome = lendable.escalateConnectionReclaim() ?? "the pump manager had nothing to escalate"
+            handbackDiag(epoch, String(format: "settle: link still down at +%.0fs — escalating: %@",
+                                       deps.now().timeIntervalSince(started), outcome))
         }
         // Force a REAL round-trip on the first tick after the link comes up, then on a slow
         // cadence — because the cheap call does not always talk to the pod at all.
