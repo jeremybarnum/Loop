@@ -105,6 +105,43 @@ therefore never arms the alert whose entire purpose is "the watch is holding the
 looping." Structurally silent in exactly the failure it exists for. Independent of the
 automaticBolus ruling and worth fixing on whichever base survives.
 
+## OPEN, FROM next-dev → production-merge — the phone never escalates a stalled reclaim
+
+**Reverse direction: found and fixed on next-dev, present and unfixed here.** Reported by the
+next-dev session 2026-08-16; the code claim verified against this base rather than taken on trust.
+
+`OmnipodKit/OmnipodKit/PumpManager/OmniPumpManager+PodLoan.swift:171` says:
+
+```
+/// No-op if there's no pod address. watchOS only; iOS never reclaims a loan.
+```
+
+and :173 wraps the escalation in `#if os(watchOS)`. **The premise is false.** The phone reclaims at
+every hand-back settle, on grant-lost, and on the escape-hatch force reclaim — we watched it do so
+in both Jeremy's and Caitlin's logs on 2026-08-16. So iOS never gets `escalateLoanReclaim` and is
+left on the bare pending-connect that our own E4 notes call probabilistic (it "caught a 578s-idle
+pod, missed a 518s-idle one"), while the takeover's scan-and-adopt "landed 4/4 from arbitrary
+state".
+
+**On next-dev this was measured: hand-back settles of 224.2 s and 237.0 s**, against ~1 s when the
+link happened to still be up. The 224 s case was on the ESCAPE HATCH — four minutes of silence with
+no UI feedback, which Jeremy had already flagged as a UX problem before anyone knew the cause.
+
+**LATENT HERE, NOT OBSERVED.** Every phone settle in our field logs is fast — `+0.0s`, `+0.0s`,
+`+2.2s` (Jeremy), `+2.2s`, `+6.6s` (Caitlin). The probabilistic path has been winning so far. The
+gate is real; the symptom has not yet appeared on this base.
+
+**Likely the root cause of task #122** ("root-cause the BLE settle from instrumented logs", open
+since build 280). Check that first — it may already be answered.
+
+Their fix, for reference (an older OmnipodKit means it will not apply cleanly):
+`escalateConnectionReclaim()` on `PumpConnectionLendable` with a default no-op so other pumps are
+unaffected; an iOS escalation that arms the scan-adopt but deliberately NOT `recreateCentral()`,
+because watchOS has no CoreBluetooth state restoration to lose while iOS's central owns a restore
+identifier the app depends on after a background relaunch; and the settle ladder escalating once at
+20 s, since the takeover budget calls a connect "typically ~17 s" and a normal reconnect is still
+landing inside that.
+
 ## NON-CHANGE — absorptionTimeOverrun stays at 1.5
 
 Jeremy has historically run 1.0. That change lives on commit `86bc2325` in the LoopKit fork,
