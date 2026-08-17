@@ -1578,6 +1578,28 @@ final class PodLoanPhoneController {
             return
         }
 
+        // The watch doses by temp basal only. If the phone is running automaticBolus, the wrist
+        // used to refuse EVERY cycle — it held the pod and never dosed at all, surfacing a raw
+        // Swift error on the watch face. Field-confirmed on the first live run: 5 cycles, 5
+        // refusals, zero enacts, for a user whose therapy is a continuous stream of small
+        // automatic boluses.
+        //
+        // So the loan runs on temps, and the strategy is overridden HERE, in the snapshot the
+        // grant carries — deliberately NOT by changing the phone's stored setting. Flipping the
+        // real setting would need a restore at hand-back, and a restore that never runs (relaunch
+        // mid-loan, force reclaim, dead watch, app killed) would leave the user silently on
+        // tempBasalOnly forever: a lasting therapy change from a bookkeeping miss. Overriding the
+        // snapshot has nothing to undo, so there is no restore that can fail. The phone is
+        // automaticBolus again the instant it has the pod back, because it never stopped being.
+        var loanSettings = settings
+        let strategyOverridden = settings.automaticDosingStrategy != .tempBasalOnly
+        loanSettings.automaticDosingStrategy = .tempBasalOnly
+        if strategyOverridden {
+            os_log("Loan: dosing strategy overridden — phone runs %{public}@, the wrist gets tempBasalOnly; the phone's own setting is untouched",
+                   log: log, type: .default, String(describing: settings.automaticDosingStrategy))
+            PhoneLog.event("loan", "dosing strategy overridden for the loan — phone \(settings.automaticDosingStrategy) → wrist tempBasalOnly (phone setting untouched)")
+        }
+
         // Fix 1 (field-confirmed boundaryDup=YES): DO NOT emit a boundaryRecord.
         // The running temp is (near-always) already in `doseHistory` — getNormalizedDoseEntries
         // returns the open mutable temp, fetched below AFTER releaseConnection (which only
@@ -1671,7 +1693,7 @@ final class PodLoanPhoneController {
                     self.queue.async {
                         guard self.state == .grantOffered, self.epoch == grantEpoch else { return }
                         guard let stateData = try? PropertyListSerialization.data(fromPropertyList: pump.rawValue, format: .binary, options: 0),
-                              let settingsData = try? PropertyListSerialization.data(fromPropertyList: settings.rawValue, format: .binary, options: 0) else {
+                              let settingsData = try? PropertyListSerialization.data(fromPropertyList: loanSettings.rawValue, format: .binary, options: 0) else {
                             self.abortGrant(reason: "snapshot encoding failed")
                             return
                         }
