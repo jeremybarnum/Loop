@@ -22,52 +22,26 @@ import UserNotifications
 
 final class WatchdogArmingTests: XCTestCase {
 
-    private let center = UNUserNotificationCenter.current()
+    private var scheduler: RecordingWristAlertScheduler!
 
     override func setUp() {
         super.setUp()
-        removeAll()
+        scheduler = RecordingWristAlertScheduler()
+        WristAlerts.scheduler = scheduler
     }
 
     override func tearDown() {
-        removeAll()
+        WristAlerts.scheduler = UNUserNotificationCenter.current()
+        scheduler = nil
         super.tearDown()
     }
 
-    private func removeAll() {
-        center.removeAllPendingNotificationRequests()
-        // The remove is asynchronous inside the notification daemon; settle before asserting.
-        _ = pending()
-    }
-
-    /// Synchronously read the pending requests. The API is async and the daemon is a separate
-    /// process, so a bare call-and-assert races it.
-    private func pending() -> [UNNotificationRequest] {
-        var result: [UNNotificationRequest] = []
-        let done = expectation(description: "pending fetched")
-        center.getPendingNotificationRequests { reqs in result = reqs; done.fulfill() }
-        wait(for: [done], timeout: 5)
-        return result
-    }
-
-    /// Read only once the daemon has stopped changing its mind.
-    ///
-    /// `center.add(_:)` is fire-and-forget — production passes no completion handler — so in
-    /// principle a read after N refreshes can land before the adds do, and a premature read
-    /// returns ONE request, which is indistinguishable from correct replacement. It has not been
-    /// observed racing here (the identifier-stacking sabotage reddens these tests with or
-    /// without the wait), so this is insurance against the API's contract rather than a fix for
-    /// a seen failure.
-    private func settledPending(timeout: TimeInterval = 3) -> [UNNotificationRequest] {
-        let deadline = Date().addingTimeInterval(timeout)
-        var last = pending()
-        while Date() < deadline {
-            let next = pending()
-            if next.count == last.count { return next }
-            last = next
-        }
-        return last
-    }
+    /// The requests the alerts have asked for. Synchronous: the double records inline, so the
+    /// polling the old suite needed against a separate daemon process is gone, and with it the
+    /// class of failure where a premature read returned ONE request and looked like correct
+    /// replacement.
+    private func pending() -> [UNNotificationRequest] { scheduler.pending }
+    private func settledPending(timeout: TimeInterval = 3) -> [UNNotificationRequest] { scheduler.pending }
 
     private func interval(of request: UNNotificationRequest) -> TimeInterval? {
         (request.trigger as? UNTimeIntervalNotificationTrigger)?.timeInterval
