@@ -130,21 +130,6 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
     }
 
     private func recommendBolus(with entry: NewCarbEntry? = nil) async {
-        // DURING A LOAN THE PHONE IS THE WRONG DEVICE TO ASK. It released its pod link at the
-        // grant and its books have been frozen since, so its IOB, COB and prediction are the ones
-        // it held when it handed the pod over — an answer computed from the wrong device's data.
-        // With the phone switched off it cannot answer at all, which is exactly the case Sport
-        // Mode exists for, and the failure surfaces as "Unable to Reach iPhone" at the bolus step
-        // (field 2026-08-16, 23:33, phone off deliberately).
-        //
-        // The watch holds the pod, ran the loop, and owns the only current books — so it computes
-        // its own recommendation.
-        if let session = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession,
-           session.loanController.isLoanActive {
-            await recommendLoanBolus(with: entry, session: session)
-            return
-        }
-
         do {
             isComputingRecommendedBolus = true
             let context = try await WCSession.default.fetchBolusRecommendation(entry)
@@ -224,41 +209,6 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
         content.sound = .default
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: Self.bolusUnconfirmedNotificationID, content: content, trigger: nil))
-    }
-
-    /// The watch-local twin of the phone round-trip above, for a live loan.
-    ///
-    /// A FAILURE HERE IS SAID OUT LOUD rather than left to be inferred. Leaving the amount nil
-    /// sits the dial at 0, and at 0 the flow's action button reads "Save" instead of "Save and
-    /// Bolus" — carbs are stored, the bolus screen is skipped, and nothing announces that a
-    /// recommendation was never computed. That is a degraded recommendation, not a trap (the user
-    /// can still dial a dose by hand on this same screen), but it must never arrive silently.
-    private func recommendLoanBolus(with entry: NewCarbEntry?, session: StockLoopSession) async {
-        isComputingRecommendedBolus = true
-        defer { isComputingRecommendedBolus = false }
-
-        let result: Swift.Result<ManualBolusRecommendation, Swift.Error> = await withCheckedContinuation { continuation in
-            session.stack.loopManager.recommendManualBolus(potentialCarbEntry: entry) { result in
-                continuation.resume(returning: result)
-            }
-        }
-
-        // Superseded while we were computing — the entry under consideration moved on, so this
-        // answer describes carbs the user is no longer entering.
-        guard entry == carbEntryUnderConsideration else { return }
-
-        switch result {
-        case .success(let recommendation):
-            SportLog.event("bolus-ui", String(format: "REC carb %.0fg (watch-local): %.2f U",
-                                              entry?.quantity.doubleValue(for: .gram) ?? 0,
-                                              recommendation.amount))
-            if recommendedBolusAmount != recommendation.amount {
-                recommendedBolusAmount = recommendation.amount
-            }
-        case .failure(let error):
-            SportLog.event("bolus-ui", "REC carb (watch-local) FAILED — \(error) · dial stays 0, button reads Save")
-            recommendedBolusAmount = nil
-        }
     }
 
     private func sendSetBolusUserInfo(carbEntry: NewCarbEntry?, bolus: Double) async throws {
