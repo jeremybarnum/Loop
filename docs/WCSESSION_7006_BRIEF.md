@@ -133,12 +133,30 @@ All diagnosis, no behaviour change:
 - Every loan send records `path`, `bytes`, `reachable`, `installed`, `paired`, `activationState`.
 - 7006 is named in the failure message rather than buried in a generic error.
 
+## Also raised and dropped — do not re-run
+
+- **A leaked `HKWorkoutSession` holding the bundle id.** Sport Mode uses one as its keepalive
+  (`WorkoutKeepalive.swift`), and the code already knows sessions can survive the app and that
+  "ended/stopped leftovers can block a fresh start" — it adopts and ends them AT LAUNCH. Since a
+  deleted app cannot run that recovery, an orphaned session looked like an excellent candidate for
+  both the failed installs and the poisoned registration. **Disproved on inspection:** what was
+  visible was a Smart Stack WIDGET carrying the bundle id, not a live session, and opening the
+  Workout app produced first-run onboarding — which would not happen with a session in progress.
+  Worth keeping in mind as a mechanism if it ever recurs with a genuinely live session.
+
+- **Companion install as a discriminator.** It cannot be run on this rig: installing the watch app
+  from the phone's Watch app failed repeatedly on 2026-08-17, and had already failed completely on
+  2026-08-15 (15 minutes, 30 samples, two manual taps, never took the build). That unreliability
+  PREDATES all of today's trouble and is almost certainly unrelated to 7006. Meanwhile `devicectl`
+  installed the watch app five times today without a single failure. So the only usable non-
+  `devicectl` route is TestFlight.
+
 ## Discriminators, in order
 
 1. **Does it clear by itself?** Watch `WATCH STATE CHANGED` for `installed` returning to true with
    no reinstall. Decides whether the remedy needs a recovery path or only prevention.
-2. **Companion install vs `devicectl`.** Install the watch app from the phone's Watch app, then run
-   loans for an hour. If `installed` stays true, hypothesis confirmed.
+2. ~~Companion install vs `devicectl`.~~ **Not runnable** — see above; the companion install does
+   not work on this rig, for reasons that predate this problem.
 3. **TestFlight build.** Same question, through the path Caitlin actually uses.
 
 ## Fix direction (not built, deliberately)
