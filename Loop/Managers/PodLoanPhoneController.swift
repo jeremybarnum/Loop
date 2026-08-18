@@ -685,6 +685,17 @@ final class PodLoanPhoneController {
             guard let self = self, self.reclaimStartedAt == started else { return }
             os_log("Reclaim settle CEILING reached (%.0fs) without a verified round-trip — clearing anyway",
                    log: self.log, type: .error, Self.reclaimSettleTimeout)
+            // ALSO to the FILE log, with the radio's own account of the window.
+            //
+            // This is the line whose absence made the stalled settle undiagnosable: the ceiling
+            // reported only through os_log, so the file logs showed the settle simply stopping
+            // mid-sentence — `settle: link up +0.0s` and then nothing, for two separate epochs.
+            // The BLE trail says whether the link was ever really up, how often it flapped, and
+            // what refused a connect, none of which the settle's own polling can see.
+            let ble = (self.deps.pumpManager() as? PumpConnectionLendable)?.connectionDiagnostics()
+            self.handbackDiag(self.epoch, String(
+                format: "settle CEILING at %.0fs — NO verified round-trip; clearing anyway · ble: %@",
+                Self.reclaimSettleTimeout, ble ?? "no diagnostics from the pump manager"))
             self.reclaimStartedAt = nil            // ceiling reached — stop settling
             self.syncUIMirror()
             self.reclaimDisplayAnchor = nil
@@ -742,9 +753,10 @@ final class PodLoanPhoneController {
            deps.now().timeIntervalSince(started) >= Self.reclaimEscalateAfter,
            let lendable = deps.pumpManager() as? PumpConnectionLendable {
             reclaimEscalated = true
+            let bleBefore = lendable.connectionDiagnostics() ?? "none"
             let outcome = lendable.escalateConnectionReclaim() ?? "the pump manager had nothing to escalate"
-            handbackDiag(epoch, String(format: "settle: link still down at +%.0fs — escalating: %@",
-                                       deps.now().timeIntervalSince(started), outcome))
+            handbackDiag(epoch, String(format: "settle: link still down at +%.0fs — escalating: %@ · ble before: %@",
+                                       deps.now().timeIntervalSince(started), outcome, bleBefore))
         }
         // Force a REAL round-trip on the first tick after the link comes up, then on a slow
         // cadence — because the cheap call does not always talk to the pod at all.
