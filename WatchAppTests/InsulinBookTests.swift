@@ -218,6 +218,40 @@ final class InsulinBookTests: XCTestCase {
                        "the glance showed \(shown) U and the algorithm dosed on \(dosed) U — that is the 2026-08-18 defect exactly")
     }
 
+    /// A RUNNING TEMP MUST NOT BREAK THE AUTOMATIC CYCLE.
+    ///
+    /// WatchDoseEnactor books an accepted temp full-span (endDate = acceptedAt + 30 min), so for
+    /// the whole life of a temp the ledger holds a basal dose ending in the FUTURE. LoopAlgorithm
+    /// refuses that outright on the automated path — `guard !input.recommendationType.automated ||
+    /// basalEnd <= input.predictionStart else { throw AlgorithmError.futureBasalNotAllowed }`
+    /// (LoopAlgorithm.swift:700-703) — and `.tempBasal.automated` is true.
+    ///
+    /// So an untrimmed ledger read makes EVERY automatic cycle decline for as long as a temp is
+    /// running: the watch stops adjusting basal entirely while believing it is looping. This case
+    /// was invisible to the first version of these tests because they all drove the .manualBolus
+    /// path, where `automated` is false and the guard never fires.
+    func testARunningTempDoesNotBreakTheAutomaticCycle() async {
+        let manager = await makeManager()
+        await seedGlucose(manager)
+
+        // A temp accepted 5 minutes ago, running for another 25 — the ordinary steady state.
+        let start = Date().addingTimeInterval(-5 * 60)
+        let liveTemp = DoseEntry(type: .tempBasal,
+                                 startDate: start,
+                                 endDate: start.addingTimeInterval(30 * 60),
+                                 value: 2.0, unit: .unitsPerHour,
+                                 decisionId: nil,
+                                 insulinType: .novolog)
+        manager.ledgerSeed(finished: [], live: [liveTemp])
+
+        manager.loop()
+        settle(4.0)
+
+        let error = manager.glanceData().lastLoopErrorText ?? ""
+        XCTAssertFalse(error.lowercased().contains("futurebasal"),
+                       "a temp still running must not make the automatic cycle decline; got: \(error)")
+    }
+
     /// No book means NO DOSING — never a silent empty one.
     ///
     /// R35 bans a store fallback precisely because the fallback is invisible: an empty history

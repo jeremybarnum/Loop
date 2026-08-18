@@ -1742,7 +1742,37 @@ final class WatchLoopManager {
         // Safe without a hop: both callers reach this through `runBlocking` from
         // `dataAccessQueue`, which blocks that queue for the duration, and every ledger
         // mutation is a `dataAccessQueue.async`. The ledger is a struct, so this is a copy.
-        let doses = ledger.doses.filter { $0.startDate <= baseTime && $0.endDate >= dosesStart }
+        let doses = ledger.doses
+            .filter { $0.startDate <= baseTime && $0.endDate >= dosesStart }
+            .compactMap { dose -> DoseEntry? in
+                // TEMPS ARE TRIMMED TO NOW; BOLUSES ARE NOT. The two need opposite treatment and
+                // a blanket rule breaks one of them.
+                //
+                // Temps: WatchDoseEnactor books an accepted temp FULL-SPAN
+                // (endDate = acceptedAt + 30 min, WatchDoseEnactor.swift:118-120), so inside a
+                // running temp the untrimmed dose ends in the FUTURE. Two things go wrong at once.
+                // LoopAlgorithm hard-refuses it on the automated path — `guard
+                // !input.recommendationType.automated || basalEnd <= input.predictionStart else
+                // { throw AlgorithmError.futureBasalNotAllowed }` (LoopAlgorithm.swift:700-703),
+                // and `.tempBasal.automated` is true — so EVERY automatic cycle would throw for
+                // as long as a temp was running. And it would be wrong even if it were allowed:
+                // forward credit for insulin the pod has not yet delivered is banned outright in
+                // this codebase. Trimming preserves the RATE and shrinks only the window, because
+                // a temp carries `.unitsPerHour` and DoseEntry.trimmed only pro-rates `.units`.
+                //
+                // Boluses: the same enactor books a bolus with a real delivery window
+                // (endDate = acceptedAt + units / 1.5 * 60, :149). Trimming THAT to now would
+                // pro-rate a just-accepted bolus to approximately zero units — which is exactly
+                // the defect this whole path was rewritten to fix, arrived at from the other
+                // direction. A commanded bolus is committed insulin; counting it whole is also
+                // the conservative direction, where under-counting invites a second dose.
+                //
+                // The phone trims everything (LoopDataManager.swift:719) and is right to: its
+                // DoseStore rows come from pod history with real delivered amounts, not from a
+                // forward-looking booking made at the moment of acceptance.
+                guard dose.type != .bolus else { return dose }
+                return dose.trimmed(to: baseTime)
+            }
         // A live ledger with nothing in the dosing window is the exact shape of the bug above,
         // and it said nothing for a whole session. Once per distinct reason, so a genuinely
         // empty book (fresh pod, no history) reports once rather than every cycle.
