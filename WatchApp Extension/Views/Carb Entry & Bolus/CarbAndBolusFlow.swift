@@ -228,20 +228,15 @@ extension CarbAndBolusFlow {
             title: saveButtonText,
             color: bolusAmount > 0 || configuration == .manualBolus ? .insulin : .blue
         ) {
-            if self.bolusAmount > 0 {
-                withAnimation {
-                    self.flowState = .bolusConfirmation
-                }
-            } else if case .carbEntry = self.configuration {
-                Task {
-                    do {
-                        try await self.viewModel.addCarbsWithoutBolusing()
-                        NotificationCenter.default.post(name: .carbAndBolusFlowDidComplete, object: nil)
-                        dismiss()
-                    } catch {
-                        viewModel.error = .bolusMessageSendFailure
-                    }
-                }
+            // CARBS GET THE CEREMONY TOO. Stock commits a carbs-only entry on a single tap,
+            // reasoning that carbs are not insulin. Under a loan they are insulin on a delay —
+            // the wrist doses against COB, so a mistaken or doubled entry becomes insulin a few
+            // minutes later with nobody in the loop. The gesture that guards a bolus should guard
+            // the thing that causes one. Deliberate deviation (Jeremy, 2026-08-18); pure made the
+            // same call and this matches its shape rather than inventing a second one.
+            if self.bolusAmount <= 0, case .manualBolus = self.configuration { return }
+            withAnimation {
+                self.flowState = .bolusConfirmation
             }
         }
         .offset(y: actionButtonOffsetY)
@@ -271,9 +266,16 @@ extension CarbAndBolusFlow {
     }
 
     private var bolusConfirmationView: some View {
-        BolusConfirmationView(progress: $bolusConfirmationProgress, onConfirmation: {
+        BolusConfirmationView(
+            progress: $bolusConfirmationProgress,
+            prompt: bolusAmount > 0
+                ? Text("Turn Digital Crown\nto bolus", comment: "Help text for bolus confirmation on Apple Watch")
+                : Text("Turn Digital Crown\nto save carbs", comment: "Help text for carb-only confirmation on Apple Watch"),
+            onConfirmation: {
             Task {
                 do {
+                    // addCarbsAndDeliverBolus with 0 delivers no insulin — it files the carb entry
+                    // and nothing else — so one call covers both paths.
                     try await self.viewModel.addCarbsAndDeliverBolus(self.bolusAmount)
                     NotificationCenter.default.post(name: .carbAndBolusFlowDidComplete, object: nil)
                     dismiss()
