@@ -694,9 +694,7 @@ final class WatchLoopManager {
             // can. Same on-demand shape as glanceCarbsOnBoard — which is exactly why COB kept
             // decaying through that same outage while IOB sat still. Pre-cutover, or before the
             // ledger is seeded, the cached value remains the only source.
-            let liveIOB: Double? = basalRateScheduleApplyingOverrideHistory.flatMap { sched in
-                sessionLedger?.insulinOnBoard(at: now(), basalSchedule: sched)
-            } ?? activeInsulin
+            let liveIOB: Double? = liveInsulinOnBoard
             return GlanceData(
                 glucose: latest?.quantity,
                 glucoseDate: latest?.startDate,
@@ -748,7 +746,21 @@ final class WatchLoopManager {
                 predictionBreakdown: lastPredictionBreakdown,
                 // Same queue as the rest of this closure, so these are consistent with the
                 // prediction being rendered rather than a torn read from another cycle.
-                retrospectiveCorrectionIsIntegral: retrospectiveCorrection is IntegralRetrospectiveCorrection,
+                // Reads the flag the ALGORITHM reads, not a property nothing assigns.
+                //
+                // This row existed to prove phone/watch RC parity and could not: it tested
+                // `retrospectiveCorrection is IntegralRetrospectiveCorrection` against a property
+                // declared as a Standard instance at :1024 and never assigned afterwards, so it
+                // reported "Standard" on every cycle whatever the phone had granted. The
+                // algorithm has never consulted that property — it takes
+                // `useIntegralRetrospectiveCorrection: integralRetrospectiveCorrectionEnabled`
+                // (:1914), which the grant sets correctly.
+                //
+                // Found in the field 2026-08-18: the wrist's RC term came out -5 against the
+                // phone's +13, and this row said "Standard" — which sent the investigation at the
+                // toggle rather than at the discrepancy history. A diagnostic that cannot be
+                // wrong about the thing it exists to check is worth more than one more term.
+                retrospectiveCorrectionIsIntegral: integralRetrospectiveCorrectionEnabled,
                 retrospectiveDiscrepancyCount: lastAlgorithmEffects?.retrospectiveGlucoseDiscrepancies.count ?? 0,
                 overrideLabel: {
                     guard let o = scheduleOverride, o.isActive() else { return nil }
@@ -801,7 +813,10 @@ final class WatchLoopManager {
         ctx.glucose = latest?.quantity
         ctx.glucoseDate = latest?.startDate
         ctx.glucoseTrend = (latest as? StoredGlucoseSample)?.trend
-        ctx.iob = activeInsulin
+        // The LIVE figure, not the cycle-time cache — the same expression `buildGlanceData` uses,
+        // so the stock rail and the glance rail cannot quote different numbers for one wrist.
+        // `activeInsulin` remains the fallback for exactly the case the glance falls back in.
+        ctx.iob = liveInsulinOnBoard
         ctx.loopLastRunDate = lastLoopCompleted
         ctx.isClosedLoop = _closedLoopEnabled
         if let dose = runningTempBasal() {
@@ -1021,6 +1036,11 @@ final class WatchLoopManager {
     /// because the flag cannot change mid-loan. Defaults to Standard, which is both the
     /// pre-existing behavior and what a grant from a phone that doesn't send the flag
     /// implies. Both implementations compile here (LoopKit watchOS target, M4).
+    /// VESTIGIAL — nothing assigns this and nothing dosing reads it. Kept only so the type stays
+    /// referenced; the live selector is `integralRetrospectiveCorrectionEnabled` below, which is
+    /// what `StoredDataAlgorithmInput` takes. Do not resurrect this as a source of truth without
+    /// giving it a writer first: it read as one for the whole port and misdirected a field
+    /// investigation on 2026-08-18.
     private var retrospectiveCorrection: RetrospectiveCorrection = StandardRetrospectiveCorrection(effectDuration: LoopMath.retrospectiveCorrectionEffectDuration)
 
     /// Apply the granted RC mode. Hops to dataAccessQueue because
@@ -1039,6 +1059,25 @@ final class WatchLoopManager {
             self.integralRetrospectiveCorrectionEnabled = enabled
             SportLog.event("loan", "retrospective correction: \(enabled ? "INTEGRAL" : "standard") (from grant)")
         }
+    }
+
+    /// IOB as of NOW, evaluated rather than read from the last cycle.
+    ///
+    /// ONE accessor with TWO readers — `buildGlanceData` and `publishHUDContext`. They had
+    /// separate expressions, and the stock pages took the cycle-time cache while the glance took
+    /// this, which is how one wrist showed 1.9 U and 2.1 U on adjacent screens.
+    ///
+    /// Evaluated, not cached, because `activeInsulin` is written only inside a loop cycle and
+    /// loop() is CGM-triggered: a sensor dropout stops IOB recomputation outright, and the rail
+    /// held a flat 1.13 U for 28 minutes across a G7 outage before falling 0.53 in one step when
+    /// readings resumed — which reads as an insulin EVENT rather than as arithmetic catching up.
+    /// IOB is a pure function of the dose timeline and the clock, so the honest fix is to
+    /// evaluate it. Falls back to the cycle value before the ledger is seeded.
+    private var liveInsulinOnBoard: Double? {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+        return basalRateScheduleApplyingOverrideHistory.flatMap { sched in
+            sessionLedger?.insulinOnBoard(at: now(), basalSchedule: sched)
+        } ?? activeInsulin
     }
 
     /// Which retrospective correction the GRANTING phone runs, frozen at grant. The algorithm
@@ -1452,8 +1491,27 @@ final class WatchLoopManager {
                 let rec = decided.map { String(format: "%.2f U/h", $0.basalAdjustment.unitsPerHour) } ?? "none"
                 SportLog.event("loop", "cycle OK — BG \(bg), IOB \(self.activeInsulin.map { String(format: "%.2f", $0) } ?? "—"), temp \(rec)")
                 self.logPredictionBreakdown(decided: decided)
-                self.publishHUDContext()
             }
+            // PUBLISH ON BOTH ARMS. This used to sit inside the success branch only, so a cycle
+            // that computed a perfect prediction and merely failed to ENACT left the stock pages
+            // frozen at whatever the last fully-successful cycle had published.
+            //
+            // Field, 2026-08-18, with the phone off and the pod contended: the glance read
+            // IOB 2.1 / COB 22 g while the stock page one swipe away read 1.9 / 17 g, and the
+            // stock page stayed stale across a carb delete. Both surfaces read the same books —
+            // the split was purely WHEN they were evaluated, and the glance re-reads every two
+            // seconds while the stock pages only change when this runs.
+            //
+            // The failure mode is worst exactly when it matters most: `enact failed
+            // communication(nil)` freezes the stock numbers for minutes, i.e. the display degrades
+            // precisely while the loop is struggling and the numbers are being scrutinised.
+            //
+            // An enact failure says nothing about whether IOB and COB are known — they come from
+            // the algorithm run that already succeeded. The phone makes the same call: `await
+            // updateDisplayState(...)` sits AFTER the do/catch in `loop()`
+            // (Loop/Managers/LoopDataManager.swift:834) so it runs on the error path too. Same
+            // reasoning as the loop-mode fix at :390, one screen further along.
+            self.publishHUDContext()
         }
     }
 
