@@ -1522,6 +1522,14 @@ final class LoanOverrideTests: XCTestCase {
         settings.basalRateSchedule = baseBasal
         settings.insulinSensitivitySchedule = baseISF
         settings.carbRatioSchedule = baseCR
+        // The DOSING LIMITS the wrist's loop requires. Absent here until 2026-08-18, because
+        // nothing had exercised the temp-basal path: next-dev defaults new LoopSettings() to
+        // automaticBolus, and the grant now forces tempBasalOnly (the wrist cannot bolus
+        // automatically), so these guards are reached where they never used to be. A fixture
+        // missing them is not a finding about the code.
+        settings.maximumBolus = 10
+        settings.maximumBasalRatePerHour = 4
+        settings.suspendThreshold = GlucoseThreshold(unit: .milligramsPerDeciliter, value: 80)
         let now = Date()
         let active = exerciseOverride(start: now)
 

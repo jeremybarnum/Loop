@@ -706,7 +706,17 @@ final class WatchLoopManager {
                 // the net remaining span: measured in the field at 493 on the phone against
                 // ~490 on the wrist within a minute of a net -3.3 U/hr enact. Dosing is
                 // unaffected — DoseMath consumes the no-pending curve, deliberately.
-                eventual: predictedGlucoseIncludingPendingInsulin?.last?.quantity,
+                // `predictedGlucose` — the curve the algorithm actually produced, and the same
+                // one the phone displays as "Eventually" (StatusTableViewController assigns
+                // `state.output?.predictedGlucose` with no adjustment).
+                //
+                // This previously read a pending-inclusive variant that, on THIS architecture, is
+                // never assigned by anything: that curve was a concept of the older Loop the fork
+                // was built on, and next-dev's LoopAlgorithm produces no such thing — only some
+                // error cases still carry the name. So the glance's eventual was nil on every
+                // cycle since the port, which is why the wrist showed no forecast while the log
+                // printed one every five minutes.
+                eventual: predictedGlucose?.last?.quantity,
                 iob: liveIOB,
                 tempRate: tempRate,
                 lastLoopCompleted: lastLoopCompleted,
@@ -1031,7 +1041,6 @@ final class WatchLoopManager {
     private var integralRetrospectiveCorrectionEnabled = false
 
     private var predictedGlucose: [PredictedGlucoseValue]?
-    private var predictedGlucoseIncludingPendingInsulin: [PredictedGlucoseValue]?
 
     /// Straight off the last algorithm run. Held rather than recomputed so that what the glance
     /// shows is, by construction, what the dose was decided from.
