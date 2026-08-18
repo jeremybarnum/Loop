@@ -706,6 +706,7 @@
 		FEEDB0000000000000000004 /* TimeInRangeBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEEDF0000000000000000004 /* TimeInRangeBar.swift */; };
 		FEEDB0000000000000000005 /* GlucoseStatisticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEEDF0000000000000000005 /* GlucoseStatisticsTests.swift */; };
 		9A7CE081302D82A800A03F53 /* GlanceSurfaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE080302D82A800A03F53 /* GlanceSurfaceTests.swift */; };
+		BB7CE081302D82A800A03F53 /* InsulinBookTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB7CE080302D82A800A03F53 /* InsulinBookTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1572,6 +1573,7 @@
 		FEEDF0000000000000000005 /* GlucoseStatisticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlucoseStatisticsTests.swift; sourceTree = "<group>"; };
 		FF6006BAC6EA4034BFD67C0E /* LoanBooksHarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LoanBooksHarnessTests.swift; path = LoopTests/LoanBooksHarnessTests.swift; sourceTree = SOURCE_ROOT; };
 		9A7CE080302D82A800A03F53 /* GlanceSurfaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlanceSurfaceTests.swift; sourceTree = "<group>"; };
+		BB7CE080302D82A800A03F53 /* InsulinBookTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InsulinBookTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -2737,6 +2739,7 @@
 				9A7CE01A302D82A800A03F53 /* WatchAppTests.swift */,
 				9A7CE070302D82A800A03F53 /* RecordingWristAlertScheduler.swift */,
 				9A7CE080302D82A800A03F53 /* GlanceSurfaceTests.swift */,
+				BB7CE080302D82A800A03F53 /* InsulinBookTests.swift */,
 				9A7CE01B302D82A800A03F53 /* WatchdogArmingTests.swift */,
 			);
 			path = WatchAppTests;
@@ -4148,6 +4151,7 @@
 				9A7CE02E302D82A800A03F53 /* WatchAppTests.swift in Sources */,
 				9A7CE071302D82A800A03F53 /* RecordingWristAlertScheduler.swift in Sources */,
 				9A7CE081302D82A800A03F53 /* GlanceSurfaceTests.swift in Sources */,
+				BB7CE081302D82A800A03F53 /* InsulinBookTests.swift in Sources */,
 				9A7CE02F302D82A800A03F53 /* WatchdogArmingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

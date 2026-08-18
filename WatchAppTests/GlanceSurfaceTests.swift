@@ -95,6 +95,16 @@ final class GlanceSurfaceTests: XCTestCase {
         _ = try? await manager.glucoseStore.addGlucoseSamples(samples)
     }
 
+    /// A ledger, because the algorithm now refuses to run without one.
+    ///
+    /// That refusal is the fix for the 2026-08-18 defect: the algorithm read the DoseStore, which
+    /// on the watch is never written, so it dosed off an empty insulin book. These three tests
+    /// began failing the moment the guard went in — correctly, since they drive the prediction
+    /// path and never had a book. Seeding one is what a real loan does at takeover.
+    private func seedLedger(_ manager: WatchLoopManager, doses: [DoseEntry] = []) {
+        manager.ledgerSeed(finished: doses, live: [])
+    }
+
     private func settle(_ seconds: TimeInterval = 2.0) {
         let done = expectation(description: "settled")
         DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { done.fulfill() }
@@ -106,6 +116,7 @@ final class GlanceSurfaceTests: XCTestCase {
     func testGlanceCarriesAnEventualAfterAPredictionRefresh() async {
         let manager = await makeManager()
         await seedGlucose(manager)
+        seedLedger(manager)
 
         manager.refreshPredictionForGlance()
         settle()
@@ -120,6 +131,7 @@ final class GlanceSurfaceTests: XCTestCase {
     func testDiagnosticsCarriesAPredictionBreakdown() async {
         let manager = await makeManager()
         await seedGlucose(manager)
+        seedLedger(manager)
 
         manager.refreshPredictionForGlance()
         settle()
@@ -134,6 +146,7 @@ final class GlanceSurfaceTests: XCTestCase {
     func testTheBreakdownAndTheGlanceAgreeOnTheSameCycle() async {
         let manager = await makeManager()
         await seedGlucose(manager)
+        seedLedger(manager)
 
         manager.refreshPredictionForGlance()
         settle()
