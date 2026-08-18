@@ -823,37 +823,32 @@ final class WatchLoopManager {
                 // Per-cycle COB trace, so seeded/loan COB is verifiable through the loan.
                 if cob > 0.05 { SportLog.event("loop", String(format: "COB %.1f g on board", cob)) }
             }
+            // Fill the recommendation BEFORE the context is installed, so the flow never sees a
+            // cycle in which it is momentarily absent. See manualBolusRecommendationOnQueue for
+            // what that window did to a dialled bolus.
+            //
+            // Still cannot take the HUD down with it, which was the original reason for doing
+            // this afterwards: a recommendation may legitimately fail early in a session, and
+            // that leaves the field nil exactly as before while every other row installs
+            // normally. What changes is only that ONE context is posted per cycle instead of a
+            // nil one followed by a real one.
+            switch self.manualBolusRecommendationOnQueue() {
+            case .success(let recommendation):
+                // The stock flow renders this as "REC: N U" under the dial (BolusInput :67).
+                SportLog.event("loan", String(format: "REC bolus %.2f U — published to the stock bolus flow", recommendation.amount))
+                ctx.recommendedBolusDose = recommendation.amount
+            case .failure(let error):
+                // Was `guard case .success ... else { return }` — silent. Field 2026-08-05:
+                // Jeremy saw no recommendation and there was no way to tell whether it had
+                // failed, or was legitimately zero, or never ran. A diagnostic that cannot
+                // distinguish those is the same gap the G7 observer had.
+                SportLog.event("loan", "REC bolus UNAVAILABLE — \(error) (the flow will show 'REC: – U')")
+            }
             DispatchQueue.main.async {
                 guard let loopDataManager = ExtensionDelegate.sharedIfAvailable()?.loopManager else { return }
                 ctx.displayGlucoseUnit = loopDataManager.activeContext?.displayGlucoseUnit ?? ctx.displayGlucoseUnit
                 loopDataManager.updateContext(ctx)
                 NotificationCenter.default.post(name: LoopDataManager.didUpdateContextNotification, object: loopDataManager)
-            }
-            // The stock carb/bolus flow reads context.recommendedBolusDose, which only the
-            // phone ever set — hence a blank recommendation for the whole loan. Fill it from the
-            // watch's own DoseMath.
-            //
-            // Deliberately AFTER the install, not before: a recommendation can legitimately fail
-            // (missing momentum/carb/insulin effect early in a session) and blocking the context
-            // on it would take the entire HUD down with it. ctx is a class, so mutating it
-            // updates what the UI already holds; re-post so the flow picks it up.
-            self.recommendManualBolus { result in
-                switch result {
-                case .success(let recommendation):
-                    // The stock flow renders this as "REC: N U" under the dial (BolusInput :67).
-                    SportLog.event("loan", String(format: "REC bolus %.2f U — published to the stock bolus flow", recommendation.amount))
-                    DispatchQueue.main.async {
-                        ctx.recommendedBolusDose = recommendation.amount
-                        guard let loopDataManager = ExtensionDelegate.sharedIfAvailable()?.loopManager else { return }
-                        NotificationCenter.default.post(name: LoopDataManager.didUpdateContextNotification, object: loopDataManager)
-                    }
-                case .failure(let error):
-                    // Was `guard case .success ... else { return }` — silent. Field 2026-08-05:
-                    // Jeremy saw no recommendation and there was no way to tell whether it had
-                    // failed, or was legitimately zero, or never ran. A diagnostic that cannot
-                    // distinguish those is the same gap the G7 observer had.
-                    SportLog.event("loan", "REC bolus UNAVAILABLE — \(error) (the flow will show 'REC: – U')")
-                }
             }
         }
     }
@@ -1987,7 +1982,30 @@ final class WatchLoopManager {
     func recommendManualBolus(potentialCarbEntry: NewCarbEntry? = nil,
                               completion: @escaping (Swift.Result<ManualBolusRecommendation, Error>) -> Void) {
         dataAccessQueue.async {
-            do {
+            completion(self.manualBolusRecommendationOnQueue(potentialCarbEntry: potentialCarbEntry))
+        }
+    }
+
+    /// The recommendation, computed synchronously by a caller already on `dataAccessQueue`.
+    ///
+    /// Factored out so `publishHUDContext` can fill the context BEFORE installing it. It used to
+    /// call the async form afterwards, and the comment there reasoned carefully about ordering —
+    /// but only about a PULL consumer. `CarbAndBolusFlowViewModel` mirrors on the PUSH, so every
+    /// cycle posted a context whose `recommendedBolusDose` was still nil, and stock's flow reads
+    /// a nil recommendation as a CHANGE TO ZERO: it boots the user out of `.bolusConfirmation`,
+    /// assigns `bolusAmount = recommendedBolus ?? 0`, and raises "recommendation updated"
+    /// (CarbAndBolusFlow.swift:357-366). Not a race — `recommendManualBolus` opens with
+    /// `dataAccessQueue.async` while `publishHUDContext` is running on that same serial queue, so
+    /// the nil post was GUARANTEED to precede the value, twice per cycle, every cycle.
+    ///
+    /// The sharp edge: a hold-to-confirm completing inside that window called
+    /// `addCarbsAndDeliverBolus(0)` — with no carb entry neither branch of the send runs, so no
+    /// dose, no haptic, no log, and the flow dismissed as though it had bolused.
+    private func manualBolusRecommendationOnQueue(potentialCarbEntry: NewCarbEntry? = nil) -> Swift.Result<ManualBolusRecommendation, Error> {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+        var result: Swift.Result<ManualBolusRecommendation, Error>!
+        let completion: (Swift.Result<ManualBolusRecommendation, Error>) -> Void = { result = $0 }
+        do {
                 // Same algorithm, different question: `.manualBolus` asks what a person should
                 // take now, where `.tempBasal` asks what the pump should run. Everything that
                 // used to be assembled by hand here — the pending-insulin-inclusive prediction,
@@ -2037,10 +2055,10 @@ final class WatchLoopManager {
                     }
                     completion(.success(manual))
                 }
-            } catch {
-                completion(.failure(error))
-            }
+        } catch {
+            completion(.failure(error))
         }
+        return result
     }
 
     /// Manual bolus: the user is PRESENT — never defers to the radio arbiter

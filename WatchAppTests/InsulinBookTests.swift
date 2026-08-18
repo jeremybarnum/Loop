@@ -252,6 +252,61 @@ final class InsulinBookTests: XCTestCase {
                        "a temp still running must not make the automatic cycle decline; got: \(error)")
     }
 
+    /// AN OVERRIDE MUST REACH DOSING, NOT JUST THE DISPLAY.
+    ///
+    /// `applyWristOverride` existed with ZERO call sites, so the dosing override had exactly one
+    /// writer for a loan's lifetime — the grant intake — while the displayed override was driven
+    /// independently off the WCSession round-trip. Activating a preset mid-loan redrew the chart
+    /// band and printed the new insulin-needs percentage while `applyBasal`/`applySensitivity`/
+    /// `applyCarbRatio` stayed identity maps: full-strength insulin toward the pre-exercise
+    /// target, during exercise, with every screen saying otherwise.
+    ///
+    /// Asserted through the RECOMMENDATION rather than by reading the property back, because the
+    /// property being set proves nothing about whether the schedules resolved through it. An
+    /// override halving insulin needs doubles ISF, so the same excess glucose needs materially
+    /// less insulin.
+    func testAnOverrideChangesWhatDosingRecommends() async {
+        let manager = await makeManager()
+        await seedGlucose(manager)
+        manager.ledgerSeed(finished: [], live: [])
+
+        let unscaled = expectation(description: "no override")
+        var before: Double?
+        manager.recommendManualBolus { if case .success(let r) = $0 { before = r.amount }; unscaled.fulfill() }
+        wait(for: [unscaled], timeout: 20)
+
+        guard let baseline = before, baseline > 0.3 else {
+            return XCTFail("a flat 250 mg/dL must recommend a correction to compare against; got \(String(describing: before))")
+        }
+
+        // "Insulin needs 50%" — the exercise shape. Basal x0.5, ISF and CR /0.5.
+        //
+        // INDEFINITE deliberately. A finite override scales only the part of the forecast it
+        // covers, so a 1-hour override against a 6-hour insulin tail moves the recommendation by
+        // ~14% rather than ~50% — correct behaviour, and a threshold written against the naive
+        // halving fails on working code. Indefinite makes the assertion unambiguous.
+        let override = TemporaryScheduleOverride(
+            context: .custom,
+            settings: TemporaryPresetSettings(unit: .milligramsPerDeciliter,
+                                              targetRange: nil,
+                                              insulinNeedsScaleFactor: 0.5),
+            startDate: Date().addingTimeInterval(-60),
+            duration: .indefinite,
+            enactTrigger: .local,
+            syncIdentifier: UUID())
+        manager.applyWristOverride(override)
+        settle()
+
+        let scaled = expectation(description: "override active")
+        var after: Double?
+        manager.recommendManualBolus { if case .success(let r) = $0 { after = r.amount }; scaled.fulfill() }
+        wait(for: [scaled], timeout: 20)
+
+        guard let overridden = after else { return XCTFail("the recommendation must still compute under an override") }
+        XCTAssertLessThan(overridden, baseline * 0.8,
+                          "halving insulin needs doubles ISF, so the correction must fall well below \(baseline) U; got \(overridden) U — an unchanged figure means the override reached the display and not the dosing")
+    }
+
     /// No book means NO DOSING — never a silent empty one.
     ///
     /// R35 bans a store fallback precisely because the fallback is invisible: an empty history
