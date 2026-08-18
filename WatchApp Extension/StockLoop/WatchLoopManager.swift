@@ -1532,6 +1532,51 @@ final class WatchLoopManager {
         let suspendThr = settings.suspendThreshold.map { String(format: "%.0f", $0.quantity.doubleValue(for: mgdlU)) } ?? "—"
 
         let e = lastAlgorithmEffects
+
+        // STORE the decomposition the line below prints. `lastPredictionBreakdown` was declared
+        // and read (into GlanceData, for the diagnostics reconciliation panel) but assigned
+        // NOWHERE in the tree, so that panel has said "no prediction to reconcile" on every cycle
+        // since the port — while this very function computed every term it needed.
+        //
+        // Same numbers as the log line by construction: both read `lastAlgorithmEffects` and
+        // `predictedGlucose` on this queue, in this pass, so the panel and the log can never
+        // disagree about a cycle.
+        lastPredictionBreakdown = {
+            func delta(_ effects: [GlucoseEffect]?) -> Double {
+                guard let effects else { return 0 }
+                let forward = effects.filter { $0.startDate >= now() }
+                guard let first = forward.first, let last = forward.last else { return 0 }
+                return last.quantity.doubleValue(for: mgdlU) - first.quantity.doubleValue(for: mgdlU)
+            }
+            guard let start = glucoseStore.latestGlucose?.quantity.doubleValue(for: mgdlU),
+                  let eventualValue = predictedGlucose?.last?.quantity.doubleValue(for: mgdlU) else { return nil }
+            let insulin = delta(e?.insulin)
+            let carb = delta(e?.carbs)
+            let momentum = delta(e?.momentum)
+            let retro = delta(e?.retrospectiveCorrection)
+            // The insulin tail BEFORE the momentum blend: last − value(at-or-before now), the
+            // same quantity the log line reports. Non-optional array on this type, so no flatMap.
+            let rawTail: Double? = {
+                guard let tail = e?.insulin, let last = tail.last else { return nil }
+                let base = tail.last(where: { $0.startDate <= now() }) ?? tail.first
+                guard let base else { return nil }
+                return last.quantity.doubleValue(for: mgdlU) - base.quantity.doubleValue(for: mgdlU)
+            }()
+            return PredictionBreakdown(
+                startMgdl: start,
+                eventualMgdl: eventualValue,
+                insulinMgdl: insulin,
+                carbMgdl: carb,
+                momentumMgdl: momentum,
+                retrospectiveMgdl: retro,
+                residualMgdl: eventualValue - (start + insulin + carb + momentum + retro),
+                insulinRawTailMgdl: rawTail,
+                insulinExpectedMgdl: nil,
+                isfMgdlPerU: nil,
+                iobUnits: activeInsulin,
+                momentumPointCount: e?.momentum.count ?? 0,
+                computedAt: now())
+        }()
         SportLog.event("predict", "eventual \(eventual) · min \(minPredicted) · suspendThr \(suspendThr) · net effects: carbs \(net(e?.carbs)), insulin \(net(e?.insulin)), momentum \(net(e?.momentum)), RC \(net(e?.retrospectiveCorrection)) · IOB \(activeInsulin.map { String(format: "%.2f", $0) } ?? "—") · COB \(activeCarbs.map { String(format: "%.0f", $0) } ?? "—") · momPts \(e?.momentum.count ?? 0) · rcDisc \(e?.retrospectiveGlucoseDiscrepancies.count ?? 0) · rec \(rec)")
         SportLog.event("curve", curveSummary(predictedGlucose))
     }
