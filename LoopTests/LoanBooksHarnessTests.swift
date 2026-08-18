@@ -115,6 +115,26 @@ private struct SimGlucoseSample: GlucoseSampleValue {
 
 /// Scripted session-replay driver: one loan session run against BOTH books at once.
 ///
+
+/// Supplies the scheduled basal history that `DoseStore.addPumpEvents` requires on this
+/// architecture. Without a delegate that call throws `DoseStoreError.configurationError`
+/// before any dose is written — which reddened this whole file (31 assertions from one cause:
+/// no doses land, so every book comparison comes back nan or zero). The harness was ported
+/// without it because the delegate requirement is new here.
+///
+/// A flat schedule at the harness's own field rate: these tests assert about LOAN bookkeeping
+/// against a known baseline, not about schedule shape.
+final class LoanBooksDoseStoreDelegate: DoseStoreDelegate {
+    private let rate: Double
+    init(rate: Double) { self.rate = rate }
+
+    func doseStoreHasUpdatedPumpEventData(_ doseStore: DoseStore) {}
+
+    func scheduledBasalHistory(from start: Date, to end: Date) async throws -> [AbsoluteScheduleValue<Double>] {
+        [AbsoluteScheduleValue(startDate: start, endDate: end, value: rate)]
+    }
+}
+
 /// Store side: a real DoseStore fed through `addPumpEvents`, playing the pod's report
 /// lifecycle exactly as OmniBLE does — the running temp is re-asserted MUTABLE full-span
 /// in every report batch (replacePendingEvents purges and the batch re-asserts), then
@@ -152,8 +172,13 @@ private final class LoanBooksDriver {
     /// at all. Schedules are applied at READ time by whoever is doing the math — which is the same
     /// move the ledger already made, so both books in this harness now take the schedule per call
     /// and the "two books, one schedule" comparison is a fairer one than it used to be.
-    init(host: XCTestCase, store: DoseStore, basalRate: Double) {
+    /// Retained here because `DoseStore.delegate` is weak — without an owner the delegate
+    /// deallocates immediately and `addPumpEvents` is back to throwing configurationError.
+    private let storeDelegate: LoanBooksDoseStoreDelegate
+
+    init(host: XCTestCase, store: DoseStore, basalRate: Double, storeDelegate: LoanBooksDoseStoreDelegate) {
         self.host = host
+        self.storeDelegate = storeDelegate
         // Fixture construction (force-unwraps allowed here, per file convention).
         self.schedule = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: basalRate)])!
         self.store = store
@@ -462,9 +487,12 @@ final class LoanBooksHarnessTests: XCTestCase {
         guard let doseStore else {
             fatalError("dose store must build")
         }
+        let delegate = LoanBooksDoseStoreDelegate(rate: fieldBasalRate)
+        doseStore.delegate = delegate
         return LoanBooksDriver(host: self,
                                store: doseStore,
-                               basalRate: fieldBasalRate)
+                               basalRate: fieldBasalRate,
+                               storeDelegate: delegate)
     }
 
     // MARK: - 1. The inherited running temp — both spans, both books
