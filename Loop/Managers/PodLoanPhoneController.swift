@@ -1710,6 +1710,27 @@ final class PodLoanPhoneController {
 
         // Deny-on-missing: the grant is refused, never defaulted.
         let settings = deps.settings()
+
+        // THE WATCH DOSES BY TEMP BASAL ONLY. If the phone is running automaticBolus, the wrist
+        // refuses EVERY cycle — it holds the pod and never doses at all, surfacing a raw Swift
+        // error on the watch face. Field-confirmed on the pure line's first live run with a real
+        // T1D user: 5 cycles, 5 refusals, zero enacts, for someone whose therapy is a continuous
+        // stream of small automatic boluses. It also explains a high eventual with no temping at
+        // the same time — the loop never produced a recommendation, so there was nothing to enact.
+        //
+        // So the loan runs on temps, and the strategy is overridden HERE, in the snapshot the
+        // grant carries — deliberately NOT by changing the phone's stored setting. Flipping the
+        // real setting would need a restore at hand-back, and a restore that never runs (relaunch
+        // mid-loan, force reclaim, dead watch, app killed) would leave the user silently on
+        // tempBasalOnly forever: a lasting therapy change from a bookkeeping miss. Overriding the
+        // snapshot has nothing to undo, so there is no restore that can fail. The phone is
+        // automaticBolus again the instant it has the pod back, because it never stopped being.
+        var loanSettings = settings
+        let strategyOverridden = settings.automaticDosingStrategy != .tempBasalOnly
+        loanSettings.automaticDosingStrategy = .tempBasalOnly
+        if strategyOverridden {
+            PhoneLog.event("loan", "dosing strategy overridden for the loan — phone \(settings.automaticDosingStrategy) → wrist tempBasalOnly; the phone's own setting is untouched")
+        }
         guard settings.basalRateSchedule != nil,
               settings.insulinSensitivitySchedule != nil,
               settings.carbRatioSchedule != nil,
@@ -1813,7 +1834,7 @@ final class PodLoanPhoneController {
                     self.queue.async {
                         guard self.state == .grantOffered, self.epoch == grantEpoch else { return }
                         guard let stateData = try? PropertyListSerialization.data(fromPropertyList: pump.rawValue, format: .binary, options: 0),
-                              let settingsData = try? PropertyListSerialization.data(fromPropertyList: settings.rawValue, format: .binary, options: 0) else {
+                              let settingsData = try? PropertyListSerialization.data(fromPropertyList: loanSettings.rawValue, format: .binary, options: 0) else {
                             self.abortGrant(reason: "snapshot encoding failed")
                             return
                         }

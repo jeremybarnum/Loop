@@ -50,7 +50,7 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
         self._bolusPickerValues = Published(
             initialValue: BolusPickerValues(
                 supportedVolumes: loopManager.supportedBolusVolumes ?? Self.defaultSupportedBolusVolumes,
-                maxBolus: loopManager.watchInfo.loopSettings.maximumBolus ?? Self.defaultMaxBolus
+                maxBolus: Self.activeMaxBolus(loopManager)
             )
         )
 
@@ -79,7 +79,7 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
 
         self.bolusPickerValues = BolusPickerValues(
             supportedVolumes: loopManager.supportedBolusVolumes ?? Self.defaultSupportedBolusVolumes,
-            maxBolus: loopManager.watchInfo.loopSettings.maximumBolus ?? Self.defaultMaxBolus
+            maxBolus: Self.activeMaxBolus(loopManager)
         )
 
         switch self.configuration {
@@ -171,6 +171,23 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
             WKInterfaceDevice.current().play(.failure)
             self.error = .potentialCarbEntryMessageSendFailure
         }
+    }
+
+
+    /// The maximum the picker may offer. DURING A LOAN THIS IS THE GRANT'S, not the phone's.
+    ///
+    /// The phone's value arrives in a WatchContext and is whatever it last relayed — which during
+    /// a loan can be stale, and with the phone off cannot be refreshed at all. The enact path
+    /// already clamps against the granted maximum, so a picker offering more than the grant allows
+    /// does not deliver an unsafe dose; it offers a dose that is then refused, which reads as a
+    /// failure rather than as a limit.
+    private static func activeMaxBolus(_ loopManager: LoopDataManager) -> Double {
+        if let session = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession,
+           session.loanController.isLoanActiveNonBlocking,
+           let granted = session.stack.loopManager.grantedMaximumBolus {
+            return granted
+        }
+        return loopManager.watchInfo.loopSettings.maximumBolus ?? Self.defaultMaxBolus
     }
 
     private func absorptionTime(for carbAbsorptionTime: CarbAbsorptionTime) -> TimeInterval {
