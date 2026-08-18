@@ -2,11 +2,11 @@
 
 **Purpose.** The go/no-go list to finish on `SportMode` (the working branch across the
 superproject and all submodule forks; historical pointers `stock-cgm-piggyback` /
-`watch-from-stock` are frozen) before Caitlin (a real T1D user) tests it on-wrist. This is insulin dosing on a real person, so the bar is
+`watch-from-stock` are frozen) before the production user (a real T1D user) tests it on-wrist. This is insulin dosing on a real person, so the bar is
 correctness and honest failure signalling — not feature completeness.
 
-**Scope note.** Path 1 = ship-to-Caitlin readiness (this doc). Path 2 (deferred) =
-merge Caitlin's branch customizations (the March2026 G7-direct foundation) — after the
+**Scope note.** Path 1 = ship-to-production readiness (this doc). Path 2 (deferred) =
+merge the production branch customizations (the March2026 G7-direct foundation) — after the
 first test proves out.
 
 **Last updated.** 2026-07-24, after the build-158 hardware session (new-sensor BLE-bond
@@ -129,7 +129,7 @@ supervised session *if* that session is short and watched. Jeremy sets the final
 - **D5. Per-phone notification settings (user-only; no API can set these).** On each
   phone that runs the app, in Settings → Notifications → Loop: **Banner Style →
   Persistent** (default Temporary auto-dismisses; a dosing banner should stay until
-  read — Jeremy set this on his phone 2026-08-14 and it must be repeated on Caitlin's),
+  read — Jeremy set this on his phone 2026-08-14 and it must be repeated on the production phone),
   and leave Time Sensitive notifications ON (the in-app permissions checker already
   nags if they're off, but only after the fact). Banner style is invisible to the app,
   so nothing can nag for it — this checklist line is the only guard.
@@ -157,7 +157,7 @@ supervised session *if* that session is short and watched. Jeremy sets the final
 
 ## Path 2 (after first test proves out)
 
-- Merge Caitlin's branch customizations (March2026 G7-direct foundation).
+- Merge the production branch customizations (March2026 G7-direct foundation).
 
 ---
 

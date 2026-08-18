@@ -118,7 +118,7 @@ next-dev session 2026-08-16; the code claim verified against this base rather th
 
 and :173 wraps the escalation in `#if os(watchOS)`. **The premise is false.** The phone reclaims at
 every hand-back settle, on grant-lost, and on the escape-hatch force reclaim — we watched it do so
-in both Jeremy's and Caitlin's logs on 2026-08-16. So iOS never gets `escalateLoanReclaim` and is
+in both the bench and production logs on 2026-08-16. So iOS never gets `escalateLoanReclaim` and is
 left on the bare pending-connect that our own E4 notes call probabilistic (it "caught a 578s-idle
 pod, missed a 518s-idle one"), while the takeover's scan-and-adopt "landed 4/4 from arbitrary
 state".
@@ -128,7 +128,7 @@ link happened to still be up. The 224 s case was on the ESCAPE HATCH — four mi
 no UI feedback, which Jeremy had already flagged as a UX problem before anyone knew the cause.
 
 **LATENT HERE, NOT OBSERVED.** Every phone settle in our field logs is fast — `+0.0s`, `+0.0s`,
-`+2.2s` (Jeremy), `+2.2s`, `+6.6s` (Caitlin). The probabilistic path has been winning so far. The
+`+2.2s` (bench), `+2.2s`, `+6.6s` (production). The probabilistic path has been winning so far. The
 gate is real; the symptom has not yet appeared on this base.
 
 **Likely the root cause of task #122** ("root-cause the BLE settle from instrumented logs", open

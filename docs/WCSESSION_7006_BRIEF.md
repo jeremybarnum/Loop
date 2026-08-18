@@ -66,7 +66,7 @@ message that arrived *from* the allegedly absent app.
    queued` and resent every 15s for ~53 seconds while the phone was in use.
 6. **It survives force-quitting both apps; reinstalling the watch app clears it.** Observed twice.
    Consistent with the state living below the app, in the OS's session bookkeeping.
-7. **The code is exonerated.** A controlled test: rolled back to `e44ac193` (Caitlin's exact
+7. **The code is exonerated.** A controlled test: rolled back to `e44ac193` (the production
    build) — loan succeeded. Reinstalled `production-merge` unchanged, byte-identical source to the
    build that had failed six times — loan succeeded in 8.7s. The 34-line delta between them
    (`b3300ee3` autobolus, `e9b82c37` carb matcher) is not the cause and neither touches transport.
@@ -120,7 +120,7 @@ then be a one-time repair rather than a workflow change — which matters, becau
 reinstall every three months and marks the app icon, and those are real reasons to prefer direct
 installs.
 
-**If this holds, Caitlin cannot hit it**, because her build arrives by TestFlight, and this whole
+**If this holds, production cannot hit it**, because her build arrives by TestFlight, and this whole
 day is a bench-rig artifact rather than a product defect. That is the single most consequential
 open question, and it gates the ship decision.
 
@@ -183,7 +183,7 @@ All diagnosis, no behaviour change:
 
    **This is one clean run, not proof.** Direct installs also succeeded intermittently during the
    failure period, so a single success cannot distinguish "TestFlight is immune" from "the state
-   had already cleared." What it does establish is that the path Caitlin actually uses was healthy
+   had already cleared." What it does establish is that the path production actually uses was healthy
    under real load, which was the question gating the ship decision.
 
 ## Found while reading these logs — not 7006, worth its own fix
