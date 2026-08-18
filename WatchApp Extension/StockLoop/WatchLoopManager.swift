@@ -379,6 +379,16 @@ final class WatchLoopManager {
             self._closedLoopEnabled = enabled
             SportLog.event("loop", enabled ? "CLOSED \(reason) — the watch will adjust basal" : "OPENED \(reason) — advisory only, no dosing")
 
+            // PUSH THE MODE TO THE STOCK SCREENS NOW, not at the end of the next loop cycle.
+            //
+            // The glance and the stock pages read the same underlying flag, but on different
+            // clocks: the glance re-reads `glanceData()` every couple of seconds, while the stock
+            // pages read `activeContext.isClosedLoop`, which only changes when publishHUDContext
+            // runs — at cycle end, up to five minutes later. So a wrist tap moved the glance
+            // immediately and left the stock pages showing the OLD mode, which reads as the two
+            // screens disagreeing about whether the loop is closed.
+            self.publishHUDContext()
+
             // Opening the loop CANCELS the running temp, exactly as the phone does — stock
             // subscribes to its automatic-dosing flag and cancels on every transition to off
             // (LoopDataManager, alongside clearing the pre-meal override). Without this the
