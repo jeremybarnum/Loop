@@ -144,20 +144,63 @@ All diagnosis, no behaviour change:
   Workout app produced first-run onboarding — which would not happen with a session in progress.
   Worth keeping in mind as a mechanism if it ever recurs with a genuinely live session.
 
-- **Companion install as a discriminator.** It cannot be run on this rig: installing the watch app
-  from the phone's Watch app failed repeatedly on 2026-08-17, and had already failed completely on
-  2026-08-15 (15 minutes, 30 samples, two manual taps, never took the build). That unreliability
-  PREDATES all of today's trouble and is almost certainly unrelated to 7006. Meanwhile `devicectl`
-  installed the watch app five times today without a single failure. So the only usable non-
-  `devicectl` route is TestFlight.
+- **Companion install as a discriminator.** ~~It cannot be run on this rig.~~ **Corrected the same
+  evening: it works, it is just far slower than anyone watches for.** The TestFlight upload finished
+  at 18:49 and the watch app appeared on the wrist at 20:21 — about ninety minutes of the phone's
+  Watch app grinding with no visible progress, after which it simply completed. Every earlier
+  verdict of "failed" came from sampling a window far shorter than that: 15 minutes and 30 samples
+  on 2026-08-15, and similar on 2026-08-17. The spinner reverting to "Install" is evidently not a
+  failure state, which is what made it read as one.
+
+  This matters twice over. It means the companion path IS available as a discriminator after all,
+  and it means a "stale watch" observation needs to be at least two hours old before it counts as
+  evidence of anything.
 
 ## Discriminators, in order
 
 1. **Does it clear by itself?** Watch `WATCH STATE CHANGED` for `installed` returning to true with
    no reinstall. Decides whether the remedy needs a recovery path or only prevention.
-2. ~~Companion install vs `devicectl`.~~ **Not runnable** — see above; the companion install does
-   not work on this rig, for reasons that predate this problem.
-3. **TestFlight build.** Same question, through the path Caitlin actually uses.
+2. **Companion install vs `devicectl`.** Runnable after all — see the correction above — but it
+   costs ~90 minutes per trial, so it is the slow instrument, not the first one to reach for.
+3. **TestFlight build. RUN 2026-08-17 EVENING — the failure did not reproduce.**
+
+   The watch app arrived by TestFlight (build 304; a direct install would have been stamped 1001,
+   so the two are not confusable) and then ran six loans across roughly two hours of tennis:
+
+   | epoch | grant | takeover |
+   |---|---|---|
+   | 87 | 3.1s | 16.8s |
+   | 90 | 1.3s | 11.6s |
+   | 91 | 0.8s | 23.5s |
+   | 92 | 1.5s | 36.9s |
+   | 93 | 0.5s |  7.5s |
+   | 94 | queued, ~2m48s | 10.8s |
+
+   No 7006 at any point. Epoch 94 is the interesting one: the phone could not use the urgent path
+   (`reachable=false`), so the grant went by `transferUserInfo` — the very mechanism that returned
+   7006 all of the previous day — and it was **delivered**, late but intact. The watch had already
+   given up by then (see the timeout note below) and took over anyway once it arrived.
+
+   **This is one clean run, not proof.** Direct installs also succeeded intermittently during the
+   failure period, so a single success cannot distinguish "TestFlight is immune" from "the state
+   had already cleared." What it does establish is that the path Caitlin actually uses was healthy
+   under real load, which was the question gating the ship decision.
+
+## Found while reading these logs — not 7006, worth its own fix
+
+The request timeout reports a duration it did not measure. Epoch 94:
+
+```
+22:39:29  [loan] REQUEST sent (build 304) — awaiting grant
+22:42:17  [loan] REQUEST TIMED OUT — no grant in 25s
+22:42:17  [loan] RX grant ch=queued
+22:42:28  [loan] ACTIVE — epoch 94
+```
+
+168 seconds elapsed, not 25. The watch was suspended, so the timer did not run down while it slept
+and fired only on wake. The user is told the loan failed, and eleven seconds later it silently
+succeeds. Nothing is wrong with the dosing; the message is simply lying about elapsed time, and it
+makes a working system look broken at exactly the moment the user is deciding whether to trust it.
 
 ## Fix direction (not built, deliberately)
 
