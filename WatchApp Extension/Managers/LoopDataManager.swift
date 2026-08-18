@@ -398,7 +398,13 @@ extension LoopDataManager {
             correctionRange: self.watchInfo.loopSettings.glucoseTargetRangeSchedule,
             scheduleOverride: self.watchInfo.scheduleOverride,
             historicalGlucose: historicalGlucose,
-            predictedGlucose: (activeContext.isClosedLoop ?? false) ? activeContext.predictedGlucose?.values : nil
+            // DRAW THE PREDICTION WHATEVER THE LOOP MODE, matching the phone — which assigns
+            // `predictedGlucoseValues = state.output?.predictedGlucose` with no mode gate at all.
+            // The gate here blanked the chart on an OPEN loop, and a loan INHERITS the phone's
+            // mode at grant, so a wrist holding the pod in advisory mode showed no forecast — the
+            // situation where you most need one, because you are deciding by hand. The number was
+            // computed every cycle regardless; we were simply declining to draw it.
+            predictedGlucose: activeContext.predictedGlucose?.values
         )
         return chartData
     }
