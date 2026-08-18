@@ -753,6 +753,29 @@ final class PodLoanWatchController {
                 hi.map { String(format: "%.0f", $0) } ?? "nil",
                 s.maximumBasalRatePerHour.map { String(format: "%.2f", $0) } ?? "nil",
                 s.maximumBolus.map { String(format: "%.2f", $0) } ?? "nil"))
+
+            // And what DOSING will actually use, whenever an override is running.
+            //
+            // The line above reads the raw schedules, which is right for "did the settings
+            // arrive intact?" and wrong for anything else: an override scales basal by its
+            // insulin-needs factor and divides ISF and CR by it, so with a 0.37 factor the
+            // schedule says ISF 70 / basal 0.60 while every [dosemath] line in the same
+            // second says ISF 189 / basal 0.22. Both numbers are correct and they look like
+            // a settings-corruption bug — this cost a full log-reading session on 2026-08-18
+            // before the override was remembered.
+            //
+            // Printed as a SECOND line rather than folded into the first, so the raw values
+            // stay greppable for the integrity check they exist to serve.
+            if let o = self.loopManager.scheduleOverride, o.isActive(at: now) {
+                let f = o.settings.effectiveInsulinNeedsScaleFactor
+                SportLog.event("settings", String(
+                    format: "override ACTIVE '%@' × %.2f insulin needs — effective ISF %@ mg/dL/U · CR %@ g/U · basal %@ U/hr (dosing uses THESE, not the schedule above)",
+                    o.context.presetNameForLog,
+                    f,
+                    isf.map { String(format: "%.0f", $0 / f) } ?? "nil",
+                    cr.map { String(format: "%.1f", $0 / f) } ?? "nil",
+                    basal.map { String(format: "%.2f", $0 * f) } ?? "nil"))
+            }
         }
 
         // Stock construction: exactly a phone relaunch. BlePodComms auto-connects from

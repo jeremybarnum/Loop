@@ -1093,11 +1093,16 @@ final class WatchLoopManager {
     /// Storm latch: last phone-fallback syncId attempted (serial deviceQueue only).
     var lastPhoneFallbackSyncId: String?
 
-    // MARK: - SessionInsulinLedger (SHADOW MODE)
+    // MARK: - SessionInsulinLedger
 
     /// The single-owner session dose timeline (see SessionInsulinLedger.swift for the full
-    /// rationale). dataAccessQueue-confined; it is the ONLY insulin book —
-    /// dosing and display still read the DoseStore. Reverting = delete these hooks.
+    /// rationale). dataAccessQueue-confined, and the ONLY insulin book: the watch's DoseStore
+    /// is never written, so both dosing and display read from here.
+    ///
+    /// The header used to end "dosing and display still read the DoseStore", a leftover from
+    /// shadow mode that contradicted its own preceding sentence. It was accurate about the
+    /// algorithm and that was the bug — `fetchAlgorithmInput` really did read the store, and
+    /// the store really was empty. Fixed 2026-08-18; the sentence goes with it.
     private var sessionLedger: SessionInsulinLedger?
 
     /// Takeover: build a fresh ledger from the grant split. Uses the SAME config the store
@@ -1707,7 +1712,43 @@ final class WatchLoopManager {
         let dosesInputHistory = CarbMath.maximumAbsorptionTimeInterval + InsulinMath.defaultInsulinActivityDuration
         var dosesStart = baseTime.addingTimeInterval(-dosesInputHistory)
 
-        let doses = try await doseStore.getNormalizedDoseEntries(start: dosesStart, end: baseTime)
+        // THE INSULIN BOOK IS THE LEDGER, NOT THE STORE.
+        //
+        // This read used to be `doseStore.getNormalizedDoseEntries(...)`, which is what the
+        // phone does — and on the phone it is right, because the phone's DoseStore is written
+        // by the pump-event delegate. The watch's is not: `pumpManager(_:hasNewPumpEvents:)`
+        // discards every row on purpose ("Dose rows are NOT stored — the ledger is the only
+        // book"), and there is no other writer anywhere in the extension. So the algorithm was
+        // being handed an EMPTY dose history on every cycle.
+        //
+        // What that looked like in the field (2026-08-18, 09:24-09:30): three manual boluses
+        // totalling 3.40 U inside six minutes, `IOB 0.00` and `insulin +0` in every prediction
+        // across the whole session, and `REC bolus 1.66 U` republished unchanged after each one.
+        // A recommendation that cannot see the insulin already given cannot decrement, so the
+        // wrist kept asking for the same dose again — the overbolus path, reached by arithmetic
+        // rather than by a radio fault.
+        //
+        // Unannotated on purpose: LoopAlgorithm does `doses.annotated(with: basal)` itself
+        // (LoopAlgorithm :203) using the override-applied basal built below, so netting here
+        // would apply it twice.
+        //
+        // Refuses rather than substituting an empty book. R35 bans a store fallback outright,
+        // and the reason is this bug: dosing off an empty history looks exactly like dosing
+        // with no insulin on board, which is the most dangerous number the watch can believe.
+        guard let ledger = sessionLedger else {
+            logLedgerRefusal("algorithm input")
+            throw WatchLoopError.configurationError("no insulin ledger — refusing to dose off an empty book")
+        }
+        // Safe without a hop: both callers reach this through `runBlocking` from
+        // `dataAccessQueue`, which blocks that queue for the duration, and every ledger
+        // mutation is a `dataAccessQueue.async`. The ledger is a struct, so this is a copy.
+        let doses = ledger.doses.filter { $0.startDate <= baseTime && $0.endDate >= dosesStart }
+        // A live ledger with nothing in the dosing window is the exact shape of the bug above,
+        // and it said nothing for a whole session. Once per distinct reason, so a genuinely
+        // empty book (fresh pod, no history) reports once rather than every cycle.
+        if doses.isEmpty {
+            logLedgerRefusal("empty dosing window (ledger holds \(ledger.doses.count) dose(s))")
+        }
         dosesStart = min(dosesStart, doses.map { $0.startDate }.min() ?? dosesStart)
         let dosesEnd = max(baseTime, doses.map { $0.endDate }.max() ?? baseTime)
 
