@@ -112,6 +112,20 @@ struct ContentView: View {
             loanIsLive = live
             if live { selectedPage = Self.sportPage }
         }
+        // Finishing a carb entry or a bolus during a loan returns to the glance.
+        //
+        // The flow is a SHEET presented from page 0, so dismissing it lands the user back on the
+        // stock actions page. That is correct when the phone holds the pod — the actions page is
+        // where they started. It is wrong when the WRIST holds it: the glance is the only surface
+        // that shows the bolus actually delivering, the resulting IOB, and the loan still being
+        // held. Landing on a page that shows none of that reads as "did it work?", which is the
+        // one question a just-delivered bolus must not raise.
+        //
+        // Gated on `wantsFocus` rather than applied always, so this never yanks the page away from
+        // someone using the watch as a plain remote.
+        .onReceive(NotificationCenter.default.publisher(for: .carbAndBolusFlowDidComplete).receive(on: RunLoop.main)) { _ in
+            if glanceModel.wantsFocus { selectedPage = Self.sportPage }
+        }
         .task {
             // The gate also has to be right on a COLD LAUNCH into a live loan — relaunching
             // mid-session posts no phase change, and that is exactly when the watch is holding

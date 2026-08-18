@@ -1948,8 +1948,21 @@ final class WatchLoopManager {
                 case .failure(let error):
                     throw error
                 case .success(let recommendation):
-                    guard let manual = recommendation.manual else {
+                    guard var manual = recommendation.manual else {
                         throw WatchLoopError.missingDataError("no manual bolus recommendation")
+                    }
+                    // Round to what the pod can actually deliver, exactly where the phone does it
+                    // (LoopDataManager.recommendManualBolus) — before the number reaches ANY
+                    // consumer, so the flow, the log line and the glance all quote one figure.
+                    //
+                    // Not cosmetic-only, though the symptom is cosmetic. The stock dial renders
+                    // insulin with QuantityFormatter(for: .internationalUnit), whose
+                    // maxFractionDigits is 3, so an unrounded recommendation reads "REC: 2.191 U"
+                    // — a number no pod can give you, printed to a precision that implies it can.
+                    // The delivery path already rounds at enactBolus, so the pre-fix wrist was
+                    // quoting one figure and delivering another.
+                    if let pump = self.pumpManager {
+                        manual.amount = pump.roundToSupportedBolusVolume(units: manual.amount)
                     }
                     completion(.success(manual))
                 }

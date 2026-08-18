@@ -236,6 +236,7 @@ extension CarbAndBolusFlow {
                 Task {
                     do {
                         try await self.viewModel.addCarbsWithoutBolusing()
+                        NotificationCenter.default.post(name: .carbAndBolusFlowDidComplete, object: nil)
                         dismiss()
                     } catch {
                         viewModel.error = .bolusMessageSendFailure
@@ -274,6 +275,7 @@ extension CarbAndBolusFlow {
             Task {
                 do {
                     try await self.viewModel.addCarbsAndDeliverBolus(self.bolusAmount)
+                    NotificationCenter.default.post(name: .carbAndBolusFlowDidComplete, object: nil)
                     dismiss()
                 } catch {
                     viewModel.error = .bolusMessageSendFailure
