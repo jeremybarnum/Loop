@@ -89,6 +89,33 @@ message that arrived *from* the allegedly absent app.
     Jeremy's objection was correct: every loan begins with a tap on the watch, which is foreground
     by definition.
 
+## CONFIRMED 2026-08-18 — the delete causes it, a TestFlight install repairs it
+
+The hypothesis below is no longer a hypothesis. The full causal chain was observed in one day:
+
+1. The watch app was DELETED (forced: next-dev's extensionless watch app cannot be replaced in
+   place by an extension-based one).
+2. It was reinstalled by `devicectl`. From that moment every phone send carried `installed=false`,
+   and `transferUserInfo` returned 7006 in bursts.
+3. The visible symptom was NOT a failed loan. The loan ran; the watch's hand-back offer reached the
+   phone and the phone acked — but the ACK could not be delivered, so the watch sat on
+   "returning records" indefinitely. Watch to phone worked throughout. It is a ONE-WAY break.
+4. Installing the same code from TestFlight flipped it: `installed=true`, hand-back completed,
+   3 doses committed, no 7006.
+
+So: a `devicectl` install writes the app without ever touching the companion registration, and
+after a delete that registration is left broken. TestFlight installs the watch app through the
+companion mechanism, which re-registers it. That is the repair.
+
+**Practical rule.** After deleting the watch app — which crossing between next-dev and the other
+lines requires — the next install must come through TestFlight or the phone's Watch app, NOT
+`devicectl`. Direct installs are fine afterwards; they only inherit the broken state, they do not
+create it.
+
+**Read `installed=` before diagnosing anything else.** Every phone send line carries it. It is one
+grep, and on 2026-08-18 it would have saved most of a day: three separate "the feature is broken"
+conclusions were really this, and two of them sent me looking at code that was working.
+
 ## Leading hypothesis, untested
 
 **A one-off corruption of the companion registration, caused by the delete — NOT by direct
