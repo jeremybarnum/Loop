@@ -328,6 +328,18 @@ extension ExtensionDelegate: WCSessionDelegate {
     /// urgent channel were lost in the port, and each one hides the other: fixing only the phone
     /// moves the failure from "no response" to "hand-over never reached the watch".
     func session(_ session: WCSession, didReceiveMessage message: [String : Any]) {
+        #if DEBUG_FEATURES_ENABLED
+        // Bench traffic first, and it never falls through: it travels under its own key, so it can
+        // be neither mistaken for a loan payload nor swallowed by the default arm below.
+        if let verb = message[BenchRemoteControl.messageKey] as? String {
+            _ = stockLoopSession?.applyBenchCommand(verb)
+            if stockLoopSession == nil {
+                log.error("bench command %{public}@ arrived before the Sport Mode stack was up", verb)
+                startStockLoopSession()
+            }
+            return
+        }
+        #endif
         if let stockLoopSession {
             if stockLoopSession.handleIncomingIfLoanMessage(message, channel: .urgent) { return }
         } else if message[LoanProtocol.userInfoKey] != nil {
@@ -342,6 +354,19 @@ extension ExtensionDelegate: WCSessionDelegate {
 
     // This method is called on a background thread of your app
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any] = [:]) {
+        #if DEBUG_FEATURES_ENABLED
+        // The queued fallback lands here. This is the path a `wake` sent to a sleeping watch takes,
+        // which is the case that matters most — so it must be handled on BOTH channels, not just
+        // the urgent one.
+        if let verb = userInfo[BenchRemoteControl.messageKey] as? String {
+            _ = stockLoopSession?.applyBenchCommand(verb)
+            if stockLoopSession == nil {
+                log.error("queued bench command %{public}@ arrived before the stack was up", verb)
+                startStockLoopSession()
+            }
+            return
+        }
+        #endif
         // Loan traffic first: it is addressed to the loan controller, not to the context
         // machinery below, and the switch's default arm would otherwise swallow it.
         if let session = stockLoopSession {

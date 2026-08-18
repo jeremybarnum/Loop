@@ -18,6 +18,7 @@
 		2EE15DB9853743D7B999AF37 /* GlanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0ABB040AC55431083B36492 /* GlanceView.swift */; };
 		95C7AE061FC149ADB8D1928D /* PhoneLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C9DDCE80C384964BDDF1C8B /* PhoneLog.swift */; };
 		BE0C410000000000000A0001 /* BenchRemoteControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE0C410000000000000A0002 /* BenchRemoteControl.swift */; };
+		BE0C410000000000000A0005 /* BenchRemoteControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE0C410000000000000A0002 /* BenchRemoteControl.swift */; };
 		9F0BBEE28E9F45FC8DB3D8C9 /* LoanReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDBF9B08E9314F23AB94CF5A /* LoanReconciler.swift */; };
 		D6201CDD83934B508AC33A24 /* PodLoanPhoneController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE577A60A96B49F3A608001B /* PodLoanPhoneController.swift */; };
 		70E4E9FE2ABE49DDBDF4B0A9 /* StoredDataAlgorithmInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37485C37C7ED4485A1EDFB19 /* StoredDataAlgorithmInput.swift */; };
@@ -3873,6 +3874,7 @@
 				54CB774C12C6459DB3AFF5C2 /* DeviceLogThrottle.swift in Sources */,
 				CDF3506125404EE4B35ED4F3 /* WatchSettingsProvider.swift in Sources */,
 				4EBEFA1A38224E7E8CE432A7 /* WatchLoopManager.swift in Sources */,
+				BE0C410000000000000A0005 /* BenchRemoteControl.swift in Sources */,
 				F06FDE1F67AF4011937B1529 /* SportLog.swift in Sources */,
 				DBA92856969B47C19B2BD581 /* WorkoutKeepalive.swift in Sources */,
 				1A353D3E971442118DD6956C /* WatchDoseEnactor.swift in Sources */,

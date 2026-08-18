@@ -7,6 +7,7 @@
 //
 
 import UIKit
+import WatchConnectivity
 import Intents
 import BackgroundTasks
 import Combine
@@ -718,6 +719,9 @@ class LoopAppManager: NSObject {
                 log.default("bench: reclaim")
                 PhoneLog.event("BENCH", "reclaim requested via URL")
                 deviceDataManager?.reclaimPodLoanFromWatch()
+            case .some(let watchCommand):
+                // Everything else is the wrist's to do, so the phone only carries it.
+                forwardBenchCommandToWatch(watchCommand)
             case nil:
                 log.error("bench: refused unrecognised command %{public}@", url.absoluteString)
                 PhoneLog.event("BENCH", "refused \(url.absoluteString)")
@@ -750,6 +754,43 @@ class LoopAppManager: NSObject {
         
         return true
     }
+
+    #if DEBUG_FEATURES_ENABLED
+    /// Carry a bench command to the wrist.
+    ///
+    /// Urgent channel with a queued fallback, mirroring how loan traffic travels. The fallback is
+    /// not politeness: `wake` is by definition aimed at a watch that may be asleep, so a command
+    /// that only worked when the watch was already reachable would be useless precisely when it
+    /// matters. `transferUserInfo` survives until the app next runs.
+    ///
+    /// Sent under `BenchRemoteControl.messageKey`, never `LoanProtocol.userInfoKey`, so neither
+    /// side can mistake bench traffic for a loan payload.
+    private func forwardBenchCommandToWatch(_ command: BenchRemoteControl.Command) {
+        let session = WCSession.default
+        guard session.activationState == .activated else {
+            log.error("bench: cannot forward %{public}@ — WCSession not activated", command.rawValue)
+            PhoneLog.event("BENCH", "forward \(command.rawValue) FAILED — session not activated")
+            return
+        }
+
+        let payload = [BenchRemoteControl.messageKey: command.rawValue]
+
+        guard session.isReachable else {
+            log.default("bench: forwarding %{public}@ path=queued (watch not reachable)", command.rawValue)
+            PhoneLog.event("BENCH", "forward \(command.rawValue) path=queued (watch not reachable)")
+            session.transferUserInfo(payload)
+            return
+        }
+
+        log.default("bench: forwarding %{public}@ path=urgent", command.rawValue)
+        PhoneLog.event("BENCH", "forward \(command.rawValue) path=urgent")
+        session.sendMessage(payload, replyHandler: nil, errorHandler: { [weak self] error in
+            self?.log.error("bench: urgent forward FAILED %{public}@ — falling back to queued", String(describing: error))
+            PhoneLog.event("BENCH", "forward \(command.rawValue) urgent FAILED — \(error.localizedDescription) — queued")
+            session.transferUserInfo(payload)
+        })
+    }
+    #endif
 
     // MARK: - Continuity
 

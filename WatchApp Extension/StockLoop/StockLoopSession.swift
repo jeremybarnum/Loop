@@ -34,6 +34,53 @@ final class StockLoopSession {
         holding ? keepalive.acquire(reason) : keepalive.release(reason)
     }
 
+    #if DEBUG_FEATURES_ENABLED
+    /// Apply a bench command that arrived from the phone. Returns false for anything unrecognised,
+    /// so the caller can fall through to the normal message handling.
+    ///
+    /// Every command is REFUSED unless the wrist is in a state where a human could have pressed the
+    /// same button. An unattended run has no eyes: firing loan-start at an already-active loan, or
+    /// loan-end at an idle one, would otherwise produce a confusing half-action at 3am and a
+    /// misleading log. Refusing is the honest answer, and it is logged as a refusal rather than
+    /// swallowed.
+    func applyBenchCommand(_ verb: String) -> Bool {
+        switch verb {
+        case "wake":
+            // Refcounted by reason, so this cannot disturb the loan lifecycle's own holders. It is
+            // never released by the bench: the point is to survive the whole soak, and the session
+            // ends when the app does.
+            setKeepalive(true, reason: "bench")
+            SportLog.event("BENCH", "wake — keepalive held for the bench")
+            return true
+
+        case "loan-start":
+            let phase = loanController.phase
+            guard phase == .idle else {
+                SportLog.event("BENCH", "loan-start REFUSED — phase is \(phase.rawValue), not idle")
+                return true
+            }
+            let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+            SportLog.event("BENCH", "loan-start — requesting a loan · build \(build)")
+            loanController.requestLoan(watchBuild: build)
+            return true
+
+        case "loan-end":
+            let phase = loanController.phase
+            guard phase == .active else {
+                SportLog.event("BENCH", "loan-end REFUSED — phase is \(phase.rawValue), not active")
+                return true
+            }
+            SportLog.event("BENCH", "loan-end — beginning hand-back")
+            loanController.beginHandback()
+            return true
+
+        default:
+            SportLog.event("BENCH", "refused unrecognised command \(verb)")
+            return false
+        }
+    }
+    #endif
+
     /// Re-assert the session if something still wants it. Called on every foreground: the one
     /// moment we KNOW we are executing, since the only other re-assert path is a timer that cannot
     /// fire while suspended. No-op when nothing holds it.
