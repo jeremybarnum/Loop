@@ -461,7 +461,27 @@ final class GlanceViewModel: ObservableObject {
             logRender(iob: data.iob, cob: latestCOB, glucoseDate: data.glucoseDate, now: Date())
             RuntimeStateLog.mark("glance.refresh.carbFetchDispatch")
             session.stack.loopManager.glanceCarbsOnBoard { [weak self] cob in
-                DispatchQueue.main.async { self?.latestCOB = cob; self?.latestCOBAt = Date() }
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    let changed = cob != self.latestCOB
+                    self.latestCOB = cob
+                    self.latestCOBAt = Date()
+                    // Repaint as soon as a CHANGED value lands, instead of leaving it for the
+                    // next tick.
+                    //
+                    // The fetch is asynchronous, so the frame that starts it necessarily renders
+                    // the PREVIOUS value — harmless while COB drifts down on its own, and wrong
+                    // at the one moment anybody is watching. Entering carbs moves the eventual
+                    // immediately (it is computed inline in the same frame) while COB kept the
+                    // old number until the next tick, so the two halves of the rail disagreed
+                    // about whether the carbs had landed. That is precisely the question the
+                    // person is looking at the screen to answer.
+                    //
+                    // Terminates: the re-entered refresh issues one more fetch, that fetch
+                    // returns the value just stored, `changed` is false, and it stops. So a real
+                    // COB change costs exactly one extra recompute, and a steady COB costs none.
+                    if changed { self.refresh(kickMirror: false) }
+                }
             }
         }
     }

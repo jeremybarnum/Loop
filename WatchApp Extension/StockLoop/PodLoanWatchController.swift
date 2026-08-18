@@ -29,6 +29,10 @@ extension Notification.Name {
     /// calling a controller keeps this file free of any particular UI's lifetime, which the
     /// SwiftUI watch app no longer models the same way.
     static let podLoanPhaseDidChange = Notification.Name("com.loopkit.Loop.podLoanPhaseDidChange")
+
+    /// A carb entry or bolus flow finished successfully. Posted regardless of who holds the pod;
+    /// the host decides whether it means anything, so the flow does not have to know about pages.
+    static let carbAndBolusFlowDidComplete = Notification.Name("com.loopkit.Loop.carbAndBolusFlowDidComplete")
 }
 
 /// Why a hand-back is stuck, when the shape says the transport is at fault rather than the
