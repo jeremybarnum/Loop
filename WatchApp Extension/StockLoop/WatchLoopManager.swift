@@ -1579,6 +1579,67 @@ final class WatchLoopManager {
         }()
         SportLog.event("predict", "eventual \(eventual) · min \(minPredicted) · suspendThr \(suspendThr) · net effects: carbs \(net(e?.carbs)), insulin \(net(e?.insulin)), momentum \(net(e?.momentum)), RC \(net(e?.retrospectiveCorrection)) · IOB \(activeInsulin.map { String(format: "%.2f", $0) } ?? "—") · COB \(activeCarbs.map { String(format: "%.0f", $0) } ?? "—") · momPts \(e?.momentum.count ?? 0) · rcDisc \(e?.retrospectiveGlucoseDiscrepancies.count ?? 0) · rec \(rec)")
         SportLog.event("curve", curveSummary(predictedGlucose))
+        logPredictionDiffAgainstPhone(effects: e)
+    }
+
+    /// PHONE vs WATCH, term by term — the comparison the grant snapshot exists to enable.
+    ///
+    /// `phonePredictionSnapshotAtGrant` has been captured at every grant and read by NOTHING: the
+    /// subtraction was never written. Its own field comments say what it is for — momentumPointCount
+    /// "proves the phone HAD momentum where the watch had 0", rcDiscrepancyCount is "RC warmth" —
+    /// so the instrument was designed for exactly the question "the eventuals differ, which term
+    /// is it?" and then left unwired.
+    ///
+    /// One line, every term on it, both sides, signed deltas. Reading two separate [predict] lines
+    /// from two devices and subtracting by eye is how this stayed unanswered.
+    ///
+    /// DRIFT IS EXPECTED AND IS NOT ERROR. The phone's numbers are from GRANT; the watch's are from
+    /// THIS cycle, so `snapAge` is on the line and every delta must be read against it. Momentum
+    /// decays over ~20 min and RC re-derives per cycle, so a same-instant match is not the
+    /// expectation — the point is ATTRIBUTION: a +5 mg/dL eventual gap that is entirely in the RC
+    /// column is a different problem from one spread evenly across four terms.
+    ///
+    /// Stops once the snapshot is too old to compare honestly rather than printing a widening gap
+    /// forever, and stays silent off-loan where there is nothing to compare against.
+    private func logPredictionDiffAgainstPhone(effects e: LoopAlgorithmEffects<StoredCarbEntry>?) {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+        guard let snap = phonePredictionSnapshotAtGrant else { return }
+        let age = now().timeIntervalSince(snap.snapshotAt)
+        guard age <= .minutes(20) else { return }
+
+        let mgdl = LoopUnit.milligramsPerDeciliter
+        // Same forward-from-now convention as the [predict] line above, so the columns are
+        // like-for-like with it rather than a second dialect of the same number.
+        func fwd(_ effects: [GlucoseEffect]?) -> Double? {
+            guard let effects else { return nil }
+            let forward = effects.filter { $0.startDate >= now() }
+            guard let first = forward.first, let last = forward.last else { return nil }
+            return last.quantity.doubleValue(for: mgdl) - first.quantity.doubleValue(for: mgdl)
+        }
+        func col(_ label: String, _ watch: Double?, _ phone: Double) -> String {
+            guard let w = watch else { return "\(label) —/\(String(format: "%+.0f", phone))" }
+            return String(format: "%@ %+.0f vs %+.0f (Δ%+.0f)", label, w, phone, w - phone)
+        }
+
+        let wEventual = predictedGlucose?.last?.quantity.doubleValue(for: mgdl)
+        let eventualCol = wEventual.map { String(format: "eventual %.0f vs %.0f (Δ%+.0f)", $0, snap.eventualMgdl, $0 - snap.eventualMgdl) }
+            ?? String(format: "eventual —/%.0f", snap.eventualMgdl)
+        let iobCol = activeInsulin.map { String(format: "IOB %.2f vs %.2f (Δ%+.2f)", $0, snap.iobUnits, $0 - snap.iobUnits) }
+            ?? String(format: "IOB —/%.2f", snap.iobUnits)
+        let cobCol = activeCarbs.map { String(format: "COB %.0f vs %.0f", $0, snap.cobGrams) }
+            ?? String(format: "COB —/%.0f", snap.cobGrams)
+
+        SportLog.event("predict-diff", String(
+            format: "@+%.0fs (watch vs phone@grant) — %@ | %@ · %@ · %@ · %@ | %@ · %@ | momPts %d vs %d · rcDisc %d vs %d",
+            age,
+            eventualCol,
+            col("mom", fwd(e?.momentum), snap.impactMomentumMgdl),
+            col("ins", fwd(e?.insulin), snap.impactInsulinMgdl),
+            col("carb", fwd(e?.carbs), snap.impactCarbMgdl),
+            col("RC", fwd(e?.retrospectiveCorrection), snap.impactRCMgdl),
+            iobCol, cobCol,
+            e?.momentum.count ?? 0, snap.momentumPointCount,
+            e?.retrospectiveGlucoseDiscrepancies.count ?? 0, snap.rcDiscrepancyCount))
     }
 
     private func emitIOBDiff(anchors: (phone: Double?, phoneDate: Date?, seed: Double, at: Date), cycle1: Double?) {
