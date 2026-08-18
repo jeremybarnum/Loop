@@ -512,7 +512,14 @@ final class LoanBooksHarnessTests: XCTestCase {
     /// full-span truth → the divergence must GROW at ≈ 0.70 U/hr × Δt. The store side is
     /// the KNOWN-WRONG book here; the assertion pins the failure signature, not health.
     func testInheritedTempSpanBooksOnBothSides() {
-        let now = Date()
+        // PINNED TO A 5-MINUTE BOUNDARY. The IOB integrals sample on an absolute grid, so an
+        // unaligned `now` makes this test's d5 phase-dependent: 0.0077, 0.0212 and 0.0277 were
+        // measured on consecutive runs of identical code, which is why its threshold had been
+        // tuned twice and failed anyway. Every instant below is relative to `now`, so aligning
+        // it fixes the phase without altering the scenario — including the deliberately
+        // off-grid `tempStart` at −7 min, whose OFFSET is the field geometry, not its phase.
+        let now = Date(timeIntervalSinceReferenceDate:
+            (Date().timeIntervalSinceReferenceDate / TimeInterval.minutes(5)).rounded(.down) * TimeInterval.minutes(5))
         let t0 = now.addingTimeInterval(-.minutes(20))                    // seed instant
         let tempStart = t0.addingTimeInterval(-.minutes(7))               // field geometry
         let tempEnd = tempStart.addingTimeInterval(.minutes(30))
@@ -545,7 +552,21 @@ final class LoanBooksHarnessTests: XCTestCase {
         let d5 = at5.store - at5.ledger     // store (frozen) minus ledger (tracking) — positive
         let d15 = at15.store - at15.ledger
 
-        XCTAssertGreaterThan(d5, 0.05,
+        // Threshold recalibrated 2026-08-18. The 0.05 it used to carry was measured against
+        // LoopKit's OLD IOB integral, whose upper bound was quantized to the delta grid
+        // (`floor((time + delay) / delta) * delta`) — the same bound the comment below still
+        // describes. Upstream LoopAlgorithm aeffea8 ("Fix delta-scale IOB ripple for basal
+        // segments longer than delta") replaced it with `min(time, doseDuration)` plus a
+        // midpoint Riemann sum, which removed both the forward walk and the phase ripple. The
+        // divergence this test measures is real and still grows, but it is now roughly 0.02 U at
+        // +5 min rather than the 0.058-0.116 the old bound produced, so the old constant fails
+        // on correct code.
+        //
+        // The SHAPE assertions below are the ones carrying the meaning — the frozen store
+        // overstates, and the overstatement grows while the dead temp withholds basal. The
+        // magnitude floor exists only to keep that from passing on float noise, so it is set
+        // just above noise rather than at a number transcribed from a deleted implementation.
+        XCTAssertGreaterThan(d5, 0.01,
                              "the frozen store must already overstate IOB 5 min after the seed")
         XCTAssertGreaterThan(d15, d5,
                              "the divergence must GROW while the dead temp keeps withholding basal")
@@ -956,7 +977,21 @@ final class LoanBooksHarnessTests: XCTestCase {
     }
 
     private func carbEffects(_ store: CarbStore, start: Date, end: Date, velocities: [GlucoseEffectVelocity]) -> [GlucoseEffect] {
-        let status = carbStatus(store, start: start, end: end, velocities: velocities)
+        // ENTRIES are fetched from one absorption window BEFORE `start`; EFFECTS are computed
+        // over [start, end]. Those are two different questions and the harness used to ask the
+        // first one with the second one's window.
+        //
+        // The parity test entered its meal 90 min before hand-back, so fetching entries in
+        // [handback, handback + 1h] found nothing and `carbStatus`'s empty guard returned no
+        // effects — for BOTH stores, which is why only the `isEmpty` assertion fired and the
+        // count-equality on the next line passed on 0 == 0. The test read as "the watch produces
+        // no carb-effect curve" when neither side produced one and the watch was fine.
+        //
+        // Mirrors production: fetchAlgorithmInput uses
+        // `carbsStart = baseTime - CarbMath.maximumAbsorptionTimeInterval` for exactly this
+        // reason — a meal still absorbing is still an input.
+        let entriesStart = start.addingTimeInterval(-CarbMath.maximumAbsorptionTimeInterval)
+        let status = carbStatus(store, start: entriesStart, end: end, velocities: velocities)
         guard !status.isEmpty else { return [] }
         let spanEnd = end.addingTimeInterval(InsulinMath.defaultInsulinActivityDuration)
         return status.dynamicGlucoseEffects(
