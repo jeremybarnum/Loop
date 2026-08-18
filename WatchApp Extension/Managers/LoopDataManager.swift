@@ -299,9 +299,55 @@ extension LoopDataManager {
         })
     }
 
+    /// The dosing manager, when the WRIST is the one dosing. nil off-loan, where the phone is
+    /// authoritative and these paths must keep their stock behaviour exactly.
+    private var loanDosingManagerIfActive: WatchLoopManager? {
+        guard let session = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession,
+              session.loanController.isLoanActiveNonBlocking else { return nil }
+        return session.stack.loopManager
+    }
+
+    /// Apply an override to the WRIST's dosing during a loan, and keep the UI in step with it.
+    ///
+    /// Without this, activating a preset mid-loan changed the display and nothing else. The
+    /// reconciler `WatchLoopManager.applyWristOverride` existed and had ZERO callers, so the
+    /// dosing override had exactly one writer for a loan's lifetime — the grant intake — while
+    /// `watchInfo.scheduleOverride` was driven independently off the WCSession round-trip. Tap
+    /// Jogging mid-run and the button highlights, the chart band redraws and ActiveOverrideView
+    /// prints 21%, while `applyBasal`/`applySensitivity`/`applyCarbRatio` stay identity maps and
+    /// the target falls through to the raw schedule: full-strength insulin toward the
+    /// pre-exercise target, during exercise, with every screen saying otherwise.
+    ///
+    /// THE PHONE SEND IS BEST-EFFORT HERE, and that inversion is the point. Off-loan the send
+    /// must throw, because the phone owns the therapy and a preset it never heard about would be
+    /// a lie. On-loan the WRIST owns it, and the phone is routinely switched off — which is
+    /// exactly when the previous code failed hardest. `sendSetPreset` threw before `watchInfo`
+    /// was written, so an ABSENT phone produced an honest no-op while a REACHABLE one produced
+    /// the silent therapy divergence. The feature was least broken when the phone was away.
+    ///
+    /// Local application first, then the UI, then the phone: the two things that must agree are
+    /// what doses and what is displayed, and neither may wait on a radio.
+    private func applyOverrideDuringLoan(_ manager: WatchLoopManager,
+                                         _ override: TemporaryScheduleOverride?,
+                                         _ watchInfoUpdate: LoopSettingsUserInfo,
+                                         presetId: String?,
+                                         alertIdentifier: String?) async {
+        manager.applyWristOverride(override)
+        watchInfo = watchInfoUpdate
+        do {
+            try await WCSession.default.sendSetPreset(presetIdentifier: presetId, alertIdentifier: alertIdentifier)
+        } catch {
+            SportLog.event("override", "phone not told (\(error)) — the wrist holds the pod, so its own dosing is authoritative")
+        }
+    }
+
     func clearOverride() async throws {
         var watchInfoUpdate = self.watchInfo
         watchInfoUpdate.scheduleOverride = nil
+        if let manager = loanDosingManagerIfActive {
+            return await applyOverrideDuringLoan(manager, TemporaryScheduleOverride?.none, watchInfoUpdate,
+                                                 presetId: String?.none, alertIdentifier: String?.none)
+        }
         try await WCSession.default.sendSetPreset(presetIdentifier: nil, alertIdentifier: nil)
         watchInfo = watchInfoUpdate
     }
@@ -309,6 +355,11 @@ extension LoopDataManager {
     func activateOverride(_ override: TemporaryScheduleOverride, alertIdentifierToAcknowledge: String? = nil) async throws {
         var watchInfoUpdate = self.watchInfo
         watchInfoUpdate.scheduleOverride = override
+        if let manager = loanDosingManagerIfActive {
+            return await applyOverrideDuringLoan(manager, override, watchInfoUpdate,
+                                                 presetId: override.presetId,
+                                                 alertIdentifier: alertIdentifierToAcknowledge)
+        }
         try await WCSession.default.sendSetPreset(presetIdentifier: override.presetId, alertIdentifier: alertIdentifierToAcknowledge)
         watchInfo = watchInfoUpdate
     }

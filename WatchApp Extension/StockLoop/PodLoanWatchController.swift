@@ -2218,6 +2218,12 @@ final class PodLoanWatchController {
         defaults.removeObject(forKey: Keys.pumpRawValue)
         // The session ledger ends with the session.
         loopManager.ledgerClear()
+        // ...and so does the override. WatchLoopManager lives for the PROCESS, not the loan, and
+        // the grant intake writes the override with `if let` and no else-branch — so without
+        // this an indefinite override from one loan kept rescaling ISF, basal and carb ratio
+        // through the next one, while every UI surface correctly showed none. The next grant
+        // brings its own; nothing should survive between them.
+        loopManager.applyWristOverride(nil)
     }
 
     // MARK: - Uncertainty chase (the genuinely-additive layer-1 piece, d27a40c7 port)
