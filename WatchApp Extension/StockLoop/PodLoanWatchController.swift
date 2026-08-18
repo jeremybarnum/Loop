@@ -1161,16 +1161,44 @@ final class PodLoanWatchController {
         }
     }
 
+    /// Every reclaim ladder gets an id, and ladders that overlap say so.
+    ///
+    /// `reclaimPodForDose` has TWO independent callers — the automatic enactor
+    /// (WatchDoseEnactor.swift:68) and the manual bolus path (WatchLoopManager.swift:2240) — and
+    /// no reentrancy guard. On 2026-08-18 a carb save (which re-runs loop(), which enacts) landed
+    /// in the same second as a manual bolus, and BOTH ran a full 14-read ladder against one pod,
+    /// interleaved, disagreeing about `released`, for 28 s until both gave up. In the log that
+    /// appeared only as every line being printed twice — which reads as a logging artifact, not
+    /// as two ladders, and cost an evening.
+    ///
+    /// This does NOT serialise them. The guard belongs somewhere deliberate and a wrong one would
+    /// suppress a legitimate retry; the instrument comes first so the next occurrence is one
+    /// greppable line instead of an inference from doubled text.
+    private var reclaimLadderSeq = 0
+    private var liveReclaimLadders: [Int: Date] = [:]
+
     func reclaimPodForDose(_ completion: @escaping (Bool) -> Void) {
         queue.async {
             guard self.phase == .active, let manager = self.pumpManager else { completion(false); return }
+            self.reclaimLadderSeq += 1
+            let ladder = self.reclaimLadderSeq
+            let startedAt = self.now()
+            if !self.liveReclaimLadders.isEmpty {
+                let others = self.liveReclaimLadders
+                    .map { "L\($0.key)@+\(String(format: "%.1f", startedAt.timeIntervalSince($0.value)))s" }
+                    .sorted().joined(separator: ", ")
+                SportLog.event("pod-contend", "L\(ladder) STARTS WHILE \(self.liveReclaimLadders.count) LADDER(S) LIVE — \(others) · both will drive the radio at once")
+            }
+            self.liveReclaimLadders[ladder] = startedAt
             // Bounded generously: the reclaim ladder alone budgets ~40 s, plus the command.
             self.doseWindowUntil = self.now().addingTimeInterval(75)
             let idle = self.lastPodLinkContact.map { self.now().timeIntervalSince($0) }
-            SportLog.event("loan", String(format: "E4: reclaim starting — pod BLE state %@, released=%@, idle %@",
+            SportLog.event("loan", String(format: "E4: reclaim starting L%d — pod BLE state %@, released=%@, idle %@ · %@",
+                                          ladder,
                                           manager.podLoanConnectionStateDescription,
                                           manager.isConnectionReleased ? "yes" : "no",
-                                          idle.map { String(format: "%.0fs", $0) } ?? "unknown"))
+                                          idle.map { String(format: "%.0fs", $0) } ?? "unknown",
+                                          self.g7StateForContention()))
             // This used to short-circuit on
             // `isConnectionReleased == false` alone, commented "still connected — nothing to do".
             // But that flag is the standing-connect BID, not the link. A reclaim already in flight
@@ -1184,6 +1212,7 @@ final class PodLoanWatchController {
             // ladder, which is the real readiness probe and already handles a connect in progress.
             if !manager.isConnectionReleased, manager.podLoanConnectionStateDescription == "connected" {
                 self.lastPodLinkContact = self.now()
+                self.finishReclaimLadder(ladder, startedAt: startedAt, reads: 0, ok: true, note: "link already up")
                 completion(true)
                 return
             }
@@ -1206,7 +1235,7 @@ final class PodLoanWatchController {
             // re-connects the bare bid too, so both paths race from t=0. The read ladder below is
             // the success probe; the release path cancels an unfinished scan (cancelLoanScan).
             manager.podLoanEscalateReclaim()
-            self.attemptReclaimRead(manager: manager, attempt: 0, completion: completion)
+            self.attemptReclaimRead(manager: manager, attempt: 0, ladder: ladder, startedAt: startedAt, completion: completion)
         }
     }
 
@@ -1228,17 +1257,38 @@ final class PodLoanWatchController {
     /// Radio cost is acceptable: the reclaim starts immediately after a reading, and
     /// the next G7 window is ~5 min out, so even a full 40s leaves ~4 min of margin —
     /// a pod exchange on every single cycle was already shown to cost 0% catch rate.
-    private func attemptReclaimRead(manager: OmniPumpManager, attempt: Int, completion: @escaping (Bool) -> Void) {
+    /// The G7's state, for the contention question that has been argued rather than measured.
+    ///
+    /// Stamped on every pod operation so "was the CGM holding the radio?" is answerable from one
+    /// line instead of by correlating two subsystems' timestamps by eye.
+    private func g7StateForContention() -> String {
+        loopManager.g7ContentionSummary
+    }
+
+    /// One line per ladder when it ends, carrying what the per-read spam used to carry.
+    private func finishReclaimLadder(_ ladder: Int, startedAt: Date, reads: Int, ok: Bool, note: String) {
+        liveReclaimLadders[ladder] = nil
+        let elapsed = now().timeIntervalSince(startedAt)
+        SportLog.event("pod-contend", String(
+            format: "L%d %@ after %d read(s) in %.1fs — %@ · %@ · still live: %@",
+            ladder, ok ? "OK" : "FAILED", reads, elapsed, note, g7StateForContention(),
+            liveReclaimLadders.isEmpty ? "none"
+                : liveReclaimLadders.keys.sorted().map { "L\($0)" }.joined(separator: ",")))
+    }
+
+    private func attemptReclaimRead(manager: OmniPumpManager, attempt: Int, ladder: Int, startedAt: Date, completion: @escaping (Bool) -> Void) {
         let maxAttempts = 14   // ~40s (14 × ~2s), same as the takeover ladder
         manager.podLoanReadStatus { [weak self] success in
             guard let self = self else { completion(false); return }
             self.queue.async {
                 guard self.phase == .active else {
+                    self.finishReclaimLadder(ladder, startedAt: startedAt, reads: attempt, ok: false, note: "phase left .active")
                     SportLog.event("loan", "E4: reclaim ABORTED — phase left .active (now \(self.phase.rawValue)). An in-flight dose is CANCELLED BY THE HAND-BACK, not by an unreachable pod — this is the 3x field failure (227 00:07:51, 228 00:18:44), all within ~1s of an End tap.")
                     completion(false); return
                 }
                 if success {
                     self.lastPodLinkContact = self.now()
+                    self.finishReclaimLadder(ladder, startedAt: startedAt, reads: attempt + 1, ok: true, note: "reconnected")
                     SportLog.event("loan", "E4: pod reconnected for dose (after \(attempt + 1) read(s)) — state \(manager.podLoanConnectionStateDescription)")
                     completion(true)
                 } else if attempt + 1 < maxAttempts {
@@ -1249,7 +1299,12 @@ final class PodLoanWatchController {
                     // actually sees each attempt: a peripheral stuck .disconnecting (2),
                     // one never reaching .connected (0/1), and a connected pod failing its
                     // status read are three different bugs that looked identical.
-                    SportLog.event("loan", "E4: reclaim read \(attempt + 1)/\(maxAttempts) failed — pod BLE state \(manager.podLoanConnectionStateDescription), released=\(manager.isConnectionReleased)")
+                    // Every read used to print, plus its armed/fired timer pair — 117 timer lines
+                    // and 28 CONFIG lines for a single failed attempt, which buries the two lines
+                    // that carry information. First, every fifth, and the last is enough to see a
+                    // ladder that never moves off `disconnected`.
+                    let noisy = attempt == 0 || (attempt + 1) % 5 == 0
+                    if noisy { SportLog.event("loan", "E4: reclaim read \(attempt + 1)/\(maxAttempts) failed — pod BLE state \(manager.podLoanConnectionStateDescription), released=\(manager.isConnectionReleased)") }
                     // Scan-adopt is armed UP FRONT in reclaimPodForDose, so the
                     // whole ladder rides the takeover-grade path from read 0 — no mid-ladder escalation.
                     // The fresh central's poweredOn handler races the bare bid and the address scan;
@@ -1257,12 +1312,14 @@ final class PodLoanWatchController {
                     // which burned ~15s on the ~98% of reclaims the bare bid never won.)
                     self.schedule(after: 2, label: "reclaim-read") {
                         guard self.phase == .active else {
+                            self.finishReclaimLadder(ladder, startedAt: startedAt, reads: attempt + 1, ok: false, note: "phase left .active mid-ladder")
                             SportLog.event("loan", "E4: reclaim ABORTED mid-ladder — phase left .active (now \(self.phase.rawValue)); in-flight dose cancelled by the hand-back")
                             completion(false); return
                         }
-                        self.attemptReclaimRead(manager: manager, attempt: attempt + 1, completion: completion)
+                        self.attemptReclaimRead(manager: manager, attempt: attempt + 1, ladder: ladder, startedAt: startedAt, completion: completion)
                     }
                 } else {
+                    self.finishReclaimLadder(ladder, startedAt: startedAt, reads: maxAttempts, ok: false, note: "never reconnected")
                     SportLog.event("loan", "E4: pod didn't reconnect after \(maxAttempts) reads (~40s) — dose skipped, pod runs baseline")
                     completion(false)
                 }

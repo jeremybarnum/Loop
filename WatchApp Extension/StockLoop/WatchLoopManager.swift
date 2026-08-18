@@ -959,6 +959,18 @@ final class WatchLoopManager {
     func notePhoneGlucoseDelivered() {
         noteGlucoseSource(directG7: false)
     }
+    /// G7 freshness for pod-contention diagnostics, safe from the loan controller's queue.
+    ///
+    /// Reuses the `bgSourceLock`-guarded stamps rather than touching `dataAccessQueue`, because
+    /// the caller is the reclaim ladder and hopping queues to log would change the timing of the
+    /// thing being measured. Ages, not booleans: "was the CGM busy?" has been argued from
+    /// correlated timestamps across two subsystems, and this puts it on the pod's own line.
+    var g7ContentionSummary: String {
+        let stamps = lastGlucoseSourceStamps
+        func age(_ d: Date?) -> String { d.map { String(format: "%.0fs", now().timeIntervalSince($0)) } ?? "never" }
+        return "g7direct=\(age(stamps.direct)) phoneRelay=\(age(stamps.phone))"
+    }
+
     private var lastGlucoseSourceStamps: (direct: Date?, phone: Date?) {
         bgSourceLock.lock(); defer { bgSourceLock.unlock() }
         return (_lastDirectG7At, _lastPhoneRelayAt)
