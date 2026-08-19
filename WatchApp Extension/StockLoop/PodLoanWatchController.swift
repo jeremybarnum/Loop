@@ -1176,19 +1176,43 @@ final class PodLoanWatchController {
     /// greppable line instead of an inference from doubled text.
     private var reclaimLadderSeq = 0
     private var liveReclaimLadders: [Int: Date] = [:]
+    /// Callers that arrived while a ladder was already in flight; answered with its result.
+    private var reclaimWaiters: [Int: [(Bool) -> Void]] = [:]
 
     func reclaimPodForDose(_ completion: @escaping (Bool) -> Void) {
         queue.async {
             guard self.phase == .active, let manager = self.pumpManager else { completion(false); return }
+            // COALESCE onto a ladder already in flight rather than starting a second one.
+            //
+            // Measured 2026-08-18 (build 112): two ladders ran 0.1 s apart and again 25.7 s apart,
+            // each driving its own scan and 14-read poll against one pod, and both failed. Two
+            // simultaneous ladders cannot both win — they contend for the same radio — so the
+            // second one buys nothing and costs the first its scan.
+            //
+            // Worse, and this is the reason it is fixed rather than merely logged: releasing the
+            // pod calls `cancelLoanScan()`, which nils `loanTakeoverPodId`
+            // (BlePodComms.swift:118). That marker is what tells connectOnDemand to leave a
+            // running scan alone (BluetoothManager.swift:881). So ladder A finishing can clear
+            // the marker out from under ladder B, and connectOnDemand then stops and replaces
+            // B's discovery scan with its own 4-second one — which is exactly the sequence
+            // observed at 17:50:35, 26 s into a live ladder.
+            //
+            // The joiner takes the in-flight ladder's result rather than retrying immediately.
+            // That is the conservative reading: a second ladder started 0.1 s later is answering
+            // the same question against the same pod in the same radio conditions, and the retry
+            // that matters is the next cycle's, which is unchanged. A manual bolus joined to a
+            // failing automatic ladder still fails loudly, which is what it did before.
+            if let (liveLadder, liveSince) = self.liveReclaimLadders.sorted(by: { $0.key < $1.key }).first {
+                let age = self.now().timeIntervalSince(liveSince)
+                SportLog.event("pod-contend", String(format:
+                    "JOINING L%d (in flight %.1fs) instead of starting a second ladder — %d waiter(s)",
+                    liveLadder, age, self.reclaimWaiters[liveLadder, default: []].count + 1))
+                self.reclaimWaiters[liveLadder, default: []].append(completion)
+                return
+            }
             self.reclaimLadderSeq += 1
             let ladder = self.reclaimLadderSeq
             let startedAt = self.now()
-            if !self.liveReclaimLadders.isEmpty {
-                let others = self.liveReclaimLadders
-                    .map { "L\($0.key)@+\(String(format: "%.1f", startedAt.timeIntervalSince($0.value)))s" }
-                    .sorted().joined(separator: ", ")
-                SportLog.event("pod-contend", "L\(ladder) STARTS WHILE \(self.liveReclaimLadders.count) LADDER(S) LIVE — \(others) · both will drive the radio at once")
-            }
             self.liveReclaimLadders[ladder] = startedAt
             // Bounded generously: the reclaim ladder alone budgets ~40 s, plus the command.
             self.doseWindowUntil = self.now().addingTimeInterval(75)
@@ -1268,6 +1292,12 @@ final class PodLoanWatchController {
     /// One line per ladder when it ends, carrying what the per-read spam used to carry.
     private func finishReclaimLadder(_ ladder: Int, startedAt: Date, reads: Int, ok: Bool, note: String) {
         liveReclaimLadders[ladder] = nil
+        // Answer everyone who joined this ladder, before anything can start another one.
+        let waiters = reclaimWaiters.removeValue(forKey: ladder) ?? []
+        if !waiters.isEmpty {
+            SportLog.event("pod-contend", "L\(ladder) answering \(waiters.count) joined caller(s) with \(ok ? "OK" : "FAILED")")
+            waiters.forEach { $0(ok) }
+        }
         let elapsed = now().timeIntervalSince(startedAt)
         SportLog.event("pod-contend", String(
             format: "L%d %@ after %d read(s) in %.1fs — %@ · %@ · still live: %@",
