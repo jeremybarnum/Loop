@@ -217,7 +217,7 @@ final class StockLoopSession {
             }
         }
 
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        let build = BuildDetails.default.codeIdentity
         SportLog.event("session", "Sport Mode ready — build \(build); tap Start to request a loan")
         startLinkCensus()
         // Name the policy at launch: a log that does not say which policy produced it cannot be
@@ -267,7 +267,7 @@ final class StockLoopSession {
     func startStandaloneG7Test() {
         guard !standaloneG7TestActive, !loanController.isLoanActive else { return }
         standaloneG7TestActive = true
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        let build = BuildDetails.default.codeIdentity
         SportLog.event("standalone", "=== STANDALONE G7 TEST START (E1, build \(build)) — no pod loan, no dosing — bench diagnostic ===")
         setKeepalive(true, reason: "soak")
         startLogPulse()   // flush every 5 min for an unattended multi-hour run

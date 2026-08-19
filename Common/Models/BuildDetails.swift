@@ -25,6 +25,30 @@ class BuildDetails {
         dict = parsed
     }
 
+    /// The one string that unambiguously identifies the code on a device.
+    ///
+    /// WHY. `CFBundleVersion` is pinned in `VersionOverride.xcconfig`, so every local build renders the
+    /// SAME number and the on-wrist tag cannot detect staleness at all. TestFlight assigns its own
+    /// numbers (109, 111, 112...) on a different sequence again, so "build 58" on the wrist and
+    /// "build 115" in TestFlight could be the same code or six hours apart and nothing on screen says
+    /// which. Two devices that must run compatible code had no way to be compared by looking at them.
+    ///
+    /// The superproject SHA has none of those problems: it is the same identifier on both halves when
+    /// they were built together, and visibly different when they were not. `capture-build-details.sh`
+    /// already wrote it; nothing read it.
+    var codeIdentity: String {
+        let sha = (dict["com-loopkit-Loop-commit-sha"] as? String)
+            ?? (dict["com-loopkit-LoopWorkspace-git-revision"] as? String)
+            ?? gitRevision
+        guard let sha else { return "sha?" }
+        // Build date disambiguates two installs of the SAME commit — the case where a rebuild is the
+        // only difference, which is most of them during a debugging session.
+        let stamp = (dict["com-loopkit-Loop-build-date"] as? String)
+            .flatMap { $0.split(separator: " ").dropFirst(3).first.map(String.init) }   // HH:MM:SS
+            .map { " @" + $0.prefix(5) } ?? ""
+        return sha + stamp
+    }
+
     var buildDateString: String? {
         return dict["com-loopkit-Loop-build-date"] as? String
     }
