@@ -41,11 +41,14 @@ class BuildDetails {
             ?? (dict["com-loopkit-LoopWorkspace-git-revision"] as? String)
             ?? gitRevision
         guard let sha else { return "sha?" }
-        // Build date disambiguates two installs of the SAME commit — the case where a rebuild is the
-        // only difference, which is most of them during a debugging session.
-        let stamp = (dict["com-loopkit-Loop-build-date"] as? String)
-            .flatMap { $0.split(separator: " ").dropFirst(3).first.map(String.init) }   // HH:MM:SS
-            .map { " @" + $0.prefix(5) } ?? ""
+        // Build date AND time disambiguate two installs of the same commit — the case where a rebuild
+        // is the only difference, which is most of them during a debugging session. The DATE is not
+        // optional detail: a build left on the wrist overnight reads as plausibly current from the time
+        // alone, and "is this yesterday's?" is exactly the question the tag exists to answer.
+        // Source format: "Wed Aug 19 15:59:38 EDT 2026" -> "Aug19 15:59".
+        let parts = (dict["com-loopkit-Loop-build-date"] as? String)?
+            .split(separator: " ").map(String.init) ?? []
+        let stamp = parts.count >= 4 ? " \(parts[1])\(parts[2]) \(parts[3].prefix(5))" : ""
         return sha + stamp
     }
 
