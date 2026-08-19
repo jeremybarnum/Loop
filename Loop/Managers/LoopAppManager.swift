@@ -922,8 +922,28 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
              LoopNotificationCategory.requiredUpdate.rawValue:
             completionHandler([.badge, .sound, .list, .banner])
         default:
-            // For all others, banners are not to be displayed while in the foreground
-            completionHandler([.badge, .sound, .list])
+            // POD LOAN alerts banner in the foreground. The identifiers are minted per-notice
+            // ("podloan.urgent.<uuid>", "podloan.notice.<uuid>", "podloan.t1"), so they cannot be
+            // enumerated in the switch above and fell to the deny-by-default arm.
+            //
+            // These are the messages for which the phone is the only device that can reach the
+            // user — a dead-watch reclaim verdict, an opened loop, a rewritten IOB — and the
+            // urgent channel already marks them .timeSensitive so they break through Focus.
+            // Denying them a foreground banner meant the one case where you are holding the
+            // phone, looking at Loop, was the case where the alert was quietest: it went to the
+            // list and the lock screen and never to the top of the screen. Field 2026-08-18.
+            //
+            // The comment in WatchDataManager.issueUrgentNotice already assumed this ("foreground
+            // banners are no longer this channel's job — LoopAppManager banners every
+            // notification in-app now"), which is true of the daily-driver branches and was not
+            // true here: the port inherited next-dev's restrictive allow-list. Code and comment
+            // now agree.
+            if notification.request.identifier.hasPrefix("podloan.") {
+                completionHandler([.badge, .sound, .list, .banner])
+            } else {
+                // For all others, banners are not to be displayed while in the foreground
+                completionHandler([.badge, .sound, .list])
+            }
         }
     }
 
