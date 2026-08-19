@@ -1184,6 +1184,26 @@ extension WatchDataManager: WCSessionDelegate {
         }
     }
 
+    /// The exact instant `isWatchAppInstalled` (or paired/complication) changes — the one thing the
+    /// 60 s census cannot give us.
+    ///
+    /// WHY THIS MATTERS MORE THAN IT LOOKS. `WCSession.isWatchAppInstalled == false` makes WCSession
+    /// QUEUE every message instead of delivering it, which silently breaks the loan's hand-back ACK:
+    /// the phone commits, takes the pod back in a second, and the watch spins on "returning records"
+    /// forever because the ack never lands. On 2026-08-19 that flag flapped five times in ninety
+    /// minutes around install churn, and because we only sampled it every 60 s we could never say
+    /// which install flipped it. A sampled level cannot be attributed to an event; a transition can.
+    ///
+    /// This also answers the open question directly: does installing the WATCH first and the phone
+    /// workspace second leave the registration healthy, where the other order does not? Do each
+    /// ordering once and read the transition lines.
+    nonisolated func sessionWatchStateDidChange(_ session: WCSession) {
+        PhoneLog.event("link", "** WATCH STATE CHANGED ** paired=\(session.isPaired) "
+            + "appInstalled=\(session.isWatchAppInstalled) reachable=\(session.isReachable) "
+            + "activation=\(session.activationState.rawValue) "
+            + "complication=\(session.isComplicationEnabled)")
+    }
+
     nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
         Task { @MainActor in
             if session.isReachable {

@@ -275,7 +275,7 @@ final class GlanceViewModel: ObservableObject {
         // the watch app with it as the companion, so if this reads the OLD number after a
         // direct install, the watch half did not actually ship and the loan is being driven
         // by stale extension code — the failure mode a version bump alone would hide.
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        let build = BuildDetails.default.codeIdentity
         // A bare `return` here is how a dead STACK looks like a dead BUTTON: the tap does
         // nothing, says nothing and leaves no trace, so the failure gets attributed to the UI
         // instead of to a session that never assembled. Say which it is, on screen and in the log.
@@ -702,9 +702,14 @@ struct GlanceView: View {
     @State private var confirmingClose = false
     @State private var closeProgress: Double = 0   // crown-to-fill loop-close ceremony
 
-    /// Always-visible build tag so a TestFlight install is unambiguous on-wrist
+    /// Always-visible build tag so an install is unambiguous on-wrist
     /// (Jeremy 2026-07-20 — often installs mid-session and needs to know the build).
-    static let buildNumber = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+    ///
+    /// Was `CFBundleVersion`, which is PINNED in VersionOverride.xcconfig and therefore identical on
+    /// every local build — the tag could not detect staleness, which is the one thing it existed to do.
+    /// Now the superproject SHA plus build time: different code always reads differently, and the phone
+    /// shows the same identifier when the two halves were built together (Jeremy 2026-08-19).
+    static let buildNumber = BuildDetails.default.codeIdentity
 
     /// The stock loop-ring assets (loop_<freshness>_<closed|open>) live in the WatchApp
     /// bundle's DefaultAssets catalog — the parent .app of this extension's .appex. Point

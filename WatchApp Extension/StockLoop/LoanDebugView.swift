@@ -66,7 +66,7 @@ struct LoanDebugView: View {
                 // but isn't enacting; matching = it dosed; loop OPEN = not dosing at all.
                 // Build tag, moved off the glance. "Which build is this?"
                 // is a diagnostic question, and this is the page you are already on when you ask.
-                Text("build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?")")
+                Text("build \(BuildDetails.default.codeIdentity)")
                     .font(.footnote).foregroundColor(.secondary)
                 Text("DOSING").font(.footnote).foregroundColor(.secondary)
                 row("closed?", (dosing?.closedLoopEnabled ?? false) ? "YES" : "no")
