@@ -1496,6 +1496,7 @@ final class PodLoanPhoneController {
             self.committedIDs = []
         }
         loadStaged()
+        installPodLinkCensus()
 
         // One-shot: two force-reclaim residuals (+0.800, +0.850) were banked before
         // bankResidual was scoped to `.handback`, and they are what the next threshold review
@@ -2148,6 +2149,17 @@ final class PodLoanPhoneController {
     /// Relay a phone-side hand-back breadcrumb to the watch (which mirrors to iCloud)
     /// AND os_log it, so the phone's offer→write→ack path is visible when the phone
     /// silently fails to ack. Purely diagnostic.
+    /// Publish the phone's own pod-link state into the 60 s link census, so a loan is no longer a
+    /// silent window in the phone's log. Diagnostics only. Idempotent; safe to call repeatedly.
+    func installPodLinkCensus() {
+        WatchDataManager.podLinkCensus = { [weak self] in
+            guard let self, let lendable = self.deps.pumpManager() as? PumpConnectionLendable else {
+                return "no pump manager"
+            }
+            return "released=\(lendable.isConnectionReleased) \(lendable.connectionDiagnostics() ?? "no diagnostics")"
+        }
+    }
+
     private func handbackDiag(_ epoch: Int, _ text: String) {
         os_log("HANDBACK-DIAG e%d: %{public}@", log: log, type: .default, epoch, text)
         // ...and into the phone's own mirrored file. These lines are relayed to the WATCH's log
