@@ -1097,13 +1097,22 @@ extension WatchDataManager: WCSessionDelegate {
     nonisolated private static let linkCensusQueue = DispatchQueue(label: "com.loopkit.Loop.linkCensus", qos: .utility)
     nonisolated(unsafe) private static var linkCensusTimer: DispatchSourceTimer?
 
+    /// Set by `PodLoanPhoneController` so the 60 s census can also report what the PHONE's pod link is
+    /// doing DURING a loan. Filling a hole, not adding detail: on 2026-08-19 the phone logged NOTHING
+    /// about its pod between `released=true linkUp=false` and, 110 s later, `link up +0.0s` — a link it
+    /// should not have had, with no record of how it got one. A loan is exactly the window in which the
+    /// phone is supposed to be silent on the radio, so silence in the log is indistinguishable from
+    /// correct behaviour. Now it is not.
+    nonisolated(unsafe) static var podLinkCensus: (() -> String)?
+
     nonisolated private func startLinkCensus() {
         let t = DispatchSource.makeTimerSource(queue: Self.linkCensusQueue)
         t.schedule(deadline: .now() + 60, repeating: 60, leeway: .seconds(5))
         t.setEventHandler {
             guard WCSession.isSupported() else { return }
             let s = WCSession.default
-            PhoneLog.event("link", "watch reachable=\(s.isReachable) activation=\(s.activationState.rawValue) paired=\(s.isPaired) appInstalled=\(s.isWatchAppInstalled)")
+            let pod = Self.podLinkCensus.map { " · pod: \($0())" } ?? ""
+            PhoneLog.event("link", "watch reachable=\(s.isReachable) activation=\(s.activationState.rawValue) paired=\(s.isPaired) appInstalled=\(s.isWatchAppInstalled)\(pod)")
         }
         t.resume()
         Self.linkCensusTimer = t
