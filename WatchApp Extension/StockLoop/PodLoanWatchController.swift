@@ -30,6 +30,11 @@ extension Notification.Name {
     /// SwiftUI watch app no longer models the same way.
     static let podLoanPhaseDidChange = Notification.Name("com.loopkit.Loop.podLoanPhaseDidChange")
 
+    /// A manual bolus changed state (requested -> pod ACKed -> done). Repaints the glance at the
+    /// transition instead of waiting for its tick, which is blocked behind the dose. See
+    /// `setManualBolusDelivering`.
+    static let manualBolusStateDidChange = Notification.Name("com.loopkit.Loop.manualBolusStateDidChange")
+
     /// A carb entry or bolus flow finished successfully. Posted regardless of who holds the pod;
     /// the host decides whether it means anything, so the flow does not have to know about pages.
     static let carbAndBolusFlowDidComplete = Notification.Name("com.loopkit.Loop.carbAndBolusFlowDidComplete")
