@@ -68,6 +68,8 @@ struct LoanDebugView: View {
                 // is a diagnostic question, and this is the page you are already on when you ask.
                 Text("build \(BuildDetails.default.codeIdentity)")
                     .font(.footnote).foregroundColor(.secondary)
+                NavigationLink("Radio Lab") { RadioLabView() }
+                    .font(.footnote)
                 Text("DOSING").font(.footnote).foregroundColor(.secondary)
                 row("closed?", (dosing?.closedLoopEnabled ?? false) ? "YES" : "no")
                 row("BG now", dosing?.glucose.map { String(format: "%.0f", $0.doubleValue(for: .milligramsPerDeciliter)) } ?? "—")
@@ -379,5 +381,64 @@ struct LogView: View {
         let tail = LogFile.tail()
         text = tail.split(separator: "\n", omittingEmptySubsequences: false)
             .reversed().joined(separator: "\n")
+    }
+}
+
+
+// MARK: - Radio Lab (2026-08-20)
+//
+// Runtime switches over the radio configuration space (docs/RADIO_LAB.md), so experiments are a
+// 10-second toggle instead of a 30-90 minute install cycle that can poison the companion
+// registration. Deliberately in the RELEASE build (Jeremy 2026-08-20: "make the lab regular, we can
+// take it out later") because local installs are the thing being routed around. Every key is read AT
+// USE with the shipped default as fallback — an untouched lab changes nothing.
+//
+// Changes apply at the next scan/connect cycle, never mid-dose.
+struct RadioLabView: View {
+    // G7 doorways — three independent gates in G7BluetoothManager.
+    @AppStorage("G7Lab.trigger.a") private var g7Ride = true
+    @AppStorage("G7Lab.trigger.b") private var g7Events = true
+    @AppStorage("G7Lab.trigger.c") private var g7Scan = true
+    // Pod link — keys OmnipodKit has always read live.
+    @AppStorage("OmnipodKit.connectOnDemandEnabled") private var podOnDemand = true
+    @AppStorage("OmnipodKit.lowPowerMonitorEnabled") private var alarmScan = true
+    @AppStorage("Lab.podReleaseDelay") private var releaseDelay = 12
+
+    private var session: StockLoopSession? { ExtensionDelegate.sharedIfAvailable()?.stockLoopSession }
+    private var configLine: String {
+        "g7=\(g7Ride ? "a" : "")\(g7Events ? "b" : "")\(g7Scan ? "c" : "") pod=\(podOnDemand ? "onDemand" : "HOLD") rel=\(releaseDelay < 0 ? "never" : "\(releaseDelay)s") alarm=\(alarmScan ? "on" : "off")"
+    }
+
+    var body: some View {
+        Form {
+            Section("G7 acquisition") {
+                Toggle("(a) Ride system link", isOn: $g7Ride)
+                Toggle("(b) Connection events", isOn: $g7Events)
+                Toggle("(c) Own scan", isOn: $g7Scan)
+            }
+            Section("Pod link") {
+                Toggle("Connect on demand", isOn: $podOnDemand)
+                Picker("Post-dose release", selection: $releaseDelay) {
+                    Text("0s").tag(0); Text("12s").tag(12); Text("60s").tag(60); Text("Never (hold)").tag(-1)
+                }
+                Toggle("Alarm scan (C00A)", isOn: $alarmScan)
+            }
+            Section("Live") {
+                Text(configLine).font(.system(size: 11, design: .monospaced))
+                Text(podCensus).font(.system(size: 10, design: .monospaced)).foregroundColor(.secondary)
+                Text("Applies at the next scan/connect cycle.").font(.system(size: 10)).foregroundColor(.secondary)
+            }
+        }
+        .navigationTitle("Radio Lab")
+        .onChange(of: configLine) { _, line in SportLog.event("lab", "config: \(line)") }
+        .onAppear { SportLog.event("lab", "opened — config: \(configLine)") }
+    }
+
+    /// The pod central's own view — advert census, any-discovery count, watchdog restarts —
+    /// via the same diagnostics string the settle prints.
+    private var podCensus: String {
+        guard let lendable = session?.loanController.pumpManagerForDiagnostics as? PumpConnectionLendable,
+              let diag = lendable.connectionDiagnostics() else { return "pod central: no pump on watch" }
+        return diag
     }
 }

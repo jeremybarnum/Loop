@@ -239,6 +239,10 @@ final class PodLoanWatchController {
     }
 
     private var pumpManager: OmniPumpManager?
+
+    /// Read-only pump handle for the Radio Lab's diagnostics line. Diagnostics only — the lab must
+    /// never command the pod through this.
+    var pumpManagerForDiagnostics: AnyObject? { pumpManager }
     /// Odometer at takeover, for the hand-back snapshot pair (§1.4).
     private var deliveredAtTakeover: Double?
     /// When the current Start attempt began (request sent) — drives the glance
@@ -1393,7 +1397,15 @@ final class PodLoanWatchController {
             // enough to outlive its loan. `.active` alone is not enough, because a LATER loan is
             // also `.active` — a hand-back and re-grant inside 12 s would let this tear down the
             // link belonging to the loan that now owns the pod.
-            self.schedule(after: 12, label: "post-dose-release", epochScoped: true, execute: work)
+            // RADIO LAB: the release delay is an experiment knob (0 / 12 / 60 / -1=never). Shipped
+            // default 12 s, read at use so a toggle needs no reinstall. -1 leaves the link held —
+            // the E2 "hold-for-loan" arm — until hand-back tears it down.
+            let labDelay = UserDefaults.standard.object(forKey: "Lab.podReleaseDelay") as? Int ?? 12
+            if labDelay < 0 {
+                SportLog.event("loan", "[lab] post-dose release DISABLED (hold-for-loan) — link stays up")
+            } else {
+                self.schedule(after: TimeInterval(labDelay), label: "post-dose-release", epochScoped: true, execute: work)
+            }
         }
     }
 
