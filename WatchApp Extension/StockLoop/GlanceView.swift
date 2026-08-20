@@ -384,7 +384,28 @@ final class GlanceViewModel: ObservableObject {
         case .revoked, .recoveredDrain:
             var s = GlanceUIState(); s.phase = .draining
             s.handbackStartedAt = snap.handbackStartedAt
-            s.loopStatusText = NSLocalizedString("returning records…", comment: "Glance status while draining records")
+            // BOUNDED (2026-08-19). This state had no ceiling. On 2026-08-19 the hand-back SUCCEEDED
+            // — the phone committed and verified a live pod round-trip in one second — and the watch
+            // spun on "returning records…" for twenty minutes, because the ack could not be delivered
+            // (WCSession queues everything when isWatchAppInstalled is false, which a phone REBOOT
+            // causes). It then crash-looped. Nothing was ever at risk, and the screen looked exactly
+            // like the state where something IS.
+            //
+            // A display that cannot say "you are fine" during a state that IS fine manufactures alarm.
+            // So after a grace period, stop repeating the plumbing and say something true and
+            // actionable. Deliberately does NOT claim the phone has the pod: on 2026-08-19 13:00 it
+            // did (state=owner, verified), and at 17:45 it did not (state=loaned) — the watch cannot
+            // tell the difference from here, and guessing wrong in either direction is worse than not
+            // guessing.
+            let draining = snap.handbackStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+            if draining > 90 {
+                s.loopStatusText = snap.phoneReachable
+                    ? NSLocalizedString("iPhone hasn't confirmed", comment: "Glance status when a hand-back drain has run long")
+                    : NSLocalizedString("can't reach iPhone", comment: "Glance status when a hand-back drain has run long and the phone is unreachable")
+                s.idleNote = NSLocalizedString("Nothing is lost — your doses are recorded. Open Loop on iPhone to finish.", comment: "Glance note when a hand-back drain has run long")
+            } else {
+                s.loopStatusText = NSLocalizedString("returning records…", comment: "Glance status while draining records")
+            }
             state = s
         case .active:
             // Main-safe read, exactly as for the loan snapshot above: publish a mirror from
@@ -438,7 +459,19 @@ final class GlanceViewModel: ObservableObject {
                 // stops the End tap.
                 let pending = session.stack.loopManager.manualBolusPendingUnits
                 let amount = pending.map { Self.unitsFormatter.string(from: NSNumber(value: $0)) ?? String($0) }
-                s.transientText = Date().timeIntervalSince(startedAt) < 20
+                // DELAYED REVEAL (2026-08-19). Jeremy: "in the latest builds there is almost no lag
+                // after bolus instructions — that means the brief yellow 'reaching pod' may not be
+                // necessary." Deleting it would be wrong: the lag returns whenever the pod link has to
+                // be re-acquired, and a bolus that appears to do nothing is the worst thing this UI can
+                // do. So show nothing for the first fraction of a second and let the fast path look
+                // instant, while the slow path still explains itself. Standard progress-indicator
+                // pattern; needs no judgement about which regime we are in.
+                // Suppress the LABEL only. An early `return` here would also skip the
+                // manualBolusDelivery branch below for a tick, which is a real (if brief) way to miss
+                // the start of a delivery — not worth it to hide a flash.
+                let elapsed = Date().timeIntervalSince(startedAt)
+                s.transientText = elapsed < 0.4 ? nil
+                    : elapsed < 20
                     ? (amount.map { String(format: NSLocalizedString("starting %@ U…", comment: "Glance status while a manual bolus is being sent to the pod (1: units)"), $0) }
                         ?? NSLocalizedString("starting bolus…", comment: "Glance status while a manual bolus is being sent, amount unknown"))
                     // Reuses the takeover bar's existing overrun phrase (:1017) rather than
