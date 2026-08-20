@@ -314,6 +314,17 @@ final class WatchLoopManager {
         manualBolusLock.lock()
         _manualBolusDelivery = (units: units, startedAt: startedAt, endsAt: endsAt)
         manualBolusLock.unlock()
+        // REPAINT NOW — the pod has ACKed (2026-08-20). Measured that morning: the glance emitted no
+        // RENDER line for 22+ s across a delivery, because its 2 s tick rebuilds from the glance
+        // MIRROR and the mirror rebuild sits on dataAccessQueue — the queue a dose holds. So the
+        // screen kept showing "starting 0.85 U…" through a bolus that had already been accepted and
+        // delivered (haptic + audible), and only a swipe cleared it.
+        //
+        // The bolus state itself is lock-protected and main-safe, so a repaint can render the truth
+        // WITHOUT the queue. This poke is the same mechanism podLoanPhaseDidChange already uses for
+        // phase changes: a state transition repaints once, rather than waiting for a tick that is
+        // blocked behind the radio.
+        NotificationCenter.default.post(name: .manualBolusStateDidChange, object: nil)
     }
 
     var reclaimPodForDose: ((@escaping (Bool) -> Void) -> Void)? {

@@ -42,6 +42,10 @@ struct GlanceUIState {
     var loopStatusText: String = ""
     var loopDotColor: Color = .clear
     var loopFreshness: LoopFreshness = .unknown
+
+    /// The eventual/recommendation are older than stock's stale threshold, because no cycle has
+    /// COMPLETED since. Rendered as a dimmed eventual with its age, matching the stale-glucose rule.
+    var predictionStale: Bool = false
     var viaPhone: Bool = false
     /// OPTION C: which source the direct-G7 LINK is currently proving, independent of which
     /// copy won the store's first-writer-wins dedup. "G7" = a direct read landed inside the
@@ -638,13 +642,27 @@ final class GlanceViewModel: ObservableObject {
         // Number + honesty.
         let age = data.glucoseDate.map { now.timeIntervalSince($0) }
         let isStale = age.map { $0 > displayStaleAge } ?? true
-        // Ring freshness = BG recency (Jeremy 2026-07-24). One G7 grid (~5m) + grace is
-        // fresh, a missed window is aging, well past is stale; nil = no reading yet
-        // (unknown/gray). Meaningful whether the loop is open or closed.
-        if let age = age {
-            s.loopFreshness = age < .minutes(7) ? .fresh : (age < .minutes(15) ? .aging : .stale)
-        } else {
-            s.loopFreshness = .unknown
+        // Ring freshness: STOCK's rule, not ours (2026-08-20). This used to be BG recency with
+        // home-grown 7/15-minute thresholds, which meant the ring stayed GREEN through 27 minutes of
+        // `enact=FAILED communication(nil)` in e141 — glucose was arriving, so by that rule the system
+        // looked healthy while nothing was being enacted. The truth was on screen (red dot,
+        // "CLOSED · 27m") but not in the element the eye goes to.
+        //
+        // `LoopCompletionFreshness` is LoopKit's shared type (fresh ≤6m, aging ≤16m) and is exactly
+        // what the phone's ring uses, against loop-completion age. Same rule, same thresholds, one
+        // definition — so the two devices cannot drift, and there is no second standard to maintain.
+        //
+        // WORST-OF, because the ring answers "is this system working?" and either half can break it:
+        // stale glucose means it cannot decide, and a stale cycle means it cannot act.
+        let bgFresh = data.glucoseDate.map { LoopCompletionFreshness(age: now.timeIntervalSince($0)) }
+        let loopFresh = data.lastLoopCompleted.map { LoopCompletionFreshness(age: now.timeIntervalSince($0)) }
+        switch (bgFresh, loopFresh) {
+        case (nil, _), (_, nil):
+            s.loopFreshness = .unknown          // no reading yet, or no cycle yet
+        case let (bg?, lp?):
+            let worst = [bg, lp].contains(.stale) ? LoopCompletionFreshness.stale
+                      : [bg, lp].contains(.aging) ? .aging : .fresh
+            s.loopFreshness = worst == .fresh ? .fresh : (worst == .aging ? .aging : .stale)
         }
         if let quantity = data.glucose {
             let mgdl = quantity.doubleValue(for: .milligramsPerDeciliter)
@@ -710,6 +728,12 @@ final class GlanceViewModel: ObservableObject {
         } else if let completed = data.lastLoopCompleted {
             let interval = now.timeIntervalSince(completed)
             let minutes = max(0, Int(interval / 60))
+            // The PREDICTION is only as current as the last COMPLETED cycle: IOB and COB render live
+            // off the stores every tick, while eventual and the recommendation freeze when enacts
+            // fail. Measured e141: dosemath IOB 1.10 vs glance 1.20, lastCompletedAge=1622s, with
+            // nothing on screen saying the eventual was 27 minutes old. Same treatment glucose
+            // already gets — say the age rather than showing a stale number as current.
+            s.predictionStale = LoopCompletionFreshness(age: interval) == .stale
             s.loopStatusText = String(format: NSLocalizedString("CLOSED · %dm", comment: "Glance loop status with age"), minutes)
             // Stock's fresh/aging/stale grading (HUDInterfaceController, 6/20 min),
             // replacing the old binary blank. The eventual stays visible; the dot conveys
@@ -775,6 +799,11 @@ struct GlanceView: View {
         // A phase change repaints once without arming the tick — the session's poke, which used
         // to be a direct call into the hosting controller.
         .onReceive(NotificationCenter.default.publisher(for: .podLoanPhaseDidChange)) { _ in
+            model.refreshNow()
+        }
+        // Same treatment for the bolus transitions: the pod's ACK must reach the screen even while
+        // the dose holds dataAccessQueue and the tick cannot rebuild the mirror.
+        .onReceive(NotificationCenter.default.publisher(for: .manualBolusStateDidChange)) { _ in
             model.refreshNow()
         }
     }
