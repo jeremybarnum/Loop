@@ -324,7 +324,11 @@ final class WatchLoopManager {
         // WITHOUT the queue. This poke is the same mechanism podLoanPhaseDidChange already uses for
         // phase changes: a state transition repaints once, rather than waiting for a tick that is
         // blocked behind the radio.
-        NotificationCenter.default.post(name: .manualBolusStateDidChange, object: nil)
+        // Posted on MAIN: enactBolus's completion runs on a background queue, and the observer
+        // mutates @Published view state.
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .manualBolusStateDidChange, object: nil)
+        }
     }
 
     var reclaimPodForDose: ((@escaping (Bool) -> Void) -> Void)? {

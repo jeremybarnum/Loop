@@ -1002,7 +1002,11 @@ struct GlanceView: View {
             if let stale = model.state.staleAgeText {
                 Text(stale).font(.system(size: 12)).foregroundColor(.glanceWarn)
             } else if let eventual = model.state.eventualText {
-                (Text("eventually ").foregroundColor(.glanceDim) + Text(eventual).bold())
+                // predictionStale: no cycle has COMPLETED inside stock's stale threshold, so this
+                // number is frozen while IOB/COB move. Same honesty rule as stale glucose — show it
+                // dimmed rather than as current, with the dot/status carrying the age detail.
+                (Text("eventually ").foregroundColor(.glanceDim)
+                 + Text(eventual).bold().foregroundColor(model.state.predictionStale ? .glanceDim : .primary))
                     .font(.system(size: 13))
             } else if model.state.viaPhone, model.state.phase == .idle || model.state.phase == .starting {
                 Text("via iPhone").font(.system(size: 12)).foregroundColor(.glanceDim)
