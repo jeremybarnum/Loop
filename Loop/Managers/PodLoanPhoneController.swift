@@ -2009,9 +2009,15 @@ final class PodLoanPhoneController {
         // dead-man and reclaims at once — so the longer a session ran, the sooner its takeovers
         // were abandoned.
         //
-        // Safe at both call sites: the grant path wants a fresh anchor, and the relaunch path
-        // finds this nil regardless (it is not persisted) so its behaviour is unchanged.
-        grantOfferedAt = deps.now()
+        // NOW A FALLBACK (2026-08-20). The grant path stamps this at the DECISION instead — armT1
+        // runs at the end of a deep async chain, and a watch that answers before the chain lands used
+        // to find it nil and report "+0s", which makes `elapsed < takeoverProgressCeiling` trivially
+        // true and stops the ceiling ever firing. Overwriting here would push the anchor forward by
+        // however long the snapshot took and re-open that window, so this only fills a genuine gap:
+        // the relaunch re-arm, where the state is restored from disk but this in-memory stamp is not.
+        // The per-grant reset that made the write unconditional now happens at the decision point,
+        // so a failed takeover's clock still cannot follow the next grant.
+        if grantOfferedAt == nil { grantOfferedAt = deps.now() }
         armGrantLostProbe(for: grantEpoch)
         // Pre-scheduled, so its text is fixed FIVE MINUTES before it lands and cannot describe
         // anything that happens in between. It therefore states only what is certain at the
