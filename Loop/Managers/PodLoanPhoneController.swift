@@ -124,6 +124,13 @@ final class PodLoanPhoneController {
         /// on (startDate, grams) otherwise. Default is a no-op so tests and older wiring are
         /// unaffected.
         var deleteCarb: (LoanReconciler.DeletedCarb, @escaping (Error?) -> Void) -> Void = { _, done in done(nil) }
+
+        /// `WCSession.isWatchAppInstalled`. When false, WCSession QUEUES every message rather than
+        /// delivering it, so a grant would never reach the watch — see `beginGrant()`. Injected rather
+        /// than read from `WCSession.default` so the controller stays testable, and DEFAULTS TO TRUE so
+        /// every existing test is unaffected: the guard is opt-in from the app, not a new precondition
+        /// the suite has to satisfy.
+        var watchAppInstalled: () -> Bool = { true }
         /// Apply a WATCH-enacted temporary schedule override to the phone's
         /// LoopSettings (nil = the wrist cleared it). Sovereignty: while
         /// the watch holds the pod it OWNS overrides, so this is a straight assignment — there
@@ -1676,6 +1683,30 @@ final class PodLoanPhoneController {
     }
 
     private func beginGrant() {
+        // DO NOT RELEASE THE POD INTO A CHANNEL THAT IS QUEUEING (2026-08-19).
+        //
+        // With `WCSession.isWatchAppInstalled == false` — which ANY install and any phone REBOOT
+        // causes — WCSession queues every message instead of delivering it. On 2026-08-19 the flag
+        // went false at 21:54:20, a loan was requested 34 s later, and the grant never arrived: the
+        // watch has "GRANT received — epoch 138" and "epoch 139" in its log and no epoch 140. The
+        // phone had already RELEASED the pod, so it then spent minutes in the reclaim ladder's LIVE
+        // branch waiting for a confirmation that could not come, while the watch timed out and
+        // crash-looped. It took a force reclaim to end, and it looked like a lost pod throughout.
+        //
+        // Every part of that is avoidable by not letting go in the first place. The request arrived,
+        // so watch -> phone works; it is phone -> watch that is broken, and the grant is the message
+        // that has to travel that way.
+        //
+        // The denial may itself fail to arrive for the same reason — but that is a MUCH better
+        // failure: the phone keeps the pod, the watch times out on its own, and nothing is stranded.
+        // Refusing early beats failing late whenever the failure releases a pod.
+        if !deps.watchAppInstalled() {
+            handbackDiag(epoch, "GRANT REFUSED — isWatchAppInstalled=false; WCSession would queue the "
+                              + "grant and the watch would never receive it. Pod NOT released.")
+            deny("The watch app isn't registered with the phone yet — usually a minute after an "
+                 + "install or a restart. The phone kept the pod. Try Start again shortly.")
+            return
+        }
         guard let pump = deps.pumpManager() else {
             deny("No pump is set up on the phone.")
             return

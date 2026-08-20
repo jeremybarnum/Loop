@@ -235,6 +235,8 @@ final class WatchDataManager: NSObject {
             // the clear: `.cleared` is skipped when nothing is held, so a preset the user switched
             // OFF on the wrist would never switch off on the phone, and the override would outlive
             // the loan indefinitely. Same queue reasoning as the writer below.
+            // Refuse to grant when WCSession would only QUEUE the grant — see beginGrant().
+            watchAppInstalled: { WCSession.isSupported() && WCSession.default.isWatchAppInstalled },
             scheduleOverride: { [weak self] in
                 self?.temporaryPresetsManager.scheduleOverride
             },
