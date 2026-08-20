@@ -652,18 +652,25 @@ final class GlanceViewModel: ObservableObject {
         // what the phone's ring uses, against loop-completion age. Same rule, same thresholds, one
         // definition — so the two devices cannot drift, and there is no second standard to maintain.
         //
-        // WORST-OF, because the ring answers "is this system working?" and either half can break it:
-        // stale glucose means it cannot decide, and a stale cycle means it cannot act.
-        let bgFresh = data.glucoseDate.map { LoopCompletionFreshness(age: now.timeIntervalSince($0)) }
-        let loopFresh = data.lastLoopCompleted.map { LoopCompletionFreshness(age: now.timeIntervalSince($0)) }
-        switch (bgFresh, loopFresh) {
-        case (nil, _), (_, nil):
-            s.loopFreshness = .unknown          // no reading yet, or no cycle yet
-        case let (bg?, lp?):
-            let worst = [bg, lp].contains(.stale) ? LoopCompletionFreshness.stale
-                      : [bg, lp].contains(.aging) ? .aging : .fresh
-            s.loopFreshness = worst == .fresh ? .fresh : (worst == .aging ? .aging : .stale)
-        }
+        // LOOP-COMPLETION AGE ALONE (2026-08-20, Jeremy's rule). The first cut took the WORST of BG
+        // recency and cycle recency, which is the phone's instinct but the wrong one here: on the watch
+        // the pod is deliberately NOT held between doses, so there are long stretches where we cannot
+        // say the pod is reachable and do not need it to be. Greying the ring for that reports an
+        // outage that is not happening. His rule: the ring is a function of the loop actually
+        // completing. "If we don't know whether the pod is available, but we don't need it yet, I'm
+        // fine for that to be green."
+        //
+        // Dropping BG from the test loses nothing, because it was never independent: Loop will not
+        // complete a cycle on stale glucose, so `lastLoopCompleted` stops advancing on its own when
+        // readings stop, and the same red ring arrives by the honest route. Stale glucose is already
+        // reported twice over on this screen — the number dims and the dot goes red — so the ring
+        // spending its one bit on enactment is the higher-information choice.
+        //
+        // `.unknown` (grey) now means only what it says: no cycle has EVER completed. That is a cold
+        // start, not a takeover in progress.
+        s.loopFreshness = data.lastLoopCompleted
+            .map { LoopCompletionFreshness(age: now.timeIntervalSince($0)) }
+            .map { $0 == .fresh ? .fresh : ($0 == .aging ? .aging : .stale) } ?? .unknown
         if let quantity = data.glucose {
             let mgdl = quantity.doubleValue(for: .milligramsPerDeciliter)
             s.bgText = String(format: "%.0f", mgdl)
