@@ -89,7 +89,30 @@ message that arrived *from* the allegedly absent app.
     Jeremy's objection was correct: every loan begins with a tap on the watch, which is foreground
     by definition.
 
-## CONFIRMED 2026-08-18 — the delete causes it, a TestFlight install repairs it
+## 2026-08-18 — a strong correlation, and a rival explanation that is NOT ruled out
+
+**Read this section before acting on the one below it.** The next-dev chat, working the same
+symptom the same day, reached the opposite causal reading, and neither of us can currently refute
+the other. What follows was written as CONFIRMED and has been downgraded.
+
+**Their model:** `isWatchAppInstalled=false` is a SYMPTOM of the watch app dying, not a statement
+about installation. Their evidence: every flip to false coincided with the watch app dying, and
+`complication=false` flips in lockstep — which is a whole-bundle statement, not an install one.
+They also see unexplained watch-app deaths (launches, initialises, paints UI, dies at ~2 s) and
+warn that a grant gate blocking on this flag refused three Start taps against a live link.
+
+**What this branch observed, which their model must also explain:** at 13:45:59 the phone logged
+`offer RX` — the watch app was demonstrably alive and sending — on the same second as
+`installed=false`, followed by 7006 bursts. A dead app cannot send an offer. Their finding of a
+~2 s post-paint death could still cover it if the watch died immediately after sending, which this
+branch's logs cannot rule out either.
+
+**What is NOT in dispute:** the sequence below happened, and the TestFlight install did coincide
+with recovery. Whether the delete CAUSED it or merely preceded a period of app instability is the
+open question. Do not build logic that blocks on this flag either way — that much both branches
+agree on, and next-dev already removed a gate that did.
+
+## The sequence, as observed
 
 The hypothesis below is no longer a hypothesis. The full causal chain was observed in one day:
 
