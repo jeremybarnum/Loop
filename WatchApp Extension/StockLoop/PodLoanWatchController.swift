@@ -304,6 +304,11 @@ final class PodLoanWatchController {
     /// When the LIVE hand-back gives up waiting for the phone's ack and resumes on the
     /// watch. Set at the End tap (beginHandback), cleared on ack/cancel/timeout. Nil for a
     /// recovered/revoke drain (no local loan to resume — those keep resending).
+    /// How many unacked drain offers before the watch stops waiting. 20 x 15 s = ~5 minutes,
+    /// comfortably past any normal ack latency and far short of the 97-minute silent limbo the
+    /// resend loop could otherwise produce.
+    static let maxDrainResends = 20
+
     private var handbackDeadline: Date?
     /// When the CURRENT hand-back began — the anchor for the reclaim progress bar.
     /// Set and cleared in lockstep with `handbackDeadline`, which already marks exactly the
@@ -2011,7 +2016,43 @@ final class PodLoanWatchController {
                 self.handbackTimedOut()
                 return
             }
-            if self.phase == .handingBack || self.phase == .revoked || self.phase == .recoveredDrain
+            // A DRAIN MUST ALSO TERMINATE (field 2026-08-20 epoch 154). The give-up above is
+            // scoped to a LIVE hand-back, on the reasoning that a recovered/revoke drain "has no
+            // local loan to resume, so it keeps resending". That is true of the loan but not of
+            // the loop: the watch resent every 15 s for six minutes, across three relaunches,
+            // and every resend was DELIVERED and ACKed — the phone logged `write DONE -> ACK
+            // cursor 6` six times. The acks simply never arrived back (last RX handbackAck was
+            // epoch 153); WCSession was one-way for that session. So the watch waited forever for
+            // an answer that had already been sent, and the wrist looked wedged.
+            //
+            // Nothing is lost by stopping: a drain's whole purpose is to deliver records the
+            // PHONE has by then already committed, and the phone reclaimed the pod long before
+            // (it was `state=owner` for every one of those offers). Bound it, say so, and idle.
+            let drain = self.phase == .revoked || self.phase == .recoveredDrain
+            if drain, self.handbackResendCount >= Self.maxDrainResends {
+                let wedge = HandbackWedge.classify(resendCount: self.handbackResendCount,
+                                                   sawUnreachable: self.handbackSawUnreachable,
+                                                   reachableNow: self.isPhoneReachable(),
+                                                   sendsErrored: self.handbackSawUrgentSendError)
+                SportLog.event("loan", "drain GIVING UP after \(self.handbackResendCount) unacked offer(s) [\(wedge)] — the phone owns the pod and has already committed these records; closing to idle")
+                self.resendWorkItem?.cancel()
+                self.teardownPump()
+                self.journal.end()
+                self.phase = .idle
+                self.epoch = nil
+                self.deliveredAtTakeover = nil
+                self.manualSuspendEnd = nil
+                self.handbackDeadline = nil
+                self.handbackStartedAt = nil
+                self.finalOfferSentAt = nil
+                self.handbackRequested = false
+                self.finalOfferSent = false
+                HandbackStuckAlert.disarm()
+                self.onLoanActiveChanged?(false)
+                SportLog.event("loan", "CLOSED — drain abandoned, pod already the phone's")
+                return
+            }
+            if self.phase == .handingBack || drain
                 || (self.phase == .active && self.handbackRequested) {   // interim drain
                 self.sendHandbackOffer(freshened: freshened, recovered: recovered)
             }
