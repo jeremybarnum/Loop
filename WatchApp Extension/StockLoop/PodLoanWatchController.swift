@@ -1530,15 +1530,20 @@ final class PodLoanWatchController {
             // enough to outlive its loan. `.active` alone is not enough, because a LATER loan is
             // also `.active` — a hand-back and re-grant inside 12 s would let this tear down the
             // link belonging to the loan that now owns the pod.
-            // RADIO LAB: the release delay is an experiment knob (0 / 12 / 60 / -1=never). Shipped
-            // default 12 s, read at use so a toggle needs no reinstall. -1 leaves the link held —
-            // the E2 "hold-for-loan" arm — until hand-back tears it down.
-            let labDelay = UserDefaults.standard.object(forKey: "Lab.podReleaseDelay") as? Int ?? 12
-            if labDelay < 0 {
-                SportLog.event("loan", "[lab] post-dose release DISABLED (hold-for-loan) — link stays up")
-            } else {
-                self.schedule(after: TimeInterval(labDelay), label: "post-dose-release", epochScoped: true, execute: work)
-            }
+            // The Lab.podReleaseDelay knob and its -1 "hold-for-loan" arm are REMOVED
+            // (2026-08-21): the experiment ran and the hold arm lost decisively — the pod hangs
+            // up on an idle held link, the reconnect churn spends G7's BLE slot, and the sensor
+            // goes dark for every app on the wrist (POD_CONNECTION_MODEL.md §2.3). A footgun
+            // whose experiment is finished doesn't earn a place in a release build.
+            //
+            // The fixed 12 s release itself SURVIVES, deliberately, although the driver's 4 s
+            // idle-disconnect already drops the physical link: reading the code for the planned
+            // full removal showed this timer is also the only thing that stamps the loan-level
+            // bookkeeping (`podConnectionReleased = true` via podLoanOrphanConnection), which the
+            // reclaim path, the relaunch-time disarm, and the diagnostics all consume. Removing
+            // the timer without re-homing that stamp changes relaunch semantics mid-loan — that
+            // refactor goes with the reclaim-latency work, not into a knob cleanup.
+            self.schedule(after: 12, label: "post-dose-release", epochScoped: true, execute: work)
         }
     }
 
@@ -1567,6 +1572,83 @@ final class PodLoanWatchController {
             guard let self = self, let manager = self.pumpManager else { return }
             let after = manager.podLoanConnectionStateDescription
             SportLog.event("loan", "E4: pod re-released after dose (+12s settle) — state \(before) -> \(after) (+3s)\(after.hasPrefix("DISCONNECTING") ? " ** WEDGED — this is the poisoning signature **" : "")")
+        }
+    }
+
+    // MARK: - Bench reclaim exerciser (Radio Lab, 2026-08-21)
+    //
+    // The instrument the reclaim work has been missing: in normal operation a reclaim happens
+    // once per ~5-minute cycle, so a latency question ("how does reclaim time vary with how long
+    // the pod sat idle?") takes an evening to answer at n=12. This drives the REAL production
+    // path — the same reclaimPodForDose the enactor and the manual bolus call, ladder coalescing
+    // and all — on a bench cadence: orphan the link, wait a chosen idle, reclaim, log, repeat.
+    //
+    // Read-only by construction: the reclaim's success probe is a status read; no dose is ever
+    // commanded. Runs only while a loan is ACTIVE, every wait is epochScoped so a hand-back or
+    // revoke kills the run with its loan, and the automatic enactor's own reclaims simply join
+    // the bench ladder (or vice versa) exactly as two production callers already do.
+    private var benchIdle: TimeInterval = 0
+    private var benchRepsWanted = 0
+    private var benchRepsDone = 0
+    private var benchProgress: ((String) -> Void)?
+
+    func benchReclaimStart(idle: TimeInterval, reps: Int, progress: @escaping (String) -> Void) {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            guard self.benchProgress == nil else { progress("already running"); return }
+            guard self.phase == .active else { progress("no active loan"); return }
+            self.benchIdle = idle
+            self.benchRepsWanted = reps
+            self.benchRepsDone = 0
+            self.benchProgress = progress
+            SportLog.event("bench", "exerciser START — \(reps) rep(s), idle \(Int(idle))s between orphan and reclaim")
+            progress("running 0/\(reps)")
+            self.benchStep()
+        }
+    }
+
+    func benchReclaimStop() {
+        queue.async { [weak self] in
+            guard let self = self, self.benchProgress != nil else { return }
+            SportLog.event("bench", "exerciser STOPPED at \(self.benchRepsDone)/\(self.benchRepsWanted)")
+            self.benchProgress?("stopped at \(self.benchRepsDone)/\(self.benchRepsWanted)")
+            self.benchProgress = nil
+        }
+    }
+
+    /// Runs on `queue`. One rep = orphan → idle → reclaim (timed) → report → next.
+    private func benchStep() {
+        guard benchProgress != nil else { return }                       // stopped
+        guard benchRepsDone < benchRepsWanted else {
+            SportLog.event("bench", "exerciser DONE — \(benchRepsDone)/\(benchRepsWanted) reps")
+            benchProgress?("done \(benchRepsDone)/\(benchRepsWanted)")
+            benchProgress = nil
+            return
+        }
+        guard phase == .active, let manager = pumpManager else {
+            SportLog.event("bench", "exerciser ABORTED — loan no longer active")
+            benchProgress?("aborted (loan ended)")
+            benchProgress = nil
+            return
+        }
+        let rep = benchRepsDone + 1
+        // Same primitive the post-dose release uses: drop the link, stay the controller.
+        manager.podLoanOrphanConnection()
+        SportLog.event("bench", String(format: "rep %d/%d — orphaned; idling %.0fs before reclaim", rep, benchRepsWanted, benchIdle))
+        benchProgress?("rep \(rep): idling \(Int(benchIdle))s")
+        schedule(after: max(benchIdle, 0.1), label: "bench-idle", epochScoped: true) { [weak self] in
+            guard let self = self, self.benchProgress != nil else { return }
+            let t0 = self.now()
+            self.benchProgress?("rep \(rep): reclaiming…")
+            self.reclaimPodForDose { ok in
+                self.queue.async {
+                    let dt = self.now().timeIntervalSince(t0)
+                    SportLog.event("bench", String(format: "rep %d/%d idle=%.0fs -> %@ in %.1fs", rep, self.benchRepsWanted, self.benchIdle, ok ? "OK" : "FAILED", dt))
+                    self.benchProgress?(String(format: "rep %d: %@ %.1fs", rep, ok ? "OK" : "FAIL", dt))
+                    self.benchRepsDone += 1
+                    self.benchStep()
+                }
+            }
         }
     }
 
