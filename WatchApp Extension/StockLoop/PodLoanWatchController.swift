@@ -508,6 +508,20 @@ final class PodLoanWatchController {
             let work = DispatchWorkItem { [weak self] in
                 guard let self = self, self.phase == .requested else { return }
                 self.phase = .idle
+                // NAME THE WEDGE (2026-08-21). A request that dies with the phone REACHABLE is
+                // the WCSession one-way failure: the phone's isWatchAppInstalled has gone false
+                // (it breaks on installs and reboots and can stay false for hours — field
+                // 2026-08-21, 09:46-11:53), so everything the phone sends us is silently queued.
+                // The grant may even have been sent; it just cannot arrive. Retrying cannot fix a
+                // queued-message wedge — only re-establishing the session does, and the reliable
+                // field remedy is toggling Bluetooth on the PHONE. Say exactly that, at the
+                // moment the user is looking at a failed start, instead of the old generic
+                // "refused or busy" which sent them hunting in the wrong places.
+                if self.isPhoneReachable() {
+                    self.lastIdleNote = NSLocalizedString("iPhone looks connected but isn't answering — the link is stuck one-way. On the PHONE: toggle Bluetooth off and on (Control Center), open Loop, then try again.", comment: "Glance idle note: request timed out while reachable (one-way WCSession wedge)")
+                    SportLog.event("loan", "REQUEST TIMED OUT with phone REACHABLE — one-way wedge signature (#113); told the user: BT toggle on the phone")
+                    return
+                }
                 self.lastIdleNote = NSLocalizedString("No response from iPhone — check the phone (loan refused, or busy) and try again.", comment: "Glance: loan request timed out")
                 SportLog.event("loan", "REQUEST TIMED OUT — no grant in 25s (phone refused / busy / unreachable)")
             }

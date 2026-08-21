@@ -1994,6 +1994,18 @@ final class PodLoanPhoneController {
         queue.asyncAfter(deadline: .now() + Self.grantLostProbeDelay) { [weak self] in
             guard let self = self, self.state == .grantOffered, self.epoch == grantEpoch else { return }
             self.handbackDiag(grantEpoch, String(format: "grant unconfirmed after %.0fs — asking the watch whether it arrived (#108)", Self.grantLostProbeDelay))
+            // EVIDENCE-KEYED WEDGE ALERT (2026-08-21). This is the replacement the removed
+            // grant gate's comment asked for: never BLOCK on isWatchAppInstalled (it lies, and
+            // blocking on it refused three Start taps against a live link on 2026-08-19), but
+            // when the grant has ALREADY gone unconfirmed for 20 s AND the flag is false, those
+            // are two independent symptoms of the same wedge — WCSession queueing everything we
+            // send. The watch cannot see this flag; only the phone can, so only the phone can
+            // tell the user. The reliable field remedy is a Bluetooth toggle on this phone.
+            if !self.deps.watchAppInstalled() {
+                self.handbackDiag(grantEpoch, "grant unconfirmed AND isWatchAppInstalled=false — one-way wedge; alerting the user (BT toggle)")
+                self.deps.issueNotice("Watch Link Is Stuck",
+                                      "This phone thinks the watch app isn't installed, so messages to the watch are being silently queued. Toggle Bluetooth off and on (Control Center), open Loop, and start the loan again.")
+            }
             self.sendMessage(.statusQuery(StatusQuery(epoch: grantEpoch)))
         }
     }
