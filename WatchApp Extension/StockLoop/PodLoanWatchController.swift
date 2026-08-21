@@ -1434,9 +1434,46 @@ final class PodLoanWatchController {
         // not answering: field 2026-08-20 L7 ran 288.8s (14 x ~20s) and held the loop for nearly
         // five minutes, which is what made the wrist go stale. Honest reads, dishonest budget.
         let ladderDeadline = startedAt.addingTimeInterval(Self.reclaimLadderBudget)
+        // PER-READ WATCHDOG (bench 2026-08-21). A read can block for the driver's full 20 s
+        // connect timeout while waiting on a condition that can never fire (the stale-manager
+        // race — see BlePodComms's re-adopt). The ladder is completion-driven, so ONE slow read
+        // is the whole ladder's throughput. A connect is ~1.3 s and a status round-trip ~1 s;
+        // a read that has produced nothing in 6 s is not late, it is stuck — count it failed and
+        // move on. The next read enters bleRunSession fresh, which now switches to the CURRENT
+        // manager and typically finds the link the E4 path already brought up. The stuck read's
+        // eventual completion is ignored via the once-token; its command dies harmlessly on the
+        // stale manager's queue.
+        var readSettled = false
+        let settleOnce: (Bool) -> Bool = { _ in            // returns true if WE settle it
+            if readSettled { return false }
+            readSettled = true
+            return true
+        }
+        schedule(after: 6, label: "reclaim-read-watchdog") { [weak self] in
+            guard let self = self else { return }
+            guard settleOnce(false) else { return }
+            SportLog.event("loan", "E4: read \(attempt + 1) STUCK >6s (driver-side wait) — counting it failed and moving on")
+            self.handleReclaimReadResult(false, manager: manager, attempt: attempt, ladder: ladder,
+                                         startedAt: startedAt, ladderDeadline: ladderDeadline,
+                                         maxAttempts: maxAttempts, completion: completion)
+        }
         manager.podLoanReadStatus { [weak self] success in
             guard let self = self else { completion(false); return }
             self.queue.async {
+                guard settleOnce(success) else { return }
+                self.handleReclaimReadResult(success, manager: manager, attempt: attempt, ladder: ladder,
+                                             startedAt: startedAt, ladderDeadline: ladderDeadline,
+                                             maxAttempts: maxAttempts, completion: completion)
+            }
+        }
+    }
+
+    /// The reclaim read's single continuation — reached exactly once per read, from either the
+    /// real completion or the 6 s watchdog, never both (the caller's once-token guarantees it).
+    /// Runs on `queue`.
+    private func handleReclaimReadResult(_ success: Bool, manager: OmniPumpManager, attempt: Int,
+                                         ladder: Int, startedAt: Date, ladderDeadline: Date,
+                                         maxAttempts: Int, completion: @escaping (Bool) -> Void) {
                 guard self.phase == .active else {
                     self.finishReclaimLadder(ladder, startedAt: startedAt, reads: attempt, ok: false, note: "phase left .active", manager: manager)
                     SportLog.event("loan", "E4: reclaim ABORTED — phase left .active (now \(self.phase.rawValue)). An in-flight dose is CANCELLED BY THE HAND-BACK, not by an unreachable pod — this is the 3x field failure (227 00:07:51, 228 00:18:44), all within ~1s of an End tap.")
@@ -1498,8 +1535,6 @@ final class PodLoanWatchController {
                     SportLog.event("loan", "E4: pod didn't reconnect after \(maxAttempts) reads (~40s) — dose skipped, pod runs baseline")
                     completion(false)
                 }
-            }
-        }
     }
 
     /// Re-release the pod after a dose — but only after a SETTLE delay: cancelling a
@@ -1591,12 +1626,18 @@ final class PodLoanWatchController {
     private var benchRepsWanted = 0
     private var benchRepsDone = 0
     private var benchProgress: ((String) -> Void)?
+    /// Run identity. Field, first use (12:42): a run was STOPPED mid-idle and a new one started;
+    /// the stopped run's pending idle timer checked only "is a run active?", found the NEW run's
+    /// callback, and fired into it — a ghost rep that double-counted and polluted the timings.
+    /// Every deferred step now captures the generation it belongs to and dies if it isn't current.
+    private var benchRunSeq = 0
 
     func benchReclaimStart(idle: TimeInterval, reps: Int, progress: @escaping (String) -> Void) {
         queue.async { [weak self] in
             guard let self = self else { return }
             guard self.benchProgress == nil else { progress("already running"); return }
             guard self.phase == .active else { progress("no active loan"); return }
+            self.benchRunSeq += 1
             self.benchIdle = idle
             self.benchRepsWanted = reps
             self.benchRepsDone = 0
@@ -1610,6 +1651,7 @@ final class PodLoanWatchController {
     func benchReclaimStop() {
         queue.async { [weak self] in
             guard let self = self, self.benchProgress != nil else { return }
+            self.benchRunSeq += 1   // invalidate every pending step of the stopped run
             SportLog.event("bench", "exerciser STOPPED at \(self.benchRepsDone)/\(self.benchRepsWanted)")
             self.benchProgress?("stopped at \(self.benchRepsDone)/\(self.benchRepsWanted)")
             self.benchProgress = nil
@@ -1632,16 +1674,18 @@ final class PodLoanWatchController {
             return
         }
         let rep = benchRepsDone + 1
+        let gen = benchRunSeq
         // Same primitive the post-dose release uses: drop the link, stay the controller.
         manager.podLoanOrphanConnection()
         SportLog.event("bench", String(format: "rep %d/%d — orphaned; idling %.0fs before reclaim", rep, benchRepsWanted, benchIdle))
         benchProgress?("rep \(rep): idling \(Int(benchIdle))s")
         schedule(after: max(benchIdle, 0.1), label: "bench-idle", epochScoped: true) { [weak self] in
-            guard let self = self, self.benchProgress != nil else { return }
+            guard let self = self, self.benchRunSeq == gen, self.benchProgress != nil else { return }
             let t0 = self.now()
             self.benchProgress?("rep \(rep): reclaiming…")
             self.reclaimPodForDose { ok in
                 self.queue.async {
+                    guard self.benchRunSeq == gen else { return }   // a stopped run's late ladder answer
                     let dt = self.now().timeIntervalSince(t0)
                     SportLog.event("bench", String(format: "rep %d/%d idle=%.0fs -> %@ in %.1fs", rep, self.benchRepsWanted, self.benchIdle, ok ? "OK" : "FAILED", dt))
                     self.benchProgress?(String(format: "rep %d: %@ %.1fs", rep, ok ? "OK" : "FAIL", dt))
