@@ -82,7 +82,12 @@ final class StockLoopSession {
             // and fall back to the queue on failure, so this is never less reliable.
             // See LoanMessage.isInteractiveHandshake for which kinds and why.
             let session = WCSession.default
-            let urgent = LoanMessage.isInteractiveHandshake(transport: dictionary) && session.isReachable
+            // ...and not once urgent has already timed out in this hand-back: `isReachable` is
+            // not trustworthy under the one-way wedge, and re-choosing urgent re-pays 15 s per
+            // retry for information we already have.
+            let wedged = loanController?.urgentSendWedged ?? false
+            let urgent = LoanMessage.isInteractiveHandshake(transport: dictionary)
+                && session.isReachable && !wedged
             SportLog.event("wc", "send \(dictionary.keys.joined(separator: ",")) — session \(session.activationState.rawValue), reachable \(session.isReachable), path \(urgent ? "urgent" : "queued")")
 
             // AT MOST ONE QUEUED OFFER. The resend loop re-offers every 15 s and
