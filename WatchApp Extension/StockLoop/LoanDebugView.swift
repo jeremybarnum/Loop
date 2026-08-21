@@ -402,11 +402,15 @@ struct RadioLabView: View {
     // Pod link — keys OmnipodKit has always read live.
     @AppStorage("OmnipodKit.connectOnDemandEnabled") private var podOnDemand = true
     @AppStorage("OmnipodKit.lowPowerMonitorEnabled") private var alarmScan = true
-    @AppStorage("Lab.podReleaseDelay") private var releaseDelay = 12
+
+    // Bench exerciser controls (see the Reclaim exerciser section below).
+    @State private var benchIdleSeconds = 60
+    @State private var benchReps = 5
+    @State private var benchStatus = ""
 
     private var session: StockLoopSession? { ExtensionDelegate.sharedIfAvailable()?.stockLoopSession }
     private var configLine: String {
-        "g7=\(g7Ride ? "a" : "")\(g7Events ? "b" : "")\(g7Scan ? "c" : "") pod=\(podOnDemand ? "onDemand" : "HOLD") rel=\(releaseDelay < 0 ? "never" : "\(releaseDelay)s") alarm=\(alarmScan ? "on" : "off")"
+        "g7=\(g7Ride ? "a" : "")\(g7Events ? "b" : "")\(g7Scan ? "c" : "") pod=\(podOnDemand ? "onDemand" : "HOLD") alarm=\(alarmScan ? "on" : "off")"
     }
 
     var body: some View {
@@ -418,10 +422,29 @@ struct RadioLabView: View {
             }
             Section("Pod link") {
                 Toggle("Connect on demand", isOn: $podOnDemand)
-                Picker("Post-dose release", selection: $releaseDelay) {
-                    Text("0s").tag(0); Text("12s").tag(12); Text("60s").tag(60); Text("Never (hold)").tag(-1)
-                }
                 Toggle("Alarm scan (C00A)", isOn: $alarmScan)
+            }
+            // BENCH: drives the real reclaimPodForDose on a chosen cadence — orphan, idle,
+            // reclaim, timed. Read-only (the probe is a status read); needs an ACTIVE loan;
+            // dies with the loan (every wait is epoch-scoped). Results land in the log as
+            // [bench] lines and the last result shows here.
+            Section("Reclaim exerciser") {
+                Picker("Idle before reclaim", selection: $benchIdleSeconds) {
+                    Text("0s").tag(0); Text("60s").tag(60); Text("180s").tag(180); Text("300s").tag(300)
+                }
+                Picker("Reps", selection: $benchReps) {
+                    Text("3").tag(3); Text("5").tag(5); Text("10").tag(10)
+                }
+                Button("Start") {
+                    benchStatus = "starting…"
+                    session?.loanController.benchReclaimStart(idle: TimeInterval(benchIdleSeconds), reps: benchReps) { line in
+                        DispatchQueue.main.async { benchStatus = line }
+                    }
+                }
+                Button("Stop") { session?.loanController.benchReclaimStop() }
+                if !benchStatus.isEmpty {
+                    Text(benchStatus).font(.system(size: 11, design: .monospaced)).foregroundColor(.secondary)
+                }
             }
             Section("Live") {
                 Text(configLine).font(.system(size: 11, design: .monospaced))
