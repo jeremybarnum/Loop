@@ -808,19 +808,28 @@ final class PodLoanWatchController {
         //
         // If we have adopted this pod before, our own handle goes in instead and the ordinary
         // driver path — init -> connectToDevice -> retrievePeripherals, then bleRunSession ->
-        // configureAndRun -> connectOnDemand — reacquires with no discovery at all. If we have
-        // not, the key is REMOVED rather than left foreign, so the scan is the only route and
-        // nothing is polluted meanwhile.
+        // configureAndRun -> connectOnDemand — reacquires with no discovery at all.
+        //
+        // NEVER REMOVE THE KEY when we have no cached handle (field 2026-08-20, epochs 150-152).
+        // The first cut deleted it, reasoning that a foreign identifier is useless here. But
+        // PodState decodes the LTK and the handle in ONE `if let`:
+        //
+        //     if let ltkString = rawValue["ltk"] as? String,
+        //        let bleIdentifier = rawValue["bleIdentifier"] as? String { ... }
+        //
+        // so dropping the handle silently drops the POD'S ENCRYPTION KEY. The takeover then
+        // connected fine and the pod hung up 108 ms after the first command (Code=7), three
+        // grants in a row, because we were talking to it with no session. Leave the phone's
+        // value in place instead: it is inert here (retrievePeripherals cannot resolve a foreign
+        // UUID) and omnipodDidAdoptLoanPod already replaces it on adopt.
         var cachedHandle: String?
         if var podRaw = rawState["podState"] as? [String: Any],
            let address = podRaw["address"] as? UInt32 {
             cachedHandle = PodLoanBleIdentifierCache.identifier(forPodAddress: address)
             if let cachedHandle {
                 podRaw["bleIdentifier"] = cachedHandle
-            } else {
-                podRaw.removeValue(forKey: "bleIdentifier")
+                rawState["podState"] = podRaw
             }
-            rawState["podState"] = podRaw
             SportLog.event("loan", String(format: "handle for pod %08X: %@", address,
                                           cachedHandle.map { "CACHED \($0) — skipping discovery" } ?? "none yet — will discover"))
         }
