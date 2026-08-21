@@ -289,13 +289,19 @@ final class PodLoanBleIdentifierCacheTests: XCTestCase {
             .replacingOccurrences(of: "Loop/WatchAppTests/PodLoanEpochScopingTests.swift",
                                   with: "OmnipodKit/OmnipodKit/PumpManager/PodState.swift")
         let source = try String(contentsOfFile: podStatePath, encoding: .utf8)
-        guard let ltkLine = source.range(of: "let ltkString = rawValue[\"ltk\"]") else {
+        // The property that matters is whether ltk's `if let` is a STANDALONE condition or a
+        // COMPOUND one. Textual proximity cannot tell those apart — the two branches sit next to
+        // each other by design — so read the ltk line itself: a compound condition continues with
+        // a comma, a standalone one opens its brace.
+        guard let ltkLine = source
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .first(where: { $0.contains("let ltkString = rawValue[\"ltk\"]") })
+        else {
             return XCTFail("PodState no longer decodes ltk the way this test expects — re-check every site that edits a grant's raw podState")
         }
-        // The handle must still be read by the SAME condition, i.e. within a couple of lines.
-        let tail = source[ltkLine.upperBound...].prefix(200)
-        XCTAssertTrue(tail.contains("bleIdentifier"),
-                      "ltk and bleIdentifier are no longer decoded together. If that is deliberate, PodLoanWatchController may now drop the handle alone — re-read its handle-substitution comment before changing it.")
+        let trimmed = ltkLine.trimmingCharacters(in: .whitespaces)
+        XCTAssertTrue(trimmed.hasSuffix("{"),
+                      "PodState's ltk decode is a COMPOUND condition again (line: \(trimmed)). Whatever it is bound with — bleIdentifier historically — becomes load-bearing for the pod's ENCRYPTION KEY, so dropping that disposable field silently drops the key and the pod hangs up ~108 ms after the first command. Decode ltk on its own.")
     }
 
     /// `forget` is the escape hatch for a handle proven wrong, so the next loan pays for
