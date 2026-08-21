@@ -13,6 +13,7 @@
 
 import XCTest
 import LoopKit
+import OmnipodKit
 import LoopCore
 import LoopAlgorithm
 @testable import WatchApp
@@ -219,5 +220,67 @@ final class PodLoanEpochScopingTests: XCTestCase {
         XCTAssertFalse(logLines().contains { $0.contains("REFUSED") },
                        "armed with epoch nil — there is no loan for it to outlive")
         XCTAssertEqual(controller.phase, .idle, "and it did its job")
+    }
+}
+
+// MARK: - The lean reacquisition path's one piece of persisted state
+
+/// Discovery is name resolution: it turns a pod id we already know into a CoreBluetooth
+/// handle THIS device can use. Handles are per-device, so the one in a grant is the phone's
+/// and useless here — but ours is reusable for every later loan with the same pod.
+///
+/// These cover the decision logic only. Whether a cached handle is still VALID is a question
+/// only the radio can answer, which is why the caller keeps a discovery fallback.
+final class PodLoanBleIdentifierCacheTests: XCTestCase {
+
+    private let podA: UInt32 = 0x177E6B7E
+    private let podB: UInt32 = 0x1A2B3C4D
+
+    override func setUp() {
+        super.setUp()
+        PodLoanBleIdentifierCache.removeAll()
+    }
+
+    override func tearDown() {
+        PodLoanBleIdentifierCache.removeAll()
+        super.tearDown()
+    }
+
+    func testAnUnknownPodHasNoHandleSoTheCallerMustDiscover() {
+        XCTAssertNil(PodLoanBleIdentifierCache.identifier(forPodAddress: podA))
+    }
+
+    func testAHandleSurvivesForTheSamePod() {
+        PodLoanBleIdentifierCache.store("UUID-A", forPodAddress: podA)
+        XCTAssertEqual(PodLoanBleIdentifierCache.identifier(forPodAddress: podA), "UUID-A")
+    }
+
+    /// The key must be the POD, not "the last pod we saw". A pod change every three days
+    /// would otherwise hand the new pod the old pod's handle — a bare connect() has no
+    /// timeout, so that would hang rather than fail.
+    func testHandlesAreKeyedPerPodAndDoNotBleed() {
+        PodLoanBleIdentifierCache.store("UUID-A", forPodAddress: podA)
+        PodLoanBleIdentifierCache.store("UUID-B", forPodAddress: podB)
+        XCTAssertEqual(PodLoanBleIdentifierCache.identifier(forPodAddress: podA), "UUID-A")
+        XCTAssertEqual(PodLoanBleIdentifierCache.identifier(forPodAddress: podB), "UUID-B")
+    }
+
+    /// Re-adopting the same pod on a different handle must REPLACE, not accumulate: the
+    /// stale one can never be retrieved on this device and would pin the radio scanning.
+    func testReAdoptingReplacesTheHandle() {
+        PodLoanBleIdentifierCache.store("UUID-OLD", forPodAddress: podA)
+        PodLoanBleIdentifierCache.store("UUID-NEW", forPodAddress: podA)
+        XCTAssertEqual(PodLoanBleIdentifierCache.identifier(forPodAddress: podA), "UUID-NEW")
+    }
+
+    /// `forget` is the escape hatch for a handle proven wrong, so the next loan pays for
+    /// discovery once instead of pending forever on a dead UUID.
+    func testForgettingSendsUsBackToDiscoveryForThatPodOnly() {
+        PodLoanBleIdentifierCache.store("UUID-A", forPodAddress: podA)
+        PodLoanBleIdentifierCache.store("UUID-B", forPodAddress: podB)
+        PodLoanBleIdentifierCache.forget(podAddress: podA)
+        XCTAssertNil(PodLoanBleIdentifierCache.identifier(forPodAddress: podA))
+        XCTAssertEqual(PodLoanBleIdentifierCache.identifier(forPodAddress: podB), "UUID-B",
+                       "forgetting one pod must not disturb another")
     }
 }

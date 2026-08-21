@@ -790,8 +790,41 @@ final class PodLoanWatchController {
         // Stock construction: exactly a phone relaunch. BlePodComms auto-connects from
         // podState.bleIdentifier at init (BlePodComms.swift:44) — no arming step.
         guard let rawValue = (try? PropertyListSerialization.propertyList(from: grant.pumpManagerRawState, options: [], format: nil)) as? [String: Any],
-              let rawState = rawValue["state"] as? PumpManager.RawStateValue,
-              let manager = OmniPumpManager(rawState: rawState) else {
+              var rawState = rawValue["state"] as? PumpManager.RawStateValue else {
+            teardownPump()
+            phase = .idle
+            lastIdleNote = NSLocalizedString("Couldn't read the pod from the phone. Try again.", comment: "Glance: pump snapshot rejected")
+            SportLog.event("loan", "grant FAILED — could not rebuild the pump from the phone's snapshot")
+            sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "pump state snapshot rejected")))
+            return
+        }
+        // SUBSTITUTE OUR OWN HANDLE (2026-08-20). The snapshot carries the PHONE's
+        // `bleIdentifier` — a CoreBluetooth handle minted on that device, which this one can
+        // never retrieve. Patching it BEFORE construction matters: BlePodComms.init calls
+        // connectToDevice(uuidString:) with whatever it finds, and a foreign UUID there is not
+        // harmless — it lands in autoConnectIDs, can never be discovered here, and so pins
+        // hasDiscoveredAllAutoConnectDevices false, keeping the radio scanning for the whole
+        // loan (the same trap omnipodDidAdoptLoanPod cleans up after).
+        //
+        // If we have adopted this pod before, our own handle goes in instead and the ordinary
+        // driver path — init -> connectToDevice -> retrievePeripherals, then bleRunSession ->
+        // configureAndRun -> connectOnDemand — reacquires with no discovery at all. If we have
+        // not, the key is REMOVED rather than left foreign, so the scan is the only route and
+        // nothing is polluted meanwhile.
+        var cachedHandle: String?
+        if var podRaw = rawState["podState"] as? [String: Any],
+           let address = podRaw["address"] as? UInt32 {
+            cachedHandle = PodLoanBleIdentifierCache.identifier(forPodAddress: address)
+            if let cachedHandle {
+                podRaw["bleIdentifier"] = cachedHandle
+            } else {
+                podRaw.removeValue(forKey: "bleIdentifier")
+            }
+            rawState["podState"] = podRaw
+            SportLog.event("loan", String(format: "handle for pod %08X: %@", address,
+                                          cachedHandle.map { "CACHED \($0) — skipping discovery" } ?? "none yet — will discover"))
+        }
+        guard let manager = OmniPumpManager(rawState: rawState) else {
             teardownPump()
             phase = .idle
             lastIdleNote = NSLocalizedString("Couldn't read the pod from the phone. Try again.", comment: "Glance: pump snapshot rejected")
