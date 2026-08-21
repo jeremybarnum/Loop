@@ -1317,7 +1317,27 @@ final class PodLoanWatchController {
             // Arm the fresh-central address scan up front; recreateCentral's poweredOn handler
             // re-connects the bare bid too, so both paths race from t=0. The read ladder below is
             // the success probe; the release path cancels an unfinished scan (cancelLoanScan).
-            manager.podLoanEscalateReclaim()
+            //
+            // ...UNLESS we already hold a handle for this pod (2026-08-20). The ~2% figure above
+            // was measured when a "bare pending-connect" was a blind bid — no local CoreBluetooth
+            // handle, so nothing for iOS to reacquire. With a cached handle it is the PHONE's
+            // mechanism, which reconnects in ~1.3 s and needs no discovery at all.
+            //
+            // And escalating is not free on watchOS: podLoanEscalateReclaim -> recreateCentral(),
+            // which installs a NEW CBCentralManager and clears `devices`. Every PeripheralManager
+            // holds its central weakly, so every escalation ORPHANS the command path (central=nil)
+            // and costs 30-100 s to recover — measured tonight on epochs 155/156, on every single
+            // dose cycle, because scan-adopt was primary. That churn was the residual failure.
+            //
+            // So: when the handle resolves, let the driver reconnect and keep the read ladder as
+            // the probe. The ladder still escalates below if the gentle path does not land, so the
+            // scan-adopt recovery is preserved for the case it was actually measured on — a pod we
+            // cannot address locally.
+            if manager.podLoanHasLocalHandle {
+                SportLog.event("loan", "E4: local handle known — driver reconnect, NO escalate (no central recreate)")
+            } else {
+                manager.podLoanEscalateReclaim()
+            }
             self.attemptReclaimRead(manager: manager, attempt: 0, ladder: ladder, startedAt: startedAt, completion: completion)
         }
     }
@@ -1349,6 +1369,10 @@ final class PodLoanWatchController {
     }
 
     /// One line per ladder when it ends, carrying what the per-read spam used to carry.
+    /// Which ladder has already paid for a scan-adopt escalation, so a 14-read ladder cannot
+    /// recreate the central more than once.
+    private var escalatedThisLadder: Int?
+
     private func finishReclaimLadder(_ ladder: Int, startedAt: Date, reads: Int, ok: Bool, note: String, manager: OmniPumpManager?) {
         liveReclaimLadders[ladder] = nil
         // Answer everyone who joined this ladder, before anything can start another one.
@@ -1399,6 +1423,19 @@ final class PodLoanWatchController {
                     // ladder that never moves off `disconnected`.
                     let noisy = attempt == 0 || (attempt + 1) % 5 == 0
                     if noisy { SportLog.event("loan", "E4: reclaim read \(attempt + 1)/\(maxAttempts) failed — pod BLE state \(manager.podLoanConnectionStateDescription), released=\(manager.isConnectionReleased)") }
+                    // GENTLE FIRST, THEN ESCALATE (2026-08-20). The scan-adopt escalation is no
+                    // longer armed up front when we hold a usable handle, because on watchOS it
+                    // recreates the central and orphans the command path on every dose cycle. But
+                    // it must still happen when the gentle path does not land, or a pod we cannot
+                    // reach by handle would never get the recovery the ~98% figure was measured on.
+                    // Four reads is ~8 s — several times the measured 1.3 s connect — and leaves
+                    // most of the 14-read budget for the scan.
+                    if attempt + 1 == 4, self.escalatedThisLadder != ladder,
+                       manager.isConnectionReady == false {
+                        self.escalatedThisLadder = ladder
+                        SportLog.event("loan", "E4: gentle reconnect hasn't landed in 4 reads — escalating to scan-adopt now")
+                        manager.podLoanEscalateReclaim()
+                    }
                     // Scan-adopt is armed UP FRONT in reclaimPodForDose, so the
                     // whole ladder rides the takeover-grade path from read 0 — no mid-ladder escalation.
                     // The fresh central's poweredOn handler races the bare bid and the address scan;
