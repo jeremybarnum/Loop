@@ -174,7 +174,19 @@ final class PodLoanWatchController {
     /// Called by the transport when an urgent send's errorHandler fires (StockLoopSession).
     func noteUrgentSendFailed() {
         queue.async { self.handbackSawUrgentSendError = true }
+        urgentSendWedged = true
     }
+
+    /// Set the first time an urgent send times out, cleared when a hand-back starts.
+    ///
+    /// WCSession's `isReachable` can be TRUE while `sendMessage` times out anyway — the
+    /// `.oneWay` wedge this code already names as "#113 variant A". Each attempt then costs the
+    /// full 15 s before falling back to the queued path, and the resend loop re-chose `urgent`
+    /// every time: field 2026-08-20 23:27-23:28, four attempts, a minute of "ending..." with the
+    /// queued path available from the first failure onward. One timeout is enough evidence;
+    /// there is no reason to re-learn it every 15 s. Deliberately NOT queue-isolated — it is a
+    /// benign one-way bool read from the WCSession callback thread, like `appIsForeground`.
+    private(set) var urgentSendWedged = false
 
     /// Injected transport: dictionary -> WCSession.transferUserInfo (integration step).
     var send: (([String: Any]) -> Void)?
@@ -1369,6 +1381,10 @@ final class PodLoanWatchController {
     }
 
     /// One line per ladder when it ends, carrying what the per-read spam used to carry.
+    /// Wall-clock ceiling for one reclaim ladder. Matches what the read-count comment always
+    /// claimed (~40s) and now actually enforces it.
+    static let reclaimLadderBudget: TimeInterval = 45
+
     /// Which ladder has already paid for a scan-adopt escalation, so a 14-read ladder cannot
     /// recreate the central more than once.
     private var escalatedThisLadder: Int?
@@ -1396,6 +1412,14 @@ final class PodLoanWatchController {
 
     private func attemptReclaimRead(manager: OmniPumpManager, attempt: Int, ladder: Int, startedAt: Date, completion: @escaping (Bool) -> Void) {
         let maxAttempts = 14   // ~40s (14 × ~2s), same as the takeover ladder
+        // ...and a REAL wall-clock ceiling, because "14 x ~2s" stopped being true.
+        //
+        // That arithmetic assumed each read returns quickly. It did — while an orphaned central
+        // made every read fail instantly with `notReady`. Now that the orphan recovers, a read
+        // gets a genuine connect attempt and blocks for the driver's 20 s timeout when the pod is
+        // not answering: field 2026-08-20 L7 ran 288.8s (14 x ~20s) and held the loop for nearly
+        // five minutes, which is what made the wrist go stale. Honest reads, dishonest budget.
+        let ladderDeadline = startedAt.addingTimeInterval(Self.reclaimLadderBudget)
         manager.podLoanReadStatus { [weak self] success in
             guard let self = self else { completion(false); return }
             self.queue.async {
@@ -1409,6 +1433,12 @@ final class PodLoanWatchController {
                     self.finishReclaimLadder(ladder, startedAt: startedAt, reads: attempt + 1, ok: true, note: "reconnected", manager: manager)
                     SportLog.event("loan", "E4: pod reconnected for dose (after \(attempt + 1) read(s)) — state \(manager.podLoanConnectionStateDescription)")
                     completion(true)
+                } else if self.now() >= ladderDeadline {
+                    self.finishReclaimLadder(ladder, startedAt: startedAt, reads: attempt + 1, ok: false,
+                                             note: "budget exhausted", manager: manager)
+                    SportLog.event("loan", String(format: "E4: reclaim ABANDONED after %.0fs (budget %.0fs) — a stuck read must not hold the loop; the pod runs baseline and the next cycle retries",
+                                                  self.now().timeIntervalSince(startedAt), Self.reclaimLadderBudget))
+                    completion(false)
                 } else if attempt + 1 < maxAttempts {
                     // Per-attempt visibility. `podLoanReadStatus` returns a bare Bool, so
                     // 14 failed reads say only "it didn't work" — three separate theories
@@ -1797,6 +1827,7 @@ final class PodLoanWatchController {
             self.handbackResendCount = 0
             self.handbackSawUnreachable = false
             self.handbackSawUrgentSendError = false
+            self.urgentSendWedged = false   // a fresh hand-back re-tests the fast path once
             // Bound the wait for the phone's ack. Pre-scheduled alert fires from a suspended
             // app; the resend loop resumes Sport Mode on the watch at the same deadline. Covers
             // both the interim-drain path below and the legacy single-phase finalize.
