@@ -273,6 +273,31 @@ final class PodLoanBleIdentifierCacheTests: XCTestCase {
         XCTAssertEqual(PodLoanBleIdentifierCache.identifier(forPodAddress: podA), "UUID-NEW")
     }
 
+
+    /// THE REGRESSION THIS SUITE MISSED (field 2026-08-20, epochs 150-152).
+    ///
+    /// `PodState` decodes the LTK and the BLE handle in a SINGLE `if let`, so removing
+    /// `bleIdentifier` from a grant's raw state silently removes the pod's ENCRYPTION KEY with
+    /// it. The takeover then connects normally and the pod hangs up ~100 ms after the first
+    /// command — which looks nothing like "a key is missing", and cost three grants to spot.
+    ///
+    /// Every cache test below passed while that shipped, because the bug was never in the
+    /// cache: it was in what the CALLER does on a cache MISS. This pins the coupling so nobody
+    /// "tidies up" the foreign identifier again.
+    func testLtkAndHandleAreCoupledInPodStateDecoding() throws {
+        let podStatePath = #filePath
+            .replacingOccurrences(of: "Loop/WatchAppTests/PodLoanEpochScopingTests.swift",
+                                  with: "OmnipodKit/OmnipodKit/PumpManager/PodState.swift")
+        let source = try String(contentsOfFile: podStatePath, encoding: .utf8)
+        guard let ltkLine = source.range(of: "let ltkString = rawValue[\"ltk\"]") else {
+            return XCTFail("PodState no longer decodes ltk the way this test expects — re-check every site that edits a grant's raw podState")
+        }
+        // The handle must still be read by the SAME condition, i.e. within a couple of lines.
+        let tail = source[ltkLine.upperBound...].prefix(200)
+        XCTAssertTrue(tail.contains("bleIdentifier"),
+                      "ltk and bleIdentifier are no longer decoded together. If that is deliberate, PodLoanWatchController may now drop the handle alone — re-read its handle-substitution comment before changing it.")
+    }
+
     /// `forget` is the escape hatch for a handle proven wrong, so the next loan pays for
     /// discovery once instead of pending forever on a dead UUID.
     func testForgettingSendsUsBackToDiscoveryForThatPodOnly() {
