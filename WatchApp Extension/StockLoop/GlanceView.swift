@@ -666,11 +666,26 @@ final class GlanceViewModel: ObservableObject {
         // reported twice over on this screen — the number dims and the dot goes red — so the ring
         // spending its one bit on enactment is the higher-information choice.
         //
-        // `.unknown` (grey) now means only what it says: no cycle has EVER completed. That is a cold
-        // start, not a takeover in progress.
-        s.loopFreshness = data.lastLoopCompleted
-            .map { LoopCompletionFreshness(age: now.timeIntervalSince($0)) }
-            .map { $0 == .fresh ? .fresh : ($0 == .aging ? .aging : .stale) } ?? .unknown
+        // CORRECTED 2026-08-20 (field): dropping BG entirely was too far. The justification was
+        // "Loop will not complete a cycle on stale glucose, so lastLoopCompleted stops advancing
+        // on its own" — and a manual bolus falsified it. A bolus woke a cycle, the cycle
+        // completed, and the ring went GREEN over nine-minute-old CGM data.
+        //
+        // Jeremy's rule was about the POD — "if we don't know whether the pod is available, but
+        // we don't need it yet, I'm fine for that to be green" — never about glucose. So take the
+        // worst of both again, and reserve grey for the one honest case: we know NOTHING. A
+        // takeover with live glucose but no completed cycle yet stays green, which was the
+        // original complaint.
+        let bgFresh = data.glucoseDate.map { LoopCompletionFreshness(age: now.timeIntervalSince($0)) }
+        let loopFresh = data.lastLoopCompleted.map { LoopCompletionFreshness(age: now.timeIntervalSince($0)) }
+        switch (bgFresh, loopFresh) {
+        case (nil, nil):
+            s.loopFreshness = .unknown          // cold start: no reading AND no cycle
+        default:
+            let both = [bgFresh, loopFresh].compactMap { $0 }
+            s.loopFreshness = both.contains(.stale) ? .stale
+                            : both.contains(.aging) ? .aging : .fresh
+        }
         if let quantity = data.glucose {
             let mgdl = quantity.doubleValue(for: .milligramsPerDeciliter)
             s.bgText = String(format: "%.0f", mgdl)
