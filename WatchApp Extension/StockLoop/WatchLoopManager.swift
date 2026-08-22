@@ -976,9 +976,26 @@ final class WatchLoopManager {
     /// bench, or an expired identity the launch path just discarded) means there is no real
     /// sensor to be degraded relative to, and Start proceeds.
     ///
-    /// The freshness bound is 15 minutes, NOT the 7-minute display window: the display window is
-    /// deliberately tight for honesty about the number on screen, but deciding whether the LINK
-    /// works needs three missed cadence periods, or one jittered reading refuses a healthy setup.
+    /// NOTHING HERE BLOCKS ANY MORE (2026-08-22). The first cut refused a Start when no direct
+    /// reading had arrived in 15 minutes, and that was wrong for every user on every device:
+    ///
+    ///   direct G7 delivers ONLY while the app has runtime — foreground, or the loan's workout
+    ///   keepalive. Between loans the extension is suspended and the radio produces nothing.
+    ///
+    /// Measured here, not merely reported: the overnight loan took 56 direct readings while the
+    /// keepalive was held, and a 44-minute between-loan window took ZERO with acquisition armed
+    /// the whole time ("NOTHING delivered in 2605s"). So the 15 minutes before a Start tap are
+    /// precisely the era in which evidence cannot exist, and the gate demanded evidence from it.
+    /// Chicken-and-egg: the loan grants the runtime whose absence the gate was reading as a fault.
+    /// (Caught by the pure/SportMode line, whose v1 refused a healthy setup in the field within
+    /// hours of shipping. Ours shipped 09:44 and would have locked Jeremy out the moment he
+    /// enrolled a working sensor — he was shielded only because his current one is expired.)
+    ///
+    /// The transferable insight survives and is why this still exists: whatever we know at the
+    /// Start tap is everything we will ever know, because the G7 client runs regardless of loan
+    /// state. So say it HERE, where the wearer can act, instead of alerting mid-loan when they
+    /// cannot. It just must not refuse — the honest readiness signal is persisted handshake
+    /// state, not recent delivery, and until that exists this warns and proceeds.
     static let startGateSilenceLimit: TimeInterval = .minutes(15)
 
     enum StartGateVerdict: Equatable {
