@@ -502,6 +502,7 @@ final class PodLoanWatchController {
                 self.phase = .active
                 self.loopManager.setClosedLoopEnabled(false)   // Loans start OPEN
                 self.simStartGlucoseFeed()                     // stage 2: feed phone-sim BG → real loop
+                self.armDirectG7Watchdog(takeoverAt: self.now())   // same watchdog as a real loan
             }
         }
     }
@@ -837,6 +838,7 @@ final class PodLoanWatchController {
                     SportLog.event("loan", String(format: "ACTIVE — epoch %d, pod taken after %d read(s) in %.1fs [takeover-timing], odometer %.2f U, final read driver=%@ · %@",
                                                   grant.epoch, attempt + 1, takeoverSecs, delivered, driver, RuntimeStateLog.snapshot()))
                     self.sendMessage(.takeoverComplete(TakeoverComplete(epoch: grant.epoch, firstPodStatus: self.currentPodStatus())))
+                    self.armDirectG7Watchdog(takeoverAt: self.now())
                     // Refresh the glance eventual + IOB from the just-seeded insulin/carbs/
                     // glucose NOW (display-only, no enact) so the prediction reflects the seeded
                     // carbs at takeover instead of the stale pre-loan value until the first G7
@@ -2115,6 +2117,43 @@ final class PodLoanWatchController {
 
     /// Title is a parameter now: "Loan Protocol Error" named an internal layer rather than the
     /// user's situation, and the only surviving caller is about a hand-back that did not confirm.
+    // MARK: - Direct-G7 watchdog (the backstop behind the Start gate)
+
+    /// The gate starts a loan on instant state checks; the estimated residue — a loan those
+    /// checks bless that still gets no direct G7 — is 1-2% (takeover-window contention,
+    /// mid-loan sensor death). This is the backstop for that residue, and the reason the gate
+    /// is allowed to be fast.
+    ///
+    /// Two transmit windows, not one: takeover contention legitimately eats the first (pod and
+    /// sensor competing for the establishment phase), so one window is twitchy and two is the
+    /// floor of meaning. WARN ONLY — relay covers while the phone is near, so the alert can be
+    /// calm; termination stayed off the table (Jeremy, 2026-08-22).
+    ///
+    /// Fire-and-check, deliberately no cancel plumbing: the timer always fires, reads the
+    /// stamp, and stays silent when a reading arrived. Cancel-on-ingest would need a hook from
+    /// the glucose path into this controller for the sole benefit of skipping a comparison.
+    static let directG7WatchdogDelay: TimeInterval = 12 * 60
+
+    /// The decision alone, testable without timers, alerts, or a live pump: warn iff no direct
+    /// reading has arrived since takeover.
+    func directG7WatchdogShouldWarn(takeoverAt: Date) -> Bool {
+        guard let last = loopManager.lastDirectReadingAt else { return true }
+        return last <= takeoverAt
+    }
+
+    func armDirectG7Watchdog(takeoverAt: Date) {
+        schedule(after: Self.directG7WatchdogDelay, label: "direct-g7-watchdog", epochScoped: true) { [weak self] in
+            guard let self = self, self.phase == .active else { return }
+            guard self.directG7WatchdogShouldWarn(takeoverAt: takeoverAt) else {
+                SportLog.event("loan", "direct-G7 watchdog: quiet — sensor delivering")
+                return
+            }
+            SportLog.event("loan", "direct-G7 watchdog: NO direct reading since takeover (+\(Int(Self.directG7WatchdogDelay))s) — warning; relay covers while the phone is near")
+            self.issueProtocolAlert(title: NSLocalizedString("No Direct BG", comment: "Watch alert title when a loan has no direct sensor readings"),
+                                    body: NSLocalizedString("The watch isn't hearing your sensor this session. Keep your phone nearby.", comment: "Watch alert body when a loan has no direct sensor readings"))
+        }
+    }
+
     private func issueProtocolAlert(title: String, body: String) {
         loopManager.issueAlert(Alert(
             identifier: Alert.Identifier(managerIdentifier: "PodLoan", alertIdentifier: "protocolNack"),
