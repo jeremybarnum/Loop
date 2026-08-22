@@ -97,6 +97,11 @@ struct GlanceUIState {
     /// display window; "phone" = only the relay did. Answers "is the watch standing alone?"
     enum BGSource { case directG7, phoneRelay, none }
     var bgSource: BGSource = .none
+    /// Seconds since the DIRECT G7 link last delivered, nil = never. Distinct from `bgSource`,
+    /// which uses the 7-minute display window: one missed reading on a 5-minute cadence flips
+    /// that to .phoneRelay, and refusing to start Sport Mode over one missed reading would be
+    /// absurd. This drives the Start gate on a much longer fuse.
+    var directG7Age: TimeInterval?
     /// LINE 2 IS THE TRANSIENT SLOT. The glance body under the number is
     /// two lines: line 1 = stale age / eventual BG, line 2 = provenance. The eventual BG is
     /// the important number; provenance and status are troubleshooting detail that a
@@ -301,6 +306,38 @@ final class GlanceViewModel: ObservableObject {
         ExtensionDelegate.shared().stockLoopSession.loanController.cancelHandback()
         // The cancel lands on the controller's queue — refresh after it drains so
         // the "ending…" UI doesn't linger a full timer tick.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
+    }
+
+    /// Sport Mode requires the watch's OWN sensor link, and refuses without it.
+    ///
+    /// The reasoning is not "degraded is bad" — it is that a relay-only loan cannot do the thing
+    /// Sport Mode exists for. The phone reads the sensor over BLE, and the sensor is on the
+    /// wearer's body, so a phone with glucose to relay is a phone already within range of the
+    /// pod — in which case it can simply loop by itself. If relay works, the loan is
+    /// unnecessary; if the loan is necessary, relay will not be there. Starting anyway buys
+    /// nothing and costs the wearer their loop the moment they walk away (field 2026-08-21:
+    /// 25 minutes with no cycles at all, mid-descent, after a low warning).
+    ///
+    /// Three missed cadence periods, not one. The G7 delivers every ~5 min and jitters; the
+    /// display window (7 min) is deliberately tight for honesty about the NUMBER on screen, and
+    /// far too tight to decide whether the link works at all. The failure this catches was
+    /// absolute — three days, 267 auth failures, zero direct readings — so a long fuse loses
+    /// nothing and avoids refusing a healthy setup that merely blinked.
+    static let directG7RequiredWithin: TimeInterval = 15 * 60
+
+    var directG7Available: Bool {
+        state.directG7Age.map { $0 < Self.directG7RequiredWithin } ?? false
+    }
+
+    /// The "yes, Dexcom shows BG" branch of the block screen: the sensor is talking to this
+    /// watch, so OUR client is following the wrong identity — drop it and rescan. This is the
+    /// manual form of the sensor-switch override, and it is exactly what recovered the field
+    /// watch on 2026-08-21 (first direct reading 78 seconds later).
+    func rescanForSensor() {
+        guard !isPreview else { return }
+        SportLog.event("cgm", "user asked for a sensor rescan from the Sport Mode block screen")
+        ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.scanForNewSensor()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
     }
 
@@ -601,6 +638,7 @@ final class GlanceViewModel: ObservableObject {
         // OPTION C: a direct read inside the display window means the direct link is live,
         // even if the phone's copy is the row we are rendering.
         let within: (Date?) -> Bool = { $0.map { now.timeIntervalSince($0) < displayStaleAge } ?? false }
+        s.directG7Age = data.directG7At.map { now.timeIntervalSince($0) }
         if within(data.directG7At) {
             s.bgSource = .directG7
         } else if within(data.phoneRelayAt) {
@@ -873,14 +911,19 @@ struct GlanceView: View {
                     }
                 }
             }
-            Button { model.startSportMode() } label: {
-                Text("Start Sport Mode")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
+            if model.directG7Available {
+                Button { model.startSportMode() } label: {
+                    Text("Start Sport Mode")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.glanceAccent)
+            } else {
+                NoDirectBGBlock(everConnected: model.state.directG7Age != nil,
+                                reconnect: { model.rescanForSensor() })
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.glanceAccent)
             if let note = model.state.idleNote {
                 Text(note)
                     .font(.system(size: 11))
@@ -1456,3 +1499,76 @@ struct GlanceDemoView: View {
     }))
 }
 #endif
+
+
+/// Sport Mode is REFUSED without a direct sensor link, and this is the refusal.
+///
+/// Not a warning that can be dismissed: a relay-only loan cannot do the thing Sport Mode exists
+/// for. The phone reads the sensor over BLE and the sensor is on the wearer, so a phone with BG
+/// to relay is already within range of the pod and can simply loop by itself. If the relay
+/// works the loan is unnecessary; if the loan is necessary the relay will not be there.
+///
+/// Two states, because "never connected" is not a fault. On a fresh install, or in the first
+/// minutes after a relaunch, there is legitimately no direct reading yet — showing a warning
+/// screen then reads as "this build is broken" when nothing is wrong.
+///
+/// The question is the whole diagnostic, and it is the one thing the wearer can check in five
+/// seconds. Dexcom showing BG means the sensor talks to this watch fine and OUR client is
+/// following the wrong identity — which the button fixes, exactly as it did in the field on
+/// 2026-08-21 (first direct reading 78 seconds after a manual rescan). Dexcom showing nothing
+/// means the watch is not reaching the sensor at all, which no button of ours can repair.
+///
+/// "Direct" throughout: it is Dexcom's own direct-to-watch wording, so it needs no translation.
+private struct NoDirectBGBlock: View {
+    let everConnected: Bool
+    let reconnect: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Text(everConnected ? "No direct\nconnection" : "Waiting for\ndirect BG")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(everConnected ? .glanceWarn : .glanceInk)
+                .multilineTextAlignment(.center)
+
+            Text(everConnected ? "Sport Mode needs direct BG." : "Usually a few minutes.")
+                .font(.system(size: 12))
+                .foregroundColor(.glanceDim)
+                .multilineTextAlignment(.center)
+
+            Text(everConnected ? "Is Dexcom showing BG on your watch?" : "Longer? Check Dexcom on your watch.")
+                .font(.system(size: 12))
+                .foregroundColor(everConnected ? .glanceInk : .glanceDim)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+
+            // Two branches rather than a ternary on buttonStyle: the styles are distinct types,
+            // so there is no common type for the expression to resolve to. The visual difference
+            // is the point — prominent when something is wrong, quiet when we are merely waiting.
+            if everConnected {
+                Button(action: reconnect) {
+                    Text("Yes — reconnect")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.glanceAccent)
+            } else {
+                Button(action: reconnect) {
+                    Text("Reconnect")
+                        .font(.system(size: 13))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.bordered)
+                .tint(.glanceAccent)
+            }
+
+            if everConnected {
+                Text("No? Toggle Bluetooth.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.glanceDim)
+            }
+        }
+    }
+}

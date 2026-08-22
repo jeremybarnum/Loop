@@ -63,7 +63,22 @@ final class StockLoopSession {
         // The G7 radio census — names which of the three acquisition triggers fires
         // (system-connected piggyback / connection event / ad scan), D2W's rhythm, and connect
         // verdicts. Made the acquisition mechanism observed rather than inferred.
-        G7RadioCensus.sink = { line in SportLog.event("g7-ble", line) }
+        // CENSUS THROTTLE. The radio census is 59% of a field log (2,363 of 3,941 lines on
+        // 2026-08-21), and the log keeps only a trailing 512 KB — so at full volume it holds
+        // ~4.6 days against a weekly cadence for seeing the user. A third of every interval was
+        // being trimmed away, and it was always the OLDEST third, which is exactly where "when
+        // did this start" lives.
+        //
+        // Steady state is what repeats: connect, didConnect, didDisconnect, disconnect, four
+        // lines every five minutes forever, saying nothing that the first pair did not. Those
+        // collapse into a periodic rollup. ANOMALIES ARE NEVER SUPPRESSED — a connect failure,
+        // an auth error or a connection-limit refusal is the whole reason the census exists, and
+        // 34 connection-limit failures in that same log were nearly missed because they render
+        // as prose with no error code to grep for.
+        //
+        // SportLog's own repeat-suppression cannot do this: it collapses CONSECUTIVE identical
+        // lines, and the census interleaves four different shapes per cycle.
+        G7RadioCensus.sink = { line in CensusThrottle.emit(line) }
         // Sensor-switch detection: the radio names every G7 it sees; the loop manager keeps
         // the evidence and fires the #104 override when a different sensor is present while
         // the persisted one delivers nothing. Wired here because this is the one place that
@@ -234,7 +249,15 @@ final class StockLoopSession {
     /// unreachability. Event-driven, because a dry session produces no readings to ride on.
     func sendLogSnapshot(_ reason: String) {
         guard WCSession.default.activationState == .activated, let url = LogFile.url else { return }
-        SportLog.event("log", "snapshot → iPhone (\(reason))")
+        // Reachability rides the pulse rather than getting a timer of its own. FIELD 2026-08-21:
+        // a 25-minute glucose hole during a loan could not be explained afterwards, because
+        // `reachable` is only ever sampled when something SENDS — and nothing sent for the whole
+        // gap. Five of these pulse lines fell inside it, every one of them silent about the one
+        // fact that would have separated "phone out of range" from "transport wedged".
+        //
+        // It costs no extra lines: the log rotates at 512 KB keeping only a tail, so a
+        // once-a-minute heartbeat would push out the content worth keeping. This piggybacks.
+        SportLog.event("log", "snapshot → iPhone (\(reason)) reachable=\(WCSession.default.isReachable)")
         WCSession.default.transferFile(url, metadata: ["kind": "g7watch.log"])
     }
 
@@ -297,5 +320,64 @@ final class StockLoopSession {
     /// recovered hand-back (data-first; the session itself is never resurrected).
     func sessionDidActivate() {
         loanController.drainRecoveredIfNeeded()
+    }
+}
+
+
+/// Collapses the radio census's steady-state repetition while letting every anomaly through.
+///
+/// Shape-based, not text-based: the sensor name, RSSI and counters vary line to line, so the
+/// throttle normalises those away and rate-limits what remains. A shape seen within the window
+/// is counted rather than written; the count is flushed with the next line of that shape, so a
+/// rollup never strands a number nobody ever sees.
+enum CensusThrottle {
+    private static let lock = NSLock()
+    private static var lastEmitted: [String: Date] = [:]
+    private static var suppressed: [String: Int] = [:]
+
+    /// One G7 cadence period plus margin. Long enough that routine cycles collapse, short enough
+    /// that a shape which is genuinely churning still shows a heartbeat.
+    private static let window: TimeInterval = 6 * 60
+
+    /// Anything that smells like a failure bypasses the throttle entirely. Deliberately generous:
+    /// the cost of letting a line through is one line, and the cost of suppressing the wrong one
+    /// is a diagnosis we cannot make a week later.
+    private static func isAnomaly(_ line: String) -> Bool {
+        let l = line.lowercased()
+        return l.contains("error") || l.contains("fail") || l.contains("maximum number")
+            || l.contains("timed out") || l.contains("unexpected") || l.contains("encrypt")
+    }
+
+    private static func shape(of line: String) -> String {
+        var s = line
+        // Sensor names, signal strengths and counts are the varying parts; the SHAPE is what
+        // repeats. Collapsing them is what lets four-lines-per-cycle become one-per-window.
+        if let r = s.range(of: "DXCM[A-Za-z0-9]+", options: .regularExpression) {
+            s.replaceSubrange(r, with: "SENSOR")
+        }
+        s = s.replacingOccurrences(of: "-?[0-9]+", with: "N", options: .regularExpression)
+        return s
+    }
+
+    static func emit(_ line: String) {
+        guard !isAnomaly(line) else { SportLog.event("g7-ble", line); return }
+
+        let key = shape(of: line)
+        let now = Date()
+        var pending = 0
+        var write = false
+
+        lock.lock()
+        if let last = lastEmitted[key], now.timeIntervalSince(last) < window {
+            suppressed[key, default: 0] += 1
+        } else {
+            pending = suppressed.removeValue(forKey: key) ?? 0
+            lastEmitted[key] = now
+            write = true
+        }
+        lock.unlock()
+
+        guard write else { return }
+        SportLog.event("g7-ble", pending > 0 ? "\(line)  [+\(pending) like this suppressed]" : line)
     }
 }

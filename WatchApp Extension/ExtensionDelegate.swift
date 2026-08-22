@@ -270,6 +270,15 @@ extension ExtensionDelegate: WCSessionDelegate {
         }
     }
 
+    /// Was NOT implemented — so a reachability change left no trace at all, and the only samples
+    /// in the log came from whatever happened to send. One line per transition, nothing while
+    /// steady: after this, silence in the log means "did not change" rather than "nobody looked",
+    /// which is the difference that made the 2026-08-21 field gap undiagnosable.
+    func sessionReachabilityDidChange(_ session: WCSession) {
+        SportLog.event("wc", "REACHABILITY CHANGED — reachable=\(session.isReachable) "
+                           + "activation=\(session.activationState.rawValue)")
+    }
+
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String : Any]) {
         log.default("didReceiveApplicationContext")
         updateContext(applicationContext)
