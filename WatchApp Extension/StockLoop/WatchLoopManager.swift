@@ -948,6 +948,78 @@ final class WatchLoopManager {
     private let bgSourceLock = NSLock()
     private var _lastDirectG7At: Date?
     private var _lastPhoneRelayAt: Date?
+    // MARK: - Stranded sensor identity (#104's blind spot)
+
+    /// A G7 runs 10 days plus a 12-hour grace. Past that, a persisted identity is a corpse and
+    /// keeping it costs direct readings. Shared by the persist filter and by the LAUNCH restore
+    /// in StockLoopStack — the escape used to exist only on the write path, so a stale identity
+    /// was restored unconditionally at every launch and the escape never got another chance.
+    static func persistedSensorIsPastLife(_ activatedAt: Date?, now: Date = Date()) -> Bool {
+        guard let activatedAt else { return false }   // unknown age: never discard on a guess
+        return now.timeIntervalSince(activatedAt) > .hours(10 * 24 + 12)
+    }
+
+    /// Evidence that a DIFFERENT sensor is in range while ours delivers nothing.
+    ///
+    /// #104 keeps the persisted identity when stock reports nil, which is right — on a watch that
+    /// signal fires after nearly every loan. But it swallows the one case where the signal is
+    /// real: an actual sensor change. The manager then cannot rescue itself, because it can only
+    /// learn a new sensor's ID by talking to it, and it is busy failing authentication against
+    /// the old one. Age alone does not save it either: the stuck window is the dead sensor's
+    /// REMAINING nominal life, so the earlier a sensor fails, the longer the outage.
+    ///
+    /// Rule: 3 sightings of ONE foreign name spanning >= 10 minutes (the G7's ~5-minute cadence
+    /// makes that two periods, so a single burst cannot fire it) while our own sensor has
+    /// delivered nothing for 45 minutes. Adoption still runs through authentication, which only
+    /// the wearer's enrolled sensor can pass — so a neighbour's G7 can trigger the attempt and
+    /// can never be adopted. Worst case of a wrong fire is the pre-#104 acquisition lottery, run
+    /// at a moment when the persisted sensor was yielding nothing anyway.
+    private var foreignSightings: [String: [Date]] = [:]
+    private static let foreignSightingsNeeded = 3
+    private static let foreignSightingSpan: TimeInterval = .minutes(10)
+    private static let ownSensorSilentFor: TimeInterval = .minutes(45)
+
+    /// Set by StockLoopStack so this rule can clear the identity and ask for a rescan; the
+    /// manager is owned by the stack, not by us (we are only its delegate).
+    weak var g7Manager: G7CGMManager?
+
+    func noteSensorSighted(_ name: String, now: Date = Date()) {
+        deviceQueue.async { [weak self] in
+            guard let self, let manager = self.g7Manager else { return }
+            guard let ourName = manager.sensorName else { return }   // nothing persisted: inert
+            guard name != ourName else {
+                self.foreignSightings.removeAll()   // ours is on the air; no case to build
+                return
+            }
+            // "Ours has delivered nothing" uses the same DIRECT-G7 stamp the pod-contention
+            // diagnostics use: relay readings must not count, or a phone in the room would mask
+            // exactly the failure this rule exists to catch.
+            let lastDirect = self.lastGlucoseSourceStamps.direct
+            let silentFor = lastDirect.map { now.timeIntervalSince($0) } ?? .greatestFiniteMagnitude
+            guard silentFor > Self.ownSensorSilentFor else { return }
+
+            var seen = self.foreignSightings[name] ?? []
+            seen.append(now)
+            seen = seen.filter { now.timeIntervalSince($0) <= .hours(2) }
+            self.foreignSightings[name] = seen
+            // Evidence is per-NAME, never pooled: a two-G7 household must not add up to a case.
+            guard seen.count >= Self.foreignSightingsNeeded,
+                  let first = seen.first, now.timeIntervalSince(first) >= Self.foreignSightingSpan
+            else { return }
+
+            let silentMin = silentFor == .greatestFiniteMagnitude ? "never delivered" : "\(Int(silentFor / 60))m"
+            SportLog.event("cgm", "** STRANDED IDENTITY ** \(ourName) \(silentMin) while \(name) sighted \(seen.count)x over \(Int(now.timeIntervalSince(first) / 60))m — clearing and rescanning (#104 blind spot)")
+            self.foreignSightings.removeAll()
+            // ORDER IS LOAD-BEARING: clear the persisted identity BEFORE the rescan. The rescan
+            // nils the manager state, cgmManagerDidUpdateState fires, and #104's filter keeps
+            // whatever the defaults still hold — clearing after races the callback and
+            // resurrects the corpse.
+            self.defaults.removeObject(forKey: Self.cgmStateDefaultsKey)
+            self.lastPersistedSensorID = nil
+            manager.scanForNewSensor()
+        }
+    }
+
     /// Last sensorID written by cgmManagerDidUpdateState (extension can't hold
     /// storage) — the persist itself runs every state change; this only rate-limits the log line.
     var lastPersistedSensorID: String?
@@ -2900,7 +2972,7 @@ extension WatchLoopManager: CGMManagerDelegate {
            let stored = defaults.dictionary(forKey: Self.cgmStateDefaultsKey),
            let storedID = stored["sensorID"] as? String {
             let activated = stored["activatedAt"] as? Date
-            let expired = activated.map { now().timeIntervalSince($0) > .hours(10 * 24 + 12) } ?? false
+            let expired = Self.persistedSensorIsPastLife(activated, now: now())
             if !expired {
                 if lastPersistedSensorID != nil {
                     SportLog.event("cgm", "G7 state: manager forgot sensor \(storedID) — KEEPING the persisted identity (#104: nil means unknown, not forget)")
