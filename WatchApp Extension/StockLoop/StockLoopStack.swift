@@ -74,18 +74,37 @@ enum StockLoopStack {
         // D2W's ~15s ride windows, leaving the watch relay-covered until it won again.
         // WatchLoopManager persists rawState on cgmManagerDidUpdateState; a corrupt or
         // absent blob falls back to the bare init.
+        // THE ESCAPE MUST RUN ON THIS PATH TOO (2026-08-21, ported from pure/SportMode).
+        // #104's age escape — past 10d12h, honour a nil and clear the identity — lived ONLY on
+        // the write path (cgmManagerDidUpdateState). Launch restored the persisted blob with no
+        // age test at all, and once restored the manager auto-connects to it and the escape never
+        // gets another chance. Their field case: an identity restored 19 hours past its own
+        // expiry, then three days of auth failures against a sensor that no longer existed
+        // (267 "unknownCharacteristic"), zero direct readings, while the replacement advertised
+        // beside it the whole time. Invisible until the phone walks away, because relay covers it.
         let cgmManager: G7CGMManager
         if let raw = UserDefaults.standard.dictionary(forKey: WatchLoopManager.cgmStateDefaultsKey),
-           let restored = G7CGMManager(rawState: raw) {
+           let restored = G7CGMManager(rawState: raw),
+           !WatchLoopManager.persistedSensorIsPastLife(restored.sensorActivatedAt) {
             cgmManager = restored
             SportLog.event("cgm", "G7 state RESTORED — sensor \(restored.sensorName ?? "none"), activated \(restored.sensorActivatedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "unknown")")
         } else {
             cgmManager = G7CGMManager()
-            SportLog.event("cgm", "G7 state fresh — no persisted sensor; acquisition will run (new install or pre-#101 build)")
+            if let raw = UserDefaults.standard.dictionary(forKey: WatchLoopManager.cgmStateDefaultsKey),
+               let stale = G7CGMManager(rawState: raw) {
+                UserDefaults.standard.removeObject(forKey: WatchLoopManager.cgmStateDefaultsKey)
+                SportLog.event("cgm", "G7 state DISCARDED at launch — sensor \(stale.sensorName ?? "none") is past its life; acquisition will run instead of auth-failing against a dead identity")
+            } else {
+                SportLog.event("cgm", "G7 state fresh — no persisted sensor; acquisition will run (new install or pre-#101 build)")
+            }
         }
         SportLog.event("session", "stack: cgm wired")
         cgmManager.delegateQueue = loopManager.deviceQueue
         cgmManager.cgmManagerDelegate = loopManager
+        // The stranded-identity rule needs to clear state and ask for a rescan; the manager is
+        // owned here, and WatchLoopManager is only its delegate.
+        loopManager.g7Manager = cgmManager
+        G7RadioCensus.sensorSighted = { [weak loopManager] name in loopManager?.noteSensorSighted(name) }
 
         return Stack(cgmManager: cgmManager, loopManager: loopManager)
     }

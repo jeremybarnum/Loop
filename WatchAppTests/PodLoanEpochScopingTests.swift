@@ -315,3 +315,54 @@ final class PodLoanBleIdentifierCacheTests: XCTestCase {
                        "forgetting one pod must not disturb another")
     }
 }
+
+// MARK: - Stranded sensor identity (#104's blind spot)
+
+/// #104 keeps a persisted sensor identity when stock reports nil, which is right on a watch —
+/// that signal fires after nearly every loan. What it swallows is a REAL sensor change, and the
+/// manager cannot rescue itself: it learns a new sensor's ID only by talking to it, and it is
+/// busy failing authentication against the old one.
+///
+/// These cover the DECISION, not the radio: the age predicate that both the persist filter and
+/// the launch restore now share, since the escape living only on the write path is what let a
+/// dead identity be restored 19 hours past its own expiry (pure/SportMode field case, three days
+/// of auth failures, zero direct readings).
+final class StrandedSensorIdentityTests: XCTestCase {
+
+    private let tenDaysTwelveHours: TimeInterval = .hours(10 * 24 + 12)
+
+    func testAFreshSensorIsNotPastLife() {
+        let activated = Date().addingTimeInterval(-.hours(24))
+        XCTAssertFalse(WatchLoopManager.persistedSensorIsPastLife(activated))
+    }
+
+    /// The boundary matters: a sensor at 10d11h is still nominally alive and forgetting it would
+    /// re-open the false-forget #104 exists to prevent.
+    func testJustInsideTheGraceWindowIsKept() {
+        let now = Date()
+        let activated = now.addingTimeInterval(-(tenDaysTwelveHours - .minutes(30)))
+        XCTAssertFalse(WatchLoopManager.persistedSensorIsPastLife(activated, now: now))
+    }
+
+    func testPastTenDaysTwelveHoursIsDiscardable() {
+        let now = Date()
+        let activated = now.addingTimeInterval(-(tenDaysTwelveHours + .minutes(1)))
+        XCTAssertTrue(WatchLoopManager.persistedSensorIsPastLife(activated, now: now))
+    }
+
+    /// Never discard on a guess. A blob with no activation date tells us nothing about age, and
+    /// throwing away a possibly-live identity costs direct readings for the rest of its life.
+    func testUnknownAgeIsNeverDiscarded() {
+        XCTAssertFalse(WatchLoopManager.persistedSensorIsPastLife(nil))
+    }
+
+    /// The field case that motivated the read-path fix: an identity restored PAST its own expiry.
+    /// Before the fix this predicate was never consulted at launch, so this returned true and
+    /// nothing asked.
+    func testTheFieldCaseNineteenHoursPastExpiryIsDiscardable() {
+        let now = Date()
+        let activated = now.addingTimeInterval(-(tenDaysTwelveHours + .hours(19)))
+        XCTAssertTrue(WatchLoopManager.persistedSensorIsPastLife(activated, now: now),
+                      "a sensor 19h past its grace window must not be restored at launch — the manager will auto-connect to it and fail auth forever")
+    }
+}
