@@ -223,11 +223,53 @@ final class StockLoopSession {
         }
 
         let build = BuildDetails.default.codeIdentity
-        SportLog.event("session", "Sport Mode ready — build \(build); tap Start to request a loan")
+        SportLog.event("session", "Sport Mode ready — build \(build); tap Start to request a loan\(Self.launchForensics())")
         startLinkCensus()
         // Name the policy at launch: a log that does not say which policy produced it cannot be
         // compared across builds.
         SportLog.event("policy", "link policy AUTOMATIC (#101): pod orphaned between doses, reclaim per cycle, acquisition-gated while un-adopted")
+    }
+
+    /// The two numbers that are unrecoverable after the fact.
+    ///
+    /// This app has died four times in one day (2026-08-21): launched, fully initialised, PAINTED
+    /// UI, gone at ~2 s. No crash report in the container, and the log's last line is a genuinely
+    /// idle app rather than a truncated tail — SportLog writes and closes per line, so there is no
+    /// buffer losing the ending. Which means the log tells us everything EXCEPT what we need.
+    ///
+    /// Two numbers change that, and neither can be reconstructed later:
+    ///
+    ///  - SECONDS SINCE THE PREVIOUS LAUNCH. Our log is not truncated on launch, so this is
+    ///    derivable by hand — but only by a human reading timestamps, and it is the single number
+    ///    that separates "the user reopened it" from "it died and something relaunched it". Making
+    ///    it explicit means a relaunch storm is one greppable line.
+    ///  - RESIDENT FOOTPRINT AT THE BANNER. A process killed for memory reports nothing at all, so
+    ///    if jetsam is taking us this is the only trace there will ever be. `phys_footprint` is the
+    ///    field jetsam actually judges, which is why it is used here rather than `resident_size`.
+    ///
+    /// (Idea and the task_vm_info call from the pure/SportMode line, where the phone-side twin —
+    /// three relaunches in four minutes — has the same shape. They ship it for iOS only and could
+    /// not vouch for watchOS, hence the guard: a refused TASK_VM_INFO yields "?" and never a crash.)
+    private static let previousLaunchKey = "SportMode.previousLaunchAt"
+
+    private static func launchForensics() -> String {
+        let now = Date()
+        let previous = UserDefaults.standard.object(forKey: previousLaunchKey) as? Date
+        UserDefaults.standard.set(now, forKey: previousLaunchKey)
+        let sincePrevious = previous.map { String(format: "%.0fs", now.timeIntervalSince($0)) } ?? "first"
+        return " · sincePrevLaunch=\(sincePrevious) footprint=\(residentFootprint())"
+    }
+
+    private static func residentFootprint() -> String {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let ok = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        guard ok == KERN_SUCCESS else { return "?" }
+        return String(format: "%.0fMB", Double(info.phys_footprint) / 1024 / 1024)
     }
 
     // MARK: Log pipeline v4 — event snapshots + loan pulse (2026-07-20)
