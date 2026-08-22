@@ -930,6 +930,16 @@ final class WatchLoopManager {
         bgSourceLock.lock()
         if directG7 { _lastDirectG7At = self.now() } else { _lastPhoneRelayAt = self.now() }
         bgSourceLock.unlock()
+        // Persisted because the Start gate reads it ACROSS launches. The first gate shipped
+        // reading only the in-memory stamp, so every relaunch started from "never" and the
+        // suspended hours before a tap looked like a dead sensor — the chicken-and-egg that
+        // refused a healthy setup (field 2026-08-22). One defaults write per direct reading,
+        // i.e. at most every ~5 minutes; not a hot path.
+        if directG7 { defaults.set(self.now(), forKey: Keys.lastDirectReadingAt) }
+    }
+
+    enum Keys {
+        static let lastDirectReadingAt = "WatchLoopManager.lastDirectReadingAt"
     }
 
     /// The grant seed counts as the PHONE. (Jeremy, 2026-08-05: "treat the seed as the same as
@@ -949,9 +959,67 @@ final class WatchLoopManager {
     func notePhoneGlucoseDelivered() {
         noteGlucoseSource(directG7: false)
     }
+    /// For the loan's direct-G7 watchdog: has the sensor delivered to THIS watch, and when.
+    /// Lock-guarded like every other reader of the stamp.
+    var lastDirectReadingAt: Date? {
+        bgSourceLock.lock(); defer { bgSourceLock.unlock() }
+        // Falls back to the persisted stamp: a relaunch mid-loan blanks the in-memory copy
+        // while readings genuinely flowed minutes ago, and the watchdog must not warn on
+        // that. The two are written in the same call, so they cannot disagree forward.
+        return _lastDirectG7At ?? defaults.object(forKey: Keys.lastDirectReadingAt) as? Date
+    }
+
     private var lastGlucoseSourceStamps: (direct: Date?, phone: Date?) {
         bgSourceLock.lock(); defer { bgSourceLock.unlock() }
         return (_lastDirectG7At, _lastPhoneRelayAt)
+    }
+
+    // MARK: - Sensor readiness (the Start gate's question, answered from state alone)
+    //
+    // "If the instant checks pass, what is the probability a loan gets no direct G7?" —
+    // estimated 1-2% (takeover-window contention and mid-loan sensor death are all that
+    // remain), and the in-loan watchdog covers that tail. So the gate asks only what state
+    // can answer instantly, and fire-and-forget stays real.
+    //
+    // Deliberately NOT here: any freshness window measured against suspended time. The first
+    // shipped gate demanded a direct reading in the last 15 minutes — a window in which a
+    // suspended app cannot produce one, so it refused every user whose watch had been asleep,
+    // which is every user (field 2026-08-22). Suspension is not evidence of anything.
+
+    enum SensorReadiness: Equatable {
+        /// Identity persisted, auth proven recently, radio not contradicting it. Start.
+        case ready
+        /// The radio keeps sighting a DIFFERENT sensor while ours is silent — the stale-identity
+        /// signature. The reconnect screen is the fix (and the override may fire on its own).
+        case wrongSensor
+        /// No persisted identity, or no successful handshake in the recency window. Not a
+        /// fault: a fresh install, a just-cleared identity, or a very long gap. Foreground
+        /// runtime resolves it by itself within ~one transmit window ("waiting" screen).
+        case unproven
+    }
+
+    /// A successful handshake this recent, with the identity unchanged, is treated as proof the
+    /// bond and identity still hold. Bonds die rarely and near-totally; 24 h keeps one
+    /// overnight from demoting a healthy setup while still catching a sensor swapped yesterday.
+    static let authRecencyWindow: TimeInterval = .hours(24)
+
+    var sensorReadiness: SensorReadiness {
+        guard defaults.dictionary(forKey: Self.cgmStateDefaultsKey)?["sensorID"] is String else {
+            return .unproven
+        }
+        let lastDirect = defaults.object(forKey: Keys.lastDirectReadingAt) as? Date
+        let directAge = lastDirect.map { now().timeIntervalSince($0) }
+        // Foreign evidence demotes ONLY when our own sensor is also silent — the same
+        // conjunction the override itself requires. Without the silence condition, two
+        // sightings of a NEIGHBOUR'S G7 (gym, household) would block a wearer whose own
+        // sensor is actively delivering. Caught in self-review before shipping, 2026-08-22.
+        sensorSightingLock.lock()
+        let foreignPattern = _foreignSightings >= 2
+        sensorSightingLock.unlock()
+        let ownSilent = directAge.map { $0 > Self.directSilenceRequired } ?? true
+        if foreignPattern && ownSilent { return .wrongSensor }
+        guard let age = directAge, age < Self.authRecencyWindow else { return .unproven }
+        return .ready
     }
 
     // MARK: - Sensor-switch detection (the positive-evidence override on #104)

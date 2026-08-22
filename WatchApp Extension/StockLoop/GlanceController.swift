@@ -309,35 +309,38 @@ final class GlanceViewModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
     }
 
-    /// Sport Mode requires the watch's OWN sensor link, and refuses without it.
+    /// Sport Mode requires the watch's OWN sensor link, and refuses without it — a relay-only
+    /// loan cannot do the thing Sport Mode exists for (the phone close enough to relay is close
+    /// enough to loop by itself; field 2026-08-21: 25 minutes with no cycles, mid-descent).
     ///
-    /// The reasoning is not "degraded is bad" — it is that a relay-only loan cannot do the thing
-    /// Sport Mode exists for. The phone reads the sensor over BLE, and the sensor is on the
-    /// wearer's body, so a phone with glucose to relay is a phone already within range of the
-    /// pod — in which case it can simply loop by itself. If relay works, the loan is
-    /// unnecessary; if the loan is necessary, relay will not be there. Starting anyway buys
-    /// nothing and costs the wearer their loop the moment they walk away (field 2026-08-21:
-    /// 25 minutes with no cycles at all, mid-descent, after a low warning).
-    ///
-    /// Three missed cadence periods, not one. The G7 delivers every ~5 min and jitters; the
-    /// display window (7 min) is deliberately tight for honesty about the NUMBER on screen, and
-    /// far too tight to decide whether the link works at all. The failure this catches was
-    /// absolute — three days, 267 auth failures, zero direct readings — so a long fuse loses
-    /// nothing and avoids refusing a healthy setup that merely blinked.
-    static let directG7RequiredWithin: TimeInterval = 15 * 60
-
-    var directG7Available: Bool {
-        state.directG7Age.map { $0 < Self.directG7RequiredWithin } ?? false
+    /// V2. The first gate demanded a direct reading in the last 15 minutes — a window in which
+    /// a suspended app cannot produce one, so it refused every watch that had been asleep,
+    /// i.e. every watch (field 2026-08-22). The question is now answered from persisted state
+    /// (WatchLoopManager.sensorReadiness): identity present, auth proven within 24 h, radio not
+    /// contradicting the identity. Suspension is no longer treated as evidence.
+    var sensorReadiness: WatchLoopManager.SensorReadiness {
+        isPreview ? .ready
+                  : ExtensionDelegate.shared().stockLoopSession.stack.loopManager.sensorReadiness
     }
 
     /// The "yes, Dexcom shows BG" branch of the block screen: the sensor is talking to this
     /// watch, so OUR client is following the wrong identity — drop it and rescan. This is the
     /// manual form of the sensor-switch override, and it is exactly what recovered the field
     /// watch on 2026-08-21 (first direct reading 78 seconds later).
+    /// True from the tap until a reading lands or ~one transmit window passes. Exists because
+    /// the field run showed three taps in 20 seconds for one recovery already in flight — the
+    /// button worked and looked dead, which invites exactly the re-tapping that resets scans.
+    @Published var rescanInFlight = false
+
     func rescanForSensor() {
-        guard !isPreview else { return }
+        guard !isPreview, !rescanInFlight else { return }
+        rescanInFlight = true
         SportLog.event("cgm", "user asked for a sensor rescan from the Sport Mode block screen")
         ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.scanForNewSensor()
+        // Cleared on a timer, not on success plumbing: if a reading lands the verdict flips to
+        // .ready and this screen is gone anyway; if none lands, one window is when the truth
+        // ("still nothing") is worth showing again. 5.5 min = one window + jitter.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 330) { [weak self] in self?.rescanInFlight = false }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
     }
 
@@ -911,7 +914,8 @@ struct GlanceView: View {
                     }
                 }
             }
-            if model.directG7Available {
+            switch model.sensorReadiness {
+            case .ready:
                 Button { model.startSportMode() } label: {
                     Text("Start Sport Mode")
                         .font(.system(size: 17, weight: .semibold))
@@ -920,8 +924,16 @@ struct GlanceView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.glanceAccent)
-            } else {
-                NoDirectBGBlock(everConnected: model.state.directG7Age != nil,
+            case .wrongSensor:
+                // The stale-identity signature: reconnect is the fix, proven in the field.
+                NoDirectBGBlock(everConnected: true,
+                                scanning: model.rescanInFlight,
+                                reconnect: { model.rescanForSensor() })
+            case .unproven:
+                // Not a fault. Foreground runtime re-proves the sensor by itself within about
+                // one transmit window; this screen is the wait, not an error.
+                NoDirectBGBlock(everConnected: false,
+                                scanning: model.rescanInFlight,
                                 reconnect: { model.rescanForSensor() })
             }
             if let note = model.state.idleNote {
@@ -1521,6 +1533,7 @@ struct GlanceDemoView: View {
 /// "Direct" throughout: it is Dexcom's own direct-to-watch wording, so it needs no translation.
 private struct NoDirectBGBlock: View {
     let everConnected: Bool
+    var scanning: Bool = false
     let reconnect: () -> Void
 
     var body: some View {
@@ -1544,7 +1557,13 @@ private struct NoDirectBGBlock: View {
             // Two branches rather than a ternary on buttonStyle: the styles are distinct types,
             // so there is no common type for the expression to resolve to. The visual difference
             // is the point — prominent when something is wrong, quiet when we are merely waiting.
-            if everConnected {
+            if scanning {
+                Text("Scanning — up to 5 min")
+                    .font(.system(size: 12))
+                    .foregroundColor(.glanceDim)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+            } else if everConnected {
                 Button(action: reconnect) {
                     Text("Yes — reconnect")
                         .font(.system(size: 13, weight: .semibold))
