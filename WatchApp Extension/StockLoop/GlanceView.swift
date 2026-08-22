@@ -306,22 +306,23 @@ final class GlanceViewModel: ObservableObject {
             state.idleNote = NSLocalizedString("No sensor set up on this watch — Sport Mode is running on BG relayed from your phone, so it will stop looping if you walk away from it.",
                                                comment: "Glance: Sport Mode started with no watch sensor, relay-only warning")
         case .waitingForFirstReading(let sensorName):
-            // Not a fault: a fresh enrollment legitimately takes minutes. Calmer wording, and no
-            // "check Dexcom" prompt that would read as an error on a healthy new sensor.
-            SportLog.event("loan", "START REFUSED — sensor \(sensorName) enrolled but has never delivered on this watch; waiting for first direct reading")
+            // Not a fault: a fresh enrollment legitimately takes minutes, and between loans the
+            // radio cannot deliver at all. Say it, proceed.
+            SportLog.event("loan", "START with sensor \(sensorName) enrolled but no direct reading yet on this watch — proceeding")
             state.idleNote = NSLocalizedString("Waiting for direct BG from your sensor. Usually a few minutes. Longer? Check Dexcom on your watch.",
-                                               comment: "Glance: Sport Mode start blocked, sensor enrolled but no reading yet")
-            return
+                                               comment: "Glance: Sport Mode started, sensor enrolled but no reading yet")
         case .noDirectConnection(let sensorName, let silentMinutes):
             // The question IS the diagnostic, and the wearer answers it in five seconds. Dexcom
             // showing BG means the sensor talks to this watch fine, so OUR client is following the
             // wrong identity — which the stranded-identity rule now heals on its own, and Forget
             // Sensor forces immediately. Dexcom showing nothing means the watch is not reaching
             // the sensor at all, which is Bluetooth or enrollment and no button of ours can fix.
-            SportLog.event("loan", "START REFUSED — no direct BG from \(sensorName) for \(silentMinutes)m; a relay-only loan is degraded by construction (phone near enough to relay is phone near enough to dose)")
-            state.idleNote = NSLocalizedString("Sport Mode needs direct BG from your sensor — the phone relaying it can't help once you walk away. Is Dexcom showing BG on your watch? If yes, use Forget Sensor. If no, toggle Bluetooth.",
-                                               comment: "Glance: Sport Mode start blocked, no direct sensor connection")
-            return
+            // WARN, DO NOT REFUSE. Silence here is the NORMAL between-loan state — the radio only
+            // delivers while the app has runtime, which the loan itself is about to grant. Refusing
+            // on it locked out every healthy setup.
+            SportLog.event("loan", "START with no direct BG from \(sensorName) for \(silentMinutes)m — expected between loans (no runtime, no radio); proceeding, but a relay-only loan stops looping if the phone leaves")
+            state.idleNote = NSLocalizedString("No direct BG from your sensor yet. If Sport Mode doesn't pick it up shortly: is Dexcom showing BG on your watch? If yes, use Forget Sensor. If no, toggle Bluetooth.",
+                                               comment: "Glance: Sport Mode started without a recent direct reading")
         }
         session.loanController.requestLoan(watchBuild: build)
         // Log pipeline v4: the Start tap itself ships a snapshot, and a +35s
