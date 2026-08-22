@@ -383,11 +383,12 @@ final class SportModeStartGateTests: XCTestCase {
                                           lastDirectG7At: lastDirect, now: now)
     }
 
-    /// The bench case, and the one that made us diverge from pure: no enrolled sensor means there
-    /// is no real sensor to be degraded relative to. This is how a simulator-sourced loan runs.
-    func testNoEnrolledSensorAllowsStart() {
+    /// No enrolled sensor WARNS rather than blocks. A bench rig and a brand-new user are
+    /// indistinguishable from the watch, and refusing would cost the no-sensor bench workflow —
+    /// so the verdict is its own case, and the caller proceeds after saying so.
+    func testNoEnrolledSensorWarnsButDoesNotBlock() {
         let now = Date()
-        XCTAssertEqual(verdict(nil, nil, nil, now), .allowed)
+        XCTAssertEqual(verdict(nil, nil, nil, now), .noSensorEverEnrolled)
     }
 
     /// An identity past its life is a corpse the launch path discards; it must not block Start on

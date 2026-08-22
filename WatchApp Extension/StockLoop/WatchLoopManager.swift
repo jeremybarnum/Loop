@@ -988,6 +988,19 @@ final class WatchLoopManager {
         /// Enrolled sensor that has never delivered on this watch. NOT a fault — a fresh
         /// enrollment legitimately takes minutes — so it gets its own, calmer wording.
         case waitingForFirstReading(sensorName: String)
+        /// No sensor has ever been enrolled on this watch. WARN, DO NOT BLOCK (2026-08-21,
+        /// Jeremy's call after the pure line flagged the gap).
+        ///
+        /// A loan here would run on relayed BG alone and stop looping the moment the phone
+        /// leaves — exactly what the gate exists to prevent. But the watch cannot distinguish
+        /// this from a BENCH RIG deliberately running without a sensor, which is how the pod
+        /// path gets tested with no sensor available, and blocking that would cost the workflow.
+        ///
+        /// So: say it, do not refuse it. The honest discrimination needs the PHONE to report
+        /// whether its own CGM is a real BLE sensor (a simulator or cloud source carries no
+        /// proximity, so it cannot stand in for the watch's own link) — that is a protocol field
+        /// and the proper fix; this is the cheap step that closes the silent part now.
+        case noSensorEverEnrolled
     }
 
     /// The decision, as a pure function of the three facts it needs — so it is testable without
@@ -996,9 +1009,9 @@ final class WatchLoopManager {
                                  sensorActivatedAt: Date?,
                                  lastDirectG7At: Date?,
                                  now: Date) -> StartGateVerdict {
-        // No enrolled sensor -> nothing to be degraded relative to. Covers fresh installs, bench
-        // rigs with no watch sensor, and the case where the launch path discarded a dead identity.
-        guard let name = sensorName else { return .allowed }
+        // No enrolled sensor: a bench rig and a brand-new user look identical from here, so warn
+        // rather than refuse. See `noSensorEverEnrolled`.
+        guard let name = sensorName else { return .noSensorEverEnrolled }
         // A corpse must not lock the wearer out on its way to being discarded.
         guard !persistedSensorIsPastLife(sensorActivatedAt, now: now) else { return .allowed }
         guard let lastDirect = lastDirectG7At else {

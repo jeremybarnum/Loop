@@ -298,6 +298,13 @@ final class GlanceViewModel: ObservableObject {
         switch session.stack.loopManager.sportModeStartGate() {
         case .allowed:
             break
+        case .noSensorEverEnrolled:
+            // WARN, DO NOT BLOCK. A loan on relayed BG alone stops looping when the phone leaves,
+            // but this state is indistinguishable from a bench rig deliberately running without a
+            // sensor — so say it and continue. The note stays on screen under the active loan.
+            SportLog.event("loan", "START with NO SENSOR EVER ENROLLED — loan will run on relayed BG alone and will stop looping if the phone leaves; proceeding (bench rigs look identical from here)")
+            state.idleNote = NSLocalizedString("No sensor set up on this watch — Sport Mode is running on BG relayed from your phone, so it will stop looping if you walk away from it.",
+                                               comment: "Glance: Sport Mode started with no watch sensor, relay-only warning")
         case .waitingForFirstReading(let sensorName):
             // Not a fault: a fresh enrollment legitimately takes minutes. Calmer wording, and no
             // "check Dexcom" prompt that would read as an error on a healthy new sensor.
