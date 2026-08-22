@@ -948,6 +948,74 @@ final class WatchLoopManager {
     private let bgSourceLock = NSLock()
     private var _lastDirectG7At: Date?
     private var _lastPhoneRelayAt: Date?
+    // MARK: - Sport Mode start gate
+
+    /// Why Sport Mode must not start right now, or nil if it may.
+    ///
+    /// THE ARGUMENT (from the pure/SportMode line, and it is sound): the phone reads the sensor
+    /// over BLE, and the sensor is on the wearer's body. So a phone with BG to relay is a phone
+    /// already within BLE range of the wearer — the same range it needs to drive the pod itself.
+    /// If the relay works the loan is unnecessary; if the loan is necessary the relay will not be
+    /// there. A relay-only loan is either redundant or degraded, never useful. Their field case:
+    /// a glucose-triggered watch loop with no inbound glucose simply stopped looping — no cycle
+    /// for 25 minutes, mid-descent, after a low warning.
+    ///
+    /// WHY A GATE AND NOT AN ALERT. The G7 client runs continuously, in and out of Sport Mode, so
+    /// starting a loan cannot improve the odds of getting direct BG. Whatever we know at the Start
+    /// tap is everything we will ever know. Alerting during the loan spends urgency at the one
+    /// moment the wearer can no longer act on it.
+    ///
+    /// WHY ONLY FOR A REAL SENSOR (Jeremy, 2026-08-21 — this branch's departure from theirs). The
+    /// range argument holds only when the phone's BG comes from a BLE sensor. It does not for a
+    /// CGM Simulator or a cloud source, which produce glucose with no proximity at all — and this
+    /// branch ships SIMULATORS_ENABLED and ran a full bench loan on simulator-sourced relay this
+    /// afternoon. A blanket gate would have refused that session.
+    ///
+    /// So the condition is watch-local and needs no protocol field: gate only when THIS WATCH has
+    /// an enrolled, still-living sensor that has gone quiet. No persisted sensor (fresh install,
+    /// bench, or an expired identity the launch path just discarded) means there is no real
+    /// sensor to be degraded relative to, and Start proceeds.
+    ///
+    /// The freshness bound is 15 minutes, NOT the 7-minute display window: the display window is
+    /// deliberately tight for honesty about the number on screen, but deciding whether the LINK
+    /// works needs three missed cadence periods, or one jittered reading refuses a healthy setup.
+    static let startGateSilenceLimit: TimeInterval = .minutes(15)
+
+    enum StartGateVerdict: Equatable {
+        case allowed
+        /// Enrolled sensor, has delivered before, now silent past the bound.
+        case noDirectConnection(sensorName: String, silentMinutes: Int)
+        /// Enrolled sensor that has never delivered on this watch. NOT a fault — a fresh
+        /// enrollment legitimately takes minutes — so it gets its own, calmer wording.
+        case waitingForFirstReading(sensorName: String)
+    }
+
+    /// The decision, as a pure function of the three facts it needs — so it is testable without
+    /// standing up a WatchLoopManager (which needs three Core Data stores).
+    static func startGateVerdict(sensorName: String?,
+                                 sensorActivatedAt: Date?,
+                                 lastDirectG7At: Date?,
+                                 now: Date) -> StartGateVerdict {
+        // No enrolled sensor -> nothing to be degraded relative to. Covers fresh installs, bench
+        // rigs with no watch sensor, and the case where the launch path discarded a dead identity.
+        guard let name = sensorName else { return .allowed }
+        // A corpse must not lock the wearer out on its way to being discarded.
+        guard !persistedSensorIsPastLife(sensorActivatedAt, now: now) else { return .allowed }
+        guard let lastDirect = lastDirectG7At else {
+            return .waitingForFirstReading(sensorName: name)
+        }
+        let silent = now.timeIntervalSince(lastDirect)
+        guard silent > startGateSilenceLimit else { return .allowed }
+        return .noDirectConnection(sensorName: name, silentMinutes: Int(silent / 60))
+    }
+
+    func sportModeStartGate(now: Date = Date()) -> StartGateVerdict {
+        Self.startGateVerdict(sensorName: g7Manager?.sensorName,
+                              sensorActivatedAt: g7Manager?.sensorActivatedAt,
+                              lastDirectG7At: lastGlucoseSourceStamps.direct,
+                              now: now)
+    }
+
     // MARK: - Stranded sensor identity (#104's blind spot)
 
     /// A G7 runs 10 days plus a 12-hour grace. Past that, a persisted identity is a corpse and
