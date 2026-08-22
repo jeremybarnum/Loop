@@ -145,13 +145,42 @@ enum PhoneLog {
     /// Truncate at launch so the file tracks the current session rather than growing forever —
     /// but archive the outgoing session first (archivePreviousSession), or its content is
     /// destroyed here and then again by the forced mirror below, with nothing ever preserved.
+    private static let launchStampKey = "PhoneLog.lastLaunchAt"
+
+    /// Resident footprint in MB, or "?" if the kernel declines. Reported at launch because a
+    /// process killed for memory has no opportunity to report anything afterwards.
+    private static var footprintMB: String {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let ok = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        guard ok == KERN_SUCCESS else { return "?" }
+        return String(format: "%.0f MB", Double(info.phys_footprint) / 1024 / 1024)
+    }
+
     static func startSession(build: String) {
         queue.async {
             archivePreviousSession()   // must precede the remove — last chance to save the prior session
             if let url = localURL { try? FileManager.default.removeItem(at: url) }
             buffer.removeAll()
         }
-        event("session", "=== Loop phone log START — build \(build) ===")
+        // LAUNCH FORENSICS. The line above truncates, so a relaunch that dies immediately leaves
+        // an archive containing nothing but its own banner — which is exactly what the field
+        // produced on 2026-08-21: three archives, one line each, at 15:44:55, 15:46:32 and
+        // 15:48:37. Three launches in four minutes, and the banner alone cannot say whether that
+        // was jetsam, a crash, or the user force-quitting.
+        //
+        // Two numbers make it diagnosable. The gap since the previous launch separates "restarted
+        // immediately" from "restarted hours later", and the memory footprint at launch is what
+        // distinguishes jetsam from everything else. Neither is inferable after the fact, and the
+        // user is only reachable weekly, so an unlogged occurrence is a lost month.
+        let previous = UserDefaults.standard.object(forKey: launchStampKey) as? Date
+        UserDefaults.standard.set(Date(), forKey: launchStampKey)
+        let sinceLast = previous.map { String(format: "%.0fs ago", Date().timeIntervalSince($0)) } ?? "first seen"
+        event("session", "=== Loop phone log START — build \(build) === previous launch \(sinceLast), footprint \(Self.footprintMB)")
         flush()
     }
 }
