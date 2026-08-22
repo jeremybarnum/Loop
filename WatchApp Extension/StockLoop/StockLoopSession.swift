@@ -64,6 +64,12 @@ final class StockLoopSession {
         // (system-connected piggyback / connection event / ad scan), D2W's rhythm, and connect
         // verdicts. Made the acquisition mechanism observed rather than inferred.
         G7RadioCensus.sink = { line in SportLog.event("g7-ble", line) }
+        // Sensor-switch detection: the radio names every G7 it sees; the loop manager keeps
+        // the evidence and fires the #104 override when a different sensor is present while
+        // the persisted one delivers nothing. Wired here because this is the one place that
+        // holds both ends.
+        G7RadioCensus.sensorSighted = { [weak self] name in self?.stack.loopManager.noteSensorSighted(name) }
+        stack.loopManager.requestSensorRescan = { [weak self] in self?.stack.cgmManager.scanForNewSensor() }
 
         // Main-thread stall detector. Runs from LAUNCH and never stops, unlike the loan-scoped
         // heartbeat below: a wedged main thread is exactly the condition under which nothing else

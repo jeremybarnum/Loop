@@ -280,7 +280,7 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
 
 - **R23 OVERTURNED (loop mode only) — the wrist follows the phone** (2026-08-04,
   Jeremy): "I'm confident enough in the system now that when the loan starts, if
-  the phone was on closed loop, I want to loop closed… for Caitlin's purposes,
+  the phone was on closed loop, I want to loop closed… for the production user's purposes,
   following the phone will be more intuitive." So: **if phone closed, watch
   closed; if phone open, watch open — and the same on the way back, the loop
   inherits the watch state.** This supersedes BOTH R23's "each loan starts
@@ -379,7 +379,7 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   (2026-07-20): Jeremy's on-body BG range is narrow (~50–100 mg/dL all day) —
   euglycemia never exercises the high-BG dosing paths. Max temp basal,
   suspend threshold, high-BG corrections, and clamp behavior (R1/R16 frozen
-  settings) MUST be validated by SIMULATION with a Caitlin-like glucose
+  settings) MUST be validated by SIMULATION with a production-like glucose
   profile (T1D ranges, e.g. 180–300 mg/dL excursions) driving the watch loop
   against a bench pod — never inferred from Jeremy's field sessions. Field
   sessions validate acquisition/plumbing; simulation validates dosing limits.

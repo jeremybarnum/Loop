@@ -73,7 +73,22 @@ enum StockLoopStack {
         // WatchLoopManager persists rawState on cgmManagerDidUpdateState; a corrupt or
         // absent blob falls back to the bare init.
         let cgmManager: G7CGMManager
-        if let raw = UserDefaults.standard.dictionary(forKey: WatchLoopManager.cgmStateDefaultsKey),
+        // The same 10-day + margin test the WRITE path applies (#104's escape), applied on READ.
+        // Without it the escape was one-sided: a stale identity that expired while the app was
+        // not running was restored anyway at next launch — field 2026-08-21, a sensor restored
+        // 19 hours past its own expiry — and once restored, the manager auto-connects to it and
+        // the escape never gets another chance to fire.
+        let persistedRaw = UserDefaults.standard.dictionary(forKey: WatchLoopManager.cgmStateDefaultsKey)
+        let persistedExpired: Bool = {
+            guard let activated = persistedRaw?["activatedAt"] as? Date else { return false }
+            return Date().timeIntervalSince(activated) > .hours(10 * 24 + 12)
+        }()
+        if persistedExpired, let staleID = persistedRaw?["sensorID"] as? String {
+            SportLog.event("cgm", "G7 state: persisted sensor \(staleID) is past its 10-day life — NOT restoring it; acquisition will run")
+            UserDefaults.standard.removeObject(forKey: WatchLoopManager.cgmStateDefaultsKey)
+        }
+        if !persistedExpired,
+           let raw = persistedRaw,
            let restored = G7CGMManager(rawState: raw) {
             cgmManager = restored
             SportLog.event("cgm", "G7 state RESTORED — sensor \(restored.sensorName ?? "none"), activated \(restored.sensorActivatedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "unknown")")

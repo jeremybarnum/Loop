@@ -953,6 +953,106 @@ final class WatchLoopManager {
         bgSourceLock.lock(); defer { bgSourceLock.unlock() }
         return (_lastDirectG7At, _lastPhoneRelayAt)
     }
+
+    // MARK: - Sensor-switch detection (the positive-evidence override on #104)
+    //
+    // #104 refuses to forget the persisted sensor on stock's say-so, because stock's
+    // end-of-session inference ("disconnected with auth pending") is false on the watch after
+    // nearly every loan. That refusal is right — and it swallowed the one time the signal was
+    // real. First T1D field session, 2026-08-21: the user changed sensors on day 9.4, and the
+    // watch spent THREE DAYS auto-connecting to the dead identity and failing auth (267
+    // identical errors, zero direct readings) while the new sensor advertised beside it.
+    //
+    // A false forget and a real change are indistinguishable in the auth signal — but only a
+    // real change produces a DIFFERENT sensor advertising while the persisted one delivers
+    // nothing. That is the discriminator. Adoption still runs through authentication, which
+    // only the user's own enrolled sensor can pass, so a neighbour's G7 can trigger the
+    // attempt but can never be adopted. Worst case of a wrong fire is the pre-#104
+    // acquisition lottery, run at a moment when the persisted sensor was yielding nothing
+    // anyway.
+    //
+    // Deliberately independent of stock's forget signal, so it also heals the case where a
+    // stale identity was RESTORED at launch (no fresh forget ever fires) — which is exactly
+    // the state the field watch was in.
+
+    private let sensorSightingLock = NSLock()
+    private var _foreignSensorName: String?
+    private var _foreignFirstSeen: Date?
+    private var _foreignSightings = 0
+
+    /// A different sensor must be seen this many times, over at least this span, while the
+    /// persisted one has been silent this long. The sighting thresholds ride the G7's own
+    /// ~5-minute connection cadence (3 sightings ≈ two cadence periods); the silence window is
+    /// long enough that a routine acquisition gap cannot trip it, and short enough to matter —
+    /// the relay covers the interim, so the cost of waiting is minutes of degraded (not absent)
+    /// coverage.
+    static let foreignSightingsRequired = 3
+    static let foreignSpanRequired: TimeInterval = 10 * 60
+    static let directSilenceRequired: TimeInterval = 45 * 60
+
+    /// Radio-census feed (G7RadioCensus.sensorSighted). CoreBluetooth's queue — keep it cheap,
+    /// decide under the lock, act by hopping to the main queue.
+    func noteSensorSighted(_ name: String) {
+        guard let storedID = defaults.dictionary(forKey: Self.cgmStateDefaultsKey)?["sensorID"] as? String,
+              name != storedID else { return }
+
+        var fire = false
+        sensorSightingLock.lock()
+        if _foreignSensorName != name {
+            // A new foreign name restarts the evidence; two different neighbours must not
+            // pool their sightings into one verdict.
+            _foreignSensorName = name
+            _foreignFirstSeen = now()
+            _foreignSightings = 1
+        } else {
+            _foreignSightings += 1
+        }
+        let sightings = _foreignSightings
+        let span = _foreignFirstSeen.map { now().timeIntervalSince($0) } ?? 0
+        sensorSightingLock.unlock()
+
+        let directAge = lastGlucoseSourceStamps.direct.map { now().timeIntervalSince($0) }
+        let directSilent = directAge.map { $0 > Self.directSilenceRequired } ?? true  // never = silent
+        fire = sightings >= Self.foreignSightingsRequired
+            && span >= Self.foreignSpanRequired
+            && directSilent
+
+        if fire {
+            switchToSightedSensor(name, storedID: storedID, sightings: sightings, span: span, directAge: directAge)
+        }
+    }
+
+    private func switchToSightedSensor(_ name: String, storedID: String, sightings: Int, span: TimeInterval, directAge: TimeInterval?) {
+        sensorSightingLock.lock()
+        _foreignSensorName = nil; _foreignFirstSeen = nil; _foreignSightings = 0
+        sensorSightingLock.unlock()
+
+        // Order matters: clear the persisted identity FIRST, so when scanForNewSensor()'s nil
+        // arrives at cgmManagerDidUpdateState, the #104 filter finds no stored ID and lets it
+        // through. Clearing after would race the callback and #104 would resurrect the corpse.
+        defaults.removeObject(forKey: Self.cgmStateDefaultsKey)
+        SportLog.event("cgm", "SENSOR SWITCH — \(storedID) silent \(directAge.map { "\(Int($0 / 60))m" } ?? "forever") while \(name) seen \(sightings)x over \(Int(span / 60))m; dropping the old identity and rescanning (auth gates adoption)")
+
+        DispatchQueue.main.async { [weak self] in
+            self?.requestSensorRescan?()
+        }
+
+        issueAlert(LoopKit.Alert(
+            identifier: LoopKit.Alert.Identifier(managerIdentifier: "G7", alertIdentifier: "sensorSwitch"),
+            foregroundContent: LoopKit.Alert.Content(
+                title: NSLocalizedString("New Sensor Detected", comment: "Watch alert title when a different G7 is adopted over a silent persisted one"),
+                body: NSLocalizedString("The watch stopped following your old sensor and is connecting to the new one.", comment: "Watch alert body for the sensor switch"),
+                acknowledgeActionButtonLabel: "OK"),
+            backgroundContent: LoopKit.Alert.Content(
+                title: NSLocalizedString("New Sensor Detected", comment: "Watch alert title when a different G7 is adopted over a silent persisted one"),
+                body: NSLocalizedString("The watch stopped following your old sensor and is connecting to the new one.", comment: "Watch alert body for the sensor switch"),
+                acknowledgeActionButtonLabel: "OK"),
+            trigger: .immediate))
+    }
+
+    /// Wired by StockLoopSession to the stack's cgmManager.scanForNewSensor() — this manager
+    /// is delegate to the CGM manager, not its owner.
+    var requestSensorRescan: (() -> Void)?
     /// The last cycle's binding-constraint summary, for the diagnostic screen. Our screen
     /// only — never annotated onto a stock surface (the stock-parity ruling).
     private(set) var lastDosingDerivation: String?
