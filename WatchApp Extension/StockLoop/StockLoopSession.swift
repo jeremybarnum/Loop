@@ -249,7 +249,15 @@ final class StockLoopSession {
     /// unreachability. Event-driven, because a dry session produces no readings to ride on.
     func sendLogSnapshot(_ reason: String) {
         guard WCSession.default.activationState == .activated, let url = LogFile.url else { return }
-        SportLog.event("log", "snapshot → iPhone (\(reason))")
+        // Reachability rides the pulse rather than getting a timer of its own. FIELD 2026-08-21:
+        // a 25-minute glucose hole during a loan could not be explained afterwards, because
+        // `reachable` is only ever sampled when something SENDS — and nothing sent for the whole
+        // gap. Five of these pulse lines fell inside it, every one of them silent about the one
+        // fact that would have separated "phone out of range" from "transport wedged".
+        //
+        // It costs no extra lines: the log rotates at 512 KB keeping only a tail, so a
+        // once-a-minute heartbeat would push out the content worth keeping. This piggybacks.
+        SportLog.event("log", "snapshot → iPhone (\(reason)) reachable=\(WCSession.default.isReachable)")
         WCSession.default.transferFile(url, metadata: ["kind": "g7watch.log"])
     }
 
