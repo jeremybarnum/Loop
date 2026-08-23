@@ -399,8 +399,8 @@ struct RadioLabView: View {
     @AppStorage("G7Lab.trigger.a") private var g7Ride = true
     @AppStorage("G7Lab.trigger.b") private var g7Events = true
     @AppStorage("G7Lab.trigger.c") private var g7Scan = true
-    // Pod link — keys OmnipodKit has always read live.
-    @AppStorage("OmnipodKit.connectOnDemandEnabled") private var podOnDemand = true
+    // Pod link — keys OmnipodKit has always read live. (Connect-on-demand is no longer here:
+    // it won its trial and is hardcoded in BluetoothManager — see connectOnDemandEnabled.)
     @AppStorage("OmnipodKit.lowPowerMonitorEnabled") private var alarmScan = true
 
     // Bench exerciser controls (see the Reclaim exerciser section below).
@@ -410,7 +410,7 @@ struct RadioLabView: View {
 
     private var session: StockLoopSession? { ExtensionDelegate.sharedIfAvailable()?.stockLoopSession }
     private var configLine: String {
-        "g7=\(g7Ride ? "a" : "")\(g7Events ? "b" : "")\(g7Scan ? "c" : "") pod=\(podOnDemand ? "onDemand" : "HOLD") alarm=\(alarmScan ? "on" : "off")"
+        "g7=\(g7Ride ? "a" : "")\(g7Events ? "b" : "")\(g7Scan ? "c" : "") alarm=\(alarmScan ? "on" : "off")"
     }
 
     var body: some View {
@@ -421,7 +421,6 @@ struct RadioLabView: View {
                 Toggle("(c) Own scan", isOn: $g7Scan)
             }
             Section("Pod link") {
-                Toggle("Connect on demand", isOn: $podOnDemand)
                 Toggle("Alarm scan (C00A)", isOn: $alarmScan)
             }
             // BENCH: drives the real reclaimPodForDose on a chosen cadence — orphan, idle,

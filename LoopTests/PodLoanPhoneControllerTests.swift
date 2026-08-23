@@ -1656,15 +1656,17 @@ extension PodLoanPhoneControllerTests {
         let early = try XCTUnwrap(controller.reclaimProgress,
                                   "a forced settle publishes progress like any other")
         XCTAssertEqual(early.phase, .forceReclaimingPod)
-        XCTAssertEqual(early.expectedBy.timeIntervalSince(early.startedAt), 15, accuracy: 0.5)
+        // ONE promise for both settle flavors (lean ruling 2026-08-23) — the label differs,
+        // the physics no longer do.
+        XCTAssertEqual(early.expectedBy.timeIntervalSince(early.startedAt), 10, accuracy: 0.5)
 
-        clock = clock.addingTimeInterval(7.5)      // halfway through the promise
+        clock = clock.addingTimeInterval(5)        // halfway through the promise
         let mid = try XCTUnwrap(controller.reclaimProgress)
         XCTAssertEqual(mid.phase, .forceReclaimingPod,
                        "no re-baseline mid-force — one operation, one timer")
         XCTAssertEqual(mid.fraction ?? -1, 0.5, accuracy: 0.01)
 
-        clock = clock.addingTimeInterval(12.5)     // 20 s: past the promise
+        clock = clock.addingTimeInterval(15)       // 20 s: past the promise
         let over = try XCTUnwrap(controller.reclaimProgress)
         XCTAssertEqual(over.phase, .forceReclaimingPod)
         XCTAssertEqual(over.fraction ?? -1, 0.95, accuracy: 0.001,
@@ -1858,14 +1860,16 @@ extension PodLoanPhoneControllerTests {
     /// 150 ms each, no radio involved, and the settle sat at 169 s until a manual status check
     /// broke it.
     ///
-    /// And it must force on a BACKOFF, not on every 2 s tick: forcing each tick would be up to
-    /// 150 real round-trips across the five-minute ceiling, which is reclaim speed paid for with
-    /// G7 radio time.
+    /// The 12 s backoff this test used to assert was DELETED (lean ruling 2026-08-23): with the
+    /// reclaim dialing at re-arm, every measured settle verifies on the first read after
+    /// link-up, so the spacing guarded radio time no settle spends anymore. What still deserves
+    /// asserting is the shape that replaced it: reads are real (forced) from tick 0, and the
+    /// in-flight latch — now the only throttle — keeps concurrent ticks from stacking reads.
     ///
     /// The virtual clock is parked an hour ahead so the mock's real-dated lastSync can never
     /// exceed `started` — that keeps the settle open for the whole test instead of verifying on
     /// the first read.
-    func testSettleForcesARealReadEarlyThenBacksOff() throws {
+    func testSettleForcesARealReadEveryTick() throws {
         clock = Date().addingTimeInterval(.hours(1))
         let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
         let grant = establishLoan(controller)
@@ -1882,21 +1886,15 @@ extension PodLoanPhoneControllerTests {
             MockPumpManager.testForcedReadCount >= 1
         }
 
-        // More ticks at 2 s. The clock has not moved, so the backoff must hold them all.
+        // More 2 s ticks pass; each one may force again (the mock resolves reads instantly, so
+        // the latch never blocks here). The assertion is a floor, not a ceiling: reads must
+        // KEEP being real for as long as the settle is open.
         let ticksPassed = XCTestExpectation(description: "several ticks pass")
         DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) { ticksPassed.fulfill() }
         wait(for: [ticksPassed], timeout: 10)
-        XCTAssertEqual(MockPumpManager.testForcedReadCount, 1,
-                       "a frozen clock inside the interval means every later tick takes the cheap path")
+        XCTAssertGreaterThanOrEqual(MockPumpManager.testForcedReadCount, 2,
+                                    "an open settle keeps doing REAL round-trips — the cheap no-radio path is what stalled 169 s in the field")
         XCTAssertTrue(controller.isReclaimSettling, "the settle is still open, so ticks are still running")
-
-        // Past the interval, the next tick is allowed to force again.
-        clock = clock.addingTimeInterval(13)
-        waitUntil(timeout: 5, "the backoff interval re-opens") {
-            MockPumpManager.testForcedReadCount >= 2
-        }
-        XCTAssertLessThanOrEqual(MockPumpManager.testForcedReadCount, 3,
-                                 "re-opening the interval allows another forced read, not a burst")
 
         // PARK THE CHASE. This settle can never verify (the clock is an hour ahead of anything
         // the mock will report), so it runs to the 5-minute ceiling — and unlike the other

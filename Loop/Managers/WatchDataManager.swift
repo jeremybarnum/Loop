@@ -59,6 +59,10 @@ final class WatchDataManager: NSObject {
     }
 
     /// When the watch was last heard from — the loan's liveness signal.
+    /// appInstalled=false glitch detector state (see trackAppInstalledGlitch).
+    private var appInstalledGlitchWork: DispatchWorkItem?
+    private var appInstalledGlitchNotified = false
+
     private let lockedLastWatchContact = Locked<Date?>(nil)
 
     // MARK: - Loan protocol v2 (M5)
@@ -1204,6 +1208,41 @@ extension WatchDataManager: WCSessionDelegate {
             + "appInstalled=\(session.isWatchAppInstalled) reachable=\(session.isReachable) "
             + "activation=\(session.activationState.rawValue) "
             + "complication=\(session.isComplicationEnabled)")
+        let paired = session.isPaired
+        let installed = session.isWatchAppInstalled
+        Task { @MainActor in self.trackAppInstalledGlitch(paired: paired, installed: installed) }
+    }
+
+    /// The `appInstalled=false` GLITCH detector. WCSession sometimes reports the watch app "not
+    /// installed" while it is sitting right there installed — a watch-side transport wedge, not
+    /// an install state. Field remedy, three-for-three (2026-08-2x): toggling the WATCH's
+    /// Bluetooth. Every occurrence cost real diagnosis time until someone remembered the
+    /// folklore, so the phone now says the remedy itself. 75 s of persistence before speaking:
+    /// a genuine install/replacement transits through false for up to ~7 min, but flips are
+    /// also momentary during ordinary churn — the delay keeps this quiet through normal
+    /// installs while still catching a wedge the same minute it starts. One notice per
+    /// occurrence; re-arms when the flag recovers.
+    @MainActor private func trackAppInstalledGlitch(paired: Bool, installed: Bool) {
+        if installed || !paired {
+            appInstalledGlitchWork?.cancel()
+            appInstalledGlitchWork = nil
+            appInstalledGlitchNotified = false
+            return
+        }
+        guard appInstalledGlitchWork == nil, !appInstalledGlitchNotified else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.appInstalledGlitchWork = nil
+            self.appInstalledGlitchNotified = true
+            PhoneLog.event("link", "appInstalled=false has PERSISTED 75s — surfacing the watch-BT-toggle remedy [appinstalled-glitch]")
+            let content = UNMutableNotificationContent()
+            content.title = NSLocalizedString("Watch Link Glitch", comment: "Notification title for the persistent appInstalled=false glitch")
+            content.body = NSLocalizedString("The watch is reporting Sport Mode as not installed — usually a Bluetooth glitch, not a real uninstall. On the watch: swipe up for Control Center, turn Bluetooth off and back on.", comment: "Notification body: remedy for the appInstalled=false glitch")
+            content.sound = .default
+            UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "podloan.appinstalled.glitch", content: content, trigger: nil))
+        }
+        appInstalledGlitchWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 75, execute: work)
     }
 
     nonisolated func sessionReachabilityDidChange(_ session: WCSession) {

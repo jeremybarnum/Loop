@@ -53,11 +53,7 @@ extension DeviceDataManager {
             // watch is silent from the first second, which is the whole point of deciding the
             // branch before the wait starts rather than after it.
             //
-            // Read ONCE and passed whole: the phase and the elapsed seconds must describe the
-            // same instant, and two reads of a live accessor do not.
-            let progress = podReclaimProgress
-            return DeviceDataManager.podReclaimingStatusHighlight(phase: progress?.phase,
-                                                                  elapsed: progress?.elapsed)
+            return DeviceDataManager.podReclaimingStatusHighlight(phase: podReclaimProgress?.phase)
         } else if isPodTakeoverInProgress {
             // The grant is out but the watch has NOT confirmed it has the pod. This branch MUST
             // precede the one below: the grant releases the pod's BLE immediately, so
@@ -110,9 +106,8 @@ extension DeviceDataManager {
         var state: DeviceStatusHighlightState = .normalPump
     }
 
-    static func podReclaimingStatusHighlight(phase: PodLoanPhoneController.ReclaimProgress.Phase?,
-                                             elapsed: TimeInterval? = nil) -> PodReclaimingStatusHighlight {
-        return PodReclaimingStatusHighlight(phase: phase, elapsed: elapsed)
+    static func podReclaimingStatusHighlight(phase: PodLoanPhoneController.ReclaimProgress.Phase?) -> PodReclaimingStatusHighlight {
+        return PodReclaimingStatusHighlight(phase: phase)
     }
 
     struct PodReclaimingStatusHighlight: DeviceStatusHighlight {
@@ -123,40 +118,23 @@ extension DeviceDataManager {
         /// nil phase = the reclaim is inside the drain's store commit, which has no deadline to
         /// name; plain "Reclaiming…" is the honest label for it.
         ///
-        /// BOTH SETTLE CASES CARRY LIVE SECONDS, and they are different words on purpose. The
-        /// settle's measured distribution is bimodal — most reclaims finish in a few seconds and
-        /// a minority take minutes, with little in between — so a settle still running once the
-        /// fast mode's deadline has passed is a different situation from the one the first label
-        /// described, and repeating that label would repeat a promise that has already expired.
-        ///
-        /// The seconds keep climbing even after the bar caps, and once it has capped they are the
-        /// only thing on this tile that can distinguish still-working from stuck. Both strings
-        /// are kept to the width the other labels here have proven, which is why they are
-        /// abbreviations rather than sentences.
-        init(phase: PodLoanPhoneController.ReclaimProgress.Phase? = nil, elapsed: TimeInterval? = nil) {
-            let seconds = max(elapsed ?? 0, 0)
+        /// NO elapsed counter (lean ruling, 2026-08-23). The climbing seconds were the right
+        /// honesty for a settle that ranged 4-190 s — you cannot promise a duration you do not
+        /// know, so you show elapsed instead. With settles in a tight 5-10 s band the counter
+        /// narrated a wait too short to read, and the deterministic bar behind the label is now
+        /// truthful nearly every time; the rare overrun holds near-full until the verify lands.
+        init(phase: PodLoanPhoneController.ReclaimProgress.Phase? = nil) {
             switch phase {
             case .forcing?, .forceReclaimingPod?:
                 // One label across the force rung AND the settle that follows it, so the force
-                // reads as a single timed operation rather than a chain of renamed waits. The
-                // dead branch enters this the instant the tap lands — it no longer waits on a
-                // watch that cannot answer — so this is the whole dead-reclaim experience: one
-                // label, one bar, a few seconds.
-                localizedMessage = String(format: NSLocalizedString("Forcing… %.0fs", comment: "Title text (with elapsed seconds) for the pump tile while the phone force-reclaims the pod and verifies it"),
-                                          seconds)
-            case .reconnectingToPod?:
-                // Same string as the handover on purpose: to the user a live reclaim is ONE wait,
-                // and the bar behind it is one continuous fill from the tap — a label change at
-                // the handover/settle boundary would read as a phase they were never told about.
-                localizedMessage = String(format: NSLocalizedString("Reclaiming… %.0fs", comment: "Title text (with elapsed seconds) for the pump tile while the pod comes home and its round-trip is verified"),
-                                          seconds)
+                // reads as a single operation rather than a chain of renamed waits.
+                localizedMessage = NSLocalizedString("Forcing…", comment: "Title text for the pump tile while the phone force-reclaims the pod")
+            case .reconnectingToPod?, .draining?:
+                // Same string across the handover/settle boundary on purpose: to the user a
+                // live reclaim is ONE wait behind one continuous bar.
+                localizedMessage = NSLocalizedString("Reclaiming…", comment: "Title text for the pump tile while the pod is coming back from the watch")
             case .watchNotAnswering?:
-                // Static — the bar is capped and the next event is the force, so ticking seconds
-                // would count toward nothing the user was promised.
-                localizedMessage = NSLocalizedString("No watch reply…", comment: "Title text for the pump tile when the watch has not answered within the drain promise, shortly before the force")
-            case .draining?:
-                localizedMessage = String(format: NSLocalizedString("Reclaiming… %.0fs", comment: "Title text (with elapsed seconds) for the pump tile while the watch drains its records under the determinate bar"),
-                                          seconds)
+                localizedMessage = NSLocalizedString("No watch reply…", comment: "Title text for the pump tile when the watch has not answered within the drain promise")
             case .none:
                 localizedMessage = NSLocalizedString("Reclaiming…", comment: "Title text for the pump tile while the pod is coming back from the watch")
             }

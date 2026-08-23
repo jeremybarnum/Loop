@@ -1520,7 +1520,7 @@ extension DeviceDataManager {
     /// the pod's BLE link is still re-establishing, and clearing the indicator at that instant
     /// would claim control the phone does not yet have.
     var isPodLoanReclaiming: Bool {
-        watchManager?.podLoanController.isReclaimSettlingOnlyForUI ?? false
+        watchManager?.podLoanController.isReclaimActivityForUI ?? false
     }
 
     var podReclaimProgress: PodLoanPhoneController.ReclaimProgress? {
