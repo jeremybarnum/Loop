@@ -146,7 +146,21 @@ extension DeviceDataManager {
     }
 
     var pumpLifecycleProgress: DeviceLifecycleProgress? {
+        // A live reclaim's deterministic bar rides the tile's NATIVE progress mechanism —
+        // the same element stock uses for pod expiry — instead of custom UI. The elapsed
+        // counter this replaces was removed 2026-08-23 (it narrated waits too short to read),
+        // which left "Reclaiming…" with no motion at all; a bar filling against the 10 s
+        // promise is the calm version of the same honesty. Cap-and-hold semantics come from
+        // the fraction itself (0.95 on overrun, ceiling still the 5-minute backstop).
+        if let progress = podReclaimProgress, let fraction = progress.fraction {
+            return PodReclaimLifecycleProgress(percentComplete: fraction)
+        }
         return (pumpManager as? PumpManagerUI)?.pumpLifecycleProgress
+    }
+
+    struct PodReclaimLifecycleProgress: DeviceLifecycleProgress {
+        var percentComplete: Double
+        var progressState: DeviceLifecycleProgressState = .normalPump
     }
     
     static var resumeOnboardingStatusHighlight: ResumeOnboardingStatusHighlight {
