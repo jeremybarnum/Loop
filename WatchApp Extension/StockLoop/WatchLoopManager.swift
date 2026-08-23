@@ -1335,6 +1335,17 @@ final class WatchLoopManager {
     private var lastRecommendation: AutomaticDoseRecommendation?
 
     private(set) var lastLoopCompleted: Date?
+
+    /// Forward-only seed of the loop-recency clock from the OTHER device (ring ruling
+    /// 2026-08-23: recency is a property of the system; the boundary inherits). Display only —
+    /// nothing in dosing reads lastLoopCompleted — so the cross-queue write is a benign
+    /// last-writer-wins against a cycle completing at the same instant, and both writers agree
+    /// the loop is fresh in that case anyway.
+    func seedLastLoopCompleted(_ date: Date, source: String) {
+        guard (lastLoopCompleted ?? .distantPast) < date else { return }
+        lastLoopCompleted = date
+        SportLog.event("loop", String(format: "loop recency SEEDED from %@ — last cycle %.0fs ago", source, self.now().timeIntervalSince(date)))
+    }
     private(set) var lastLoopError: Error?
 
     /// Mirrors DeviceDataManager.lastCGMLoopTrigger (deviceQueue only).

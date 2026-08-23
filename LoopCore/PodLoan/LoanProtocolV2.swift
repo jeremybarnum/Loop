@@ -537,6 +537,11 @@ public struct LoanGrant: Codable, Equatable {
     /// otherwise a dozen epochs would multiply COB. nil (older phone) → no seeding, the
     /// pre-existing behavior.
     public let carbHistory: [LoanCarbRecord]?
+    /// The phone's last completed loop cycle, so the wrist's loop dot starts from the SYSTEM's
+    /// recency instead of grey (ring ruling 2026-08-23: loop recency is a property of the
+    /// system, not the device — the boundary inherits, and the new device's own next cycle
+    /// then keeps or loses the freshness honestly). nil (older phone) = the old behavior.
+    public let lastLoopCompleted: Date?
     /// ~3 h of recent glucose seeded phone→watch so momentum AND retrospective correction
     /// compute from the FIRST post-takeover cycle. The watch's GlucoseStore is otherwise empty
     /// at takeover (fed only by live G7 reads that accumulate over ~15 min), so momentum was
@@ -599,7 +604,8 @@ public struct LoanGrant: Codable, Equatable {
                 glucoseHistory: [LoanGlucoseRecord]? = nil,
                 predictionSnapshot: LoanPredictionSnapshot? = nil,
                 activeOverrideRaw: Data? = nil,
-                therapySettingsSupplementRaw: Data? = nil) {
+                therapySettingsSupplementRaw: Data? = nil,
+                lastLoopCompleted: Date? = nil) {
         self.epoch = epoch
         self.expiresAt = expiresAt
         self.pumpManagerRawState = pumpManagerRawState
@@ -617,6 +623,7 @@ public struct LoanGrant: Codable, Equatable {
         self.predictionSnapshot = predictionSnapshot
         self.activeOverrideRaw = activeOverrideRaw
         self.therapySettingsSupplementRaw = therapySettingsSupplementRaw
+        self.lastLoopCompleted = lastLoopCompleted
     }
 }
 
@@ -797,10 +804,16 @@ public struct HandbackOffer: Codable, Equatable {
     /// rather than restoring the value captured before the loan. nil (older watch) → the phone
     /// keeps its captured pre-loan value, i.e. the previous restore behavior.
     public let watchClosedLoopEnabled: Bool?
+    /// The wrist's last completed loop cycle, the return-direction twin of the grant's field:
+    /// at reclaim the phone seeds its own recency display from this, so the ~10 s settle does
+    /// not paint a red ring over a system that looped seconds ago (the watch's temp is still
+    /// running, R33 — therapy is genuinely continuous). nil (older watch) = no seed.
+    public let lastLoopCompleted: Date?
 
     public init(epoch: Int, handedBackAt: Date, finalStatus: LoanPodStatus?,
                 odometer: LoanOdometerSnapshot?, events: [LoanEvent], tombstones: [UUID],
-                recovered: Bool, released: Bool? = nil, watchClosedLoopEnabled: Bool? = nil) {
+                recovered: Bool, released: Bool? = nil, watchClosedLoopEnabled: Bool? = nil,
+                lastLoopCompleted: Date? = nil) {
         self.epoch = epoch
         self.handedBackAt = handedBackAt
         self.finalStatus = finalStatus
@@ -810,6 +823,7 @@ public struct HandbackOffer: Codable, Equatable {
         self.recovered = recovered
         self.released = released
         self.watchClosedLoopEnabled = watchClosedLoopEnabled
+        self.lastLoopCompleted = lastLoopCompleted
     }
 }
 

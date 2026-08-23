@@ -107,6 +107,16 @@ final class LoopDataManager: ObservableObject {
     }
 
     @Published private(set) var lastLoopCompleted: Date?
+
+    /// Ring ruling 2026-08-23: loop recency is a property of the SYSTEM, not the device. At
+    /// reclaim commit the wrist's final cycle seeds this display clock so the hand-back does
+    /// not paint a red ring over a system that looped seconds ago (the watch's temp is still
+    /// running until this phone cancels it, R33). Forward-only, display-only: dosing decisions
+    /// never read this, and the phone's own next cycle keeps or loses the freshness honestly.
+    func seedLastLoopCompleted(fromWatch date: Date) {
+        guard (lastLoopCompleted ?? .distantPast) < date else { return }
+        lastLoopCompleted = date
+    }
     @Published private(set) var publishedMostRecentGlucoseDataDate: Date?
     @Published private(set) var publishedMostRecentPumpDataDate: Date?
     @Published private(set) var lastManualBolus: LastManualBolus?

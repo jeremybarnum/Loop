@@ -261,6 +261,16 @@ final class WatchDataManager: NSObject {
             noteWatchClosedLoop: { closed in
                 UserDefaults.standard.set(closed, forKey: dosingKey)
             },
+            lastLoopCompleted: { [weak self] in
+                // Reading a @MainActor-published Date? off-actor is a benign snapshot: the
+                // grant path wants "roughly when did this phone last loop", not a sync point.
+                self?.loopDataManager.lastLoopCompleted
+            },
+            noteWatchLoopCompleted: { [weak self] date in
+                DispatchQueue.main.async {
+                    self?.loopDataManager.seedLastLoopCompleted(fromWatch: date)
+                }
+            },
             doseHistory: { [weak self] start, completion in
                 guard let self = self else { completion([]); return }
                 Task {
