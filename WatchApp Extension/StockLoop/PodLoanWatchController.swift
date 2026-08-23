@@ -761,6 +761,13 @@ final class PodLoanWatchController {
                                          reason: grant.phoneClosedLoopEnabled == nil
                                             ? "(older phone sent no loop mode — defaulting open)"
                                             : "inherited from the phone at grant")
+        // Ring ruling 2026-08-23: the loop dot starts from the SYSTEM's recency — the phone
+        // looped minutes ago at most, so the wrist should not open on grey/red for the seconds
+        // until its own first cycle. Forward-only seed; the watch's first cycle (~10 s away)
+        // takes over the clock immediately.
+        if let phoneLoop = grant.lastLoopCompleted {
+            loopManager.seedLastLoopCompleted(phoneLoop, source: "phone at grant")
+        }
         // INSTRUMENTATION ONLY: stash the phone's prediction decomposition + echo it into the
         // log, BEFORE the takeover read / first prediction refresh, so [predict-diff] and [iob-diff]
         // Leg 1 have the phone baseline in hand. The serial dataAccessQueue guarantees the stash
@@ -2220,7 +2227,10 @@ final class PodLoanWatchController {
             // the way back, mirroring the grant's outbound inheritance. Read through the
             // NON-BLOCKING mirror: this runs on `queue`, and `closedLoopEnabled` would sync
             // onto dataAccessQueue — the deadlock direction.
-            watchClosedLoopEnabled: loopManager.closedLoopEnabledNonBlocking)
+            watchClosedLoopEnabled: loopManager.closedLoopEnabledNonBlocking,
+            // Same benign-snapshot read as the phase above: "roughly when did the wrist last
+            // loop" for the phone's recency seed, not a sync point.
+            lastLoopCompleted: loopManager.lastLoopCompleted)
         if offer.released == true, finalOfferSentAt == nil { finalOfferSentAt = self.now() }
         handbackResendCount += 1
         // Self-documenting limbo (a wait can run to 97 silent minutes of 15s resends):

@@ -148,6 +148,11 @@ final class PodLoanPhoneController {
         /// mode so the reclaim restores THAT rather than the value captured before the loan.
         /// Default no-op keeps the state-machine tests constructing unchanged.
         var noteWatchClosedLoop: (Bool) -> Void = { _ in }
+        /// The phone's last completed loop cycle, for the grant (ring ruling 2026-08-23).
+        var lastLoopCompleted: () -> Date? = { nil }
+        /// Seed the phone's loop-recency display from the wrist's final cycle at reclaim
+        /// commit — the return-direction twin. Display only; never read by dosing.
+        var noteWatchLoopCompleted: (Date) -> Void = { _ in }
         /// 16 h insulin history for the grant.
         var doseHistory: (_ start: Date, _ completion: @escaping ([DoseEntry]) -> Void) -> Void
         /// Active carb entries for the grant — seeded so the watch predicts with COB.
@@ -1931,7 +1936,10 @@ final class PodLoanPhoneController {
                             glucoseHistory: glucose,
                             predictionSnapshot: snapshot,
                             activeOverrideRaw: overrideData,
-                            therapySettingsSupplementRaw: supplementData)
+                            therapySettingsSupplementRaw: supplementData,
+                            // Ring ruling 2026-08-23: the wrist's loop dot starts from the
+                            // SYSTEM's recency — this phone looped minutes ago at most.
+                            lastLoopCompleted: self.deps.lastLoopCompleted())
                         self.sendMessage(.grant(grant))
                         self.armT1(for: grantEpoch)
                     }
@@ -2260,6 +2268,15 @@ final class PodLoanPhoneController {
             if let watchClosed = offer.watchClosedLoopEnabled {
                 deps.noteWatchClosedLoop(watchClosed)
                 handbackDiag(offer.epoch, "loop mode INHERITED from the wrist — phone will resume \(watchClosed ? "CLOSED" : "OPEN")")
+            }
+            // Loop recency inherits across the boundary too (ring ruling 2026-08-23): the
+            // system looped seconds ago on the wrist, and the watch's temp keeps running
+            // until this phone cancels it (R33), so a red ring during the ~10 s settle would
+            // claim a therapy gap that does not exist. The phone's OWN next cycle then keeps
+            // or loses the green honestly — if the pod or BG is missing, it ages out.
+            if let watchLoop = offer.lastLoopCompleted {
+                deps.noteWatchLoopCompleted(watchLoop)
+                handbackDiag(offer.epoch, String(format: "loop recency INHERITED from the wrist — last cycle %.0fs ago", deps.now().timeIntervalSince(watchLoop)))
             }
         }
         // Round-2 fix: the odometer audit runs ONLY on the transition-owning final
