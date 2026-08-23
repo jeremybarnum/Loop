@@ -69,14 +69,30 @@ final class SensorReadinessTests: XCTestCase {
         XCTAssertEqual(m.sensorReadiness, .ready, "overnight suspension must not demote a healthy setup")
     }
 
+    /// V3's defining case: identity present, stamp never written (fresh key after an update).
+    /// The first launch of build 111 hit exactly this and was wrongly blocked under v2.
+    func testIdentityWithNoStampAtAllIsReady() {
+        let m = makeManager(identity: "DXCMu0", lastDirectAgo: nil)
+        XCTAssertEqual(m.sensorReadiness, .ready)
+    }
+
     func testNoIdentityIsUnprovenNotAFault() {
         let m = makeManager(identity: nil, lastDirectAgo: nil)
         XCTAssertEqual(m.sensorReadiness, .unproven)
     }
 
-    func testStaleAuthIsUnproven() {
+    /// V3: a stale stamp no longer demotes — the identity is the proof (adoption requires
+    /// auth), and the 12-minute in-loan watchdog is the specified backstop for the residue.
+    /// This is the case that blocked the first post-update launch under v2.
+    func testStaleStampWithValidIdentityIsReadyUnderV3() {
         let m = makeManager(identity: "DXCMu0", lastDirectAgo: .hours(30))
-        XCTAssertEqual(m.sensorReadiness, .unproven, "past the 24h window the bond needs re-proving, not trusting")
+        XCTAssertEqual(m.sensorReadiness, .ready)
+    }
+
+    func testExpiredIdentityIsUnproven() {
+        let m = makeManager(identity: "DXCMu0", lastDirectAgo: nil)
+        clock = clock.addingTimeInterval(.hours(11 * 24))   // sensor activated 24h before clock; now 12 days past
+        XCTAssertEqual(m.sensorReadiness, .unproven, "a corpse past its life proves nothing")
     }
 
     /// The three-day field failure, as the gate would now see it: identity held, but the radio

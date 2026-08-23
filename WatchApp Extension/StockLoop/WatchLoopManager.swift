@@ -998,27 +998,34 @@ final class WatchLoopManager {
         case unproven
     }
 
-    /// A successful handshake this recent, with the identity unchanged, is treated as proof the
-    /// bond and identity still hold. Bonds die rarely and near-totally; 24 h keeps one
-    /// overnight from demoting a healthy setup while still catching a sensor swapped yesterday.
-    static let authRecencyWindow: TimeInterval = .hours(24)
-
     var sensorReadiness: SensorReadiness {
-        guard defaults.dictionary(forKey: Self.cgmStateDefaultsKey)?["sensorID"] is String else {
+        // V3 (Jeremy, 2026-08-22 evening): a persisted identity within its sensor's life IS the
+        // 98% state — adoption cannot happen without a successful authentication, so the
+        // identity is itself the proof. V2 additionally demanded a direct reading within 24 h,
+        // which blocked the first launch after the update (the stamp key was born empty) and
+        // added little: the failure it guarded against — identity held, sensor dead or swapped —
+        // is caught by the foreign-sightings check when evidence exists and by the 12-minute
+        // in-loan watchdog when it does not. That is the 98/2 trade as specified, with the
+        // watchdog as the specified backstop.
+        guard let stored = defaults.dictionary(forKey: Self.cgmStateDefaultsKey),
+              stored["sensorID"] is String else {
             return .unproven
+        }
+        if let activated = stored["activatedAt"] as? Date,
+           now().timeIntervalSince(activated) > .hours(10 * 24 + 12) {
+            return .unproven   // a corpse past its life proves nothing (launch restore clears it anyway)
         }
         let lastDirect = defaults.object(forKey: Keys.lastDirectReadingAt) as? Date
         let directAge = lastDirect.map { now().timeIntervalSince($0) }
         // Foreign evidence demotes ONLY when our own sensor is also silent — the same
         // conjunction the override itself requires. Without the silence condition, two
         // sightings of a NEIGHBOUR'S G7 (gym, household) would block a wearer whose own
-        // sensor is actively delivering. Caught in self-review before shipping, 2026-08-22.
+        // sensor is actively delivering.
         sensorSightingLock.lock()
         let foreignPattern = _foreignSightings >= 2
         sensorSightingLock.unlock()
         let ownSilent = directAge.map { $0 > Self.directSilenceRequired } ?? true
         if foreignPattern && ownSilent { return .wrongSensor }
-        guard let age = directAge, age < Self.authRecencyWindow else { return .unproven }
         return .ready
     }
 
