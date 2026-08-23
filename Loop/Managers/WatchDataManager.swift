@@ -1249,6 +1249,11 @@ extension WatchDataManager: WCSessionDelegate {
             content.title = NSLocalizedString("Watch Link Glitch", comment: "Notification title for the persistent appInstalled=false glitch")
             content.body = NSLocalizedString("The watch is reporting Sport Mode as not installed — usually a Bluetooth glitch, not a real uninstall. On the watch: swipe up for Control Center, turn Bluetooth off and back on.", comment: "Notification body: remedy for the appInstalled=false glitch")
             content.sound = .default
+            // timeSensitive or a Focus mode eats it silently — field 2026-08-23: the detector's
+            // first firing produced no banner on a phone in flight-mode-adjacent Focus, while
+            // the .timeSensitive urgent notices have always shown. Same justification as that
+            // channel: the phone is the only device able to say this (the watch link is down).
+            content.interruptionLevel = .timeSensitive
             UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "podloan.appinstalled.glitch", content: content, trigger: nil))
         }
         appInstalledGlitchWork = work
