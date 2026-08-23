@@ -854,12 +854,22 @@ struct GlanceView: View {
         .onDisappear { model.stopRefreshing() }
         // A phase change repaints once without arming the tick — the session's poke, which used
         // to be a direct call into the hosting controller.
-        .onReceive(NotificationCenter.default.publisher(for: .podLoanPhaseDidChange)) { _ in
+        // .receive(on: main) is LOAD-BEARING, not style (2026-08-23). The phase didSet posts
+        // from the controller's own queue, and a bare .onReceive delivers on the POSTING
+        // thread — so this repaint mutated SwiftUI state from a background queue. Off-main
+        // @Published writes render unreliably, and this poke is the ONLY painter precisely
+        // when it matters: a wrist-drop during hand-back kills the 2 s tick and the mirror
+        // observer (stopRefreshing), a bare undim revives neither, and so the one dropped
+        // off-main render left the glance frozen on "returning records…" until a swipe
+        // forced a page transition (field, 2026-08-23 — every rapid-cycle hand-back).
+        .onReceive(NotificationCenter.default.publisher(for: .podLoanPhaseDidChange)
+            .receive(on: DispatchQueue.main)) { _ in
             model.refreshNow()
         }
         // Same treatment for the bolus transitions: the pod's ACK must reach the screen even while
         // the dose holds dataAccessQueue and the tick cannot rebuild the mirror.
-        .onReceive(NotificationCenter.default.publisher(for: .manualBolusStateDidChange)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .manualBolusStateDidChange)
+            .receive(on: DispatchQueue.main)) { _ in
             model.refreshNow()
         }
     }

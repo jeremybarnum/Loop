@@ -63,6 +63,14 @@ extension DeviceDataManager {
             // precede the one below: the grant releases the pod's BLE immediately, so
             // `isConnectionReleased` is already true here and would otherwise claim "Pod on
             // Watch" for a handover still in flight.
+            //
+            // Two stages, keyed on the release flag: ~3 s of actual BLE release work, then the
+            // wait for the watch's confirmation. One unchanging "Handing over…" across both
+            // read as a stall (field, 2026-08-23: 5-6 s frozen after the WATCH already showed
+            // the loan live); naming the second stage says whose turn it is.
+            if (pumpManager as? PumpConnectionLendable)?.isConnectionReleased == true {
+                return DeviceDataManager.podReleasedAwaitingWatchStatusHighlight
+            }
             return DeviceDataManager.podHandingOverStatusHighlight
         } else if (pumpManager as? PumpConnectionLendable)?.isConnectionReleased == true || isPodLoanedToWatch {
             // While the pod is loaned to the watch, keying on the persisted release flag flips
@@ -86,6 +94,19 @@ extension DeviceDataManager {
 
     static var podHandingOverStatusHighlight: PodHandingOverStatusHighlight {
         return PodHandingOverStatusHighlight()
+    }
+
+    static var podReleasedAwaitingWatchStatusHighlight: PodReleasedAwaitingWatchStatusHighlight {
+        return PodReleasedAwaitingWatchStatusHighlight()
+    }
+
+    /// Stage two of the handover pill: the phone's release work is DONE and the remaining wait
+    /// is the watch's takeover plus its confirmation in flight. Same symbol and state as stage
+    /// one — it is one handover; only the narration advances.
+    struct PodReleasedAwaitingWatchStatusHighlight: DeviceStatusHighlight {
+        var localizedMessage: String = NSLocalizedString("Released — waiting for Watch…", comment: "Title text for the pump tile after the pod BLE is released, awaiting the watch's takeover confirmation")
+        var imageName: String = "arrow.triangle.2.circlepath"
+        var state: DeviceStatusHighlightState = .normalPump
     }
 
     /// The outbound twin of `PodReclaimingStatusHighlight` — same in-transit idiom, same symbol,
