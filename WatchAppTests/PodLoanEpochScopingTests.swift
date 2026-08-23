@@ -425,3 +425,51 @@ final class SportModeStartGateTests: XCTestCase {
         XCTAssertEqual(verdict("DXCMqL", now.addingTimeInterval(-.hours(24)), now.addingTimeInterval(-(WatchLoopManager.startGateSilenceLimit - .minutes(1))), now), .allowed)
     }
 }
+
+
+// MARK: - The BLE-wedge signature (PodLoanConnectClock.isWedge)
+
+/// A takeover failure carries the WEDGE signature when a CBError#11 landed during the attempt,
+/// or when no connect EVER landed against a pod the phone released seconds earlier. The verdict
+/// changes the user-facing remedy — a wedge means "toggle watch Bluetooth", because retrying
+/// feeds it (system-level pending connects survive force-quit and accumulate) — so both false
+/// positives and false negatives put the WRONG instruction on the wrist.
+final class BleWedgeSignatureTests: XCTestCase {
+
+    private let start = Date(timeIntervalSinceReferenceDate: 1_000_000)
+
+    func testCode11DuringTheAttemptIsAWedge() {
+        XCTAssertTrue(PodLoanConnectClock.isWedge(lastCode11At: start.addingTimeInterval(5),
+                                                  lastConnectAt: start.addingTimeInterval(2),
+                                                  since: start),
+                      "a slot refusal during the attempt is the wedge even if some connect landed")
+    }
+
+    /// Stale evidence must not indict a fresh attempt: the clock is reset at takeover start, but
+    /// reclaim ladders share it across a loan, so the time test is what scopes the verdict.
+    func testCode11FromBeforeTheAttemptIsNot() {
+        XCTAssertFalse(PodLoanConnectClock.isWedge(lastCode11At: start.addingTimeInterval(-60),
+                                                   lastConnectAt: start.addingTimeInterval(3),
+                                                   since: start))
+    }
+
+    /// At takeover the pod is known-present — the phone was talking to it seconds ago and
+    /// released it for us — so a whole attempt with zero didConnect is our radio, not the pod.
+    func testNoConnectEverIsAWedge() {
+        XCTAssertTrue(PodLoanConnectClock.isWedge(lastCode11At: nil, lastConnectAt: nil, since: start))
+    }
+
+    func testConnectLandedAndNoCode11IsNotAWedge() {
+        XCTAssertFalse(PodLoanConnectClock.isWedge(lastCode11At: nil,
+                                                   lastConnectAt: start.addingTimeInterval(1.3),
+                                                   since: start))
+    }
+
+    /// A connect from BEFORE the attempt is somebody else's evidence — a prior ladder's success
+    /// must not make this attempt read as healthy.
+    func testConnectFromBeforeTheAttemptDoesNotCount() {
+        XCTAssertTrue(PodLoanConnectClock.isWedge(lastCode11At: nil,
+                                                  lastConnectAt: start.addingTimeInterval(-300),
+                                                  since: start))
+    }
+}
