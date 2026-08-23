@@ -925,16 +925,17 @@ struct GlanceView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(.glanceAccent)
             case .wrongSensor:
-                // The stale-identity signature: reconnect is the fix, proven in the field.
-                NoDirectBGBlock(everConnected: true,
-                                scanning: model.rescanInFlight,
+                // The stale-identity signature: reconnect is the fix, proven in the field
+                // (78 seconds to first reading). The ONLY state where the button exists.
+                NoDirectBGBlock(scanning: model.rescanInFlight,
                                 reconnect: { model.rescanForSensor() })
             case .unproven:
-                // Not a fault. Foreground runtime re-proves the sensor by itself within about
-                // one transmit window; this screen is the wait, not an error.
-                NoDirectBGBlock(everConnected: false,
-                                scanning: model.rescanInFlight,
-                                reconnect: { model.rescanForSensor() })
+                // Not a fault, and NOTHING TO PRESS — foreground runtime re-proves the sensor by
+                // itself within about one transmit window, and the field showed a button here is
+                // worse than patience: tapping it reset a healthy adoption and slowed the first
+                // launch by minutes (2026-08-22). The live counter is the anti-force-quit device;
+                // a static "waiting" screen was read as stale state and killed.
+                ListeningForSensor()
             }
             if let note = model.state.idleNote {
                 Text(note)
@@ -1532,38 +1533,34 @@ struct GlanceDemoView: View {
 ///
 /// "Direct" throughout: it is Dexcom's own direct-to-watch wording, so it needs no translation.
 private struct NoDirectBGBlock: View {
-    let everConnected: Bool
     var scanning: Bool = false
     let reconnect: () -> Void
 
     var body: some View {
         VStack(spacing: 12) {
-            Text(everConnected ? "No direct\nconnection" : "Waiting for\ndirect BG")
+            Text("No direct\nconnection")
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundColor(everConnected ? .glanceWarn : .glanceInk)
+                .foregroundColor(.glanceWarn)
                 .multilineTextAlignment(.center)
 
-            Text(everConnected ? "Sport Mode needs direct BG." : "Usually a few minutes.")
+            Text("Sport Mode needs direct BG.")
                 .font(.system(size: 12))
                 .foregroundColor(.glanceDim)
                 .multilineTextAlignment(.center)
 
-            Text(everConnected ? "Is Dexcom showing BG on your watch?" : "Longer? Check Dexcom on your watch.")
+            Text("Is Dexcom showing BG on your watch?")
                 .font(.system(size: 12))
-                .foregroundColor(everConnected ? .glanceInk : .glanceDim)
+                .foregroundColor(.glanceInk)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
 
-            // Two branches rather than a ternary on buttonStyle: the styles are distinct types,
-            // so there is no common type for the expression to resolve to. The visual difference
-            // is the point — prominent when something is wrong, quiet when we are merely waiting.
             if scanning {
                 Text("Scanning — up to 5 min")
                     .font(.system(size: 12))
                     .foregroundColor(.glanceDim)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 6)
-            } else if everConnected {
+            } else {
                 Button(action: reconnect) {
                     Text("Yes — reconnect")
                         .font(.system(size: 13, weight: .semibold))
@@ -1572,22 +1569,57 @@ private struct NoDirectBGBlock: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.glanceAccent)
-            } else {
-                Button(action: reconnect) {
-                    Text("Reconnect")
-                        .font(.system(size: 13))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                }
-                .buttonStyle(.bordered)
-                .tint(.glanceAccent)
             }
 
-            if everConnected {
-                Text("No? Toggle Bluetooth.")
-                    .font(.system(size: 11))
+            Text("No? Toggle Bluetooth.")
+                .font(.system(size: 11))
+                .foregroundColor(.glanceDim)
+        }
+    }
+}
+
+/// The unproven state: fresh install, or an expired identity just cleared. Rare by design after
+/// gate v3, and deliberately BUTTONLESS — foreground runtime is the mechanism, so the screen's
+/// whole job is to keep the wearer here without inviting an action. The ticking counter is what
+/// distinguishes "alive and listening" from the stale screen that got force-quit in the field.
+private struct ListeningForSensor: View {
+    @State private var startedAt = Date()
+    private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    @State private var elapsed: TimeInterval = 0
+
+    var body: some View {
+        VStack(spacing: 11) {
+            Text("Listening for\nyour sensor")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(.glanceInk)
+                .multilineTextAlignment(.center)
+
+            Text("Usually under 5 min.\nKeep the app open.")
+                .font(.system(size: 12))
+                .foregroundColor(.glanceDim)
+                .multilineTextAlignment(.center)
+
+            Spacer(minLength: 0)
+
+            VStack(spacing: 4) {
+                Text(timeString)
+                    .font(.system(size: 20, weight: .medium).monospacedDigit())
+                    .foregroundColor(.glanceAccent)
+                Text("listening")
+                    .font(.system(size: 10))
                     .foregroundColor(.glanceDim)
             }
+
+            Text("No BG in Dexcom either?\nToggle Bluetooth.")
+                .font(.system(size: 10))
+                .foregroundColor(.glanceDim)
+                .multilineTextAlignment(.center)
         }
+        .onReceive(tick) { _ in elapsed = Date().timeIntervalSince(startedAt) }
+    }
+
+    private var timeString: String {
+        let s = Int(elapsed)
+        return String(format: "%d:%02d", s / 60, s % 60)
     }
 }
