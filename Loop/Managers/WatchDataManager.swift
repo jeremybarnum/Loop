@@ -980,6 +980,10 @@ extension WatchDataManager: WCSessionDelegate {
         // this delegate method returns — so mirror from the durable local copy on a
         // background queue. Same latest+stamped+prune scheme as the local folder.
         Self.mirrorLogToICloud(from: stamped)
+        // The visible-folder channel gets the same pair the container gets. Latest is the one
+        // a remote diagnosis reads first; the stamped copy preserves history across sessions.
+        LogExportFolder.export(file: stamped, as: stamped.lastPathComponent)
+        LogExportFolder.export(file: stamped, as: "g7watch-latest.log")
         log.default("Watch log received: %{public}@", stamped.lastPathComponent)
     }
 
