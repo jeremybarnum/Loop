@@ -145,6 +145,12 @@ final class StatusTableViewController: LoopChartsTableViewController {
                 Task { @MainActor [weak self] in
                     self?.registerPumpManager()
                     self?.configurePumpManagerHUDViews()
+                    // .status EXPLICITLY: every loan ownership transition posts this
+                    // notification, and a reloadData with an empty refresh context skips the
+                    // status section — the pill then shows the PREVIOUS ownership until some
+                    // unrelated trigger reloads it (field 2026-08-23: "Handing over…" standing
+                    // long after the watch was green; a tap revealed the already-arrived truth).
+                    self?.refreshContext.update(with: .status)
                     await self?.reloadData()
                 }
             },
@@ -1926,6 +1932,10 @@ final class StatusTableViewController: LoopChartsTableViewController {
             // Re-present on every tick: the label carries elapsed seconds that only advance if the
             // text is rebuilt, and the phase can move under it as the reclaim progresses.
             hudView.pumpStatusHUD.presentStatusHighlight(self.deviceManager.pumpStatusHighlight)
+            // The bar rides the same tick: reclaim progress publishes through
+            // pumpLifecycleProgress (stock's own tile-progress mechanism), and nothing else
+            // refreshes it at reclaim cadence.
+            hudView.pumpStatusHUD.lifecycleProgress = self.deviceManager.pumpLifecycleProgress
             if !self.deviceManager.isPodLoanReclaiming, !self.deviceManager.isPodTakeoverInProgress {
                 self.stopPodReclaimCountdown()
             }
