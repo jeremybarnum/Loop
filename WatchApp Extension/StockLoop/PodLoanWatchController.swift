@@ -18,6 +18,7 @@
 import Foundation
 import HealthKit
 import LoopKit
+import G7SensorKit
 import LoopCore
 import OmnipodKit
 import WatchKit
@@ -823,8 +824,18 @@ final class PodLoanWatchController {
                 guard self.now() < grant.expiresAt else {
                     self.teardownPump()
                     self.phase = .idle
-                    self.lastIdleNote = NSLocalizedString("Sport Mode start expired before the pod answered. Tap Start to try again.", comment: "Glance: grant lease expired mid-takeover")
-                    SportLog.event("loan", "TAKEOVER ABORTED — grant lease expired mid-takeover after \(attempt + 1) read(s), epoch \(grant.epoch)")
+                    // Two messages, because the two failures need OPPOSITE user responses.
+                    // The wedge (Code-11, or a ladder that never connected once) is made WORSE
+                    // by retrying — tonight's field session force-quit-and-retried its way from
+                    // one camped slot to a blind radio — and fixed by a watch Bluetooth toggle.
+                    // Only a clean transient (pod seen, connects attempted, no #11) earns
+                    // "try again".
+                    if PodLoanConnectClock.wedgeSignature {
+                        self.lastIdleNote = NSLocalizedString("The pod didn't answer. Turn watch Bluetooth off and on, then try again.", comment: "Glance: takeover failed with the BLE-wedge signature")
+                    } else {
+                        self.lastIdleNote = NSLocalizedString("Sport Mode start expired before the pod answered. Tap Start to try again.", comment: "Glance: grant lease expired mid-takeover")
+                    }
+                    SportLog.event("loan", "TAKEOVER ABORTED — grant lease expired mid-takeover after \(attempt + 1) read(s), epoch \(grant.epoch), wedgeSignature=\(PodLoanConnectClock.wedgeSignature)")
                     self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "grant expired mid-takeover")))
                     return
                 }
@@ -915,7 +926,13 @@ final class PodLoanWatchController {
                     // deferred timer was late — fix the ladder. If didConnect says "never", the
                     // radio genuinely hasn't connected — fix the keepalive. The poll alone cannot
                     // distinguish those, which is why this line exists.
-                    SportLog.event("loan", String(format: "takeover read %d/%d driver=%@ (+%.1fs) — pod BLE state %@ · %@ · %@",
+                    // The G7 stamp exists because Code-11 during a takeover cannot name its
+                    // holder from OmnipodKit's own census — the G7's central is a separate
+                    // manager, and a pending connect camped there is invisible here. One field:
+                    // how long a G7 connect has been pending, or "-" when none is.
+                    let g7Pending = G7RadioCensus.connectPendingSince
+                        .map { String(format: "g7pending=%.0fs", self.now().timeIntervalSince($0)) } ?? "g7pending=-"
+                    SportLog.event("loan", String(format: "takeover read %d/%d driver=%@ (+%.1fs) — pod BLE state %@ · %@ · \(g7Pending) · %@",
                                                   attempt + 1, maxAttempts, driver, readElapsed,
                                                   manager.podLoanConnectionStateDescription,
                                                   PodLoanConnectClock.summary(since: self.attemptStartedAt),
