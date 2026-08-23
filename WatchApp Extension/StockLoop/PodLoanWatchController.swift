@@ -2546,6 +2546,8 @@ final class PodLoanWatchController {
     /// Display reads take the mirror instead: at most one refresh interval stale, never
     /// blocking. Dosing paths that genuinely need current state still call `debugSnapshot()`.
     private let snapshotMirrorLock = NSLock()
+    /// Throttle for the [glance-stale] instrument — one line per burst, not one per tick.
+    private var lastMirrorDelayLogAt: Date?
     private var _snapshotMirror: DebugSnapshot?
 
     /// Main-safe: never touches `queue`. Nil only before the first refresh completes.

@@ -539,10 +539,12 @@ final class PodLoanPhoneController {
             // it before ownership flips, and it is consumed only after the verification this
             // bar is waiting on.
             if s.auditIsForceReclaim {
+                // Same promise as the ordinary settle (one const, by the 2026-08-23 lean
+                // ruling) — the label differs, the physics no longer do.
                 return ReclaimProgress(
                     phase: .forceReclaimingPod, startedAt: started,
-                    expectedBy: started.addingTimeInterval(Self.reclaimForcedSettleExpectation),
-                    fraction: min(elapsed / Self.reclaimForcedSettleExpectation, 0.95),
+                    expectedBy: started.addingTimeInterval(Self.reclaimSettleExpectation),
+                    fraction: min(elapsed / Self.reclaimSettleExpectation, 0.95),
                     elapsed: elapsed)
             }
             // One stage, anchored where the USER'S wait began — the tap for a phone
@@ -571,6 +573,17 @@ final class PodLoanPhoneController {
 
     /// Non-blocking twins of the predicates above, for the tile. See `UISnapshot`.
     var isReclaimSettlingOnlyForUI: Bool { return uiState.isSettlingOnly }
+
+    /// The TILE's gate: any reclaim activity at all — the drain/force ladder OR the settle.
+    /// The old gate was settle-only, so a dead-watch force showed "Pod on Watch" for the whole
+    /// 25 s ladder (field, 2026-08-23): the ladder runs with state still .loaned, isSettlingOnly
+    /// false throughout, and the first honest frame arrived only at .owner — by which time the
+    /// settle was 5 s and the render never caught it. The mirror already carries both flags and
+    /// every state change syncs it before notifying, so this is purely the gate widening.
+    var isReclaimActivityForUI: Bool {
+        let s = uiState
+        return s.isSettlingOnly || s.ladderIsRunning
+    }
     var isPodLoanedOutForUI: Bool { return uiState.isLoanedOut }
     var isPodTakeoverInProgressForUI: Bool { return uiState.isTakeoverInProgress }
     var reclaimProgressForUI: ReclaimProgress? {
@@ -604,20 +617,7 @@ final class PodLoanPhoneController {
     /// occasionally-wrong promise beats a re-baseline that reads as a second failure.
     private static let reclaimSettleExpectation: TimeInterval = 10
 
-    /// The FORCED settle's promise, a little looser than the ordinary one: the only forced
-    /// reclaim measured on the fixed build verified at +1 s, but that is n=1 — the earlier +45,
-    /// +66 and +70 s forced settles all carried the stale-read signature of the freshness bug
-    /// rather than force physics, so the true clean distribution is thin. Fifteen seconds is
-    /// generous against the evidence and cheap to be wrong about: an overrun holds at the 0.95
-    /// cap; the real bound stays `reclaimSettleTimeout`.
-    private static let reclaimForcedSettleExpectation: TimeInterval = 15
 
-    /// How often the settle forces a REAL pod round-trip past the freshness optimization. The
-    /// first one goes out as soon as the link is up; this spaces the rest. Twelve seconds is
-    /// picked to bound the radio cost — about 25 forced reads across the whole five-minute
-    /// ceiling, against roughly 150 if every 2 s tick forced one — while still ending a stalled
-    /// settle in seconds rather than the 167 s measured before this existed.
-    private static let reclaimForcedReadInterval: TimeInterval = 12
     /// Set when a pod ROUND-TRIP has completed since the reclaim began.
     /// This — not the peripheral's Bluetooth state — is what "the pod is back" means.
     /// Field measurement: after a hand-back the pod advertises immediately, the phone's
@@ -645,8 +645,6 @@ final class PodLoanPhoneController {
     /// One escalation per reclaim. Re-armed with each new settle window.
     private var reclaimEscalated = false
     private var reclaimStaleReads = 0
-    /// When the settle last forced a real pod round-trip, so the backoff can space them.
-    private var reclaimLastForcedReadAt: Date?
     /// Where the USER'S wait began, for the bar alone — the tap for a phone-initiated reclaim,
     /// the settle open for a watch-initiated one. The bar must be ONE continuous fill across
     /// the handover and the settle (a bar that restarts at the phase boundary reads as a second
@@ -681,7 +679,6 @@ final class PodLoanPhoneController {
         reclaimVerifyInFlight = false
         reclaimLinkUpAt = nil
         reclaimStaleReads = 0
-        reclaimLastForcedReadAt = nil
         // Keep a RECENT tap anchor so the bar continues across the handover-to-settle boundary
         // instead of restarting; adopt the settle's own start otherwise. The 60 s staleness
         // bound is structural protection: an anchor left behind by an abandoned reclaim must
@@ -772,21 +769,15 @@ final class PodLoanPhoneController {
             handbackDiag(epoch, String(format: "settle: link still down at +%.0fs — escalating: %@ · ble before: %@",
                                        deps.now().timeIntervalSince(started), outcome, bleBefore))
         }
-        // Force a REAL round-trip on the first tick after the link comes up, then on a slow
-        // cadence — because the cheap call does not always talk to the pod at all.
-        // `ensureCurrentPumpData` skips the radio entirely when the manager judges its data
-        // fresh (under 6 minutes old) and hands back the EXISTING lastSync, which this settle's
-        // `lastSync > started` test then rejects. Field 2026-08-14: 77 consecutive such calls
-        // returned in ~150 ms each — far too fast for pod BLE — and the settle sat at 169 s
-        // until a manual status check from the pod screen broke it.
-        //
-        // Deliberately NOT forced on every tick: at 2 s that would be up to 150 real round
-        // trips across a five-minute settle, which is reclaim speed bought with G7 radio time.
-        // First-plus-backoff removes the stall for a handful of reads.
-        let forced = reclaimLinkUpAt != nil && (reclaimLastForcedReadAt.map {
-            deps.now().timeIntervalSince($0) >= Self.reclaimForcedReadInterval
-        } ?? true)
-        attemptReclaimVerificationNow(started: started, forced: forced)
+        // ALWAYS a real round-trip — the cheap call does not always talk to the pod at all
+        // (`ensureCurrentPumpData` skips the radio on data under 6 min old and returns the
+        // existing lastSync, which the `lastSync > started` test rejects forever; field
+        // 2026-08-14: 77 such calls in a row, settle stuck 169 s). The forced/cheap split and
+        // its 12 s spacing were sized for a settle that could run minutes; with the reclaim
+        // dialing at re-arm (2026-08-23) every measured settle verifies on the FIRST read
+        // after link-up, so the spacing machinery guarded radio time no settle spends anymore.
+        // The `reclaimVerifyInFlight` latch is the remaining (sufficient) throttle.
+        attemptReclaimVerificationNow(started: started, forced: true)
         queue.asyncAfter(deadline: .now() + 2) { [weak self] in
             self?.chaseReclaimVerification(started: started, attempt: attempt + 1)
         }
@@ -805,7 +796,6 @@ final class PodLoanPhoneController {
             reclaimVerifyInFlight = true
             let read: (@escaping (Date?) -> Void) -> Void
             if forced, let lendable = pump as? PumpConnectionLendable {
-                reclaimLastForcedReadAt = deps.now()
                 // Force the round-trip, then ask the ordinary way for the answer. The forced
                 // read updates the manager's report date, so the follow-up takes the cheap
                 // no-radio path and hands back the NOW-ADVANCED lastSync — one round-trip, and
