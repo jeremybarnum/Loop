@@ -365,15 +365,22 @@ final class PodLoanPhoneController {
             // user-visible — crude parity: it pushed every phase, and the 5s frozen
             // tile during hand-back read as ambiguity).
             if oldValue != state {
-                // Mirror FIRST, notify second — the notification causes the read.
-                syncUIMirror()
-                deps.ownershipDidChange()
-                // A reclaim just landed us in .owner, but reclaimConnection() only re-armed
-                // the BLE bid — the pod isn't actually back for ~2 min. Open the settle window
-                // so "Reclaiming…" (and the bolus gate) persist until the pod is truly reachable.
+                // SETTLE WINDOW FIRST, then mirror, then notify (reordered 2026-08-22). The old
+                // order announced .owner before the settle baseline existed, so any observer that
+                // reacted to the announcement could catch the gap: a tile render saw
+                // isSettlingOnly=false for a frame ("done" flashing before "Reclaiming…"), and
+                // testSettleFractionCapsAndHoldsWhenTheSettleOverruns caught it as a race — its
+                // fake clock advanced in the gap, so the baseline consumed the ADVANCED time and
+                // every elapsed came up 9.5 s short (fraction 0.0 where 0.95 was owed). That is
+                // the test that blocked a ship on 2026-08-21 while passing in isolation. The
+                // window is display bookkeeping, so opening it before the pod is re-armed costs
+                // nothing; observers must simply never see .owner without its baseline.
                 if oldValue != .owner, state == .owner {
                     beginReclaimSettleWindow()
                 }
+                // Mirror before notifying — the notification causes the read.
+                syncUIMirror()
+                deps.ownershipDidChange()
             }
         }
     }

@@ -1067,10 +1067,14 @@ final class PodLoanWatchController {
                     // deferred timer was late — fix the ladder. If didConnect says "never", the
                     // radio genuinely hasn't connected — fix the keepalive. The poll alone cannot
                     // distinguish those, which is why this line exists.
-                    SportLog.event("loan", String(format: "takeover read %d/%d driver=%@ (+%.1fs) — pod BLE state %@ · %@ · %@",
+                    // The G7 side rides along because a #11 cannot name its holder from the pod
+                    // central's own census — the G7 client is a separate CBCentralManager, and a
+                    // pending G7 connect is the usual suspect for the missing slot.
+                    SportLog.event("loan", String(format: "takeover read %d/%d driver=%@ (+%.1fs) — pod BLE state %@ · %@ · %@ · %@",
                                                   attempt + 1, maxAttempts, driver, readElapsed,
                                                   manager.podLoanConnectionStateDescription,
                                                   PodLoanConnectClock.summary(since: self.attemptStartedAt),
+                                                  self.g7StateForContention(),
                                                   RuntimeStateLog.snapshot()))
                     // The retry is a cancellable work item so the session-established
                     // event can run it IMMEDIATELY. The timer is only a backstop at 8 s —
@@ -1108,6 +1112,7 @@ final class PodLoanWatchController {
                     // held and the stall is something else; "off"/"DENIED"/"FAILED" means the
                     // keepalive is the failure.
                     let stalled = self.takeoverMaxReadGap > 20
+                    let wedged = !stalled && PodLoanConnectClock.wedgeSignature(since: self.attemptStartedAt)
                     if stalled {
                         // Say ONLY what was measured. Battery level does NOT track the outcome:
                         // takeovers succeed at 20% with the wrist up, and run unsuspended at 65%
@@ -1133,11 +1138,26 @@ final class PodLoanWatchController {
                         // inspect healthy hardware for a fault in our own radio bookkeeping. Say
                         // the two things that are true and useful instead: nothing moved, and a
                         // short wait is the remedy that actually works in the field.
-                        self.lastIdleNote = String(format: NSLocalizedString(
-                            "Sport Mode didn't start (%.0fs). Your phone still has the pod and is still looping. Wait ~30s, then try again.",
-                            comment: "Glance: takeover failed — the pod link never established"), failSecs)
+                        // ...and when the failure carries the WEDGE signature (#11 during the
+                        // attempt, or zero connects against a known-present pod), "try again" is
+                        // actively harmful: CoreBluetooth connect requests are SYSTEM-level and
+                        // outlive the app, so a force-quit-and-retry leaves orphaned pending
+                        // connects consuming slots and each round makes the radio blinder (field,
+                        // pure line 2026-08-21: refused-with-#11 escalated to zero adverts in
+                        // 108 s across retries; a watch Bluetooth toggle cleared it first try).
+                        // Say the remedy that works instead of the one that feeds the failure.
+                        if wedged {
+                            self.lastIdleNote = String(format: NSLocalizedString(
+                                "Sport Mode didn't start (%.0fs) — the watch's Bluetooth is wedged. Turn watch Bluetooth off and on (Control Center), then try again. Your phone still has the pod and is still looping.",
+                                comment: "Glance: takeover failed with the BLE-wedge signature — retrying without a Bluetooth toggle makes it worse"), failSecs)
+                        } else {
+                            self.lastIdleNote = String(format: NSLocalizedString(
+                                "Sport Mode didn't start (%.0fs). Your phone still has the pod and is still looping. Wait ~30s, then try again.",
+                                comment: "Glance: takeover failed — the pod link never established"), failSecs)
+                        }
                     }
-                    SportLog.event("loan", String(format: "TAKEOVER FAILED — %@ after %d reads in %.1fs [takeover-timing], max inter-read gap %.1fs (event-driven; 8s backstop when no event fires), %@, final BLE state %@, %@, %@, epoch %d",
+                    SportLog.event("loan", String(format: "TAKEOVER FAILED wedge=%@ — %@ after %d reads in %.1fs [takeover-timing], max inter-read gap %.1fs (event-driven; 8s backstop when no event fires), %@, final BLE state %@, %@, %@, epoch %d",
+                                                  wedged ? "YES" : "no",
                                                   stalled ? "ladder STALLED (our polling was deferred; see cb: for whether the link was up)" : "pod unreachable",
                                                   maxAttempts, failSecs, self.takeoverMaxReadGap, batteryTag(),
                                                   manager.podLoanConnectionStateDescription,
@@ -1147,7 +1167,7 @@ final class PodLoanWatchController {
                     // ("The watch could not take the pod (…). The phone kept it."), so it carries
                     // the same obligation as the wrist note above: do not blame the pod for a
                     // connection slot we were holding ourselves.
-                    self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: stalled ? "watch app suspended mid-takeover" : "couldn't establish the pod link")))
+                    self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: stalled ? "watch app suspended mid-takeover" : (wedged ? "watch Bluetooth wedged — toggle needed" : "couldn't establish the pod link"))))
                 }
             }
         }

@@ -1121,10 +1121,19 @@ final class WatchLoopManager {
     /// Last sensorID written by cgmManagerDidUpdateState (extension can't hold
     /// storage) — the persist itself runs every state change; this only rate-limits the log line.
     var lastPersistedSensorID: String?
+    /// Persisted so a relaunch does not reset the direct-G7 age to "never". Two consumers were
+    /// being misled by the in-memory-only stamp (the chicken-and-egg the pure line hit first):
+    /// the start-gate note told a user with a healthy, recently-delivering sensor to go check
+    /// Dexcom after every relaunch, and the stranded-identity rule's 45-minute silence clock
+    /// restarted from scratch. The write rides the ingest choke point — same call, same lock
+    /// discipline — so the two can never disagree about what arrived.
+    static let lastDirectG7DefaultsKey = "SportMode.lastDirectG7At"
+
     private func noteGlucoseSource(directG7: Bool) {
         bgSourceLock.lock()
         if directG7 { _lastDirectG7At = self.now() } else { _lastPhoneRelayAt = self.now() }
         bgSourceLock.unlock()
+        if directG7 { defaults.set(self.now(), forKey: Self.lastDirectG7DefaultsKey) }
     }
 
     /// The grant seed counts as the PHONE. (Jeremy, 2026-08-05: "treat the seed as the same as
@@ -1153,12 +1162,21 @@ final class WatchLoopManager {
     var g7ContentionSummary: String {
         let stamps = lastGlucoseSourceStamps
         func age(_ d: Date?) -> String { d.map { String(format: "%.0fs", now().timeIntervalSince($0)) } ?? "never" }
-        return "g7direct=\(age(stamps.direct)) phoneRelay=\(age(stamps.phone))"
+        // `g7pending` names the usual suspect for a pod-side CBError#11: a pending G7 connect
+        // holds one of the app's BLE slots, and the pod central's own census cannot see it —
+        // the G7 client is a separate CBCentralManager. "-" means no G7 connect is pending.
+        let pending = G7RadioCensus.connectPendingSince.map { String(format: "%.0fs", now().timeIntervalSince($0)) } ?? "-"
+        return "g7direct=\(age(stamps.direct)) phoneRelay=\(age(stamps.phone)) g7pending=\(pending)"
     }
 
     private var lastGlucoseSourceStamps: (direct: Date?, phone: Date?) {
-        bgSourceLock.lock(); defer { bgSourceLock.unlock() }
-        return (_lastDirectG7At, _lastPhoneRelayAt)
+        bgSourceLock.lock()
+        let mem = (_lastDirectG7At, _lastPhoneRelayAt)
+        bgSourceLock.unlock()
+        // In-memory nil means "none THIS LAUNCH", which is not the question anyone here asks —
+        // fall back to the persisted stamp so ages survive a relaunch. Memory, once set, wins.
+        let direct = mem.0 ?? defaults.object(forKey: Self.lastDirectG7DefaultsKey) as? Date
+        return (direct, mem.1)
     }
     /// The last cycle's binding-constraint summary, for the diagnostic screen. Our screen
     /// only — never annotated onto a stock surface (the stock-parity ruling).
