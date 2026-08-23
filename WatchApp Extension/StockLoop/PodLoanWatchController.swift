@@ -2155,23 +2155,36 @@ final class PodLoanWatchController {
         }
 
         do {
-            // Freshen the odometer (one retry on a zero delta), then offer. Best-effort:
-            // when the link is down this fails instantly and the offer carries freshenSucceeded
-            // = false, which is now merely a note — the AUTHORITATIVE end-of-loan reading is the
-            // one the phone takes on its own reclaim round-trip.
-            manager.podLoanReadStatus { first in
-                let finalize: (Bool) -> Void = { freshened in
-                    self.queue.async {
-                        self.finalOfferSent = true
-                        self.sendHandbackOffer(freshened: freshened, recovered: false)
+            // Freshen the odometer (one retry on a zero delta), then offer — but ONLY over a
+            // link that is already up. The old comment here claimed "when the link is down this
+            // fails instantly"; that was true under the standing-connection model and is FALSE
+            // under connect-on-demand, where a read DIALS: fresh-discovery scan → connect → we
+            // send nothing while finalizing → the pod hangs up on the idle link (#7 at ~7 s) →
+            // the read burns its full 20 s timeout → only then does the final offer go out.
+            // Measured on-wrist 2026-08-23 (e172): 20.5 s added to every watch-initiated
+            // hand-back, for a reading the phone discards anyway — its own reclaim round-trip
+            // is the AUTHORITATIVE end-of-loan reading (reconcile[AUTHORITATIVE], and the
+            // grant/settle path depends on that, not on this). Between doses the link is
+            // deliberately released, so the common case is skip-and-offer-immediately;
+            // a hand-back within the 12 s post-dose hold still freshens in ~0.6 s.
+            let finalize: (Bool) -> Void = { freshened in
+                self.queue.async {
+                    self.finalOfferSent = true
+                    self.sendHandbackOffer(freshened: freshened, recovered: false)
+                }
+            }
+            if manager.isConnectionReady {
+                manager.podLoanReadStatus { first in
+                    let delivered = manager.podLoanInsulinDelivered
+                    if first, delivered != nil, delivered == self.deliveredAtTakeover {
+                        manager.podLoanReadStatus { second in finalize(second) }
+                    } else {
+                        finalize(first)
                     }
                 }
-                let delivered = manager.podLoanInsulinDelivered
-                if first, delivered != nil, delivered == self.deliveredAtTakeover {
-                    manager.podLoanReadStatus { second in finalize(second) }
-                } else {
-                    finalize(first)
-                }
+            } else {
+                SportLog.event("loan", "hand-back: freshen SKIPPED — no live pod link; the phone's reclaim read is authoritative")
+                finalize(false)
             }
         }
     }
