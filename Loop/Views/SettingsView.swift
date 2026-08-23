@@ -10,6 +10,7 @@ import LoopKit
 import LoopKitUI
 import MockKit
 import SwiftUI
+import UniformTypeIdentifiers
 import HealthKit
 
 public struct SettingsView: View {
@@ -54,6 +55,8 @@ public struct SettingsView: View {
     }
     
     @State private var actionSheet: Destination.ActionSheet?
+    @State private var showingLogFolderPicker = false
+    @State private var logFolderName = LogExportFolder.displayName
     @State private var alert: Destination.Alert?
     @State private var sheet: Destination.Sheet?
     
@@ -462,6 +465,25 @@ extension SettingsView {
 
             NavigationLink(destination: CriticalEventLogExportView(viewModel: viewModel.criticalEventLogExportViewModel)) {
                 Text(NSLocalizedString("Export Critical Event Logs", comment: "The title of the export critical event logs in support"))
+            }
+
+            // Remote log sharing: copies every mirrored log into a user-picked, VISIBLE iCloud
+            // folder — which, when that folder is shared from a caregiver's account, puts the
+            // logs on the caregiver's Mac with no per-incident action from the wearer. Exists
+            // because the app's own iCloud container syncs invisibly (no Drive UI will show
+            // it), so "share a folder" is the channel that can actually be seen and shared.
+            Button(action: { showingLogFolderPicker = true }) {
+                HStack {
+                    Text(NSLocalizedString("Log Sharing Folder", comment: "Settings row that picks the log export folder"))
+                    Spacer()
+                    Text(logFolderName ?? NSLocalizedString("Off", comment: "Log sharing folder state when unconfigured"))
+                        .foregroundColor(.secondary)
+                }
+            }
+            .fileImporter(isPresented: $showingLogFolderPicker, allowedContentTypes: [.folder]) { result in
+                if case .success(let url) = result, LogExportFolder.set(url) {
+                    logFolderName = LogExportFolder.displayName
+                }
             }
         }
     }

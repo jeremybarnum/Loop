@@ -88,10 +88,23 @@ enum PhoneLog {
         }
     }
 
+    private static var warnedMirrorOff = false   // `queue`-confined
+
     private static func mirrorToICloud() {
         let fm = FileManager.default
         guard let local = localURL, fm.fileExists(atPath: local.path) else { return }
-        guard let container = fm.url(forUbiquityContainerIdentifier: nil) else { return }   // iCloud off
+        // The export copy goes out regardless of the container's mood — it is the channel that
+        // exists precisely because the container can fail (or hide) silently.
+        LogExportFolder.export(file: local, as: "g7phone-latest.log")
+        guard let container = fm.url(forUbiquityContainerIdentifier: nil) else {
+            // The silent guard that cost an evening (2026-08-22): every provisioning layer
+            // checked green while this returned nil with no trace anywhere. Once per launch.
+            if !warnedMirrorOff {
+                warnedMirrorOff = true
+                event("session", "iCloud mirror OFF — ubiquity container unavailable (signed out, Drive off for this app, or container missing)")
+            }
+            return
+        }
         let dir = container.appendingPathComponent("Documents", isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         // Atomic replace, never remove-then-copy — that is exactly how the watch's latest.log
@@ -119,6 +132,7 @@ enum PhoneLog {
         let dir = local.deletingLastPathComponent()
         try? fm.copyItem(at: local, to: dir.appendingPathComponent(name))
         prune(in: dir)
+        LogExportFolder.export(file: local, as: name)
         guard let container = fm.url(forUbiquityContainerIdentifier: nil) else { return }   // iCloud off
         let cloudDir = container.appendingPathComponent("Documents", isDirectory: true)
         try? fm.createDirectory(at: cloudDir, withIntermediateDirectories: true)
@@ -180,7 +194,105 @@ enum PhoneLog {
         let previous = UserDefaults.standard.object(forKey: launchStampKey) as? Date
         UserDefaults.standard.set(Date(), forKey: launchStampKey)
         let sinceLast = previous.map { String(format: "%.0fs ago", Date().timeIntervalSince($0)) } ?? "first seen"
-        event("session", "=== Loop phone log START — build \(build) === previous launch \(sinceLast), footprint \(Self.footprintMB)")
+        event("session", "=== Loop phone log START — build \(build) === previous launch \(sinceLast), footprint \(Self.footprintMB), export=\(LogExportFolder.displayName ?? "off")")
         flush()
+    }
+}
+
+
+/// A user-chosen, VISIBLE iCloud Drive folder that receives a copy of every log the pipeline
+/// mirrors — the remote-observability channel for a user with no Mac.
+///
+/// WHY THIS EXISTS. The app's own iCloud container syncs perfectly and is invisible in every
+/// Drive UI — Finder, Files, iCloud.com — because the public-document-scope registration never
+/// takes (confirmed on the bench account 2026-08-22: files synced all week, folder shown
+/// nowhere). An ordinary folder has no such failure mode, and an ordinary folder SHARED from
+/// the caregiver's account syncs cross-account: the user picks it once, and from then on their
+/// logs are on the caregiver's Mac before anyone has to ask for them. That last property is the
+/// point — "send me your logs" stops being a step in every remote diagnosis.
+///
+/// Silent failure is the enemy this file keeps having to relearn (the container mirror's nil
+/// guard cost an evening of guessing), so every distinct failure reason logs ONCE per launch,
+/// and configuring the folder immediately writes a visible README so success is confirmable in
+/// the Files app on the spot.
+enum LogExportFolder {
+    private static let bookmarkKey = "LogExportFolder.bookmark"
+    private static let nameKey = "LogExportFolder.displayName"
+    private static let queue = DispatchQueue(label: "com.loopkit.Loop.logExport", qos: .utility)
+    private static var warnedReasons = Set<String>()   // queue-confined
+
+    static var isConfigured: Bool { UserDefaults.standard.data(forKey: bookmarkKey) != nil }
+
+    /// For the settings row and the session banner: "Off", or the folder's name.
+    static var displayName: String? { UserDefaults.standard.string(forKey: nameKey) }
+
+    /// Store the picked folder. Returns false only when the bookmark cannot be minted, which
+    /// the settings row surfaces rather than pretending success.
+    static func set(_ url: URL) -> Bool {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let bm = try? url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil) else {
+            PhoneLog.event("export", "FAILED to bookmark the picked folder — export not configured")
+            return false
+        }
+        UserDefaults.standard.set(bm, forKey: bookmarkKey)
+        UserDefaults.standard.set(url.lastPathComponent, forKey: nameKey)
+        PhoneLog.event("export", "log export folder set -> \(url.lastPathComponent)")
+        // Prove writability NOW, visibly: a README the user can see in Files the moment they
+        // return from the picker. If this file does not appear, setup did not work — no
+        // waiting for the next log event to find out.
+        let marker = "Loop log sharing is set up. Log files land in this folder automatically.\n"
+        exportData(Data(marker.utf8), as: "README — Loop logs.txt")
+        return true
+    }
+
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: bookmarkKey)
+        UserDefaults.standard.removeObject(forKey: nameKey)
+        PhoneLog.event("export", "log export folder cleared")
+    }
+
+    /// Copy `src` into the export folder under `name`, atomic-replace, coordinated (the folder
+    /// is expected to be a shared iCloud folder, and NSFileCoordinator is the contract there).
+    static func export(file src: URL, as name: String) {
+        queue.async { performExport(name: name) { tmp in try? FileManager.default.copyItem(at: src, to: tmp) } }
+    }
+
+    private static func exportData(_ data: Data, as name: String) {
+        queue.async { performExport(name: name) { tmp in try? data.write(to: tmp) } }
+    }
+
+    /// Queue-confined. `fill` writes the payload into the scratch URL.
+    private static func performExport(name: String, fill: (URL) -> Void) {
+        guard let bm = UserDefaults.standard.data(forKey: bookmarkKey) else { return }
+        var stale = false
+        guard let dir = try? URL(resolvingBookmarkData: bm, options: [], relativeTo: nil, bookmarkDataIsStale: &stale) else {
+            warnOnce("bookmark no longer resolves — folder deleted or share revoked; re-pick in Settings")
+            return
+        }
+        guard dir.startAccessingSecurityScopedResource() else {
+            warnOnce("security scope refused — re-pick the folder in Settings")
+            return
+        }
+        defer { dir.stopAccessingSecurityScopedResource() }
+        if stale, let fresh = try? dir.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil) {
+            UserDefaults.standard.set(fresh, forKey: bookmarkKey)
+        }
+        let fm = FileManager.default
+        let tmp = dir.appendingPathComponent(".export-\(name).tmp")
+        try? fm.removeItem(at: tmp)
+        fill(tmp)
+        guard fm.fileExists(atPath: tmp.path) else { warnOnce("scratch write failed"); return }
+        let coordinator = NSFileCoordinator()
+        var coordError: NSError?
+        coordinator.coordinate(writingItemAt: dir.appendingPathComponent(name), options: .forReplacing, error: &coordError) { dst in
+            _ = try? fm.replaceItemAt(dst, withItemAt: tmp)
+        }
+        if let e = coordError { warnOnce("coordinated write failed (\(e.domain)#\(e.code))") }
+    }
+
+    private static func warnOnce(_ reason: String) {
+        guard warnedReasons.insert(reason).inserted else { return }
+        PhoneLog.event("export", "EXPORT FAILED — \(reason) (logged once per launch)")
     }
 }
