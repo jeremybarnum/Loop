@@ -233,6 +233,17 @@ final class PodLoanEpochScopingTests: XCTestCase {
 /// only the radio can answer, which is why the caller keeps a discovery fallback.
 final class PodLoanBleIdentifierCacheTests: XCTestCase {
 
+    /// The launch reap's candidate list: every handle ever cached, no dedup surprises.
+    func testAllIdentifiersEnumeratesEveryStoredHandle() {
+        PodLoanBleIdentifierCache.removeAll()
+        defer { PodLoanBleIdentifierCache.removeAll() }
+        PodLoanBleIdentifierCache.store("AAAA1111-0000-0000-0000-000000000001", forPodAddress: 0x11111111)
+        PodLoanBleIdentifierCache.store("BBBB2222-0000-0000-0000-000000000002", forPodAddress: 0x22222222)
+        XCTAssertEqual(Set(PodLoanBleIdentifierCache.allIdentifiers()),
+                       ["AAAA1111-0000-0000-0000-000000000001", "BBBB2222-0000-0000-0000-000000000002"])
+    }
+
+
     private let podA: UInt32 = 0x177E6B7E
     private let podB: UInt32 = 0x1A2B3C4D
 
