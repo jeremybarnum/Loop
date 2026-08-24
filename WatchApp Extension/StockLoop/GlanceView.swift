@@ -208,6 +208,7 @@ final class GlanceViewModel: ObservableObject {
     func startRefreshing() {
         guard !isPreview else { return }
         RuntimeStateLog.mark("glance.startRefreshing")
+        if let o = oneShotMirrorObserver { NotificationCenter.default.removeObserver(o); oneShotMirrorObserver = nil }
         if mirrorObserver == nil {
             mirrorObserver = NotificationCenter.default.addObserver(
                 forName: WatchLoopManager.glanceMirrorDidUpdate, object: nil, queue: .main
@@ -229,9 +230,31 @@ final class GlanceViewModel: ObservableObject {
     /// it), so an event landing in that gap goes unpainted until a real appearance
     /// transition. Not startRefreshing(), because that arms the timer — and a page that
     /// might be hidden must not tick (each tick takes the loan controller's queue).
+    /// One-shot mirror catch-up for pokes that arrive while the render loop is DOWN. refresh()
+    /// paints the PREVIOUS mirror by construction (paint, then kick the rebuild), and the
+    /// standing repaint-on-mirror observer lives only while startRefreshing's loop runs — so a
+    /// poke landing outside it painted a stale frame, rebuilt a fresh mirror behind it, and
+    /// left nobody to paint the result. Field, 2026-08-23: a phone-forced reclaim completed at
+    /// 19:54:08 with the wrist down; the wrist-raise painted the pre-revoke frame and it stood
+    /// until a tap restarted the loop. This observer fires once, paints the fresh mirror, and
+    /// unhooks — every poke now finishes its own paint, with no standing tick off-screen.
+    private var oneShotMirrorObserver: NSObjectProtocol?
+
     func refreshNow() {
         guard !isPreview else { return }
         RuntimeStateLog.mark("glance.refreshNow")
+        if mirrorObserver == nil, oneShotMirrorObserver == nil {
+            oneShotMirrorObserver = NotificationCenter.default.addObserver(
+                forName: WatchLoopManager.glanceMirrorDidUpdate, object: nil, queue: .main
+            ) { [weak self] _ in
+                guard let self = self else { return }
+                if let o = self.oneShotMirrorObserver {
+                    NotificationCenter.default.removeObserver(o)
+                    self.oneShotMirrorObserver = nil
+                }
+                self.refresh(kickMirror: false)
+            }
+        }
         refresh()
     }
 
