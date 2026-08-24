@@ -89,6 +89,30 @@ message that arrived *from* the allegedly absent app.
     Jeremy's objection was correct: every loan begins with a tap on the watch, which is foreground
     by definition.
 
+## 2026-08-23 — stereo capture on the port branch; the wedge may live in the PHONE's daemon
+
+Four occurrences in one evening on next-dev's rig (in flight: clock stepping backwards, timezone
+change, install churn), captured with BOTH logs for the first time. Signature identical to this
+brief's: watch→phone alive (requests cross, grants issued), phone→watch dead (grants never
+arrive), the phone's own WCSession reporting `isWatchAppInstalled=false` with the app running.
+
+The new fact: **watch-side remedies did NOT clear it** — Bluetooth toggles, force-quit, and a full
+watch reboot all failed. That is consistent with the wedge living in the PHONE's WatchConnectivity
+daemon, not on the watch and not in either app. A phone-reboot trial is pending; if it clears,
+the remedy guidance for THIS wedge becomes "restart the phone".
+
+DO NOT conflate with the BLE orphan wedge (2026-08-22, this branch): that one is Code-11/blind-scan
+on the POD connection, provably cleared by a watch Bluetooth toggle, and the build-113 failure
+message targets it specifically. Two wedges, two transports, two remedies:
+
+| wedge | layer | signature | proven remedy |
+|---|---|---|---|
+| BLE orphan | CoreBluetooth | #11 / ladder never connects | watch BT toggle (field, first try) |
+| one-way WC | WatchConnectivity | grants vanish, installed=false | open — phone reboot suspected |
+
+Everything downstream held in all four of their occurrences: dead-man abandoned the loans,
+force-reclaims recovered in 1-5 s, audits clean. The failure mode remains obstructive, not unsafe.
+
 ## 2026-08-18 — a strong correlation, and a rival explanation that is NOT ruled out
 
 **Read this section before acting on the one below it.** The next-dev chat, working the same
