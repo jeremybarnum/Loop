@@ -965,9 +965,10 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         waitUntil(timeout: 8, "warn verdict") { self.diagMatching("R32 WARN") != nil }
         XCTAssertEqual(openLoopCalls, 0, "a shortfall must NOT open the loop — that worsens under-treatment")
         // "Overstated", not "High" (ruled 2026-08-15): the pod delivered LESS than the records
-        // claim, so the books are wrong, not the body. Asserted on the PLAIN channel — this
-        // direction keeps looping, and only an alert that stops dosing earns the urgent one.
-        XCTAssertTrue(notices.contains("Insulin On Board May Be Overstated"))
+        // claim, so the books are wrong, not the body. URGENT channel by the 2026-08-24 ruling
+        // (symmetric urgency, asymmetric action): both breach directions speak loudly; only the
+        // positive one also opens the loop — which the openLoopCalls assertion above pins.
+        XCTAssertTrue(urgentNotices.contains("Insulin On Board May Be Overstated"))
     }
 
     /// The ordinary case — a residual inside the bounds — must be silent. If routine loans warn,
