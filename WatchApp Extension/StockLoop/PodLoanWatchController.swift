@@ -989,6 +989,7 @@ final class PodLoanWatchController {
                     return
                 }
                 if success, let delivered = manager.podLoanInsulinDelivered {
+                    self.revokeCapturedDelivered = nil   // new loan, new baseline — never a stale capture
                     self.deliveredAtTakeover = delivered
                     self.phase = .active
                     self.loopManager.pumpManager = manager
@@ -1193,6 +1194,9 @@ final class PodLoanWatchController {
     /// measured rather than eyeballed from timestamps.
     private var lastPodLinkContact: Date?
     /// Highest epoch the phone has ever revoked — survives an unmatched revoke (see handleRevoke).
+    /// The odometer captured at revoke, before teardown nils the pump — consumed by the
+    /// offer builder as a fallback so revoke hand-backs still carry a reconcile baseline.
+    private var revokeCapturedDelivered: Double?
     private var lastRevokedEpoch: Int?
 
     /// The reclaim must not start INSIDE the G7's connect+auth burst. Measured across 140
@@ -2199,7 +2203,8 @@ final class PodLoanWatchController {
     private func sendHandbackOffer(freshened: Bool, recovered: Bool) {
         guard let epoch = epoch ?? journal.activeEpoch else { return }
         var odometer: LoanOdometerSnapshot?
-        if let start = deliveredAtTakeover, let latest = pumpManager?.podLoanInsulinDelivered {
+        if let start = deliveredAtTakeover,
+           let latest = pumpManager?.podLoanInsulinDelivered ?? revokeCapturedDelivered {
             odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest, freshenSucceeded: freshened)
         }
         // Verify rounds 1-3: IN-FLIGHT (mint→classification) and chase-pending events
@@ -2415,6 +2420,13 @@ final class PodLoanWatchController {
         handbackDeadline = nil
         handbackStartedAt = nil
         HandbackStuckAlert.disarm()   // The phone took over — no stuck alert
+        // Capture the odometer BEFORE the teardown nils the pump. The revoke path tears down
+        // first ON PURPOSE (it frees the pod's BLE immediately for the phone that is actively
+        // reclaiming), but the offer built below used to ask the now-nil pumpManager for
+        // podLoanInsulinDelivered and shipped odometer: nil — so revoke hand-backs skipped the
+        // AUTHORITATIVE reconcile entirely (e181, 2026-08-23: the one loan that day with no
+        // reconcile line). The records still ride the drain; this restores the CROSS-CHECK.
+        revokeCapturedDelivered = pumpManager?.podLoanInsulinDelivered
         loopManager.pumpManager = nil
         chaseWorkItem?.cancel()
         pendingUncertainEventID = nil   // liveness: no cross-loan chase residue
