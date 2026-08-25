@@ -1428,9 +1428,9 @@ final class PodLoanWatchController {
     /// One line per ladder when it ends, carrying what the per-read spam used to carry.
     /// Wall-clock ceiling for one reclaim ladder. Matches what the read-count comment always
     /// claimed (~40s) and now actually enforces it.
-    static let reclaimLadderBudget: TimeInterval = 45
+    static let reclaimLadderBudget: TimeInterval = 25   // lean 2026-08-24: 5× the observed worst case (was 45)
 
-    /// Which ladder has already paid for a scan-adopt escalation, so a 14-read ladder cannot
+    /// Which ladder has already paid for a scan-adopt escalation, so a ladder cannot
     /// recreate the central more than once.
     private var escalatedThisLadder: Int?
 
@@ -1456,7 +1456,14 @@ final class PodLoanWatchController {
     }
 
     private func attemptReclaimRead(manager: OmniPumpManager, attempt: Int, ladder: Int, startedAt: Date, completion: @escaping (Bool) -> Void) {
-        let maxAttempts = 14   // ~40s (14 × ~2s), same as the takeover ladder
+        // LEAN DOWNPAYMENT (ruling 2026-08-24): 14 reads was sized for the era when reclaims
+        // failed in batches. Post-fix evidence — hundreds of reclaims across three bench days —
+        // success is ALWAYS read 1 or 2 (~4 s), escalations fired zero times, and the one
+        // 6-s-watchdog burn all day was a single read. Six reads is double the observed worst
+        // case; the scan-adopt backstop stays and arrives one read earlier. Validated by the
+        // overnight soak this shipped into; if the soak shows escalations, the backstop earned
+        // its keep and this comment gets an update rather than a revert.
+        let maxAttempts = 6
         // ...and a REAL wall-clock ceiling, because "14 x ~2s" stopped being true.
         //
         // That arithmetic assumed each read returns quickly. It did — while an orphaned central
@@ -1542,7 +1549,7 @@ final class PodLoanWatchController {
                     // reach by handle would never get the recovery the ~98% figure was measured on.
                     // Four reads is ~8 s — several times the measured 1.3 s connect — and leaves
                     // most of the 14-read budget for the scan.
-                    if attempt + 1 == 4, self.escalatedThisLadder != ladder,
+                    if attempt + 1 == 3, self.escalatedThisLadder != ladder,
                        manager.isConnectionReady == false {
                         self.escalatedThisLadder = ladder
                         SportLog.event("loan", "E4: gentle reconnect hasn't landed in 4 reads — escalating to scan-adopt now")
