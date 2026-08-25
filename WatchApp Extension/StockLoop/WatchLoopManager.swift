@@ -2790,12 +2790,6 @@ extension WatchLoopManager: CGMManagerDelegate {
                 // bench flag is on.
                 self.e5FireRandomTempIfEnabled()
             }
-            // Every direct reading re-defers the sensor-blackout dead-man —
-            // but only DURING a loan (pumpManager is loan-scoped): a reading that
-            // lands after loan-end must not resurrect a disarmed repeating alert.
-            if case .newData = readingResult, self.pumpManager != nil {
-                SensorBlackoutAlert.refresh()
-            }
             // Autonomous-iteration pipeline (Jeremy 2026-07-20): every reading
             // queues the log to the phone (throttled; queued transfers survive
             // unreachability), where a Shortcuts automation syncs it to iCloud.
