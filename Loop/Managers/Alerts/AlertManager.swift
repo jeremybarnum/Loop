@@ -181,13 +181,30 @@ public final class AlertManager {
 
     // MARK: - Loop Not Running alerts
 
+    /// True while a pod loan is active. Set by WatchDataManager at wiring time. The
+    /// grant-time clear (clearLoopNotRunningNotificationsForLoanGrant) removes the QUEUED
+    /// rungs, but .LoopCycleCompleted kept firing — the phone completes open-loop cycles all
+    /// through a loan — and each completion re-armed the whole ladder ungated, so a
+    /// "Loop Failure" about the phone's deliberately-idle loop fired mid-loan (field
+    /// 2026-08-24: 20-minute rung on the wrist while the WATCH held the pod; also the earlier
+    /// sightings the grant-time clear was believed to have fixed). The clear handles the past;
+    /// this gate handles the future; the reclaim-instant re-arm restores coverage at loan end.
+    var loopNotRunningSuppressionGate: (() -> Bool)?
+
     func loopDidComplete(_ lastLoopDate: Date? = nil) async {
+        if loopNotRunningSuppressionGate?() == true {
+            log.default("loopDidComplete during a pod loan — Loop Failure ladder NOT re-armed (the watch is the looper)")
+            return
+        }
         // use now if there is no lastLoopDate
         await rescheduleLoopNotRunningNotifications(lastLoopDate ?? Date())
     }
 
     private func rescheduleLoopNotRunningNotifications() {
         Task {
+            // Same gate as loopDidComplete — this path serves the alert-muter config change,
+            // which can land mid-loan just as easily.
+            guard loopNotRunningSuppressionGate?() != true else { return }
             guard let lastLoopDate = getLastLoopDate() else { return }
             await rescheduleLoopNotRunningNotifications(lastLoopDate)
         }
