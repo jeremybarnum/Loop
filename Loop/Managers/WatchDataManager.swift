@@ -71,7 +71,11 @@ final class WatchDataManager: NSObject {
     /// state. Lazy-adjacent to the controller so neither can exist without the other.
     func wireLoopFailureSuppressionGate() {
         deviceManager.alertManager?.loopNotRunningSuppressionGate = { [weak self] in
-            self?.podLoanController.isLoanedOutForUI ?? false
+            // Loan state OR the pause capture: the capture is written synchronously at grant,
+            // BEFORE the pause-triggered final cycle can complete — closing the systematic
+            // escape at its root. The sweep demotes to true backstop.
+            (self?.podLoanController.isLoanedOutForUI ?? false)
+                || UserDefaults.standard.object(forKey: Self.dosingCaptureKey) != nil
         }
         Self.loanLadderSweep = { [weak self] in
             self?.deviceManager.alertManager?.sweepLoopNotRunningNotificationsDuringLoan()
@@ -83,8 +87,15 @@ final class WatchDataManager: NSObject {
     /// the closure hops back through Task-per-call inside the sweep itself.
     nonisolated(unsafe) private static var loanLadderSweep: (() -> Void)?
 
+    /// Set at pause (before the pause-triggered final phone cycle can complete), cleared at
+    /// unpause — so it brackets the loan INCLUDING the pre-state-flip window the loan-state
+    /// gate cannot see. That window is why the Loop-Failure ladder escaped the grant clear on
+    /// EVERY loan (3/3 on 2026-08-25, each caught by the sweep): the clear ran, the final
+    /// cycle completed while state still read .owner, and its completion re-armed the ladder.
+    static let dosingCaptureKey = "PodLoanPhoneController.dosingEnabledBeforeLoan"
+
     private(set) lazy var podLoanController: PodLoanPhoneController = {
-        let dosingKey = "PodLoanPhoneController.dosingEnabledBeforeLoan"
+        let dosingKey = Self.dosingCaptureKey
         return PodLoanPhoneController(dependencies: .init(
             pumpManager: { [weak self] in self?.deviceManager.pumpManager },
             settings: { [weak self] in self?.settingsManager.loopSettings ?? LoopSettings() },

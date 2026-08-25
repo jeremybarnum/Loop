@@ -1456,49 +1456,37 @@ final class PodLoanWatchController {
     }
 
     private func attemptReclaimRead(manager: OmniPumpManager, attempt: Int, ladder: Int, startedAt: Date, completion: @escaping (Bool) -> Void) {
-        // LEAN DOWNPAYMENT (ruling 2026-08-24): 14 reads was sized for the era when reclaims
-        // failed in batches. Post-fix evidence — hundreds of reclaims across three bench days —
-        // success is ALWAYS read 1 or 2 (~4 s), escalations fired zero times, and the one
-        // 6-s-watchdog burn all day was a single read. Six reads is double the observed worst
-        // case; the scan-adopt backstop stays and arrives one read earlier. Validated by the
-        // overnight soak this shipped into; if the soak shows escalations, the backstop earned
-        // its keep and this comment gets an update rather than a revert.
-        let maxAttempts = 6
-        // ...and a REAL wall-clock ceiling, because "14 x ~2s" stopped being true.
+        // THE ELEGANT FORM (ruling 2026-08-25): a reclaim is ONE status round-trip — the
+        // driver dials on demand — plus bounded retry, one escalation, and a liveness ceiling.
         //
-        // That arithmetic assumed each read returns quickly. It did — while an orphaned central
-        // made every read fail instantly with `notReady`. Now that the orphan recovers, a read
-        // gets a genuine connect attempt and blocks for the driver's 20 s timeout when the pod is
-        // not answering: field 2026-08-20 L7 ran 288.8s (14 x ~20s) and held the loop for nearly
-        // five minutes, which is what made the wrist go stale. Honest reads, dishonest budget.
+        // Three reads, down from six, down from fourteen: field truth across four bench days is
+        // that read 1 succeeds (~4 s) or the pod is unreachable by handle, in which case read 2
+        // runs behind the scan-adopt escalation and read 3 is margin. The per-read 6 s watchdog
+        // is GONE: it existed for waits that could never end (the stale-manager race), that
+        // architecture died with the parallel dialer, and by 2026-08-25 its only remaining
+        // effect was killing healthy connects in the 6-10 s tail — all three of the day's
+        // "stalls" were the watchdog manufacturing failures out of slow successes. A genuinely
+        // wedged read is bounded twice over: the driver's own 20 s connect timeout, and ONE
+        // per-ladder liveness timer at budget+2 (below) — the same protection as six per-read
+        // timers, with one timer.
+        let maxAttempts = 3
         let ladderDeadline = startedAt.addingTimeInterval(Self.reclaimLadderBudget)
-        // PER-READ WATCHDOG (bench 2026-08-21). A read can block for the driver's full 20 s
-        // connect timeout while waiting on a condition that can never fire (the stale-manager
-        // race — see BlePodComms's re-adopt). The ladder is completion-driven, so ONE slow read
-        // is the whole ladder's throughput. A connect is ~1.3 s and a status round-trip ~1 s;
-        // a read that has produced nothing in 6 s is not late, it is stuck — count it failed and
-        // move on. The next read enters bleRunSession fresh, which now switches to the CURRENT
-        // manager and typically finds the link the E4 path already brought up. The stuck read's
-        // eventual completion is ignored via the once-token; its command dies harmlessly on the
-        // stale manager's queue.
-        var readSettled = false
-        let settleOnce: (Bool) -> Bool = { _ in            // returns true if WE settle it
-            if readSettled { return false }
-            readSettled = true
-            return true
-        }
-        schedule(after: 6, label: "reclaim-read-watchdog") { [weak self] in
-            guard let self = self else { return }
-            guard settleOnce(false) else { return }
-            SportLog.event("loan", "E4: read \(attempt + 1) STUCK >6s (driver-side wait) — counting it failed and moving on")
-            self.handleReclaimReadResult(false, manager: manager, attempt: attempt, ladder: ladder,
-                                         startedAt: startedAt, ladderDeadline: ladderDeadline,
-                                         maxAttempts: maxAttempts, completion: completion)
+        if attempt == 0 {
+            schedule(after: Self.reclaimLadderBudget + 2, label: "reclaim-ladder-liveness") { [weak self] in
+                guard let self = self, self.liveReclaimLadders[ladder] != nil else { return }
+                SportLog.event("loan", String(format: "E4: LIVENESS CEILING at %.0fs — a read is wedged past the driver's own timeout; failing the ladder so the loop breathes", Self.reclaimLadderBudget + 2))
+                self.finishReclaimLadder(ladder, startedAt: startedAt, reads: attempt + 1, ok: false,
+                                         note: "liveness ceiling", manager: manager)
+                completion(false)
+            }
         }
         manager.podLoanReadStatus { [weak self] success in
             guard let self = self else { completion(false); return }
             self.queue.async {
-                guard settleOnce(success) else { return }
+                // The ladder may have been finished under us (liveness ceiling, phase abort).
+                // finishReclaimLadder clears the live entry, so a late completion no-ops here —
+                // the ladder-level once-gate that replaced the per-read once-tokens.
+                guard self.liveReclaimLadders[ladder] != nil else { return }
                 self.handleReclaimReadResult(success, manager: manager, attempt: attempt, ladder: ladder,
                                              startedAt: startedAt, ladderDeadline: ladderDeadline,
                                              maxAttempts: maxAttempts, completion: completion)
@@ -1549,10 +1537,10 @@ final class PodLoanWatchController {
                     // reach by handle would never get the recovery the ~98% figure was measured on.
                     // Four reads is ~8 s — several times the measured 1.3 s connect — and leaves
                     // most of the 14-read budget for the scan.
-                    if attempt + 1 == 3, self.escalatedThisLadder != ladder,
+                    if attempt + 1 == 2, self.escalatedThisLadder != ladder,
                        manager.isConnectionReady == false {
                         self.escalatedThisLadder = ladder
-                        SportLog.event("loan", "E4: gentle reconnect hasn't landed in 4 reads — escalating to scan-adopt now")
+                        SportLog.event("loan", "E4: gentle reconnect hasn't landed — escalating to scan-adopt for the final read")
                         manager.podLoanEscalateReclaim()
                     }
                     // Scan-adopt is armed UP FRONT in reclaimPodForDose, so the
@@ -1561,6 +1549,7 @@ final class PodLoanWatchController {
                     // these reads just poll for the winner. (Was: bare-connect first, escalate at read 6,
                     // which burned ~15s on the ~98% of reclaims the bare bid never won.)
                     self.schedule(after: 2, label: "reclaim-read") {
+                        guard self.liveReclaimLadders[ladder] != nil else { return }   // finished under us
                         guard self.phase == .active else {
                             self.finishReclaimLadder(ladder, startedAt: startedAt, reads: attempt + 1, ok: false, note: "phase left .active mid-ladder", manager: manager)
                             SportLog.event("loan", "E4: reclaim ABORTED mid-ladder — phase left .active (now \(self.phase.rawValue)); in-flight dose cancelled by the hand-back")

@@ -395,10 +395,7 @@ struct LogView: View {
 //
 // Changes apply at the next scan/connect cycle, never mid-dose.
 struct RadioLabView: View {
-    // G7 doorways — three independent gates in G7BluetoothManager.
-    @AppStorage("G7Lab.trigger.a") private var g7Ride = true
-    @AppStorage("G7Lab.trigger.b") private var g7Events = true
-    @AppStorage("G7Lab.trigger.c") private var g7Scan = true
+    // (The G7 doorway toggles are gone — settled 2026-08-25, hardcoded in G7BluetoothManager.)
     // Pod link — keys OmnipodKit has always read live. (Connect-on-demand is no longer here:
     // it won its trial and is hardcoded in BluetoothManager — see connectOnDemandEnabled.)
     @AppStorage("OmnipodKit.lowPowerMonitorEnabled") private var alarmScan = true
@@ -410,16 +407,11 @@ struct RadioLabView: View {
 
     private var session: StockLoopSession? { ExtensionDelegate.sharedIfAvailable()?.stockLoopSession }
     private var configLine: String {
-        "g7=\(g7Ride ? "a" : "")\(g7Events ? "b" : "")\(g7Scan ? "c" : "") alarm=\(alarmScan ? "on" : "off")"
+        "alarm=\(alarmScan ? "on" : "off")"
     }
 
     var body: some View {
         Form {
-            Section("G7 acquisition") {
-                Toggle("(a) Ride system link", isOn: $g7Ride)
-                Toggle("(b) Connection events", isOn: $g7Events)
-                Toggle("(c) Own scan", isOn: $g7Scan)
-            }
             Section("Pod link") {
                 Toggle("Alarm scan (C00A)", isOn: $alarmScan)
             }
