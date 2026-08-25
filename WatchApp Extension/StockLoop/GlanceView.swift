@@ -208,6 +208,7 @@ final class GlanceViewModel: ObservableObject {
     func startRefreshing() {
         guard !isPreview else { return }
         RuntimeStateLog.mark("glance.startRefreshing")
+        SportLog.event("glance", "render loop STARTED [glance-life]")
         if let o = oneShotMirrorObserver { NotificationCenter.default.removeObserver(o); oneShotMirrorObserver = nil }
         if mirrorObserver == nil {
             mirrorObserver = NotificationCenter.default.addObserver(
@@ -222,6 +223,33 @@ final class GlanceViewModel: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             self?.refresh()
         }
+    }
+
+    /// PASSIVE AGING has no push (field 2026-08-25: the ring sat green through the amber and
+    /// red deadlines of a caged-pod stall until a TAP rebuilt the frame). Every paint therefore
+    /// arms a one-shot timer for the exact moment the frame's color EXPIRES — the shared
+    /// 6/16-minute freshness boundaries past lastLoopCompleted. On-screen, it repaints the
+    /// instant amber is due; wrist-down, the suspended timer fires overdue the moment the app
+    /// resumes — which is precisely the wrist-raise trigger the lifecycle events fail to
+    /// deliver on a bare undim. At most two fires per completed cycle; each is one refreshNow.
+    private var boundaryTimer: Timer?
+
+    private func armFreshnessBoundaryRepaint() {
+        boundaryTimer?.invalidate(); boundaryTimer = nil
+        guard state.phase == .active,
+              let last = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.loopManager.mirroredGlanceData?.lastLoopCompleted
+        else { return }
+        let age = Date().timeIntervalSince(last)
+        let boundaries: [TimeInterval] = [6 * 60, 16 * 60]
+        guard let next = boundaries.first(where: { $0 > age }) else { return }   // already past red — nothing left to expire
+        let delay: TimeInterval = next - age + 1
+        let t = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+            SportLog.event("glance", "freshness boundary passed — self-repaint [glance-life]")
+            self?.refreshNow()
+        }
+        t.tolerance = 5
+        RunLoop.main.add(t, forMode: .common)
+        boundaryTimer = t
     }
 
     /// One catch-up render, deliberately WITHOUT touching the tick. For state the session
@@ -262,6 +290,7 @@ final class GlanceViewModel: ObservableObject {
     /// controller's queue, which the pump also uses.
     func stopRefreshing() {
         RuntimeStateLog.mark("glance.stopRefreshing")
+        SportLog.event("glance", "render loop STOPPED [glance-life]")
         if let o = mirrorObserver { NotificationCenter.default.removeObserver(o); mirrorObserver = nil }
         timer?.invalidate()
         timer = nil
@@ -412,6 +441,7 @@ final class GlanceViewModel: ObservableObject {
         RuntimeStateLog.mark("glance.refresh.mirrorRead")
         guard let snap = session.loanController.mirroredDebugSnapshot else { return }
         RuntimeStateLog.mark("glance.refresh.phase(\(snap.phase.rawValue))")
+        defer { armFreshnessBoundaryRepaint() }
 
         switch snap.phase {
         case .idle:

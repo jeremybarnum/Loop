@@ -73,7 +73,13 @@ final class WatchDataManager: NSObject {
         deviceManager.alertManager?.loopNotRunningSuppressionGate = { [weak self] in
             self?.podLoanController.isLoanedOutForUI ?? false
         }
+        Self.loanLadderSweep = { [weak self] in
+            self?.deviceManager.alertManager?.sweepLoopNotRunningNotificationsDuringLoan()
+        }
     }
+
+    /// Called from the link-census tick (its own queue) — the sweep itself gates on loan state.
+    private static var loanLadderSweep: (() -> Void)?
 
     private(set) lazy var podLoanController: PodLoanPhoneController = {
         let dosingKey = "PodLoanPhoneController.dosingEnabledBeforeLoan"
@@ -1137,6 +1143,7 @@ extension WatchDataManager: WCSessionDelegate {
             guard WCSession.isSupported() else { return }
             let s = WCSession.default
             let pod = Self.podLinkCensus.map { " · pod: \($0())" } ?? ""
+            Self.loanLadderSweep?()
             PhoneLog.event("link", "watch reachable=\(s.isReachable) activation=\(s.activationState.rawValue) paired=\(s.isPaired) appInstalled=\(s.isWatchAppInstalled)\(pod)")
         }
         t.resume()

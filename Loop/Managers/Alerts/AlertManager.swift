@@ -191,6 +191,26 @@ public final class AlertManager {
     /// this gate handles the future; the reclaim-instant re-arm restores coverage at loan end.
     var loopNotRunningSuppressionGate: (() -> Bool)?
 
+    /// Belt-and-braces for the ladder's escape artists. A 1-hour rung fired mid-loan on
+    /// 2026-08-25 having survived BOTH the grant-time clear and the completion gate — anchored
+    /// pre-loan, mechanism unidentified. Rather than guess the escape path, sweep: once a
+    /// minute during a loan (riding the link census tick) any pending Loop-Failure rung is
+    /// removed and LOGGED with its count, so whatever queued it dies within a minute and the
+    /// log line convicts the original path.
+    func sweepLoopNotRunningNotificationsDuringLoan() {
+        guard loopNotRunningSuppressionGate?() == true else { return }
+        Task {
+            let center = UNUserNotificationCenter.current()
+            let prefix = LoopNotificationCategory.loopNotRunning.rawValue
+            let ids = await center.pendingNotificationRequests()
+                .filter { $0.identifier.hasPrefix(prefix) }
+                .map(\.identifier)
+            guard !ids.isEmpty else { return }
+            center.removePendingNotificationRequests(withIdentifiers: ids)
+            PhoneLog.event("deadman", "swept \(ids.count) stale phone Loop-Failure rung(s) mid-loan — these escaped the grant clear and the gate [deadman-sweep]")
+        }
+    }
+
     func loopDidComplete(_ lastLoopDate: Date? = nil) async {
         if loopNotRunningSuppressionGate?() == true {
             log.default("loopDidComplete during a pod loan — Loop Failure ladder NOT re-armed (the watch is the looper)")
