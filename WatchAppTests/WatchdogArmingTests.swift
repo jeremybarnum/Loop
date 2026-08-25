@@ -54,7 +54,7 @@ final class WatchdogArmingTests: XCTestCase {
         let reqs = pending()
         XCTAssertEqual(reqs.count, 1)
         XCTAssertEqual(interval(of: reqs[0]), LoopStallWatchdog.interval)
-        XCTAssertEqual(interval(of: reqs[0]), 15 * 60, "15 min = three G7 reading intervals")
+        XCTAssertEqual(interval(of: reqs[0]), 20 * 60, "20 min, matching the phone's own ladder (ruling 2026-08-24; reverted from 15 on proven reliability)")
     }
 
     func testSensorBlackoutArmsRepeatingAtTwentyMinutes() {

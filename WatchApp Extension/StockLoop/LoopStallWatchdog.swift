@@ -25,10 +25,11 @@ enum LoopStallWatchdog {
 
     /// How long the closed loop may go without completing a cycle before the
     /// alert fires. Refreshed on every live cycle, so it only fires on a genuine
-    /// stall. 15 min = three G7 reading intervals: tolerates a normal RF gap or
-    /// two, catches a real stall promptly. (The phone's AT-REST loop-not-running
-    /// ladder starts at 20 min — a workout warrants a tighter window.)
-    static let interval: TimeInterval = 15 * 60
+    /// stall. 20 min, matching the phone's own loop-not-running ladder — reverted
+    /// from 15 by ruling (2026-08-24): the tighter window was insurance bought when
+    /// reclaims failed routinely, and the system has since earned the standard
+    /// patience (faraday bench test: fired exactly on schedule).
+    static let interval: TimeInterval = 20 * 60
 
     /// How disruptive the "loop stopped" alert is.
     ///   false (DEFAULT) → .timeSensitive: a wrist haptic + on-screen card that
@@ -50,14 +51,16 @@ enum LoopStallWatchdog {
     /// cycle simply re-defers the alert.
     static func refresh() {
         let content = UNMutableNotificationContent()
-        content.title = NSLocalizedString("Sport Mode Loop Stopped", comment: "Title: the watch closed loop has stopped completing cycles")
-        // Wrist copy (field-corrected 2026-08-06). Dropped two things from the original: the
-        // opening clause, which restated the title, and "check your pod" — during a loan the pod
-        // is driven by the watch and there is nothing the user can inspect. KEPT "check your
-        // glucose": a sensor gap is by far the most common cause, and it IS the right action,
-        // since a stalled loop means nothing is watching BG. Temp hedged because the watchdog
-        // fires at 15 min and a temp usually outlasts that.
-        content.body = NSLocalizedString("Check your glucose. Your pod returns to scheduled basal when its temp expires.", comment: "Body: the watch closed loop has stopped completing cycles")
+        // STOCK's exact words, by ruling (2026-08-24): the custom copy read as pedantic, and
+        // the phone's own ladder says the same thing better — one voice on both devices, one
+        // string in the catalog.
+        content.title = NSLocalizedString("Loop Failure", comment: "The notification title for a loop failure")
+        let formatter = DateComponentsFormatter()
+        formatter.maximumUnitCount = 1
+        formatter.allowedUnits = [.hour, .minute]
+        formatter.unitsStyle = .full
+        content.body = String(format: NSLocalizedString("Loop has not completed successfully in %@", comment: "The notification alert describing a long-lasting loop failure. The substitution parameter is the time interval since the last loop"),
+                              formatter.string(from: interval)?.localizedLowercase ?? "20 minutes")
         content.interruptionLevel = useCriticalAlert ? .critical : .timeSensitive
         content.sound = useCriticalAlert ? .defaultCritical : .default
         content.threadIdentifier = identifier

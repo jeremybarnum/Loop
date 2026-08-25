@@ -67,6 +67,14 @@ final class WatchDataManager: NSObject {
 
     // MARK: - Loan protocol v2 (M5)
 
+    /// One-time wiring of the alert manager's Loop-Failure suppression gate to the loan
+    /// state. Lazy-adjacent to the controller so neither can exist without the other.
+    func wireLoopFailureSuppressionGate() {
+        deviceManager.alertManager?.loopNotRunningSuppressionGate = { [weak self] in
+            self?.podLoanController.isLoanedOutForUI ?? false
+        }
+    }
+
     private(set) lazy var podLoanController: PodLoanPhoneController = {
         let dosingKey = "PodLoanPhoneController.dosingEnabledBeforeLoan"
         return PodLoanPhoneController(dependencies: .init(
@@ -489,6 +497,7 @@ final class WatchDataManager: NSObject {
         NotificationCenter.default.addObserver(self, selector: #selector(updateWatch(_:)), name: .LoopDataUpdated, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(sendSupportedBolusVolumesIfNeeded), name: .PumpManagerChanged, object: deviceManager)
 
+        wireLoopFailureSuppressionGate()
         watchSession?.delegate = self
         watchSession?.activate()
 
