@@ -649,7 +649,11 @@ final class PodLoanPhoneController {
     /// scan-and-adopt. 20s because the takeover budget calls a connect "typically ~17s": inside
     /// that, a normal reconnect is still landing and escalating would only add radio contention;
     /// past it, waiting is not working. Field settles that stalled ran 224.2s and 237.0s.
-    private static let reclaimEscalateAfter: TimeInterval = 20
+    /// Lean 2026-08-24: 20 → 12 s. Since the reclaim dials at re-arm (skipDiscovery), measured
+    /// link-up runs 0.0–8.8 s; twelve covers the worst by a third. Elapsed time stays the
+    /// trigger because this escalation exists ONLY for the link-never-came-up case, where there
+    /// are no failed reads to count — absence is the only evidence there is.
+    private static let reclaimEscalateAfter: TimeInterval = 12
 
     /// One escalation per reclaim. Re-armed with each new settle window.
     private var reclaimEscalated = false
