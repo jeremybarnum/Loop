@@ -79,7 +79,9 @@ final class WatchDataManager: NSObject {
     }
 
     /// Called from the link-census tick (its own queue) — the sweep itself gates on loan state.
-    private static var loanLadderSweep: (() -> Void)?
+    /// nonisolated(unsafe): written once at wiring time on main, read from the census queue;
+    /// the closure hops back through Task-per-call inside the sweep itself.
+    nonisolated(unsafe) private static var loanLadderSweep: (() -> Void)?
 
     private(set) lazy var podLoanController: PodLoanPhoneController = {
         let dosingKey = "PodLoanPhoneController.dosingEnabledBeforeLoan"
