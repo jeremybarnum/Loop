@@ -23,121 +23,64 @@ enum LoopStallWatchdog {
 
     // ─── TUNABLES — safe to change for your own build ────────────────────────
 
-    /// How long the closed loop may go without completing a cycle before the
-    /// alert fires. Refreshed on every live cycle, so it only fires on a genuine
-    /// stall. 20 min, matching the phone's own loop-not-running ladder — reverted
-    /// from 15 by ruling (2026-08-24): the tighter window was insurance bought when
-    /// reclaims failed routinely, and the system has since earned the standard
-    /// patience (faraday bench test: fired exactly on schedule).
-    static let interval: TimeInterval = 20 * 60
+    /// STOCK PARITY (ruling 2026-08-24): the wrist runs the phone's exact ladder —
+    /// 20/40 minutes time-sensitive, 1/2 hours critical, stock's words — instead of a single
+    /// custom 15-minute alert with bespoke copy. Same rungs, same escalation, both devices;
+    /// the mirroring dedupe is ownership, not cleverness: the PHONE's ladder is suppressed for
+    /// the whole loan (AlertManager's loan gate), so during a loan only this one speaks, and
+    /// outside a loan this one is disarmed, so only the phone's does.
+    ///
+    /// The rungs are pre-scheduled from OUTSIDE the app (UNUserNotificationCenter), so a
+    /// suspended or dead watch app still alarms — the dead-man property is unchanged.
+    static let rungs: [(interval: TimeInterval, isCritical: Bool)] = [
+        (20 * 60, false), (40 * 60, false), (60 * 60, true), (120 * 60, true),
+    ]
 
-    /// How disruptive the "loop stopped" alert is.
-    ///   false (DEFAULT) → .timeSensitive: a wrist haptic + on-screen card that
-    ///     can break through Focus, but does NOT force sound through the silent
-    ///     switch / Do Not Disturb. Deliberately non-blaring so it can't disrupt
-    ///     an equestrian competition round.
-    ///   true → .critical: pierces silent mode / DND with sound — louder and more
-    ///     insistent. Requires the Critical Alerts entitlement; without it watchOS
-    ///     silently downgrades to time-sensitive.
-    /// Change this one flag to trade non-disruption against insistence.
-    static let useCriticalAlert = false
-
-    // ─────────────────────────────────────────────────────────────────────────
+    /// The first rung, for tests and for anything that reasons about "the" deadline.
+    static let interval: TimeInterval = rungs[0].interval
 
     private static let identifier = "com.loopkit.Loop.watch.loopStallWatchdog"
+    private static var rungIdentifiers: [String] { rungs.map { "\(identifier).\(Int($0.interval))" } }
 
-    /// Arm the watchdog or push its deadline forward. Adding a request with the
-    /// same identifier REPLACES the pending one, so calling this on every live
-    /// cycle simply re-defers the alert.
+    /// Arm the ladder or push every rung forward. Adding requests with the same identifiers
+    /// REPLACES the pending ones, so calling this on every live cycle re-defers the whole ladder.
     static func refresh() {
-        let content = UNMutableNotificationContent()
-        // STOCK's exact words, by ruling (2026-08-24): the custom copy read as pedantic, and
-        // the phone's own ladder says the same thing better — one voice on both devices, one
-        // string in the catalog.
-        content.title = NSLocalizedString("Loop Failure", comment: "The notification title for a loop failure")
+        let center = WristAlerts.scheduler
         let formatter = DateComponentsFormatter()
         formatter.maximumUnitCount = 1
         formatter.allowedUnits = [.hour, .minute]
         formatter.unitsStyle = .full
-        content.body = String(format: NSLocalizedString("Loop has not completed successfully in %@", comment: "The notification alert describing a long-lasting loop failure. The substitution parameter is the time interval since the last loop"),
-                              formatter.string(from: interval)?.localizedLowercase ?? "20 minutes")
-        content.interruptionLevel = useCriticalAlert ? .critical : .timeSensitive
-        content.sound = useCriticalAlert ? .defaultCritical : .default
-        content.threadIdentifier = identifier
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: false)
-        WristAlerts.scheduler.add(
-            UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
+        for rung in rungs {
+            let content = UNMutableNotificationContent()
+            content.title = NSLocalizedString("Loop Failure", comment: "The notification title for a loop failure")
+            content.body = String(format: NSLocalizedString("Loop has not completed successfully in %@", comment: "The notification alert describing a long-lasting loop failure. The substitution parameter is the time interval since the last loop"),
+                                  formatter.string(from: rung.interval)?.localizedLowercase ?? "\(Int(rung.interval / 60)) minutes")
+            // Critical rungs request .critical; without the Critical Alerts entitlement
+            // watchOS silently downgrades to time-sensitive, which is the acceptable floor.
+            content.interruptionLevel = rung.isCritical ? .critical : .timeSensitive
+            content.sound = rung.isCritical ? .defaultCritical : .default
+            content.threadIdentifier = identifier
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: rung.interval, repeats: false)
+            center.add(UNNotificationRequest(identifier: "\(identifier).\(Int(rung.interval))",
+                                             content: content, trigger: trigger))
+        }
     }
 
-    /// Disarm — a clean end / hand-back / revoke. The loop is stopping on purpose.
+    /// Disarm — a clean end / hand-back / revoke. The loop is stopping on purpose, and the
+    /// PHONE's ladder re-arms at reclaim, so coverage transfers rather than lapses.
     static func disarm() {
         let center = WristAlerts.scheduler
-        center.removePendingRequests(withIdentifiers: [identifier])
-        center.removeDeliveredRequests(withIdentifiers: [identifier])
+        center.removePendingRequests(withIdentifiers: rungIdentifiers)
+        center.removeDeliveredRequests(withIdentifiers: rungIdentifiers)
     }
 }
 
-/// WS4b (ruled 2026-07-19): notification-only dead-man for DIRECT G7 readings
-/// during a loan. Same pre-scheduled pattern as LoopStallWatchdog — armed at loan
-/// start, re-deferred by every direct reading, fires from OUTSIDE a suspended app.
-/// Distinct from the loop watchdog: this fires in OPEN loop too (the loop watchdog
-/// is closed-cycle-keyed) — a 2.5-hour silent blackout must never happen again
-/// (party finding 2026-07-18). Repeats every 20 min while the blackout persists;
-/// no automatic actions (C8 pattern).
-enum SensorBlackoutAlert {
+// SensorBlackoutAlert (WS4b, ruled 2026-07-19) DELETED by ruling 2026-08-24: a glucose
+// blackout stalls loop cycles in open and closed mode alike (missingDataError holds the
+// watchdog), so the ladder above reports it on the same rungs — the separate 20-minute
+// repeating alert had become a guaranteed duplicate voice for the same stall. The party
+// finding it answered (a 2.5-hour silent blackout) remains covered, one octave lower.
 
-    /// Two missed reading cycles beyond the display staleness gate (ruled: 20 min).
-    static let interval: TimeInterval = 20 * 60
-
-    private static let identifier = "sportmode.sensorBlackout"
-
-    private static let sinceFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.timeStyle = .short
-        f.dateStyle = .none
-        return f
-    }()
-
-    /// Arm, or push forward after a fresh direct reading.
-    ///
-    /// The body names the TIME of the last reading rather than an elapsed duration, because the
-    /// trigger REPEATS: "for 20 minutes" is a lie from the second firing onward, while "since
-    /// 14:05" stays true however long the blackout runs. It is stamped here, at the moment of
-    /// that reading, which is the only place the fact is known — the notification itself is
-    /// composed 20 minutes before it lands.
-    ///
-    /// It no longer blames sensor geometry. All the watch observes is silence; the causes it
-    /// cannot distinguish include a post-takeover G7 stand-down that self-recovers, a held pod
-    /// link starving acquisition, and a sensor session that simply ended. Dexcom's own watch app
-    /// reads the same sensor independently, so it is the one check that tells the user whether
-    /// the sensor stopped or only Sport Mode's link to it did — which is worth naming while this
-    /// build is young and "is it me or the app?" is the live question.
-    static func refresh() {
-        let center = WristAlerts.scheduler
-        center.removePendingRequests(withIdentifiers: [identifier])
-        let content = UNMutableNotificationContent()
-        content.title = NSLocalizedString("No Direct G7 Readings", comment: "Sensor-blackout alert title")
-        content.body = String(
-            format: NSLocalizedString("Nothing since %@. May clear on its own — check Dexcom's app to see if the sensor is reporting.", comment: "Sensor-blackout alert body (1: time of the last direct reading)"),
-            sinceFormatter.string(from: Date()))
-        content.sound = .default
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: true)
-        center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
-    }
-
-    static func disarm() {
-        let center = WristAlerts.scheduler
-        center.removePendingRequests(withIdentifiers: [identifier])
-        center.removeDeliveredRequests(withIdentifiers: [identifier])
-    }
-}
-
-/// #67 (2026-07-28): the hand-back to the iPhone never got acked within the budget — the
-/// phone is unreachable, or silently dropping offers (#35). Pre-scheduled like the watchdogs
-/// above so the wrist alert fires FROM OUTSIDE a suspended app (a hand-back can hang while the
-/// app is backgrounded). Armed at the End tap (beginHandback), disarmed on ack / cancel / a
-/// phone revoke. On expiry the watch also resumes Sport Mode locally in the SAME loop mode
-/// (PodLoanWatchController.handbackTimedOut) — the two are coordinated at the same deadline.
 enum HandbackStuckAlert {
 
     /// How long to wait for the phone's ack before giving up and resuming on the watch. ~8

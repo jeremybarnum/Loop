@@ -2065,7 +2065,6 @@ final class PodLoanWatchController {
             phase = .active
             loopManager.pumpManager = manager
             loopManager.loanDoseRecorder = self
-            SensorBlackoutAlert.refresh()   // dosing resumes → re-arm the blackout dead-man
             onLoanActiveChanged?(true)
             SportLog.event("loan", "HAND-BACK timed out (final, \(Int(HandbackStuckAlert.interval))s) — iPhone never acked; resumed Sport Mode on the watch (still holding the pod)\(wedgeSuffix)")
             loopManager.checkPumpDataAndLoop()   // re-establish a temp this cycle
@@ -2117,7 +2116,6 @@ final class PodLoanWatchController {
         phase = .handingBack
         SportLog.event("loan", "drain complete — finalizing hand-back (loop dosing stops now)")
         loopManager.pumpManager = nil  // no dosing from here
-        SensorBlackoutAlert.disarm()   // dosing stopped — a blackout alert would mislead
 
         // Cancel the leftover LOOP temp — but a running bounded manual
         // suspend is preserved; the pod auto-resumes at its expiry.
