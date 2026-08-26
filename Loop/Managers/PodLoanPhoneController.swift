@@ -902,8 +902,11 @@ final class PodLoanPhoneController {
         if let latest = (deps.pumpManager() as? PumpConnectionLendable)?.lentDeviceInsulinDelivered {
             // The VERDICT residual is window-scoped: [audit base → this reading]. With no
             // checkpoints the base is the takeover anchor and this is the whole loan.
+            // Quantized to milli-units BEFORE the band comparisons: e223 (2026-08-26) opened
+            // the loop on "+0.200 exceeds +0.20" because 2.400−2.200 is 0.20000000000000018
+            // in binary — the boundary must turn on the pulse grid, never on float dust.
             let delivered = latest - pending.deliveredAtStart
-            let residual = delivered - pending.expected
+            let residual = ((delivered - pending.expected) * 1000).rounded() / 1000
             // The whole-loan companions: what the bank and the drift tripwire read, so the
             // residual series keeps one meaning across the checkpoint change.
             let loanDelivered = pending.takeoverUnits.map { latest - $0 }
@@ -1373,9 +1376,12 @@ final class PodLoanPhoneController {
             .filter { !stagedTombstones.contains($0.id) }
             .sorted { $0.seq < $1.seq }
         let expected = LoanReconciler.expectedInsulin(events: events, schedule: deps.settings().basalRateSchedule,
-                                                      from: base.asOf, to: asOf)
+                                                      from: base.asOf, to: asOf,
+                                                      includingBolusesAtEnd: false)
         let delivered = snap.deliveredLatest - base.units
-        let residual = delivered - expected
+        // Milli-unit quantization, same reason as the verdict residual: a window sitting
+        // exactly on the band must reconcile, not carry on float representation error.
+        let residual = ((delivered - expected) * 1000).rounded() / 1000
         if abs(residual) <= Self.checkpointBand {
             auditBase = AuditBase(units: snap.deliveredLatest, asOf: asOf)
             checkpointsThisLoan += 1
