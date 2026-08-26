@@ -222,6 +222,7 @@ final class StockLoopSession {
         }
 
         let build = BuildDetails.default.codeIdentity
+        DeathBlackBox.shared.arm()
         SportLog.event("session", "Sport Mode ready — build \(build); tap Start to request a loan\(Self.launchForensics())")
         startLinkCensus()
         // Name the policy at launch: a log that does not say which policy produced it cannot be

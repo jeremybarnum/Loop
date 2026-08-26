@@ -165,10 +165,15 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         // while suspended. No-op when nothing holds it.
         startStockLoopSession()
         stockLoopSession?.ensureKeepalive()
+        SportLog.event("lifecycle", "didBecomeActive [lifecycle-crumb]")
         NotificationCenter.default.post(name: Self.didBecomeActiveNotification, object: self)
     }
 
     func applicationWillResignActive() {
+        // Breadcrumb for the silent-death investigation: the deaths cluster in the
+        // radio-quiet window, and the app's exact lifecycle state at last breath is the
+        // discriminator between watchdog-on-transition and background-kill theories.
+        SportLog.event("lifecycle", "willResignActive [lifecycle-crumb]")
         NotificationCenter.default.post(name: Self.willResignActiveNotification, object: self)
     }
 
