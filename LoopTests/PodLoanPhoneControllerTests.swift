@@ -1048,6 +1048,31 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertTrue(urgentNotices.contains("Loop Open — Unexplained Insulin"))
     }
 
+    /// e223 (2026-08-26, field): the loop opened on "+0.200 exceeds +0.20" — delivered 2.400
+    /// minus expected 2.200 is 0.20000000000000018 in binary, and the strict > tripped at
+    /// nominal EQUALITY with the bound. ±0.200 is the worst clean banked sample; exactly on
+    /// the band is inside it. This replicates e223's exact arithmetic.
+    func testResidualExactlyOnTheBandStaysSilentDespiteFloatDust() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+
+        // Books say 2.2 U bolused; the pod metered 2.4 — a raw float residual of 0.2000…018.
+        MockPumpManager.testOdometer = 12.4
+        let bolus = makeEvent(seq: 1, units: 2.2, at: Date())
+        let ackSent = expectSend()
+        let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil,
+                                  odometer: LoanOdometerSnapshot(deliveredAtStart: 10.0, deliveredLatest: 12.4,
+                                                                 freshenSucceeded: true),
+                                  events: [bolus], tombstones: [], recovered: false, released: true)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+        waitUntil(timeout: 8, "authoritative audit") { self.diagMatching("reconcile[AUTHORITATIVE]") != nil }
+
+        XCTAssertEqual(openLoopCalls, 0, "exactly ±0.200 is ON the band, not beyond it — float dust must not open the loop")
+        XCTAssertNil(diagMatching("R32 OPEN LOOP"))
+    }
+
     // MARK: - Since-last-sync checkpoints (ruled 2026-08-26)
 
     /// A mid-loan record batch carrying a checkpoint snapshot, the way a live watch streams
