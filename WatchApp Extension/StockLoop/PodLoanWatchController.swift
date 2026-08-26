@@ -2226,7 +2226,13 @@ final class PodLoanWatchController {
             // the way back, mirroring the grant's outbound inheritance. Read through the
             // NON-BLOCKING mirror: this runs on `queue`, and `closedLoopEnabled` would sync
             // onto dataAccessQueue — the deadlock direction.
-            watchClosedLoopEnabled: loopManager.closedLoopEnabledNonBlocking,
+            // RECOVERED offers send nil — no authority (field 2026-08-25 e221): a
+            // relaunch-recovered drain reads a freshly-booted manager whose flag is a boot
+            // default, not the wrist's real mode; e221's recovered offer overwrote the user's
+            // captured CLOSED with open, and the phone resumed open-loop after the watch died.
+            // nil already means exactly the right thing at the phone: keep the captured
+            // pre-loan value.
+            watchClosedLoopEnabled: recovered ? nil : loopManager.closedLoopEnabledNonBlocking,
             // Same benign-snapshot read as the phase above: "roughly when did the wrist last
             // loop" for the phone's recency seed, not a sync point.
             lastLoopCompleted: loopManager.lastLoopCompleted)
