@@ -295,8 +295,14 @@ enum LoanReconciler {
 
         var total: Double = 0
 
-        // Boluses.
+        // Boluses — clipped to the window like every other contribution. Whole-loan calls
+        // never notice (every loan bolus is inside the loan window by construction), but the
+        // checkpoint audit computes ADJACENT windows over one event set, and an unclipped
+        // bolus would be double-counted into every window after its own. Half-open
+        // [start, end): a bolus stamped exactly at a checkpoint reading belongs to the
+        // window that STARTS there — the odometer had metered none of it at that instant.
         for event in events where event.record.kind == .bolus {
+            guard event.record.startDate >= start, event.record.startDate < end else { continue }
             total += event.record.amount ?? 0
         }
 
