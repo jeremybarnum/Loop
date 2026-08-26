@@ -280,12 +280,24 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     }
 
     /// Drives a controller into LOANED at epoch 1, returning the grant it sent.
+    ///
+    /// The grant path is deny-and-retry BY DESIGN: right after a hand-back the phone
+    /// refuses to grant until the settle verification round-trip lands on its queue, and
+    /// the user's next Start succeeds ("Try Start again in a few seconds"). Whether that
+    /// async completion beats this request is a queue race no test may depend on, so a
+    /// denial here is retried the way a user would — any OTHER non-grant reply stays fatal.
     @discardableResult
     func establishLoan(_ controller: PodLoanPhoneController) -> LoanGrant {
-        let grantSent = expectSend()
-        controller.handleIncoming(userInfo: try! LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
-        wait(for: [grantSent], timeout: 5)
-        guard case .grant(let grant)? = lastSent() else {
+        var grant: LoanGrant?
+        for _ in 0..<25 {
+            let grantSent = expectSend()
+            controller.handleIncoming(userInfo: try! LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
+            wait(for: [grantSent], timeout: 5)
+            if case .grant(let g)? = lastSent() { grant = g; break }
+            if case .denied? = lastSent() { usleep(100_000); continue }
+            break
+        }
+        guard let grant else {
             XCTFail("expected a grant, got \(String(describing: lastSent()))")
             fatalError()
         }
