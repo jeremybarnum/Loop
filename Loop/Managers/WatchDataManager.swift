@@ -403,7 +403,15 @@ final class WatchDataManager: NSObject {
                 // is worse than not warning at all. Cleared, the next loan captures false and restores
                 // false, and only the user's own settings change can re-close it.
                 UserDefaults.standard.removeObject(forKey: dosingKey)
-                self.settingsManager.mutateLoopSettings { $0.dosingEnabled = false }
+                // MAIN-hopped (2026-08-26): third instance of the off-main therapy-write
+                // desync. The R32 open at the end of the 9-hour overnight loan applied
+                // dosingEnabled=false from the controller queue; the settings screen kept
+                // showing CLOSED while automation was genuinely off — the user only knew
+                // because the warning text disagreed with the toggle. Same treatment as the
+                // pause/restore writes: one writer, one thread.
+                DispatchQueue.main.async {
+                    self.settingsManager.mutateLoopSettings { $0.dosingEnabled = false }
+                }
             },
             issueUrgentNotice: { [weak self] title, body in
                 // The urgent channel's distinction is TIME-SENSITIVE interruption: it breaks
