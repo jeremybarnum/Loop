@@ -87,7 +87,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                     "PodLoanPhoneController.cursor", "PodLoanPhoneController.pendingRevoke",
                     "PodLoanPhoneController.committedIDs", "PodLoanPhoneController.loanStartedAt",
                     "PodLoanPhoneController.deliveredAtTakeover", "PodLoanPhoneController.gapBooking",
-                    "PodLoanPhoneController.pendingForceAudit", "PodLoanPhoneController.deliveredAtGrant"] {
+                    "PodLoanPhoneController.pendingForceAudit", "PodLoanPhoneController.deliveredAtGrant",
+                    "PodLoanPhoneController.auditBase"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
         MockPumpManager.testForcedReadCount = 0
@@ -1045,6 +1046,118 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         waitUntil(timeout: 5, "open-loop verdict") { self.diagMatching("R32 OPEN LOOP") != nil }
         XCTAssertEqual(openLoopCalls, 1, "+0.25 U is over the 0.20 U bound — the loop must open")
         XCTAssertTrue(urgentNotices.contains("Loop Open — Unexplained Insulin"))
+    }
+
+    // MARK: - Since-last-sync checkpoints (ruled 2026-08-26)
+
+    /// A mid-loan record batch carrying a checkpoint snapshot, the way a live watch streams
+    /// one after a dose window. `asOf: nil` models an older watch (no checkpoint possible).
+    private func sendCheckpoint(_ controller: PodLoanPhoneController, epoch: Int,
+                                events: [LoanEvent] = [], latest: Double, asOf: Date?) throws {
+        let snap = LoanOdometerSnapshot(deliveredAtStart: 10.0, deliveredLatest: latest,
+                                        freshenSucceeded: false, asOf: asOf)
+        controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
+            DoseRecordBatch(epoch: epoch, events: events, tombstones: [], odometer: snap)).transportDictionary())
+    }
+
+    /// Closes the loan with a final offer whose end odometer the phone then verifies first-hand.
+    private func finishLoan(_ controller: PodLoanPhoneController, epoch: Int, finalOdometer: Double) throws {
+        MockPumpManager.testOdometer = finalOdometer
+        let ackSent = expectSend()
+        let offer = HandbackOffer(epoch: epoch, handedBackAt: Date().addingTimeInterval(5), finalStatus: nil,
+                                  odometer: LoanOdometerSnapshot(deliveredAtStart: 10.0, deliveredLatest: finalOdometer,
+                                                                 freshenSucceeded: true),
+                                  events: [], tombstones: [], recovered: false, released: true)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+        waitUntil(timeout: 8, "authoritative audit") { self.diagMatching("reconcile[AUTHORITATIVE]") != nil }
+    }
+
+    /// THE point of the checkpoint design: benign drift that accumulates past the band over a
+    /// long loan must NOT trip a verdict when every synced window individually reconciled.
+    /// +0.30 U of loan-total drift (the overnight false-open of 2026-08-26 was +0.35) split
+    /// across two windows of +0.15 each — the whole-loan framing opens the loop, the
+    /// since-last-sync framing correctly stays silent.
+    func testCheckpointedDriftWithinEachWindowStaysSilent() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)   // audit base = 10.0 @ the takeover reading
+
+        try sendCheckpoint(controller, epoch: grant.epoch, latest: 10.15, asOf: Date().addingTimeInterval(2))
+        try finishLoan(controller, epoch: grant.epoch, finalOdometer: 10.30)
+
+        XCTAssertEqual(openLoopCalls, 0, "each window reconciled at a sync — no verdict may fire on the loan total")
+        XCTAssertNil(diagMatching("R32 OPEN LOOP"))
+        XCTAssertNil(diagMatching("R32 WARN"))
+    }
+
+    /// The checkpoint must not blunt detection: insulin the tail cannot explain still opens.
+    func testUnexplainedTailAfterACheckpointStillOpensTheLoop() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+
+        try sendCheckpoint(controller, epoch: grant.epoch, latest: 10.0, asOf: Date().addingTimeInterval(2))
+        try finishLoan(controller, epoch: grant.epoch, finalOdometer: 10.5)
+
+        waitUntil(timeout: 5, "open-loop verdict") { self.diagMatching("R32 OPEN LOOP") != nil }
+        XCTAssertEqual(openLoopCalls, 1, "+0.5 U since the last sync is unexplained — the loop must open")
+    }
+
+    /// An older watch sends snapshots without `asOf`; the base must never advance on one, so
+    /// the audit keeps its whole-loan window — the exact pre-checkpoint behavior.
+    func testSnapshotWithoutAsOfNeverCheckpoints() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+
+        try sendCheckpoint(controller, epoch: grant.epoch, latest: 10.15, asOf: nil)
+        try finishLoan(controller, epoch: grant.epoch, finalOdometer: 10.30)
+
+        waitUntil(timeout: 5, "open-loop verdict") { self.diagMatching("R32 OPEN LOOP") != nil }
+        XCTAssertEqual(openLoopCalls, 1, "no asOf = no checkpoint — +0.30 over the whole loan must still open")
+    }
+
+    /// A window that does NOT reconcile is carried, never retired: the base stays put, and
+    /// the final audit judges the discrepancy with full records. If a breaching checkpoint
+    /// wrongly advanced the base, this unexplained 0.5 U would vanish from the audit.
+    func testBreachingCheckpointDoesNotAdvanceTheBase() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+
+        try sendCheckpoint(controller, epoch: grant.epoch, latest: 10.5, asOf: Date().addingTimeInterval(2))
+        try finishLoan(controller, epoch: grant.epoch, finalOdometer: 10.5)
+
+        waitUntil(timeout: 5, "open-loop verdict") { self.diagMatching("R32 OPEN LOOP") != nil }
+        XCTAssertEqual(openLoopCalls, 1, "a checkpoint that failed to reconcile must not retire its window")
+    }
+
+    /// The scenario the design exists for: a loan that synced, then died. The force-reclaim
+    /// audit judges only the tail since the last sync — the synced bolus is already in the
+    /// records, so it must be neither unexplained (whole-loan anchor) nor double-counted
+    /// (unclipped bolus in the tail's expectation).
+    func testForceReclaimJudgesOnlyTheTailSinceTheLastSync() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+
+        // A synced stretch: a 1.0 U bolus streamed, and the checkpoint shows the pod metered
+        // it plus 0.15 U of benign drift — within the band, window retired (base → 11.15).
+        let bolus = makeEvent(seq: 1, units: 1.0, at: Date())
+        try sendCheckpoint(controller, epoch: grant.epoch, events: [bolus], latest: 11.15,
+                           asOf: Date().addingTimeInterval(2))
+
+        // Then the watch dies. The pod's final odometer adds only 0.15 U since the sync.
+        // Whole-loan framing reads +0.30 and opens; since-last-sync reads +0.15 and stays closed.
+        MockPumpManager.testOdometer = 11.30
+        controller.forceReclaimToOwner(reason: "test: watch dead after a synced stretch")
+        waitForState(controller, .owner)
+        waitUntil(timeout: 8, "force verdict") { self.diagMatching("reconcile[FORCE-RECLAIM]") != nil }
+
+        lock.lock()
+        let opened = openLoopCalls
+        let booked = bookedGapDoses
+        lock.unlock()
+        XCTAssertEqual(opened, 0, "the tail since the sync is 0.15 U — inside the band")
+        XCTAssertTrue(booked.isEmpty, "the synced window is already in the records — nothing to book")
+        XCTAssertNil(diagMatching("R37 OPEN LOOP"))
     }
 
     /// Row 10: the same offer redelivered (lost ack) re-acks the same cursor and

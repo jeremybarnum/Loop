@@ -990,6 +990,7 @@ final class PodLoanWatchController {
                 }
                 if success, let delivered = manager.podLoanInsulinDelivered {
                     self.revokeCapturedDelivered = nil   // new loan, new baseline — never a stale capture
+                    self.revokeCapturedDeliveredAt = nil
                     self.deliveredAtTakeover = delivered
                     self.phase = .active
                     self.loopManager.pumpManager = manager
@@ -1197,6 +1198,9 @@ final class PodLoanWatchController {
     /// The odometer captured at revoke, before teardown nils the pump — consumed by the
     /// offer builder as a fallback so revoke hand-backs still carry a reconcile baseline.
     private var revokeCapturedDelivered: Double?
+    /// The reading-time twin of `revokeCapturedDelivered` — captured together so a revoke
+    /// hand-back's snapshot still carries the `asOf` the phone's checkpoint audit anchors on.
+    private var revokeCapturedDeliveredAt: Date?
     private var lastRevokedEpoch: Int?
 
     /// The reclaim must not start INSIDE the G7's connect+auth burst. Measured across 140
@@ -2199,7 +2203,8 @@ final class PodLoanWatchController {
         var odometer: LoanOdometerSnapshot?
         if let start = deliveredAtTakeover,
            let latest = pumpManager?.podLoanInsulinDelivered ?? revokeCapturedDelivered {
-            odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest, freshenSucceeded: freshened)
+            odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest, freshenSucceeded: freshened,
+                                            asOf: pumpManager?.podLoanInsulinDeliveredAt ?? revokeCapturedDeliveredAt)
         }
         // Verify rounds 1-3: IN-FLIGHT (mint→classification) and chase-pending events
         // stay OUT of interim offers — once the phone commits one, a later annul or
@@ -2427,6 +2432,7 @@ final class PodLoanWatchController {
         // AUTHORITATIVE reconcile entirely (e181, 2026-08-23: the one loan that day with no
         // reconcile line). The records still ride the drain; this restores the CROSS-CHECK.
         revokeCapturedDelivered = pumpManager?.podLoanInsulinDelivered
+        revokeCapturedDeliveredAt = pumpManager?.podLoanInsulinDeliveredAt
         loopManager.pumpManager = nil
         chaseWorkItem?.cancel()
         pendingUncertainEventID = nil   // liveness: no cross-loan chase residue
@@ -2807,8 +2813,26 @@ final class PodLoanWatchController {
         // no logic and consistently mislead: it exceeds physically-possible delivery, so it is NOT a
         // meaningful commanded total. The trustworthy commanded number is the watch's own floored
         // reconciled dose total; the hand-back reconciliation delta will be captured separately.)
-        SportLog.event("handback", String(format: "stream: %d event(s), %d tombstone(s)", events.count, tombstones.count))
-        sendMessage(.doseRecordBatch(DoseRecordBatch(epoch: epoch, events: events, tombstones: tombstones)))
+        // Ride the latest odometer reading along as a CHECKPOINT candidate: the phone pairs
+        // "records through this batch" with "pod odometer at asOf" and, when they reconcile,
+        // advances its audit base — so a later forced reclaim judges only the tail since this
+        // sync. The reading is whatever the last dose window already fetched (no extra radio);
+        // its asOf is the status response's own validTime, so the phone integrates expected
+        // insulin to exactly the reading's moment, not the send's.
+        // Coherence guard: a checkpoint pairs a COMPLETE record set with the reading. A
+        // withheld event (in-flight mint→classification, or a live uncertainty chase) is
+        // insulin the odometer may already meter but this batch does not carry — its
+        // checkpoint would breach by construction. Skip; the next clean batch checkpoints.
+        var odometer: LoanOdometerSnapshot?
+        if inFlightEventIDs.isEmpty, pendingUncertainEventID == nil,
+           let start = deliveredAtTakeover, let latest = pumpManager?.podLoanInsulinDelivered,
+           let asOf = pumpManager?.podLoanInsulinDeliveredAt {
+            odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest,
+                                            freshenSucceeded: false, asOf: asOf)
+        }
+        SportLog.event("handback", String(format: "stream: %d event(s), %d tombstone(s)%@", events.count, tombstones.count,
+                                          odometer.map { String(format: " · odo %.2f U @ %@ [checkpoint]", $0.deliveredLatest, DateFormatter.localizedString(from: $0.asOf ?? .distantPast, dateStyle: .none, timeStyle: .medium)) } ?? ""))
+        sendMessage(.doseRecordBatch(DoseRecordBatch(epoch: epoch, events: events, tombstones: tombstones, odometer: odometer)))
     }
 }
 
