@@ -107,7 +107,14 @@ final class WatchDataManager: NSObject {
                     if UserDefaults.standard.object(forKey: dosingKey) == nil {
                         UserDefaults.standard.set(self.settingsManager.loopSettings.dosingEnabled, forKey: dosingKey)
                     }
-                    self.settingsManager.mutateLoopSettings { $0.dosingEnabled = false }
+                    // MAIN-hopped (2026-08-25): this closure runs on the loan controller's
+                    // queue, and a therapy-settings write from off-main is how the settings
+                    // screen, the automation-status object, and the loop dialog ended up
+                    // reading three different snapshots after e221's reclaim. One writer,
+                    // one thread, every observer sees the same ordered truth.
+                    DispatchQueue.main.async {
+                        self.settingsManager.mutateLoopSettings { $0.dosingEnabled = false }
+                    }
                     // A loan just started: cancel the "Loop Failure" batch the last pre-loan loop queued.
                     // Gating future re-arms is not enough — the already-queued 20/40/60/120-minute rungs
                     // would still fire mid-loan. Also covers relaunching into an active loan, since this runs
@@ -126,7 +133,10 @@ final class WatchDataManager: NSObject {
                     // never invent closed-loop-on (R7's override is the settings UI).
                     let prior = UserDefaults.standard.object(forKey: dosingKey) as? Bool ?? false
                     UserDefaults.standard.removeObject(forKey: dosingKey)
-                    self.settingsManager.mutateLoopSettings { $0.dosingEnabled = prior }
+                    // Same main-hop as the pause side, same reason.
+                    DispatchQueue.main.async {
+                        self.settingsManager.mutateLoopSettings { $0.dosingEnabled = prior }
+                    }
                     // This closure runs on the loan controller's serial queue, and the
                     // reschedule below reads a gate that dispatches sync onto that same queue —
                     // calling it inline deadlocks. Hopping to main is safe: state is already
