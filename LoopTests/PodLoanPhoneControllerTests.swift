@@ -88,7 +88,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                     "PodLoanPhoneController.committedIDs", "PodLoanPhoneController.loanStartedAt",
                     "PodLoanPhoneController.deliveredAtTakeover", "PodLoanPhoneController.gapBooking",
                     "PodLoanPhoneController.pendingForceAudit", "PodLoanPhoneController.deliveredAtGrant",
-                    "PodLoanPhoneController.auditBase"] {
+                    "PodLoanPhoneController.auditBase", "PodLoanPhoneController.windowResidualWorst"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
         MockPumpManager.testForcedReadCount = 0
@@ -996,21 +996,24 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertTrue(notices.isEmpty, "a normal loan must produce no notice at all, got \(notices)")
     }
 
-    /// Every authoritative residual is banked, and the log states how many samples exist — the
-    /// mechanism that makes "tighten these bounds once we have data" self-reminding rather than
-    /// dependent on someone re-reading a doc.
-    func testResidualsAreBankedAndTheLogAsksForAThresholdReview() throws {
+    /// Every authoritative residual is still banked — but as DIAGNOSTICS: R32 closed
+    /// 2026-08-27 with the window-scoped verdict ratified at ±0.20 U, so the line reports
+    /// both series (whole-loan drift trend + worst-window, the distribution a future band
+    /// review would read) and must no longer nag for a review that already happened.
+    func testResidualsAreBankedAsDiagnosticsWithTheWorstWindowSeries() throws {
         UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.residualHistory")
+        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.windowResidualWorst")
         let controller = makeController()
         try runLoanToAudit(controller, deliveredDuringLoan: 0.10)
 
         let bank = diagMatching("residual bank:")
         XCTAssertNotNil(bank, "each audit must bank its residual and say how many exist")
         XCTAssertTrue(bank!.contains("n=1"), "got: \(bank!)")
-        XCTAssertTrue(bank!.contains("39 more for a re-review"), "got: \(bank!)")
-        XCTAssertFalse(bank!.contains("set with none"),
-                       "the first review HAPPENED — this line must not keep claiming otherwise: \(bank!)")
+        XCTAssertTrue(bank!.contains("window-worst"), "the worst-window series is the review data now: \(bank!)")
+        XCTAssertTrue(bank!.contains("R32 closed"), "the line states the ruling, not a demand for one: \(bank!)")
+        XCTAssertFalse(bank!.contains("RE-REVIEW DUE"), "the review happened — no nag: \(bank!)")
         XCTAssertEqual((UserDefaults.standard.array(forKey: "PodLoanPhoneController.residualHistory") as? [Double])?.count, 1)
+        XCTAssertEqual((UserDefaults.standard.array(forKey: "PodLoanPhoneController.windowResidualWorst") as? [Double])?.count, 1)
     }
 
     /// The bank is calibration data for CLEAN hand-backs, and two force-reclaim residuals

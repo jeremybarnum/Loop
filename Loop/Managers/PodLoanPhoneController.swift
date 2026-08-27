@@ -949,9 +949,11 @@ final class PodLoanPhoneController {
                 // about hand-backs. Consequence, intended: a force-reclaim audit prints no bank
                 // line, so the "N more for a re-review" countdown counts clean samples only.
                 // The bank keeps its pre-checkpoint meaning — the WHOLE loan's residual —
-                // so the calibration series stays one distribution. Identical to `residual`
+                // so the drift-trend series stays one distribution. Identical to `residual`
                 // whenever no checkpoint advanced the base. The VERDICT is window-scoped.
-                bankResidual(loanResidual ?? residual, epoch: pending.epoch)
+                bankResidual(loanResidual ?? residual,
+                             worstWindow: max(worstWindowThisLoan, abs(residual)),
+                             epoch: pending.epoch)
                 applyReconciliationVerdict(residual: residual, epoch: pending.epoch)
             case .forceReclaim:
                 applyForceReclaimVerdict(residual: residual, epoch: pending.epoch)
@@ -1255,35 +1257,32 @@ final class PodLoanPhoneController {
     /// The "don't forget to tighten this" mechanism, built so it cannot be forgotten: bank every
     /// authoritative residual and say in the log how many clean samples exist. A note in a doc
     /// relies on someone re-reading the doc; a line that appears at every hand-back does not.
-    private func bankResidual(_ residual: Double, epoch: Int) {
+    /// R32 CLOSED (2026-08-27): the verdict is window-scoped at ±0.20 U and this bank is
+    /// DIAGNOSTICS ONLY. The whole-loan series continues for drift trend (it is what proved
+    /// the −0.05 U/h truncation bias), and the worst-window series is what any FUTURE band
+    /// review reads — it is the distribution the active band actually judges. No nag: the
+    /// 2026-08-13 provisional bounds were reviewed and ratified against ~90 field windows
+    /// (worst |0.10| noise vs +1.500 signal), and a log line demanding a review that already
+    /// happened is the OBS-8 cry-wolf failure.
+    private func bankResidual(_ residual: Double, worstWindow: Double, epoch: Int) {
         var history = (UserDefaults.standard.array(forKey: Keys.residualHistory) as? [Double]) ?? []
         history.append(residual)
         if history.count > 40 { history.removeFirst(history.count - 40) }
         UserDefaults.standard.set(history, forKey: Keys.residualHistory)
 
+        var windows = (UserDefaults.standard.array(forKey: Keys.windowWorstHistory) as? [Double]) ?? []
+        windows.append(worstWindow)
+        if windows.count > 40 { windows.removeFirst(windows.count - 40) }
+        UserDefaults.standard.set(windows, forKey: Keys.windowWorstHistory)
+
         let mean = history.reduce(0, +) / Double(history.count)
         let worst = history.map(abs).max() ?? 0
-        var line = String(format: "residual bank: n=%d mean=%+.3f worst=|%.3f| min=%+.3f max=%+.3f",
-                          history.count, mean, worst, history.min() ?? 0, history.max() ?? 0)
-        // The first review HAPPENED (2026-08-13, n=13 → ±0.20 U), so this line no longer asks for
-        // it. Leaving the old text in place would have printed "the bounds were set with none" at
-        // every hand-back forever — a log line stating something false, which is the exact
-        // cry-wolf failure OBS-8 was about. The ratchet is kept, just re-armed further out.
-        if history.count >= Self.residualReReviewTarget {
-            line += String(format: " ** R32 THRESHOLD RE-REVIEW DUE — %d samples banked since the ±%.2f U bounds were set from 13 on 2026-08-13 **",
-                           history.count, Self.openLoopPositiveResidual)
-        } else {
-            line += String(format: " (bounds ±%.2f U, set from 13 samples 2026-08-13; %d more for a re-review)",
-                           Self.openLoopPositiveResidual, Self.residualReReviewTarget - history.count)
-        }
-        handbackDiag(epoch, line)
+        handbackDiag(epoch, String(format:
+            "residual bank: n=%d mean=%+.3f worst=|%.3f| min=%+.3f max=%+.3f · window-worst this loan |%.3f| (series n=%d max |%.3f|) — diagnostics only, R32 closed 2026-08-27 (window verdict ±%.2f U)",
+            history.count, mean, worst, history.min() ?? 0, history.max() ?? 0,
+            worstWindow, windows.count, windows.map(abs).max() ?? 0,
+            Self.openLoopPositiveResidual))
     }
-
-    /// How many banked residuals before the bounds above are worth revisiting AGAIN. The first
-    /// review fired at 10, was acted on at 13, and set ±0.20 U; this is the next checkpoint.
-    /// It equals the ring capacity, so it trips exactly when the whole 40-sample window is fresh
-    /// evidence gathered under the tightened bounds.
-    private static let residualReReviewTarget = 40
 
     /// True whenever this phone does NOT own the pod's connection (any non-owner
     /// state — the link is released or in flux). Delivery attempts made here while
@@ -1357,6 +1356,10 @@ final class PodLoanPhoneController {
     /// the R37 line then said "since takeover (0 checkpoint(s))" while correctly auditing
     /// from the LOADED base — a label that misdescribes the verdict's own anchor.
     private var checkpointsThisLoan = 0
+    /// The largest |window residual| any accepted checkpoint saw this loan — combined with
+    /// the final window's at hand-back, it becomes the banked worst-window sample (the
+    /// distribution a future band review reads; R32 closed 2026-08-27).
+    private var worstWindowThisLoan: Double = 0
 
     /// The same four-pulse band the verdicts use: a window that reconciles within it is
     /// retired; one that doesn't is CARRIED — the base does not advance past an
@@ -1389,6 +1392,7 @@ final class PodLoanPhoneController {
         if abs(residual) <= Self.checkpointBand {
             // Count BEFORE the base assignment — the didSet persists the count alongside.
             checkpointsThisLoan += 1
+            worstWindowThisLoan = max(worstWindowThisLoan, abs(residual))
             auditBase = AuditBase(units: snap.deliveredLatest, asOf: asOf)
             os_log("Checkpoint ACCEPTED (%{public}@): window %.1f min reconciled (delivered %.3f expected %.3f residual %+.3f) — base → %.3f U",
                    log: log, type: .default, context, asOf.timeIntervalSince(base.asOf) / 60,
@@ -1581,6 +1585,9 @@ final class PodLoanPhoneController {
         /// The since-last-sync audit base {units, asOf, epoch} — the last odometer reading
         /// reconciled against a complete record set (restart survival; epoch-guarded on load).
         static let auditBase = "PodLoanPhoneController.auditBase"
+        /// Per-loan worst |window residual| ring — the distribution any future band review
+        /// reads (R32 closed 2026-08-27).
+        static let windowWorstHistory = "PodLoanPhoneController.windowResidualWorst"
     }
 
     private enum NotificationID {
@@ -1930,6 +1937,7 @@ final class PodLoanPhoneController {
             auditBase = nil
         }
         checkpointsThisLoan = 0
+        worstWindowThisLoan = 0
         // The LAST loan's takeover odometer must not leak into this one. If a force-reclaim
         // fires before this loan's takeoverComplete arrives, the audit's baseline fallback is the
         // fresh grant capture above — a stale takeover value would put the whole previous loan's
