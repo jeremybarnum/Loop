@@ -1344,7 +1344,8 @@ final class PodLoanPhoneController {
     private var auditBase: AuditBase? {
         didSet {
             if let b = auditBase {
-                UserDefaults.standard.set(["units": b.units, "asOf": b.asOf, "epoch": epoch],
+                UserDefaults.standard.set(["units": b.units, "asOf": b.asOf, "epoch": epoch,
+                                           "count": checkpointsThisLoan],
                                           forKey: Keys.auditBase)
             } else {
                 UserDefaults.standard.removeObject(forKey: Keys.auditBase)
@@ -1352,6 +1353,9 @@ final class PodLoanPhoneController {
         }
     }
     /// Accepted checkpoints this loan — diagnostic color for the end-of-loan reconcile lines.
+    /// Persisted inside the auditBase dict: e226 (2026-08-26, field) relaunched mid-loan and
+    /// the R37 line then said "since takeover (0 checkpoint(s))" while correctly auditing
+    /// from the LOADED base — a label that misdescribes the verdict's own anchor.
     private var checkpointsThisLoan = 0
 
     /// The same four-pulse band the verdicts use: a window that reconciles within it is
@@ -1383,8 +1387,9 @@ final class PodLoanPhoneController {
         // exactly on the band must reconcile, not carry on float representation error.
         let residual = ((delivered - expected) * 1000).rounded() / 1000
         if abs(residual) <= Self.checkpointBand {
-            auditBase = AuditBase(units: snap.deliveredLatest, asOf: asOf)
+            // Count BEFORE the base assignment — the didSet persists the count alongside.
             checkpointsThisLoan += 1
+            auditBase = AuditBase(units: snap.deliveredLatest, asOf: asOf)
             os_log("Checkpoint ACCEPTED (%{public}@): window %.1f min reconciled (delivered %.3f expected %.3f residual %+.3f) — base → %.3f U",
                    log: log, type: .default, context, asOf.timeIntervalSince(base.asOf) / 60,
                    delivered, expected, residual, snap.deliveredLatest)
@@ -1636,6 +1641,7 @@ final class PodLoanPhoneController {
            let units = d["units"] as? Double, let asOf = d["asOf"] as? Date,
            (d["epoch"] as? Int) == self.epoch {
             self.auditBase = AuditBase(units: units, asOf: asOf)
+            self.checkpointsThisLoan = d["count"] as? Int ?? 0
         }
         installPodLinkCensus()
 
@@ -3283,6 +3289,8 @@ final class PodLoanPhoneController {
             loanMinutes: deps.now().timeIntervalSince(start) / 60, cycles: 0,
             watchLatest: nil, watchFreshened: false, flavor: .forceReclaim,
             takeoverUnits: takeoverUnits, wholeLoanExpected: wholeLoanExpected)
+        // checkpointsThisLoan survives relaunch (persisted with the base) — e226 mislabeled
+        // its relaunch-survived base as "takeover (0 checkpoint(s))" before it did.
         handbackDiag(epoch, String(format:
             "R37 audit armed — expected %.3f U from %d record(s) + schedule fill over window since %@ (%d checkpoint(s)); verdict on the reclaim round-trip",
             expected, allEvents.count,
