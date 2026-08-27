@@ -2748,15 +2748,25 @@ final class WatchLoopManager {
 
 extension TemporaryScheduleOverride.Context {
     /// Greppable preset identity for the [override] lines — the name is what Jeremy will
-    /// match against the phone when reconciling a session.
+    /// match against the phone when reconciling a session. Also the glance pill's text, so
+    /// it must render CLEAN: next-dev's `symbol` is an optional PresetSymbol STRUCT, and
+    /// interpolating it raw put "Optional(LoopKit.Pres…" on the wrist (field, 2026-08-26).
     var presetNameForLog: String {
         switch self {
         case .preMeal: return "pre-meal"
-        case .preset(let preset): return "\(preset.symbol) \(preset.name)"
-        case .activity(let preset): return "\(preset.activityType.symbol) \(preset.activityType.name)"
+        case .preset(let preset):
+            return [preset.symbol?.textGlyph, preset.name].compactMap { $0 }.joined(separator: " ")
+        case .activity(let preset):
+            return [preset.activityType.symbol.textGlyph, preset.activityType.name].compactMap { $0 }.joined(separator: " ")
         case .custom: return "custom"
         }
     }
+}
+
+private extension PresetSymbol {
+    /// Only an emoji is text — a systemImage/image symbol's `value` is an asset name
+    /// ("figure.run"), which belongs in no pill and no log line.
+    var textGlyph: String? { symbolType == .emoji ? value : nil }
 }
 
 // MARK: - CGM input (mirrors DeviceDataManager.cgmManager(_:hasNew:) — :1001 — and processCGMReadingResult — :580)
