@@ -140,7 +140,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// from the watch this launch, which is the dead branch.
     func makeController(watchReachable: @escaping () -> Bool = { false },
                         lastWatchContact: @escaping () -> Date? = { nil },
-                        now: @escaping () -> Date = { Date() }) -> PodLoanPhoneController {
+                        now: @escaping () -> Date = { Date() },
+                        whenProtectedDataAvailable: @escaping (@escaping () -> Void) -> Void = { $0() }) -> PodLoanPhoneController {
         return PodLoanPhoneController(dependencies: .init(
             pumpManager: { [weak self] in self?.pump },
             settings: { [weak self] in self?.settings ?? LoopSettings() },
@@ -213,6 +214,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 self.lock.lock(); self.deletedGapSyncs.append(sync); let ok = self.gapDeleteSucceeds; self.lock.unlock()
                 completion(ok)
             },
+            whenProtectedDataAvailable: whenProtectedDataAvailable,
             beginReclaimBackgroundTask: { [weak self] in
                 guard let self = self else { return }
                 self.lock.lock(); self.backgroundTaskBegins += 1; self.lock.unlock()
@@ -1623,6 +1625,30 @@ extension PodLoanPhoneControllerTests {
         let deleted = deletedGapSyncs
         lock.unlock()
         XCTAssertEqual(deleted, ["PODLOAN-ODOGAP-e7"], "retried against the PERSISTED epoch, no offer involved")
+    }
+
+    /// Launch-while-locked (field crash 2026-08-27, TF 141): a reboot mid-loan relaunches
+    /// Loop in the background BEFORE FIRST UNLOCK, where every protected store file is still
+    /// sealed. The launch retry must WAIT for protected data, then run — not race the lock.
+    func testLaunchStoreWorkWaitsForProtectedData() throws {
+        UserDefaults.standard.set(["epoch": 9, "units": 1.0, "bookedAt": Date().timeIntervalSince1970,
+                                   "deleteFailedAfterRecords": true],
+                                  forKey: "PodLoanPhoneController.gapBooking")
+        var unlock: (() -> Void)?
+        let controller = makeController(whenProtectedDataAvailable: { work in unlock = work })
+        _ = controller
+
+        // Locked: the retry must not have touched the store.
+        Thread.sleep(forTimeInterval: 0.3)
+        lock.lock(); let attemptsWhileLocked = deletedGapSyncs.count; lock.unlock()
+        XCTAssertEqual(attemptsWhileLocked, 0, "store work ran during the pre-first-unlock window")
+        XCTAssertNotNil(UserDefaults.standard.dictionary(forKey: "PodLoanPhoneController.gapBooking"))
+
+        // First unlock: the deferred work runs and the retry completes.
+        unlock?()
+        waitUntil(timeout: 5, "deferred retry runs at unlock") {
+            self.lock.lock(); defer { self.lock.unlock() }; return self.deletedGapSyncs == ["PODLOAN-ODOGAP-e9"]
+        }
     }
 
     /// The failure side of the same path: launch retry fails again, state must survive for yet

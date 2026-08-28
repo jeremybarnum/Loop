@@ -478,9 +478,39 @@ final class WatchDataManager: NSObject {
             // without this hook a backfill invalidates nothing whatsoever.
             insulinHistoryRewritten: { [weak self] earliestStart in
                 guard let self = self else { return }
-                self.loopDataManager.insulinHistoryRewritten(startingAt: earliestStart)
-                // insulinHistoryRewritten already refreshes the display state, so the corrected
-                // books are visible without waiting for the next 5-minute cycle.
+                // Launch-while-locked guard (field crash 2026-08-27, TF 141): a reboot
+                // mid-loan relaunched Loop in the background BEFORE FIRST UNLOCK, and the
+                // display-refresh task this hook drives trapped +2 s into that launch
+                // (insulinHistoryRewritten → updateDisplayState → EXC_BREAKPOINT). There is
+                // no display to refresh while the device is locked, and the first
+                // post-unlock cycle recomputes everything — skipping is free.
+                // isProtectedDataAvailable must be read on main.
+                DispatchQueue.main.async {
+                    guard UIApplication.shared.isProtectedDataAvailable else {
+                        PhoneLog.event("loan", "insulinHistoryRewritten display refresh SKIPPED — protected data locked (pre-first-unlock launch); the next cycle repaints [locked-launch]")
+                        return
+                    }
+                    self.loopDataManager.insulinHistoryRewritten(startingAt: earliestStart)
+                    // insulinHistoryRewritten already refreshes the display state, so the corrected
+                    // books are visible without waiting for the next 5-minute cycle.
+                }
+            },
+            whenProtectedDataAvailable: { work in
+                DispatchQueue.main.async {
+                    if UIApplication.shared.isProtectedDataAvailable {
+                        work()
+                    } else {
+                        // One-shot: resume the deferred launch store work at first unlock.
+                        PhoneLog.event("loan", "launch store work DEFERRED — protected data locked (pre-first-unlock launch); resuming on unlock [locked-launch]")
+                        var token: NSObjectProtocol?
+                        token = NotificationCenter.default.addObserver(
+                            forName: UIApplication.protectedDataDidBecomeAvailableNotification,
+                            object: nil, queue: .main) { _ in
+                            if let token = token { NotificationCenter.default.removeObserver(token) }
+                            work()
+                        }
+                    }
+                }
             },
             // The two inputs the reclaim ladder branches on. Reachability is the positive-only
             // signal (true proves the watch is awake; false is routinely true of a healthy

@@ -213,6 +213,14 @@ final class PodLoanPhoneController {
         /// reservoir-inferred dose. Default no-op keeps the state-machine tests constructing
         /// unchanged.
         var insulinHistoryRewritten: (_ earliestDoseStart: Date) -> Void = { _ in }
+        /// Runs `work` once protected data (file access) is available — immediately when it
+        /// already is. A reboot mid-loan relaunches Loop in the BACKGROUND before first
+        /// unlock, where the data-protection layer still has every store file locked; the
+        /// controller's launch-time store work must wait for the unlock instead of trapping
+        /// against sealed files (field crash 2026-08-27, TF 141, +2 s into a locked launch).
+        /// Injected so the controller stays UIKit-free; DEFAULTS TO IMMEDIATE so tests and
+        /// existing wiring are unaffected.
+        var whenProtectedDataAvailable: (@escaping () -> Void) -> Void = { $0() }
         /// True when the watch app is reachable RIGHT NOW (WCSession.isReachable at integration).
         /// Admissible only as a POSITIVE signal: reachable proves the watch is alive, but false
         /// proves nothing — in this codebase the flag is a channel selector (urgent vs queued) and
@@ -1693,11 +1701,15 @@ final class PodLoanPhoneController {
         // resend loop has been acked off — see retryPersistedGapDeleteIfAny for why. Independent
         // of the audit re-arm above: this fires on every launch that finds ANY persisted
         // booking, whether or not a force-reclaim is currently in flight.
-        queue.async { [weak self] in
-            self?.retryPersistedGapDeleteIfAny()
-            // Best-effort tidy-up: if the user closed the loop while the app was dead, retire
-            // the pending reminder rather than let it fire about a decision already made.
-            self?.cancelOpenLoopReminderIfLoopClosed()
+        // Store work waits for first unlock — see Dependencies.whenProtectedDataAvailable.
+        deps.whenProtectedDataAvailable { [weak self] in
+            guard let self = self else { return }
+            self.queue.async {
+                self.retryPersistedGapDeleteIfAny()
+                // Best-effort tidy-up: if the user closed the loop while the app was dead, retire
+                // the pending reminder rather than let it fire about a decision already made.
+                self.cancelOpenLoopReminderIfLoopClosed()
+            }
         }
 
         // Relaunch during a non-owner state: dosing stays paused (persisted-state
