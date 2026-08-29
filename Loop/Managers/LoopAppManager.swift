@@ -129,7 +129,18 @@ class LoopAppManager: NSObject {
         self.state = state.next
     }
 
+    /// True once BGTaskScheduler registration has happened this process. launch() is
+    /// RE-ENTERED at first unlock when a pre-first-unlock boot launch deferred
+    /// (AppDelegate.applicationProtectedDataDidBecomeAvailable → launch()), and
+    /// BGTaskScheduler throws NSInternalInconsistencyException on a second registration
+    /// of the same identifier — the crash BEHIND the resetLoopManager IUO crash: once
+    /// that was fixed and the deferred launch survived to unlock (TF 143, 2026-08-29,
+    /// +31 s, wasUnlockedSinceBoot=1), the resume registered again and aborted.
+    private var hasRegisteredBackgroundTasks = false
+
     func registerBackgroundTasks() {
+        guard !hasRegisteredBackgroundTasks else { return }
+        hasRegisteredBackgroundTasks = true
         let taskIdentifier = CriticalEventLogExportManager.historicalExportBackgroundTaskIdentifier
         let registered = BGTaskScheduler.shared.register(forTaskWithIdentifier: taskIdentifier, using: nil) { task in
             guard let criticalEventLogExportManager = self.criticalEventLogExportManager else {
