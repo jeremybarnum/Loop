@@ -2183,6 +2183,37 @@ final class PodLoanPhoneController {
     }
 
     private func handleHandbackOffer(_ offer: HandbackOffer) {
+        // R40 seize 4/4: retro-acknowledge a loan this phone never granted. A seized loan's
+        // offer arrives with an epoch AHEAD of ours (forced fresh at activation) and the
+        // reunion token matching the outstanding dormant credential. Adopting the epoch and
+        // entering .loaned makes everything downstream the PROVEN hand-back path — the
+        // normal transition to .reconciling, stage, commit, ack, the window audit anchored
+        // at the offer's own seize-time odometer start, R33 cancel on the verified reclaim —
+        // and .loaned also accepts the mid-blackout record batches WC queued behind this
+        // offer. Only from .owner: a live granted loan's state must never be stomped by a
+        // token (defense against a duplicated credential).
+        if let token = offer.seizeToken, state == .owner, offer.epoch > epoch,
+           token.uuidString == UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) {
+            handbackDiag(offer.epoch, "[seize] RETRO-ACK — offer for a SEIZED loan (token …\(String(token.uuidString.suffix(8)))); adopting epoch \(epoch)→\(offer.epoch) as .loaned, reconciling on the normal path")
+            epoch = offer.epoch
+            state = .loaned
+            // The seized loan's audit anchors at ITS OWN seize-time odometer read
+            // (offer.odometer.deliveredAtStart); anchors from before the blackout must not
+            // widen the window or misattribute the phone's own pre-blackout delivery.
+            auditBase = nil
+            checkpointsThisLoan = 0
+            worstWindowThisLoan = 0
+            UserDefaults.standard.removeObject(forKey: Keys.deliveredAtTakeover)
+            UserDefaults.standard.removeObject(forKey: Keys.loanStartedAt)
+            loanStartedAt = nil
+            // The phone never paused for this loan, so the reclaim's restore would find no
+            // capture and fail-safe to OPEN loop — wrong here: the user's setting was
+            // untouched all along. Seed the capture with the CURRENT value so the restore
+            // is truthful (and the Loop-Failure suppression gate arms for the reconcile).
+            if UserDefaults.standard.object(forKey: WatchDataManager.dosingCaptureKey) == nil {
+                UserDefaults.standard.set(deps.settings().dosingEnabled, forKey: WatchDataManager.dosingCaptureKey)
+            }
+        }
         // Stale epoch (rows 13/14): the records still drain — they are historical
         // truth, idempotent by ID — but loan STATE is untouched and the ack says
         // stale so the sender stops retrying. Dead loans cannot speak.
