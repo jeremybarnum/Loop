@@ -233,6 +233,17 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   frozen ring was correct THEN (freshness meant phone-loop staleness);
   the premise changed.
 
+  **R21(b) — Ring freshness = loop-completion age ONLY (2026-08-30; supersedes the
+  2026-07-24 "ring = BG recency" refinement).** Phone parity, adopted from the port
+  line's 2026-08-24 ruling after three clean field days there: fresh ≤6 min, aging
+  ≤16 min, exactly the phone's LoopCompletionFreshness model, with loop recency
+  inherited across loan boundaries in both directions. The BG-recency semantics made
+  the ring amber on CGM staleness while the loop itself was healthy — Jeremy's own
+  field observation ("no looping after 9 minutes on the phone would definitely
+  produce amber") is what forced the reversal. BG staleness keeps its own surfaces
+  (the reading's display-staleness handling); the ring stops moonlighting as a CGM
+  indicator. Implementation lands with the notification stock-parity port.
+
 - **R22 — Negative-remainder allocation: fingerprints only** (M5,
   2026-07-17; the R6 layer-2/3 detail). Layer 2 acts ONLY on fingerprint
   matches: exact-size annulment of a single `.assumed` event (within one
@@ -570,6 +581,38 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   the machine quietly resuming, which is worse than never warning at all. The
   dependency clears the pre-loan capture first, so only the user's own settings
   change re-closes the loop.
+
+  **R32(d) — Odometer reconciliation: bands and verdict scope (CLOSED 2026-08-27,
+  supersedes the 2026-08-13 provisional bounds and the 2026-08-26 deferral).**
+  Ratified on the port line 2026-08-27; confirmed by Jeremy for this register
+  2026-08-30. Text as ratified:
+
+  The reconciliation verdict is WINDOW-SCOPED: every audit — clean hand-back or forced
+  reclaim — judges [last checkpoint → end], where a checkpoint is any mid-loan odometer
+  reading reconciled against a complete record set (LoanOdometerSnapshot.asOf on streamed
+  batches and interim offers). A contactless loan has no checkpoints, so its forced reclaim
+  degenerates to the whole-loan window: the emergency case is unchanged by construction.
+
+  Bands, ratified tight: window verdict ±0.20 U both signs (positive → open loop + book gap
+  dose at reclaim; negative → warn only; urgency symmetric per 2026-08-24). Checkpoint
+  acceptance uses the SAME ±0.20 — one number, one meaning: a window the final verdict would
+  bless also checkpoints. A window outside the band is CARRIED, never retired; residuals
+  quantize to milli-units before comparison (the band boundary turns on the pulse grid, not
+  float representation — e223/e225 both tripped at nominal equality).
+
+  Evidence: field noise floor across ~90 windows (e227, e232) — worst |0.10|, overwhelmingly
+  0.000; real-signal test — a 1.5 U unsynced bolus read +1.500 exactly and its gap dose was
+  retired by the watch's real record on return (e227); payoff case — e232's 8h37m loan
+  accumulated −0.450 whole-loan drift (−0.05 U/h truncation bias) across 77 accepted windows
+  and closed silent, where the whole-loan band had false-opened e222 (+0.35/9h) and e223
+  (+0.200/3.1h).
+
+  Consequences: the whole-loan residual is diagnostics only — banked for trend, tripwire
+  logged (never acted) beyond 0.5 U. The IOB/decay-weighted residual proposal is closed
+  unbuilt: windows make timing known at ~5-minute granularity, leaving decay-weighting
+  nothing to correct. The re-review nag retires; future band review, if any, reads the
+  worst-window-per-loan series banked from this ruling forward. Safety propagation: the
+  checkpoint design + bands must reach the pure and Caitlin lines with the port.
 
 - **R34 — The D2W piggyback closed two lines of inquiry. Do not reopen them.**
   (2026-08-11, Jeremy: "#38 and #39 can both be retired. They've been rendered
