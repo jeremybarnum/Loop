@@ -1078,6 +1078,32 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertNil(diagMatching("R32 OPEN LOOP"))
     }
 
+    /// The negative twin, construction borrowed from the pure line's port (2026-08-30): books
+    /// claim 2.4 U, the pod metered 12.2−10.0 = 2.1999999999999993 — a raw residual of
+    /// −0.2000000000000007, beyond −0.20 by float dust alone. Sturdier than the positive twin:
+    /// any schedule-fill accrual pushes the raw residual FURTHER negative, so the unfixed
+    /// compare always trips regardless of timing. (On this line fill is pulse-floored to zero
+    /// for sub-3-minute windows anyway; this test does not depend on that.)
+    func testResidualExactlyOnTheNegativeBandStaysSilentDespiteFloatDust() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+
+        MockPumpManager.testOdometer = 12.2
+        let bolus = makeEvent(seq: 1, units: 2.4, at: Date())
+        let ackSent = expectSend()
+        let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil,
+                                  odometer: LoanOdometerSnapshot(deliveredAtStart: 10.0, deliveredLatest: 12.2,
+                                                                 freshenSucceeded: true),
+                                  events: [bolus], tombstones: [], recovered: false, released: true)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+        waitUntil(timeout: 8, "authoritative audit") { self.diagMatching("reconcile[AUTHORITATIVE]") != nil }
+
+        XCTAssertEqual(openLoopCalls, 0)
+        XCTAssertNil(diagMatching("R32 WARN"), "exactly −0.200 is ON the band — float dust must not warn")
+    }
+
     // MARK: - Since-last-sync checkpoints (ruled 2026-08-26)
 
     /// A mid-loan record batch carrying a checkpoint snapshot, the way a live watch streams
