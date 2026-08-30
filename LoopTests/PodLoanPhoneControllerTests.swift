@@ -1038,6 +1038,36 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertTrue(notices.isEmpty, "a normal loan must produce no notice at all, got \(notices)")
     }
 
+    /// The band boundary turns on the pulse grid, not float dust (port-line field bugs e223/e225,
+    /// 2026-08-26): a residual of nominal ±0.200 tripped the strict compares on binary
+    /// representation — 2.400 − 2.200 is 0.20000000000000018. ±0.200 is the worst clean banked
+    /// sample; exactly on the band is INSIDE it. Replicated on the NEGATIVE side, where the
+    /// arithmetic is deterministic under this harness: the books claim a 2.4 U bolus, the
+    /// odometer moved 2.2 (12.2 − 10.0 − 2.4 is −0.2000000000000007 in binary), and any basal
+    /// accrued over the sub-second loan window only pushes the raw value further negative — so
+    /// without quantization this ALWAYS warned. The fix feeds both signs from one line.
+    func testResidualExactlyOnTheBandStaysSilentDespiteFloatDust() throws {
+        let controller = makeController()
+        let grant = try establishLoan(controller)
+
+        MockPumpManager.testOdometer = 12.2
+        let bolus = makeEvent(seq: 1, units: 2.4, at: Date())
+        let ackSent = expectSend()
+        let offer = HandbackOffer(epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil,
+                                  odometer: LoanOdometerSnapshot(deliveredAtStart: 10.0, deliveredLatest: 12.2,
+                                                                 freshenSucceeded: true),
+                                  events: [bolus], tombstones: [], recovered: false, released: true)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(offer).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+        waitUntil(timeout: 8, "authoritative audit") { self.diagMatching("reconcile[AUTHORITATIVE]") != nil }
+
+        XCTAssertEqual(openLoopCalls, 0)
+        XCTAssertNil(diagMatching("R32 WARN"), "exactly −0.200 is ON the band, not beyond it — float dust must not warn")
+        XCTAssertNil(diagMatching("R32 OPEN LOOP"))
+        XCTAssertTrue(notices.isEmpty, "a boundary residual is a clean loan, got \(notices)")
+    }
+
     /// Every authoritative residual is banked, and the log states how many samples exist — the
     /// mechanism that makes "tighten these bounds once we have data" self-reminding rather than
     /// dependent on someone re-reading a doc.
