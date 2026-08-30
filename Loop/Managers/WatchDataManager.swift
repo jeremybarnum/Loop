@@ -55,6 +55,24 @@ final class WatchDataManager: NSObject {
     private(set) lazy var podLoanController: PodLoanPhoneController = {
         let dosingKey = "PodLoanPhoneController.dosingEnabledBeforeLoan"
         return PodLoanPhoneController(dependencies: .init(
+            whenProtectedDataAvailable: { work in
+                // Launch-while-locked guard (ported from next-dev, 2026-08-29): a reboot
+                // mid-loan relaunches Loop in the background before first unlock; the loan
+                // controller's launch store work waits for the unlock. One-shot observer.
+                DispatchQueue.main.async {
+                    if UIApplication.shared.isProtectedDataAvailable {
+                        work()
+                    } else {
+                        var token: NSObjectProtocol?
+                        token = NotificationCenter.default.addObserver(
+                            forName: UIApplication.protectedDataDidBecomeAvailableNotification,
+                            object: nil, queue: .main) { _ in
+                            if let token = token { NotificationCenter.default.removeObserver(token) }
+                            work()
+                        }
+                    }
+                }
+            },
             pumpManager: { [weak self] in self?.deviceManager.pumpManager },
             settings: { [weak self] in self?.deviceManager.loopManager.settings ?? LoopSettings() },
             setAutomaticDosingPaused: { [weak self] paused in

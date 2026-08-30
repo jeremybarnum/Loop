@@ -16,6 +16,7 @@ extension UserDefaults {
         case legacyServicesState = "com.loopkit.Loop.ServicesState"
         case loopNotRunningNotifications = "com.loopkit.Loop.loopNotRunningNotifications"
         case inFlightAutomaticDose = "com.loopkit.Loop.inFlightAutomaticDose"
+        case inFlightDoseBootSession = "com.loopkit.Loop.inFlightDoseBootSession"
         case favoriteFoods = "com.loopkit.Loop.favoriteFoods"
         case pendingSensorCodeRelay = "com.loopkit.Loop.PendingSensorCodeRelay"
     }
@@ -60,6 +61,14 @@ extension UserDefaults {
 
     func clearLegacyServicesState() {
         set(nil, forKey: Key.legacyServicesState.rawValue)
+    }
+
+    /// The boot session the in-flight dose marker was written in — lets the crash-recovery
+    /// launch check distinguish "process died mid-dose" from "the PHONE restarted mid-dose"
+    /// and label its dialog honestly (ported from next-dev, ruled 2026-08-29).
+    var inFlightDoseBootSession: String? {
+        get { string(forKey: Key.inFlightDoseBootSession.rawValue) }
+        set { set(newValue, forKey: Key.inFlightDoseBootSession.rawValue) }
     }
 
     var inFlightAutomaticDose: AutomaticDoseRecommendation? {
