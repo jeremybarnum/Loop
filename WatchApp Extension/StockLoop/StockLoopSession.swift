@@ -42,6 +42,9 @@ final class StockLoopSession {
     private let log = OSLog(subsystem: "com.loopkit.Loop", category: "StockLoopSession")
 
     init() {
+        // The silent-death witness arms FIRST: MetricKit delivers held diagnostics at launch,
+        // and a payload arriving while the stack is still wiring must not be missed.
+        DeathBlackBox.shared.arm()
         // Link policy is automatic: orphan the pod between doses, reclaim every
         // cycle, and gate that reclaim on G7 acquisition state while the sensor is un-adopted.
         // Replaced a user toggle whose two arms were each wrong for acquisition — evidence in

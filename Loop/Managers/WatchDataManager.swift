@@ -52,8 +52,16 @@ final class WatchDataManager: NSObject {
 
     // MARK: - Loan protocol v2 (M5)
 
+    /// Set at pause (before the pause-triggered final phone cycle can complete), cleared at
+    /// unpause — so it brackets the loan INCLUDING the pre-state-flip window the loan-state
+    /// gate cannot see. That window is why the Loop-Failure ladder escaped the grant clear
+    /// on the port line (3/3 loans, 2026-08-25, each caught by the sweep): the clear ran,
+    /// the final cycle completed while state still read .owner, and its completion re-armed
+    /// the ladder. The AlertManager suppression predicate ORs on this key.
+    static let dosingCaptureKey = "PodLoanPhoneController.dosingEnabledBeforeLoan"
+
     private(set) lazy var podLoanController: PodLoanPhoneController = {
-        let dosingKey = "PodLoanPhoneController.dosingEnabledBeforeLoan"
+        let dosingKey = Self.dosingCaptureKey
         let controller = PodLoanPhoneController(dependencies: .init(
             whenProtectedDataAvailable: { work in
                 // Launch-while-locked guard (ported from next-dev, 2026-08-29): a reboot
@@ -83,7 +91,16 @@ final class WatchDataManager: NSObject {
                     if UserDefaults.standard.object(forKey: dosingKey) == nil {
                         UserDefaults.standard.set(self.deviceManager.loopManager.settings.dosingEnabled, forKey: dosingKey)
                     }
-                    self.deviceManager.loopManager.mutateSettings { $0.dosingEnabled = false }
+                    // MAIN-hopped (ported from next-dev, field 2026-08-25): this closure runs on
+                    // the loan controller's queue, and a therapy-settings write from off-main is
+                    // how the settings screen, the automation-status object, and the loop dialog
+                    // ended up reading three different snapshots of dosingEnabled on the port
+                    // line. One writer, one thread, every observer sees the same ordered truth.
+                    // (The capture write above stays synchronous — the suppression gate reads it
+                    // the instant the grant lands.)
+                    DispatchQueue.main.async {
+                        self.deviceManager.loopManager.mutateSettings { $0.dosingEnabled = false }
+                    }
                     // A loan just started: cancel the "Loop Failure" batch the last pre-loan loop queued.
                     // Gating future re-arms is not enough — the already-queued 20/40/60/120-minute rungs
                     // would still fire mid-loan. Also covers relaunching into an active loan, since this runs
@@ -102,7 +119,10 @@ final class WatchDataManager: NSObject {
                     // never invent closed-loop-on (R7's override is the settings UI).
                     let prior = UserDefaults.standard.object(forKey: dosingKey) as? Bool ?? false
                     UserDefaults.standard.removeObject(forKey: dosingKey)
-                    self.deviceManager.loopManager.mutateSettings { $0.dosingEnabled = prior }
+                    // Same main-hop as the pause side, same reason (one writer, one thread).
+                    DispatchQueue.main.async {
+                        self.deviceManager.loopManager.mutateSettings { $0.dosingEnabled = prior }
+                    }
                     // This closure runs on the loan controller's serial queue, and the
                     // reschedule below reads a gate that dispatches sync onto that same queue —
                     // calling it inline deadlocks. Hopping to main is safe: state is already
@@ -363,7 +383,15 @@ final class WatchDataManager: NSObject {
                 // is worse than not warning at all. Cleared, the next loan captures false and restores
                 // false, and only the user's own settings change can re-close it.
                 UserDefaults.standard.removeObject(forKey: dosingKey)
-                self.deviceManager.loopManager.mutateSettings { $0.dosingEnabled = false }
+                // MAIN-hopped (ported from next-dev, field 2026-08-26): third instance of the
+                // off-main therapy-write desync — the port's 9-hour overnight loan ended with
+                // an R32 open applied from the controller queue, automation genuinely off while
+                // the settings screen kept showing CLOSED. Same treatment as the pause/restore
+                // writes. (The capture clear above stays synchronous and first — ORDER MATTERS,
+                // see the comment.)
+                DispatchQueue.main.async {
+                    self.deviceManager.loopManager.mutateSettings { $0.dosingEnabled = false }
+                }
             },
             issueUrgentNotice: { [weak self] title, body in
                 // The urgent channel's distinction is TIME-SENSITIVE interruption: it breaks

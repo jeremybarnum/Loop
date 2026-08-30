@@ -1156,6 +1156,22 @@ final class PodLoanWatchController {
             // itself is gone. The CGM is now stock G7SensorKit riding
             // the Dexcom watch app's session; this app never drives the sensor radio, so the pod
             // ladder has no contender to yield to or hold off.
+            // ONE liveness ceiling for the whole ladder (the port line's elegant-reclaim
+            // design, taken without its geometry): every read below is completion-driven, so
+            // a driver callback that never comes would strand the cycle with nothing to time
+            // it out. The ceiling fails the ladder at budget+2 so the loop breathes; the
+            // bounded read chain keeps polling harmlessly and its late completions no-op.
+            var ladderFinished = false
+            let finish: (Bool) -> Void = { ok in   // every caller is on `queue`
+                guard !ladderFinished else { return }
+                ladderFinished = true
+                completion(ok)
+            }
+            self.schedule(after: 42, label: "reclaim-ladder-liveness") {
+                guard !ladderFinished else { return }
+                SportLog.event("loan", "E4: LIVENESS CEILING at 42s — a read is wedged past the driver's own timeout; failing the ladder so the loop breathes")
+                finish(false)
+            }
             SportLog.event("loan", "E4: reclaiming pod to dose (scan-adopt primary, #54)")
             manager.reclaimConnection()
             // Scan-adopt is the PRIMARY reclaim, not a mid-ladder fallback.
@@ -1169,7 +1185,7 @@ final class PodLoanWatchController {
             // re-connects the bare bid too, so both paths race from t=0. The read ladder below is
             // the success probe; the release path cancels an unfinished scan (cancelLoanScan).
             manager.podLoanEscalateReclaim()
-            self.attemptReclaimRead(manager: manager, attempt: 0, completion: completion)
+            self.attemptReclaimRead(manager: manager, attempt: 0, completion: finish)
         }
     }
 
@@ -1786,9 +1802,17 @@ final class PodLoanWatchController {
             // the way back, mirroring the grant's outbound inheritance. Read through the
             // NON-BLOCKING mirror: this runs on `queue`, and `closedLoopEnabled` would sync
             // onto dataAccessQueue — the deadlock direction.
-            watchClosedLoopEnabled: loopManager.closedLoopEnabledNonBlocking,
+            // RECOVERED offers send nil — no authority (ported from next-dev, field 2026-08-25
+            // e221): a relaunch-recovered drain reads a freshly-booted manager whose flag is a
+            // boot default, not the wrist's real mode; e221's recovered offer overwrote the
+            // user's captured CLOSED with open, and the phone resumed open-loop after the watch
+            // died. nil already means exactly the right thing at the phone: keep the captured
+            // pre-loan value.
+            watchClosedLoopEnabled: recovered ? nil : loopManager.closedLoopEnabledNonBlocking,
             // Same benign-snapshot read as the mode above: "roughly when did the wrist last
-            // loop" for the phone's recency seed, not a sync point.
+            // loop" for the phone's recency seed, not a sync point. (Safe on recovered drains
+            // without gating: a freshly-booted manager's clock is nil, and the phone's seed is
+            // forward-only either way.)
             lastLoopCompleted: loopManager.lastLoopCompleted,
             // Hands the snooze anchor back, so the phone resuming its own warnings does not
             // repeat within minutes what the user just read on their wrist. Same non-blocking

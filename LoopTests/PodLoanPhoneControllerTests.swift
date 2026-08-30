@@ -336,12 +336,24 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// refused by the reclaim-settle guard killed the run here and failed five unrelated tests
     /// behind it. Same pathology this file's own tearDown comment records fixing once before.
     /// A throw fails exactly the test that hit it and lets the rest of the bundle run.
+    /// The grant path is deny-and-retry BY DESIGN (ported from next-dev 0810086d): right
+    /// after a hand-back the phone refuses to grant until the settle verification round-trip
+    /// lands on its queue, and the user's next Start succeeds ("Try Start again in a few
+    /// seconds"). Whether that async completion beats this request is a queue race no test
+    /// may depend on, so a denial here is retried the way a user would — any OTHER non-grant
+    /// reply stays fatal (the throw below, which fails exactly the one test that hit it).
     @discardableResult
     func establishLoan(_ controller: PodLoanPhoneController) throws -> LoanGrant {
-        let grantSent = expectSend()
-        controller.handleIncoming(userInfo: try! LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
-        wait(for: [grantSent], timeout: 5)
-        guard case .grant(let grant)? = lastSent() else {
+        var granted: LoanGrant?
+        for _ in 0..<25 {
+            let grantSent = expectSend()
+            controller.handleIncoming(userInfo: try! LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
+            wait(for: [grantSent], timeout: 5)
+            if case .grant(let g)? = lastSent() { granted = g; break }
+            if case .denied? = lastSent() { usleep(100_000); continue }
+            break
+        }
+        guard let grant = granted else {
             XCTFail("expected a grant, got \(String(describing: lastSent()))")
             throw SetupFailure.noGrant
         }
