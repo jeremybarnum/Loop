@@ -896,7 +896,14 @@ final class PodLoanPhoneController {
             // "Overstated", not "High": the pod delivered LESS than the records claim, so the
             // defect is in the books, not in the body. "High" reads as a therapy state — is my
             // IOB high, is that bad? — and sends the user looking at the wrong thing.
-            deps.issueNotice("Insulin On Board May Be Overstated",
+            //
+            // URGENT channel, by ruling (2026-08-24): SYMMETRIC URGENCY, ASYMMETRIC ACTION.
+            // Urgency answers "does the user need to know" — and any audit breach means the
+            // books and the pod disagree, both directions alike. Action answers "what is
+            // safe" — and stays asymmetric: this direction keeps looping (phantom IOB
+            // under-doses and decays out; opening would worsen it). The previous plain-channel
+            // choice meant a Focus mode could eat the only witness to a recording failure.
+            deps.issueUrgentNotice("Insulin On Board May Be Overstated",
                              String(format: "The watch session's records account for %.2f U more than the pod delivered. Automatic dosing continues; expect it to run cautious until this clears.", -residual))
         }
     }
@@ -936,11 +943,12 @@ final class PodLoanPhoneController {
             handbackDiag(epoch, String(format:
                 "** R37 WARN — force-reclaim residual %+.3f U beyond -%.2f: records claim more than the pod delivered (phantom IOB). Looping resumes — this direction under-doses and decays out. **",
                 residual, Self.warnNegativeResidual))
-            // PLAIN channel, matching the identical verdict on the clean-hand-back path (:857).
-            // Same finding, same direction, same "looping continues" outcome — the urgent
-            // channel here was an inconsistency, and this direction under-doses and decays out
-            // on its own, which is the case for NOT breaking through a Focus mode.
-            deps.issueNotice("Insulin On Board May Be Overstated",
+            // URGENT channel, by ruling (2026-08-24) — same symmetric-urgency/asymmetric-action
+            // rule as the R32 twin, and a dead-watch session is the stronger case for it: the
+            // counterparty that would normally explain the residual is dead, so this notice may
+            // be the ONLY witness that recording failed. Looping still continues (the action
+            // asymmetry is unchanged).
+            deps.issueUrgentNotice("Insulin On Board May Be Overstated",
                              String(format: "After the watch session ended abruptly, records account for %.2f U more than the pod delivered. Automatic dosing resumes; expect it to run cautious until this clears.", -residual))
         } else {
             handbackDiag(epoch, String(format:
