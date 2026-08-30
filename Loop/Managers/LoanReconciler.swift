@@ -317,13 +317,29 @@ enum LoanReconciler {
     /// expectation is unknowable, so only journaled insulin counts (the audit then
     /// skews conservative: a too-low expectation makes remainders MORE positive,
     /// which only ever adds IOB).
-    static func expectedInsulin(events: [LoanEvent], schedule: BasalRateSchedule?, from start: Date, to end: Date) -> Double {
+    static func expectedInsulin(events: [LoanEvent], schedule: BasalRateSchedule?, from start: Date, to end: Date,
+                                includingBolusesAtEnd: Bool = true) -> Double {
         guard end > start else { return 0 }
 
         var total: Double = 0
 
-        // Boluses.
+        // Boluses — clipped to the window like every other contribution. Whole-loan calls
+        // never notice (every loan bolus is inside the loan window by construction), but the
+        // checkpoint audit computes ADJACENT windows over one event set, and an unclipped
+        // bolus would be double-counted into every window after its own.
+        //
+        // The end boundary is caller-declared because the two audit shapes need opposite
+        // rules at the (millisecond-quantized) instant `end` itself:
+        //  - INTERIOR checkpoint boundary (`includingBolusesAtEnd: false`): a bolus stamped
+        //    exactly at the reading belongs to the NEXT window — delivery takes ~40 s/U, so
+        //    the odometer at that instant has metered none of it, and counting it in both
+        //    windows would double-count.
+        //  - FINAL endpoint (default): a bolus stamped exactly at hand-back is part of the
+        //    loan — dropping it would inflate the positive residual and mint a false open.
         for event in events where event.record.kind == .bolus {
+            guard event.record.startDate >= start else { continue }
+            guard includingBolusesAtEnd ? event.record.startDate <= end
+                                        : event.record.startDate < end else { continue }
             total += event.record.amount ?? 0
         }
 

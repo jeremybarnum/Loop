@@ -1731,7 +1731,10 @@ final class PodLoanWatchController {
         guard let epoch = epoch ?? journal.activeEpoch else { return }
         var odometer: LoanOdometerSnapshot?
         if let start = deliveredAtTakeover, let latest = pumpManager?.podLoanInsulinDelivered {
-            odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest, freshenSucceeded: freshened)
+            // asOf makes the snapshot a checkpoint candidate for an INTERIM drain; the phone
+            // never checkpoints a FINAL offer's snapshot (it is the endpoint under audit).
+            odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest, freshenSucceeded: freshened,
+                                            asOf: pumpManager?.podLoanInsulinDeliveredAt)
         }
         // Verify rounds 1-3: IN-FLIGHT (mint→classification) and chase-pending events
         // stay OUT of interim offers — once the phone commits one, a later annul or
@@ -2312,8 +2315,26 @@ final class PodLoanWatchController {
         // no logic and consistently mislead: it exceeds physically-possible delivery, so it is NOT a
         // meaningful commanded total. The trustworthy commanded number is the watch's own floored
         // reconciled dose total; the hand-back reconciliation delta will be captured separately.)
-        SportLog.event("handback", String(format: "stream: %d event(s), %d tombstone(s)", events.count, tombstones.count))
-        sendMessage(.doseRecordBatch(DoseRecordBatch(epoch: epoch, events: events, tombstones: tombstones)))
+        // Ride the latest odometer reading along as a CHECKPOINT candidate: the phone pairs
+        // "records through this batch" with "pod odometer at asOf" and, when they reconcile,
+        // advances its audit base — so a later forced reclaim judges only the tail since this
+        // sync. The reading is whatever the last dose window already fetched (no extra radio);
+        // its asOf is the status response's own validTime, so the phone integrates expected
+        // insulin to exactly the reading's moment, not the send's.
+        // Coherence guard: a checkpoint pairs a COMPLETE record set with the reading. A
+        // withheld event (in-flight mint→classification, or a live uncertainty chase) is
+        // insulin the odometer may already meter but this batch does not carry — its
+        // checkpoint would breach by construction. Skip; the next clean batch checkpoints.
+        var odometer: LoanOdometerSnapshot?
+        if inFlightEventIDs.isEmpty, pendingUncertainEventID == nil,
+           let start = deliveredAtTakeover, let latest = pumpManager?.podLoanInsulinDelivered,
+           let asOf = pumpManager?.podLoanInsulinDeliveredAt {
+            odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest,
+                                            freshenSucceeded: false, asOf: asOf)
+        }
+        SportLog.event("handback", String(format: "stream: %d event(s), %d tombstone(s)%@", events.count, tombstones.count,
+                                          odometer.map { String(format: " · odo %.2f U [checkpoint]", $0.deliveredLatest) } ?? ""))
+        sendMessage(.doseRecordBatch(DoseRecordBatch(epoch: epoch, events: events, tombstones: tombstones, odometer: odometer)))
     }
 }
 
