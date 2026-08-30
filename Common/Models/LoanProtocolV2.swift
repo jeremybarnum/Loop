@@ -426,11 +426,20 @@ public struct LoanOdometerSnapshot: Codable, Equatable {
     public let deliveredAtStart: Double
     public let deliveredLatest: Double
     public let freshenSucceeded: Bool
+    /// When `deliveredLatest` was actually read off the pod (the status response's validTime,
+    /// watch-stamped like every record timestamp). This is what turns a snapshot into a
+    /// CHECKPOINT for the since-last-sync audit: the phone can only advance its audit base past
+    /// a reading whose moment it knows, because the window's expected-insulin integral runs to
+    /// exactly this instant. nil (older watch) = no checkpoint — the audit keeps its
+    /// whole-loan window, the pre-checkpoint behavior.
+    public let asOf: Date?
 
-    public init(deliveredAtStart: Double, deliveredLatest: Double, freshenSucceeded: Bool) {
+    public init(deliveredAtStart: Double, deliveredLatest: Double, freshenSucceeded: Bool,
+                asOf: Date? = nil) {
         self.deliveredAtStart = deliveredAtStart
         self.deliveredLatest = deliveredLatest
         self.freshenSucceeded = freshenSucceeded
+        self.asOf = asOf
     }
 }
 
@@ -822,11 +831,19 @@ public struct DoseRecordBatch: Codable, Equatable {
     public let epoch: Int
     public let events: [LoanEvent]
     public let tombstones: [UUID]
+    /// The watch's latest pod odometer reading, riding along so the phone can CHECKPOINT the
+    /// audit mid-loan: records synced + odometer observed = this window is reconciled, and the
+    /// audit base advances. A later forced reclaim then judges only the tail since this sync
+    /// instead of the whole loan. nil (older watch, or no reading yet) = no checkpoint; the
+    /// phone behaves exactly as before.
+    public let odometer: LoanOdometerSnapshot?
 
-    public init(epoch: Int, events: [LoanEvent], tombstones: [UUID]) {
+    public init(epoch: Int, events: [LoanEvent], tombstones: [UUID],
+                odometer: LoanOdometerSnapshot? = nil) {
         self.epoch = epoch
         self.events = events
         self.tombstones = tombstones
+        self.odometer = odometer
     }
 }
 

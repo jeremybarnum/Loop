@@ -748,6 +748,8 @@ final class PodLoanPhoneController {
         pendingHandbackAudit = nil
 
         if let latest = (deps.pumpManager() as? PumpConnectionLendable)?.lentDeviceInsulinDelivered {
+            // The VERDICT residual is window-scoped: [audit base → this reading]. With no
+            // checkpoints the base is the takeover anchor and this is the whole loan.
             let delivered = latest - pending.deliveredAtStart
             // Quantized to milli-units BEFORE the band comparisons (ported from next-dev,
             // field bugs e223/e225, 2026-08-26): a residual of nominal ±0.200 tripped the
@@ -756,19 +758,36 @@ final class PodLoanPhoneController {
             // worst clean banked sample, so exactly on the band is INSIDE it. Feeds every
             // reader below: both verdicts and the bank.
             let residual = ((delivered - pending.expected) * 1000).rounded() / 1000
+            // The whole-loan companions: what the bank and the drift tripwire read, so the
+            // residual series keeps one meaning across the checkpoint change.
+            let loanDelivered = pending.takeoverUnits.map { latest - $0 }
+            let loanResidual: Double? = {
+                guard let d = loanDelivered, let e = pending.wholeLoanExpected else { return nil }
+                return d - e
+            }()
             // `drift` is the whole point of the change: how much delivery the watch's stale
             // endpoint was missing. If this is reliably ~0 the watch's reading was fine after all
             // and this machinery can go; if it is a temp's worth, every earlier residual we
             // puzzled over was measuring the wrong interval.
             let drift = pending.watchLatest.map { latest - $0 }
             handbackDiag(pending.epoch, String(format:
-                "reconcile[%@]: delivered=%.3f expected=%.3f residual=%+.3f (tol 0.05) · loanMin=%.0f cycles=%d · odometer read by PHONE +%.0fs after reclaim · vs watch endpoint %@ (watch fresh=%@)",
+                "reconcile[%@]: delivered=%.3f expected=%.3f residual=%+.3f (tol 0.05) · loan total %@ resid %@ · %d checkpoint(s) · loanMin=%.0f cycles=%d · odometer read by PHONE +%.0fs after reclaim · vs watch endpoint %@ (watch fresh=%@)",
                 pending.flavor == .forceReclaim ? "FORCE-RECLAIM" : "AUTHORITATIVE",
                 delivered, pending.expected, residual,
+                loanDelivered.map { String(format: "%.3f", $0) } ?? "n/a",
+                loanResidual.map { String(format: "%+.3f", $0) } ?? "n/a",
+                checkpointsThisLoan,
                 pending.loanMinutes, pending.cycles, elapsed,
                 drift.map { String(format: "%+.3f", $0) } ?? "n/a",
                 pending.watchFreshened ? "Y" : "N"))
-            UserDefaults.standard.set(delivered, forKey: Keys.deliveredAuthoritative)
+            UserDefaults.standard.set(loanDelivered ?? delivered, forKey: Keys.deliveredAuthoritative)
+            // The slow-drip tripwire: windows individually clean, loan total not. Never an
+            // action — quantization drift is same-signed too and the one field-observed
+            // systematic case erred conservative. Visibility only.
+            if let lr = loanResidual, abs(lr) > 0.5, abs(residual) <= Self.checkpointBand {
+                handbackDiag(pending.epoch, String(format:
+                    "** [checkpoint] loan-total residual %+.3f U exceeds ±0.5 while every window reconciled — possible systematic drip; diagnostic only **", lr))
+            }
             switch pending.flavor {
             case .handback:
                 // BANKED ONLY ON A CLEAN HAND-BACK (2026-08-13). The bank exists to describe the
@@ -778,9 +797,13 @@ final class PodLoanPhoneController {
                 // statistics the next threshold review reads: two of them (+0.800, +0.850) had
                 // already moved the banked max from +0.000 to +0.850. Force-reclaim residuals stay
                 // visible in the reconcile[FORCE-RECLAIM] line above; they just are not evidence
-                // about hand-backs. Consequence, intended: a force-reclaim audit prints no bank
-                // line, so the "N more for a re-review" countdown counts clean samples only.
-                bankResidual(residual, epoch: pending.epoch)
+                // about hand-backs.
+                // The bank keeps its pre-checkpoint meaning — the WHOLE loan's residual —
+                // so the drift-trend series stays one distribution. Identical to `residual`
+                // whenever no checkpoint advanced the base. The VERDICT is window-scoped.
+                bankResidual(loanResidual ?? residual,
+                             worstWindow: max(worstWindowThisLoan, abs(residual)),
+                             epoch: pending.epoch)
                 applyReconciliationVerdict(residual: residual, epoch: pending.epoch)
             case .forceReclaim:
                 applyForceReclaimVerdict(residual: residual, epoch: pending.epoch)
@@ -1076,35 +1099,29 @@ final class PodLoanPhoneController {
     /// The "don't forget to tighten this" mechanism, built so it cannot be forgotten: bank every
     /// authoritative residual and say in the log how many clean samples exist. A note in a doc
     /// relies on someone re-reading the doc; a line that appears at every hand-back does not.
-    private func bankResidual(_ residual: Double, epoch: Int) {
+    private func bankResidual(_ residual: Double, worstWindow: Double, epoch: Int) {
         var history = (UserDefaults.standard.array(forKey: Keys.residualHistory) as? [Double]) ?? []
         history.append(residual)
         if history.count > 40 { history.removeFirst(history.count - 40) }
         UserDefaults.standard.set(history, forKey: Keys.residualHistory)
 
+        var windows = (UserDefaults.standard.array(forKey: Keys.windowWorstHistory) as? [Double]) ?? []
+        windows.append(worstWindow)
+        if windows.count > 40 { windows.removeFirst(windows.count - 40) }
+        UserDefaults.standard.set(windows, forKey: Keys.windowWorstHistory)
+
         let mean = history.reduce(0, +) / Double(history.count)
         let worst = history.map(abs).max() ?? 0
-        var line = String(format: "residual bank: n=%d mean=%+.3f worst=|%.3f| min=%+.3f max=%+.3f",
-                          history.count, mean, worst, history.min() ?? 0, history.max() ?? 0)
-        // The first review HAPPENED (2026-08-13, n=13 → ±0.20 U), so this line no longer asks for
-        // it. Leaving the old text in place would have printed "the bounds were set with none" at
-        // every hand-back forever — a log line stating something false, which is the exact
-        // cry-wolf failure OBS-8 was about. The ratchet is kept, just re-armed further out.
-        if history.count >= Self.residualReReviewTarget {
-            line += String(format: " ** R32 THRESHOLD RE-REVIEW DUE — %d samples banked since the ±%.2f U bounds were set from 13 on 2026-08-13 **",
-                           history.count, Self.openLoopPositiveResidual)
-        } else {
-            line += String(format: " (bounds ±%.2f U, set from 13 samples 2026-08-13; %d more for a re-review)",
-                           Self.openLoopPositiveResidual, Self.residualReReviewTarget - history.count)
-        }
-        handbackDiag(epoch, line)
+        // The re-review nag retired with R32's close (2026-08-27): the review it demanded
+        // happened, and a demand for a review that happened is the OBS-8 cry-wolf failure.
+        // The whole-loan bank continues as the drift-trend series; the worst-window ring is
+        // the distribution any future band review actually reads.
+        handbackDiag(epoch, String(format:
+            "residual bank: n=%d mean=%+.3f worst=|%.3f| min=%+.3f max=%+.3f · window-worst this loan |%.3f| (series n=%d max |%.3f|) — diagnostics only, R32 closed 2026-08-27 (window verdict ±%.2f U)",
+            history.count, mean, worst, history.min() ?? 0, history.max() ?? 0,
+            worstWindow, windows.count, windows.map(abs).max() ?? 0,
+            Self.openLoopPositiveResidual))
     }
-
-    /// How many banked residuals before the bounds above are worth revisiting AGAIN. The first
-    /// review fired at 10, was acted on at 13, and set ±0.20 U; this is the next checkpoint.
-    /// It equals the ring capacity, so it trips exactly when the whole 40-sample window is fresh
-    /// evidence gathered under the tightened bounds.
-    private static let residualReReviewTarget = 40
 
     /// True whenever this phone does NOT own the pod's connection (any non-owner
     /// state — the link is released or in flux). Delivery attempts made here while
@@ -1149,19 +1166,109 @@ final class PodLoanPhoneController {
     /// Same once-per-state discipline, for the build-skew notice: cleared on the first clean decode.
     private var hasWarnedProtocolMismatch = false
 
+    // MARK: - The audit base (since-last-sync reconciliation, R32 closed 2026-08-27)
+
+    /// The audit's anchor: the last pod odometer reading that was RECONCILED against a
+    /// complete record set. Every audit — clean hand-back or forced reclaim — judges the
+    /// window [base.asOf → end], so a mid-loan sync retires the windows behind it and a
+    /// forced reclaim answers "what happened since we last agreed?", not "replay the whole
+    /// loan". With no checkpoints the base never leaves the takeover reading, which is
+    /// byte-for-byte the old whole-loan behavior — the contactless-loan force-reclaim,
+    /// the one case with no choice, is unchanged by construction.
+    private struct AuditBase {
+        let units: Double
+        let asOf: Date
+    }
+    private var auditBase: AuditBase? {
+        didSet {
+            if let b = auditBase {
+                UserDefaults.standard.set(["units": b.units, "asOf": b.asOf, "epoch": epoch,
+                                           "count": checkpointsThisLoan],
+                                          forKey: Keys.auditBase)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Keys.auditBase)
+            }
+        }
+    }
+    /// Accepted checkpoints this loan — diagnostic color for the end-of-loan reconcile lines.
+    /// Persisted inside the auditBase dict: e226 on the port line (2026-08-26, field)
+    /// relaunched mid-loan and the R37 line then said "since takeover (0 checkpoint(s))"
+    /// while correctly auditing from the LOADED base — a label that misdescribes the
+    /// verdict's own anchor.
+    private var checkpointsThisLoan = 0
+    /// The largest |window residual| any accepted checkpoint saw this loan — combined with
+    /// the final window's at hand-back, it becomes the banked worst-window sample (the
+    /// distribution a future band review reads; R32 closed 2026-08-27).
+    private var worstWindowThisLoan: Double = 0
+
+    /// The same four-pulse band the verdicts use: a window that reconciles within it is
+    /// retired; one that doesn't is CARRIED — the base does not advance past an
+    /// unreconciled window, so the discrepancy stays in scope for the next checkpoint or
+    /// the final audit rather than being quietly absorbed.
+    private static let checkpointBand: Double = 0.20
+
+    /// Consider advancing the audit base to a synced odometer reading. Called with the
+    /// staged record set already updated by the same message that carried the snapshot,
+    /// so "records through this instant" and "odometer at this instant" are paired.
+    private func considerCheckpoint(_ snap: LoanOdometerSnapshot, context: String) {
+        guard let asOf = snap.asOf else { return }          // older watch: whole-loan audit
+        guard let base = auditBase else { return }          // no anchor yet: nothing to advance
+        guard asOf > base.asOf else { return }              // stale or duplicate reading
+        guard snap.deliveredLatest >= base.units else {
+            handbackDiag(epoch, String(format: "[checkpoint] REJECTED (%@): odometer regressed %.3f → %.3f",
+                                       context, base.units, snap.deliveredLatest))
+            return
+        }
+        let events = staged.values
+            .filter { !stagedTombstones.contains($0.id) }
+            .sorted { $0.seq < $1.seq }
+        // Interior boundary: a bolus stamped exactly at the reading is NOT yet metered
+        // (delivery takes ~40 s/U) — it belongs to the window that STARTS here.
+        let expected = LoanReconciler.expectedInsulin(events: events, schedule: deps.settings().basalRateSchedule,
+                                                      from: base.asOf, to: asOf,
+                                                      includingBolusesAtEnd: false)
+        let delivered = snap.deliveredLatest - base.units
+        // Milli-unit quantization, same reason as the verdict residual: a window sitting
+        // exactly on the band must reconcile, not carry on float representation error.
+        let residual = ((delivered - expected) * 1000).rounded() / 1000
+        if abs(residual) <= Self.checkpointBand {
+            // Count BEFORE the base assignment — the didSet persists the count alongside.
+            checkpointsThisLoan += 1
+            worstWindowThisLoan = max(worstWindowThisLoan, abs(residual))
+            auditBase = AuditBase(units: snap.deliveredLatest, asOf: asOf)
+            handbackDiag(epoch, String(format:
+                "[checkpoint] #%d ACCEPTED (%@): %.1f min window reconciled (delivered %.3f expected %.3f residual %+.3f) — base → %.3f U",
+                checkpointsThisLoan, context, asOf.timeIntervalSince(base.asOf) / 60,
+                delivered, expected, residual, snap.deliveredLatest))
+        } else {
+            // CARRY, loudly. In-flight delivery, a still-chasing verdict, or a genuinely
+            // missing record all look like this mid-window; the final audit (or a later
+            // checkpoint over the widened window) renders the verdict with full records.
+            handbackDiag(epoch, String(format:
+                "[checkpoint] CARRIED (%@): window residual %+.3f exceeds ±%.2f (delivered %.3f expected %.3f) — base stays at %.3f U",
+                context, residual, Self.checkpointBand, delivered, expected, base.units))
+        }
+    }
+
     /// Everything the odometer audit needs EXCEPT the end reading, held
     /// from the final drain until the phone's own reclaim round-trip lands (seconds later) and can
     /// supply that reading first-hand. See `finishPendingHandbackAudit`.
     private struct PendingHandbackAudit {
         enum Flavor: String { case handback, forceReclaim }
         let epoch: Int
-        let deliveredAtStart: Double
-        let expected: Double
+        let deliveredAtStart: Double  // the audit base's units — the verdict window's anchor
+        let expected: Double          // expected insulin over [base.asOf → end]
         let loanMinutes: Double
         let cycles: Int
         let watchLatest: Double?      // the watch's own end reading, for the fresh-vs-stale delta
         let watchFreshened: Bool
         var flavor: Flavor = .handback
+        /// Whole-loan companions (nil when no takeover anchor survived): the banked residual
+        /// series and the slow-drift tripwire keep reading the FULL loan even when
+        /// checkpoints narrowed the verdict window — a real systematic drip that stays
+        /// inside every window band still shows here.
+        var takeoverUnits: Double? = nil
+        var wholeLoanExpected: Double? = nil
     }
     private var pendingHandbackAudit: PendingHandbackAudit? {
         didSet {
@@ -1309,6 +1416,13 @@ final class PodLoanPhoneController {
         static let deliveredAuthoritative = "PodLoanPhoneController.deliveredAuthoritative"
         /// Every authoritative residual, so the loose thresholds get tightened from data.
         static let residualHistory = "PodLoanPhoneController.residualHistory"
+        /// The since-last-sync audit base {units, asOf, epoch, count} — the last odometer
+        /// reading reconciled against a complete record set (restart survival; epoch-guarded
+        /// on load, checkpoint count rides along so the R37 label survives relaunch).
+        static let auditBase = "PodLoanPhoneController.auditBase"
+        /// Per-loan worst |window residual| ring — the distribution any future band review
+        /// reads (R32 closed 2026-08-27).
+        static let windowWorstHistory = "PodLoanPhoneController.windowResidualWorst"
         /// One-shot repair flag for the residuals banked before the bank was scoped to clean
         /// hand-backs. Date-suffixed on purpose: this names a specific 2026-08-13 field-data
         /// repair, not a standing rule, so nobody reads it as a recurring purge.
@@ -1367,6 +1481,14 @@ final class PodLoanPhoneController {
             self.committedIDs = []
         }
         loadStaged()
+        // Epoch-guarded: a base persisted by some other loan must never anchor this one —
+        // a wrong anchor turns the whole previous loan's delivery into "unexplained".
+        if let d = UserDefaults.standard.dictionary(forKey: Keys.auditBase),
+           let units = d["units"] as? Double, let asOf = d["asOf"] as? Date,
+           (d["epoch"] as? Int) == self.epoch {
+            self.auditBase = AuditBase(units: units, asOf: asOf)
+            self.checkpointsThisLoan = d["count"] as? Int ?? 0
+        }
 
         // One-shot: two force-reclaim residuals (+0.800, +0.850) were banked before
         // bankResidual was scoped to `.handback`, and they are what the next threshold review
@@ -1636,9 +1758,15 @@ final class PodLoanPhoneController {
         // dies before ever sending one.
         if let delivered = lendable.lentDeviceInsulinDelivered {
             UserDefaults.standard.set(delivered, forKey: Keys.deliveredAtGrant)
+            // Seed the audit base from the phone's own last reading. takeoverComplete
+            // re-anchors it seconds later with the watch's fresher post-takeover pair.
+            auditBase = AuditBase(units: delivered, asOf: handedOverAt)
         } else {
             UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
+            auditBase = nil
         }
+        checkpointsThisLoan = 0
+        worstWindowThisLoan = 0
         // The LAST loan's takeover odometer must not leak into this one. If a force-reclaim
         // fires before this loan's takeoverComplete arrives, the audit's baseline fallback is the
         // fresh grant capture above — a stale takeover value would put the whole previous loan's
@@ -1831,6 +1959,9 @@ final class PodLoanPhoneController {
         // normal audit's baseline arrives in the hand-back offer, which a dead watch never sends.
         if let atTakeover = complete.firstPodStatus.deliveredUnits {
             UserDefaults.standard.set(atTakeover, forKey: Keys.deliveredAtTakeover)
+            // Re-anchor the audit base on the watch's post-takeover pair — the reading every
+            // window audit measures from, stamped by the same clock as the records.
+            auditBase = AuditBase(units: atTakeover, asOf: complete.firstPodStatus.timestamp)
         }
         state = .loaned
         // No 6-hour duration notice. It was armed unconditionally the instant a takeover
@@ -1908,6 +2039,13 @@ final class PodLoanPhoneController {
             return
         }
         stage(events: batch.events, tombstones: batch.tombstones)
+        // Records synced + odometer observed = a checkpoint candidate: the audit base can
+        // advance past a window that reconciles, so a later forced reclaim judges only the
+        // tail since this sync. Staging above happened first — the pairing is "records
+        // through this batch" against "odometer at asOf".
+        if let snap = batch.odometer {
+            considerCheckpoint(snap, context: "batch")
+        }
     }
 
     /// Relay a phone-side hand-back breadcrumb to the watch (which mirrors to iCloud)
@@ -2000,6 +2138,13 @@ final class PodLoanPhoneController {
         let auditThisOffer = !isStale && isFinal && state == .reconciling
 
         stage(events: offer.events, tombstones: offer.tombstones)
+        // An INTERIM drain is a mid-loan sync like any batch: records + odometer paired, so
+        // it may checkpoint. A FINAL offer must NOT — its snapshot is the endpoint the audit
+        // below is about to judge; advancing the base to it first would collapse the verdict
+        // window to nothing.
+        if !isStale, offer.epoch == epoch, !isFinal, let snap = offer.odometer {
+            considerCheckpoint(snap, context: "interim-offer")
+        }
         // Round-4 fix: dedup by EVENT ID only. The seq>cursor condition assumed a
         // gapless cursor; two-phase withholding creates gaps (an in-flight command's seq
         // can arrive AFTER later events were acked), and it would silently discard
@@ -2101,11 +2246,27 @@ final class PodLoanPhoneController {
             // the pod is home (the settle-window chase). It was already reading the odometer and throwing the
             // value away. Take it: same audit, same tolerance, an endpoint that is actually the end.
             if isFinal, let start = offer.odometer?.deliveredAtStart {
+                // Since-last-sync: the verdict window runs from the audit base — the last
+                // checkpoint when mid-loan syncs reconciled, the takeover reading when none
+                // did (in which case base.units == start and this is the whole loan, the old
+                // behavior exactly). The whole-loan pair rides along for the residual bank
+                // and the slow-drift tripwire.
+                let windowStart = auditBase?.units ?? start
+                let windowExpected = auditBase.map {
+                    LoanReconciler.expectedInsulin(events: allStagedEvents, schedule: deps.settings().basalRateSchedule,
+                                                   from: $0.asOf, to: offer.handedBackAt)
+                } ?? expected
+                if checkpointsThisLoan > 0 {
+                    handbackDiag(offer.epoch, String(format:
+                        "[checkpoint] verdict window narrowed by %d checkpoint(s): anchor %.3f U (loan start %.3f), window expected %.3f (loan %.3f)",
+                        checkpointsThisLoan, windowStart, start, windowExpected, expected))
+                }
                 pendingHandbackAudit = PendingHandbackAudit(
-                    epoch: offer.epoch, deliveredAtStart: start, expected: expected,
+                    epoch: offer.epoch, deliveredAtStart: windowStart, expected: windowExpected,
                     loanMinutes: loanMin, cycles: allStagedEvents.count,
                     watchLatest: offer.odometer?.deliveredLatest,
-                    watchFreshened: offer.odometer?.freshenSucceeded == true)
+                    watchFreshened: offer.odometer?.freshenSucceeded == true,
+                    takeoverUnits: start, wholeLoanExpected: expected)
             }
         }
 
@@ -2830,26 +2991,49 @@ final class PodLoanPhoneController {
     /// because "cannot verify" must never quietly become "assume fine".
     @discardableResult
     private func armForceReclaimAudit() -> Bool {
-        let baseline = (UserDefaults.standard.object(forKey: Keys.deliveredAtTakeover) as? Double)
-                    ?? (UserDefaults.standard.object(forKey: Keys.deliveredAtGrant) as? Double)
-        guard let deliveredAtStart = baseline, let schedule = deps.settings().basalRateSchedule else {
+        // The one rule everywhere: the verdict window runs from the audit base — the last
+        // mid-loan sync when there ever was one, the takeover reading when there wasn't. A
+        // dead watch after a contactless loan therefore still gets the whole-loan audit
+        // (no choice there), but a watch that synced records an hour ago is judged only on
+        // the hour the phone actually cannot account for.
+        let start = loanStartedAt ?? deps.now().addingTimeInterval(-.hours(2))
+        let anchor: (units: Double, asOf: Date)?
+        if let base = auditBase {
+            anchor = (base.units, base.asOf)
+        } else if let units = (UserDefaults.standard.object(forKey: Keys.deliveredAtTakeover) as? Double)
+                            ?? (UserDefaults.standard.object(forKey: Keys.deliveredAtGrant) as? Double) {
+            anchor = (units, start)
+        } else {
+            anchor = nil
+        }
+        guard let anchor = anchor, let schedule = deps.settings().basalRateSchedule else {
             handbackDiag(epoch, "** R37 force-reclaim audit IMPOSSIBLE — no start odometer/schedule; loop OPENS on principle (cannot verify => do not resume) **")
             deps.openLoopForUncertainReconciliation()
             armOpenLoopReminder()
             deps.issueUrgentNotice("Watch Session Unverified", Self.sessionUnverifiedBody)
             return false
         }
-        let start = loanStartedAt ?? deps.now().addingTimeInterval(-.hours(2))
         let allEvents = staged.values.sorted { $0.seq < $1.seq }
         let expected = LoanReconciler.expectedInsulin(events: allEvents, schedule: schedule,
-                                                      from: start, to: deps.now())
+                                                      from: anchor.asOf, to: deps.now())
+        // Whole-loan companions for the reconcile line's loan-total fields (never banked on
+        // the force flavor; diagnostic color only).
+        let takeoverUnits = UserDefaults.standard.object(forKey: Keys.deliveredAtTakeover) as? Double
+        let wholeLoanExpected = takeoverUnits.map {
+            _ in LoanReconciler.expectedInsulin(events: allEvents, schedule: schedule, from: start, to: deps.now())
+        }
         pendingHandbackAudit = PendingHandbackAudit(
-            epoch: epoch, deliveredAtStart: deliveredAtStart, expected: expected,
+            epoch: epoch, deliveredAtStart: anchor.units, expected: expected,
             loanMinutes: deps.now().timeIntervalSince(start) / 60, cycles: 0,
-            watchLatest: nil, watchFreshened: false, flavor: .forceReclaim)
+            watchLatest: nil, watchFreshened: false, flavor: .forceReclaim,
+            takeoverUnits: takeoverUnits, wholeLoanExpected: wholeLoanExpected)
+        // checkpointsThisLoan survives relaunch (persisted with the base), so this label
+        // stays true even when the audit re-arms after a mid-loan restart.
         handbackDiag(epoch, String(format:
-            "R37 audit armed — expected %.3f U from %d record(s) + schedule fill; verdict on the reclaim round-trip",
-            expected, allEvents.count))
+            "R37 audit armed — expected %.3f U from %d record(s) + schedule fill over window since %@ (%d checkpoint(s)); verdict on the reclaim round-trip",
+            expected, allEvents.count,
+            checkpointsThisLoan > 0 ? String(format: "last sync %.0f min ago", deps.now().timeIntervalSince(anchor.asOf) / 60) : "takeover",
+            checkpointsThisLoan))
         return true
     }
 
