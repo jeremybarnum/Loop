@@ -256,7 +256,19 @@ final class LoopDataManager {
                 self.mutateSettings { settings in
                     settings.clearOverride(matching: .preMeal)
                 }
-                self.cancelActiveTempBasal(for: .automaticDosingDisabled)
+                // PODLOAN (ruled 2026-08-29, ported from next-dev): a LOAN-driven pause must
+                // NOT cancel the temp. The watch asserts its own program at takeover and the
+                // phone cancels the leftover at reclaim (podReturnedFromWatch) — whoever HOLDS
+                // the pod manages the program. This cancel raced the grant's BLE release,
+                // failed against the given-away pod, and stranded CrashRecoveryManager's
+                // in-flight marker (never disarmed on a thrown enact), so any relaunch
+                // mid-loan showed a false "Loop Crashed" dialog. The capture key is written
+                // by the loan pause before dosingEnabled mutates.
+                if UserDefaults.standard.object(forKey: "PodLoanPhoneController.dosingEnabledBeforeLoan") != nil {
+                    self.logger.default("Automation-off temp cancel SKIPPED — pod-loan pause; the temp is the watch's to manage (R33)")
+                } else {
+                    self.cancelActiveTempBasal(for: .automaticDosingDisabled)
+                }
             } }
             .store(in: &cancellables)
     }
@@ -662,6 +674,13 @@ extension LoopDataManager {
             return
         }
               
+        // PODLOAN: no pod commands while the pod is loaned out — a doomed cancel strands
+        // the crash marker (see the automation-off site). The wrist owns therapy decisions
+        // for the loan's duration.
+        guard !(UserDefaults.standard.object(forKey: "PodLoanPhoneController.dosingEnabledBeforeLoan") != nil) else {
+            logger.default("Unreliable-CGM temp cancel SKIPPED — pod is loaned out")
+            return
+        }
         // Cancel active high temp basal
         cancelActiveTempBasal(for: .unreliableCGMData)
     }
