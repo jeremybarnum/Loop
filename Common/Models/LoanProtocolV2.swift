@@ -472,13 +472,42 @@ public struct LoanRequest: Codable, Equatable {
     /// Optional for back-compat: an older watch sends none, and the phone then behaves
     /// exactly as it did before (no dedupe).
     public let requestID: String?
+    /// R40: this watch understands the .dormantGrant kind and the seize flow. The phone
+    /// gates its dormant-grant refresher on this — an older watch (nil) must never receive
+    /// a kind its envelope decoder throws on (it would raise the build-skew notice every
+    /// refresh). Recorded phone-side at every request.
+    public let supportsSeize: Bool?
 
     public init(watchBuild: String,
                 supportedVersions: [Int] = [LoanProtocol.version],
-                requestID: String = UUID().uuidString) {
+                requestID: String = UUID().uuidString,
+                supportsSeize: Bool? = nil) {
         self.watchBuild = watchBuild
         self.supportedVersions = supportedVersions
         self.requestID = requestID
+        self.supportsSeize = supportsSeize
+    }
+}
+
+/// R40: the dormant grant — a fully-assembled LoanGrant continuously re-issued to the
+/// watch while the phone owns the pod, so a phoneless loan start (seize) has everything a
+/// normal takeover has: keys, settings snapshot, full records. `issuedAt` drives the seize
+/// confirm's age line (R40(d): the age is SHOWN, never capped). `seizeToken` is the
+/// reunion identity: stable per pod, echoed in a seized loan's hand-back offer so the
+/// phone can retro-acknowledge a loan it never granted; an old phone ignores the field and
+/// the offer degrades to the established stale-epoch records-drain (state untouched). The
+/// inner grant's `epoch` is PROVISIONAL (the phone's counter at issue) — the real epoch is
+/// assigned at retro-acknowledgment; the inner `expiresAt` is meaningless dormant and set
+/// to `issuedAt` so nothing mistakes it for a live 5-minute lease.
+public struct DormantGrant: Codable, Equatable {
+    public let grant: LoanGrant
+    public let issuedAt: Date
+    public let seizeToken: UUID
+
+    public init(grant: LoanGrant, issuedAt: Date, seizeToken: UUID) {
+        self.grant = grant
+        self.issuedAt = issuedAt
+        self.seizeToken = seizeToken
     }
 }
 
@@ -875,6 +904,11 @@ public struct HandbackOffer: Codable, Equatable {
     /// rather than restoring the value captured before the loan. nil (older watch) → the phone
     /// keeps its captured pre-loan value, i.e. the previous restore behavior.
     public let watchClosedLoopEnabled: Bool?
+    /// R40 reunion identity: present on offers for a SEIZED loan (one the phone never
+    /// granted live). Matches the outstanding DormantGrant.seizeToken; the phone
+    /// retro-acknowledges on match. nil = ordinary granted loan. An old phone ignores this
+    /// and the offer takes the stale-epoch records-drain path (safe, state untouched).
+    public let seizeToken: UUID?
     /// The wrist's last completed loop cycle, the return-direction twin of the grant's field:
     /// at reclaim the phone seeds its own recency display from this, so the ~10 s settle does
     /// not paint a red ring over a system that looped seconds ago (the watch's temp is still
@@ -892,6 +926,7 @@ public struct HandbackOffer: Codable, Equatable {
     public init(epoch: Int, handedBackAt: Date, finalStatus: LoanPodStatus?,
                 odometer: LoanOdometerSnapshot?, events: [LoanEvent], tombstones: [UUID],
                 recovered: Bool, released: Bool? = nil, watchClosedLoopEnabled: Bool? = nil,
+                seizeToken: UUID? = nil,
                 lastLoopCompleted: Date? = nil,
                 lastLowBGWarningAt: Date? = nil) {
         self.epoch = epoch
@@ -903,6 +938,7 @@ public struct HandbackOffer: Codable, Equatable {
         self.recovered = recovered
         self.released = released
         self.watchClosedLoopEnabled = watchClosedLoopEnabled
+        self.seizeToken = seizeToken
         self.lastLoopCompleted = lastLoopCompleted
         self.lastLowBGWarningAt = lastLowBGWarningAt
     }
@@ -1026,11 +1062,16 @@ public enum LoanMessage: Equatable {
     case nack(ProtocolNack)
     case denied(LoanDenied)
     case diag(LoanDiag)
+    /// R40: phone→watch, the continuously-refreshed offline-start credential. Sent only
+    /// to watches that advertised supportsSeize (older envelope decoders throw on the
+    /// unknown kind).
+    case dormantGrant(DormantGrant)
 
     /// The message's epoch, nil only for request/nack/denied (§1.1).
     public var epoch: Int? {
         switch self {
         case .request, .nack, .denied: return nil
+        case .dormantGrant: return nil   // provisional epoch inside; not addressable by epoch
         case .grant(let m): return m.epoch
         case .takeoverComplete(let m): return m.epoch
         case .takeoverFailed(let m): return m.epoch
@@ -1059,7 +1100,7 @@ public struct LoanEnvelope: Codable {
     private enum Kind: String, Codable {
         case request, grant, takeoverComplete, takeoverFailed, doseRecordBatch
         case handbackOffer, handbackAck, revoke, statusQuery, statusReport, nack, denied
-        case diag
+        case diag, dormantGrant
     }
 
     public init(from decoder: Decoder) throws {
@@ -1087,6 +1128,7 @@ public struct LoanEnvelope: Codable {
         case .nack: self.message = .nack(try c.decode(ProtocolNack.self, forKey: .body))
         case .denied: self.message = .denied(try c.decode(LoanDenied.self, forKey: .body))
         case .diag: self.message = .diag(try c.decode(LoanDiag.self, forKey: .body))
+        case .dormantGrant: self.message = .dormantGrant(try c.decode(DormantGrant.self, forKey: .body))
         }
     }
 
@@ -1107,6 +1149,7 @@ public struct LoanEnvelope: Codable {
         case .nack(let m): try c.encode(Kind.nack, forKey: .kind); try c.encode(m, forKey: .body)
         case .denied(let m): try c.encode(Kind.denied, forKey: .kind); try c.encode(m, forKey: .body)
         case .diag(let m): try c.encode(Kind.diag, forKey: .kind); try c.encode(m, forKey: .body)
+        case .dormantGrant(let m): try c.encode(Kind.dormantGrant, forKey: .kind); try c.encode(m, forKey: .body)
         }
     }
 }
@@ -1157,6 +1200,7 @@ extension LoanMessage {
         case .nack:             return "nack"
         case .denied:           return "denied"
         case .diag:             return "diag"
+        case .dormantGrant:     return "dormantGrant"
         }
     }
 
@@ -1166,7 +1210,10 @@ extension LoanMessage {
              .takeoverComplete:
             return true
         case .takeoverFailed, .doseRecordBatch, .statusQuery,
-             .statusReport, .diag:
+             .statusReport, .diag,
+             // R40: nobody is watching a spinner for a dormant refresh — background
+             // bookkeeping; guaranteed queued delivery is exactly right for it.
+             .dormantGrant:
             return false
         }
     }

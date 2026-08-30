@@ -1442,6 +1442,11 @@ final class PodLoanPhoneController {
         /// Per-loan worst |window residual| ring — the distribution any future band review
         /// reads (R32 closed 2026-08-27).
         static let windowWorstHistory = "PodLoanPhoneController.windowResidualWorst"
+        /// R40: the paired watch advertised supportsSeize in a LoanRequest — gates the
+        /// dormant-grant refresher (an older watch's decoder throws on the unknown kind).
+        static let watchSupportsSeize = "PodLoanPhoneController.watchSupportsSeize"
+        /// R40: the stable per-pod reunion identity for seized loans.
+        static let dormantSeizeToken = "PodLoanPhoneController.dormantSeizeToken"
         /// One-shot repair flag for the residuals banked before the bank was scoped to clean
         /// hand-backs. Date-suffixed on purpose: this names a specific 2026-08-13 field-data
         /// repair, not a standing rule, so nobody reads it as a recurring purge.
@@ -1625,7 +1630,7 @@ final class PodLoanPhoneController {
             // posted a fresh banner every 15 s, forever. The decode arm keeps the notice; this
             // direction is a developer fact, and the user's own signal is the loan not starting.
             os_log("Loan protocol skew — the WATCH could not decode a message from this phone", log: log, type: .fault)
-        case .grant, .handbackAck, .revoke, .statusQuery, .denied, .diag:
+        case .grant, .handbackAck, .revoke, .statusQuery, .denied, .diag, .dormantGrant:
             break  // watch-bound kinds (diag is phone→watch only)
         }
     }
@@ -1653,6 +1658,10 @@ final class PodLoanPhoneController {
         if let id = request.requestID {
             lastRequestID = id
             lastRequestAt = deps.now()
+        }
+        // R40: remember whether this watch speaks seize — the dormant refresher gates on it.
+        if let seize = request.supportsSeize {
+            UserDefaults.standard.set(seize, forKey: Keys.watchSupportsSeize)
         }
         guard request.supportedVersions.contains(LoanProtocol.version) else {
             sendMessage(.nack(ProtocolNack(seenVersion: request.supportedVersions.max())))
@@ -1837,67 +1846,157 @@ final class PodLoanPhoneController {
         UserDefaults.standard.set(handedOverAt, forKey: Keys.loanStartedAt)
 
         let grantEpoch = epoch
-        let historyStart = handedOverAt.addingTimeInterval(-.hours(16))
-        // Fetch insulin AND carb history before building the grant. Nested so both
-        // are in hand at construction; the same 16h window that seeds IOB now seeds COB.
-        // 3 h of glucose (the Integral RC look-back) seeds momentum + RC; the 16 h window seeds
-        // IOB and COB. Nested so all three are in hand at construction.
-        let glucoseStart = handedOverAt.addingTimeInterval(-.hours(3))
+        // R40: assembly extracted so the dormant refresher issues EXACTLY what a live grant
+        // would — a seized loan must dose on the same materials a granted loan gets.
+        assembleGrant(epoch: grantEpoch, referenceDate: handedOverAt,
+                      expiresAt: handedOverAt.addingTimeInterval(.minutes(5)),
+                      pumpRaw: pump.rawValue, loanSettingsRaw: loanSettings.rawValue,
+                      settings: settings) { [weak self] grant in
+            guard let self = self else { return }
+            guard self.state == .grantOffered, self.epoch == grantEpoch else { return }
+            guard let grant = grant else {
+                self.abortGrant(reason: "snapshot encoding failed")
+                return
+            }
+            self.sendMessage(.grant(grant))
+            self.armT1(for: grantEpoch)
+        }
+    }
+
+    /// R40: one grant assembly for BOTH the live path and the dormant refresher — the
+    /// fetch chain (16 h doses, carbs, 3 h glucose, prediction snapshot) plus the
+    /// LoanGrant construction, exactly as the live grant has always built it. Duplicating
+    /// it would let the two grants drift. Completion runs on `queue`; nil = snapshot
+    /// encoding failed. `expiresAt` is the live path's 5-minute lease; the dormant path
+    /// passes `referenceDate` (a dormant grant has no lease — R40(d) staleness is
+    /// consent-based, shown in the seize confirm, never enforced).
+    private func assembleGrant(epoch grantEpoch: Int, referenceDate: Date, expiresAt: Date,
+                               pumpRaw: [String: Any], loanSettingsRaw: [String: Any],
+                               settings: LoopSettings,
+                               completion: @escaping (LoanGrant?) -> Void) {
+        let historyStart = referenceDate.addingTimeInterval(-.hours(16))
+        let glucoseStart = referenceDate.addingTimeInterval(-.hours(3))
         deps.doseHistory(historyStart) { [weak self] history in
             guard let self = self else { return }
             self.deps.carbHistory(historyStart) { [weak self] carbs in
                 guard let self = self else { return }
                 self.deps.glucoseHistory(glucoseStart) { [weak self] glucose in
                     guard let self = self else { return }
-                    // INSTRUMENTATION ONLY: capture the phone's last-computed prediction
-                    // decomposition (cached read, no recompute) as a fourth nested fetch, so it
-                    // rides in the grant. Default nil closure ⇒ this is a no-op for tests / old builds.
                     self.deps.predictionSnapshot { [weak self] snapshot in
-                    guard let self = self else { return }
-                    self.queue.async {
-                        guard self.state == .grantOffered, self.epoch == grantEpoch else { return }
-                        guard let stateData = try? PropertyListSerialization.data(fromPropertyList: pump.rawValue, format: .binary, options: 0),
-                              let settingsData = try? PropertyListSerialization.data(fromPropertyList: loanSettings.rawValue, format: .binary, options: 0) else {
-                            self.abortGrant(reason: "snapshot encoding failed")
-                            return
+                        guard let self = self else { return }
+                        self.queue.async {
+                            guard let stateData = try? PropertyListSerialization.data(fromPropertyList: pumpRaw, format: .binary, options: 0),
+                                  let settingsData = try? PropertyListSerialization.data(fromPropertyList: loanSettingsRaw, format: .binary, options: 0) else {
+                                completion(nil)
+                                return
+                            }
+                            completion(LoanGrant(
+                                epoch: grantEpoch,
+                                expiresAt: expiresAt,
+                                pumpManagerRawState: stateData,
+                                podAddress: 0,
+                                therapySettingsRaw: settingsData,
+                                settingsTimeZoneID: settings.basalRateSchedule?.timeZone.identifier ?? TimeZone.current.identifier,
+                                doseHistory: history.compactMap(Self.loanRecord(from:)),
+                                boundaryRecord: nil,   // Fix 1: running temp already lives in doseHistory
+                                supportsInterimHandback: true,   // two-phase hand-back capability gate (REAL-3)
+                                supportsOverrideRecords: true,   // this phone decodes .overrideChange
+                                // Same source LoopDataManager reads. Without this the watch runs
+                                // Standard RC while this phone may be running Integral — different
+                                // predictions from identical inputs, silently (audit 2026-07-22).
+                                integralRetrospectiveCorrectionEnabled: UserDefaults.standard.integralRetrospectiveCorrectionEnabled,
+                                // The wrist follows the phone's loop mode instead of resetting to
+                                // OPEN each loan. Snapshotted like the therapy settings.
+                                phoneClosedLoopEnabled: settings.dosingEnabled,
+                                carbHistory: carbs,
+                                glucoseHistory: glucose,
+                                predictionSnapshot: snapshot,
+                                // Ring ruling 2026-08-23: the wrist's loop dot starts from the
+                                // SYSTEM's recency.
+                                lastLoopCompleted: self.deps.lastLoopCompleted(),
+                                // The predicted-low warning follows the pod, snapshotted like the
+                                // therapy settings.
+                                lowBGWarningSettings: Self.lowBGWarningSettingsForGrant(
+                                    lastNotificationTime: self.lowBGWarningLastNotificationTime?())))
                         }
-                        let grant = LoanGrant(
-                            epoch: grantEpoch,
-                            expiresAt: handedOverAt.addingTimeInterval(.minutes(5)),
-                            pumpManagerRawState: stateData,
-                            podAddress: 0,
-                            therapySettingsRaw: settingsData,
-                            settingsTimeZoneID: settings.basalRateSchedule?.timeZone.identifier ?? TimeZone.current.identifier,
-                            doseHistory: history.compactMap(Self.loanRecord(from:)),
-                            boundaryRecord: nil,   // Fix 1: running temp already lives in doseHistory (see above)
-                            supportsInterimHandback: true,   // two-phase hand-back capability gate (REAL-3)
-                            supportsOverrideRecords: true,   // this phone decodes .overrideChange
-                            // Same source LoopDataManager:458 reads. Without this the watch runs
-                            // Standard RC while this phone may be running Integral — different
-                            // predictions from identical inputs, silently (audit 2026-07-22).
-                            integralRetrospectiveCorrectionEnabled: UserDefaults.standard.integralRetrospectiveCorrectionEnabled,
-                            // The wrist follows the phone's
-                            // loop mode instead of resetting to OPEN each loan. Snapshotted at
-                            // the grant like the therapy settings, so a later phone-side toggle
-                            // does not reach through to a loan already in flight.
-                            phoneClosedLoopEnabled: settings.dosingEnabled,
-                            carbHistory: carbs,
-                            glucoseHistory: glucose,
-                            predictionSnapshot: snapshot,
-                            // Ring ruling 2026-08-23: the wrist's loop dot starts from the
-                            // SYSTEM's recency — this phone looped minutes ago at most.
-                            lastLoopCompleted: self.deps.lastLoopCompleted(),
-                            // The predicted-low warning follows the pod. Snapshotted here like the
-                            // therapy settings, so the wrist evaluates with what this phone would
-                            // have used and a mid-loan settings change does not reach through.
-                            lowBGWarningSettings: Self.lowBGWarningSettingsForGrant(
-                                lastNotificationTime: self.lowBGWarningLastNotificationTime?()))
-                        self.sendMessage(.grant(grant))
-                        self.armT1(for: grantEpoch)
-                    }
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - R40: the dormant-grant refresher (seize credential pipe)
+
+    private var lastDormantRefreshAt: Date?
+    private var lastDormantSettingsFingerprint: String?
+    /// Periodic floor between refreshes with unchanged settings. A settings change
+    /// refreshes immediately regardless. Tunable.
+    private static let dormantRefreshInterval: TimeInterval = .minutes(30)
+
+    /// A coarse fingerprint of everything therapy-relevant the grant snapshot freezes —
+    /// when it changes, the dormant grant refreshes immediately (the R40(d) analysis:
+    /// settings-change-then-leave is the only unique staleness exposure, so make its
+    /// window as small as the pipe allows).
+    private static func settingsFingerprint(_ s: LoopSettings) -> String {
+        let basal = s.basalRateSchedule.map { String(describing: $0.items) } ?? "-"
+        let isf = s.insulinSensitivitySchedule.map { String(describing: $0.items) } ?? "-"
+        let cr = s.carbRatioSchedule.map { String(describing: $0.items) } ?? "-"
+        let targets = s.glucoseTargetRangeSchedule.map { String(describing: $0.items) } ?? "-"
+        return "\(basal)|\(isf)|\(cr)|\(targets)|\(String(describing: s.maximumBolus))|\(String(describing: s.maximumBasalRatePerHour))|\(s.dosingEnabled)"
+    }
+
+    /// The stable per-pod reunion identity carried in every dormant grant and echoed in a
+    /// seized loan's offer. v1 approximation: persisted once and rotated only when the
+    /// refresher first runs after the stored value is missing — a mismatch at reunion is
+    /// never dangerous (the offer degrades to the stale-epoch records-drain), so the
+    /// rotation policy can stay coarse until the seize flow's field data argues otherwise.
+    private func dormantSeizeToken() -> UUID {
+        if let raw = UserDefaults.standard.string(forKey: Keys.dormantSeizeToken),
+           let token = UUID(uuidString: raw) {
+            return token
+        }
+        let token = UUID()
+        UserDefaults.standard.set(token.uuidString, forKey: Keys.dormantSeizeToken)
+        return token
+    }
+
+    /// Cheap to call from any repeating phone moment (WatchDataManager pings it on loop
+    /// updates); all gating and throttling lives here. Refreshes only while this phone
+    /// OWNS the pod, only to a watch that advertised supportsSeize, and only when the
+    /// settings fingerprint changed or the periodic floor elapsed.
+    func considerDormantRefresh() {
+        queue.async { [weak self] in self?.queue_considerDormantRefresh() }
+    }
+
+    private func queue_considerDormantRefresh() {
+        guard state == .owner else { return }
+        guard UserDefaults.standard.bool(forKey: Keys.watchSupportsSeize) else { return }
+        guard let pump = deps.pumpManager(),
+              let lendable = pump as? PumpConnectionLendable,
+              !lendable.isConnectionReleased else { return }
+        let settings = deps.settings()
+        // Same completeness rule as a live grant: deny-on-missing, never defaulted. An
+        // incomplete snapshot simply skips this refresh; the last complete one stands.
+        guard settings.maximumBolus != nil, settings.maximumBasalRatePerHour != nil,
+              settings.basalRateSchedule != nil else { return }
+        let fingerprint = Self.settingsFingerprint(settings)
+        let periodicDue = lastDormantRefreshAt.map { deps.now().timeIntervalSince($0) >= Self.dormantRefreshInterval } ?? true
+        guard periodicDue || fingerprint != lastDormantSettingsFingerprint else { return }
+
+        var loanSettings = settings
+        loanSettings.automaticDosingStrategy = .tempBasalOnly   // same override as a live grant
+        let issuedAt = deps.now()
+        let token = dormantSeizeToken()
+        let provisionalEpoch = epoch + 1
+        assembleGrant(epoch: provisionalEpoch, referenceDate: issuedAt, expiresAt: issuedAt,
+                      pumpRaw: pump.rawValue, loanSettingsRaw: loanSettings.rawValue,
+                      settings: settings) { [weak self] grant in
+            guard let self = self, let grant = grant else { return }
+            guard self.state == .owner else { return }   // ownership moved mid-assembly
+            self.lastDormantRefreshAt = self.deps.now()
+            self.lastDormantSettingsFingerprint = fingerprint
+            self.sendMessage(.dormantGrant(DormantGrant(grant: grant, issuedAt: issuedAt, seizeToken: token)))
+            PhoneLog.event("seize", "dormant grant refreshed — \(grant.doseHistory.count) dose record(s), token …\(String(token.uuidString.suffix(8))) [seize]")
         }
     }
 

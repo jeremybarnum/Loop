@@ -440,9 +440,47 @@ final class PodLoanWatchController {
             SportLog.event("loan", "DENIED by phone — \(denied.reason)")
         case .diag(let d):
             SportLog.event("phone", d.text)   // Phone hand-back breadcrumb → iCloud mirror
+        case .dormantGrant(let dormant):
+            handleDormantGrant(dormant)
         case .request, .takeoverComplete, .takeoverFailed, .doseRecordBatch, .handbackOffer, .statusReport:
             os_log("Ignoring phone-bound message kind on watch", log: log, type: .default)
         }
+    }
+
+    // MARK: - R40: the dormant grant (seize credential)
+
+    /// UserDefaults keys for the stored seize credential. The grant blob (~14 KB) rides
+    /// defaults deliberately: it must survive relaunches and be readable before any store
+    /// wiring, exactly like the loan journal's persisted state.
+    private enum DormantKeys {
+        static let envelope = "PodLoanWatchController.dormantGrant"
+        static let issuedAt = "PodLoanWatchController.dormantGrantIssuedAt"
+        static let token = "PodLoanWatchController.dormantGrantToken"
+    }
+
+    /// Every refresh replaces the stored credential wholesale — the newest snapshot is the
+    /// only one that matters (R40: full records, settings frozen at issue). Logged at each
+    /// arrival so the field cadence is auditable; the seize confirm's age line reads
+    /// issuedAt (R40(d): age SHOWN, never capped).
+    private func handleDormantGrant(_ dormant: DormantGrant) {
+        guard let data = try? LoanProtocol.encoder.encode(dormant) else {
+            SportLog.event("seize", "dormant grant arrived but failed to re-encode — NOT stored [seize]")
+            return
+        }
+        defaults.set(data, forKey: DormantKeys.envelope)
+        defaults.set(dormant.issuedAt, forKey: DormantKeys.issuedAt)
+        defaults.set(dormant.seizeToken.uuidString, forKey: DormantKeys.token)
+        SportLog.event("seize", String(format: "dormant grant refreshed — issued %@, %d dose record(s), token …%@ [seize]",
+                                       DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .none, timeStyle: .medium),
+                                       dormant.grant.doseHistory.count,
+                                       String(dormant.seizeToken.uuidString.suffix(8))))
+    }
+
+    /// The stored seize credential, decoded fresh from defaults — the entry flow (next
+    /// commit) reads this when the phone doesn't answer a normal request.
+    func storedDormantGrant() -> DormantGrant? {
+        guard let data = defaults.data(forKey: DormantKeys.envelope) else { return nil }
+        return try? LoanProtocol.decoder.decode(DormantGrant.self, from: data)
     }
 
     // MARK: - Request / Grant / Takeover (§2.1-2.3)
@@ -468,7 +506,7 @@ final class PodLoanWatchController {
             self.attemptStartedAt = self.now()
             self.lastIdleNote = nil
             SportLog.event("loan", "REQUEST sent (build \(watchBuild)) — awaiting grant")
-            self.sendMessage(.request(LoanRequest(watchBuild: watchBuild)))
+            self.sendMessage(.request(LoanRequest(watchBuild: watchBuild, supportsSeize: true)))
 
             // No grant in 25 s → the phone refused, is busy, or isn't reachable. Return
             // to idle with a visible reason instead of hanging on "requesting…".
