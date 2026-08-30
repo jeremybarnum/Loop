@@ -749,7 +749,13 @@ final class PodLoanPhoneController {
 
         if let latest = (deps.pumpManager() as? PumpConnectionLendable)?.lentDeviceInsulinDelivered {
             let delivered = latest - pending.deliveredAtStart
-            let residual = delivered - pending.expected
+            // Quantized to milli-units BEFORE the band comparisons (ported from next-dev,
+            // field bugs e223/e225, 2026-08-26): a residual of nominal ±0.200 tripped the
+            // strict compares on binary representation — 2.400−2.200 is 0.20000000000000018 —
+            // and the boundary must turn on the pulse grid, never on float dust. ±0.200 is the
+            // worst clean banked sample, so exactly on the band is INSIDE it. Feeds every
+            // reader below: both verdicts and the bank.
+            let residual = ((delivered - pending.expected) * 1000).rounded() / 1000
             // `drift` is the whole point of the change: how much delivery the watch's stale
             // endpoint was missing. If this is reliably ~0 the watch's reading was fine after all
             // and this machinery can go; if it is a temp's worth, every earlier residual we
