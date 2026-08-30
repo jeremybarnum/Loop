@@ -916,3 +916,54 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   Note the irony and its limit: this is a ruling saying not to cite rulings. RULINGS.md
   remains the register of DECISIONS — it is where a future session looks before
   re-litigating something settled. It simply stops being a dependency for reading the code.
+
+- **R40 — The seize family: phoneless loan start + watch wake-resume** (designed with
+  the port session 2026-08-30; three core rulings ratified there, two arms ruled here
+  the same day. Built CAITLIN-BRANCH-FIRST by Jeremy's explicit call — a deliberate,
+  feature-specific inversion of the next-dev-leads policy.)
+
+  FRAMING: a DORMANT GRANT, not a new protocol. The phone continuously re-issues the
+  grant to the watch (on pod change, settings change, and checkpoint) carrying FULL
+  RECORDS — Jeremy ruled the checkpoint-only distinction not meaningful; carbs/COB/
+  overrides are needed for dosing, not just IOB safety. Seize = the watch activating
+  the dormant grant offline. Wake-resume = the same ladder pointed at the watch's own
+  persisted active-loan state. Reunion = an ordinary hand-back offer for a loan the
+  phone never granted, retro-acknowledged (capability-gated). Crypto rides the static
+  DASH LTK + the AUTS/SQN resync path the contactless force-reclaim already exercises.
+
+  R40(a) — AUTHORITY: the pod belongs to whoever is with the body. On any detected
+  conflict during a seized loan, the phone yields. Always.
+
+  R40(b) — ENTRY GATE: seize is never a first-class button. The user asks for a loan;
+  the watch tries the normal grant request first with a short timeout; only on
+  no-answer does it offer the offline path behind a deliberate confirm. Reachability
+  warnings are ADVISORY, never blocking (signals lie both ways on the watch).
+
+  R40(c) — RESIDUAL RISK ACCEPTED: a false separation can have both sides dosing for
+  the blackout. Records merge correctly at reunion (distinct identities); the exposure
+  is mid-blackout IOB blindness bounded by the 6 h insulin horizon and caught by the
+  reunion audit. Accepted explicitly.
+
+  R40(d) — STALENESS: WARN TIER, no refusal (ruled 2026-08-30, against the no-cap
+  recommendation). The seize confirm always shows the grant's age ("Last synced with
+  phone N ago — settings and history from then"); beyond a threshold (initially 24 h,
+  tunable) an extra deliberate confirm step is required. Never a hard refusal — a
+  refused seize strands the person the feature exists for. Context: settings already
+  freeze mid-loan on this line (R22 note: changes apply at the next grant), so a stale
+  dormant grant is the same freeze with a longer tail, and settings-change is itself a
+  refresh trigger.
+
+  R40(e) — AUTO-RESUME CAP (ruled 2026-08-30, against the gates-suffice
+  recommendation): a CLEAN wake fingerprint (own SQN, odometer fully explained by the
+  watch's own program) auto-resumes with a notification only within a threshold
+  (initially 6 h — the insulin horizon — tunable); beyond it, even clean fingerprints
+  degrade to offer-to-resume behind a deliberate confirm. Ambiguous fingerprints
+  (SQN-jump-only, truncated journal tail, pod near expiry) always offer rather than
+  auto-resume; force-reclaim fingerprints stand down to viewer and alert.
+
+  PHONE MIRROR: after any pod blackout beyond M minutes with a dormant grant
+  outstanding, the phone's first pod contact is a STATUS READ ONLY, and ownership must
+  resolve via WCSession before it enacts. Blackout posture: pod and watch both dark
+  with a dormant grant outstanding → quiet hold (no aggressive pod retries, no
+  loop-failure alarm cascade). Tripwires: unexplained odometer delta, a running temp
+  the phone never enacted, SQN jump on reconnect.
