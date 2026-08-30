@@ -269,6 +269,14 @@ final class WatchDataManager: NSObject {
             noteWatchClosedLoop: { closed in
                 UserDefaults.standard.set(closed, forKey: dosingKey)
             },
+            lastLoopCompleted: { [weak self] in
+                // Locked-backed on this line, so the off-queue read is a plain snapshot: the
+                // grant path wants "roughly when did this phone last loop", not a sync point.
+                self?.deviceManager.loopManager.lastLoopCompleted
+            },
+            noteWatchLoopCompleted: { [weak self] date in
+                self?.deviceManager.loopManager.seedLastLoopCompleted(fromWatch: date)
+            },
             doseHistory: { [weak self] start, completion in
                 guard let self = self else { completion([]); return }
                 self.deviceManager.doseStore.getNormalizedDoseEntries(start: start) { result in

@@ -74,8 +74,11 @@ final class GlanceController: WKHostingController<GlanceView> {
 struct GlanceUIState {
     enum Phase { case idle, starting, active, handingBack, draining }
     enum BGColor { case inRange, high, low, dim }
-    /// Loop-ring freshness = BG recency (Jeremy 2026-07-24): meaningful OPEN or CLOSED,
-    /// and stale G7 is the likely failure. Drives the stock ring color; open is NOT gray.
+    /// Loop-ring freshness = loop-completion age ONLY (R21(b), 2026-08-30; supersedes the
+    /// 2026-07-24 BG-recency rule): phone parity, the phone's exact LoopCompletionFreshness
+    /// model. Drives the stock ring color; open is NOT gray. BG staleness keeps its own
+    /// voice on the same screen (dimmed number + age line) — the ring stops moonlighting
+    /// as a CGM indicator.
     enum LoopFreshness { case fresh, aging, stale, unknown }
 
     var phase: Phase = .idle
@@ -653,11 +656,15 @@ final class GlanceViewModel: ObservableObject {
         // Number + honesty.
         let age = data.glucoseDate.map { now.timeIntervalSince($0) }
         let isStale = age.map { $0 > displayStaleAge } ?? true
-        // Ring freshness = BG recency (Jeremy 2026-07-24). One G7 grid (~5m) + grace is
-        // fresh, a missed window is aging, well past is stale; nil = no reading yet
-        // (unknown/gray). Meaningful whether the loop is open or closed.
-        if let age = age {
-            s.loopFreshness = age < .minutes(7) ? .fresh : (age < .minutes(15) ? .aging : .stale)
+        // Ring freshness = loop-completion age ONLY (R21(b), 2026-08-30; supersedes the
+        // 2026-07-24 BG-recency rule): fresh ≤6 min, aging ≤16, else stale — the phone's
+        // exact LoopCompletionFreshness thresholds, so both devices grade the same system
+        // the same way. nil = no cycle yet this session (unknown/gray, until the grant's
+        // recency seed or the first cycle lands). Nine quiet minutes goes amber on both
+        // devices by loop age alone; a stale READING still dims the number and prints its
+        // age line on this same screen — glucose keeps its own voice.
+        if let loopAge = data.lastLoopCompleted.map({ now.timeIntervalSince($0) }) {
+            s.loopFreshness = loopAge < .minutes(6) ? .fresh : (loopAge < .minutes(16) ? .aging : .stale)
         } else {
             s.loopFreshness = .unknown
         }

@@ -198,10 +198,9 @@ final class StockLoopSession {
                 // Deliberately NOT re-asserted here: this also fires on the
                 // hand-back-timeout resume path, where the user's own choice must survive.
                 self.setKeepalive(true, reason: "soak")
-                // Loop-stall dead-man: every live cycle re-defers it, so it fires only on a stall.
+                // Loop-Failure ladder (stock parity): every live cycle re-defers all four rungs.
                 LoopStallWatchdog.refresh()
-                // Sensor-blackout dead-man: every direct reading re-defers it.
-                SensorBlackoutAlert.refresh()
+                SportLog.event("deadman", "ladder ARMED — 20/40m timeSensitive + 1/2h critical rungs [deadman]")
                 // The glance page is the landing surface during a loan.
                 DispatchQueue.main.async { GlanceController.current?.becomeCurrentPage() }
                 // 5-min pulse independent of readings: the per-reading transfer goes silent
@@ -213,8 +212,8 @@ final class StockLoopSession {
             } else {
                 os_log("Loan ended: stopping G7 transport", log: self.log, type: .default)
                 self.setKeepalive(false, reason: "soak")
-                LoopStallWatchdog.disarm()   // clean end — the loop stops on purpose
-                SensorBlackoutAlert.disarm()
+                LoopStallWatchdog.disarm()   // clean end — the phone's ladder re-arms at reclaim
+                SportLog.event("deadman", "ladder CLEARED — loan ended, coverage transfers to the phone [deadman]")
                 self.stopLogPulse()
                 RuntimeStateLog.stopHeartbeat()
                 // Queue the session log at every loan end, so a deleted or reinstalled app

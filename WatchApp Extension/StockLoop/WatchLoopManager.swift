@@ -1268,6 +1268,17 @@ final class WatchLoopManager {
     private(set) var lastLoopCompleted: Date?
     private(set) var lastLoopError: Error?
 
+    /// Forward-only seed of the loop-recency clock from the OTHER device (ring ruling
+    /// 2026-08-23: recency is a property of the system; the boundary inherits). Display only —
+    /// nothing in dosing reads lastLoopCompleted — so the cross-queue write is a benign
+    /// last-writer-wins against a cycle completing at the same instant, and both writers agree
+    /// the loop is fresh in that case anyway.
+    func seedLastLoopCompleted(_ date: Date, source: String) {
+        guard (lastLoopCompleted ?? .distantPast) < date else { return }
+        lastLoopCompleted = date
+        SportLog.event("loop", String(format: "loop recency SEEDED from %@ — last cycle %.0fs ago", source, self.now().timeIntervalSince(date)))
+    }
+
     /// Mirrors DeviceDataManager.lastCGMLoopTrigger (deviceQueue only).
     private var lastCGMLoopTrigger: Date = .distantPast
     /// Storm latch: last phone-fallback syncId attempted (serial deviceQueue only).
@@ -3100,12 +3111,6 @@ extension WatchLoopManager: CGMManagerDelegate {
                 // the NEXT window, exactly like production timing. No-op unless the
                 // bench flag is on.
                 self.e5FireRandomTempIfEnabled()
-            }
-            // Every direct reading re-defers the sensor-blackout dead-man —
-            // but only DURING a loan (pumpManager is loan-scoped): a reading that
-            // lands after loan-end must not resurrect a disarmed repeating alert.
-            if case .newData = readingResult, self.pumpManager != nil {
-                SensorBlackoutAlert.refresh()
             }
             // Autonomous-iteration pipeline (Jeremy 2026-07-20): every reading
             // queues the log to the phone (throttled; queued transfers survive
