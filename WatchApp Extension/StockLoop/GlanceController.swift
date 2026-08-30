@@ -94,6 +94,9 @@ struct GlanceUIState {
     var loopStatusText: String = ""
     var loopDotColor: Color = .clear
     var loopFreshness: LoopFreshness = .unknown
+    /// R40(b): non-nil = a seize offer is pending; the idle body renders the deliberate
+    /// confirm with this age line instead of the Start button.
+    var seizeOfferAgeText: String? = nil
     var viaPhone: Bool = false
     /// OPTION C: which source the direct-G7 LINK is currently proving, independent of which
     /// copy won the store's first-writer-wins dedup. "G7" = a direct read landed inside the
@@ -347,6 +350,20 @@ final class GlanceViewModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
     }
 
+    /// R40(b): the deliberate confirm / dismissal for a pending offline start.
+    func confirmSeize() {
+        guard !isPreview else { return }
+        RuntimeStateLog.mark("glance.confirmSeize")
+        ExtensionDelegate.shared().stockLoopSession.loanController.confirmSeize()
+        refreshNow()
+    }
+
+    func dismissSeize() {
+        guard !isPreview else { return }
+        ExtensionDelegate.shared().stockLoopSession.loanController.dismissSeize()
+        refreshNow()
+    }
+
     func startSportMode() {
         RuntimeStateLog.mark("glance.startSportMode")
         guard !isPreview else { return }
@@ -424,8 +441,18 @@ final class GlanceViewModel: ObservableObject {
 
         switch snap.phase {
         case .idle:
-            state = Self.idleState(context: ExtensionDelegate.shared().loopManager.activeContext,
-                                   note: snap.lastIdleNote)
+            var idle = Self.idleState(context: ExtensionDelegate.shared().loopManager.activeContext,
+                                      note: snap.lastIdleNote)
+            // R40(b)/(d): the offer's age is the WHOLE staleness contract — shown, never
+            // enforced. Formatted coarsely on purpose; "3d" reads, "76:12:04" does not.
+            if let issued = snap.seizeOfferIssuedAt {
+                let f = DateComponentsFormatter()
+                f.maximumUnitCount = 1
+                f.allowedUnits = [.day, .hour, .minute]
+                f.unitsStyle = .abbreviated
+                idle.seizeOfferAgeText = f.string(from: Date().timeIntervalSince(issued)) ?? "?"
+            }
+            state = idle
         case .requested, .takingOver:
             state = Self.startingState(context: ExtensionDelegate.shared().loopManager.activeContext,
                                        takingOver: snap.phase == .takingOver,
@@ -921,6 +948,33 @@ struct GlanceView: View {
                     }
                 }
             }
+            if let age = model.state.seizeOfferAgeText {
+                // R40(b): the deliberate confirm. One labeled decision after one honest
+                // explanation IS the deliberateness — the phone did not answer, and the
+                // age line is the R40(d) consent.
+                VStack(spacing: 6) {
+                    Text("iPhone didn't answer")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.glanceInk)
+                    Text("Start without it?\nLast synced \(age) ago — settings and history from then.")
+                        .font(.system(size: 12))
+                        .foregroundColor(.glanceDim)
+                        .multilineTextAlignment(.center)
+                    Button { model.confirmSeize() } label: {
+                        Text("Start Anyway")
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 7)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.glanceAccent)
+                    Button { model.dismissSeize() } label: {
+                        Text("Cancel").font(.system(size: 13))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.glanceDim)
+                }
+            } else {
             switch model.sensorReadiness {
             case .ready:
                 Button { model.startSportMode() } label: {
@@ -943,6 +997,7 @@ struct GlanceView: View {
                 // launch by minutes (2026-08-22). The live counter is the anti-force-quit device;
                 // a static "waiting" screen was read as stale state and killed.
                 ListeningForSensor()
+            }
             }
             if let note = model.state.idleNote {
                 Text(note)

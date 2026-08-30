@@ -449,6 +449,7 @@ final class PodLoanWatchController {
 
     // MARK: - R40: the dormant grant (seize credential)
 
+
     /// UserDefaults keys for the stored seize credential. The grant blob (~14 KB) rides
     /// defaults deliberately: it must survive relaunches and be readable before any store
     /// wiring, exactly like the loan journal's persisted state.
@@ -456,6 +457,57 @@ final class PodLoanWatchController {
         static let envelope = "PodLoanWatchController.dormantGrant"
         static let issuedAt = "PodLoanWatchController.dormantGrantIssuedAt"
         static let token = "PodLoanWatchController.dormantGrantToken"
+        /// R40: set the moment a seize activates; rides every hand-back offer of the seized
+        /// loan so the phone can retro-acknowledge; cleared when the loan CLOSES. Persisted —
+        /// a relaunch mid-seized-loan must keep sending it.
+        static let activeToken = "PodLoanWatchController.activeSeizeToken"
+    }
+
+    /// R40(b) entry gate: the pending offline-start offer, set when a normal request times
+    /// out and a dormant grant is stored. The glance renders the deliberate confirm off the
+    /// snapshot; confirmSeize()/dismissSeize() consume it. Queue-confined.
+    private var seizeOffer: (issuedAt: Date, token: UUID)?
+    /// True only inside a confirmed seize's activation, to let handleGrant's lease and
+    /// staleness guards stand aside for a credential that has neither (a dormant grant has
+    /// no 5-minute lease, and its epoch is provisional and forced fresh at activation).
+    private var seizeActivationInFlight = false
+
+    /// R40(b): the user asked, the phone did not answer, a credential exists — OFFER the
+    /// offline path (never auto-take it). Shows the age per R40(d); a deliberate confirm
+    /// activates, anything else stays idle.
+    func confirmSeize() {
+        queue.async {
+            guard self.phase == .idle, let offer = self.seizeOffer,
+                  let dormant = self.storedDormantGrant(), dormant.seizeToken == offer.token else {
+                SportLog.event("seize", "confirm arrived with no live offer — ignored [seize]")
+                return
+            }
+            self.seizeOffer = nil
+            // Force the local epoch FRESH: the credential's epoch is provisional (the
+            // phone's counter at issue) and may be stale against loans granted since. The
+            // phone's retro-ack matches on the token, not the epoch, so freshness here only
+            // has to satisfy the watch's own monotonicity guards.
+            let newEpoch = max(dormant.grant.epoch, (self.epoch ?? 0) + 1)
+            self.defaults.set(dormant.seizeToken.uuidString, forKey: DormantKeys.activeToken)
+            SportLog.event("seize", String(format: "SEIZE confirmed — activating dormant grant (issued %@, epoch %d→%d, token …%@) [seize]",
+                                           DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .short, timeStyle: .short),
+                                           dormant.grant.epoch, newEpoch,
+                                           String(dormant.seizeToken.uuidString.suffix(8))))
+            self.phase = .requested
+            self.attemptStartedAt = self.now()
+            self.seizeActivationInFlight = true
+            self.handleGrant(dormant.grant.withEpoch(newEpoch))
+            self.seizeActivationInFlight = false
+        }
+    }
+
+    func dismissSeize() {
+        queue.async {
+            guard self.seizeOffer != nil else { return }
+            self.seizeOffer = nil
+            self.lastIdleNote = NSLocalizedString("Offline start cancelled.", comment: "Glance note after dismissing a seize offer")
+            SportLog.event("seize", "seize offer DISMISSED [seize]")
+        }
     }
 
     /// Every refresh replaces the stored credential wholesale — the newest snapshot is the
@@ -514,8 +566,18 @@ final class PodLoanWatchController {
             let work = DispatchWorkItem { [weak self] in
                 guard let self = self, self.phase == .requested else { return }
                 self.phase = .idle
-                self.lastIdleNote = NSLocalizedString("No response from iPhone — check the phone (loan refused, or busy) and try again.", comment: "Glance: loan request timed out")
-                SportLog.event("loan", "REQUEST TIMED OUT — no grant in 25s (phone refused / busy / unreachable)")
+                // R40(b): no answer + a stored credential = offer the offline path (never
+                // auto-take it; the confirm is the user's deliberate act). No credential =
+                // the pre-seize message stands.
+                if let dormant = self.storedDormantGrant() {
+                    self.seizeOffer = (issuedAt: dormant.issuedAt, token: dormant.seizeToken)
+                    self.lastIdleNote = nil
+                    SportLog.event("seize", String(format: "REQUEST TIMED OUT — offering offline start (credential issued %@) [seize]",
+                                                   DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .short, timeStyle: .short)))
+                } else {
+                    self.lastIdleNote = NSLocalizedString("No response from iPhone — check the phone (loan refused, or busy) and try again.", comment: "Glance: loan request timed out")
+                    SportLog.event("loan", "REQUEST TIMED OUT — no grant in 25s (phone refused / busy / unreachable)")
+                }
             }
             self.requestTimeoutWork = work
             self.schedule(after: 25, label: "request-timeout", execute: work)
@@ -613,12 +675,14 @@ final class PodLoanWatchController {
             }
             phase = .idle
         }
-        guard self.now() < grant.expiresAt else {
+        guard self.now() < grant.expiresAt || seizeActivationInFlight else {
             // Row 2: a late grant self-rejects; the phone's T1 already reclaimed.
+            // (A confirmed seize stands aside: a dormant credential has no lease — R40(d)
+            // staleness was shown and consented to in the confirm.)
             rejectGrant("grant expired", notifyPhone: true)
             return
         }
-        if let known = epoch, grant.epoch <= known {
+        if let known = epoch, grant.epoch <= known, !seizeActivationInFlight {
             rejectGrant("stale epoch \(grant.epoch) (known \(known))", notifyPhone: false)
             return
         }
@@ -1847,6 +1911,9 @@ final class PodLoanWatchController {
             // died. nil already means exactly the right thing at the phone: keep the captured
             // pre-loan value.
             watchClosedLoopEnabled: recovered ? nil : loopManager.closedLoopEnabledNonBlocking,
+            // R40 reunion identity: present only while a SEIZED loan is live — the phone
+            // retro-acknowledges on match; an old phone ignores it (stale-drain, safe).
+            seizeToken: defaults.string(forKey: DormantKeys.activeToken).flatMap(UUID.init(uuidString:)),
             // Same benign-snapshot read as the mode above: "roughly when did the wrist last
             // loop" for the phone's recency seed, not a sync point. (Safe on recovered drains
             // without gating: a freshly-booted manager's clock is nil, and the phone's seed is
@@ -1967,6 +2034,7 @@ final class PodLoanWatchController {
         handbackStartedAt = nil
         HandbackStuckAlert.disarm()   // Hand-back completed cleanly
         onLoanActiveChanged?(false)
+        defaults.removeObject(forKey: DormantKeys.activeToken)   // R40: seized loan (if any) is over
         SportLog.event("loan", "CLOSED — records drained, pod released, cursor \(ack.committedCursor)")
     }
 
@@ -2118,6 +2186,9 @@ final class PodLoanWatchController {
         /// Bluetooth off, or is powered down; all three are "can't reach it" and all three
         /// have the same remedy. Drives the hand-back wrist note.
         let phoneReachable: Bool
+        /// R40(b): a seize offer is pending (normal request timed out with a stored
+        /// credential); the glance renders the deliberate confirm with this age.
+        let seizeOfferIssuedAt: Date?
     }
 
     /// True while this watch owns the pod (phase .active) — the carb/bolus flow
@@ -2197,7 +2268,8 @@ final class PodLoanWatchController {
                 startedAt: attemptStartedAt,
                 handbackPending: handbackRequested,
                 handbackStartedAt: handbackStartedAt,
-                phoneReachable: isPhoneReachable())
+                phoneReachable: isPhoneReachable(),
+                seizeOfferIssuedAt: seizeOffer?.issuedAt)
     }
 
     /// Bench helper: force a real pod status round-trip and report reachability.
@@ -2855,5 +2927,22 @@ extension PodLoanWatchController: DeviceManagerDelegate {
 
     func recordRetractedAlert(_ alert: LoopKit.Alert, at date: Date) {
         loopManager.recordRetractedAlert(alert, at: date)
+    }
+}
+
+
+// R40: a seize activation forces the credential's provisional epoch fresh; LoanGrant is
+// all-let by design, so the rewrite is an explicit re-init — every field carried verbatim.
+fileprivate extension LoanGrant {
+    func withEpoch(_ newEpoch: Int) -> LoanGrant {
+        LoanGrant(epoch: newEpoch, expiresAt: expiresAt, pumpManagerRawState: pumpManagerRawState,
+                  podAddress: podAddress, therapySettingsRaw: therapySettingsRaw,
+                  settingsTimeZoneID: settingsTimeZoneID, doseHistory: doseHistory,
+                  boundaryRecord: boundaryRecord, supportsInterimHandback: supportsInterimHandback,
+                  supportsOverrideRecords: supportsOverrideRecords,
+                  integralRetrospectiveCorrectionEnabled: integralRetrospectiveCorrectionEnabled,
+                  phoneClosedLoopEnabled: phoneClosedLoopEnabled, carbHistory: carbHistory,
+                  glucoseHistory: glucoseHistory, predictionSnapshot: predictionSnapshot,
+                  lastLoopCompleted: lastLoopCompleted, lowBGWarningSettings: lowBGWarningSettings)
     }
 }
