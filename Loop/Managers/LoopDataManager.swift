@@ -313,8 +313,22 @@ final class LoopDataManager: ObservableObject {
 
             if !enabled {
                 temporaryPresetsManager.endPreMealOverride()
-                Task {
-                    try? await self?.cancelActiveTempBasal(for: .automaticDosingDisabled)
+                // PODLOAN (ruled 2026-08-29): a LOAN-driven pause must NOT cancel the temp.
+                // R33/R2: no automatic program crosses the loan boundary — the WATCH asserts
+                // its own program at takeover, and the PHONE enforces the boundary at reclaim
+                // (the R33 cancel). This stock cancel raced the pod-BLE release at every
+                // grant, usually failed against the just-released pod, and — because stock's
+                // cancelActiveTempBasal never disarms the crash marker on a thrown enact —
+                // stranded CrashRecoveryManager's in-flight marker for the whole loan: any
+                // relaunch mid-loan (power-off, TestFlight update) then showed a false
+                // "Loop Crashed" dialog. The capture key is written by the pause wiring
+                // BEFORE dosingEnabled mutates, so it is visible when this sink fires.
+                if UserDefaults.standard.object(forKey: WatchDataManager.dosingCaptureKey) != nil {
+                    self?.logger.default("Automation-off temp cancel SKIPPED — pod-loan pause; the temp is the watch's to manage (R33)")
+                } else {
+                    Task {
+                        try? await self?.cancelActiveTempBasal(for: .automaticDosingDisabled)
+                    }
                 }
             }
         }
@@ -675,8 +689,22 @@ final class LoopDataManager: ObservableObject {
     }
 
     /// Cancel the active temp basal if it was automatically issued
+    /// True while the pod's BLE connection is loaned out (or being released) — no pod
+    /// command can succeed then, and a doomed cancel strands CrashRecoveryManager's
+    /// in-flight marker (stock never disarms it on a thrown enact). Injected at wiring;
+    /// defaults false so tests and non-loan configurations are unaffected.
+    var isPumpConnectionReleased: () -> Bool = { false }
+
     func cancelActiveTempBasal(for reason: CancelActiveTempBasalReason) async throws {
         guard case .tempBasal(let dose) = deliveryDelegate?.basalDeliveryState, (dose.automatic ?? true) else { return }
+
+        // PODLOAN (ruled 2026-08-29): never issue a pod command while we do not hold the
+        // pod. Covers every cancel trigger firing mid-loan (unreliable CGM, max-basal
+        // change) — the R33 boundary cancel runs AFTER reclaim, when the pod is ours again.
+        guard !isPumpConnectionReleased() else {
+            logger.default("Temp-basal cancel SKIPPED (%{public}@) — pod connection is released (loaned out); the watch owns the program until reclaim", String(describing: reason))
+            return
+        }
 
         logger.default("Cancelling active temp basal for reason: %{public}@", String(describing: reason))
 
