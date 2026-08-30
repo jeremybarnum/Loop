@@ -944,17 +944,19 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   is mid-blackout IOB blindness bounded by the 6 h insulin horizon and caught by the
   reunion audit. Accepted explicitly.
 
-  R40(d) — STALENESS: WARN TIER, no refusal (ruled 2026-08-30, against the no-cap
-  recommendation). The seize confirm always shows the grant's age ("Last synced with
-  phone N ago — settings and history from then"); beyond a threshold (initially 24 h,
-  tunable) an extra deliberate confirm step is required. Never a hard refusal — a
-  refused seize strands the person the feature exists for. Context: settings already
-  freeze mid-loan on this line (R22 note: changes apply at the next grant), so a stale
-  dormant grant is the same freeze with a longer tail, and settings-change is itself a
-  refresh trigger.
+  R40(d) — STALENESS: NO CAP, NO TIER (ruled 2026-08-30; a warn tier was ruled first
+  and REVERSED by Jeremy the same hour: "I don't think we should cap stale
+  credentials"). The seize confirm always shows the grant's age ("Last synced with
+  phone N ago — settings and history from then") and that informed consent is the
+  entire contract — no thresholds, never a refusal. Context: settings already freeze
+  mid-loan on this line (R22 note: changes apply at the next grant), so a stale
+  dormant grant is the same freeze with a longer tail, and settings-change is itself
+  a refresh trigger.
 
   R40(e) — AUTO-RESUME CAP (ruled 2026-08-30, against the gates-suffice
-  recommendation): a CLEAN wake fingerprint (own SQN, odometer fully explained by the
+  recommendation — Jeremy's rationale, recorded verbatim in intent: wake-resume is
+  EXCEPTIONAL functionality and must not become the routine mechanism for super-long
+  phoneless loans; the cap enforces that posture): a CLEAN wake fingerprint (own SQN, odometer fully explained by the
   watch's own program) auto-resumes with a notification only within a threshold
   (initially 6 h — the insulin horizon — tunable); beyond it, even clean fingerprints
   degrade to offer-to-resume behind a deliberate confirm. Ambiguous fingerprints
