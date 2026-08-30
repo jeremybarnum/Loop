@@ -274,6 +274,13 @@ final class PodLoanWatchController {
     /// it to the phone, whose interim commit has no unwind for a later annul.
     /// Events in this set are withheld from streams and interim offers until their
     /// loanDidEnact classifies them. (Carb records mint CONFIRMED — never in-flight.)
+    /// The odometer captured at revoke, before teardown nils the pump — consumed by the
+    /// offer builder as a fallback so revoke hand-backs still carry a reconcile baseline.
+    private var revokeCapturedDelivered: Double?
+    /// The reading-time twin of `revokeCapturedDelivered` — captured together so a revoke
+    /// hand-back's snapshot still carries the `asOf` the phone's checkpoint audit anchors on.
+    private var revokeCapturedDeliveredAt: Date?
+
     private var inFlightEventIDs: Set<UUID> = []
     /// The single in-flight uncertainty being chased (mirrors the crude
     /// UncertainCommandRecord — one at a time; a NEW programming command destroys the
@@ -840,6 +847,8 @@ final class PodLoanWatchController {
                     return
                 }
                 if success, let delivered = manager.podLoanInsulinDelivered {
+                    self.revokeCapturedDelivered = nil   // new loan, new baseline — never a stale capture
+                    self.revokeCapturedDeliveredAt = nil
                     self.deliveredAtTakeover = delivered
                     self.phase = .active
                     self.loopManager.pumpManager = manager
@@ -1739,11 +1748,13 @@ final class PodLoanWatchController {
     private func sendHandbackOffer(freshened: Bool, recovered: Bool) {
         guard let epoch = epoch ?? journal.activeEpoch else { return }
         var odometer: LoanOdometerSnapshot?
-        if let start = deliveredAtTakeover, let latest = pumpManager?.podLoanInsulinDelivered {
+        if let start = deliveredAtTakeover,
+           let latest = pumpManager?.podLoanInsulinDelivered ?? revokeCapturedDelivered {
             // asOf makes the snapshot a checkpoint candidate for an INTERIM drain; the phone
             // never checkpoints a FINAL offer's snapshot (it is the endpoint under audit).
+            // The revoke captures are the fallback for the torn-down-pump path (e181).
             odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest, freshenSucceeded: freshened,
-                                            asOf: pumpManager?.podLoanInsulinDeliveredAt)
+                                            asOf: pumpManager?.podLoanInsulinDeliveredAt ?? revokeCapturedDeliveredAt)
         }
         // Verify rounds 1-3: IN-FLIGHT (mint→classification) and chase-pending events
         // stay OUT of interim offers — once the phone commits one, a later annul or
@@ -1923,6 +1934,16 @@ final class PodLoanWatchController {
         handbackDeadline = nil
         handbackStartedAt = nil
         HandbackStuckAlert.disarm()   // The phone took over — no stuck alert
+        // Capture the odometer BEFORE the teardown nils the pump. The revoke path tears down
+        // first ON PURPOSE (it frees the pod's BLE immediately for the phone that is actively
+        // reclaiming), but the offer built below used to ask the now-nil pumpManager for
+        // podLoanInsulinDelivered and shipped odometer: nil — so revoke hand-backs skipped the
+        // AUTHORITATIVE reconcile entirely (port-line e181, 2026-08-23: the one loan that day
+        // with no reconcile line). The records still ride the drain; this restores the
+        // CROSS-CHECK — and, since the checkpoint port, the asOf twin keeps revoke offers
+        // checkpoint-capable too.
+        revokeCapturedDelivered = pumpManager?.podLoanInsulinDelivered
+        revokeCapturedDeliveredAt = pumpManager?.podLoanInsulinDeliveredAt
         loopManager.pumpManager = nil
         chaseWorkItem?.cancel()
         pendingUncertainEventID = nil   // liveness: no cross-loan chase residue
