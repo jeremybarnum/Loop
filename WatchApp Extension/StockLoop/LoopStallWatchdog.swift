@@ -110,3 +110,63 @@ enum HandbackStuckAlert {
         center.removeDeliveredRequests(withIdentifiers: [identifier])
     }
 }
+
+// MARK: - DeathBlackBox (ported from next-dev, 2026-08-25)
+// The silent-death investigation's system-side witness. The watch app dies without a crash
+// report — our own instrumentation brackets WHEN to the second and rules out
+// memory-at-launch; what it cannot see is WHY, because the killer is the OS and the OS
+// writes its account elsewhere. MetricKit is that account: crash/hang/CPU diagnostics
+// delivered on a LATER launch. Summaries go to SportLog ([blackbox]); full JSON lands in
+// Documents/blackbox-<stamp>.json and rides the log pull.
+// (Homed here rather than its own file to stay inside the existing target membership.)
+
+#if canImport(MetricKit)
+import MetricKit
+
+final class DeathBlackBox: NSObject, MXMetricManagerSubscriber {
+    static let shared = DeathBlackBox()
+
+    /// Idempotent. Called once at session assembly — early, so a payload delivered at launch
+    /// (the usual delivery moment) is not missed while the stack is still wiring.
+    func arm() {
+        MXMetricManager.shared.add(self)
+        SportLog.event("blackbox", "MetricKit subscriber armed — system diagnostics will be captured on delivery [blackbox]")
+    }
+
+    func didReceive(_ payloads: [MXDiagnosticPayload]) {
+        for payload in payloads {
+            summarize(payload)
+            persist(payload)
+        }
+    }
+
+    private func summarize(_ payload: MXDiagnosticPayload) {
+        for crash in payload.crashDiagnostics ?? [] {
+            SportLog.event("blackbox", "CRASH diagnostic: type=\(crash.exceptionType?.stringValue ?? "-") code=\(crash.exceptionCode?.stringValue ?? "-") signal=\(crash.signal?.stringValue ?? "-") reason=\(crash.terminationReason ?? "-") build=\(crash.applicationVersion) [blackbox]")
+        }
+        for hang in payload.hangDiagnostics ?? [] {
+            SportLog.event("blackbox", "HANG diagnostic: duration=\(hang.hangDuration) [blackbox]")
+        }
+        for cpu in payload.cpuExceptionDiagnostics ?? [] {
+            SportLog.event("blackbox", "CPU-EXCEPTION diagnostic: totalCPU=\(cpu.totalCPUTime) sampled=\(cpu.totalSampledTime) [blackbox]")
+        }
+    }
+
+    private func persist(_ payload: MXDiagnosticPayload) {
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let url = docs.appendingPathComponent("blackbox-\(stamp).json")
+        do {
+            try payload.jsonRepresentation().write(to: url)
+            SportLog.event("blackbox", "full diagnostic payload written: \(url.lastPathComponent) [blackbox]")
+        } catch {
+            SportLog.event("blackbox", "payload persist FAILED: \(error) [blackbox]")
+        }
+    }
+}
+#else
+final class DeathBlackBox {
+    static let shared = DeathBlackBox()
+    func arm() {}
+}
+#endif
