@@ -446,6 +446,9 @@ class LoopAppManager: NSObject {
         )
 
         loopDataManager.deliveryDelegate = deviceDataManager
+        loopDataManager.isPumpConnectionReleased = { [weak deviceDataManager] in
+            (deviceDataManager?.pumpManager as? PumpConnectionLendable)?.isConnectionReleased ?? false
+        }
 
         deviceDataManager.instantiateDeviceManagers()
 
