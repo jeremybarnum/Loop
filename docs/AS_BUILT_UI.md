@@ -55,7 +55,7 @@ symbol names, not line numbers (the rework shifted them).
 
 | Control | Where | Action |
 |---|---|---|
-| Loop **ring** (stock `loop_<fresh\|aging\|stale\|unknown>_<closed\|open>`, `loopAssetName`) | top-left, active | **Tap toggles the loop** — open immediate (fail-safe); close → `confirmingClose` alert (**interim**; the crown ceremony is the pending #22 polish). Solid=closed, gapped=open; color = **BG recency** (`loopFreshness`, fresh<7m / aging<15m / stale), honest open OR closed. |
+| Loop **ring** (stock `loop_<fresh\|aging\|stale\|unknown>_<closed\|open>`, `loopAssetName`) | top-left, active | **Tap toggles the loop** — open immediate (fail-safe); close → `confirmingClose` alert (**interim**; the crown ceremony is the pending #22 polish). Solid=closed, gapped=open; color = **loop-completion age** (R21(b), 2026-08-30: `loopFreshness`, fresh≤6m / aging≤16m / stale — phone parity, recency inherited across loan boundaries; supersedes BG-recency), honest open OR closed. BG staleness keeps its own voice (dimmed number + age line). |
 | **Start Sport Mode** | idle body (centered) | `startSportMode` → `requestLoan`. **One tap, unconfirmed** (#22). |
 | **End Sport Mode** chip | top-right, active | `endSportMode` → `beginHandback` — R25 two-phase stay-active hand-back (dosing continues while records drain). |
 | **Cancel Ending** chip | top-right, active if `handbackPending` | `cancelHandback`. |
@@ -120,5 +120,6 @@ and the Request Loan / Hand Back buttons.
    `glanceWarn` (number-high / stale-age text) are different ambers; align `glanceWarn`
    to the ring for consistency.
 3. **`DESIGN_SPORT_UI.md` / `RULINGS.md` not yet updated** for the 2026-07-24 rework
-   (ring-as-control, BG-recency freshness, top-right End chip, calm-blue identity, suspend
-   removal). Fold into RULINGS as a new/amended entry so intent tracks the as-built.
+   (ring-as-control, top-right End chip, calm-blue identity, suspend removal). Fold into
+   RULINGS as a new/amended entry so intent tracks the as-built. (The freshness half is now
+   settled the other way: R21(b), 2026-08-30, ring = loop-completion age.)

@@ -681,6 +681,13 @@ final class PodLoanWatchController {
                                          reason: grant.phoneClosedLoopEnabled == nil
                                             ? "(older phone sent no loop mode — defaulting open)"
                                             : "inherited from the phone at grant")
+        // Ring ruling 2026-08-23: the loop dot starts from the SYSTEM's recency — the phone
+        // looped minutes ago at most, so the wrist should not open on grey/red for the seconds
+        // until its own first cycle. Forward-only seed; the watch's first cycle (~10 s away)
+        // takes over the clock immediately.
+        if let phoneLoop = grant.lastLoopCompleted {
+            loopManager.seedLastLoopCompleted(phoneLoop, source: "phone at grant")
+        }
         // INSTRUMENTATION ONLY: stash the phone's prediction decomposition + echo it into the
         // log, BEFORE the takeover read / first prediction refresh, so [predict-diff] and [iob-diff]
         // Leg 1 have the phone baseline in hand. The serial dataAccessQueue guarantees the stash
@@ -1623,7 +1630,6 @@ final class PodLoanWatchController {
             phase = .active
             loopManager.pumpManager = manager
             loopManager.loanDoseRecorder = self
-            SensorBlackoutAlert.refresh()   // dosing resumes → re-arm the blackout dead-man
             onLoanActiveChanged?(true)
             SportLog.event("loan", "HAND-BACK timed out (final, \(Int(HandbackStuckAlert.interval))s) — iPhone never acked; resumed Sport Mode on the watch (still holding the pod)\(wedgeSuffix)")
             loopManager.checkPumpDataAndLoop()   // re-establish a temp this cycle
@@ -1675,7 +1681,6 @@ final class PodLoanWatchController {
         phase = .handingBack
         SportLog.event("loan", "drain complete — finalizing hand-back (loop dosing stops now)")
         loopManager.pumpManager = nil  // no dosing from here
-        SensorBlackoutAlert.disarm()   // dosing stopped — a blackout alert would mislead
 
         // Cancel the leftover LOOP temp — but a running bounded manual
         // suspend is preserved; the pod auto-resumes at its expiry.
@@ -1782,6 +1787,9 @@ final class PodLoanWatchController {
             // NON-BLOCKING mirror: this runs on `queue`, and `closedLoopEnabled` would sync
             // onto dataAccessQueue — the deadlock direction.
             watchClosedLoopEnabled: loopManager.closedLoopEnabledNonBlocking,
+            // Same benign-snapshot read as the mode above: "roughly when did the wrist last
+            // loop" for the phone's recency seed, not a sync point.
+            lastLoopCompleted: loopManager.lastLoopCompleted,
             // Hands the snooze anchor back, so the phone resuming its own warnings does not
             // repeat within minutes what the user just read on their wrist. Same non-blocking
             // mirror discipline as the loop mode above — this is built on `queue`.

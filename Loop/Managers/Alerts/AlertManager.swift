@@ -59,10 +59,13 @@ public final class AlertManager {
 
     /// True while the phone has LOANED its pod to the watch (Sport Mode). During a loan the phone's
     /// own automatic dosing is paused ON PURPOSE — the WATCH runs the closed loop and issues its own
-    /// on-wrist not-looping alerts (LoopStallWatchdog / SensorBlackoutAlert) — so the phone must NOT
+    /// on-wrist Loop-Failure ladder (LoopStallWatchdog, stock's exact rungs) — so the phone must NOT
     /// fire its "Loop Failure" notifications (they'd be false alarms). Injected by LoopAppManager;
     /// default `{ false }` keeps stock behavior for tests and the non-loan build.
     var podOnLoanProvider: () -> Bool = { false }
+
+    /// The mid-loan ladder sweep's clock — see the arming note in init.
+    private var loanLadderSweepTimer: Timer?
 
     init(alertPresenter: AlertPresenter,
                 modalAlertScheduler: InAppModalAlertScheduler? = nil,
@@ -94,6 +97,17 @@ public final class AlertManager {
         self.modalAlertScheduler = modalAlertScheduler ?? InAppModalAlertScheduler(alertPresenter: alertPresenter, alertManagerResponder: self)
 
         bluetoothProvider.addBluetoothObserver(self, queue: .main)
+
+        // Mid-loan ladder sweep (ported from next-dev, adapted): this line has no phone-side
+        // link census to ride, so a plain 60 s timer carries the same once-a-minute contract.
+        // The sweep gates on the loan, so outside a loan each tick is one bool read. Known
+        // limitation carried honestly from the port line: the sweep runs only while the phone
+        // app is awake — a reboot or suspension in the post-grant window can still let leaked
+        // rungs fire; the [deadman-sweep] line exists to convict the leak's origin.
+        loanLadderSweepTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            self?.sweepLoopNotRunningNotificationsDuringLoan()
+        }
+        loanLadderSweepTimer?.tolerance = 10
 
         NotificationCenter.default.publisher(for: .LoopCompleted)
             .sink { [weak self] publisher in
@@ -183,7 +197,7 @@ public final class AlertManager {
     func scheduleLoopNotRunningNotifications(_ lastLoopDate: Date) {
         // SPORT MODE (#2, Jeremy 2026-07-26): while the pod is loaned to the watch the phone stops
         // looping on purpose, and the WATCH owns not-looping alerting (it fires its own pre-scheduled
-        // on-wrist LoopStallWatchdog / SensorBlackoutAlert). So do NOT re-arm the phone's "Loop
+        // on-wrist Loop-Failure ladder — stock's exact rungs, LoopStallWatchdog). So do NOT re-arm the phone's "Loop
         // Failure" ladder — it would be a false alarm. Every scheduling path funnels here (incl.
         // rescheduleLoopNotRunningNotifications and the muter-change path), so this one guard covers
         // them all. On hand-back the predicate returns false and the next .LoopCompleted re-arms.
@@ -331,6 +345,26 @@ public final class AlertManager {
             }
         }
         UserDefaults.appGroup?.loopNotRunningNotifications = stillPendingNotifications
+    }
+
+    /// Belt-and-braces for the ladder's escape artists (ported from next-dev): a 1-hour rung
+    /// fired mid-loan on the port line (2026-08-25) having survived BOTH the grant-time clear
+    /// and the completion gate — anchored pre-loan, mechanism unidentified. Rather than guess
+    /// the escape path, sweep: once a minute during a loan any pending Loop-Failure rung is
+    /// removed and LOGGED with its count, so whatever queued it dies within a minute and the
+    /// log line convicts the original path.
+    func sweepLoopNotRunningNotificationsDuringLoan() {
+        guard podOnLoanProvider() else { return }
+        Task {
+            let center = UNUserNotificationCenter.current()
+            let prefix = LoopNotificationCategory.loopNotRunning.rawValue
+            let ids = await center.pendingNotificationRequests()
+                .filter { $0.identifier.hasPrefix(prefix) }
+                .map(\.identifier)
+            guard !ids.isEmpty else { return }
+            center.removePendingNotificationRequests(withIdentifiers: ids)
+            PhoneLog.event("deadman", "swept \(ids.count) stale phone Loop-Failure rung(s) mid-loan — these escaped the grant clear and the gate [deadman-sweep]")
+        }
     }
 
     func clearLoopNotRunningNotifications() {

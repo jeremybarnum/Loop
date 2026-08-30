@@ -561,6 +561,11 @@ public struct LoanGrant: Codable, Equatable {
     /// (leave-one-out via stock predictGlucose, no recompute). nil (older phone / stale caches)
     /// → the watch simply skips the diff lines.
     public let predictionSnapshot: LoanPredictionSnapshot?
+    /// The phone's last completed loop cycle, so the wrist's loop dot starts from the SYSTEM's
+    /// recency instead of grey (ring ruling 2026-08-23: loop recency is a property of the
+    /// system, not the device — the boundary inherits, and the new device's own next cycle
+    /// then keeps or loses the freshness honestly). nil (older phone) = the old behavior.
+    public let lastLoopCompleted: Date?
 
     /// The phone's predicted-low warning configuration, inherited for the life of the loan.
     ///
@@ -586,6 +591,7 @@ public struct LoanGrant: Codable, Equatable {
                 carbHistory: [LoanCarbRecord]? = nil,
                 glucoseHistory: [LoanGlucoseRecord]? = nil,
                 predictionSnapshot: LoanPredictionSnapshot? = nil,
+                lastLoopCompleted: Date? = nil,
                 lowBGWarningSettings: LoanLowBGWarningSettings? = nil) {
         self.epoch = epoch
         self.expiresAt = expiresAt
@@ -602,6 +608,7 @@ public struct LoanGrant: Codable, Equatable {
         self.carbHistory = carbHistory
         self.glucoseHistory = glucoseHistory
         self.predictionSnapshot = predictionSnapshot
+        self.lastLoopCompleted = lastLoopCompleted
         self.lowBGWarningSettings = lowBGWarningSettings
     }
 }
@@ -868,6 +875,11 @@ public struct HandbackOffer: Codable, Equatable {
     /// rather than restoring the value captured before the loan. nil (older watch) → the phone
     /// keeps its captured pre-loan value, i.e. the previous restore behavior.
     public let watchClosedLoopEnabled: Bool?
+    /// The wrist's last completed loop cycle, the return-direction twin of the grant's field:
+    /// at reclaim the phone seeds its own recency display from this, so the ~10 s settle does
+    /// not paint a red ring over a system that looped seconds ago (the watch's temp is still
+    /// running, R33 — therapy is genuinely continuous). nil (older watch) = no seed.
+    public let lastLoopCompleted: Date?
 
     /// When the WRIST last posted a predicted-low warning, returned so the snooze survives the
     /// hand-back in the same way the grant carries it outbound. Without it the phone resumes
@@ -880,6 +892,7 @@ public struct HandbackOffer: Codable, Equatable {
     public init(epoch: Int, handedBackAt: Date, finalStatus: LoanPodStatus?,
                 odometer: LoanOdometerSnapshot?, events: [LoanEvent], tombstones: [UUID],
                 recovered: Bool, released: Bool? = nil, watchClosedLoopEnabled: Bool? = nil,
+                lastLoopCompleted: Date? = nil,
                 lastLowBGWarningAt: Date? = nil) {
         self.epoch = epoch
         self.handedBackAt = handedBackAt
@@ -890,6 +903,7 @@ public struct HandbackOffer: Codable, Equatable {
         self.recovered = recovered
         self.released = released
         self.watchClosedLoopEnabled = watchClosedLoopEnabled
+        self.lastLoopCompleted = lastLoopCompleted
         self.lastLowBGWarningAt = lastLowBGWarningAt
     }
 }
