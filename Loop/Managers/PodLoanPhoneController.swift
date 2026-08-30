@@ -700,6 +700,12 @@ final class PodLoanPhoneController {
                         self.handbackDiag(self.epoch,
                             String(format: "reclaim VERIFIED — pod round-trip complete +%.0fs (link +%.1fs, stale reads %d, read +%.1fs)",
                                    elapsed, linkWait, self.reclaimStaleReads, readWait))
+                        // The interlock's whole-loan census, at the moment the loan is over:
+                        // whileLoaned=none is the H5-clean verdict; anything else names the
+                        // connect path that contended for the lent pod (and was refused).
+                        if let lendable = self.deps.pumpManager() as? PumpConnectionLendable {
+                            self.handbackDiag(self.epoch, "loan BLE contention census — \(lendable.podLoanBleContentionDiagnostics)")
+                        }
                         self.deps.ownershipDidChange()
                         // The pod is provably reachable RIGHT NOW. This is the only moment in the
                         // whole hand-back where that is true, so it is where both jobs that need
@@ -1807,7 +1813,7 @@ final class PodLoanPhoneController {
             // central held nothing — so something else held the slot, and the only candidate we
             // could not test was "the phone never actually let go". released=true says nothing
             // about that. linkUp=true three seconds after a release says it outright.
-            self.handbackDiag(releaseEpoch, "GRANT +3s — pod BLE released=\(lendable.isConnectionReleased) linkUp=\(lendable.isConnectionReady)")
+            self.handbackDiag(releaseEpoch, "GRANT +3s — pod BLE released=\(lendable.isConnectionReleased) linkUp=\(lendable.isConnectionReady) · \(lendable.podLoanBleContentionDiagnostics)")
             if lendable.isConnectionReady {
                 self.handbackDiag(releaseEpoch, "GRANT +3s — ** STILL CONNECTED after release — the watch's takeover will be refused (single-central pod) **")
             }
