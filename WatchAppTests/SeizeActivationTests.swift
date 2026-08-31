@@ -79,13 +79,32 @@ final class SeizeActivationTests: XCTestCase {
     }
 
     /// A credential exactly as the phone builds it dormant: expiresAt == issuedAt
-    /// ("meaningless dormant"), minimal-but-valid everything else.
-    private func fixtureDormant(issuedAt: Date, epoch: Int = 3, token: UUID = UUID()) -> DormantGrant {
+    /// ("meaningless dormant"), minimal-but-valid everything else. With
+    /// `completeSettings`, the therapy snapshot decodes fully so an activation gets past
+    /// settings validation and into the journal step (it still dies at the pump rebuild —
+    /// the bytes aren't a pod — which is exactly far enough to observe the fold).
+    private func fixtureDormant(issuedAt: Date, epoch: Int = 3, token: UUID = UUID(),
+                                completeSettings: Bool = false) -> DormantGrant {
         let grant = LoanGrant(epoch: epoch, expiresAt: issuedAt,
                               pumpManagerRawState: Data([1, 2, 3]), podAddress: 0x1F0A2B3C,
-                              therapySettingsRaw: Data([4, 5]), settingsTimeZoneID: "GMT",
+                              therapySettingsRaw: completeSettings ? Self.completeTherapySettingsRaw() : Data([4, 5]),
+                              settingsTimeZoneID: "GMT",
                               doseHistory: [], boundaryRecord: nil)
         return DormantGrant(grant: grant, issuedAt: issuedAt, seizeToken: token)
+    }
+
+    /// A fully-populated LoopSettings snapshot, serialized the way a grant carries it.
+    private static func completeTherapySettingsRaw() -> Data {
+        let tz = TimeZone(identifier: "GMT")!
+        let settings = LoopSettings(
+            dosingEnabled: false,
+            glucoseTargetRangeSchedule: GlucoseRangeSchedule(unit: .milligramsPerDeciliter, dailyItems: [RepeatingScheduleValue(startTime: 0, value: DoubleRange(minValue: 100, maxValue: 110))], timeZone: tz),
+            insulinSensitivitySchedule: InsulinSensitivitySchedule(unit: .milligramsPerDeciliter, dailyItems: [RepeatingScheduleValue(startTime: 0, value: 50.0)], timeZone: tz),
+            basalRateSchedule: BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: 1.0)], timeZone: tz),
+            carbRatioSchedule: CarbRatioSchedule(unit: .gram(), dailyItems: [RepeatingScheduleValue(startTime: 0, value: 10.0)], timeZone: tz),
+            maximumBasalRatePerHour: 3.0,
+            maximumBolus: 5.0)
+        return try! PropertyListSerialization.data(fromPropertyList: settings.rawValue, format: .binary, options: 0)
     }
 
     // MARK: - The root-cause pin
@@ -187,5 +206,72 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertEqual(snap.phase, .idle, "the fixture activation fails and returns to idle (startable again)")
         XCTAssertNil(defaults.string(forKey: "PodLoanWatchController.activeSeizeToken"),
                      "no .active, no persisted token — a failed activation must leave nothing to echo")
+    }
+
+    // MARK: - Re-entry over a parked drain (R40, field 2026-08-30)
+
+    /// The journal fold: adoptEpoch re-tags the epoch and keeps every event, seq, cursor,
+    /// and tombstone — the one sanctioned way past begin()'s refuse-to-clobber.
+    func testJournalAdoptEpochPreservesTheParkedDrain() throws {
+        let journal = LoanEventJournal(directory: journalDir)
+        try journal.begin(epoch: 5)
+        let now = Date()
+        let a = try journal.mintEvent(record: LoanDoseRecord(kind: .bolus, startDate: now, amount: 1.0), provenance: .confirmed)
+        let b = try journal.mintEvent(record: LoanDoseRecord(kind: .tempBasal, startDate: now, endDate: now.addingTimeInterval(1800), unitsPerHour: 0.8), provenance: .confirmed)
+        journal.applyAck(committedCursor: 1)                      // event a acked, b still parked
+
+        XCTAssertThrowsError(try journal.begin(epoch: 9), "begin must still refuse to clobber an undrained loan")
+
+        let carried = journal.adoptEpoch(9)
+        XCTAssertEqual(carried, 1, "one undrained event rides the fold")
+        XCTAssertEqual(journal.activeEpoch, 9, "epoch re-tagged")
+        let unacked = journal.unackedEvents()
+        XCTAssertEqual(unacked.map(\.id), [b.id], "same identity — that's what keeps every downstream layer idempotent")
+        XCTAssertEqual(unacked.map(\.seq), [b.seq], "same seq — the phone's contiguous-cursor arithmetic just works")
+        _ = a
+    }
+
+    /// The full re-entry: a controller that woke up on a parked drain (the reboot case)
+    /// must accept Start, rest back on the drain when the request times out — with the
+    /// resend chain re-kicked — offer the seize, and on confirm FOLD the drain into the
+    /// new loan (epoch above the parked one, token persisted at fold so the drain keeps
+    /// the retro-ack door even though this activation dies at the pump rebuild).
+    func testStartAndSeizeOverAParkedDrainFoldsIt() throws {
+        // Park a drain: a prior loan (epoch 5) with one unacked event, as a reboot leaves it.
+        let seeded = LoanEventJournal(directory: journalDir)
+        try seeded.begin(epoch: 5)
+        let parked = try seeded.mintEvent(record: LoanDoseRecord(kind: .bolus, startDate: Date(), amount: 0.5), provenance: .confirmed)
+
+        let controller = makeController()                          // loads the same journal file
+        var sent = 0
+        controller.send = { _ in sent += 1 }
+        var labels: [String] = []
+        controller.scheduler = { _, label, work in
+            labels.append(label)
+            if label == "request-timeout" { work.perform() }       // inline ONLY the timeout: an inline resend would recurse
+        }
+        XCTAssertEqual(controller.debugSnapshot().phase, .recoveredDrain, "precondition: woke up on the parked drain")
+
+        let token = UUID()
+        controller.handleDormantGrant(fixtureDormant(issuedAt: Date().addingTimeInterval(-900), epoch: 3,
+                                                     token: token, completeSettings: true))
+        controller.requestLoan(watchBuild: "seize-test")
+        var snap = controller.debugSnapshot()
+        XCTAssertEqual(snap.phase, .recoveredDrain, "timed out → rests ON the drain, not plain idle")
+        XCTAssertNotNil(snap.seizeOfferIssuedAt, "…and the offline offer is up")
+        XCTAssertTrue(labels.contains("handback-resend"), "the resend chain was re-kicked on return to the drain")
+        XCTAssertGreaterThanOrEqual(sent, 2, "the request went out and so did a recovered offer")
+        XCTAssertNil(defaults.string(forKey: "PodLoanWatchController.activeSeizeToken"),
+                     "before the confirm the token is pending-only")
+
+        controller.confirmSeize()
+        snap = controller.debugSnapshot()                          // fence: fold + failed activation drained
+
+        let after = LoanEventJournal(directory: journalDir)        // fresh instance = the persisted truth
+        XCTAssertEqual(after.activeEpoch, 6, "folded to max(credential 3, journal 5 + 1)")
+        XCTAssertEqual(after.unackedEvents().map(\.id), [parked.id], "the parked record rides the new loan's stream")
+        XCTAssertEqual(defaults.string(forKey: "PodLoanWatchController.activeSeizeToken"), token.uuidString,
+                       "token persisted at FOLD — a tokenless future-epoch offer would be dropped by the phone")
+        XCTAssertEqual(snap.phase, .recoveredDrain, "the failed activation rests back on the drain, still startable")
     }
 }

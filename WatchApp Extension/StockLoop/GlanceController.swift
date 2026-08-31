@@ -478,11 +478,29 @@ final class GlanceViewModel: ObservableObject {
                 ? NSLocalizedString("Waiting for iPhone — pod still on watch. Bolus unavailable until it connects.", comment: "Glance note while a hand-back waits for the phone")
                 : NSLocalizedString("Can't reach iPhone — pod still on watch. Move it closer or check its Bluetooth.", comment: "Glance note while a hand-back waits for an UNREACHABLE phone")
             state = s
-        case .revoked, .recoveredDrain:
+        case .revoked:
             var s = GlanceUIState(); s.phase = .draining
             s.handbackStartedAt = snap.handbackStartedAt
             s.loopStatusText = NSLocalizedString("returning records…", comment: "Glance status while draining records")
             state = s
+        case .recoveredDrain:
+            // R40 re-entry: a parked drain is STARTABLE ground, not a wall. The records
+            // resend on their own timeline; rendering the idle family keeps the Start
+            // button and the seize offer reachable. Field 2026-08-30: this screen showed
+            // "returning records…" with no Start after a watch reboot mid-phoneless loan,
+            // and the user's only way out was turning the phone back on.
+            var idle = Self.idleState(context: ExtensionDelegate.shared().loopManager.activeContext,
+                                      note: snap.lastIdleNote
+                                        ?? NSLocalizedString("Records from the last session are waiting for your iPhone. You can still start.",
+                                                             comment: "Glance note while resting on a parked drain"))
+            if let issued = snap.seizeOfferIssuedAt {
+                let f = DateComponentsFormatter()
+                f.maximumUnitCount = 1
+                f.allowedUnits = [.day, .hour, .minute]
+                f.unitsStyle = .abbreviated
+                idle.seizeOfferAgeText = f.string(from: Date().timeIntervalSince(issued)) ?? "?"
+            }
+            state = idle
         case .active:
             // Main-safe read, exactly as for the loan snapshot above: publish a mirror from
             // dataAccessQueue, read the mirror here, never sync onto it. A dose cycle holds that

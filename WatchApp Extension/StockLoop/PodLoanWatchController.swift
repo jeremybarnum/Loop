@@ -433,8 +433,8 @@ final class PodLoanWatchController {
         case .denied(let denied):
             // The phone refused — show why instead of hanging on "requesting…".
             requestTimeoutWork?.cancel()
-            if phase == .requested || phase == .idle {
-                phase = .idle
+            if phase == .requested || phase == .idle || phase == .recoveredDrain {
+                returnToRestingPhase()
                 lastIdleNote = denied.reason
             }
             SportLog.event("loan", "DENIED by phone — \(denied.reason)")
@@ -496,7 +496,9 @@ final class PodLoanWatchController {
     /// activates, anything else stays idle.
     func confirmSeize() {
         queue.async {
-            guard self.phase == .idle, let offer = self.seizeOffer,
+            // R40 re-entry: the offer can be presented from plain idle OR from a parked
+            // drain (.recoveredDrain) — a watch reboot mid-phoneless-loan rests there.
+            guard self.phase == .idle || self.phase == .recoveredDrain, let offer = self.seizeOffer,
                   let dormant = self.storedDormantGrant(), dormant.seizeToken == offer.token else {
                 SportLog.event("seize", "confirm arrived with no live offer — ignored [seize]")
                 return
@@ -505,8 +507,11 @@ final class PodLoanWatchController {
             // Force the local epoch FRESH: the credential's epoch is provisional (the
             // phone's counter at issue) and may be stale against loans granted since. The
             // phone's retro-ack matches on the token, not the epoch, so freshness here only
-            // has to satisfy the watch's own monotonicity guards.
-            let newEpoch = max(dormant.grant.epoch, (self.epoch ?? 0) + 1)
+            // has to satisfy the watch's own monotonicity guards — plus the parked
+            // journal's epoch, which the fold (handleGrant) re-tags and must strictly
+            // exceed: a fold ONTO the same epoch would let the drain's queued
+            // released=final offer close the LIVE loan on the phone.
+            let newEpoch = max(dormant.grant.epoch, (self.epoch ?? 0) + 1, (self.journal.activeEpoch ?? 0) + 1)
             // Mint the LIVE lease alongside: the dormant expiresAt is issuedAt by contract,
             // so an un-restamped credential walks into the ladder already expired and the
             // mid-takeover lease guard kills it at read 1 (the first field seize, 2026-08-30).
@@ -561,6 +566,23 @@ final class PodLoanWatchController {
 
     // MARK: - Request / Grant / Takeover (§2.1-2.3)
 
+    /// Where a failed or abandoned start attempt comes to rest. Plain .idle — unless
+    /// undrained records are parked, in which case the resting phase is .recoveredDrain and
+    /// the drain's resend chain is restarted (the 15 s re-arm guard deliberately lets the
+    /// chain die whenever phase leaves the drain family, so every return must re-kick it).
+    /// This is what makes the drain a STATE the watch passes through rather than a wall:
+    /// field 2026-08-30, a watch reboot mid-seized-loan parked 3 records and then refused
+    /// Start — silently — until the phone came back. The records resend on their own;
+    /// nothing about them should block the next attempt.
+    private func returnToRestingPhase() {
+        if journal.hasUndrainedEvents {
+            phase = .recoveredDrain
+            sendHandbackOffer(freshened: false, recovered: true)
+        } else {
+            phase = .idle
+        }
+    }
+
     func requestLoan(watchBuild: String) {
         #if targetEnvironment(simulator)
         // Default in the sim: run the REAL loan protocol against the phone's simulated
@@ -574,9 +596,16 @@ final class PodLoanWatchController {
         if simFakeFlow { simDriveStart(); return }
         #endif
         queue.async {
-            guard self.phase == .idle else {
+            // R40 re-entry: a parked drain (.recoveredDrain) is startable ground, not a
+            // wall. The staged records keep resending on their own timeline and, on the
+            // seize path, FOLD into the new loan's stream (handleGrant). Any other busy
+            // phase still refuses.
+            guard self.phase == .idle || self.phase == .recoveredDrain else {
                 SportLog.event("loan", "Start ignored — not idle (phase \(self.phase.rawValue))")
                 return
+            }
+            if self.phase == .recoveredDrain {
+                SportLog.event("loan", "Start over a parked drain — \(self.journal.unackedEvents().count) undrained event(s) keep resending; a seize would fold them in [seize]")
             }
             self.phase = .requested
             self.attemptStartedAt = self.now()
@@ -596,7 +625,7 @@ final class PodLoanWatchController {
             self.requestTimeoutWork?.cancel()
             let work = DispatchWorkItem { [weak self] in
                 guard let self = self, self.phase == .requested else { return }
-                self.phase = .idle
+                self.returnToRestingPhase()
                 // R40(b): no answer + a stored credential = offer the offline path (never
                 // auto-take it; the confirm is the user's deliberate act). No credential =
                 // the pre-seize message stands.
@@ -703,13 +732,14 @@ final class PodLoanWatchController {
         requestTimeoutWork?.cancel()
 
         /// Every rejection must leave the controller startable. Logs the reason, tells the phone
-        /// where the protocol expects it, and returns to .idle.
+        /// where the protocol expects it, and returns to the resting phase (idle, or the
+        /// parked drain when undrained records exist — startable either way).
         func rejectGrant(_ reason: String, notifyPhone: Bool) {
-            SportLog.event("loan", "grant REJECTED — \(reason); returning to idle so Start works again")
+            SportLog.event("loan", "grant REJECTED — \(reason); returning to resting so Start works again")
             if notifyPhone {
                 sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: reason)))
             }
-            phase = .idle
+            returnToRestingPhase()
         }
         guard self.now() < grant.expiresAt || seizeActivationInFlight else {
             // Row 2: a late grant self-rejects; the phone's T1 already reclaimed.
@@ -754,19 +784,40 @@ final class PodLoanWatchController {
             return nil
         }()
         if let missing = missing {
-            phase = .idle
+            returnToRestingPhase()
             lastIdleNote = String(format: NSLocalizedString("Can't start: %@ didn't arrive from the phone. Check therapy settings and try again.", comment: "Glance: grant refused for incomplete settings (1: missing field)"), missing)
             SportLog.event("loan", "grant REFUSED — therapy settings incomplete (\(missing))")
             sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "therapy settings incomplete: \(missing)")))
             return
         }
 
-        do {
-            try journal.begin(epoch: grant.epoch)
-        } catch {
-            // An undrained prior loan must drain first — refuse, never clobber.
-            rejectGrant("undrained prior loan must drain first", notifyPhone: true)
-            return
+        if seizeActivationInFlight, journal.hasUndrainedEvents {
+            // R40 re-entry FOLD: the parked drain becomes this loan's opening stream —
+            // epoch re-tagged, events/seqs/cursor/tombstones kept (see adoptEpoch for why
+            // re-tagging beats re-minting). Seize-only: confirmSeize guarantees this epoch
+            // strictly exceeds the parked one. A normal grant still refuses below — the
+            // phone is reachable in that case and the drain resolves itself in seconds.
+            let carried = journal.adoptEpoch(grant.epoch)
+            SportLog.event("seize", "journal FOLDED — \(carried) undrained event(s) carried into epoch \(grant.epoch); the drain rides this loan's stream [seize]")
+            // The folded stream carries REAL records from the prior seized era, and the
+            // phone DROPS a future-epoch offer that has no token ("watch ahead of phone").
+            // So the reunion token is persisted NOW, not at .active: even if this
+            // activation aborts, the resend chain must keep the retro-ack door open.
+            // The promote-at-.active hygiene still governs the no-fold path — its property
+            // ("no token without records or a live loan") holds here BECAUSE records exist.
+            if let token = pendingSeizeToken {
+                defaults.set(token.uuidString, forKey: DormantKeys.activeToken)
+                pendingSeizeToken = nil
+                SportLog.event("seize", "reunion token …\(String(token.uuidString.suffix(8))) persisted at FOLD — the folded drain needs the retro-ack door [seize]")
+            }
+        } else {
+            do {
+                try journal.begin(epoch: grant.epoch)
+            } catch {
+                // An undrained prior loan must drain first — refuse, never clobber.
+                rejectGrant("undrained prior loan must drain first", notifyPhone: true)
+                return
+            }
         }
 
         epoch = grant.epoch
@@ -866,7 +917,7 @@ final class PodLoanWatchController {
               let rawState = rawValue["state"] as? PumpManager.RawStateValue,
               let manager = OmniPumpManager(rawState: rawState) else {
             teardownPump()
-            phase = .idle
+            returnToRestingPhase()
             lastIdleNote = NSLocalizedString("Couldn't read the pod from the phone. Try again.", comment: "Glance: pump snapshot rejected")
             SportLog.event("loan", "grant FAILED — could not rebuild the pump from the phone's snapshot")
             sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "pump state snapshot rejected")))
@@ -983,7 +1034,7 @@ final class PodLoanWatchController {
                 // honoring a successful read — expiry outranks a good status.
                 guard self.now() < grant.expiresAt else {
                     self.teardownPump()
-                    self.phase = .idle
+                    self.returnToRestingPhase()
                     // Two messages, because the two failures need OPPOSITE user responses.
                     // The wedge (Code-11, or a ladder that never connected once) is made WORSE
                     // by retrying — tonight's field session force-quit-and-retried its way from
@@ -1129,7 +1180,7 @@ final class PodLoanWatchController {
                     self.schedule(after: 8, label: "takeover-read", execute: backstop)
                 } else {
                     self.teardownPump()
-                    self.phase = .idle
+                    self.returnToRestingPhase()
                     let failSecs = self.attemptStartedAt.map { self.now().timeIntervalSince($0) } ?? -1
                     // A stalled ladder usually means watchOS suspended the app mid-connect, not
                     // that the pod is unreachable — so the message must not send the user to the

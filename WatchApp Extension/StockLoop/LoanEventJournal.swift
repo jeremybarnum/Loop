@@ -85,6 +85,33 @@ final class LoanEventJournal {
         try? FileManager.default.removeItem(at: fileURL)
     }
 
+    /// R40 re-entry: FOLDS a parked drain into a new loan by re-tagging the epoch while
+    /// keeping every event, its seq, the acked cursor, and the tombstones. This is the one
+    /// sanctioned way past `begin()`'s refuse-to-clobber: the records are not clobbered,
+    /// they become the new loan's opening stream (seq continuity intact, so the phone's
+    /// contiguous-cursor ack arithmetic just works). Re-tagging beats re-minting because
+    /// identity is what makes every downstream layer idempotent — if a stale queued offer
+    /// for the OLD epoch still delivers later, the phone books the same IDs and the store
+    /// dedupes them. Seize-path only by design: the caller controls the new epoch there
+    /// and guarantees it exceeds the parked one.
+    /// Returns the number of undrained events carried, for the caller's log line.
+    @discardableResult
+    func adoptEpoch(_ newEpoch: Int) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        guard var s = state else {
+            state = .empty(epoch: newEpoch)
+            persistLocked()
+            return 0
+        }
+        let carried = s.events.filter { $0.seq > s.ackedCursor }.count + s.tombstones.count
+        s.epoch = newEpoch
+        state = s
+        persistLocked()
+        os_log("Journal FOLDED into epoch %d — %d undrained event(s) carried, cursor %d kept",
+               log: log, type: .default, newEpoch, carried, s.ackedCursor)
+        return carried
+    }
+
     // MARK: - Event minting (intent-before-transmission, §1.2)
 
     /// Mints and DURABLY persists an event BEFORE the pod command transmits. Returns the
