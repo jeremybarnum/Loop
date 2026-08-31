@@ -1668,32 +1668,41 @@ private struct ListeningForSensor: View {
     @State private var elapsed: TimeInterval = 0
 
     var body: some View {
-        VStack(spacing: 11) {
+        // Every Text here is vertically PINNED (fixedSize) — without it, the 40 mm screen
+        // squeezes each two-line string down to one truncated line ("Listening for…",
+        // field photo 2026-08-30). The Spacer is the only thing allowed to compress, and
+        // the geometry is sized so title + subtitle + counter + footer fit under the
+        // glance header on the smallest case.
+        VStack(spacing: 6) {
             Text("Listening for\nyour sensor")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(.glanceInk)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
 
             Text("Usually under 5 min.\nKeep the app open.")
                 .font(.system(size: 12))
                 .foregroundColor(.glanceDim)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
 
             Spacer(minLength: 0)
 
-            VStack(spacing: 4) {
+            VStack(spacing: 2) {
                 Text(timeString)
-                    .font(.system(size: 20, weight: .medium).monospacedDigit())
+                    .font(.system(size: 18, weight: .medium).monospacedDigit())
                     .foregroundColor(.glanceAccent)
                 Text("listening")
                     .font(.system(size: 10))
                     .foregroundColor(.glanceDim)
             }
+            .fixedSize(horizontal: false, vertical: true)
 
             Text("No BG in Dexcom either?\nToggle Bluetooth.")
                 .font(.system(size: 10))
                 .foregroundColor(.glanceDim)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .onReceive(tick) { _ in elapsed = Date().timeIntervalSince(startedAt) }
     }
