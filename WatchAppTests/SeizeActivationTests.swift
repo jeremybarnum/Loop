@@ -380,6 +380,74 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertEqual(snap.phase, .active, "and must not touch the loan")
     }
 
+    /// Fix 4a (field 2026-08-31, five reuse lines + four revoke-bricks on tape): the
+    /// seize epoch must clear EVERY mark the watch itself enforces — the persisted
+    /// high-water epoch (CLOSED wipes `epoch` and the journal, the amnesia behind
+    /// 270→270) and the split-brain guard's recorded revoke (a credential at-or-below it
+    /// was rejected outright, bricking seize until the 30-min credential floor).
+    func testSeizeEpochClearsHighWaterAndRevokeMarks() throws {
+        defaults.set(5, forKey: "PodLoanWatchController.highWaterEpoch")
+        let controller = makeController()
+        var sentEpochs: [Int] = []
+        controller.send = { dict in
+            if let message = try? LoanMessage.decode(fromTransport: dict), case .takeoverFailed(let f) = message {
+                sentEpochs.append(f.epoch)
+            }
+        }
+        controller.scheduler = { _, label, work in if label == "request-timeout" { work.perform() } }
+
+        // The split-brain guard records a revoke even with no live session.
+        controller.handleIncoming(userInfo: try LoanMessage.revoke(Revoke(epoch: 7)).transportDictionary(), channel: .queued)
+        _ = controller.debugSnapshot()
+
+        controller.handleDormantGrant(fixtureDormant(issuedAt: Date().addingTimeInterval(-600), epoch: 3,
+                                                     completeSettings: true))
+        controller.requestLoan(watchBuild: "epoch-test")
+        XCTAssertNotNil(controller.debugSnapshot().seizeOfferIssuedAt)
+        controller.confirmSeize()
+        _ = controller.debugSnapshot()   // activation dies at the pump rebuild → takeoverFailed carries the minted epoch
+
+        XCTAssertEqual(sentEpochs.last, 8,
+                       "max(credential 3, high-water 5, revoked 7) + 1 — every guard cleared, nothing reused")
+    }
+
+    /// Detector C (fix 2): the reunion prompt and Keep each SEND a holdsPod status
+    /// report, so the phone's yield never waits on dose-stream evidence.
+    func testReunionPromptAndKeepSendHoldsPodReports() {
+        defaults.set(true, forKey: "sim.fakeLoanFlow")
+        let controller = makeController()
+        var holdsPodEpochs: [Int] = []
+        controller.send = { dict in
+            if let message = try? LoanMessage.decode(fromTransport: dict),
+               case .statusReport(let r) = message, r.holdsPod {
+                holdsPodEpochs.append(r.epoch)
+            }
+        }
+        controller.isPhoneReachable = { true }
+        var pendingDebounce: [DispatchWorkItem] = []
+        controller.scheduler = { _, label, work in
+            switch label {
+            case "sim-grant", "sim-active": work.perform()
+            case "seize-reunion-debounce": pendingDebounce.append(work)
+            default: break
+            }
+        }
+        controller.requestLoan(watchBuild: "reunion-test")
+        XCTAssertEqual(controller.debugSnapshot().phase, .active)
+        defaults.set(UUID().uuidString, forKey: "PodLoanWatchController.activeSeizeToken")
+
+        controller.noteReachabilityChanged(true)
+        _ = controller.debugSnapshot()
+        pendingDebounce[0].perform()
+        _ = controller.debugSnapshot()
+        XCTAssertEqual(holdsPodEpochs.count, 1, "the prompt raise tells the phone outright")
+
+        controller.dismissReunionPrompt()
+        _ = controller.debugSnapshot()
+        XCTAssertEqual(holdsPodEpochs.count, 2, "Keep re-asserts it")
+        XCTAssertEqual(holdsPodEpochs.last, controller.debugSnapshot().epoch, "for the live loan's epoch")
+    }
+
     /// A late queued grant arriving while resting on a parked drain gets an ANSWER (the
     /// undrained-prior-loan denial the phone recovers from), not the silent wrong-phase
     /// ignore that cost a tap — the resting phase replaced plain .idle, which always

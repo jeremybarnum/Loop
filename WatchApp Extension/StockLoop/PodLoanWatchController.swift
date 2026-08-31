@@ -227,6 +227,15 @@ final class PodLoanWatchController {
         didSet { defaults.set(epoch, forKey: Keys.epoch) }
     }
 
+    /// Repaint for NON-phase state the glance renders — the seize offer, the reunion
+    /// prompt, idle notes. The phase.didSet repaint above covers transitions, but these
+    /// mutate WITHIN a phase (the prompt is raised on .active; a re-entry offer lands on
+    /// a same-value resting reassignment, which the real-change guard skips) — field
+    /// 2026-08-31: both needed a tap to appear, which corrupted a day of test readings.
+    private func notifyUI() {
+        DispatchQueue.main.async { GlanceController.current?.refreshGlanceNow() }
+    }
+
     private var pumpManager: OmniPumpManager?
     /// Odometer at takeover, for the hand-back snapshot pair (§1.4).
     private var deliveredAtTakeover: Double?
@@ -320,6 +329,11 @@ final class PodLoanWatchController {
         static let phase = "PodLoanWatchController.phase"
         static let epoch = "PodLoanWatchController.epoch"
         static let pumpRawValue = "PodLoanWatchController.pumpManagerRawValue"
+        /// Fix 4a (field 2026-08-31): the highest epoch ANY accepted loan has used —
+        /// never cleared, survives CLOSED (which wipes `epoch` and the journal, the
+        /// amnesia that let back-to-back seizes reuse a spent epoch: 270→270 five times
+        /// on tape, then bricked by the split-brain guard at revoked 271).
+        static let highWaterEpoch = "PodLoanWatchController.highWaterEpoch"
     }
 
     /// `defaults` is an init parameter, not just a settable property, because the relaunch
@@ -436,6 +450,7 @@ final class PodLoanWatchController {
             if phase == .requested || phase == .idle || phase == .recoveredDrain {
                 returnToRestingPhase()
                 lastIdleNote = denied.reason
+                notifyUI()   // the reason must not wait for a tap
             }
             SportLog.event("loan", "DENIED by phone — \(denied.reason)")
         case .diag(let d):
@@ -518,7 +533,16 @@ final class PodLoanWatchController {
             // journal's epoch, which the fold (handleGrant) re-tags and must strictly
             // exceed: a fold ONTO the same epoch would let the drain's queued
             // released=final offer close the LIVE loan on the phone.
-            let newEpoch = max(dormant.grant.epoch, (self.epoch ?? 0) + 1, (self.journal.activeEpoch ?? 0) + 1)
+            // Fix 4a (field 2026-08-31): also strictly above the persisted HIGH-WATER mark
+            // (CLOSED wipes `epoch` + the journal, so back-to-back seizes reused a spent
+            // epoch) and above the last REVOKE the split-brain guard recorded (a stale
+            // credential at-or-below it bricked seize outright — four identical rejects
+            // until the 30-min credential floor happened to refresh).
+            let newEpoch = max(dormant.grant.epoch,
+                               (self.epoch ?? 0) + 1,
+                               (self.journal.activeEpoch ?? 0) + 1,
+                               self.defaults.integer(forKey: Keys.highWaterEpoch) + 1,
+                               (self.lastRevokedEpoch ?? 0) + 1)
             // Mint the LIVE lease alongside: the dormant expiresAt is issuedAt by contract,
             // so an un-restamped credential walks into the ladder already expired and the
             // mid-takeover lease guard kills it at read 1 (the first field seize, 2026-08-30).
@@ -542,6 +566,7 @@ final class PodLoanWatchController {
             self.seizeOffer = nil
             self.lastIdleNote = NSLocalizedString("Offline start cancelled.", comment: "Glance note after dismissing a seize offer")
             SportLog.event("seize", "seize offer DISMISSED [seize]")
+            self.notifyUI()
         }
     }
 
@@ -597,9 +622,30 @@ final class PodLoanWatchController {
                 }
                 self.reunionPromptActive = true
                 SportLog.event("seize", "phone is back — REUNION PROMPT raised (R40(f): the hand-back stays the user's deliberate act) [seize]")
+                self.notifyUI()   // raised within .active — no phase change, no repaint without this
                 self.issueReunionPromptAlert()
+                // Detector C (fix 2, field 2026-08-31): tell the phone OUTRIGHT that this
+                // loan holds the pod, instead of leaving it to infer from dose-stream
+                // evidence that only flows when the loop happens to enact. The phone's
+                // mirror yields on this within seconds of WC contact.
+                self.sendHoldsPodStatusReport(reason: "reunion prompt raised")
             }
         }
+    }
+
+    /// Detector C's message: an unsolicited holdsPod status report for the current loan.
+    /// The phone treats holdsPod + a newer epoch as books-dirty evidence and yields.
+    private func sendHoldsPodStatusReport(reason: String) {
+        guard phase == .active, let current = epoch else { return }
+        sendMessage(.statusReport(StatusReport(
+            epoch: current,
+            mode: currentMode(),
+            lastDirectGlucoseAge: loopManager.latestGlucoseAge,
+            lastEventSeq: journal.lastEventSeq,
+            podFault: pumpManager?.podLoanFaultDescription,
+            holdsPod: true,
+            knowsGrant: true)))
+        SportLog.event("seize", "statusReport sent — holdsPod e\(current) (\(reason)) [seize]")
     }
 
     /// The user chose Hand Back on the reunion prompt — the normal hand-back runs.
@@ -608,6 +654,7 @@ final class PodLoanWatchController {
             guard self.reunionPromptActive, self.phase == .active else { return }
             self.reunionPromptActive = false
             SportLog.event("seize", "reunion prompt: HAND BACK chosen — normal hand-back begins [seize]")
+            self.notifyUI()
             self.beginHandback()
         }
     }
@@ -619,6 +666,10 @@ final class PodLoanWatchController {
             guard self.reunionPromptActive else { return }
             self.reunionPromptActive = false
             SportLog.event("seize", "reunion prompt: KEEP chosen — seized loan continues [seize]")
+            self.notifyUI()
+            // Keep = this loan runs on with the phone present — re-assert holdsPod so the
+            // phone's yield can't be waiting on evidence (detector C, fix 2).
+            self.sendHoldsPodStatusReport(reason: "Keep chosen")
         }
     }
 
@@ -734,6 +785,7 @@ final class PodLoanWatchController {
                     self.lastIdleNote = NSLocalizedString("No response from iPhone — check the phone (loan refused, or busy) and try again.", comment: "Glance: loan request timed out")
                     SportLog.event("loan", "REQUEST TIMED OUT — no grant in \(Int(timeout))s (phone refused / busy / unreachable)")
                 }
+                self.notifyUI()   // offer/note landed within a possibly same-value phase
             }
             self.requestTimeoutWork = work
             self.schedule(after: timeout, label: "request-timeout", execute: work)
@@ -921,6 +973,9 @@ final class PodLoanWatchController {
         }
 
         epoch = grant.epoch
+        // The high-water mark records every epoch ever accepted and is never cleared —
+        // the memory CLOSED wipes, so a later seize can't re-mint a spent epoch (fix 4a).
+        defaults.set(max(defaults.integer(forKey: Keys.highWaterEpoch), grant.epoch), forKey: Keys.highWaterEpoch)
         phoneSupportsInterimHandback = grant.supportsInterimHandback ?? false   // interim-handback capability gate
         phoneSupportsOverrideRecords = grant.supportsOverrideRecords ?? false    // override-record skew gate
         chaseWorkItem?.cancel()         // liveness: fresh loan, no chase residue

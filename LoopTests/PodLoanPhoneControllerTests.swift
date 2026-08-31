@@ -2347,6 +2347,109 @@ extension PodLoanPhoneControllerTests {
         waitUntil(timeout: 5, "fresh evidence yields") { controller.yieldingToInferredLoan }
     }
 
+    /// The ghost-drain theft, fixed (field 2026-08-31 12:44): a reboot-era FINAL offer
+    /// for the old epoch retro-acks and drains while the LIVE successor loan streams.
+    /// The batches that arrive mid-drain are remembered as evidence in ANY state, and the
+    /// close then commits the books but does NOT resume custody — no reclaim, dosing
+    /// stays paused, yield engaged. The old behavior reclaimed the pod and R33-canceled
+    /// the live loan's temp out from under it.
+    func testGhostDrainCloseYieldsInsteadOfStealingFromTheLiveLoan() throws {
+        let token = seizeCredentialOutstanding()
+        let controller = makeController()
+
+        // The ghost era: retro-ack adopts e4 (interim first — the drain is in progress).
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: 4, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                          events: [], tombstones: [], recovered: true, released: false,
+                          seizeToken: token)).transportDictionary())
+        waitUntil(timeout: 5, "ghost adopted") { controller.state == .loaned }
+
+        // The LIVE loan's traffic lands mid-drain — dropped, but remembered as evidence.
+        controller.handleIncoming(userInfo: try futureEpochBatch(epoch: 5))
+        usleep(200_000)
+
+        // The ghost's FINAL offer closes its drain.
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: 4, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                          events: [], tombstones: [], recovered: true, released: true,
+                          seizeToken: token)).transportDictionary())
+        waitUntil(timeout: 5, "close yielded") { controller.yieldingToInferredLoan }
+
+        XCTAssertEqual(controller.state, .owner, "books closed at .owner…")
+        XCTAssertTrue(MockPumpManager.testConnectionReleased, "…but custody NOT resumed — the pod stays the live loan's")
+        lock.lock(); let paused = pauseCalls; lock.unlock()
+        XCTAssertNotEqual(paused.last, false, "and dosing never resumed under the live loan")
+    }
+
+    /// Fix 4b: the epoch rides the dormant-refresh fingerprint, so every epoch advance
+    /// re-issues the credential immediately — no 30-minute staleness window in which a
+    /// spent provisional epoch can be reused or bricked by a recorded revoke.
+    func testEpochAdvanceRefreshesTheDormantCredential() throws {
+        let token = seizeCredentialOutstanding()
+        UserDefaults.standard.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
+        let controller = makeController()
+
+        let first = expectSend()
+        controller.considerDormantRefresh()
+        wait(for: [first], timeout: 5)
+
+        // Advance the epoch without touching settings: retro-ack e3 and drain it closed.
+        // (Terminal-condition wait: the controller STARTS at .owner, so wait on the
+        // drain's ack instead of the state.)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: 3, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                          events: [], tombstones: [], recovered: true, released: true,
+                          seizeToken: token)).transportDictionary())
+        waitUntil(timeout: 5, "ghost drained") {
+            self.lock.lock(); defer { self.lock.unlock() }
+            return self.sent.contains { if case .handbackAck = $0 { return true }; return false }
+        }
+        waitForState(controller, .owner)
+
+        controller.considerDormantRefresh()
+        waitUntil(timeout: 5, "second refresh") {
+            self.lock.lock(); defer { self.lock.unlock() }
+            return self.sent.filter { if case .dormantGrant = $0 { return true }; return false }.count >= 2
+        }
+        lock.lock()
+        let epochs: [Int] = sent.compactMap { if case .dormantGrant(let d) = $0 { return d.grant.epoch }; return nil }
+        lock.unlock()
+        XCTAssertEqual(epochs, [1, 4], "provisional epochs track the phone's counter (0+1, then adopted-3+1) with no settings change and no 30-minute wait")
+    }
+
+    /// Fix 3: the retro-ack anchors the audit window at the offer's own era instead of
+    /// clearing it to nil — which fell back to the reconciler's 2-hour default and judged
+    /// a 5-minute seized loan over the whole morning (loanMin=120, phantom -1.15/-1.30).
+    func testRetroAckAnchorsTheAuditWindowAtTheOffersEra() throws {
+        let token = seizeCredentialOutstanding()
+        let controller = makeController()
+        let eventStart = Date().addingTimeInterval(-1200)
+        let event = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
+                              record: LoanDoseRecord(kind: .bolus, startDate: eventStart, amount: 0.5), loggedAt: eventStart)
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: 4, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                          events: [event], tombstones: [], recovered: true, released: false,
+                          seizeToken: token)).transportDictionary())
+        waitUntil(timeout: 5, "adopted") { controller.state == .loaned }
+
+        let anchor = UserDefaults.standard.object(forKey: "PodLoanPhoneController.loanStartedAt") as? Date
+        XCTAssertNotNil(anchor, "the window anchor is SET, never nil-to-default")
+        XCTAssertEqual(anchor.map { abs($0.timeIntervalSince(eventStart)) < 1 }, true,
+                       "…at the offer's earliest event")
+    }
+
+    /// Detector C, phone half: an unsolicited holdsPod status report for a newer epoch
+    /// at .owner is books-dirty evidence — yield without waiting for dose traffic.
+    func testHoldsPodStatusReportYieldsAtOwner() throws {
+        _ = seizeCredentialOutstanding()
+        let controller = makeController()
+        controller.handleIncoming(userInfo: try LoanMessage.statusReport(StatusReport(
+            epoch: 5, mode: .closedDirect, lastDirectGlucoseAge: 60, lastEventSeq: 2,
+            podFault: nil, holdsPod: true)).transportDictionary())
+        waitUntil(timeout: 5, "yielded on the report") { controller.yieldingToInferredLoan }
+        XCTAssertTrue(controller.isPodLoanedOut, "pill reads Pod on Watch off the report alone")
+    }
+
     /// The gates, each alone sufficient to hold the mirror off: no credential (watchless
     /// and never-loaned users stay bit-for-bit stock), the kill switch, and — for
     /// detector A — a reachable watch.

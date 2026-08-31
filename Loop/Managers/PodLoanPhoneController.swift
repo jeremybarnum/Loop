@@ -2028,7 +2028,13 @@ final class PodLoanPhoneController {
         // incomplete snapshot simply skips this refresh; the last complete one stands.
         guard settings.maximumBolus != nil, settings.maximumBasalRatePerHour != nil,
               settings.basalRateSchedule != nil else { return }
-        let fingerprint = Self.settingsFingerprint(settings)
+        // The EPOCH rides the fingerprint (fix 4b, field 2026-08-31): every epoch advance
+        // — grant, retro-ack, force — re-issues the credential immediately. Without it, a
+        // stale provisional epoch produced three field symptoms in one afternoon: epoch
+        // reuse on back-to-back seizes, an un-retro-ackable strand, and a seize BRICKED
+        // for 12 minutes by the split-brain guard after a revoke (270 ≤ revoked 271,
+        // four identical rejects until the 30-min floor refresh).
+        let fingerprint = Self.settingsFingerprint(settings) + "|e\(epoch)"
         let periodicDue = lastDormantRefreshAt.map { deps.now().timeIntervalSince($0) >= Self.dormantRefreshInterval } ?? true
         guard periodicDue || fingerprint != lastDormantSettingsFingerprint else { return }
 
@@ -2076,6 +2082,20 @@ final class PodLoanPhoneController {
     /// Guards the SQN detector against our own relaunch-restore noise (a restored older
     /// pod state can resync against our own sessions in the first moments of a launch).
     private let processStartedAt: Date
+
+    /// The newest loan traffic seen for an epoch AHEAD of ours, in ANY state — batches
+    /// dropped mid-drain, holdsPod status reports. Fix for the 2026-08-31 ghost-drain
+    /// theft: e269's batches arrived while the e268 ghost was closing (.reconciling, so
+    /// detector B's .owner guard couldn't act), and the close then reclaimed the pod out
+    /// from under the live loan. Remembered here so the close can check before resuming
+    /// custody. In-memory on purpose: only FRESH evidence (10 min) may block a reclaim.
+    private var newestForeignLoanEvidence: (epoch: Int, at: Date)?
+
+    /// Fresh evidence that a loan NEWER than `epochN` is live right now.
+    private func supersededByLiveLoan(_ epochN: Int) -> Bool {
+        guard let evidence = newestForeignLoanEvidence, evidence.epoch > epochN else { return false }
+        return deps.now().timeIntervalSince(evidence.at) < 600
+    }
 
     /// Kill switch (absent = enabled), the standing insurance pattern.
     static let inferredLoanYieldDisabledKey = "PodLoanPhoneController.inferredLoanYieldDisabled"
@@ -2258,6 +2278,21 @@ final class PodLoanPhoneController {
     }
 
     private func handleStatusReport(_ report: StatusReport) {
+        // PHONE MIRROR detector C (before the epoch guard — a foreign-epoch report is the
+        // whole point): the watch says outright that it holds the pod on a loan ahead of
+        // ours. Sent at the reunion prompt and at Keep, so the yield no longer waits for
+        // dose-stream evidence that only flows when the loop happens to enact — and it
+        // converts the 2026-08-31 phantom-grant standoff (query → silence → force-steal)
+        // into query → answer → yield, once epochs are honest (fix 4).
+        if report.holdsPod, report.epoch > epoch {
+            if newestForeignLoanEvidence.map({ report.epoch >= $0.epoch }) ?? true {
+                newestForeignLoanEvidence = (report.epoch, deps.now())
+            }
+            if state == .owner,
+               UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) != nil {
+                engageInferredLoanYield(evidence: "statusReport — watch holds the pod on e\(report.epoch)")
+            }
+        }
         guard report.epoch == epoch else { return }
         // Row 4: the query-before-reclaim answer.
         if state == .grantOffered, report.holdsPod {
@@ -2303,6 +2338,12 @@ final class PodLoanPhoneController {
         // arrive?" had no answer. It has one now.
         guard batch.epoch == epoch, state == .loaned || state == .reclaimPending else {
             handbackDiag(batch.epoch, "batch DROPPED — \(batch.events.count) event(s) ev=\(batch.epoch) vs phone ev=\(epoch), state=\(state.rawValue) (recovered via the offer path if the watch still resends)")
+            // A future-epoch batch is live evidence of a newer loan in ANY state — the
+            // drop at .reconciling during the 2026-08-31 ghost drain is exactly the
+            // moment the evidence mattered most (the close was about to steal the pod).
+            if batch.epoch > epoch, newestForeignLoanEvidence.map({ batch.epoch >= $0.epoch }) ?? true {
+                newestForeignLoanEvidence = (batch.epoch, deps.now())
+            }
             // PHONE MIRROR detector B (row 6 — WC up): a FUTURE-epoch batch at .owner is
             // live evidence of a loan this phone never granted. The batch itself stays
             // dropped (yield needs less authority than adoption — booking still waits for
@@ -2363,8 +2404,15 @@ final class PodLoanPhoneController {
             checkpointsThisLoan = 0
             worstWindowThisLoan = 0
             UserDefaults.standard.removeObject(forKey: Keys.deliveredAtTakeover)
-            UserDefaults.standard.removeObject(forKey: Keys.loanStartedAt)
-            loanStartedAt = nil
+            // The loan window anchors at the OFFER'S OWN ERA — its earliest event, else
+            // its hand-back stamp — never nil: a nil anchor fell back to the reconciler's
+            // 2-hour default and audited a 5-minute seized loan over the whole morning
+            // (field 2026-08-31: loanMin=120, phantom -1.15/-1.30 residuals). Floored at
+            // -6h, the insulin horizon.
+            let anchor = max(offer.events.map(\.record.startDate).min() ?? offer.handedBackAt,
+                             deps.now().addingTimeInterval(-.hours(6)))
+            loanStartedAt = anchor
+            UserDefaults.standard.set(anchor, forKey: Keys.loanStartedAt)
             // The phone never paused for this loan, so the reclaim's restore would find no
             // capture and fail-safe to OPEN loop — wrong here: the user's setting was
             // untouched all along. Seed the capture with the CURRENT value so the restore
@@ -2894,6 +2942,25 @@ final class PodLoanPhoneController {
         cancelReclaimLadder()
         cancelNotification(id: NotificationID.duration)
         cancelNotification(id: NotificationID.paused)
+        // GHOST-DRAIN SUPERSESSION (field 2026-08-31 12:44): the loan that just drained
+        // can be a reboot-era ghost whose queued FINAL offer outlived the fold — while the
+        // LIVE successor loan is streaming. Closing its books is right; resuming custody
+        // is theft: the old close reclaimed the pod and R33-canceled the live loan's temp.
+        // With fresh newer-epoch evidence in hand: commit stands, audit is moot (it needs
+        // the pod, and the pod is the live loan's), custody yields.
+        if supersededByLiveLoan(epoch) {
+            let liveEpoch = newestForeignLoanEvidence?.epoch ?? epoch + 1
+            pendingRevoke = false
+            state = .owner
+            staged = [:]
+            stagedTombstones = []
+            persistStaged()
+            pendingHandbackAudit = nil
+            UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
+            PhoneLog.event("mirror", "drain e\(epoch) closed UNDER live e\(liveEpoch) — books committed, audit moot, custody NOT resumed [mirror]")
+            engageInferredLoanYield(evidence: "superseding loan e\(liveEpoch) streamed during the e\(epoch) drain")
+            return
+        }
         (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
         pendingRevoke = false
         state = .owner
