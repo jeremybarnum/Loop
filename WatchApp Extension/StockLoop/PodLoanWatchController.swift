@@ -482,6 +482,13 @@ final class PodLoanWatchController {
     /// reunion exists for.
     private var pendingSeizeToken: UUID?
 
+    /// True while THIS loan attempt is seize-flavored, for the [seize] grep tag on ladder
+    /// and abort lines. Two sources because the fold consumes the pending token early
+    /// (persisting it), which made post-fold aborts log untagged on 2026-08-30.
+    private var seizeMarkerActive: Bool {
+        pendingSeizeToken != nil || defaults.string(forKey: DormantKeys.activeToken) != nil
+    }
+
     /// The takeover-liveness budget a seize activation mints for itself — the same 5 minutes
     /// a live grant gets from the phone. The DORMANT credential's own expiresAt is issuedAt
     /// by contract ("meaningless dormant"); forgetting to re-stamp it here is what killed
@@ -535,6 +542,57 @@ final class PodLoanWatchController {
             self.seizeOffer = nil
             self.lastIdleNote = NSLocalizedString("Offline start cancelled.", comment: "Glance note after dismissing a seize offer")
             SportLog.event("seize", "seize offer DISMISSED [seize]")
+        }
+    }
+
+    // MARK: - R40 reunion: the phone's return ends a seized loan
+
+    /// Kill switch (absent = enabled), same insurance pattern as the OmnipodKit loan
+    /// interlock: an automatic dosing-control transition ships with a way to turn it off
+    /// in the field without a build.
+    static let seizeAutoHandbackDisabledKey = "PodLoanWatchController.seizeAutoHandbackDisabled"
+
+    /// True while the 30 s reunion debounce is pending, so reachability flapping arms it once.
+    private var seizeReunionDebounceArmed = false
+
+    /// Wired from the WCSession delegate's reachability callback. A seize is a bridge, not
+    /// a mode (R40(e)): the moment the phone is genuinely back, the exceptional state ends
+    /// by the SAME hand-back the user would perform — WS1 keeps the watch in control and
+    /// dosing through the drain, the offer carries the reunion token, and the phone
+    /// retro-acknowledges the whole story. Field 2026-08-30, the reason this exists: the
+    /// returned phone dosed the pod AS OWNER (it never granted the loan, so its standing
+    /// connect simply won the orphaned pod) while the watch still believed it held the
+    /// loan — dual controllers, split insulin books, both under-counting IOB.
+    ///
+    /// Debounced 30 s: a reachability flicker must not end a loan the user deliberately
+    /// started. And regret is already handled: if the phone vanishes again mid-drain, the
+    /// existing hand-back deadline resumes Sport Mode on the watch.
+    func noteReachabilityChanged(_ reachable: Bool) {
+        queue.async {
+            guard reachable else { return }
+            guard self.phase == .active,
+                  self.defaults.string(forKey: DormantKeys.activeToken) != nil,
+                  !self.handbackRequested else { return }
+            guard !self.defaults.bool(forKey: Self.seizeAutoHandbackDisabledKey) else {
+                SportLog.event("seize", "phone returned during a seized loan — auto hand-back DISABLED by kill switch [seize]")
+                return
+            }
+            guard !self.seizeReunionDebounceArmed else { return }
+            self.seizeReunionDebounceArmed = true
+            SportLog.event("seize", "phone REACHABLE during a seized loan — auto hand-back in 30s unless it flickers away [seize]")
+            self.schedule(after: 30, label: "seize-reunion-debounce") { [weak self] in
+                guard let self = self else { return }
+                self.seizeReunionDebounceArmed = false
+                guard self.phase == .active,
+                      self.defaults.string(forKey: DormantKeys.activeToken) != nil,
+                      !self.handbackRequested else { return }
+                guard self.isPhoneReachable() else {
+                    SportLog.event("seize", "phone flickered away before the reunion debounce — seized loan continues [seize]")
+                    return
+                }
+                SportLog.event("seize", "phone is back — AUTO HAND-BACK of the seized loan (R40(e): a seize is a bridge, not a mode) [seize]")
+                self.beginHandback()
+            }
         }
     }
 
@@ -725,7 +783,11 @@ final class PodLoanWatchController {
         /// `phase == .idle`, Start becomes a silent no-op until the app is relaunched. Every
         /// rejection path goes through `rejectGrant`, which restores `.idle` so the state does
         /// the timeout's job instead.
-        guard phase == .idle || phase == .requested else {
+        // .recoveredDrain accepts grants too (R40 re-entry): the resting phase with a
+        // parked drain replaced plain .idle, and a late queued grant deserves the same
+        // answer it always got there — usually the "undrained prior loan" denial below,
+        // which the phone recovers from, rather than a silent ignore that costs a tap.
+        guard phase == .idle || phase == .requested || phase == .recoveredDrain else {
             SportLog.event("loan", "grant ignored — wrong phase (\(phase.rawValue))")
             return
         }
@@ -961,7 +1023,7 @@ final class PodLoanWatchController {
         // was identified as the killer).
         SportLog.event("loan", String(format: "takeover ladder start — lease %+.0fs, epoch %d%@",
                                       grant.expiresAt.timeIntervalSince(now()), grant.epoch,
-                                      pendingSeizeToken != nil ? " [seize]" : ""))
+                                      seizeMarkerActive ? " [seize]" : ""))
         attemptTakeoverRead(manager: manager, grant: grant, attempt: 0)
     }
 
@@ -1046,7 +1108,7 @@ final class PodLoanWatchController {
                     } else {
                         self.lastIdleNote = NSLocalizedString("Sport Mode start expired before the pod answered. Tap Start to try again.", comment: "Glance: grant lease expired mid-takeover")
                     }
-                    SportLog.event("loan", "TAKEOVER ABORTED — grant lease expired mid-takeover after \(attempt + 1) read(s), epoch \(grant.epoch), wedgeSignature=\(PodLoanConnectClock.wedgeSignature)\(self.pendingSeizeToken != nil ? " [seize]" : "")")
+                    SportLog.event("loan", "TAKEOVER ABORTED — grant lease expired mid-takeover after \(attempt + 1) read(s), epoch \(grant.epoch), wedgeSignature=\(PodLoanConnectClock.wedgeSignature)\(self.seizeMarkerActive ? " [seize]" : "")")
                     self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "grant expired mid-takeover")))
                     return
                 }
@@ -1229,7 +1291,7 @@ final class PodLoanWatchController {
                                                   manager.podLoanConnectionStateDescription,
                                                   PodLoanConnectClock.summary(since: self.attemptStartedAt),
                                                   RuntimeStateLog.snapshot(), grant.epoch,
-                                                  self.pendingSeizeToken != nil ? " [seize]" : ""))
+                                                  self.seizeMarkerActive ? " [seize]" : ""))
                     // The reason string is rendered verbatim in the PHONE's notification body
                     // ("The watch could not take the pod (…). The phone kept it."), so it carries
                     // the same obligation as the wrist note above: do not blame the pod for a

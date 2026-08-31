@@ -275,4 +275,120 @@ final class SeizeActivationTests: XCTestCase {
                        "token persisted at FOLD — a tokenless future-epoch offer would be dropped by the phone")
         XCTAssertEqual(snap.phase, .recoveredDrain, "the failed activation rests back on the drain, still startable")
     }
+
+    // MARK: - R40 reunion: the phone's return ends a seized loan
+
+    /// Drives the sim fake-flow to .active (the scheduler seam fires the sim timers
+    /// inline), marks the loan seized (persisted reunion token), then delivers the
+    /// reachability transition. The debounce must arm, and firing it must run the full
+    /// auto hand-back — in the sim flow, all the way back to idle. This is the fix for
+    /// field 2026-08-30: the returned phone dosed as OWNER while the watch still claimed
+    /// the loan (dual controllers, split books).
+    func testPhoneReturnEndsASeizedLoanThroughTheNormalHandback() {
+        defaults.set(true, forKey: "sim.fakeLoanFlow")
+        let controller = makeController()
+        controller.send = { _ in }
+        controller.isPhoneReachable = { true }
+        var pendingDebounce: [DispatchWorkItem] = []
+        controller.scheduler = { _, label, work in
+            switch label {
+            case "sim-grant", "sim-active", "sim-handback": work.perform()   // virtual time through the sim flow
+            case "seize-reunion-debounce": pendingDebounce.append(work)      // held, fired by hand below
+            default: break                                                   // watchdogs etc. stay armed-only
+            }
+        }
+
+        controller.requestLoan(watchBuild: "reunion-test")
+        XCTAssertEqual(controller.debugSnapshot().phase, .active, "precondition: sim flow reached the live loan")
+        defaults.set(UUID().uuidString, forKey: "PodLoanWatchController.activeSeizeToken")   // mark it SEIZED
+
+        controller.noteReachabilityChanged(true)
+        _ = controller.debugSnapshot()                              // fence the arming block
+        XCTAssertEqual(pendingDebounce.count, 1, "reachability during a seized loan arms the reunion debounce")
+
+        controller.noteReachabilityChanged(true)
+        _ = controller.debugSnapshot()
+        XCTAssertEqual(pendingDebounce.count, 1, "flapping reachability must not stack debounces")
+
+        pendingDebounce[0].perform()                                // 30 s later, phone still reachable
+        // The auto chain hops the queue twice (beginHandback re-enqueues, then the sim
+        // drive re-enqueues) — fence each hop before reading the verdict.
+        _ = controller.debugSnapshot()
+        _ = controller.debugSnapshot()
+        let snap = controller.debugSnapshot()
+        XCTAssertEqual(snap.phase, .idle, "the seized loan ended through the normal hand-back")
+    }
+
+    /// The three gates that must each keep the debounce unarmed: no reunion token (a
+    /// NORMAL loan is never auto-ended), the kill switch, and a reachability LOSS.
+    func testReunionDebounceRespectsItsGates() {
+        defaults.set(true, forKey: "sim.fakeLoanFlow")
+        let controller = makeController()
+        controller.send = { _ in }
+        controller.isPhoneReachable = { true }
+        var pendingDebounce: [DispatchWorkItem] = []
+        controller.scheduler = { _, label, work in
+            switch label {
+            case "sim-grant", "sim-active": work.perform()
+            case "seize-reunion-debounce": pendingDebounce.append(work)
+            default: break
+            }
+        }
+        controller.requestLoan(watchBuild: "reunion-test")
+        XCTAssertEqual(controller.debugSnapshot().phase, .active)
+
+        controller.noteReachabilityChanged(true)                    // NORMAL loan: no token stored
+        _ = controller.debugSnapshot()
+        XCTAssertTrue(pendingDebounce.isEmpty, "a normal loan must never arm the auto hand-back")
+
+        defaults.set(UUID().uuidString, forKey: "PodLoanWatchController.activeSeizeToken")
+        defaults.set(true, forKey: "PodLoanWatchController.seizeAutoHandbackDisabled")
+        controller.noteReachabilityChanged(true)
+        _ = controller.debugSnapshot()
+        XCTAssertTrue(pendingDebounce.isEmpty, "the kill switch must hold it off")
+
+        defaults.removeObject(forKey: "PodLoanWatchController.seizeAutoHandbackDisabled")
+        controller.noteReachabilityChanged(false)
+        _ = controller.debugSnapshot()
+        XCTAssertTrue(pendingDebounce.isEmpty, "a reachability LOSS is not a reunion")
+
+        controller.noteReachabilityChanged(true)
+        _ = controller.debugSnapshot()
+        XCTAssertEqual(pendingDebounce.count, 1, "with the gates open, the debounce arms")
+
+        // Flicker: reachable at arming, gone at fire — the loan continues.
+        controller.isPhoneReachable = { false }
+        pendingDebounce[0].perform()
+        XCTAssertEqual(controller.debugSnapshot().phase, .active, "a flicker must not end the loan")
+    }
+
+    /// A late queued grant arriving while resting on a parked drain gets an ANSWER (the
+    /// undrained-prior-loan denial the phone recovers from), not the silent wrong-phase
+    /// ignore that cost a tap — the resting phase replaced plain .idle, which always
+    /// accepted late grants.
+    func testLateGrantWhileRestingOnAParkedDrainIsAnsweredNotIgnored() throws {
+        let seeded = LoanEventJournal(directory: journalDir)
+        try seeded.begin(epoch: 5)
+        _ = try seeded.mintEvent(record: LoanDoseRecord(kind: .bolus, startDate: Date(), amount: 0.5), provenance: .confirmed)
+
+        let controller = makeController()
+        var sentKinds: [String] = []
+        controller.send = { dict in
+            if let message = try? LoanMessage.decode(fromTransport: dict), case .takeoverFailed = message {
+                sentKinds.append("takeoverFailed")
+            } else {
+                sentKinds.append("other")
+            }
+        }
+        controller.scheduler = { _, _, _ in }
+        XCTAssertEqual(controller.debugSnapshot().phase, .recoveredDrain, "precondition: parked drain")
+
+        let grant = fixtureDormant(issuedAt: Date(), epoch: 9, completeSettings: true).grant
+            .withEpoch(9, leaseUntil: Date().addingTimeInterval(300))
+        controller.handleIncoming(userInfo: try LoanMessage.grant(grant).transportDictionary(), channel: .queued)
+        let snap = controller.debugSnapshot()
+
+        XCTAssertTrue(sentKinds.contains("takeoverFailed"), "the phone hears the denial and can recover")
+        XCTAssertEqual(snap.phase, .recoveredDrain, "and the watch rests back on its drain")
+    }
 }
