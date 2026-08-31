@@ -280,11 +280,10 @@ final class SeizeActivationTests: XCTestCase {
 
     /// Drives the sim fake-flow to .active (the scheduler seam fires the sim timers
     /// inline), marks the loan seized (persisted reunion token), then delivers the
-    /// reachability transition. The debounce must arm, and firing it must run the full
-    /// auto hand-back — in the sim flow, all the way back to idle. This is the fix for
-    /// field 2026-08-30: the returned phone dosed as OWNER while the watch still claimed
-    /// the loan (dual controllers, split books).
-    func testPhoneReturnEndsASeizedLoanThroughTheNormalHandback() {
+    /// reachability transition. R40(f), ruled 2026-08-31: the debounce fire raises a
+    /// PROMPT — the loan continues untouched — and only the user's Hand Back choice runs
+    /// the normal hand-back. (Jeremy overruled auto: reachability is not presence.)
+    func testPhoneReturnPromptsAndOnlyTheUsersChoiceEndsASeizedLoan() {
         defaults.set(true, forKey: "sim.fakeLoanFlow")
         let controller = makeController()
         controller.send = { _ in }
@@ -311,16 +310,33 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertEqual(pendingDebounce.count, 1, "flapping reachability must not stack debounces")
 
         pendingDebounce[0].perform()                                // 30 s later, phone still reachable
-        // The auto chain hops the queue twice (beginHandback re-enqueues, then the sim
-        // drive re-enqueues) — fence each hop before reading the verdict.
+        var snap = controller.debugSnapshot()
+        XCTAssertTrue(snap.reunionPromptVisible, "the fire raises the PROMPT")
+        XCTAssertEqual(snap.phase, .active, "…and the loan continues — never auto-ended (R40(f))")
+
+        // KEEP dismisses; a fresh reachability transition may prompt again later.
+        controller.dismissReunionPrompt()
+        snap = controller.debugSnapshot()
+        XCTAssertFalse(snap.reunionPromptVisible, "Keep clears the prompt")
+        XCTAssertEqual(snap.phase, .active, "and the loan still continues")
+
+        // Raise it again (new transition) and choose HAND BACK this time.
+        controller.noteReachabilityChanged(true)
+        _ = controller.debugSnapshot()
+        pendingDebounce[1].perform()
+        XCTAssertTrue(controller.debugSnapshot().reunionPromptVisible, "a fresh transition re-prompts")
+        controller.confirmReunionHandback()
+        // The confirm chain hops the queue twice (beginHandback re-enqueues, then the
+        // sim drive re-enqueues) — fence each hop before reading the verdict.
         _ = controller.debugSnapshot()
         _ = controller.debugSnapshot()
-        let snap = controller.debugSnapshot()
-        XCTAssertEqual(snap.phase, .idle, "the seized loan ended through the normal hand-back")
+        snap = controller.debugSnapshot()
+        XCTAssertEqual(snap.phase, .idle, "Hand Back runs the normal hand-back to completion")
+        XCTAssertFalse(snap.reunionPromptVisible, "and the prompt is gone")
     }
 
     /// The three gates that must each keep the debounce unarmed: no reunion token (a
-    /// NORMAL loan is never auto-ended), the kill switch, and a reachability LOSS.
+    /// NORMAL loan never prompts), the kill switch, and a reachability LOSS.
     func testReunionDebounceRespectsItsGates() {
         defaults.set(true, forKey: "sim.fakeLoanFlow")
         let controller = makeController()
@@ -339,7 +355,7 @@ final class SeizeActivationTests: XCTestCase {
 
         controller.noteReachabilityChanged(true)                    // NORMAL loan: no token stored
         _ = controller.debugSnapshot()
-        XCTAssertTrue(pendingDebounce.isEmpty, "a normal loan must never arm the auto hand-back")
+        XCTAssertTrue(pendingDebounce.isEmpty, "a normal loan must never arm the reunion prompt")
 
         defaults.set(UUID().uuidString, forKey: "PodLoanWatchController.activeSeizeToken")
         defaults.set(true, forKey: "PodLoanWatchController.seizeAutoHandbackDisabled")
@@ -356,10 +372,12 @@ final class SeizeActivationTests: XCTestCase {
         _ = controller.debugSnapshot()
         XCTAssertEqual(pendingDebounce.count, 1, "with the gates open, the debounce arms")
 
-        // Flicker: reachable at arming, gone at fire — the loan continues.
+        // Flicker: reachable at arming, gone at fire — no prompt, the loan continues.
         controller.isPhoneReachable = { false }
         pendingDebounce[0].perform()
-        XCTAssertEqual(controller.debugSnapshot().phase, .active, "a flicker must not end the loan")
+        let snap = controller.debugSnapshot()
+        XCTAssertFalse(snap.reunionPromptVisible, "a flicker must not raise the prompt")
+        XCTAssertEqual(snap.phase, .active, "and must not touch the loan")
     }
 
     /// A late queued grant arriving while resting on a parked drain gets an ANSWER (the

@@ -160,6 +160,9 @@ struct GlanceUIState {
     var handbackPending: Bool = false
     /// When the current reclaim began — anchors the determinate reclaim bar (2026-08-04).
     var handbackStartedAt: Date? = nil
+    /// R40(f): the phone returned during a seized loan — render the hand-back-or-keep
+    /// prompt on the active screen (the deliberate choice; never auto).
+    var reunionPrompt: Bool = false
 }
 
 // MARK: - View model
@@ -530,6 +533,7 @@ final class GlanceViewModel: ObservableObject {
                     s.idleNote = NSLocalizedString("Can't reach iPhone — still looping. Move it closer or check its Bluetooth.", comment: "Glance note when an interim hand-back is blocked by an unreachable phone")
                 }
             }
+            s.reunionPrompt = snap.reunionPromptVisible
             // A manual bolus spends most of its wall-clock waiting on the radio arbiter, with
             // the flow already dismissed. Say so, or the wrist looks idle and the user taps End
             // — which cancels the dose (field: 3x).
@@ -1189,6 +1193,36 @@ struct GlanceView: View {
                             .font(.system(size: 10))
                             .foregroundColor(.glanceDim)
                             .multilineTextAlignment(.center)
+                    }
+                }
+                // R40(f): the phone returned during a seized loan. The choice is the
+                // user's — never auto (reachability is not presence: "phone could be
+                // lost in the house but still on WiFi"). Mutually exclusive with the
+                // hand-back note above by construction: beginHandback clears the prompt.
+                if model.state.reunionPrompt {
+                    VStack(spacing: 3) {
+                        Text(NSLocalizedString("iPhone is back — hand the pod back?", comment: "Glance prompt when the phone returns during a seized loan"))
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.glanceInk)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 6) {
+                            Button {
+                                ExtensionDelegate.shared().stockLoopSession.loanController.confirmReunionHandback()
+                            } label: {
+                                Text(NSLocalizedString("Hand Back", comment: "Glance reunion prompt: end the seized loan"))
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.glanceAccent)
+                            Button {
+                                ExtensionDelegate.shared().stockLoopSession.loanController.dismissReunionPrompt()
+                            } label: {
+                                Text(NSLocalizedString("Keep", comment: "Glance reunion prompt: continue the seized loan"))
+                                    .font(.system(size: 12))
+                            }
+                            .buttonStyle(.bordered)
+                        }
                     }
                 }
             }

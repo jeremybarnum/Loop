@@ -969,3 +969,19 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   with a dormant grant outstanding → quiet hold (no aggressive pod retries, no
   loop-failure alarm cascade). Tripwires: unexplained odometer delta, a running temp
   the phone never enacted, SQN jump on reconnect.
+
+  R40(f) — REUNION PROMPT (ruled 2026-08-31, overruling the auto-hand-back
+  recommendation; the auto version was built overnight and REPLACED the same morning on
+  Jeremy's call. His rationale, near-verbatim: he is "starting to rethink how
+  exceptional the seize should be", and reachability is not presence — the "phone
+  could be lost in the house but still on WiFi"): when the phone becomes reachable
+  during a seized loan (30 s debounce; one prompt per reachability transition), the
+  watch PROMPTS — wrist alert plus an active-screen choice, Hand Back / Keep — and
+  NEVER auto-ends the loan. Hand Back runs the ordinary hand-back (WS1 drain, token on
+  the offer, retro-ack); Keep continues the seized loan until the next transition or a
+  manual End. Consequence, accepted explicitly: the dual-controller window
+  (field 2026-08-30: the returned phone dosed AS OWNER while the watch held the loan)
+  now stays open for as long as the prompt sits unanswered — the PHONE MIRROR above is
+  therefore the load-bearing safety mechanism, not a belt, and rises accordingly in the
+  build order. Kill switch: PodLoanWatchController.seizeAutoHandbackDisabled (gates the
+  prompt).

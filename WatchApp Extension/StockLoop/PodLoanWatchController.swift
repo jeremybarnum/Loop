@@ -545,55 +545,93 @@ final class PodLoanWatchController {
         }
     }
 
-    // MARK: - R40 reunion: the phone's return ends a seized loan
+    // MARK: - R40(f) reunion: the phone's return PROMPTS during a seized loan
 
     /// Kill switch (absent = enabled), same insurance pattern as the OmnipodKit loan
-    /// interlock: an automatic dosing-control transition ships with a way to turn it off
-    /// in the field without a build.
+    /// interlock: a field-new behavior ships with a way to turn it off without a build.
     static let seizeAutoHandbackDisabledKey = "PodLoanWatchController.seizeAutoHandbackDisabled"
 
     /// True while the 30 s reunion debounce is pending, so reachability flapping arms it once.
     private var seizeReunionDebounceArmed = false
 
-    /// Wired from the WCSession delegate's reachability callback. A seize is a bridge, not
-    /// a mode (R40(e)): the moment the phone is genuinely back, the exceptional state ends
-    /// by the SAME hand-back the user would perform — WS1 keeps the watch in control and
-    /// dosing through the drain, the offer carries the reunion token, and the phone
-    /// retro-acknowledges the whole story. Field 2026-08-30, the reason this exists: the
-    /// returned phone dosed the pod AS OWNER (it never granted the loan, so its standing
-    /// connect simply won the orphaned pod) while the watch still believed it held the
-    /// loan — dual controllers, split insulin books, both under-counting IOB.
+    /// True while the reunion PROMPT is up: the phone became reachable during a seized
+    /// loan and the user has not chosen yet. Queue-confined; rendered off the snapshot.
+    private var reunionPromptActive = false
+
+    /// Wired from the WCSession delegate's reachability callback. R40(f), ruled
+    /// 2026-08-31: the phone's return during a seized loan raises a PROMPT — never an
+    /// automatic hand-back. Jeremy's rationale, overruling the auto recommendation:
+    /// reachability is not presence ("phone could be lost in the house but still on
+    /// WiFi"), and he is rethinking how exceptional the seize posture should be. The
+    /// hand-back stays the user's deliberate act; the phone-side mirror (R40(a): first
+    /// pod contact after a blackout is a status read, no enacting) is therefore the
+    /// safety mechanism for however long the prompt sits unanswered.
     ///
-    /// Debounced 30 s: a reachability flicker must not end a loan the user deliberately
-    /// started. And regret is already handled: if the phone vanishes again mid-drain, the
-    /// existing hand-back deadline resumes Sport Mode on the watch.
+    /// Field 2026-08-30, why SOMETHING must happen here: the returned phone dosed the
+    /// pod AS OWNER (it never granted the loan, so its standing connect simply won the
+    /// orphaned pod) while the watch still claimed the loan — dual controllers, split
+    /// insulin books. Debounced 30 s so a flicker doesn't prompt; one prompt per
+    /// reachability transition (a dismissal holds until the phone leaves and returns).
     func noteReachabilityChanged(_ reachable: Bool) {
         queue.async {
             guard reachable else { return }
             guard self.phase == .active,
                   self.defaults.string(forKey: DormantKeys.activeToken) != nil,
-                  !self.handbackRequested else { return }
+                  !self.handbackRequested, !self.reunionPromptActive else { return }
             guard !self.defaults.bool(forKey: Self.seizeAutoHandbackDisabledKey) else {
-                SportLog.event("seize", "phone returned during a seized loan — auto hand-back DISABLED by kill switch [seize]")
+                SportLog.event("seize", "phone returned during a seized loan — reunion prompt DISABLED by kill switch [seize]")
                 return
             }
             guard !self.seizeReunionDebounceArmed else { return }
             self.seizeReunionDebounceArmed = true
-            SportLog.event("seize", "phone REACHABLE during a seized loan — auto hand-back in 30s unless it flickers away [seize]")
+            SportLog.event("seize", "phone REACHABLE during a seized loan — reunion prompt in 30s unless it flickers away [seize]")
             self.schedule(after: 30, label: "seize-reunion-debounce") { [weak self] in
                 guard let self = self else { return }
                 self.seizeReunionDebounceArmed = false
                 guard self.phase == .active,
                       self.defaults.string(forKey: DormantKeys.activeToken) != nil,
-                      !self.handbackRequested else { return }
+                      !self.handbackRequested, !self.reunionPromptActive else { return }
                 guard self.isPhoneReachable() else {
                     SportLog.event("seize", "phone flickered away before the reunion debounce — seized loan continues [seize]")
                     return
                 }
-                SportLog.event("seize", "phone is back — AUTO HAND-BACK of the seized loan (R40(e): a seize is a bridge, not a mode) [seize]")
-                self.beginHandback()
+                self.reunionPromptActive = true
+                SportLog.event("seize", "phone is back — REUNION PROMPT raised (R40(f): the hand-back stays the user's deliberate act) [seize]")
+                self.issueReunionPromptAlert()
             }
         }
+    }
+
+    /// The user chose Hand Back on the reunion prompt — the normal hand-back runs.
+    func confirmReunionHandback() {
+        queue.async {
+            guard self.reunionPromptActive, self.phase == .active else { return }
+            self.reunionPromptActive = false
+            SportLog.event("seize", "reunion prompt: HAND BACK chosen — normal hand-back begins [seize]")
+            self.beginHandback()
+        }
+    }
+
+    /// The user chose Keep — the seized loan continues. No re-prompt until the phone
+    /// LEAVES reachability and returns (a fresh transition re-arms the debounce).
+    func dismissReunionPrompt() {
+        queue.async {
+            guard self.reunionPromptActive else { return }
+            self.reunionPromptActive = false
+            SportLog.event("seize", "reunion prompt: KEEP chosen — seized loan continues [seize]")
+        }
+    }
+
+    /// Wrist-down coverage for the prompt — same alert machinery as the session-ended
+    /// notice. Informational only; the choice itself lives on the glance.
+    private func issueReunionPromptAlert() {
+        let title = NSLocalizedString("iPhone Is Back", comment: "Watch alert title when the phone returns during a seized loan")
+        let body = NSLocalizedString("Sport Mode is still running without it. Open the app to hand the pod back, or keep going.", comment: "Watch alert body when the phone returns during a seized loan")
+        loopManager.issueAlert(Alert(
+            identifier: Alert.Identifier(managerIdentifier: "PodLoan", alertIdentifier: "seizeReunionPrompt"),
+            foregroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
+            backgroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
+            trigger: .immediate))
     }
 
     /// Every refresh replaces the stored credential wholesale — the newest snapshot is the
@@ -1844,6 +1882,7 @@ final class PodLoanWatchController {
         queue.async {
             guard self.phase == .active, self.pumpManager != nil else { return }
             guard !self.handbackRequested else { return }
+            self.reunionPromptActive = false   // a manual End answers the R40(f) prompt too
             self.handbackRequested = true
             self.handbackResendCount = 0
             self.handbackSawUnreachable = false
@@ -2201,6 +2240,7 @@ final class PodLoanWatchController {
         HandbackStuckAlert.disarm()   // Hand-back completed cleanly
         onLoanActiveChanged?(false)
         defaults.removeObject(forKey: DormantKeys.activeToken)   // R40: seized loan (if any) is over
+        reunionPromptActive = false   // hygiene: no prompt can outlive its loan
         SportLog.event("loan", "CLOSED — records drained, pod released, cursor \(ack.committedCursor)")
     }
 
@@ -2355,6 +2395,9 @@ final class PodLoanWatchController {
         /// R40(b): a seize offer is pending (normal request timed out with a stored
         /// credential); the glance renders the deliberate confirm with this age.
         let seizeOfferIssuedAt: Date?
+        /// R40(f): the phone returned during a seized loan — the glance renders the
+        /// hand-back-or-keep prompt on the active screen.
+        let reunionPromptVisible: Bool
     }
 
     /// True while this watch owns the pod (phase .active) — the carb/bolus flow
@@ -2435,7 +2478,8 @@ final class PodLoanWatchController {
                 handbackPending: handbackRequested,
                 handbackStartedAt: handbackStartedAt,
                 phoneReachable: isPhoneReachable(),
-                seizeOfferIssuedAt: seizeOffer?.issuedAt)
+                seizeOfferIssuedAt: seizeOffer?.issuedAt,
+                reunionPromptVisible: reunionPromptActive)
     }
 
     /// Bench helper: force a real pod status round-trip and report reachability.
