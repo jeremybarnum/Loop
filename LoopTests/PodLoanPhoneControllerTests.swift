@@ -2321,6 +2321,32 @@ extension PodLoanPhoneControllerTests {
         XCTAssertFalse(controller.yieldingToInferredLoan, "a handled stamp must not re-trigger the posture")
     }
 
+    /// The false positive the pre-ship verification pass caught: every NORMAL loan leaves
+    /// the same SQN residue detector A reads — the watch drove the pod, and the phone's
+    /// own reclaim observes the foreign sessions, at .owner. Hand back, pocket the phone,
+    /// leave the watch behind, and 330 s later the un-absolved detector would yield the
+    /// phone to a loan that ended properly. Absolution at reconciliation (verified or
+    /// forced) consumes the evidence; genuinely NEW sessions afterward still convict.
+    func testNormalLoanResidueIsAbsolvedNotRediscovered() throws {
+        _ = seizeCredentialOutstanding()
+        let controller = makeController(watchReachable: { false }, lastWatchContact: { nil }, now: { self.clock })
+        _ = try establishLoan(controller)
+        MockPumpManager.testForeignSessionAt = clock   // the loan's own sessions, as the reclaim sees them
+
+        controller.reclaimNow()                        // user takes the pod back; dead branch forces
+        waitUntil(timeout: 5, "force landed") { controller.state == .owner && !MockPumpManager.testConnectionReleased }
+
+        clock = clock.addingTimeInterval(600)          // walk away: past liveness window + launch guard
+        controller.considerInferredLoan()
+        usleep(300_000)
+        XCTAssertFalse(controller.yieldingToInferredLoan,
+                       "the loan's own residue is absolved at the force — a routine day must never yield")
+
+        MockPumpManager.testForeignSessionAt = clock.addingTimeInterval(-30)   // NEW sessions after absolution
+        controller.considerInferredLoan()
+        waitUntil(timeout: 5, "fresh evidence yields") { controller.yieldingToInferredLoan }
+    }
+
     /// The gates, each alone sufficient to hold the mirror off: no credential (watchless
     /// and never-loaned users stay bit-for-bit stock), the kill switch, and — for
     /// detector A — a reachable watch.

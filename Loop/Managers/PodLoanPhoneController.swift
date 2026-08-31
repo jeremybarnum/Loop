@@ -710,6 +710,11 @@ final class PodLoanPhoneController {
                         if let lendable = self.deps.pumpManager() as? PumpConnectionLendable {
                             self.handbackDiag(self.epoch, "loan BLE contention census — \(lendable.podLoanBleContentionDiagnostics)")
                         }
+                        // PHONE MIRROR absolution: the loan that just reconciled EXPLAINS every
+                        // foreign session up to now — without this, the mirror's SQN detector
+                        // would read a routine loan's own residue as a discovered seizure the
+                        // moment the watch goes quiet (hand back, pocket the phone, walk away).
+                        self.absolveForeignSessions(reason: "reclaim verified — the loan explains its own sessions")
                         self.deps.ownershipDidChange()
                         // The pod is provably reachable RIGHT NOW. This is the only moment in the
                         // whole hand-back where that is true, so it is where both jobs that need
@@ -2093,6 +2098,15 @@ final class PodLoanPhoneController {
         PhoneLog.event("mirror", "YIELDING to an inferred loan — \(evidence); pill=Pod on Watch, dosing paused, pod BLE released, exits: pill tap / watch revival / R40(f) prompt (R40(a): on conflict the phone yields) [mirror]")
     }
 
+    /// Absolution: stamp the foreign-session evidence as HANDLED because a reconciled or
+    /// forced loan-end explains it. Without this, detector A reads a routine loan's own
+    /// SQN residue as a discovered seizure the moment the watch goes quiet afterward —
+    /// the false positive that would put a normal day's phone into a needless yield.
+    private func absolveForeignSessions(reason: String) {
+        UserDefaults.standard.set(deps.now(), forKey: Keys.lastHandledForeignSessionAt)
+        PhoneLog.event("mirror", "foreign-session evidence absolved — \(reason) [mirror]")
+    }
+
     /// Exit bookkeeping. `resumeDosing` stays false on every current path: reclaimNow's
     /// force unpauses in forceReclaimToOwner, the retro-ack keeps the pause because the
     /// loan it adopts is live, and beginGrant re-pauses for its own loan.
@@ -3155,6 +3169,11 @@ final class PodLoanPhoneController {
             pendingForceReclaimReason = reason
             return
         }
+        // PHONE MIRROR absolution: the force is a deliberate reassertion of ownership —
+        // every foreign session up to this moment is either the loan being forced closed
+        // or the seizure the user just chose to take over from. The mirror must not
+        // rediscover it minutes later.
+        absolveForeignSessions(reason: "force reclaim (\(reason))")
         cancelReclaimLadder()
         cancelNotification(id: NotificationID.paused)
         cancelNotification(id: NotificationID.duration)
