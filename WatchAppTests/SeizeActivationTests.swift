@@ -21,6 +21,7 @@
 //
 
 import XCTest
+import HealthKit
 import LoopKit
 import LoopCore
 @testable import WatchApp_Extension
