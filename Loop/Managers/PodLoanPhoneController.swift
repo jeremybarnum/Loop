@@ -545,6 +545,10 @@ final class PodLoanPhoneController {
     private var lastRequestID: String?
     private var lastRequestAt: Date?
     private static let requestDedupeWindow: TimeInterval = .minutes(2)
+    /// How old a request may be (by its own sentAt stamp) and still earn a grant. The watch
+    /// gives up on a request in ≤25 s; anything older arriving here rode the queued channel
+    /// and its sender has long moved on. 90 s = the timeout with generous transit slack.
+    private static let requestTTL: TimeInterval = 90
 
     /// reclaimConnection() only re-arms the BLE bid; the actual reconnect lands
     /// seconds-to-minutes later. Open a bounded window so the tile keeps showing "Reclaiming…"
@@ -1638,6 +1642,23 @@ final class PodLoanPhoneController {
     // MARK: - Grant (§2.2)
 
     private func handleRequest(_ request: LoanRequest) {
+        // A request that AGED in the queued channel is a ghost: its watch timed out in ≤25 s
+        // and moved on — possibly all the way to a seize. Granting it releases the pod at a
+        // watch that isn't asking. Field 2026-08-30: two requests queued against a powered-
+        // off phone detonated at power-on — e253 granted to the five-minute-old first copy,
+        // the second denied against .grantOffered, the recovery force-reclaiming the fresh
+        // grant. The dedupe below cannot catch this (two real taps = two requestIDs); age
+        // can. Checked FIRST so a ghost also never updates the dedupe memory or the
+        // capability record. Older watches send no stamp and pass untouched.
+        if let sentAt = request.sentAt {
+            let age = deps.now().timeIntervalSince(sentAt)
+            if age > Self.requestTTL {
+                os_log("Loan request STALE — sent %.0fs ago (TTL %.0fs); ignored as a queued-channel ghost",
+                       log: log, type: .default, age, Self.requestTTL)
+                PhoneLog.event("loan", String(format: "request STALE — sent %.0fs ago (TTL %.0fs) — ignored, no grant", age, Self.requestTTL))
+                return
+            }
+        }
         // Suppress a TRANSPORT redelivery of the same request. This is not
         // the same as a user tapping Start twice — a second tap arrives seconds later against
         // settled state, whereas a redelivered copy arrives milliseconds later while the FIRST
@@ -1988,13 +2009,21 @@ final class PodLoanPhoneController {
         let issuedAt = deps.now()
         let token = dormantSeizeToken()
         let provisionalEpoch = epoch + 1
+        // Stamp the throttle at ENQUEUE, not completion: LoopDataUpdated arrives in bursts
+        // faster than assembly finishes, and completion-stamping let five identical 25 KB
+        // refreshes through one gate in a single second (field 2026-08-30) — straight into
+        // the same queued channel a jam later backs up. A failed assembly re-opens the gate.
+        lastDormantRefreshAt = issuedAt
+        lastDormantSettingsFingerprint = fingerprint
         assembleGrant(epoch: provisionalEpoch, referenceDate: issuedAt, expiresAt: issuedAt,
                       pumpRaw: pump.rawValue, loanSettingsRaw: loanSettings.rawValue,
                       settings: settings) { [weak self] grant in
-            guard let self = self, let grant = grant else { return }
+            guard let self = self else { return }
+            guard let grant = grant else {
+                self.lastDormantRefreshAt = nil   // assembly failed — next ping may retry
+                return
+            }
             guard self.state == .owner else { return }   // ownership moved mid-assembly
-            self.lastDormantRefreshAt = self.deps.now()
-            self.lastDormantSettingsFingerprint = fingerprint
             self.sendMessage(.dormantGrant(DormantGrant(grant: grant, issuedAt: issuedAt, seizeToken: token)))
             PhoneLog.event("seize", "dormant grant refreshed — \(grant.doseHistory.count) dose record(s), token …\(String(token.uuidString.suffix(8))) [seize]")
         }

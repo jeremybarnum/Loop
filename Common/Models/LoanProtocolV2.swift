@@ -477,15 +477,26 @@ public struct LoanRequest: Codable, Equatable {
     /// a kind its envelope decoder throws on (it would raise the build-skew notice every
     /// refresh). Recorded phone-side at every request.
     public let supportsSeize: Bool?
+    /// When the watch SENT this request — so the phone can refuse one that aged in the
+    /// queued channel instead of granting into the void. A request outlives its sender's
+    /// interest in ~25 s (the watch times out and moves on, possibly to a seize), but
+    /// transferUserInfo happily delivers it minutes later: at power-on 2026-08-30 the phone
+    /// granted an epoch to a five-minute-old replay from an idle watch, then denied the
+    /// next copy and force-reclaimed its own grant. The dedupe can't catch this — two real
+    /// taps carry different requestIDs. Optional for back-compat: nil (older watch) is
+    /// treated as fresh, exactly the pre-field behavior.
+    public let sentAt: Date?
 
     public init(watchBuild: String,
                 supportedVersions: [Int] = [LoanProtocol.version],
                 requestID: String = UUID().uuidString,
-                supportsSeize: Bool? = nil) {
+                supportsSeize: Bool? = nil,
+                sentAt: Date? = nil) {
         self.watchBuild = watchBuild
         self.supportedVersions = supportedVersions
         self.requestID = requestID
         self.supportsSeize = supportsSeize
+        self.sentAt = sentAt
     }
 }
 

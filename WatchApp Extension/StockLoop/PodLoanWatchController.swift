@@ -472,6 +472,25 @@ final class PodLoanWatchController {
     /// no 5-minute lease, and its epoch is provisional and forced fresh at activation).
     private var seizeActivationInFlight = false
 
+    /// The reunion token of a seize whose activation is in flight but not yet proven. It is
+    /// PROMOTED to the persisted active token only when the takeover reaches .active — an
+    /// aborted activation never touched the pod, so nothing may later echo its token: a
+    /// stale persisted token plus the activation's forced-fresh epoch is exactly the pair
+    /// the phone's retro-ack matches on, and it would acknowledge a loan that never ran.
+    /// Memory-only on purpose: a crash mid-ladder cannot resume the ladder, so there is
+    /// nothing to reunify; a crash AFTER .active has the persisted token, which is the case
+    /// reunion exists for.
+    private var pendingSeizeToken: UUID?
+
+    /// The takeover-liveness budget a seize activation mints for itself — the same 5 minutes
+    /// a live grant gets from the phone. The DORMANT credential's own expiresAt is issuedAt
+    /// by contract ("meaningless dormant"); forgetting to re-stamp it here is what killed
+    /// the first field seize at ladder read 1 (2026-08-30, "grant lease expired
+    /// mid-takeover" 900 ms after the confirm). The lease bounds the HANDSHAKE, not the
+    /// credential — R40(d) keeps credential age uncapped and disclosed, and the handshake
+    /// starts at the confirm.
+    static let seizeActivationLease: TimeInterval = 5 * 60
+
     /// R40(b): the user asked, the phone did not answer, a credential exists — OFFER the
     /// offline path (never auto-take it). Shows the age per R40(d); a deliberate confirm
     /// activates, anything else stays idle.
@@ -488,15 +507,19 @@ final class PodLoanWatchController {
             // phone's retro-ack matches on the token, not the epoch, so freshness here only
             // has to satisfy the watch's own monotonicity guards.
             let newEpoch = max(dormant.grant.epoch, (self.epoch ?? 0) + 1)
-            self.defaults.set(dormant.seizeToken.uuidString, forKey: DormantKeys.activeToken)
-            SportLog.event("seize", String(format: "SEIZE confirmed — activating dormant grant (issued %@, epoch %d→%d, token …%@) [seize]",
+            // Mint the LIVE lease alongside: the dormant expiresAt is issuedAt by contract,
+            // so an un-restamped credential walks into the ladder already expired and the
+            // mid-takeover lease guard kills it at read 1 (the first field seize, 2026-08-30).
+            let leaseUntil = self.now().addingTimeInterval(Self.seizeActivationLease)
+            self.pendingSeizeToken = dormant.seizeToken
+            SportLog.event("seize", String(format: "SEIZE confirmed — activating dormant grant (issued %@, epoch %d→%d, lease +%.0fs, token …%@) [seize]",
                                            DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .short, timeStyle: .short),
-                                           dormant.grant.epoch, newEpoch,
+                                           dormant.grant.epoch, newEpoch, Self.seizeActivationLease,
                                            String(dormant.seizeToken.uuidString.suffix(8))))
             self.phase = .requested
             self.attemptStartedAt = self.now()
             self.seizeActivationInFlight = true
-            self.handleGrant(dormant.grant.withEpoch(newEpoch))
+            self.handleGrant(dormant.grant.withEpoch(newEpoch, leaseUntil: leaseUntil))
             self.seizeActivationInFlight = false
         }
     }
@@ -514,7 +537,8 @@ final class PodLoanWatchController {
     /// only one that matters (R40: full records, settings frozen at issue). Logged at each
     /// arrival so the field cadence is auditable; the seize confirm's age line reads
     /// issuedAt (R40(d): age SHOWN, never capped).
-    private func handleDormantGrant(_ dormant: DormantGrant) {
+    /// Internal (not private) so tests can seed a stored credential through the real writer.
+    func handleDormantGrant(_ dormant: DormantGrant) {
         guard let data = try? LoanProtocol.encoder.encode(dormant) else {
             SportLog.event("seize", "dormant grant arrived but failed to re-encode — NOT stored [seize]")
             return
@@ -557,11 +581,18 @@ final class PodLoanWatchController {
             self.phase = .requested
             self.attemptStartedAt = self.now()
             self.lastIdleNote = nil
-            SportLog.event("loan", "REQUEST sent (build \(watchBuild)) — awaiting grant")
-            self.sendMessage(.request(LoanRequest(watchBuild: watchBuild, supportsSeize: true)))
+            // Advisory reachability ACCELERATES the timeout, never gates the attempt (R40(b)):
+            // a session already reporting unreachable will not deliver a grant in the next
+            // 17 s either, and the user is standing there watching "requesting…" — the first
+            // field seize (2026-08-30) spent 25 s twice against a powered-off phone. A
+            // reachable-LOOKING dead phone still gets the full window.
+            let reachable = self.isPhoneReachable()
+            let timeout: TimeInterval = reachable ? 25 : 8
+            SportLog.event("loan", "REQUEST sent (build \(watchBuild)) — awaiting grant\(reachable ? "" : " (phone unreachable — short \(Int(timeout))s timeout)")")
+            self.sendMessage(.request(LoanRequest(watchBuild: watchBuild, supportsSeize: true, sentAt: self.now())))
 
-            // No grant in 25 s → the phone refused, is busy, or isn't reachable. Return
-            // to idle with a visible reason instead of hanging on "requesting…".
+            // No grant within the timeout → the phone refused, is busy, or isn't reachable.
+            // Return to idle with a visible reason instead of hanging on "requesting…".
             self.requestTimeoutWork?.cancel()
             let work = DispatchWorkItem { [weak self] in
                 guard let self = self, self.phase == .requested else { return }
@@ -576,11 +607,11 @@ final class PodLoanWatchController {
                                                    DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .short, timeStyle: .short)))
                 } else {
                     self.lastIdleNote = NSLocalizedString("No response from iPhone — check the phone (loan refused, or busy) and try again.", comment: "Glance: loan request timed out")
-                    SportLog.event("loan", "REQUEST TIMED OUT — no grant in 25s (phone refused / busy / unreachable)")
+                    SportLog.event("loan", "REQUEST TIMED OUT — no grant in \(Int(timeout))s (phone refused / busy / unreachable)")
                 }
             }
             self.requestTimeoutWork = work
-            self.schedule(after: 25, label: "request-timeout", execute: work)
+            self.schedule(after: timeout, label: "request-timeout", execute: work)
         }
     }
 
@@ -652,6 +683,11 @@ final class PodLoanWatchController {
 
     private func handleGrant(_ grant: LoanGrant) {
         SportLog.event("loan", "GRANT received — epoch \(grant.epoch), \(grant.pumpManagerRawState.count)B pod state")
+
+        // A REAL grant supersedes any seize attempt that never proved out: drop the pending
+        // reunion token so this (normal) loan's ACTIVE flip cannot promote a seize identity
+        // it does not own. Covers every route to .active — they all pass through here first.
+        if !seizeActivationInFlight { pendingSeizeToken = nil }
 
         /// Order matters here. The timeout is cancelled AFTER the phase check and BEFORE the
         /// rejections: a grant we are going to act on stops the timeout, but a rejected one must
@@ -867,6 +903,14 @@ final class PodLoanWatchController {
         // (BlePodComms.bleRunSession guard). So retry on a bounded schedule — the
         // pod-side timeout budget (~40s) — instead of failing on the first,
         // pre-connection read.
+        // The lease horizon, logged at entry: a grant whose budget is already negative or
+        // seconds-thin dies at read 1 with "lease expired mid-takeover", and that death
+        // should be legible HERE rather than reconstructed from issue timestamps (the
+        // first field seize burned two attempts before the un-restamped dormant lease
+        // was identified as the killer).
+        SportLog.event("loan", String(format: "takeover ladder start — lease %+.0fs, epoch %d%@",
+                                      grant.expiresAt.timeIntervalSince(now()), grant.epoch,
+                                      pendingSeizeToken != nil ? " [seize]" : ""))
         attemptTakeoverRead(manager: manager, grant: grant, attempt: 0)
     }
 
@@ -951,7 +995,7 @@ final class PodLoanWatchController {
                     } else {
                         self.lastIdleNote = NSLocalizedString("Sport Mode start expired before the pod answered. Tap Start to try again.", comment: "Glance: grant lease expired mid-takeover")
                     }
-                    SportLog.event("loan", "TAKEOVER ABORTED — grant lease expired mid-takeover after \(attempt + 1) read(s), epoch \(grant.epoch), wedgeSignature=\(PodLoanConnectClock.wedgeSignature)")
+                    SportLog.event("loan", "TAKEOVER ABORTED — grant lease expired mid-takeover after \(attempt + 1) read(s), epoch \(grant.epoch), wedgeSignature=\(PodLoanConnectClock.wedgeSignature)\(self.pendingSeizeToken != nil ? " [seize]" : "")")
                     self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "grant expired mid-takeover")))
                     return
                 }
@@ -960,6 +1004,14 @@ final class PodLoanWatchController {
                     self.revokeCapturedDeliveredAt = nil
                     self.deliveredAtTakeover = delivered
                     self.phase = .active
+                    // R40 reunion identity: the seize is PROVEN only now — persist its token
+                    // so the loan's offers echo it and the phone can retro-acknowledge. Every
+                    // failed activation leaves this un-promoted, so nothing stale can match.
+                    if let token = self.pendingSeizeToken {
+                        self.defaults.set(token.uuidString, forKey: DormantKeys.activeToken)
+                        self.pendingSeizeToken = nil
+                        SportLog.event("seize", "seized loan ACTIVE — reunion token …\(String(token.uuidString.suffix(8))) persisted for the offer echo [seize]")
+                    }
                     self.loopManager.pumpManager = manager
                     self.loopManager.loanDoseRecorder = self
                     self.onLoanActiveChanged?(true)
@@ -1120,12 +1172,13 @@ final class PodLoanWatchController {
                             "Sport Mode didn't start (%.0fs). Your phone still has the pod and is still looping. Wait ~30s, then try again.",
                             comment: "Glance: takeover failed — the pod link never established"), failSecs)
                     }
-                    SportLog.event("loan", String(format: "TAKEOVER FAILED — %@ after %d reads in %.1fs [takeover-timing], max inter-read gap %.1fs (event-driven; 8s backstop when no event fires), %@, final BLE state %@, %@, %@, epoch %d",
+                    SportLog.event("loan", String(format: "TAKEOVER FAILED — %@ after %d reads in %.1fs [takeover-timing], max inter-read gap %.1fs (event-driven; 8s backstop when no event fires), %@, final BLE state %@, %@, %@, epoch %d%@",
                                                   stalled ? "ladder STALLED (our polling was deferred; see cb: for whether the link was up)" : "pod unreachable",
                                                   maxAttempts, failSecs, self.takeoverMaxReadGap, batteryTag(),
                                                   manager.podLoanConnectionStateDescription,
                                                   PodLoanConnectClock.summary(since: self.attemptStartedAt),
-                                                  RuntimeStateLog.snapshot(), grant.epoch))
+                                                  RuntimeStateLog.snapshot(), grant.epoch,
+                                                  self.pendingSeizeToken != nil ? " [seize]" : ""))
                     // The reason string is rendered verbatim in the PHONE's notification body
                     // ("The watch could not take the pod (…). The phone kept it."), so it carries
                     // the same obligation as the wrist note above: do not blame the pod for a
@@ -2931,11 +2984,14 @@ extension PodLoanWatchController: DeviceManagerDelegate {
 }
 
 
-// R40: a seize activation forces the credential's provisional epoch fresh; LoanGrant is
-// all-let by design, so the rewrite is an explicit re-init — every field carried verbatim.
-fileprivate extension LoanGrant {
-    func withEpoch(_ newEpoch: Int) -> LoanGrant {
-        LoanGrant(epoch: newEpoch, expiresAt: expiresAt, pumpManagerRawState: pumpManagerRawState,
+// R40: a seize activation forces the credential's provisional epoch fresh AND mints the
+// live takeover lease — the dormant expiresAt is issuedAt by contract, and carrying it
+// verbatim aborted the first field seize at ladder read 1. LoanGrant is all-let by design,
+// so the rewrite is an explicit re-init — every other field carried verbatim.
+// Internal (not fileprivate) so the unit test can pin both rewritten fields directly.
+extension LoanGrant {
+    func withEpoch(_ newEpoch: Int, leaseUntil: Date) -> LoanGrant {
+        LoanGrant(epoch: newEpoch, expiresAt: leaseUntil, pumpManagerRawState: pumpManagerRawState,
                   podAddress: podAddress, therapySettingsRaw: therapySettingsRaw,
                   settingsTimeZoneID: settingsTimeZoneID, doseHistory: doseHistory,
                   boundaryRecord: boundaryRecord, supportsInterimHandback: supportsInterimHandback,

@@ -2154,6 +2154,58 @@ extension PodLoanPhoneControllerTests {
         XCTAssertGreaterThanOrEqual(begins, 1, "the reclaim held background execution for its wait")
         XCTAssertEqual(ends, begins, "every hold released once the wait resolved")
     }
+
+    // MARK: - Request TTL (queued-channel ghosts)
+
+    /// A request that aged past the TTL in the queued channel must not earn a grant. Field
+    /// 2026-08-30: two requests queued against a powered-off phone detonated at power-on —
+    /// the five-minute-old first copy was granted (releasing the pod at a watch that was
+    /// no longer asking), the second denied against .grantOffered, and the recovery
+    /// force-reclaimed the fresh grant. The requestID dedupe cannot catch this (two real
+    /// taps carry two IDs); age can. A fresh request afterwards must still grant — and
+    /// establishLoan's nil-sentAt request doubles as the older-watch compat check.
+    func testStaleRequestIsIgnoredAndAFreshOneStillGrants() throws {
+        let controller = makeController(now: { self.clock })
+
+        controller.handleIncoming(userInfo: try LoanMessage.request(
+            LoanRequest(watchBuild: "t", sentAt: clock.addingTimeInterval(-300))).transportDictionary())
+
+        // The ghost's rejection is a silent return; give its queue block time to run, then
+        // assert the state machine never moved. (A regression flips state synchronously
+        // inside that block — epoch += 1, state = .grantOffered — so stillness here is the
+        // whole assertion, not a race.)
+        usleep(400_000)
+        XCTAssertEqual(controller.state, .owner, "a stale request must not move the state machine")
+        lock.lock(); let sentDuringGhost = sent; lock.unlock()
+        XCTAssertTrue(sentDuringGhost.isEmpty, "a stale request earns NOTHING — no grant, no denial: \(sentDuringGhost)")
+
+        try establishLoan(controller)   // fresh (nil-sentAt) request still grants — liveness + back-compat
+    }
+
+    // MARK: - Dormant-refresh throttle (R40 seize credential pipe)
+
+    /// The refresh throttle stamps at ENQUEUE, not completion: LoopDataUpdated arrives in
+    /// bursts faster than grant assembly finishes, and completion-stamping let five
+    /// identical 25 KB refreshes through one gate in a single second (field 2026-08-30) —
+    /// straight into the queued channel a 7001 jam later backed up. A burst must yield ONE.
+    func testDormantRefreshBurstYieldsOneRefresh() {
+        UserDefaults.standard.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
+        defer { UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.watchSupportsSeize") }
+        let controller = makeController()
+
+        let firstRefresh = expectSend()
+        for _ in 0..<5 { controller.considerDormantRefresh() }
+        wait(for: [firstRefresh], timeout: 5)
+        // All five gate blocks ran before the first assembly's send (same serial queue);
+        // any leaked extra assemblies are already enqueued behind it — a short settle
+        // flushes them into `sent` where the count can convict them.
+        usleep(400_000)
+
+        lock.lock()
+        let refreshes = sent.filter { if case .dormantGrant = $0 { return true }; return false }
+        lock.unlock()
+        XCTAssertEqual(refreshes.count, 1, "one burst, one refresh — the throttle stamps at enqueue")
+    }
 }
 
 /// Holds the reclaim ladder's rungs still. The controller schedules them through `scheduler`, so
