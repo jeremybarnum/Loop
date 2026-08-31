@@ -1014,7 +1014,10 @@ struct GlanceView: View {
                 // worse than patience: tapping it reset a healthy adoption and slowed the first
                 // launch by minutes (2026-08-22). The live counter is the anti-force-quit device;
                 // a static "waiting" screen was read as stale state and killed.
-                ListeningForSensor()
+                // The failure streak tempers that patience (field 2026-08-30): once the sensor
+                // keeps CONNECTING but auth-subscribe keeps dying, waiting is no longer
+                // informative and the view says so.
+                ListeningForSensor(failures: ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.authSubscribeFailureStreak)
             }
             }
             if let note = model.state.idleNote {
@@ -1663,9 +1666,17 @@ private struct NoDirectBGBlock: View {
 /// whole job is to keep the wearer here without inviting an action. The ticking counter is what
 /// distinguishes "alive and listening" from the stale screen that got force-quit in the field.
 private struct ListeningForSensor: View {
+    /// Consecutive auth-subscribe failures (G7CGMManager streak). 0 = still innocent
+    /// waiting; ≥ 1 shows the attempts so the screen visibly reflects work (a Bluetooth
+    /// toggle no longer *looks* ignored); ≥ 3 swaps the footer for the twice-proven
+    /// remedy (field 2026-08-30: force-quit fixed what a watch reboot did not).
+    var failures: Int = 0
+
     @State private var startedAt = Date()
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     @State private var elapsed: TimeInterval = 0
+
+    private var stuck: Bool { failures >= 3 }
 
     var body: some View {
         // Every Text here is vertically PINNED (fixedSize) — without it, the 40 mm screen
@@ -1674,15 +1685,15 @@ private struct ListeningForSensor: View {
         // the geometry is sized so title + subtitle + counter + footer fit under the
         // glance header on the smallest case.
         VStack(spacing: 6) {
-            Text("Listening for\nyour sensor")
+            Text(stuck ? "Sensor found,\nnot linking" : "Listening for\nyour sensor")
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(.glanceInk)
+                .foregroundColor(stuck ? .glanceWarn : .glanceInk)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("Usually under 5 min.\nKeep the app open.")
+            Text(stuck ? "Force-quit this app,\nthen reopen it." : "Usually under 5 min.\nKeep the app open.")
                 .font(.system(size: 12))
-                .foregroundColor(.glanceDim)
+                .foregroundColor(stuck ? .glanceInk : .glanceDim)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -1692,13 +1703,13 @@ private struct ListeningForSensor: View {
                 Text(timeString)
                     .font(.system(size: 18, weight: .medium).monospacedDigit())
                     .foregroundColor(.glanceAccent)
-                Text("listening")
+                Text(failures > 0 ? "listening · \(failures) failed tries" : "listening")
                     .font(.system(size: 10))
-                    .foregroundColor(.glanceDim)
+                    .foregroundColor(failures > 0 ? .glanceWarn : .glanceDim)
             }
             .fixedSize(horizontal: false, vertical: true)
 
-            Text("No BG in Dexcom either?\nToggle Bluetooth.")
+            Text(stuck ? "Hold the side button, then\nswipe this app up to quit." : "No BG in Dexcom either?\nToggle Bluetooth.")
                 .font(.system(size: 10))
                 .foregroundColor(.glanceDim)
                 .multilineTextAlignment(.center)
