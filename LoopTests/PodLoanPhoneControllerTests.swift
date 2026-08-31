@@ -22,10 +22,14 @@ extension MockPumpManager: PumpConnectionLendable {
     static var testConnectionReleased = false
     /// Item 1: the odometer the PHONE reads on its reclaim round-trip. nil = pump reports none.
     static var testOdometer: Double?
+    /// PHONE MIRROR: the books-dirty primitive (SQN-resync stamp) the inferred-loan
+    /// detector reads. nil = no foreign sessions observed.
+    static var testForeignSessionAt: Date?
     public var isConnectionReleased: Bool { Self.testConnectionReleased }
     public func releaseConnection() { Self.testConnectionReleased = true }
     public func reclaimConnection() { Self.testConnectionReleased = false }
     public var lentDeviceInsulinDelivered: Double? { Self.testOdometer }
+    public var podLoanLastForeignSessionAt: Date? { Self.testForeignSessionAt }
     /// Counts the FORCED round-trips (the ones that bypass the freshness optimization), so a
     /// test can assert the settle forces early without forcing on every 2 s tick — the whole
     /// point of the backoff is that reclaim speed is not bought with radio time.
@@ -90,6 +94,16 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             UserDefaults.standard.removeObject(forKey: key)
         }
         MockPumpManager.testForcedReadCount = 0
+        MockPumpManager.testForeignSessionAt = nil
+        // PHONE MIRROR keys: a leaked yield flag would re-pause dosing at the next
+        // test's controller init (the flag folds into podIsOnLoan).
+        for key in ["PodLoanPhoneController.yieldingToInferredLoan",
+                    "PodLoanPhoneController.lastHandledForeignSessionAt",
+                    "PodLoanPhoneController.dormantSeizeToken",
+                    "PodLoanPhoneController.watchSupportsSeize",
+                    "PodLoanPhoneController.inferredLoanYieldDisabled"] {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
         backgroundTaskBegins = 0
         backgroundTaskEnds = 0
         urgentNotices = []
@@ -2205,6 +2219,133 @@ extension PodLoanPhoneControllerTests {
         let refreshes = sent.filter { if case .dormantGrant = $0 { return true }; return false }
         lock.unlock()
         XCTAssertEqual(refreshes.count, 1, "one burst, one refresh — the throttle stamps at enqueue")
+    }
+
+    // MARK: - PHONE MIRROR (R40(a), the minimum-deviation paradigm)
+
+    private func seizeCredentialOutstanding() -> UUID {
+        let token = UUID()
+        UserDefaults.standard.set(token.uuidString, forKey: "PodLoanPhoneController.dormantSeizeToken")
+        UserDefaults.standard.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
+        return token
+    }
+
+    private func futureEpochBatch(epoch: Int) throws -> [String: Any] {
+        let now = Date()
+        let event = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
+                              record: LoanDoseRecord(kind: .bolus, startDate: now, amount: 0.5), loggedAt: now)
+        return try LoanMessage.doseRecordBatch(DoseRecordBatch(epoch: epoch, events: [event], tombstones: [])).transportDictionary()
+    }
+
+    /// Detector B (row 6): a future-epoch batch at .owner is live evidence of a loan this
+    /// phone never granted. Field 2026-08-30 23:43: the drop line fired and the phone went
+    /// on to bolus the pod as its own. Now the same evidence yields — pill flips to Pod on
+    /// Watch, dosing pauses, and the pod's BLE is released so the watch can keep dosing.
+    /// The batch itself stays dropped; booking still waits for the token-bearing offer,
+    /// whose retro-ack then clears the flag by adopting the loan for real.
+    func testFutureEpochBatchAtOwnerYieldsInsteadOfDosingOn() throws {
+        let token = seizeCredentialOutstanding()
+        let controller = makeController()
+
+        controller.handleIncoming(userInfo: try futureEpochBatch(epoch: 5))
+        waitUntil(timeout: 5, "yield engaged") { controller.yieldingToInferredLoan }
+
+        XCTAssertTrue(controller.podIsOnLoan, "the yielded posture IS a loan for every consumer")
+        XCTAssertTrue(controller.isPodLoanedOut, "pill reads Pod on Watch")
+        XCTAssertEqual(controller.state, .owner, "…while the state machine stays truthful (retro-ack needs .owner)")
+        XCTAssertTrue(MockPumpManager.testConnectionReleased, "authority and radio travel together — BLE released")
+        lock.lock(); let paused = pauseCalls; lock.unlock()
+        XCTAssertEqual(paused, [true], "automatic dosing paused")
+
+        // The watch's INTERIM offer arrives (token + higher epoch; released=false is what
+        // a live seized loan streams — nil would mean FINAL by the legacy convention and
+        // march straight through .loaned to the drain-close): retro-ack adopts the loan,
+        // the flag's job is done, and .loaned HOLDS because the loan is still running.
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: 5, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                          events: [], tombstones: [], recovered: false, released: false,
+                          seizeToken: token)).transportDictionary())
+        waitUntil(timeout: 5, "retro-ack adopted") { controller.state == .loaned && !controller.yieldingToInferredLoan }
+        XCTAssertFalse(controller.yieldingToInferredLoan, "the inferred loan became the adopted loan")
+    }
+
+    /// The pill tap from the yielded posture takes the inherited road: reclaimNow →
+    /// ladder (dead branch forces immediately — the watch is silent) → forceReclaimToOwner
+    /// → dosing resumes. Same taps, same machinery, same outcome as a granted dead-watch loan.
+    func testInferredYieldPillTapTakesTheInheritedRoad() throws {
+        _ = seizeCredentialOutstanding()
+        let controller = makeController()
+        controller.handleIncoming(userInfo: try futureEpochBatch(epoch: 5))
+        waitUntil(timeout: 5, "yield engaged") { controller.yieldingToInferredLoan }
+
+        controller.reclaimNow()
+        // Wait on the TERMINAL condition, not the state alone: the controller starts at
+        // .owner, so a bare waitForState(.owner) can fulfill on a pre-transition sample
+        // before reclaimNow's queue block has even run. The dead branch forces
+        // immediately; released flipping false is the force's own first act.
+        waitUntil(timeout: 5, "force landed") {
+            controller.state == .owner && !controller.yieldingToInferredLoan && !MockPumpManager.testConnectionReleased
+        }
+        waitUntil(timeout: 5, "dosing resumed") {
+            self.lock.lock(); defer { self.lock.unlock() }
+            return self.pauseCalls.last == false
+        }
+
+        XCTAssertFalse(controller.podIsOnLoan)
+        XCTAssertFalse(MockPumpManager.testConnectionReleased, "the pod bid re-armed")
+    }
+
+    /// Detector A (rows 7/8): foreign pod sessions (the SQN-resync stamp) discovered at
+    /// .owner while the watch is absent by the ladder's own pulse discriminator. One stamp
+    /// fires one yield (the handled-stamp survives), and a reachable watch holds it off
+    /// entirely — with WC up, row 6's batch evidence and the R40(f) prompt own the case.
+    func testForeignSessionsWhileWatchAbsentYieldOnce() {
+        _ = seizeCredentialOutstanding()
+        let controller = makeController(watchReachable: { false }, lastWatchContact: { nil }, now: { self.clock })
+        clock = clock.addingTimeInterval(300)                     // past the launch-restore guard
+        MockPumpManager.testForeignSessionAt = clock.addingTimeInterval(-60)
+
+        controller.considerInferredLoan()
+        waitUntil(timeout: 5, "yield engaged") { controller.yieldingToInferredLoan }
+        XCTAssertTrue(controller.isPodLoanedOut)
+
+        // Same stamp again after a pill-tap recovery: handled, no re-fire. (Terminal-
+        // condition wait — a bare waitForState(.owner) can sample the pre-transition
+        // .owner before reclaimNow's block runs.)
+        controller.reclaimNow()
+        waitUntil(timeout: 5, "force landed") {
+            controller.state == .owner && !controller.yieldingToInferredLoan && !MockPumpManager.testConnectionReleased
+        }
+        controller.considerInferredLoan()
+        usleep(300_000)
+        XCTAssertFalse(controller.yieldingToInferredLoan, "a handled stamp must not re-trigger the posture")
+    }
+
+    /// The gates, each alone sufficient to hold the mirror off: no credential (watchless
+    /// and never-loaned users stay bit-for-bit stock), the kill switch, and — for
+    /// detector A — a reachable watch.
+    func testInferredLoanGatesHold() throws {
+        // No credential: the future-epoch batch drops exactly as before, nothing engages.
+        let controller = makeController()
+        controller.handleIncoming(userInfo: try futureEpochBatch(epoch: 5))
+        usleep(300_000)
+        XCTAssertFalse(controller.yieldingToInferredLoan, "no credential, no mirror — structurally stock")
+
+        // Credential but kill switch: evidence logged, posture refused.
+        _ = seizeCredentialOutstanding()
+        UserDefaults.standard.set(true, forKey: "PodLoanPhoneController.inferredLoanYieldDisabled")
+        controller.handleIncoming(userInfo: try futureEpochBatch(epoch: 6))
+        usleep(300_000)
+        XCTAssertFalse(controller.yieldingToInferredLoan, "kill switch holds")
+        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.inferredLoanYieldDisabled")
+
+        // Detector A with a REACHABLE watch: no yield — that is row 6's territory.
+        let reachable = makeController(watchReachable: { true }, lastWatchContact: { self.clock }, now: { self.clock })
+        clock = clock.addingTimeInterval(300)
+        MockPumpManager.testForeignSessionAt = clock.addingTimeInterval(-60)
+        reachable.considerInferredLoan()
+        usleep(300_000)
+        XCTAssertFalse(reachable.yieldingToInferredLoan, "a reachable watch means WC evidence and the prompt own the case")
     }
 }
 

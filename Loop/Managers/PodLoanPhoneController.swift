@@ -1150,7 +1150,8 @@ final class PodLoanPhoneController {
     /// state — the link is released or in flux). Delivery attempts made here while
     /// true would die in a BLE timeout; callers should refuse loudly instead.
     var isPodLoanedOut: Bool {
-        return queue.sync { state != .owner }
+        // PHONE MIRROR: the yielded posture shows as Pod on Watch — technically true.
+        return queue.sync { state != .owner || yieldingToInferredLoan }
     }
 
     /// True while the pod is actively coming home (hand-back reconcile / reclaim in
@@ -1451,6 +1452,12 @@ final class PodLoanPhoneController {
         static let watchSupportsSeize = "PodLoanPhoneController.watchSupportsSeize"
         /// R40: the stable per-pod reunion identity for seized loans.
         static let dormantSeizeToken = "PodLoanPhoneController.dormantSeizeToken"
+        /// PHONE MIRROR: the yielded posture survives relaunch (the blackout it answers
+        /// can include phone reboots).
+        static let yieldingToInferredLoan = "PodLoanPhoneController.yieldingToInferredLoan"
+        /// PHONE MIRROR: the last foreign-session evidence already acted on, so one
+        /// resync fires one yield across relaunches instead of re-triggering forever.
+        static let lastHandledForeignSessionAt = "PodLoanPhoneController.lastHandledForeignSessionAt"
         /// One-shot repair flag for the residuals banked before the bank was scoped to clean
         /// hand-backs. Date-suffixed on purpose: this names a specific 2026-08-13 field-data
         /// repair, not a standing rule, so nobody reads it as a recurring purge.
@@ -1491,7 +1498,10 @@ final class PodLoanPhoneController {
 
     var podIsOnLoan: Bool {
         switch state {
-        case .owner: return false
+        // PHONE MIRROR: the yielded posture IS a loan for every consumer of this
+        // predicate — the sweep engages, the re-pause-on-relaunch covers it, reclaimNow's
+        // guard admits the pill tap.
+        case .owner: return yieldingToInferredLoan
         case .grantOffered, .loaned, .reconciling, .reclaimPending: return true
         }
     }
@@ -1500,6 +1510,10 @@ final class PodLoanPhoneController {
         self.deps = dependencies
         self.state = State(rawValue: UserDefaults.standard.string(forKey: Keys.state) ?? "") ?? .owner
         self.epoch = UserDefaults.standard.object(forKey: Keys.epoch) as? Int ?? 0
+        // PHONE MIRROR: restored BEFORE the podIsOnLoan re-pause below, so a relaunch
+        // mid-yield re-enters the posture (flag folds into podIsOnLoan) automatically.
+        self.yieldingToInferredLoan = UserDefaults.standard.bool(forKey: Keys.yieldingToInferredLoan)
+        self.processStartedAt = dependencies.now()
         self.committedCursor = UserDefaults.standard.object(forKey: Keys.cursor) as? Int ?? 0
         self.pendingRevoke = UserDefaults.standard.bool(forKey: Keys.pendingRevoke)
         self.loanStartedAt = UserDefaults.standard.object(forKey: Keys.loanStartedAt) as? Date
@@ -1728,6 +1742,15 @@ final class PodLoanPhoneController {
         guard let lendable = pump as? PumpConnectionLendable else {
             deny("This pump can't be loaned to the watch (\(type(of: pump))).")
             return
+        }
+        // PHONE MIRROR exit: a fresh request while yielding means the watch is alive and
+        // ASKING — a watch that is asking is not looping, so the inferred loan is over.
+        // Re-arm the pod bid we released at yield, or the still-returning-pod guard below
+        // would deny-and-retry against a pod nobody is bringing back; the guard then does
+        // its normal job while the link re-establishes, and the next retry grants.
+        if yieldingToInferredLoan {
+            clearInferredLoanYield(reason: "new loan request — a granted loan supersedes the inferred one")
+            lendable.reclaimConnection()
         }
 
         // Don't hand a still-returning pod to the watch. After a reclaim the phone
@@ -2029,6 +2052,86 @@ final class PodLoanPhoneController {
         }
     }
 
+    // MARK: - PHONE MIRROR (R40(a), operational spec 2026-08-31: the minimum-deviation paradigm)
+    //
+    // A discovered seizure is the granted-loan-with-dead-watch scenario minus one bit of
+    // knowledge, and the pod supplies that bit. On detection the phone enters the posture it
+    // would already be in had it granted the loan: pill reads Pod on Watch (folded into
+    // podIsOnLoan/isPodLoanedOut), automatic dosing paused, the loop-not-running sweep
+    // engaged — and EVERY exit is the existing one (pill tap -> reclaimNow ladder + gap
+    // booking; watch revival -> retro-ack; WC healing -> the R40(f) wrist prompt). The state
+    // machine never fakes .loaned: the flag rides .owner, because the retro-ack door
+    // deliberately requires .owner and the watch's real epoch is unknown.
+
+    /// Presentation-level posture flag on .owner (never a state transition). Persisted:
+    /// the blackout this answers can include phone reboots.
+    private(set) var yieldingToInferredLoan: Bool {
+        didSet { UserDefaults.standard.set(yieldingToInferredLoan, forKey: Keys.yieldingToInferredLoan) }
+    }
+    /// Guards the SQN detector against our own relaunch-restore noise (a restored older
+    /// pod state can resync against our own sessions in the first moments of a launch).
+    private let processStartedAt: Date
+
+    /// Kill switch (absent = enabled), the standing insurance pattern.
+    static let inferredLoanYieldDisabledKey = "PodLoanPhoneController.inferredLoanYieldDisabled"
+
+    /// Both detectors funnel here. Yield is deliberately cheap to enter: it doses nothing,
+    /// claims nothing, and every exit is user-driven or evidence-driven.
+    private func engageInferredLoanYield(evidence: String) {
+        guard state == .owner, !yieldingToInferredLoan else { return }
+        guard !UserDefaults.standard.bool(forKey: Self.inferredLoanYieldDisabledKey) else {
+            PhoneLog.event("mirror", "inferred-loan evidence (\(evidence)) but yield DISABLED by kill switch [mirror]")
+            return
+        }
+        yieldingToInferredLoan = true
+        deps.setAutomaticDosingPaused(true)
+        // Yield the RADIO too, exactly as a grant does: a yielded phone that keeps its
+        // standing connect starves an alive watch's per-cycle reclaims (single-central
+        // pod) — authority and radio must travel together. reclaimNow re-arms the bid.
+        (deps.pumpManager() as? PumpConnectionLendable)?.releaseConnection()
+        deps.ownershipDidChange()
+        PhoneLog.event("mirror", "YIELDING to an inferred loan — \(evidence); pill=Pod on Watch, dosing paused, pod BLE released, exits: pill tap / watch revival / R40(f) prompt (R40(a): on conflict the phone yields) [mirror]")
+    }
+
+    /// Exit bookkeeping. `resumeDosing` stays false on every current path: reclaimNow's
+    /// force unpauses in forceReclaimToOwner, the retro-ack keeps the pause because the
+    /// loan it adopts is live, and beginGrant re-pauses for its own loan.
+    private func clearInferredLoanYield(reason: String) {
+        guard yieldingToInferredLoan else { return }
+        yieldingToInferredLoan = false
+        deps.ownershipDidChange()
+        PhoneLog.event("mirror", "inferred-loan yield CLEARED — \(reason) [mirror]")
+    }
+
+    /// Detector A (rows 7/8 — watch absent): foreign pod sessions discovered at .owner.
+    /// The pod's EAP/SQN counters advance for ANY controller, so a resync observed while
+    /// we believe we are the only controller is definitive books-dirty evidence. SQN is
+    /// not subject to the lost-ack settling that motivated M — M stays reserved for the
+    /// future odometer tripwire; the launch guard covers the one self-inflicted resync
+    /// (our own restored state racing our own sessions).
+    /// Pinged from the same loop-update moment as the dormant refresher; all gating here.
+    func considerInferredLoan() {
+        queue.async { [weak self] in self?.queue_considerInferredLoan() }
+    }
+
+    private func queue_considerInferredLoan() {
+        guard state == .owner, !yieldingToInferredLoan else { return }
+        guard UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) != nil,
+              UserDefaults.standard.bool(forKey: Keys.watchSupportsSeize) else { return }
+        // Watch-absent = the reclaim ladder's own pulse discriminator, same constants.
+        let contactAge = deps.lastWatchContactAt().map { deps.now().timeIntervalSince($0) }
+        let heardRecently = (contactAge ?? .greatestFiniteMagnitude) < Self.watchContactLivenessWindow
+        guard !deps.isWatchReachable(), !heardRecently else { return }
+        guard deps.now().timeIntervalSince(processStartedAt) > 120 else { return }
+        guard let foreignAt = (deps.pumpManager() as? PumpConnectionLendable)?.podLoanLastForeignSessionAt else { return }
+        let handled = UserDefaults.standard.object(forKey: Keys.lastHandledForeignSessionAt) as? Date
+        guard foreignAt > (handled ?? .distantPast) else { return }
+        UserDefaults.standard.set(foreignAt, forKey: Keys.lastHandledForeignSessionAt)
+        engageInferredLoanYield(evidence: String(format: "foreign pod sessions at %@ (SQN resync), watch silent %@",
+                                                 ISO8601DateFormatter().string(from: foreignAt),
+                                                 contactAge.map { String(format: "%.0fs", $0) } ?? "always"))
+    }
+
     private func abortGrant(reason: String) {
         // The refusal travels to the WATCH, which is where the user just tapped Start and is
         // still looking; the phone posts nothing. Reasons here are internal encoding failures
@@ -2186,6 +2289,16 @@ final class PodLoanPhoneController {
         // arrive?" had no answer. It has one now.
         guard batch.epoch == epoch, state == .loaned || state == .reclaimPending else {
             handbackDiag(batch.epoch, "batch DROPPED — \(batch.events.count) event(s) ev=\(batch.epoch) vs phone ev=\(epoch), state=\(state.rawValue) (recovered via the offer path if the watch still resends)")
+            // PHONE MIRROR detector B (row 6 — WC up): a FUTURE-epoch batch at .owner is
+            // live evidence of a loan this phone never granted. The batch itself stays
+            // dropped (yield needs less authority than adoption — booking still waits for
+            // the token-bearing offer), but dosing as owner stops NOW instead of at
+            // hand-back. Field 2026-08-30 23:43: this exact drop line fired while the
+            // phone went on to bolus the pod as its own.
+            if state == .owner, batch.epoch > epoch,
+               UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) != nil {
+                engageInferredLoanYield(evidence: "future-epoch batch e\(batch.epoch) at .owner (live seized loan streaming)")
+            }
             return
         }
         stage(events: batch.events, tombstones: batch.tombstones)
@@ -2224,6 +2337,9 @@ final class PodLoanPhoneController {
         if let token = offer.seizeToken, state == .owner, offer.epoch > epoch,
            token.uuidString == UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) {
             handbackDiag(offer.epoch, "[seize] RETRO-ACK — offer for a SEIZED loan (token …\(String(token.uuidString.suffix(8)))); adopting epoch \(epoch)→\(offer.epoch) as .loaned, reconciling on the normal path")
+            // PHONE MIRROR exit: the inferred loan just became a KNOWN loan — the flag's
+            // job is done (dosing stays paused; the drain-close unpauses as always).
+            clearInferredLoanYield(reason: "retro-ack — the inferred loan is now the adopted loan e\(offer.epoch)")
             epoch = offer.epoch
             state = .loaned
             // The seized loan's audit anchors at ITS OWN seize-time odometer read
@@ -2886,6 +3002,10 @@ final class PodLoanPhoneController {
     func reclaimNow() {
         queue.async {
             guard self.podIsOnLoan else { return }
+            // PHONE MIRROR exit: the pill tap on an inferred loan takes the SAME road a
+            // granted dead-watch loan takes — revoke (stale epoch, harmless), ladder,
+            // force, schedule audit, gap booking. forceReclaimToOwner unpauses dosing.
+            self.clearInferredLoanYield(reason: "pill tap — reclaimNow (the inherited exit)")
             self.reclaimDisplayAnchor = self.deps.now()   // the user's wait starts at the tap
             // Hold background execution from the tap: without it, tap-and-pocket freezes the
             // ladder and orphans the pod until the user next looks at the phone.
