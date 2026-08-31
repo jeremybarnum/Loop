@@ -985,3 +985,57 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   therefore the load-bearing safety mechanism, not a belt, and rises accordingly in the
   build order. Kill switch: PodLoanWatchController.seizeAutoHandbackDisabled (gates the
   prompt).
+
+  PHONE MIRROR — OPERATIONAL SPEC (2026-08-31, Jeremy's "minimum deviation" paradigm,
+  designed off the canonical-scenarios table; this makes the 2026-08-30 MIRROR
+  paragraph buildable):
+
+  THE INSIGHT: a discovered seizure is the granted-loan-with-dead-watch scenario with
+  one missing bit of knowledge, and the pod supplies that bit. The pod's counters are
+  a flight recorder — odometer, running-temp identity, EAP/SQN session counters.
+  CLEAN = fully explained by the phone's own command history; DIRTY at .owner =
+  definitive proof a second controller drove during the gap. The pod says WHETHER,
+  WC says WHO, the human says WHAT NOW, and M only says when to believe the pod.
+
+  DETECTION: state == .owner AND books dirty AND dormant credential outstanding AND
+  watch absent (no WC, no recent loan pulse). Structural gating, not tuning: a
+  watchless user, or a watch user who never loans, grows no credential — their phone
+  stays bit-for-bit stock. Consider capability decay (drop the credential after weeks
+  of no watch contact) so lapsed users regress to stock too.
+
+  M: not a UX dial — the trust threshold beyond which an unexplained pod delta means
+  FOREIGN rather than the phone's own lost-ack settling (below it, the existing
+  uncertain-command chase owns discrepancies). Default 10 min, tunable. No scenario's
+  user experience depends on its value.
+
+  POSTURE ON DETECTION: enter the posture the phone would already be in had it
+  granted the loan — implemented presentation-level ONLY (a yieldingToInferredLoan
+  flag on .owner; the state machine never fakes .loaned: the retro-ack door
+  deliberately requires .owner, and the watch's real epoch is unknown). Pill reads
+  Pod on Watch — technically true. No dosing. The loop-not-running sweep engages with
+  the posture. No new alarm policy: whatever the granted case does about a silent
+  watch, this does (currently: no automatic silence alarm — the paused reminder was
+  retired 2026-08-15 — the sweep, and the user's pill).
+
+  EXITS — all inherited verbatim, nothing new:
+  - Pill tap -> reclaimNow(): revoke + .reclaimPending + the reclaim ladder (pulse
+    discriminator, 330 s liveness window; live branch resend +10 s / force +25 s;
+    DEAD BRANCH FORCES NOW, the 2026-08-14 field ruling), the §5.3.3 schedule audit,
+    gap booking with e44 store-identity dedup, the placeholder bolus + standing
+    reminder ladder for unexplained delivery, R33 temp cancel on verified reclaim.
+  - Watch revives -> recoveredDrain offer with the reunion token -> retro-ack (the
+    .owner door, kept open by the flag-not-state choice) -> real records replace the
+    gap fill by identity.
+  - WC heals with the loan live -> that is row 6: the R40(f) wrist prompt resolves
+    it; the phone keeps yielding meanwhile, pill unchanged.
+
+  DECIDED ALONG THE WAY (2026-08-31): clean books never wait on WC — the recorder
+  already answered, so shower/charger/walking-the-house gaps stay invisible; row 8
+  (WC wedge, watch alive) is NOT a design driver (Jeremy: the wedge gets solved
+  directly) — the posture covers it as a byproduct; the one-way-valve special state
+  was REJECTED for consistency (yielding carries exactly the granted case's risk
+  profile; any future suspend-authority-while-yielded lands on the granted case
+  first, applied to both); manual phone bolus while yielding behaves exactly as
+  during any loan; auto-takeover is barred by R40(a) — the phone takes the pod on
+  explicit user command only, and auto-resume-after-quiet was dropped with the rest
+  of the row-8 machinery.
