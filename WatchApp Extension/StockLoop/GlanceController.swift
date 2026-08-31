@@ -1016,8 +1016,11 @@ struct GlanceView: View {
                 // a static "waiting" screen was read as stale state and killed.
                 // The failure streak tempers that patience (field 2026-08-30): once the sensor
                 // keeps CONNECTING but auth-subscribe keeps dying, waiting is no longer
-                // informative and the view says so.
-                ListeningForSensor(failures: ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.authSubscribeFailureStreak)
+                // informative — the view says so and offers the remedy that went 2-for-2
+                // that night (cold re-acquire; it beat both a watch reboot and force-quit,
+                // and unlike force-quit it doesn't kill a live loan).
+                ListeningForSensor(failures: ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.authSubscribeFailureStreak,
+                                   reacquire: { model.rescanForSensor() })
             }
             }
             if let note = model.state.idleNote {
@@ -1668,13 +1671,18 @@ private struct NoDirectBGBlock: View {
 private struct ListeningForSensor: View {
     /// Consecutive auth-subscribe failures (G7CGMManager streak). 0 = still innocent
     /// waiting; ≥ 1 shows the attempts so the screen visibly reflects work (a Bluetooth
-    /// toggle no longer *looks* ignored); ≥ 3 swaps the footer for the twice-proven
-    /// remedy (field 2026-08-30: force-quit fixed what a watch reboot did not).
+    /// toggle no longer *looks* ignored); ≥ 3 swaps the screen for the remedy that went
+    /// 2-for-2 in the field (2026-08-30): a cold re-acquire, offered as a button right
+    /// here — it beat both a watch reboot and force-quit, and it can't kill a live loan.
+    /// Force-quit stays as the footer fallback. The 2026-08-22 no-button lesson still
+    /// governs the INNOCENT state; the streak is what proves patience wrong.
     var failures: Int = 0
+    var reacquire: (() -> Void)? = nil
 
     @State private var startedAt = Date()
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     @State private var elapsed: TimeInterval = 0
+    @State private var reacquireTapped = false
 
     private var stuck: Bool { failures >= 3 }
 
@@ -1691,11 +1699,24 @@ private struct ListeningForSensor: View {
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text(stuck ? "Force-quit this app,\nthen reopen it." : "Usually under 5 min.\nKeep the app open.")
-                .font(.system(size: 12))
-                .foregroundColor(stuck ? .glanceInk : .glanceDim)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
+            if stuck, let reacquire = reacquire {
+                Button {
+                    reacquireTapped = true
+                    reacquire()   // resets the streak too — the screen returns to innocent listening
+                } label: {
+                    Text(reacquireTapped ? "Re-acquiring…" : "Re-acquire Sensor")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.glanceAccent)
+                .disabled(reacquireTapped)
+            } else {
+                Text("Usually under 5 min.\nKeep the app open.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.glanceDim)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             Spacer(minLength: 0)
 
@@ -1709,13 +1730,18 @@ private struct ListeningForSensor: View {
             }
             .fixedSize(horizontal: false, vertical: true)
 
-            Text(stuck ? "Hold the side button, then\nswipe this app up to quit." : "No BG in Dexcom either?\nToggle Bluetooth.")
+            Text(stuck ? "Still stuck? Force-quit\nthis app and reopen it." : "No BG in Dexcom either?\nToggle Bluetooth.")
                 .font(.system(size: 10))
                 .foregroundColor(.glanceDim)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .onReceive(tick) { _ in elapsed = Date().timeIntervalSince(startedAt) }
+        .onReceive(tick) { _ in
+            elapsed = Date().timeIntervalSince(startedAt)
+            // The streak reset (scanForNewSensor) flips `stuck` off on the next refresh;
+            // if failures climb again the button must be tappable again, not dead.
+            if reacquireTapped && !stuck { reacquireTapped = false }
+        }
     }
 
     private var timeString: String {
