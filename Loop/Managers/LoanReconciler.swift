@@ -353,7 +353,18 @@ enum LoanReconciler {
                       let segEnd = event.record.endDate else { continue }
                 let s = max(event.record.startDate, start)
                 let e = min(segEnd, end)
-                if e > s { segments.append(Segment(start: s, end: e, rate: rate)) }
+                // `>=`, not `>`: a ZERO-DURATION record is a CANCEL (the pod command
+                // "temp 0.00 × 0 min"), and it must enter resolution as a terminator even
+                // though it spans nothing — dropping it left the cancelled temp standing in
+                // the books for its full programmed window. Field 2026-09-01 (Caitlin's
+                // first breakfast loan): the bolus flow's 2.50 U/hr bracket temp was
+                // cancelled after 3 s, the zero-length record was discarded here, and the
+                // phantom ran 9.6 min until the next real temp — 8 pulses = 0.40 U expected
+                // against 0.10 U the pod actually metered on schedule, a locked −0.25
+                // residual, and a false "IOB May Be Overstated" warning on honest books.
+                // A zero-length segment contributes zero delivery on its own (pulsedInsulin
+                // of 0 s is 0); its whole job is the clip.
+                if e >= s { segments.append(Segment(start: s, end: e, rate: rate)) }
             default:
                 break
             }
