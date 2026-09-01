@@ -163,6 +163,24 @@ final class PodLoanWatchController {
     /// Injected transport: dictionary -> WCSession.transferUserInfo (integration step).
     var send: (([String: Any]) -> Void)?
 
+    /// Injected transport cleanup: cancel still-QUEUED loan-request transfers, returning how
+    /// many were cancelled. A request that outlives the watch's own patience is a delayed
+    /// detonator: it sits in transferUserInfo's queue while the watch times out and moves on
+    /// (possibly all the way to a seize), then delivers whenever the phone returns — and if
+    /// that reunion lands inside the phone's 90 s freshness window, the phone GRANTS it, over
+    /// a loan the watch is actively running. Field 2026-08-31 21:21: the seize-prelude request
+    /// (~67 s old at delivery) did exactly that — ghost grant e276 against live e277, phone
+    /// wedged on "Handing over…" until a manual force. The queue is the same one the offer
+    /// superseder already prunes (#120); this is the request-kind twin.
+    var cancelQueuedLoanRequests: (() -> Int)?
+
+    /// The single funnel for "this request is dead to us": every path that stops awaiting a
+    /// grant calls this, so a queued copy can never outlive the watch's interest.
+    private func cancelStaleQueuedRequests(context: String) {
+        guard let cancelled = cancelQueuedLoanRequests?(), cancelled > 0 else { return }
+        SportLog.event("loan", "cancelled \(cancelled) queued loan request(s) — \(context); a delivered ghost would re-grant over whatever this watch does next")
+    }
+
     /// Fires on loan lifecycle edges: true when the loan becomes ACTIVE (the session
     /// owner starts the G7 transport — closedDirect needs glucose), false when the
     /// pod is released/revoked/failed (transport stops, loop input pauses).
@@ -548,6 +566,10 @@ final class PodLoanWatchController {
             // mid-takeover lease guard kills it at read 1 (the first field seize, 2026-08-30).
             let leaseUntil = self.now().addingTimeInterval(Self.seizeActivationLease)
             self.pendingSeizeToken = dormant.seizeToken
+            // Belt on the timeout's cancel: the seize is the strongest possible statement
+            // that no queued request should ever reach the phone (its grant would collide
+            // with the loan being started RIGHT NOW).
+            self.cancelStaleQueuedRequests(context: "seize confirmed")
             SportLog.event("seize", String(format: "SEIZE confirmed — activating dormant grant (issued %@, epoch %d→%d, lease +%.0fs, token …%@) [seize]",
                                            DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .short, timeStyle: .short),
                                            dormant.grant.epoch, newEpoch, Self.seizeActivationLease,
@@ -773,6 +795,9 @@ final class PodLoanWatchController {
             let work = DispatchWorkItem { [weak self] in
                 guard let self = self, self.phase == .requested else { return }
                 self.returnToRestingPhase()
+                // The timeout is the moment this request stops being wanted — a copy still
+                // queued for a dark phone must die WITH it, not detonate at reunion.
+                self.cancelStaleQueuedRequests(context: "request timed out")
                 // R40(b): no answer + a stored credential = offer the offline path (never
                 // auto-take it; the confirm is the user's deliberate act). No credential =
                 // the pre-seize message stands.
@@ -879,6 +904,13 @@ final class PodLoanWatchController {
         // which the phone recovers from, rather than a silent ignore that costs a tap.
         guard phase == .idle || phase == .requested || phase == .recoveredDrain else {
             SportLog.event("loan", "grant ignored — wrong phase (\(phase.rawValue))")
+            // A GHOST grant refused mid-loan (a queued request detonating at reunion, field
+            // 2026-08-31 21:21:13) used to strand the PHONE at .grantOffered — it waits on a
+            // takeoverComplete this refusal guarantees will never come. Answer with the loan
+            // we hold so its mirror can abandon the ghost now, not at the +20s probe.
+            if phase == .active, (epoch ?? Int.min) >= grant.epoch {
+                sendHoldsPodStatusReport(reason: "stale grant e\(grant.epoch) refused")
+            }
             return
         }
         requestTimeoutWork?.cancel()
@@ -2325,6 +2357,13 @@ final class PodLoanWatchController {
         }
         guard let current = epoch ?? journal.activeEpoch, revoke.epoch == current else {
             SportLog.event("loan", "revoke ev=\(revoke.epoch) matched no live session (epoch \(epoch.map(String.init) ?? "nil"), phase \(phase.rawValue)) — RECORDED; any grant at or below ev=\(revoke.epoch) will now be refused")
+            // Refusing in silence read as "no reply from watch" on the phone (field
+            // 2026-08-31 21:24: two stale revokes RECORDED here while the phone's ladder
+            // concluded the watch was gone and force-stole a live loan's pod). Say what we
+            // hold instead; the phone re-aims its reclaim at the real epoch.
+            if phase == .active, (epoch ?? Int.min) > revoke.epoch {
+                sendHoldsPodStatusReport(reason: "stale revoke e\(revoke.epoch) refused")
+            }
             return
         }
         guard phase != .idle else { return }
@@ -2391,6 +2430,12 @@ final class PodLoanWatchController {
                     podFault: nil,
                     holdsPod: false,
                     knowsGrant: false)))
+            } else if phase == .active, (epoch ?? Int.min) > query.epoch {
+                // The third case was the wedge (field 2026-08-31 21:21:31): the phone probing
+                // for a GHOST grant while we run a NEWER loan got the "stale message" silence —
+                // and silence left it parked on "Handing over…" until a manual force. Answer
+                // with the loan we actually hold; the phone's mirror abandons the ghost on it.
+                sendHoldsPodStatusReport(reason: "status query for stale e\(query.epoch)")
             }
             return
         }

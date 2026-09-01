@@ -477,4 +477,69 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertTrue(sentKinds.contains("takeoverFailed"), "the phone hears the denial and can recover")
         XCTAssertEqual(snap.phase, .recoveredDrain, "and the watch rests back on its drain")
     }
+
+    /// The three silences that built the 2026-08-31 21:21 wedge, each now an answer: a live
+    /// loan refusing a stale status query, a stale revoke, or a stale (ghost) grant says
+    /// WHAT IT HOLDS instead of going quiet. The phone's mirror abandons its ghost on any
+    /// one of them; before, it parked on "Handing over…" until a manual force-steal.
+    func testStaleTrafficWhileActiveAnswersHoldsPod() throws {
+        defaults.set(true, forKey: "sim.fakeLoanFlow")
+        let controller = makeController()
+        var holdsPodEpochs: [Int] = []
+        controller.send = { dict in
+            if let message = try? LoanMessage.decode(fromTransport: dict),
+               case .statusReport(let r) = message, r.holdsPod {
+                holdsPodEpochs.append(r.epoch)
+            }
+        }
+        controller.scheduler = { _, label, work in
+            if label == "sim-grant" || label == "sim-active" { work.perform() }
+        }
+        controller.requestLoan(watchBuild: "stale-traffic-test")
+        let live = controller.debugSnapshot()
+        XCTAssertEqual(live.phase, .active, "precondition: a live loan")
+        guard let ours = live.epoch else { return XCTFail("active loan has no epoch") }
+
+        // A ghost-grant probe (#108) for an older epoch — the tape's 21:21:31 silence.
+        controller.handleIncoming(userInfo: try LoanMessage.statusQuery(StatusQuery(epoch: ours - 1)).transportDictionary(), channel: .queued)
+        _ = controller.debugSnapshot()
+        XCTAssertEqual(holdsPodEpochs, [ours], "the stale query is answered with the loan we hold")
+
+        // A stale revoke — the tape's 21:24 'RECORDED' twice while the phone heard nothing.
+        controller.handleIncoming(userInfo: try LoanMessage.revoke(Revoke(epoch: ours - 1)).transportDictionary(), channel: .queued)
+        _ = controller.debugSnapshot()
+        XCTAssertEqual(holdsPodEpochs, [ours, ours], "the refused revoke says what it refused FOR")
+
+        // The ghost grant itself — the tape's 21:21:13 'grant ignored — wrong phase'.
+        let ghost = fixtureDormant(issuedAt: Date(), epoch: max(ours - 1, 1), completeSettings: true).grant
+            .withEpoch(max(ours - 1, 1), leaseUntil: Date().addingTimeInterval(300))
+        controller.handleIncoming(userInfo: try LoanMessage.grant(ghost).transportDictionary(), channel: .queued)
+        let snap = controller.debugSnapshot()
+        XCTAssertEqual(holdsPodEpochs, [ours, ours, ours], "the refused grant answers too")
+        XCTAssertEqual(snap.phase, .active, "and none of the three touched the live loan")
+        XCTAssertEqual(snap.epoch, ours)
+    }
+
+    /// The detonator itself, defused at the source: a request that outlives the watch's
+    /// patience is cancelled from the transfer queue at the timeout, and again (belt) at
+    /// seize confirm — so no queued copy can reach a returning phone inside its 90 s
+    /// freshness window and re-grant over the loan this watch is running by then.
+    func testTimeoutAndSeizeCancelQueuedRequestTransfers() {
+        let controller = makeController()
+        controller.send = { _ in }
+        var cancelCalls = 0
+        controller.cancelQueuedLoanRequests = { cancelCalls += 1; return 1 }
+        controller.scheduler = { _, label, work in if label == "request-timeout" { work.perform() } }
+
+        controller.handleDormantGrant(fixtureDormant(issuedAt: Date().addingTimeInterval(-600), epoch: 3,
+                                                     completeSettings: true))
+        controller.requestLoan(watchBuild: "cancel-test")
+        _ = controller.debugSnapshot()
+        XCTAssertEqual(cancelCalls, 1, "the timeout is the moment the request stops being wanted")
+
+        XCTAssertNotNil(controller.debugSnapshot().seizeOfferIssuedAt, "precondition: the offline offer is up")
+        controller.confirmSeize()
+        _ = controller.debugSnapshot()
+        XCTAssertEqual(cancelCalls, 2, "seize confirm cancels again — the strongest statement that no queued request should ever land")
+    }
 }

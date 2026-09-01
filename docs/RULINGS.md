@@ -1044,3 +1044,29 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   during any loan; auto-takeover is barred by R40(a) — the phone takes the pod on
   explicit user command only, and auto-resume-after-quiet was dropped with the rest
   of the row-8 machinery.
+
+  GHOST-REQUEST WEDGE + REFUSALS ANSWER (field 2026-08-31 21:16-21:26, fixed same
+  night). Every seize BEGINS with a normal loan request, and with the phone dark that
+  request rides the queued channel — a delayed detonator that delivers at reunion. The
+  90 s request TTL (built for the 2026-08-30 power-on detonation) cannot cover a fast
+  reunion: the tape's copy was ~67 s old, passed, and the phone GRANTED e276 against
+  the live seized e277 — then parked on "Handing over…" forever, because the wedge had
+  three silences stacked: the watch's wrong-phase grant refusal says nothing, its
+  stale-revoke refusal says nothing (the phone's ladder read that as "no reply" and
+  force-stole a dosing pod), and its #108 answer policy deliberately went quiet for a
+  query OLDER than its loan. Meanwhile all three mirror detectors sat structurally
+  blind — evidence recorded, engage gated to .owner.
+
+  The rule that fixes the class: A REFUSAL NAMES WHAT IT REFUSED FOR. While holding a
+  live loan, a stale grant, stale revoke, or stale status query is answered with the
+  existing holdsPod status report (no new message kind); and the phone ACTS on that
+  report outside .owner — at .grantOffered it abandons the ghost into the yield
+  posture (T1 cancelled with the wait it timed; the burned epoch adopts forward via
+  retro-ack exactly as tape proved), and at .reclaimPending it re-aims the ladder's
+  remaining revoke at the epoch the watch says it holds. The pill-tap revoke aims at
+  fresh foreign evidence from the start (supersededByLiveLoan-gated, so stale evidence
+  cannot mis-aim), and the retro-ack door admits .reclaimPending — a reclaim is the
+  phone ENDING a loan, not a state a duplicated credential could stomp — so the aimed
+  drain lands without a force. The detonator itself is also defused at the source:
+  the watch cancels still-queued request transfers at request-timeout and again at
+  seize confirm (the #120 offer-superseder idiom, request-kind twin).

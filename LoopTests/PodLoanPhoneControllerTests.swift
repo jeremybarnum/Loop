@@ -2450,6 +2450,123 @@ extension PodLoanPhoneControllerTests {
         XCTAssertTrue(controller.isPodLoanedOut, "pill reads Pod on Watch off the report alone")
     }
 
+    /// The ghost-grant wedge, healed (field 2026-08-31 21:21): a queued request detonated at
+    /// reunion, the phone granted over a live seized loan, and .grantOffered sat on
+    /// "Handing over…" forever — the watch's wrong-phase refusal guarantees no
+    /// takeoverComplete. The watch now answers with holdsPod for its newer loan; the phone
+    /// abandons the ghost into the yield posture, and the later token-bearing offer adopts
+    /// the burned epoch forward exactly as the .owner path always has.
+    func testHoldsPodReportAbandonsAGhostGrantIntoTheYield() throws {
+        let token = seizeCredentialOutstanding()
+        let controller = makeController()
+
+        // The ghost: a request grants normally (nobody confirms — the "watch" is mid-seize).
+        let grantSent = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
+        wait(for: [grantSent], timeout: 5)
+        guard case .grant(let ghost)? = lastSent() else { throw SetupFailure.noGrant }
+        XCTAssertEqual(controller.state, .grantOffered)
+
+        // The answer: the watch holds a NEWER loan. The ghost can never confirm.
+        controller.handleIncoming(userInfo: try LoanMessage.statusReport(StatusReport(
+            epoch: ghost.epoch + 1, mode: .closedDirect, lastDirectGlucoseAge: 30, lastEventSeq: 1,
+            podFault: nil, holdsPod: true)).transportDictionary())
+        waitUntil(timeout: 5, "ghost abandoned into the yield") {
+            controller.state == .owner && controller.yieldingToInferredLoan
+        }
+        XCTAssertTrue(controller.isPodLoanedOut, "pill reads Pod on Watch, not Handing over…")
+        XCTAssertTrue(MockPumpManager.testConnectionReleased, "the pod stays released — the live loan needs it")
+
+        // The reunion: the seized loan's offer adopts the burned epoch forward (276→277 on tape).
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: ghost.epoch + 1, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                          events: [], tombstones: [], recovered: false, released: false,
+                          seizeToken: token)).transportDictionary())
+        waitUntil(timeout: 5, "retro-ack adopted past the burned epoch") {
+            controller.state == .loaned && !controller.yieldingToInferredLoan
+        }
+    }
+
+    /// Structural gating holds for the abandon too: without the dormant credential a
+    /// holdsPod report cannot move a grant-in-flight — watchless users stay bit-for-bit stock.
+    func testGhostGrantAbandonRequiresTheCredential() throws {
+        let controller = makeController()
+        let grantSent = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
+        wait(for: [grantSent], timeout: 5)
+        guard case .grant(let ghost)? = lastSent() else { throw SetupFailure.noGrant }
+
+        controller.handleIncoming(userInfo: try LoanMessage.statusReport(StatusReport(
+            epoch: ghost.epoch + 1, mode: .closedDirect, lastDirectGlucoseAge: 30, lastEventSeq: 1,
+            podFault: nil, holdsPod: true)).transportDictionary())
+        usleep(300_000)
+        XCTAssertEqual(controller.state, .grantOffered, "no credential — the report changes nothing")
+        XCTAssertFalse(controller.yieldingToInferredLoan)
+    }
+
+    /// The pill tap from the yielded posture AIMS the revoke at the live loan the evidence
+    /// names (field 2026-08-31 21:24: a revoke at the phone's own stale epoch was refused as
+    /// matching no live session, and the ladder force-stole a pod that would have drained).
+    /// The watch's drain then answers through the .reclaimPending retro-ack door — no force.
+    func testReclaimFromYieldAimsTheRevokeAtTheLiveLoanAndAcceptsItsDrain() throws {
+        let token = seizeCredentialOutstanding()
+        // LIVE branch on purpose (reachable): the dead branch forces instantly and would
+        // bury the drain this test exists to prove.
+        let controller = makeController(watchReachable: { true }, lastWatchContact: { self.clock }, now: { self.clock })
+
+        controller.handleIncoming(userInfo: try futureEpochBatch(epoch: 5))
+        waitUntil(timeout: 5, "yield engaged") { controller.yieldingToInferredLoan }
+
+        let revokeSent = expectSend()
+        controller.reclaimNow()
+        wait(for: [revokeSent], timeout: 5)
+        guard case .revoke(let aimed)? = lastSent() else {
+            return XCTFail("expected the tap's revoke, got \(String(describing: lastSent()))")
+        }
+        XCTAssertEqual(aimed.epoch, 5, "aimed at the live loan the evidence names, not this phone's stale epoch")
+
+        // The watch drains that loan (FINAL — released nil by the legacy convention), token attached.
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: 5, handedBackAt: clock, finalStatus: nil, odometer: nil,
+                          events: [], tombstones: [], recovered: true, released: nil,
+                          seizeToken: token)).transportDictionary())
+        waitUntil(timeout: 8, "drain adopted and closed back to owner") {
+            controller.state == .owner && !controller.yieldingToInferredLoan
+        }
+        XCTAssertNil(diagMatching("ladder spent"), "the aimed revoke got its drain — no force")
+        XCTAssertNotNil(diagMatching("retro-ack arrived MID-RECLAIM"), "the .reclaimPending door took the offer")
+    }
+
+    /// Evidence can arrive BETWEEN the rungs: the watch's holdsPod answer to a mis-aimed
+    /// attempt 1 re-aims the ladder's remaining attempt at the loan it actually holds.
+    func testHoldsPodReportMidLadderReAimsTheRemainingAttempt() throws {
+        _ = seizeCredentialOutstanding()
+        let controller = makeController(watchReachable: { true }, lastWatchContact: { self.clock }, now: { self.clock })
+        let grant = try establishLoan(controller)
+
+        let revokeSent = expectSend()
+        controller.reclaimNow()
+        wait(for: [revokeSent], timeout: 5)
+        guard case .revoke(let first)? = lastSent() else {
+            return XCTFail("expected the tap's revoke, got \(String(describing: lastSent()))")
+        }
+        XCTAssertEqual(first.epoch, grant.epoch, "no foreign evidence — the tap names our own loan")
+
+        // The watch answers: it holds a NEWER loan (a seize this phone never saw).
+        let reAimed = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.statusReport(StatusReport(
+            epoch: grant.epoch + 1, mode: .closedDirect, lastDirectGlucoseAge: 30, lastEventSeq: 1,
+            podFault: nil, holdsPod: true)).transportDictionary())
+        wait(for: [reAimed], timeout: 5)
+        guard case .revoke(let second)? = lastSent() else {
+            return XCTFail("expected the re-aimed revoke, got \(String(describing: lastSent()))")
+        }
+        XCTAssertEqual(second.epoch, grant.epoch + 1, "the remaining attempt spends on the loan the watch holds")
+        // The diag rides the controller queue a beat behind the revoke that fulfilled the
+        // wait — poll, don't sample (the bare assert lost that race on the first run).
+        waitUntil(timeout: 5, "re-aim diag") { self.diagMatching("RE-AIMED") != nil }
+    }
+
     /// The gates, each alone sufficient to hold the mirror off: no credential (watchless
     /// and never-loaned users stay bit-for-bit stock), the kill switch, and — for
     /// detector A — a reachable watch.

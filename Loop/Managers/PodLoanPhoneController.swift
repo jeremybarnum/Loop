@@ -2288,9 +2288,38 @@ final class PodLoanPhoneController {
             if newestForeignLoanEvidence.map({ report.epoch >= $0.epoch }) ?? true {
                 newestForeignLoanEvidence = (report.epoch, deps.now())
             }
-            if state == .owner,
-               UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) != nil {
+            let hasCredential = UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) != nil
+            switch state {
+            case .owner where hasCredential:
                 engageInferredLoanYield(evidence: "statusReport — watch holds the pod on e\(report.epoch)")
+            case .grantOffered where hasCredential:
+                // GHOST-GRANT ABANDON (field 2026-08-31 21:21): a queued request detonated at
+                // reunion and this phone granted e276 against a live seized e277 — then sat on
+                // "Handing over…" awaiting a takeoverComplete the watch's wrong-phase refusal
+                // guarantees will never come. The watch now answers that refusal (and the +20s
+                // #108 probe, and stale revokes) with this report: the grant can never confirm,
+                // so stop waiting on it and enter the posture the evidence says is true. The
+                // burned epoch stays burned — the retro-ack adopts forward exactly as tape
+                // proved (276→277), and the T1 dead-man is cancelled WITH the wait it timed.
+                t1WorkItem?.cancel()
+                cancelNotification(id: NotificationID.t1)
+                handbackDiag(epoch, "ghost grant e\(epoch) ABANDONED — the watch answered holdsPod e\(report.epoch); yielding instead of waiting on a takeover that cannot come [mirror]")
+                state = .owner
+                engageInferredLoanYield(evidence: "statusReport — watch holds e\(report.epoch), ghost grant abandoned")
+            case .reclaimPending:
+                // RE-AIM (same field episode, 21:24): the ladder's revoke named this phone's
+                // stale epoch, the watch refused it as matching no live session, and the ladder
+                // read refusal as death and force-stole a live loan's pod. The report names the
+                // real loan — spend the ladder's remaining attempt on it. The force rung stays
+                // armed behind this, unchanged, for a watch that goes quiet after answering.
+                if var ladder = reclaimLadder, !ladder.forced, ladder.attempts < 2 {
+                    sendMessage(.revoke(Revoke(epoch: report.epoch)))
+                    ladder.attempts += 1
+                    reclaimLadder = ladder
+                    handbackDiag(epoch, "reclaim revoke RE-AIMED at e\(report.epoch) (attempt \(ladder.attempts) of 2) — the watch holds a newer loan than the one this reclaim named")
+                }
+            default:
+                break
             }
         }
         guard report.epoch == epoch else { return }
@@ -2387,10 +2416,20 @@ final class PodLoanPhoneController {
         // normal transition to .reconciling, stage, commit, ack, the window audit anchored
         // at the offer's own seize-time odometer start, R33 cancel on the verified reclaim —
         // and .loaned also accepts the mid-blackout record batches WC queued behind this
-        // offer. Only from .owner: a live granted loan's state must never be stomped by a
-        // token (defense against a duplicated credential).
-        if let token = offer.seizeToken, state == .owner, offer.epoch > epoch,
+        // offer. From .owner, or from .reclaimPending — the aimed-revoke drain (the pill tap
+        // that targeted a live seized loan) answers with exactly this offer, and refusing it
+        // there meant a needless force before the .owner door opened. The defense holds
+        // either way: the states a duplicated credential must never stomp are a live grant
+        // in flight (.grantOffered) and a live granted loan (.loaned/.reconciling), and both
+        // stay excluded — a reclaim is this phone actively ENDING whatever loan exists.
+        if let token = offer.seizeToken, state == .owner || state == .reclaimPending, offer.epoch > epoch,
            token.uuidString == UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) {
+            if state == .reclaimPending {
+                // The drain the ladder was waiting for — stand the rungs down before adopting
+                // so the force cannot fire into the hand-back it just received.
+                cancelReclaimLadder()
+                handbackDiag(offer.epoch, "[seize] retro-ack arrived MID-RECLAIM — ladder stood down; the aimed revoke got its drain")
+            }
             handbackDiag(offer.epoch, "[seize] RETRO-ACK — offer for a SEIZED loan (token …\(String(token.uuidString.suffix(8)))); adopting epoch \(epoch)→\(offer.epoch) as .loaned, reconciling on the normal path")
             // PHONE MIRROR exit: the inferred loan just became a KNOWN loan — the flag's
             // job is done (dosing stays paused; the drain-close unpauses as always).
@@ -3092,7 +3131,19 @@ final class PodLoanPhoneController {
             // ladder and orphans the pod until the user next looks at the phone.
             self.deps.beginReclaimBackgroundTask()
             self.pendingRevoke = true
-            self.sendMessage(.revoke(Revoke(epoch: self.epoch)))
+            // AIM AT THE LIVE LOAN when fresh evidence names one this phone never granted
+            // (a seized loan discovered by the mirror). A revoke at our own stale epoch is
+            // refused by the watch's split-brain guard as matching no live session — correct
+            // on its side, but the ladder then reads refusal as death and force-steals a pod
+            // that would have drained politely (field 2026-08-31 21:24). Freshness-gated via
+            // supersededByLiveLoan so yesterday's evidence can't mis-aim today's reclaim —
+            // stale or absent evidence keeps today's exact behavior.
+            let revokeEpoch = self.supersededByLiveLoan(self.epoch)
+                ? (self.newestForeignLoanEvidence?.epoch ?? self.epoch) : self.epoch
+            if revokeEpoch != self.epoch {
+                self.handbackDiag(self.epoch, "reclaim revoke AIMED at e\(revokeEpoch) — fresh evidence of a loan this phone never granted (mirror)")
+            }
+            self.sendMessage(.revoke(Revoke(epoch: revokeEpoch)))
             (self.deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
             self.state = .reclaimPending
             self.armPausedReminder()
@@ -3183,7 +3234,12 @@ final class PodLoanPhoneController {
                 // Two attempts is the whole budget. A reachability change can already have spent
                 // the second one — better timed than this rung, since the watch was awake for it.
                 guard ladder.attempts < 2 else { return }
-                self.sendMessage(.revoke(Revoke(epoch: self.epoch)))
+                // Same aim rule as the tap's own revoke: fresh evidence of a never-granted
+                // live loan re-targets the resend (evidence can arrive BETWEEN the rungs —
+                // a holdsPod answer to attempt 1 is exactly that).
+                let resendEpoch = self.supersededByLiveLoan(self.epoch)
+                    ? (self.newestForeignLoanEvidence?.epoch ?? self.epoch) : self.epoch
+                self.sendMessage(.revoke(Revoke(epoch: resendEpoch)))
                 ladder.attempts += 1
                 self.reclaimLadder = ladder
                 self.handbackDiag(self.epoch, "reclaim revoke RESENT (attempt \(ladder.attempts) of 2) — no drain yet on the \(ladder.branch.rawValue) branch")
@@ -3199,7 +3255,13 @@ final class PodLoanPhoneController {
             // Mark BEFORE forcing: a force can be deferred behind an in-flight hand-back commit,
             // and while it waits the tile must say what is actually happening.
             self.reclaimLadder?.forced = true
-            self.forceReclaimToOwner(reason: "reclaim ladder spent on the \(ladder.branch.rawValue) branch — \(ladder.attempts) revoke attempt(s), watch did not drain")
+            // "Watch did not drain" was field-misread as "no reply from watch" when the watch
+            // WAS replying (refusing stale revokes for a loan it holds). Name the newer loan
+            // when the evidence shows one, so the log and the notice describe a refusal, not
+            // silence.
+            let holding = self.supersededByLiveLoan(self.epoch)
+                ? " (watch holds newer loan e\(self.newestForeignLoanEvidence?.epoch ?? 0) — refused, not silent)" : ""
+            self.forceReclaimToOwner(reason: "reclaim ladder spent on the \(ladder.branch.rawValue) branch — \(ladder.attempts) revoke attempt(s), watch did not drain\(holding)")
         }
         reclaimTimeoutWork = force
         scheduleLadderRung(after: max(forceDelay, 0), label: "reclaim-force", execute: force)
