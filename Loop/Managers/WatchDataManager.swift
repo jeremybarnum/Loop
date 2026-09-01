@@ -649,6 +649,13 @@ final class WatchDataManager: NSObject {
             return
         }
 
+        // R40: every loop update pings the dormant-grant refresher — all gating (owner
+        // state, watch capability, settings fingerprint, 30-min floor) lives inside it,
+        // so this is one enqueued no-op almost always.
+        podLoanController.considerDormantRefresh()
+        // PHONE MIRROR detector A rides the same pulse — all gating lives inside it.
+        podLoanController.considerInferredLoan()
+
         // Any update context should trigger a watch update
         sendWatchContextIfNeeded()
 
