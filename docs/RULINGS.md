@@ -986,6 +986,11 @@ an open question. Companion: `DESIGN_M5_INPUTS.md` (detail on R6/R7),
   build order. Kill switch: PodLoanWatchController.seizeAutoHandbackDisabled (gates the
   prompt).
 
+  CONFIRMED KEPT 2026-08-31 after field-testing BOTH answers (Keep 2026-08-30, Hand
+  Back 2026-08-31 — retro-ack, clean drain, honest books in 14 s): "I think it's fine
+  to keep phone is back prompt." The silent-reunion reconsideration is CLOSED; do not
+  re-ask. The kill switch stays as a bench lever only.
+
   PHONE MIRROR — OPERATIONAL SPEC (2026-08-31, Jeremy's "minimum deviation" paradigm,
   designed off the canonical-scenarios table; this makes the 2026-08-30 MIRROR
   paragraph buildable):
