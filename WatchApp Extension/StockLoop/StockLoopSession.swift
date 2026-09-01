@@ -75,6 +75,19 @@ final class StockLoopSession {
         // The one question the hand-back UI needs answered.
         loanController.isPhoneReachable = { WCSession.default.isReachable }
 
+        // The offer superseder's request-kind twin (#120 idiom): a request still queued for a
+        // dark phone after the watch stops wanting it is a delayed detonator — delivered at
+        // reunion inside the phone's 90 s freshness window, it re-grants over whatever loan
+        // the watch is running by then (field 2026-08-31: ghost grant e276 against live e277).
+        // Same safety rule as #120: never cancel a transfer already in flight.
+        loanController.cancelQueuedLoanRequests = {
+            let stale = WCSession.default.outstandingUserInfoTransfers.filter {
+                LoanMessage.peekKind(transport: $0.userInfo) == "request" && !$0.isTransferring
+            }
+            stale.forEach { $0.cancel() }
+            return stale.count
+        }
+
         loanController.send = { [weak loanController] dictionary in
             // Two channels, chosen per message kind. transferUserInfo is queued and survives
             // reachability flaps and relaunches — the semantics the cursor/ID machinery assumes —

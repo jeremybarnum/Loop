@@ -46,6 +46,12 @@ struct GlanceUIState {
     /// The eventual/recommendation are older than stock's stale threshold, because no cycle has
     /// COMPLETED since. Rendered as a dimmed eventual with its age, matching the stale-glucose rule.
     var predictionStale: Bool = false
+    /// R40(b): non-nil = a seize offer is pending; the idle body renders the deliberate
+    /// confirm with this age line instead of the Start button.
+    var seizeOfferAgeText: String? = nil
+    /// R40(f): the phone returned during a seized loan — render the hand-back-or-keep
+    /// prompt on the active screen (the deliberate choice; never auto).
+    var reunionPrompt: Bool = false
     var viaPhone: Bool = false
     /// OPTION C: which source the direct-G7 LINK is currently proving, independent of which
     /// copy won the store's first-writer-wins dedup. "G7" = a direct read landed inside the
@@ -324,6 +330,20 @@ final class GlanceViewModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
     }
 
+    /// R40(b): the deliberate confirm / dismissal for a pending offline start.
+    func confirmSeize() {
+        guard !isPreview else { return }
+        RuntimeStateLog.mark("glance.confirmSeize")
+        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.confirmSeize()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
+    }
+
+    func dismissSeize() {
+        guard !isPreview else { return }
+        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.dismissSeize()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
+    }
+
     func startSportMode() {
         RuntimeStateLog.mark("glance.startSportMode")
         guard !isPreview else { return }
@@ -445,8 +465,18 @@ final class GlanceViewModel: ObservableObject {
 
         switch snap.phase {
         case .idle:
-            state = Self.idleState(context: ExtensionDelegate.sharedIfAvailable()?.loopManager.activeContext,
-                                   note: snap.lastIdleNote)
+            var idle = Self.idleState(context: ExtensionDelegate.sharedIfAvailable()?.loopManager.activeContext,
+                                      note: snap.lastIdleNote)
+            // R40(b)/(d): the offer's age is the WHOLE staleness contract — shown, never
+            // enforced. Formatted coarsely on purpose; "3d" reads, "76:12:04" does not.
+            if let issued = snap.seizeOfferIssuedAt {
+                let f = DateComponentsFormatter()
+                f.maximumUnitCount = 1
+                f.allowedUnits = [.day, .hour, .minute]
+                f.unitsStyle = .abbreviated
+                idle.seizeOfferAgeText = f.string(from: Date().timeIntervalSince(issued)) ?? "?"
+            }
+            state = idle
         case .requested, .takingOver:
             state = Self.startingState(context: ExtensionDelegate.sharedIfAvailable()?.loopManager.activeContext,
                                        takingOver: snap.phase == .takingOver,
@@ -472,7 +502,25 @@ final class GlanceViewModel: ObservableObject {
                 ? NSLocalizedString("Waiting for iPhone — pod still on watch. Bolus unavailable until it connects.", comment: "Glance note while a hand-back waits for the phone")
                 : NSLocalizedString("Can't reach iPhone — pod still on watch. Move it closer or check its Bluetooth.", comment: "Glance note while a hand-back waits for an UNREACHABLE phone")
             state = s
-        case .revoked, .recoveredDrain:
+        case .recoveredDrain:
+            // R40 re-entry: a parked drain is STARTABLE ground, not a wall. The records
+            // resend on their own timeline; rendering the idle family keeps the Start
+            // button and the seize offer reachable. Field 2026-08-30: this screen showed
+            // "returning records…" with no Start after a watch reboot mid-phoneless loan,
+            // and the user's only way out was turning the phone back on.
+            var restIdle = Self.idleState(context: ExtensionDelegate.sharedIfAvailable()?.loopManager.activeContext,
+                                          note: snap.lastIdleNote
+                                            ?? NSLocalizedString("Records from the last session are waiting for your iPhone. You can still start.",
+                                                                 comment: "Glance note while resting on a parked drain"))
+            if let issued = snap.seizeOfferIssuedAt {
+                let f = DateComponentsFormatter()
+                f.maximumUnitCount = 1
+                f.allowedUnits = [.day, .hour, .minute]
+                f.unitsStyle = .abbreviated
+                restIdle.seizeOfferAgeText = f.string(from: Date().timeIntervalSince(issued)) ?? "?"
+            }
+            state = restIdle
+        case .revoked:
             var s = GlanceUIState(); s.phase = .draining
             s.handbackStartedAt = snap.handbackStartedAt
             // BOUNDED (2026-08-19). This state had no ceiling. On 2026-08-19 the hand-back SUCCEEDED
@@ -527,6 +575,7 @@ final class GlanceViewModel: ObservableObject {
                     s.idleNote = NSLocalizedString("Can't reach iPhone — still looping. Move it closer or check its Bluetooth.", comment: "Glance note when an interim hand-back is blocked by an unreachable phone")
                 }
             }
+            s.reunionPrompt = snap.reunionPromptVisible
             // A manual bolus spends most of its wall-clock waiting on the radio arbiter, with
             // the flow already dismissed. Say so, or the wrist looks idle and the user taps End
             // — which cancels the dose (field: 3x).
@@ -1059,6 +1108,33 @@ struct GlanceView: View {
                     }
                 }
             }
+            if let age = model.state.seizeOfferAgeText {
+                // R40(b): the deliberate confirm. One labeled decision after one honest
+                // explanation IS the deliberateness — the phone did not answer, and the
+                // age line is the R40(d) consent.
+                VStack(spacing: 6) {
+                    Text("iPhone didn't answer")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.glanceInk)
+                    Text("Start without it?\nLast synced \(age) ago — settings and history from then.")
+                        .font(.system(size: 12))
+                        .foregroundColor(.glanceDim)
+                        .multilineTextAlignment(.center)
+                    Button { model.confirmSeize() } label: {
+                        Text("Start Anyway")
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 7)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.glanceAccent)
+                    Button { model.dismissSeize() } label: {
+                        Text("Cancel").font(.system(size: 13))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.glanceDim)
+                }
+            } else {
             Button { model.startSportMode() } label: {
                 Text("Start Sport Mode")
                     .font(.system(size: 17, weight: .semibold))
@@ -1067,6 +1143,7 @@ struct GlanceView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.glanceAccent)
+            }
             if let note = model.state.idleNote {
                 Text(note)
                     .font(.system(size: 11))
@@ -1237,6 +1314,36 @@ struct GlanceView: View {
                             .font(.system(size: 10))
                             .foregroundColor(.glanceDim)
                             .multilineTextAlignment(.center)
+                    }
+                }
+                // R40(f): the phone returned during a seized loan. The choice is the
+                // user's — never auto (reachability is not presence: "phone could be
+                // lost in the house but still on WiFi"). Mutually exclusive with the
+                // hand-back note above by construction: beginHandback clears the prompt.
+                if model.state.reunionPrompt {
+                    VStack(spacing: 3) {
+                        Text(NSLocalizedString("iPhone is back — hand the pod back?", comment: "Glance prompt when the phone returns during a seized loan"))
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.glanceInk)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 6) {
+                            Button {
+                                ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.confirmReunionHandback()
+                            } label: {
+                                Text(NSLocalizedString("Hand Back", comment: "Glance reunion prompt: end the seized loan"))
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.glanceAccent)
+                            Button {
+                                ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.dismissReunionPrompt()
+                            } label: {
+                                Text(NSLocalizedString("Keep", comment: "Glance reunion prompt: continue the seized loan"))
+                                    .font(.system(size: 12))
+                            }
+                            .buttonStyle(.bordered)
+                        }
                     }
                 }
             }
