@@ -1496,6 +1496,54 @@ final class LoanOverrideTests: XCTestCase {
     private let baseISF = InsulinSensitivitySchedule(unit: .milligramsPerDeciliter, dailyItems: [RepeatingScheduleValue(startTime: 0, value: 50.0)])!
     private let baseCR = CarbRatioSchedule(unit: .gram, dailyItems: [RepeatingScheduleValue(startTime: 0, value: 10.0)])!
 
+    /// Field 2026-09-01, Caitlin's first breakfast loan: the stock carb flow brackets a manual
+    /// bolus with a max-temp enact that is cancelled seconds later, and when the cancel takes
+    /// the zero-duration form ("temp 0.00 × 0 min") the audit's segment builder DISCARDED the
+    /// zero-length record — so the cancelled 2.50 U/hr × 30 min temp stood in the books until
+    /// the next real temp, 8 phantom pulses ≈ 0.40 U of expected insulin the pod (correctly
+    /// back on schedule) never delivered. Locked −0.25 residual, false "IOB May Be Overstated"
+    /// on honest books. The fix admits zero-length segments as TERMINATORS: they clip their
+    /// predecessor at the cancel instant and contribute zero delivery themselves.
+    ///
+    /// This test replays the tape's shape: bolus + bracket temp + zero-length cancel 3 s later
+    /// + next real temp 15 min on, odometer metering exactly what the schedule says. Pre-fix
+    /// the phantom books a 0.40 U shortfall; post-fix the audit reads dead even.
+    /// (Ported by content from her line's ab31d9e7 — same builder, same walk, same field tape.)
+    func testZeroDurationCancelClipsThePhantomTempInTheAudit() {
+        let t0 = Date()
+        let bolus = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
+                              record: LoanDoseRecord(kind: .bolus, startDate: t0.addingTimeInterval(30), amount: 1.30),
+                              loggedAt: t0.addingTimeInterval(30))
+        let bracket = LoanEvent(id: UUID(), seq: 2, provenance: .confirmed,
+                                record: LoanDoseRecord(kind: .tempBasal, startDate: t0.addingTimeInterval(30),
+                                                       endDate: t0.addingTimeInterval(30 + 1800), unitsPerHour: 2.50),
+                                loggedAt: t0.addingTimeInterval(30))
+        let cancel = LoanEvent(id: UUID(), seq: 3, provenance: .confirmed,
+                               record: LoanDoseRecord(kind: .tempBasal, startDate: t0.addingTimeInterval(33),
+                                                      endDate: t0.addingTimeInterval(33), unitsPerHour: 0.0),
+                               loggedAt: t0.addingTimeInterval(33))
+        let nextTemp = LoanEvent(id: UUID(), seq: 4, provenance: .confirmed,
+                                 record: LoanDoseRecord(kind: .tempBasal, startDate: t0.addingTimeInterval(900),
+                                                        endDate: t0.addingTimeInterval(900 + 1800), unitsPerHour: 0.0),
+                                 loggedAt: t0.addingTimeInterval(900))
+
+        // What the pod actually metered: the 1.30 bolus (exact) + schedule (1.0 U/hr, one pulse
+        // per 180 s) over the post-cancel gap [t0+33 s, t0+900 s] = 4 pulses = 0.20 U. The
+        // bracket temp's 3 live seconds floor to zero pulses; the zero temps deliver nothing.
+        let odometer = LoanOdometerSnapshot(deliveredAtStart: 50.00, deliveredLatest: 51.50,
+                                            freshenSucceeded: true, asOf: t0.addingTimeInterval(2400))
+
+        let outcome = LoanReconciler.reconcile(LoanReconciler.Input(
+            events: [bolus, bracket, cancel, nextTemp], odometer: odometer, schedule: baseBasal,
+            loanStart: t0, loanEnd: t0.addingTimeInterval(2400)))
+
+        XCTAssertNil(outcome.residualShortfallUnits,
+                     "honest books must audit clean — pre-fix the discarded cancel left the 2.50 bracket " +
+                     "standing 14.5 phantom minutes (12 pulses = 0.60 U) and booked a false shortfall")
+        XCTAssertNil(outcome.positiveRemainderUnits, "and nothing in the other direction either")
+        XCTAssertTrue(outcome.annulledEventIDs.isEmpty, "confirmed records; annulment must not be the thing absorbing this")
+    }
+
     override func tearDown() {
         // Same reasoning as LoanBooksHarnessTests above — do not race the async Core Data
         // stack to unlink a temp directory. Lazy creation already limited the blast radius here;
