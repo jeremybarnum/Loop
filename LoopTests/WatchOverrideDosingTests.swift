@@ -188,7 +188,13 @@ final class WatchOverrideDosingTests: XCTestCase {
                           "a reduced-needs override must lower the temp rate, not raise it")
     }
 
-    // MARK: - The recommendation's REASON reaches the wrist
+    // MARK: - The recommendation's REASON (wrist strings; display reverted to stock)
+    //
+    // 2026-09-02: the WRIST DISPLAY of these strings was reverted to stock (the appended
+    // sentence read as clutter — "let's just go back to stock with that"), so nothing
+    // renders `wristDescription` today. The strings and this pin stay so the display
+    // revert remains a one-line restore in BolusInput if the 2026-08-11 reads-as-broken
+    // complaint ever returns.
 
     /// A bare "REC: 0 U" is indistinguishable from a broken screen — which is exactly how it
     /// read in the field on 2026-08-11 while the loop was correcting at maxBasal and zero was

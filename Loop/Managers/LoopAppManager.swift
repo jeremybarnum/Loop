@@ -212,7 +212,15 @@ class LoopAppManager: NSObject {
         // SPORT MODE (#2, Jeremy 2026-07-26): suppress the phone's "Loop Failure" notifications while
         // the pod is loaned to the watch — the watch owns not-looping alerting on the wrist. alertManager
         // is built above and deviceDataManager just now, so wire the loan predicate here.
-        alertManager.podOnLoanProvider = { [weak deviceDataManager] in deviceDataManager?.isPodLoanedToWatch ?? false }
+        // Loan state OR the pause capture (ported from next-dev 12ca7ff9): the capture is
+        // written synchronously at grant, BEFORE the pause-triggered final phone cycle can
+        // complete — the pre-state-flip window the loan-state predicate cannot see, which is
+        // how the ladder escaped the grant clear on every loan (3/3 on the port line,
+        // 2026-08-25, each caught by the sweep). The sweep demotes to true backstop.
+        alertManager.podOnLoanProvider = { [weak deviceDataManager] in
+            (deviceDataManager?.isPodLoanedToWatch ?? false)
+                || UserDefaults.standard.object(forKey: WatchDataManager.dosingCaptureKey) != nil
+        }
         // #26 hardening (adversarial review): if the app died between the loan-end state flip and
         // the main-queue clear, the pre-scheduled watch-silence dead-man is orphaned and would fire
         // a phantom critical alert 15/30 min after a completed hand-back. Launching with NO active

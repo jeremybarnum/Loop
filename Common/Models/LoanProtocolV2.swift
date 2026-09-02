@@ -472,13 +472,53 @@ public struct LoanRequest: Codable, Equatable {
     /// Optional for back-compat: an older watch sends none, and the phone then behaves
     /// exactly as it did before (no dedupe).
     public let requestID: String?
+    /// R40: this watch understands the .dormantGrant kind and the seize flow. The phone
+    /// gates its dormant-grant refresher on this — an older watch (nil) must never receive
+    /// a kind its envelope decoder throws on (it would raise the build-skew notice every
+    /// refresh). Recorded phone-side at every request.
+    public let supportsSeize: Bool?
+    /// When the watch SENT this request — so the phone can refuse one that aged in the
+    /// queued channel instead of granting into the void. A request outlives its sender's
+    /// interest in ~25 s (the watch times out and moves on, possibly to a seize), but
+    /// transferUserInfo happily delivers it minutes later: at power-on 2026-08-30 the phone
+    /// granted an epoch to a five-minute-old replay from an idle watch, then denied the
+    /// next copy and force-reclaimed its own grant. The dedupe can't catch this — two real
+    /// taps carry different requestIDs. Optional for back-compat: nil (older watch) is
+    /// treated as fresh, exactly the pre-field behavior.
+    public let sentAt: Date?
 
     public init(watchBuild: String,
                 supportedVersions: [Int] = [LoanProtocol.version],
-                requestID: String = UUID().uuidString) {
+                requestID: String = UUID().uuidString,
+                supportsSeize: Bool? = nil,
+                sentAt: Date? = nil) {
         self.watchBuild = watchBuild
         self.supportedVersions = supportedVersions
         self.requestID = requestID
+        self.supportsSeize = supportsSeize
+        self.sentAt = sentAt
+    }
+}
+
+/// R40: the dormant grant — a fully-assembled LoanGrant continuously re-issued to the
+/// watch while the phone owns the pod, so a phoneless loan start (seize) has everything a
+/// normal takeover has: keys, settings snapshot, full records. `issuedAt` drives the seize
+/// confirm's age line (R40(d): the age is SHOWN, never capped). `seizeToken` is the
+/// reunion identity: stable per pod, echoed in a seized loan's hand-back offer so the
+/// phone can retro-acknowledge a loan it never granted; an old phone ignores the field and
+/// the offer degrades to the established stale-epoch records-drain (state untouched). The
+/// inner grant's `epoch` is PROVISIONAL (the phone's counter at issue) — the real epoch is
+/// assigned at retro-acknowledgment; the inner `expiresAt` is meaningless dormant and set
+/// to `issuedAt` so nothing mistakes it for a live 5-minute lease.
+public struct DormantGrant: Codable, Equatable {
+    public let grant: LoanGrant
+    public let issuedAt: Date
+    public let seizeToken: UUID
+
+    public init(grant: LoanGrant, issuedAt: Date, seizeToken: UUID) {
+        self.grant = grant
+        self.issuedAt = issuedAt
+        self.seizeToken = seizeToken
     }
 }
 
@@ -567,6 +607,20 @@ public struct LoanGrant: Codable, Equatable {
     /// then keeps or loses the freshness honestly). nil (older phone) = the old behavior.
     public let lastLoopCompleted: Date?
 
+    /// The phone's predicted-low warning configuration, inherited for the life of the loan.
+    ///
+    /// The warning is a phone feature whose settings live in the phone's `UserDefaults`, which the
+    /// watch has no access to. Rather than give the wrist its own copy to drift, the phone hands
+    /// over what it would have used and the watch evaluates with it — so turning the feature off,
+    /// or widening the window, takes effect on both devices from the next grant.
+    ///
+    /// nil means "this phone said nothing about low warnings", and the watch stays SILENT. That is
+    /// the correct reading for an older phone that predates the field: silence is what the user
+    /// already experiences today during a loan, whereas inventing defaults would start warning
+    /// someone who never asked for it. `lastNotificationTime` rides inside so the snooze survives
+    /// takeover instead of resetting and double-warning minutes after the phone just fired.
+    public let lowBGWarningSettings: LoanLowBGWarningSettings?
+
     public init(epoch: Int, expiresAt: Date, pumpManagerRawState: Data, podAddress: UInt32,
                 therapySettingsRaw: Data, settingsTimeZoneID: String,
                 doseHistory: [LoanDoseRecord], boundaryRecord: LoanDoseRecord?,
@@ -577,7 +631,8 @@ public struct LoanGrant: Codable, Equatable {
                 carbHistory: [LoanCarbRecord]? = nil,
                 glucoseHistory: [LoanGlucoseRecord]? = nil,
                 predictionSnapshot: LoanPredictionSnapshot? = nil,
-                lastLoopCompleted: Date? = nil) {
+                lastLoopCompleted: Date? = nil,
+                lowBGWarningSettings: LoanLowBGWarningSettings? = nil) {
         self.epoch = epoch
         self.expiresAt = expiresAt
         self.pumpManagerRawState = pumpManagerRawState
@@ -594,6 +649,84 @@ public struct LoanGrant: Codable, Equatable {
         self.glucoseHistory = glucoseHistory
         self.predictionSnapshot = predictionSnapshot
         self.lastLoopCompleted = lastLoopCompleted
+        self.lowBGWarningSettings = lowBGWarningSettings
+    }
+}
+
+/// The phone's predicted-low warning configuration, snapshotted into the grant.
+///
+/// INFORMATION ONLY. Nothing here reaches dosing on either device — these values decide whether a
+/// notification is posted and what it says, nothing more.
+///
+/// The offsets travel as doubles already expressed in `glucoseUnitString`, and the night window
+/// travels as minutes-since-midnight rather than as `Date`s, so neither depends on the two devices
+/// agreeing about a calendar. All durations are seconds.
+public struct LoanLowBGWarningSettings: Codable, Equatable {
+    /// The phone's master switch. False means the user turned the feature off; the watch honours
+    /// that rather than warning on its own initiative.
+    public let enabled: Bool
+    /// Whether warnings are allowed during the night window at all.
+    public let nightWarningsEnabled: Bool
+    /// Subtracted from the suspend threshold to get the warning level, in `glucoseUnitString`.
+    public let dayWarningOffset: Double
+    public let nightWarningOffset: Double
+    /// Minimum gap between two warnings.
+    public let warningSnooze: TimeInterval
+    /// Don't warn about a low that is closer than this — too late to act on usefully.
+    public let dontWarnIfSooner: TimeInterval
+    /// ...or farther away than this — too speculative.
+    public let dontWarnIfLater: TimeInterval
+    /// Suppress most classes for this long after a carb entry, so declaring a meal doesn't
+    /// immediately warn about the low it is already treating.
+    public let delayAfterCarbEntry: TimeInterval
+    /// Night window as minutes since local midnight. Wrapping past midnight is expected and
+    /// handled by `isNightTime(at:)`.
+    public let nightStartMinutes: Int
+    public let nightEndMinutes: Int
+    /// The unit the offsets are expressed in, as `HKUnit.unitString`.
+    public let glucoseUnitString: String
+    /// When the phone last posted a warning, so the snooze carries across takeover. nil = never.
+    public let lastNotificationTime: Date?
+
+    public init(enabled: Bool, nightWarningsEnabled: Bool,
+                dayWarningOffset: Double, nightWarningOffset: Double,
+                warningSnooze: TimeInterval, dontWarnIfSooner: TimeInterval,
+                dontWarnIfLater: TimeInterval, delayAfterCarbEntry: TimeInterval,
+                nightStartMinutes: Int, nightEndMinutes: Int,
+                glucoseUnitString: String, lastNotificationTime: Date?) {
+        self.enabled = enabled
+        self.nightWarningsEnabled = nightWarningsEnabled
+        self.dayWarningOffset = dayWarningOffset
+        self.nightWarningOffset = nightWarningOffset
+        self.warningSnooze = warningSnooze
+        self.dontWarnIfSooner = dontWarnIfSooner
+        self.dontWarnIfLater = dontWarnIfLater
+        self.delayAfterCarbEntry = delayAfterCarbEntry
+        self.nightStartMinutes = nightStartMinutes
+        self.nightEndMinutes = nightEndMinutes
+        self.glucoseUnitString = glucoseUnitString
+        self.lastNotificationTime = lastNotificationTime
+    }
+
+    /// Mirrors the phone's night test, including the wrap case where the window crosses midnight.
+    public func isNightTime(at date: Date, calendar: Calendar = .current) -> Bool {
+        let comps = calendar.dateComponents([.hour, .minute], from: date)
+        let minutes = (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
+        if nightStartMinutes <= nightEndMinutes {
+            return minutes >= nightStartMinutes && minutes <= nightEndMinutes
+        } else {
+            return minutes >= nightStartMinutes || minutes <= nightEndMinutes
+        }
+    }
+
+    /// A copy carrying a new snooze anchor, for the hand-back leg.
+    public func withLastNotificationTime(_ date: Date?) -> LoanLowBGWarningSettings {
+        LoanLowBGWarningSettings(enabled: enabled, nightWarningsEnabled: nightWarningsEnabled,
+                                 dayWarningOffset: dayWarningOffset, nightWarningOffset: nightWarningOffset,
+                                 warningSnooze: warningSnooze, dontWarnIfSooner: dontWarnIfSooner,
+                                 dontWarnIfLater: dontWarnIfLater, delayAfterCarbEntry: delayAfterCarbEntry,
+                                 nightStartMinutes: nightStartMinutes, nightEndMinutes: nightEndMinutes,
+                                 glucoseUnitString: glucoseUnitString, lastNotificationTime: date)
     }
 }
 
@@ -782,16 +915,31 @@ public struct HandbackOffer: Codable, Equatable {
     /// rather than restoring the value captured before the loan. nil (older watch) → the phone
     /// keeps its captured pre-loan value, i.e. the previous restore behavior.
     public let watchClosedLoopEnabled: Bool?
+    /// R40 reunion identity: present on offers for a SEIZED loan (one the phone never
+    /// granted live). Matches the outstanding DormantGrant.seizeToken; the phone
+    /// retro-acknowledges on match. nil = ordinary granted loan. An old phone ignores this
+    /// and the offer takes the stale-epoch records-drain path (safe, state untouched).
+    public let seizeToken: UUID?
     /// The wrist's last completed loop cycle, the return-direction twin of the grant's field:
     /// at reclaim the phone seeds its own recency display from this, so the ~10 s settle does
     /// not paint a red ring over a system that looped seconds ago (the watch's temp is still
     /// running, R33 — therapy is genuinely continuous). nil (older watch) = no seed.
     public let lastLoopCompleted: Date?
 
+    /// When the WRIST last posted a predicted-low warning, returned so the snooze survives the
+    /// hand-back in the same way the grant carries it outbound. Without it the phone resumes
+    /// warning with a clean clock and can repeat, within a minute or two, what the user just read
+    /// on their wrist — the same duplicate the grant's anchor prevents on the way out.
+    /// nil = the wrist never warned, or an older watch that does not send it; either way the
+    /// phone keeps whatever anchor it already had.
+    public let lastLowBGWarningAt: Date?
+
     public init(epoch: Int, handedBackAt: Date, finalStatus: LoanPodStatus?,
                 odometer: LoanOdometerSnapshot?, events: [LoanEvent], tombstones: [UUID],
                 recovered: Bool, released: Bool? = nil, watchClosedLoopEnabled: Bool? = nil,
-                lastLoopCompleted: Date? = nil) {
+                seizeToken: UUID? = nil,
+                lastLoopCompleted: Date? = nil,
+                lastLowBGWarningAt: Date? = nil) {
         self.epoch = epoch
         self.handedBackAt = handedBackAt
         self.finalStatus = finalStatus
@@ -801,7 +949,9 @@ public struct HandbackOffer: Codable, Equatable {
         self.recovered = recovered
         self.released = released
         self.watchClosedLoopEnabled = watchClosedLoopEnabled
+        self.seizeToken = seizeToken
         self.lastLoopCompleted = lastLoopCompleted
+        self.lastLowBGWarningAt = lastLowBGWarningAt
     }
 }
 
@@ -923,11 +1073,16 @@ public enum LoanMessage: Equatable {
     case nack(ProtocolNack)
     case denied(LoanDenied)
     case diag(LoanDiag)
+    /// R40: phone→watch, the continuously-refreshed offline-start credential. Sent only
+    /// to watches that advertised supportsSeize (older envelope decoders throw on the
+    /// unknown kind).
+    case dormantGrant(DormantGrant)
 
     /// The message's epoch, nil only for request/nack/denied (§1.1).
     public var epoch: Int? {
         switch self {
         case .request, .nack, .denied: return nil
+        case .dormantGrant: return nil   // provisional epoch inside; not addressable by epoch
         case .grant(let m): return m.epoch
         case .takeoverComplete(let m): return m.epoch
         case .takeoverFailed(let m): return m.epoch
@@ -956,7 +1111,7 @@ public struct LoanEnvelope: Codable {
     private enum Kind: String, Codable {
         case request, grant, takeoverComplete, takeoverFailed, doseRecordBatch
         case handbackOffer, handbackAck, revoke, statusQuery, statusReport, nack, denied
-        case diag
+        case diag, dormantGrant
     }
 
     public init(from decoder: Decoder) throws {
@@ -984,6 +1139,7 @@ public struct LoanEnvelope: Codable {
         case .nack: self.message = .nack(try c.decode(ProtocolNack.self, forKey: .body))
         case .denied: self.message = .denied(try c.decode(LoanDenied.self, forKey: .body))
         case .diag: self.message = .diag(try c.decode(LoanDiag.self, forKey: .body))
+        case .dormantGrant: self.message = .dormantGrant(try c.decode(DormantGrant.self, forKey: .body))
         }
     }
 
@@ -1004,6 +1160,7 @@ public struct LoanEnvelope: Codable {
         case .nack(let m): try c.encode(Kind.nack, forKey: .kind); try c.encode(m, forKey: .body)
         case .denied(let m): try c.encode(Kind.denied, forKey: .kind); try c.encode(m, forKey: .body)
         case .diag(let m): try c.encode(Kind.diag, forKey: .kind); try c.encode(m, forKey: .body)
+        case .dormantGrant(let m): try c.encode(Kind.dormantGrant, forKey: .kind); try c.encode(m, forKey: .body)
         }
     }
 }
@@ -1054,6 +1211,7 @@ extension LoanMessage {
         case .nack:             return "nack"
         case .denied:           return "denied"
         case .diag:             return "diag"
+        case .dormantGrant:     return "dormantGrant"
         }
     }
 
@@ -1063,7 +1221,10 @@ extension LoanMessage {
              .takeoverComplete:
             return true
         case .takeoverFailed, .doseRecordBatch, .statusQuery,
-             .statusReport, .diag:
+             .statusReport, .diag,
+             // R40: nobody is watching a spinner for a dormant refresh — background
+             // bookkeeping; guaranteed queued delivery is exactly right for it.
+             .dormantGrant:
             return false
         }
     }

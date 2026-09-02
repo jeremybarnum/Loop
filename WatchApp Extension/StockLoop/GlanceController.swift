@@ -94,6 +94,9 @@ struct GlanceUIState {
     var loopStatusText: String = ""
     var loopDotColor: Color = .clear
     var loopFreshness: LoopFreshness = .unknown
+    /// R40(b): non-nil = a seize offer is pending; the idle body renders the deliberate
+    /// confirm with this age line instead of the Start button.
+    var seizeOfferAgeText: String? = nil
     var viaPhone: Bool = false
     /// OPTION C: which source the direct-G7 LINK is currently proving, independent of which
     /// copy won the store's first-writer-wins dedup. "G7" = a direct read landed inside the
@@ -157,6 +160,9 @@ struct GlanceUIState {
     var handbackPending: Bool = false
     /// When the current reclaim began — anchors the determinate reclaim bar (2026-08-04).
     var handbackStartedAt: Date? = nil
+    /// R40(f): the phone returned during a seized loan — render the hand-back-or-keep
+    /// prompt on the active screen (the deliberate choice; never auto).
+    var reunionPrompt: Bool = false
 }
 
 // MARK: - View model
@@ -347,6 +353,20 @@ final class GlanceViewModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
     }
 
+    /// R40(b): the deliberate confirm / dismissal for a pending offline start.
+    func confirmSeize() {
+        guard !isPreview else { return }
+        RuntimeStateLog.mark("glance.confirmSeize")
+        ExtensionDelegate.shared().stockLoopSession.loanController.confirmSeize()
+        refreshNow()
+    }
+
+    func dismissSeize() {
+        guard !isPreview else { return }
+        ExtensionDelegate.shared().stockLoopSession.loanController.dismissSeize()
+        refreshNow()
+    }
+
     func startSportMode() {
         RuntimeStateLog.mark("glance.startSportMode")
         guard !isPreview else { return }
@@ -424,8 +444,18 @@ final class GlanceViewModel: ObservableObject {
 
         switch snap.phase {
         case .idle:
-            state = Self.idleState(context: ExtensionDelegate.shared().loopManager.activeContext,
-                                   note: snap.lastIdleNote)
+            var idle = Self.idleState(context: ExtensionDelegate.shared().loopManager.activeContext,
+                                      note: snap.lastIdleNote)
+            // R40(b)/(d): the offer's age is the WHOLE staleness contract — shown, never
+            // enforced. Formatted coarsely on purpose; "3d" reads, "76:12:04" does not.
+            if let issued = snap.seizeOfferIssuedAt {
+                let f = DateComponentsFormatter()
+                f.maximumUnitCount = 1
+                f.allowedUnits = [.day, .hour, .minute]
+                f.unitsStyle = .abbreviated
+                idle.seizeOfferAgeText = f.string(from: Date().timeIntervalSince(issued)) ?? "?"
+            }
+            state = idle
         case .requested, .takingOver:
             state = Self.startingState(context: ExtensionDelegate.shared().loopManager.activeContext,
                                        takingOver: snap.phase == .takingOver,
@@ -451,11 +481,29 @@ final class GlanceViewModel: ObservableObject {
                 ? NSLocalizedString("Waiting for iPhone — pod still on watch. Bolus unavailable until it connects.", comment: "Glance note while a hand-back waits for the phone")
                 : NSLocalizedString("Can't reach iPhone — pod still on watch. Move it closer or check its Bluetooth.", comment: "Glance note while a hand-back waits for an UNREACHABLE phone")
             state = s
-        case .revoked, .recoveredDrain:
+        case .revoked:
             var s = GlanceUIState(); s.phase = .draining
             s.handbackStartedAt = snap.handbackStartedAt
             s.loopStatusText = NSLocalizedString("returning records…", comment: "Glance status while draining records")
             state = s
+        case .recoveredDrain:
+            // R40 re-entry: a parked drain is STARTABLE ground, not a wall. The records
+            // resend on their own timeline; rendering the idle family keeps the Start
+            // button and the seize offer reachable. Field 2026-08-30: this screen showed
+            // "returning records…" with no Start after a watch reboot mid-phoneless loan,
+            // and the user's only way out was turning the phone back on.
+            var idle = Self.idleState(context: ExtensionDelegate.shared().loopManager.activeContext,
+                                      note: snap.lastIdleNote
+                                        ?? NSLocalizedString("Records from the last session are waiting for your iPhone. You can still start.",
+                                                             comment: "Glance note while resting on a parked drain"))
+            if let issued = snap.seizeOfferIssuedAt {
+                let f = DateComponentsFormatter()
+                f.maximumUnitCount = 1
+                f.allowedUnits = [.day, .hour, .minute]
+                f.unitsStyle = .abbreviated
+                idle.seizeOfferAgeText = f.string(from: Date().timeIntervalSince(issued)) ?? "?"
+            }
+            state = idle
         case .active:
             // Main-safe read, exactly as for the loan snapshot above: publish a mirror from
             // dataAccessQueue, read the mirror here, never sync onto it. A dose cycle holds that
@@ -485,6 +533,7 @@ final class GlanceViewModel: ObservableObject {
                     s.idleNote = NSLocalizedString("Can't reach iPhone — still looping. Move it closer or check its Bluetooth.", comment: "Glance note when an interim hand-back is blocked by an unreachable phone")
                 }
             }
+            s.reunionPrompt = snap.reunionPromptVisible
             // A manual bolus spends most of its wall-clock waiting on the radio arbiter, with
             // the flow already dismissed. Say so, or the wrist looks idle and the user taps End
             // — which cancels the dose (field: 3x).
@@ -865,14 +914,30 @@ struct GlanceView: View {
             // Ring only (like the stock screen): shape carries closed/open, color carries
             // BG-recency freshness. No text — the ring says it all.
             Image(loopAssetName, bundle: Self.watchAppBundle)
+                .renderingMode(.template)
                 .resizable()
                 .frame(width: 26, height: 26)
+                .foregroundColor(ringColor)
         } else if model.state.phase != .idle {
             // starting / handing back / draining: the phase text. IDLE shows nothing —
             // the "Start Sport Mode" button is the whole message (Jeremy 2026-07-24).
             Text(model.state.loopStatusText)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundColor(.glanceDim)
+        }
+    }
+
+    /// One freshness palette for BOTH devices (Caitlin, 2026-09-02: the ring's aging
+    /// ORANGE — the tint baked into stock's old watch PNGs — matched nothing she knows
+    /// from the phone, whose aging is the "warning" yellow). The stock assets now render
+    /// as templates (shape only: solid=closed, gapped=open) and take their color from
+    /// here, the phone's palette verbatim — so the two devices cannot drift again.
+    private var ringColor: Color {
+        switch model.state.loopFreshness {
+        case .fresh:   return Color(red: 10/255, green: 180/255, blue: 67/255)   // #0AB443 — unchanged (matches the old asset tint)
+        case .aging:   return Color(red: 233/255, green: 194/255, blue: 68/255)  // #E9C244 — the phone's "warning" colorset
+        case .stale:   return Color(red: 255/255, green: 69/255, blue: 58/255)   // #FF453A — unchanged
+        case .unknown: return .glanceDim
         }
     }
 
@@ -921,6 +986,33 @@ struct GlanceView: View {
                     }
                 }
             }
+            if let age = model.state.seizeOfferAgeText {
+                // R40(b): the deliberate confirm. One labeled decision after one honest
+                // explanation IS the deliberateness — the phone did not answer, and the
+                // age line is the R40(d) consent.
+                VStack(spacing: 6) {
+                    Text("iPhone didn't answer")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.glanceInk)
+                    Text("Start without it?\nLast synced \(age) ago — settings and history from then.")
+                        .font(.system(size: 12))
+                        .foregroundColor(.glanceDim)
+                        .multilineTextAlignment(.center)
+                    Button { model.confirmSeize() } label: {
+                        Text("Start Anyway")
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 7)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.glanceAccent)
+                    Button { model.dismissSeize() } label: {
+                        Text("Cancel").font(.system(size: 13))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.glanceDim)
+                }
+            } else {
             switch model.sensorReadiness {
             case .ready:
                 Button { model.startSportMode() } label: {
@@ -942,7 +1034,14 @@ struct GlanceView: View {
                 // worse than patience: tapping it reset a healthy adoption and slowed the first
                 // launch by minutes (2026-08-22). The live counter is the anti-force-quit device;
                 // a static "waiting" screen was read as stale state and killed.
-                ListeningForSensor()
+                // The failure streak tempers that patience (field 2026-08-30): once the sensor
+                // keeps CONNECTING but auth-subscribe keeps dying, waiting is no longer
+                // informative — the view says so and offers the remedy that went 2-for-2
+                // that night (cold re-acquire; it beat both a watch reboot and force-quit,
+                // and unlike force-quit it doesn't kill a live loan).
+                ListeningForSensor(failures: ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.authSubscribeFailureStreak,
+                                   reacquire: { model.rescanForSensor() })
+            }
             }
             if let note = model.state.idleNote {
                 Text(note)
@@ -1110,6 +1209,36 @@ struct GlanceView: View {
                             .font(.system(size: 10))
                             .foregroundColor(.glanceDim)
                             .multilineTextAlignment(.center)
+                    }
+                }
+                // R40(f): the phone returned during a seized loan. The choice is the
+                // user's — never auto (reachability is not presence: "phone could be
+                // lost in the house but still on WiFi"). Mutually exclusive with the
+                // hand-back note above by construction: beginHandback clears the prompt.
+                if model.state.reunionPrompt {
+                    VStack(spacing: 3) {
+                        Text(NSLocalizedString("iPhone is back — hand the pod back?", comment: "Glance prompt when the phone returns during a seized loan"))
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.glanceInk)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 6) {
+                            Button {
+                                ExtensionDelegate.shared().stockLoopSession.loanController.confirmReunionHandback()
+                            } label: {
+                                Text(NSLocalizedString("Hand Back", comment: "Glance reunion prompt: end the seized loan"))
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.glanceAccent)
+                            Button {
+                                ExtensionDelegate.shared().stockLoopSession.loanController.dismissReunionPrompt()
+                            } label: {
+                                Text(NSLocalizedString("Keep", comment: "Glance reunion prompt: continue the seized loan"))
+                                    .font(.system(size: 12))
+                            }
+                            .buttonStyle(.bordered)
+                        }
                     }
                 }
             }
@@ -1590,39 +1719,79 @@ private struct NoDirectBGBlock: View {
 /// whole job is to keep the wearer here without inviting an action. The ticking counter is what
 /// distinguishes "alive and listening" from the stale screen that got force-quit in the field.
 private struct ListeningForSensor: View {
+    /// Consecutive auth-subscribe failures (G7CGMManager streak). 0 = still innocent
+    /// waiting; ≥ 1 shows the attempts so the screen visibly reflects work (a Bluetooth
+    /// toggle no longer *looks* ignored); ≥ 3 swaps the screen for the remedy that went
+    /// 2-for-2 in the field (2026-08-30): a cold re-acquire, offered as a button right
+    /// here — it beat both a watch reboot and force-quit, and it can't kill a live loan.
+    /// Force-quit stays as the footer fallback. The 2026-08-22 no-button lesson still
+    /// governs the INNOCENT state; the streak is what proves patience wrong.
+    var failures: Int = 0
+    var reacquire: (() -> Void)? = nil
+
     @State private var startedAt = Date()
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     @State private var elapsed: TimeInterval = 0
+    @State private var reacquireTapped = false
+
+    private var stuck: Bool { failures >= 3 }
 
     var body: some View {
-        VStack(spacing: 11) {
-            Text("Listening for\nyour sensor")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundColor(.glanceInk)
+        // Every Text here is vertically PINNED (fixedSize) — without it, the 40 mm screen
+        // squeezes each two-line string down to one truncated line ("Listening for…",
+        // field photo 2026-08-30). The Spacer is the only thing allowed to compress, and
+        // the geometry is sized so title + subtitle + counter + footer fit under the
+        // glance header on the smallest case.
+        VStack(spacing: 6) {
+            Text(stuck ? "Sensor found,\nnot linking" : "Listening for\nyour sensor")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(stuck ? .glanceWarn : .glanceInk)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
 
-            Text("Usually under 5 min.\nKeep the app open.")
-                .font(.system(size: 12))
-                .foregroundColor(.glanceDim)
-                .multilineTextAlignment(.center)
+            if stuck, let reacquire = reacquire {
+                Button {
+                    reacquireTapped = true
+                    reacquire()   // resets the streak too — the screen returns to innocent listening
+                } label: {
+                    Text(reacquireTapped ? "Re-acquiring…" : "Re-acquire Sensor")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.glanceAccent)
+                .disabled(reacquireTapped)
+            } else {
+                Text("Usually under 5 min.\nKeep the app open.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.glanceDim)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             Spacer(minLength: 0)
 
-            VStack(spacing: 4) {
+            VStack(spacing: 2) {
                 Text(timeString)
-                    .font(.system(size: 20, weight: .medium).monospacedDigit())
+                    .font(.system(size: 18, weight: .medium).monospacedDigit())
                     .foregroundColor(.glanceAccent)
-                Text("listening")
+                Text(failures > 0 ? "listening · \(failures) failed tries" : "listening")
                     .font(.system(size: 10))
-                    .foregroundColor(.glanceDim)
+                    .foregroundColor(failures > 0 ? .glanceWarn : .glanceDim)
             }
+            .fixedSize(horizontal: false, vertical: true)
 
-            Text("No BG in Dexcom either?\nToggle Bluetooth.")
+            Text(stuck ? "Still stuck? Force-quit\nthis app and reopen it." : "No BG in Dexcom either?\nToggle Bluetooth.")
                 .font(.system(size: 10))
                 .foregroundColor(.glanceDim)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .onReceive(tick) { _ in elapsed = Date().timeIntervalSince(startedAt) }
+        .onReceive(tick) { _ in
+            elapsed = Date().timeIntervalSince(startedAt)
+            // The streak reset (scanForNewSensor) flips `stuck` off on the next refresh;
+            // if failures climb again the button must be tappable again, not dead.
+            if reacquireTapped && !stuck { reacquireTapped = false }
+        }
     }
 
     private var timeString: String {

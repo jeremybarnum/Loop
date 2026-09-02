@@ -71,13 +71,12 @@ struct BolusInput: View {
             return Text("REC: Calculating...", comment: "Indicator that recommended bolus computation is in progress on Apple Watch")
         } else {
             let valueString = recommendedAmount.map { value in Self.recommendedAmountFormatter.string(from: value) ?? String(value) } ?? "–"
-            // #117: append stock's own reason when there is one. A bare "REC: 0 U" while the loop
-            // corrects at maxBasal is indistinguishable from a broken screen (field 2026-08-11):
-            // the number was right and the wrist had no way to know why. Stock computes this
-            // notice on every recommendation; the watch was discarding it.
-            if let notice = recommendationNotice {
-                return Text("REC: \(valueString) U — \(notice)", comment: "Recommended bolus amount label with the reason for it, on Apple Watch")
-            }
+            // #117 DISPLAY REVERTED to stock (Jeremy, 2026-09-02: "let's just go back to
+            // stock with that") — the appended reason sentence read as clutter on the
+            // wrist. The notice plumbing and its distinct-sentence tests stay (the phone
+            // still surfaces stock's notice; `recommendationNotice` is simply not
+            // rendered here), so restoring the wrist display is a one-line change if the
+            // 2026-08-11 "REC: 0 U reads as broken" complaint ever returns.
             return Text("REC: \(valueString) U", comment: "Recommended bolus amount label on Apple Watch")
         }
     }

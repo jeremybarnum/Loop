@@ -719,7 +719,29 @@ final class WatchLoopManager {
                 retrospectiveDiscrepancyCount: retrospectiveGlucoseDiscrepancies?.count ?? 0,
                 overrideLabel: {
                     guard let o = settings.scheduleOverride, o.isActive() else { return nil }
-                    return o.context.presetNameForLog
+                    // Icon + numbers, not the name (Jeremy, 2026-09-02): preset names are
+                    // unbounded free text and truncate on small watches ("50 Percent/Post T…"),
+                    // while the numeric summary is bounded AND is the operative content — how
+                    // much insulin, steering toward what. The target shows the MIDPOINT
+                    // ("140-160" spends row width to say "150" — same ruling). A symbol-less
+                    // override gets a generic glyph so the indicator never vanishes.
+                    var parts: [String] = []
+                    switch o.context {
+                    case .preset(let p) where !p.symbol.isEmpty:
+                        parts.append(p.symbol)
+                    default:
+                        parts.append("⏱")
+                    }
+                    if let scale = o.settings.insulinNeedsScaleFactor {
+                        parts.append("\(Int((scale * 100).rounded()))%")
+                    }
+                    if let range = o.settings.targetRange {
+                        let unit = HKUnit.milligramsPerDeciliter
+                        let mid = (range.lowerBound.doubleValue(for: unit)
+                                   + range.upperBound.doubleValue(for: unit)) / 2
+                        parts.append(String(format: "%.0f", mid))
+                    }
+                    return parts.joined(separator: " ")
                 }())
     }
 
@@ -2328,6 +2350,39 @@ final class WatchLoopManager {
             prediction.append(PredictedGlucoseValue(startDate: finalDate, quantity: last.quantity))
         }
         return prediction.last?.quantity.doubleValue(for: .milligramsPerDeciliter)
+    }
+
+    // MARK: - Predicted-low warning (INFORMATION ONLY)
+
+    /// PREDICTED-LOW CARRIAGE ONLY on this line. The warning ENGINE (observed absorption,
+    /// the three warning predictions, WatchLowGlucoseWarning) is a personal-mods feature and
+    /// lives on production-merge; what stays here is the loan-protocol carriage the two lines
+    /// share — the grant-seeded settings and snooze anchor below ride the wire either way, so
+    /// cross-line syncs never conflict in the protocol layer. nil settings = this engine-less
+    /// build stays silent, and the offer echoes nil harmlessly.
+    /// Inherited from the phone at grant. nil = this phone said nothing, so the wrist stays silent.
+    var lowBGWarningSettings: LoanLowBGWarningSettings?
+
+    /// Snooze anchor. Seeded from the grant so takeover does not reset the phone's clock, and read
+    /// back at hand-back so the phone does not immediately repeat what the wrist just said.
+    /// Written on `dataAccessQueue` with the rest of the warning state.
+    var lastLowBGWarningTime: Date? {
+        didSet {
+            lowBGWarningMirrorLock.lock()
+            _lastLowBGWarningMirror = lastLowBGWarningTime
+            lowBGWarningMirrorLock.unlock()
+        }
+    }
+
+    /// Lock-guarded mirror for the hand-back offer, which is built on the loan controller's queue.
+    /// A `sync` from there onto `dataAccessQueue` is the deadlock direction — the same reason
+    /// `closedLoopEnabledNonBlocking` exists — and this value is read at exactly that moment.
+    private let lowBGWarningMirrorLock = NSLock()
+    private var _lastLowBGWarningMirror: Date?
+    var lastLowBGWarningTimeNonBlocking: Date? {
+        lowBGWarningMirrorLock.lock()
+        defer { lowBGWarningMirrorLock.unlock() }
+        return _lastLowBGWarningMirror
     }
 
     /// INSTRUMENTATION ONLY (display + logging; no dosing path reads this). Build the EXACT

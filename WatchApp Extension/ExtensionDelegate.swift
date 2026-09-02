@@ -277,6 +277,9 @@ extension ExtensionDelegate: WCSessionDelegate {
     func sessionReachabilityDidChange(_ session: WCSession) {
         SportLog.event("wc", "REACHABILITY CHANGED — reachable=\(session.isReachable) "
                            + "activation=\(session.activationState.rawValue)")
+        // R40 reunion: a seized loan ends (debounced, via the normal hand-back) when the
+        // phone genuinely returns — the controller ignores everything but that case.
+        stockLoopSession.loanController.noteReachabilityChanged(session.isReachable)
     }
 
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String : Any]) {

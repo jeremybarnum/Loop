@@ -545,6 +545,10 @@ final class PodLoanPhoneController {
     private var lastRequestID: String?
     private var lastRequestAt: Date?
     private static let requestDedupeWindow: TimeInterval = .minutes(2)
+    /// How old a request may be (by its own sentAt stamp) and still earn a grant. The watch
+    /// gives up on a request in ≤25 s; anything older arriving here rode the queued channel
+    /// and its sender has long moved on. 90 s = the timeout with generous transit slack.
+    private static let requestTTL: TimeInterval = 90
 
     /// reclaimConnection() only re-arms the BLE bid; the actual reconnect lands
     /// seconds-to-minutes later. Open a bounded window so the tile keeps showing "Reclaiming…"
@@ -700,6 +704,17 @@ final class PodLoanPhoneController {
                         self.handbackDiag(self.epoch,
                             String(format: "reclaim VERIFIED — pod round-trip complete +%.0fs (link +%.1fs, stale reads %d, read +%.1fs)",
                                    elapsed, linkWait, self.reclaimStaleReads, readWait))
+                        // The interlock's whole-loan census, at the moment the loan is over:
+                        // whileLoaned=none is the H5-clean verdict; anything else names the
+                        // connect path that contended for the lent pod (and was refused).
+                        if let lendable = self.deps.pumpManager() as? PumpConnectionLendable {
+                            self.handbackDiag(self.epoch, "loan BLE contention census — \(lendable.podLoanBleContentionDiagnostics)")
+                        }
+                        // PHONE MIRROR absolution: the loan that just reconciled EXPLAINS every
+                        // foreign session up to now — without this, the mirror's SQN detector
+                        // would read a routine loan's own residue as a discovered seizure the
+                        // moment the watch goes quiet (hand back, pocket the phone, walk away).
+                        self.absolveForeignSessions(reason: "reclaim verified — the loan explains its own sessions")
                         self.deps.ownershipDidChange()
                         // The pod is provably reachable RIGHT NOW. This is the only moment in the
                         // whole hand-back where that is true, so it is where both jobs that need
@@ -1140,7 +1155,8 @@ final class PodLoanPhoneController {
     /// state — the link is released or in flux). Delivery attempts made here while
     /// true would die in a BLE timeout; callers should refuse loudly instead.
     var isPodLoanedOut: Bool {
-        return queue.sync { state != .owner }
+        // PHONE MIRROR: the yielded posture shows as Pod on Watch — technically true.
+        return queue.sync { state != .owner || yieldingToInferredLoan }
     }
 
     /// True while the pod is actively coming home (hand-back reconcile / reclaim in
@@ -1436,6 +1452,17 @@ final class PodLoanPhoneController {
         /// Per-loan worst |window residual| ring — the distribution any future band review
         /// reads (R32 closed 2026-08-27).
         static let windowWorstHistory = "PodLoanPhoneController.windowResidualWorst"
+        /// R40: the paired watch advertised supportsSeize in a LoanRequest — gates the
+        /// dormant-grant refresher (an older watch's decoder throws on the unknown kind).
+        static let watchSupportsSeize = "PodLoanPhoneController.watchSupportsSeize"
+        /// R40: the stable per-pod reunion identity for seized loans.
+        static let dormantSeizeToken = "PodLoanPhoneController.dormantSeizeToken"
+        /// PHONE MIRROR: the yielded posture survives relaunch (the blackout it answers
+        /// can include phone reboots).
+        static let yieldingToInferredLoan = "PodLoanPhoneController.yieldingToInferredLoan"
+        /// PHONE MIRROR: the last foreign-session evidence already acted on, so one
+        /// resync fires one yield across relaunches instead of re-triggering forever.
+        static let lastHandledForeignSessionAt = "PodLoanPhoneController.lastHandledForeignSessionAt"
         /// One-shot repair flag for the residuals banked before the bank was scoped to clean
         /// hand-backs. Date-suffixed on purpose: this names a specific 2026-08-13 field-data
         /// repair, not a standing rule, so nobody reads it as a recurring purge.
@@ -1476,7 +1503,10 @@ final class PodLoanPhoneController {
 
     var podIsOnLoan: Bool {
         switch state {
-        case .owner: return false
+        // PHONE MIRROR: the yielded posture IS a loan for every consumer of this
+        // predicate — the sweep engages, the re-pause-on-relaunch covers it, reclaimNow's
+        // guard admits the pill tap.
+        case .owner: return yieldingToInferredLoan
         case .grantOffered, .loaned, .reconciling, .reclaimPending: return true
         }
     }
@@ -1485,6 +1515,10 @@ final class PodLoanPhoneController {
         self.deps = dependencies
         self.state = State(rawValue: UserDefaults.standard.string(forKey: Keys.state) ?? "") ?? .owner
         self.epoch = UserDefaults.standard.object(forKey: Keys.epoch) as? Int ?? 0
+        // PHONE MIRROR: restored BEFORE the podIsOnLoan re-pause below, so a relaunch
+        // mid-yield re-enters the posture (flag folds into podIsOnLoan) automatically.
+        self.yieldingToInferredLoan = UserDefaults.standard.bool(forKey: Keys.yieldingToInferredLoan)
+        self.processStartedAt = dependencies.now()
         self.committedCursor = UserDefaults.standard.object(forKey: Keys.cursor) as? Int ?? 0
         self.pendingRevoke = UserDefaults.standard.bool(forKey: Keys.pendingRevoke)
         self.loanStartedAt = UserDefaults.standard.object(forKey: Keys.loanStartedAt) as? Date
@@ -1619,7 +1653,7 @@ final class PodLoanPhoneController {
             // posted a fresh banner every 15 s, forever. The decode arm keeps the notice; this
             // direction is a developer fact, and the user's own signal is the loan not starting.
             os_log("Loan protocol skew — the WATCH could not decode a message from this phone", log: log, type: .fault)
-        case .grant, .handbackAck, .revoke, .statusQuery, .denied, .diag:
+        case .grant, .handbackAck, .revoke, .statusQuery, .denied, .diag, .dormantGrant:
             break  // watch-bound kinds (diag is phone→watch only)
         }
     }
@@ -1627,6 +1661,23 @@ final class PodLoanPhoneController {
     // MARK: - Grant (§2.2)
 
     private func handleRequest(_ request: LoanRequest) {
+        // A request that AGED in the queued channel is a ghost: its watch timed out in ≤25 s
+        // and moved on — possibly all the way to a seize. Granting it releases the pod at a
+        // watch that isn't asking. Field 2026-08-30: two requests queued against a powered-
+        // off phone detonated at power-on — e253 granted to the five-minute-old first copy,
+        // the second denied against .grantOffered, the recovery force-reclaiming the fresh
+        // grant. The dedupe below cannot catch this (two real taps = two requestIDs); age
+        // can. Checked FIRST so a ghost also never updates the dedupe memory or the
+        // capability record. Older watches send no stamp and pass untouched.
+        if let sentAt = request.sentAt {
+            let age = deps.now().timeIntervalSince(sentAt)
+            if age > Self.requestTTL {
+                os_log("Loan request STALE — sent %.0fs ago (TTL %.0fs); ignored as a queued-channel ghost",
+                       log: log, type: .default, age, Self.requestTTL)
+                PhoneLog.event("loan", String(format: "request STALE — sent %.0fs ago (TTL %.0fs) — ignored, no grant", age, Self.requestTTL))
+                return
+            }
+        }
         // Suppress a TRANSPORT redelivery of the same request. This is not
         // the same as a user tapping Start twice — a second tap arrives seconds later against
         // settled state, whereas a redelivered copy arrives milliseconds later while the FIRST
@@ -1647,6 +1698,10 @@ final class PodLoanPhoneController {
         if let id = request.requestID {
             lastRequestID = id
             lastRequestAt = deps.now()
+        }
+        // R40: remember whether this watch speaks seize — the dormant refresher gates on it.
+        if let seize = request.supportsSeize {
+            UserDefaults.standard.set(seize, forKey: Keys.watchSupportsSeize)
         }
         guard request.supportedVersions.contains(LoanProtocol.version) else {
             sendMessage(.nack(ProtocolNack(seenVersion: request.supportedVersions.max())))
@@ -1692,6 +1747,15 @@ final class PodLoanPhoneController {
         guard let lendable = pump as? PumpConnectionLendable else {
             deny("This pump can't be loaned to the watch (\(type(of: pump))).")
             return
+        }
+        // PHONE MIRROR exit: a fresh request while yielding means the watch is alive and
+        // ASKING — a watch that is asking is not looping, so the inferred loan is over.
+        // Re-arm the pod bid we released at yield, or the still-returning-pod guard below
+        // would deny-and-retry against a pod nobody is bringing back; the guard then does
+        // its normal job while the link re-establishes, and the next retry grants.
+        if yieldingToInferredLoan {
+            clearInferredLoanYield(reason: "new loan request — a granted loan supersedes the inferred one")
+            lendable.reclaimConnection()
         }
 
         // Don't hand a still-returning pod to the watch. After a reclaim the phone
@@ -1807,7 +1871,7 @@ final class PodLoanPhoneController {
             // central held nothing — so something else held the slot, and the only candidate we
             // could not test was "the phone never actually let go". released=true says nothing
             // about that. linkUp=true three seconds after a release says it outright.
-            self.handbackDiag(releaseEpoch, "GRANT +3s — pod BLE released=\(lendable.isConnectionReleased) linkUp=\(lendable.isConnectionReady)")
+            self.handbackDiag(releaseEpoch, "GRANT +3s — pod BLE released=\(lendable.isConnectionReleased) linkUp=\(lendable.isConnectionReady) · \(lendable.podLoanBleContentionDiagnostics)")
             if lendable.isConnectionReady {
                 self.handbackDiag(releaseEpoch, "GRANT +3s — ** STILL CONNECTED after release — the watch's takeover will be refused (single-central pod) **")
             }
@@ -1831,63 +1895,275 @@ final class PodLoanPhoneController {
         UserDefaults.standard.set(handedOverAt, forKey: Keys.loanStartedAt)
 
         let grantEpoch = epoch
-        let historyStart = handedOverAt.addingTimeInterval(-.hours(16))
-        // Fetch insulin AND carb history before building the grant. Nested so both
-        // are in hand at construction; the same 16h window that seeds IOB now seeds COB.
-        // 3 h of glucose (the Integral RC look-back) seeds momentum + RC; the 16 h window seeds
-        // IOB and COB. Nested so all three are in hand at construction.
-        let glucoseStart = handedOverAt.addingTimeInterval(-.hours(3))
+        // R40: assembly extracted so the dormant refresher issues EXACTLY what a live grant
+        // would — a seized loan must dose on the same materials a granted loan gets.
+        assembleGrant(epoch: grantEpoch, referenceDate: handedOverAt,
+                      expiresAt: handedOverAt.addingTimeInterval(.minutes(5)),
+                      pumpRaw: pump.rawValue, loanSettingsRaw: loanSettings.rawValue,
+                      settings: settings) { [weak self] grant in
+            guard let self = self else { return }
+            guard self.state == .grantOffered, self.epoch == grantEpoch else { return }
+            guard let grant = grant else {
+                self.abortGrant(reason: "snapshot encoding failed")
+                return
+            }
+            self.sendMessage(.grant(grant))
+            self.armT1(for: grantEpoch)
+        }
+    }
+
+    /// R40: one grant assembly for BOTH the live path and the dormant refresher — the
+    /// fetch chain (16 h doses, carbs, 3 h glucose, prediction snapshot) plus the
+    /// LoanGrant construction, exactly as the live grant has always built it. Duplicating
+    /// it would let the two grants drift. Completion runs on `queue`; nil = snapshot
+    /// encoding failed. `expiresAt` is the live path's 5-minute lease; the dormant path
+    /// passes `referenceDate` (a dormant grant has no lease — R40(d) staleness is
+    /// consent-based, shown in the seize confirm, never enforced).
+    private func assembleGrant(epoch grantEpoch: Int, referenceDate: Date, expiresAt: Date,
+                               pumpRaw: [String: Any], loanSettingsRaw: [String: Any],
+                               settings: LoopSettings,
+                               completion: @escaping (LoanGrant?) -> Void) {
+        let historyStart = referenceDate.addingTimeInterval(-.hours(16))
+        let glucoseStart = referenceDate.addingTimeInterval(-.hours(3))
         deps.doseHistory(historyStart) { [weak self] history in
             guard let self = self else { return }
             self.deps.carbHistory(historyStart) { [weak self] carbs in
                 guard let self = self else { return }
                 self.deps.glucoseHistory(glucoseStart) { [weak self] glucose in
                     guard let self = self else { return }
-                    // INSTRUMENTATION ONLY: capture the phone's last-computed prediction
-                    // decomposition (cached read, no recompute) as a fourth nested fetch, so it
-                    // rides in the grant. Default nil closure ⇒ this is a no-op for tests / old builds.
                     self.deps.predictionSnapshot { [weak self] snapshot in
-                    guard let self = self else { return }
-                    self.queue.async {
-                        guard self.state == .grantOffered, self.epoch == grantEpoch else { return }
-                        guard let stateData = try? PropertyListSerialization.data(fromPropertyList: pump.rawValue, format: .binary, options: 0),
-                              let settingsData = try? PropertyListSerialization.data(fromPropertyList: loanSettings.rawValue, format: .binary, options: 0) else {
-                            self.abortGrant(reason: "snapshot encoding failed")
-                            return
+                        guard let self = self else { return }
+                        self.queue.async {
+                            guard let stateData = try? PropertyListSerialization.data(fromPropertyList: pumpRaw, format: .binary, options: 0),
+                                  let settingsData = try? PropertyListSerialization.data(fromPropertyList: loanSettingsRaw, format: .binary, options: 0) else {
+                                completion(nil)
+                                return
+                            }
+                            completion(LoanGrant(
+                                epoch: grantEpoch,
+                                expiresAt: expiresAt,
+                                pumpManagerRawState: stateData,
+                                podAddress: 0,
+                                therapySettingsRaw: settingsData,
+                                settingsTimeZoneID: settings.basalRateSchedule?.timeZone.identifier ?? TimeZone.current.identifier,
+                                doseHistory: history.compactMap(Self.loanRecord(from:)),
+                                boundaryRecord: nil,   // Fix 1: running temp already lives in doseHistory
+                                supportsInterimHandback: true,   // two-phase hand-back capability gate (REAL-3)
+                                supportsOverrideRecords: true,   // this phone decodes .overrideChange
+                                // Same source LoopDataManager reads. Without this the watch runs
+                                // Standard RC while this phone may be running Integral — different
+                                // predictions from identical inputs, silently (audit 2026-07-22).
+                                integralRetrospectiveCorrectionEnabled: UserDefaults.standard.integralRetrospectiveCorrectionEnabled,
+                                // The wrist follows the phone's loop mode instead of resetting to
+                                // OPEN each loan. Snapshotted like the therapy settings.
+                                phoneClosedLoopEnabled: settings.dosingEnabled,
+                                carbHistory: carbs,
+                                glucoseHistory: glucose,
+                                predictionSnapshot: snapshot,
+                                // Ring ruling 2026-08-23: the wrist's loop dot starts from the
+                                // SYSTEM's recency.
+                                lastLoopCompleted: self.deps.lastLoopCompleted(),
+                                // The predicted-low warning follows the pod, snapshotted like the
+                                // therapy settings.
+                                lowBGWarningSettings: Self.lowBGWarningSettingsForGrant(
+                                    lastNotificationTime: self.lowBGWarningLastNotificationTime?())))
                         }
-                        let grant = LoanGrant(
-                            epoch: grantEpoch,
-                            expiresAt: handedOverAt.addingTimeInterval(.minutes(5)),
-                            pumpManagerRawState: stateData,
-                            podAddress: 0,
-                            therapySettingsRaw: settingsData,
-                            settingsTimeZoneID: settings.basalRateSchedule?.timeZone.identifier ?? TimeZone.current.identifier,
-                            doseHistory: history.compactMap(Self.loanRecord(from:)),
-                            boundaryRecord: nil,   // Fix 1: running temp already lives in doseHistory (see above)
-                            supportsInterimHandback: true,   // two-phase hand-back capability gate (REAL-3)
-                            supportsOverrideRecords: true,   // this phone decodes .overrideChange
-                            // Same source LoopDataManager:458 reads. Without this the watch runs
-                            // Standard RC while this phone may be running Integral — different
-                            // predictions from identical inputs, silently (audit 2026-07-22).
-                            integralRetrospectiveCorrectionEnabled: UserDefaults.standard.integralRetrospectiveCorrectionEnabled,
-                            // The wrist follows the phone's
-                            // loop mode instead of resetting to OPEN each loan. Snapshotted at
-                            // the grant like the therapy settings, so a later phone-side toggle
-                            // does not reach through to a loan already in flight.
-                            phoneClosedLoopEnabled: settings.dosingEnabled,
-                            carbHistory: carbs,
-                            glucoseHistory: glucose,
-                            predictionSnapshot: snapshot,
-                            // Ring ruling 2026-08-23: the wrist's loop dot starts from the
-                            // SYSTEM's recency — this phone looped minutes ago at most.
-                            lastLoopCompleted: self.deps.lastLoopCompleted())
-                        self.sendMessage(.grant(grant))
-                        self.armT1(for: grantEpoch)
-                    }
                     }
                 }
             }
         }
+    }
+
+    // MARK: - R40: the dormant-grant refresher (seize credential pipe)
+
+    private var lastDormantRefreshAt: Date?
+    private var lastDormantSettingsFingerprint: String?
+    /// Periodic floor between refreshes with unchanged settings. A settings change
+    /// refreshes immediately regardless. Tunable.
+    private static let dormantRefreshInterval: TimeInterval = .minutes(30)
+
+    /// A coarse fingerprint of everything therapy-relevant the grant snapshot freezes —
+    /// when it changes, the dormant grant refreshes immediately (the R40(d) analysis:
+    /// settings-change-then-leave is the only unique staleness exposure, so make its
+    /// window as small as the pipe allows).
+    private static func settingsFingerprint(_ s: LoopSettings) -> String {
+        let basal = s.basalRateSchedule.map { String(describing: $0.items) } ?? "-"
+        let isf = s.insulinSensitivitySchedule.map { String(describing: $0.items) } ?? "-"
+        let cr = s.carbRatioSchedule.map { String(describing: $0.items) } ?? "-"
+        let targets = s.glucoseTargetRangeSchedule.map { String(describing: $0.items) } ?? "-"
+        return "\(basal)|\(isf)|\(cr)|\(targets)|\(String(describing: s.maximumBolus))|\(String(describing: s.maximumBasalRatePerHour))|\(s.dosingEnabled)"
+    }
+
+    /// The stable per-pod reunion identity carried in every dormant grant and echoed in a
+    /// seized loan's offer. v1 approximation: persisted once and rotated only when the
+    /// refresher first runs after the stored value is missing — a mismatch at reunion is
+    /// never dangerous (the offer degrades to the stale-epoch records-drain), so the
+    /// rotation policy can stay coarse until the seize flow's field data argues otherwise.
+    private func dormantSeizeToken() -> UUID {
+        if let raw = UserDefaults.standard.string(forKey: Keys.dormantSeizeToken),
+           let token = UUID(uuidString: raw) {
+            return token
+        }
+        let token = UUID()
+        UserDefaults.standard.set(token.uuidString, forKey: Keys.dormantSeizeToken)
+        return token
+    }
+
+    /// Cheap to call from any repeating phone moment (WatchDataManager pings it on loop
+    /// updates); all gating and throttling lives here. Refreshes only while this phone
+    /// OWNS the pod, only to a watch that advertised supportsSeize, and only when the
+    /// settings fingerprint changed or the periodic floor elapsed.
+    func considerDormantRefresh() {
+        queue.async { [weak self] in self?.queue_considerDormantRefresh() }
+    }
+
+    private func queue_considerDormantRefresh() {
+        guard state == .owner else { return }
+        guard UserDefaults.standard.bool(forKey: Keys.watchSupportsSeize) else { return }
+        guard let pump = deps.pumpManager(),
+              let lendable = pump as? PumpConnectionLendable,
+              !lendable.isConnectionReleased else { return }
+        let settings = deps.settings()
+        // Same completeness rule as a live grant: deny-on-missing, never defaulted. An
+        // incomplete snapshot simply skips this refresh; the last complete one stands.
+        guard settings.maximumBolus != nil, settings.maximumBasalRatePerHour != nil,
+              settings.basalRateSchedule != nil else { return }
+        // The EPOCH rides the fingerprint (fix 4b, field 2026-08-31): every epoch advance
+        // — grant, retro-ack, force — re-issues the credential immediately. Without it, a
+        // stale provisional epoch produced three field symptoms in one afternoon: epoch
+        // reuse on back-to-back seizes, an un-retro-ackable strand, and a seize BRICKED
+        // for 12 minutes by the split-brain guard after a revoke (270 ≤ revoked 271,
+        // four identical rejects until the 30-min floor refresh).
+        let fingerprint = Self.settingsFingerprint(settings) + "|e\(epoch)"
+        let periodicDue = lastDormantRefreshAt.map { deps.now().timeIntervalSince($0) >= Self.dormantRefreshInterval } ?? true
+        guard periodicDue || fingerprint != lastDormantSettingsFingerprint else { return }
+
+        var loanSettings = settings
+        loanSettings.automaticDosingStrategy = .tempBasalOnly   // same override as a live grant
+        let issuedAt = deps.now()
+        let token = dormantSeizeToken()
+        let provisionalEpoch = epoch + 1
+        // Stamp the throttle at ENQUEUE, not completion: LoopDataUpdated arrives in bursts
+        // faster than assembly finishes, and completion-stamping let five identical 25 KB
+        // refreshes through one gate in a single second (field 2026-08-30) — straight into
+        // the same queued channel a jam later backs up. A failed assembly re-opens the gate.
+        lastDormantRefreshAt = issuedAt
+        lastDormantSettingsFingerprint = fingerprint
+        assembleGrant(epoch: provisionalEpoch, referenceDate: issuedAt, expiresAt: issuedAt,
+                      pumpRaw: pump.rawValue, loanSettingsRaw: loanSettings.rawValue,
+                      settings: settings) { [weak self] grant in
+            guard let self = self else { return }
+            guard let grant = grant else {
+                self.lastDormantRefreshAt = nil   // assembly failed — next ping may retry
+                return
+            }
+            guard self.state == .owner else { return }   // ownership moved mid-assembly
+            self.sendMessage(.dormantGrant(DormantGrant(grant: grant, issuedAt: issuedAt, seizeToken: token)))
+            PhoneLog.event("seize", "dormant grant refreshed — \(grant.doseHistory.count) dose record(s), token …\(String(token.uuidString.suffix(8))) [seize]")
+        }
+    }
+
+    // MARK: - PHONE MIRROR (R40(a), operational spec 2026-08-31: the minimum-deviation paradigm)
+    //
+    // A discovered seizure is the granted-loan-with-dead-watch scenario minus one bit of
+    // knowledge, and the pod supplies that bit. On detection the phone enters the posture it
+    // would already be in had it granted the loan: pill reads Pod on Watch (folded into
+    // podIsOnLoan/isPodLoanedOut), automatic dosing paused, the loop-not-running sweep
+    // engaged — and EVERY exit is the existing one (pill tap -> reclaimNow ladder + gap
+    // booking; watch revival -> retro-ack; WC healing -> the R40(f) wrist prompt). The state
+    // machine never fakes .loaned: the flag rides .owner, because the retro-ack door
+    // deliberately requires .owner and the watch's real epoch is unknown.
+
+    /// Presentation-level posture flag on .owner (never a state transition). Persisted:
+    /// the blackout this answers can include phone reboots.
+    private(set) var yieldingToInferredLoan: Bool {
+        didSet { UserDefaults.standard.set(yieldingToInferredLoan, forKey: Keys.yieldingToInferredLoan) }
+    }
+    /// Guards the SQN detector against our own relaunch-restore noise (a restored older
+    /// pod state can resync against our own sessions in the first moments of a launch).
+    private let processStartedAt: Date
+
+    /// The newest loan traffic seen for an epoch AHEAD of ours, in ANY state — batches
+    /// dropped mid-drain, holdsPod status reports. Fix for the 2026-08-31 ghost-drain
+    /// theft: e269's batches arrived while the e268 ghost was closing (.reconciling, so
+    /// detector B's .owner guard couldn't act), and the close then reclaimed the pod out
+    /// from under the live loan. Remembered here so the close can check before resuming
+    /// custody. In-memory on purpose: only FRESH evidence (10 min) may block a reclaim.
+    private var newestForeignLoanEvidence: (epoch: Int, at: Date)?
+
+    /// Fresh evidence that a loan NEWER than `epochN` is live right now.
+    private func supersededByLiveLoan(_ epochN: Int) -> Bool {
+        guard let evidence = newestForeignLoanEvidence, evidence.epoch > epochN else { return false }
+        return deps.now().timeIntervalSince(evidence.at) < 600
+    }
+
+    /// Kill switch (absent = enabled), the standing insurance pattern.
+    static let inferredLoanYieldDisabledKey = "PodLoanPhoneController.inferredLoanYieldDisabled"
+
+    /// Both detectors funnel here. Yield is deliberately cheap to enter: it doses nothing,
+    /// claims nothing, and every exit is user-driven or evidence-driven.
+    private func engageInferredLoanYield(evidence: String) {
+        guard state == .owner, !yieldingToInferredLoan else { return }
+        guard !UserDefaults.standard.bool(forKey: Self.inferredLoanYieldDisabledKey) else {
+            PhoneLog.event("mirror", "inferred-loan evidence (\(evidence)) but yield DISABLED by kill switch [mirror]")
+            return
+        }
+        yieldingToInferredLoan = true
+        deps.setAutomaticDosingPaused(true)
+        // Yield the RADIO too, exactly as a grant does: a yielded phone that keeps its
+        // standing connect starves an alive watch's per-cycle reclaims (single-central
+        // pod) — authority and radio must travel together. reclaimNow re-arms the bid.
+        (deps.pumpManager() as? PumpConnectionLendable)?.releaseConnection()
+        deps.ownershipDidChange()
+        PhoneLog.event("mirror", "YIELDING to an inferred loan — \(evidence); pill=Pod on Watch, dosing paused, pod BLE released, exits: pill tap / watch revival / R40(f) prompt (R40(a): on conflict the phone yields) [mirror]")
+    }
+
+    /// Absolution: stamp the foreign-session evidence as HANDLED because a reconciled or
+    /// forced loan-end explains it. Without this, detector A reads a routine loan's own
+    /// SQN residue as a discovered seizure the moment the watch goes quiet afterward —
+    /// the false positive that would put a normal day's phone into a needless yield.
+    private func absolveForeignSessions(reason: String) {
+        UserDefaults.standard.set(deps.now(), forKey: Keys.lastHandledForeignSessionAt)
+        PhoneLog.event("mirror", "foreign-session evidence absolved — \(reason) [mirror]")
+    }
+
+    /// Exit bookkeeping. `resumeDosing` stays false on every current path: reclaimNow's
+    /// force unpauses in forceReclaimToOwner, the retro-ack keeps the pause because the
+    /// loan it adopts is live, and beginGrant re-pauses for its own loan.
+    private func clearInferredLoanYield(reason: String) {
+        guard yieldingToInferredLoan else { return }
+        yieldingToInferredLoan = false
+        deps.ownershipDidChange()
+        PhoneLog.event("mirror", "inferred-loan yield CLEARED — \(reason) [mirror]")
+    }
+
+    /// Detector A (rows 7/8 — watch absent): foreign pod sessions discovered at .owner.
+    /// The pod's EAP/SQN counters advance for ANY controller, so a resync observed while
+    /// we believe we are the only controller is definitive books-dirty evidence. SQN is
+    /// not subject to the lost-ack settling that motivated M — M stays reserved for the
+    /// future odometer tripwire; the launch guard covers the one self-inflicted resync
+    /// (our own restored state racing our own sessions).
+    /// Pinged from the same loop-update moment as the dormant refresher; all gating here.
+    func considerInferredLoan() {
+        queue.async { [weak self] in self?.queue_considerInferredLoan() }
+    }
+
+    private func queue_considerInferredLoan() {
+        guard state == .owner, !yieldingToInferredLoan else { return }
+        guard UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) != nil,
+              UserDefaults.standard.bool(forKey: Keys.watchSupportsSeize) else { return }
+        // Watch-absent = the reclaim ladder's own pulse discriminator, same constants.
+        let contactAge = deps.lastWatchContactAt().map { deps.now().timeIntervalSince($0) }
+        let heardRecently = (contactAge ?? .greatestFiniteMagnitude) < Self.watchContactLivenessWindow
+        guard !deps.isWatchReachable(), !heardRecently else { return }
+        guard deps.now().timeIntervalSince(processStartedAt) > 120 else { return }
+        guard let foreignAt = (deps.pumpManager() as? PumpConnectionLendable)?.podLoanLastForeignSessionAt else { return }
+        let handled = UserDefaults.standard.object(forKey: Keys.lastHandledForeignSessionAt) as? Date
+        guard foreignAt > (handled ?? .distantPast) else { return }
+        UserDefaults.standard.set(foreignAt, forKey: Keys.lastHandledForeignSessionAt)
+        engageInferredLoanYield(evidence: String(format: "foreign pod sessions at %@ (SQN resync), watch silent %@",
+                                                 ISO8601DateFormatter().string(from: foreignAt),
+                                                 contactAge.map { String(format: "%.0fs", $0) } ?? "always"))
     }
 
     private func abortGrant(reason: String) {
@@ -2002,6 +2278,50 @@ final class PodLoanPhoneController {
     }
 
     private func handleStatusReport(_ report: StatusReport) {
+        // PHONE MIRROR detector C (before the epoch guard — a foreign-epoch report is the
+        // whole point): the watch says outright that it holds the pod on a loan ahead of
+        // ours. Sent at the reunion prompt and at Keep, so the yield no longer waits for
+        // dose-stream evidence that only flows when the loop happens to enact — and it
+        // converts the 2026-08-31 phantom-grant standoff (query → silence → force-steal)
+        // into query → answer → yield, once epochs are honest (fix 4).
+        if report.holdsPod, report.epoch > epoch {
+            if newestForeignLoanEvidence.map({ report.epoch >= $0.epoch }) ?? true {
+                newestForeignLoanEvidence = (report.epoch, deps.now())
+            }
+            let hasCredential = UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) != nil
+            switch state {
+            case .owner where hasCredential:
+                engageInferredLoanYield(evidence: "statusReport — watch holds the pod on e\(report.epoch)")
+            case .grantOffered where hasCredential:
+                // GHOST-GRANT ABANDON (field 2026-08-31 21:21): a queued request detonated at
+                // reunion and this phone granted e276 against a live seized e277 — then sat on
+                // "Handing over…" awaiting a takeoverComplete the watch's wrong-phase refusal
+                // guarantees will never come. The watch now answers that refusal (and the +20s
+                // #108 probe, and stale revokes) with this report: the grant can never confirm,
+                // so stop waiting on it and enter the posture the evidence says is true. The
+                // burned epoch stays burned — the retro-ack adopts forward exactly as tape
+                // proved (276→277), and the T1 dead-man is cancelled WITH the wait it timed.
+                t1WorkItem?.cancel()
+                cancelNotification(id: NotificationID.t1)
+                handbackDiag(epoch, "ghost grant e\(epoch) ABANDONED — the watch answered holdsPod e\(report.epoch); yielding instead of waiting on a takeover that cannot come [mirror]")
+                state = .owner
+                engageInferredLoanYield(evidence: "statusReport — watch holds e\(report.epoch), ghost grant abandoned")
+            case .reclaimPending:
+                // RE-AIM (same field episode, 21:24): the ladder's revoke named this phone's
+                // stale epoch, the watch refused it as matching no live session, and the ladder
+                // read refusal as death and force-stole a live loan's pod. The report names the
+                // real loan — spend the ladder's remaining attempt on it. The force rung stays
+                // armed behind this, unchanged, for a watch that goes quiet after answering.
+                if var ladder = reclaimLadder, !ladder.forced, ladder.attempts < 2 {
+                    sendMessage(.revoke(Revoke(epoch: report.epoch)))
+                    ladder.attempts += 1
+                    reclaimLadder = ladder
+                    handbackDiag(epoch, "reclaim revoke RE-AIMED at e\(report.epoch) (attempt \(ladder.attempts) of 2) — the watch holds a newer loan than the one this reclaim named")
+                }
+            default:
+                break
+            }
+        }
         guard report.epoch == epoch else { return }
         // Row 4: the query-before-reclaim answer.
         if state == .grantOffered, report.holdsPod {
@@ -2047,6 +2367,22 @@ final class PodLoanPhoneController {
         // arrive?" had no answer. It has one now.
         guard batch.epoch == epoch, state == .loaned || state == .reclaimPending else {
             handbackDiag(batch.epoch, "batch DROPPED — \(batch.events.count) event(s) ev=\(batch.epoch) vs phone ev=\(epoch), state=\(state.rawValue) (recovered via the offer path if the watch still resends)")
+            // A future-epoch batch is live evidence of a newer loan in ANY state — the
+            // drop at .reconciling during the 2026-08-31 ghost drain is exactly the
+            // moment the evidence mattered most (the close was about to steal the pod).
+            if batch.epoch > epoch, newestForeignLoanEvidence.map({ batch.epoch >= $0.epoch }) ?? true {
+                newestForeignLoanEvidence = (batch.epoch, deps.now())
+            }
+            // PHONE MIRROR detector B (row 6 — WC up): a FUTURE-epoch batch at .owner is
+            // live evidence of a loan this phone never granted. The batch itself stays
+            // dropped (yield needs less authority than adoption — booking still waits for
+            // the token-bearing offer), but dosing as owner stops NOW instead of at
+            // hand-back. Field 2026-08-30 23:43: this exact drop line fired while the
+            // phone went on to bolus the pod as its own.
+            if state == .owner, batch.epoch > epoch,
+               UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) != nil {
+                engageInferredLoanYield(evidence: "future-epoch batch e\(batch.epoch) at .owner (live seized loan streaming)")
+            }
             return
         }
         stage(events: batch.events, tombstones: batch.tombstones)
@@ -2073,6 +2409,57 @@ final class PodLoanPhoneController {
     }
 
     private func handleHandbackOffer(_ offer: HandbackOffer) {
+        // R40 seize 4/4: retro-acknowledge a loan this phone never granted. A seized loan's
+        // offer arrives with an epoch AHEAD of ours (forced fresh at activation) and the
+        // reunion token matching the outstanding dormant credential. Adopting the epoch and
+        // entering .loaned makes everything downstream the PROVEN hand-back path — the
+        // normal transition to .reconciling, stage, commit, ack, the window audit anchored
+        // at the offer's own seize-time odometer start, R33 cancel on the verified reclaim —
+        // and .loaned also accepts the mid-blackout record batches WC queued behind this
+        // offer. From .owner, or from .reclaimPending — the aimed-revoke drain (the pill tap
+        // that targeted a live seized loan) answers with exactly this offer, and refusing it
+        // there meant a needless force before the .owner door opened. The defense holds
+        // either way: the states a duplicated credential must never stomp are a live grant
+        // in flight (.grantOffered) and a live granted loan (.loaned/.reconciling), and both
+        // stay excluded — a reclaim is this phone actively ENDING whatever loan exists.
+        if let token = offer.seizeToken, state == .owner || state == .reclaimPending, offer.epoch > epoch,
+           token.uuidString == UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) {
+            if state == .reclaimPending {
+                // The drain the ladder was waiting for — stand the rungs down before adopting
+                // so the force cannot fire into the hand-back it just received.
+                cancelReclaimLadder()
+                handbackDiag(offer.epoch, "[seize] retro-ack arrived MID-RECLAIM — ladder stood down; the aimed revoke got its drain")
+            }
+            handbackDiag(offer.epoch, "[seize] RETRO-ACK — offer for a SEIZED loan (token …\(String(token.uuidString.suffix(8)))); adopting epoch \(epoch)→\(offer.epoch) as .loaned, reconciling on the normal path")
+            // PHONE MIRROR exit: the inferred loan just became a KNOWN loan — the flag's
+            // job is done (dosing stays paused; the drain-close unpauses as always).
+            clearInferredLoanYield(reason: "retro-ack — the inferred loan is now the adopted loan e\(offer.epoch)")
+            epoch = offer.epoch
+            state = .loaned
+            // The seized loan's audit anchors at ITS OWN seize-time odometer read
+            // (offer.odometer.deliveredAtStart); anchors from before the blackout must not
+            // widen the window or misattribute the phone's own pre-blackout delivery.
+            auditBase = nil
+            checkpointsThisLoan = 0
+            worstWindowThisLoan = 0
+            UserDefaults.standard.removeObject(forKey: Keys.deliveredAtTakeover)
+            // The loan window anchors at the OFFER'S OWN ERA — its earliest event, else
+            // its hand-back stamp — never nil: a nil anchor fell back to the reconciler's
+            // 2-hour default and audited a 5-minute seized loan over the whole morning
+            // (field 2026-08-31: loanMin=120, phantom -1.15/-1.30 residuals). Floored at
+            // -6h, the insulin horizon.
+            let anchor = max(offer.events.map(\.record.startDate).min() ?? offer.handedBackAt,
+                             deps.now().addingTimeInterval(-.hours(6)))
+            loanStartedAt = anchor
+            UserDefaults.standard.set(anchor, forKey: Keys.loanStartedAt)
+            // The phone never paused for this loan, so the reclaim's restore would find no
+            // capture and fail-safe to OPEN loop — wrong here: the user's setting was
+            // untouched all along. Seed the capture with the CURRENT value so the restore
+            // is truthful (and the Loop-Failure suppression gate arms for the reconcile).
+            if UserDefaults.standard.object(forKey: WatchDataManager.dosingCaptureKey) == nil {
+                UserDefaults.standard.set(deps.settings().dosingEnabled, forKey: WatchDataManager.dosingCaptureKey)
+            }
+        }
         // Stale epoch (rows 13/14): the records still drain — they are historical
         // truth, idempotent by ID — but loan STATE is untouched and the ack says
         // stale so the sender stops retrying. Dead loans cannot speak.
@@ -2126,6 +2513,18 @@ final class PodLoanPhoneController {
             if let watchClosed = offer.watchClosedLoopEnabled {
                 deps.noteWatchClosedLoop(watchClosed)
                 handbackDiag(offer.epoch, "loop mode INHERITED from the wrist — phone will resume \(watchClosed ? "CLOSED" : "OPEN")")
+            }
+            // The predicted-low snooze comes home with the pod. Only ever moved FORWARD: hand-back
+            // offers are resent every 15 s against ack latency, so an older duplicate must not
+            // rewind the clock and let the phone repeat a warning the wrist already delivered.
+            if let wristWarnedAt = offer.lastLowBGWarningAt {
+                let existing = lowBGWarningLastNotificationTime?()
+                if let existing = existing, existing >= wristWarnedAt {
+                    handbackDiag(offer.epoch, "low-BG snooze anchor kept — the phone's is already newer")
+                } else {
+                    setLowBGWarningLastNotificationTime?(wristWarnedAt)
+                    handbackDiag(offer.epoch, "low-BG snooze anchor INHERITED from the wrist")
+                }
             }
             // Loop recency inherits across the boundary too (ring ruling 2026-08-23): the
             // system looped seconds ago on the wrist, and the watch's temp keeps running
@@ -2582,6 +2981,25 @@ final class PodLoanPhoneController {
         cancelReclaimLadder()
         cancelNotification(id: NotificationID.duration)
         cancelNotification(id: NotificationID.paused)
+        // GHOST-DRAIN SUPERSESSION (field 2026-08-31 12:44): the loan that just drained
+        // can be a reboot-era ghost whose queued FINAL offer outlived the fold — while the
+        // LIVE successor loan is streaming. Closing its books is right; resuming custody
+        // is theft: the old close reclaimed the pod and R33-canceled the live loan's temp.
+        // With fresh newer-epoch evidence in hand: commit stands, audit is moot (it needs
+        // the pod, and the pod is the live loan's), custody yields.
+        if supersededByLiveLoan(epoch) {
+            let liveEpoch = newestForeignLoanEvidence?.epoch ?? epoch + 1
+            pendingRevoke = false
+            state = .owner
+            staged = [:]
+            stagedTombstones = []
+            persistStaged()
+            pendingHandbackAudit = nil
+            UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
+            PhoneLog.event("mirror", "drain e\(epoch) closed UNDER live e\(liveEpoch) — books committed, audit moot, custody NOT resumed [mirror]")
+            engageInferredLoanYield(evidence: "superseding loan e\(liveEpoch) streamed during the e\(epoch) drain")
+            return
+        }
         (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
         pendingRevoke = false
         state = .owner
@@ -2605,6 +3023,47 @@ final class PodLoanPhoneController {
     /// shrinking the dead-watch blind window. Override for tests; the default runs
     /// the real audit 90 s after reclaim (BLE session re-establishment time).
     var postReclaimReAudit: (() -> Void)?
+
+    /// Reads the phone's last predicted-low warning time, so the snooze can ride along in the
+    /// grant instead of resetting at takeover. Injected because that clock lives in
+    /// LoopDataManager. nil provider = no anchor, which the watch reads as "never warned".
+    var lowBGWarningLastNotificationTime: (() -> Date?)?
+
+    /// Writes the phone's snooze anchor when a hand-back returns one from the wrist.
+    var setLowBGWarningLastNotificationTime: ((Date) -> Void)?
+
+    /// Snapshot the phone's predicted-low warning configuration for the grant.
+    ///
+    /// INFORMATION ONLY — these values decide whether a notification is posted on the wrist and
+    /// what it says. The defaults mirror the phone's own accessors exactly, so an unset preference
+    /// behaves identically on both devices.
+    ///
+    /// The night window is hardcoded 22:30–06:30 in LoopDataManager rather than being a setting,
+    /// so it is reproduced here as minutes-since-midnight instead of invented.
+    ///
+    /// KNOWN PHONE DEFECT, deliberately NOT reproduced: the phone gates night warnings on
+    /// `com.loopkit.Loop.nightwarningEnabled`, a key nothing in the app ever writes — the Alert
+    /// Management toggle writes `...nightLowBGNotificationsEnabled`. `bool(forKey:)` returns false
+    /// for the unwritten key, so night warnings never fire on the phone no matter how the toggle
+    /// reads. The grant carries what the TOGGLE says, because propagating a typo to a second
+    /// device would bake it in. Flagged for a ruling rather than fixed here, since fixing the
+    /// phone changes behaviour Jeremy has been living with.
+    static func lowBGWarningSettingsForGrant(lastNotificationTime: Date?) -> LoanLowBGWarningSettings {
+        let defaults = UserDefaults.standard
+        return LoanLowBGWarningSettings(
+            enabled: defaults.lowBGNotificationsEnabled,
+            nightWarningsEnabled: defaults.nightLowBGNotificationsEnabled,
+            dayWarningOffset: Double(defaults.dayWarningOffset),
+            nightWarningOffset: Double(defaults.nightWarningOffset),
+            warningSnooze: TimeInterval(defaults.warningSnooze) * 60,
+            dontWarnIfSooner: TimeInterval(defaults.dontWarnIfSooner) * 60,
+            dontWarnIfLater: TimeInterval(defaults.dontWarnIfLater) * 60,
+            delayAfterCarbEntry: TimeInterval(defaults.delayAfterCarbEntry) * 60,
+            nightStartMinutes: 22 * 60 + 30,
+            nightEndMinutes: 6 * 60 + 30,
+            glucoseUnitString: HKUnit.milligramsPerDeciliter.unitString,
+            lastNotificationTime: lastNotificationTime)
+    }
     private func schedulePostReclaimReAudit(recordsCommitted: Bool) {
         queue.asyncAfter(deadline: .now() + 90) { [weak self] in
             guard let self = self else { return }
@@ -2663,12 +3122,28 @@ final class PodLoanPhoneController {
     func reclaimNow() {
         queue.async {
             guard self.podIsOnLoan else { return }
+            // PHONE MIRROR exit: the pill tap on an inferred loan takes the SAME road a
+            // granted dead-watch loan takes — revoke (stale epoch, harmless), ladder,
+            // force, schedule audit, gap booking. forceReclaimToOwner unpauses dosing.
+            self.clearInferredLoanYield(reason: "pill tap — reclaimNow (the inherited exit)")
             self.reclaimDisplayAnchor = self.deps.now()   // the user's wait starts at the tap
             // Hold background execution from the tap: without it, tap-and-pocket freezes the
             // ladder and orphans the pod until the user next looks at the phone.
             self.deps.beginReclaimBackgroundTask()
             self.pendingRevoke = true
-            self.sendMessage(.revoke(Revoke(epoch: self.epoch)))
+            // AIM AT THE LIVE LOAN when fresh evidence names one this phone never granted
+            // (a seized loan discovered by the mirror). A revoke at our own stale epoch is
+            // refused by the watch's split-brain guard as matching no live session — correct
+            // on its side, but the ladder then reads refusal as death and force-steals a pod
+            // that would have drained politely (field 2026-08-31 21:24). Freshness-gated via
+            // supersededByLiveLoan so yesterday's evidence can't mis-aim today's reclaim —
+            // stale or absent evidence keeps today's exact behavior.
+            let revokeEpoch = self.supersededByLiveLoan(self.epoch)
+                ? (self.newestForeignLoanEvidence?.epoch ?? self.epoch) : self.epoch
+            if revokeEpoch != self.epoch {
+                self.handbackDiag(self.epoch, "reclaim revoke AIMED at e\(revokeEpoch) — fresh evidence of a loan this phone never granted (mirror)")
+            }
+            self.sendMessage(.revoke(Revoke(epoch: revokeEpoch)))
             (self.deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
             self.state = .reclaimPending
             self.armPausedReminder()
@@ -2759,7 +3234,12 @@ final class PodLoanPhoneController {
                 // Two attempts is the whole budget. A reachability change can already have spent
                 // the second one — better timed than this rung, since the watch was awake for it.
                 guard ladder.attempts < 2 else { return }
-                self.sendMessage(.revoke(Revoke(epoch: self.epoch)))
+                // Same aim rule as the tap's own revoke: fresh evidence of a never-granted
+                // live loan re-targets the resend (evidence can arrive BETWEEN the rungs —
+                // a holdsPod answer to attempt 1 is exactly that).
+                let resendEpoch = self.supersededByLiveLoan(self.epoch)
+                    ? (self.newestForeignLoanEvidence?.epoch ?? self.epoch) : self.epoch
+                self.sendMessage(.revoke(Revoke(epoch: resendEpoch)))
                 ladder.attempts += 1
                 self.reclaimLadder = ladder
                 self.handbackDiag(self.epoch, "reclaim revoke RESENT (attempt \(ladder.attempts) of 2) — no drain yet on the \(ladder.branch.rawValue) branch")
@@ -2775,7 +3255,13 @@ final class PodLoanPhoneController {
             // Mark BEFORE forcing: a force can be deferred behind an in-flight hand-back commit,
             // and while it waits the tile must say what is actually happening.
             self.reclaimLadder?.forced = true
-            self.forceReclaimToOwner(reason: "reclaim ladder spent on the \(ladder.branch.rawValue) branch — \(ladder.attempts) revoke attempt(s), watch did not drain")
+            // "Watch did not drain" was field-misread as "no reply from watch" when the watch
+            // WAS replying (refusing stale revokes for a loan it holds). Name the newer loan
+            // when the evidence shows one, so the log and the notice describe a refusal, not
+            // silence.
+            let holding = self.supersededByLiveLoan(self.epoch)
+                ? " (watch holds newer loan e\(self.newestForeignLoanEvidence?.epoch ?? 0) — refused, not silent)" : ""
+            self.forceReclaimToOwner(reason: "reclaim ladder spent on the \(ladder.branch.rawValue) branch — \(ladder.attempts) revoke attempt(s), watch did not drain\(holding)")
         }
         reclaimTimeoutWork = force
         scheduleLadderRung(after: max(forceDelay, 0), label: "reclaim-force", execute: force)
@@ -2812,6 +3298,11 @@ final class PodLoanPhoneController {
             pendingForceReclaimReason = reason
             return
         }
+        // PHONE MIRROR absolution: the force is a deliberate reassertion of ownership —
+        // every foreign session up to this moment is either the loan being forced closed
+        // or the seizure the user just chose to take over from. The mirror must not
+        // rediscover it minutes later.
+        absolveForeignSessions(reason: "force reclaim (\(reason))")
         cancelReclaimLadder()
         cancelNotification(id: NotificationID.paused)
         cancelNotification(id: NotificationID.duration)
