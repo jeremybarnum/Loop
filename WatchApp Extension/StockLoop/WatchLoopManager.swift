@@ -719,7 +719,29 @@ final class WatchLoopManager {
                 retrospectiveDiscrepancyCount: retrospectiveGlucoseDiscrepancies?.count ?? 0,
                 overrideLabel: {
                     guard let o = settings.scheduleOverride, o.isActive() else { return nil }
-                    return o.context.presetNameForLog
+                    // Icon + numbers, not the name (Jeremy, 2026-09-02): preset names are
+                    // unbounded free text and truncate on small watches ("50 Percent/Post T…"),
+                    // while the numeric summary is bounded AND is the operative content — how
+                    // much insulin, steering toward what. The target shows the MIDPOINT
+                    // ("140-160" spends row width to say "150" — same ruling). A symbol-less
+                    // override gets a generic glyph so the indicator never vanishes.
+                    var parts: [String] = []
+                    switch o.context {
+                    case .preset(let p) where !p.symbol.isEmpty:
+                        parts.append(p.symbol)
+                    default:
+                        parts.append("⏱")
+                    }
+                    if let scale = o.settings.insulinNeedsScaleFactor {
+                        parts.append("\(Int((scale * 100).rounded()))%")
+                    }
+                    if let range = o.settings.targetRange {
+                        let unit = HKUnit.milligramsPerDeciliter
+                        let mid = (range.lowerBound.doubleValue(for: unit)
+                                   + range.upperBound.doubleValue(for: unit)) / 2
+                        parts.append(String(format: "%.0f", mid))
+                    }
+                    return parts.joined(separator: " ")
                 }())
     }
 

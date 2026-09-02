@@ -1404,11 +1404,13 @@ final class PodLoanWatchController {
                         //
                         // So telling the user to "check the pod is nearby and awake" sent them to
                         // inspect healthy hardware for a fault in our own radio bookkeeping. Say
-                        // the two things that are true and useful instead: nothing moved, and a
-                        // short wait is the remedy that actually works in the field.
-                        self.lastIdleNote = String(format: NSLocalizedString(
-                            "Sport Mode didn't start (%.0fs). Your phone still has the pod and is still looping. Wait ~30s, then try again.",
-                            comment: "Glance: takeover failed — the pod link never established"), failSecs)
+                        // the fact and stop ("if there is no pod, there is no pod" — Jeremy,
+                        // 2026-09-02, trimming the earlier "wait ~30s" coaching too): nothing
+                        // moved, the pod couldn't be reached, the Start button is right there.
+                        // The seconds and the retry-timing evidence live in the log line below.
+                        self.lastIdleNote = NSLocalizedString(
+                            "Sport Mode didn't start — the pod couldn't be reached. Your phone still has it and is still looping.",
+                            comment: "Glance: takeover failed — the pod link never established")
                     }
                     SportLog.event("loan", String(format: "TAKEOVER FAILED — %@ after %d reads in %.1fs [takeover-timing], max inter-read gap %.1fs (event-driven; 8s backstop when no event fires), %@, final BLE state %@, %@, %@, epoch %d%@",
                                                   stalled ? "ladder STALLED (our polling was deferred; see cb: for whether the link was up)" : "pod unreachable",

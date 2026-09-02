@@ -914,14 +914,30 @@ struct GlanceView: View {
             // Ring only (like the stock screen): shape carries closed/open, color carries
             // BG-recency freshness. No text — the ring says it all.
             Image(loopAssetName, bundle: Self.watchAppBundle)
+                .renderingMode(.template)
                 .resizable()
                 .frame(width: 26, height: 26)
+                .foregroundColor(ringColor)
         } else if model.state.phase != .idle {
             // starting / handing back / draining: the phase text. IDLE shows nothing —
             // the "Start Sport Mode" button is the whole message (Jeremy 2026-07-24).
             Text(model.state.loopStatusText)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundColor(.glanceDim)
+        }
+    }
+
+    /// One freshness palette for BOTH devices (Caitlin, 2026-09-02: the ring's aging
+    /// ORANGE — the tint baked into stock's old watch PNGs — matched nothing she knows
+    /// from the phone, whose aging is the "warning" yellow). The stock assets now render
+    /// as templates (shape only: solid=closed, gapped=open) and take their color from
+    /// here, the phone's palette verbatim — so the two devices cannot drift again.
+    private var ringColor: Color {
+        switch model.state.loopFreshness {
+        case .fresh:   return Color(red: 10/255, green: 180/255, blue: 67/255)   // #0AB443 — unchanged (matches the old asset tint)
+        case .aging:   return Color(red: 233/255, green: 194/255, blue: 68/255)  // #E9C244 — the phone's "warning" colorset
+        case .stale:   return Color(red: 255/255, green: 69/255, blue: 58/255)   // #FF453A — unchanged
+        case .unknown: return .glanceDim
         }
     }
 
