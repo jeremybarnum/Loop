@@ -3049,16 +3049,19 @@ final class PodLoanPhoneController {
     /// device would bake it in. Flagged for a ruling rather than fixed here, since fixing the
     /// phone changes behaviour Jeremy has been living with.
     static func lowBGWarningSettingsForGrant(lastNotificationTime: Date?) -> LoanLowBGWarningSettings {
-        let defaults = UserDefaults.standard
+        // CARRIAGE STUB on this line: the Alert Management settings store (personal-mods
+        // area 2) is absent here, so the grant carries a DISABLED payload — same wire
+        // shape, engine-less on both ends. The personal-mods line reads its real toggles
+        // in this function's full form; keep the signature identical so syncs stay clean.
         return LoanLowBGWarningSettings(
-            enabled: defaults.lowBGNotificationsEnabled,
-            nightWarningsEnabled: defaults.nightLowBGNotificationsEnabled,
-            dayWarningOffset: Double(defaults.dayWarningOffset),
-            nightWarningOffset: Double(defaults.nightWarningOffset),
-            warningSnooze: TimeInterval(defaults.warningSnooze) * 60,
-            dontWarnIfSooner: TimeInterval(defaults.dontWarnIfSooner) * 60,
-            dontWarnIfLater: TimeInterval(defaults.dontWarnIfLater) * 60,
-            delayAfterCarbEntry: TimeInterval(defaults.delayAfterCarbEntry) * 60,
+            enabled: false,
+            nightWarningsEnabled: false,
+            dayWarningOffset: 0,
+            nightWarningOffset: 0,
+            warningSnooze: 0,
+            dontWarnIfSooner: 0,
+            dontWarnIfLater: 0,
+            delayAfterCarbEntry: 0,
             nightStartMinutes: 22 * 60 + 30,
             nightEndMinutes: 6 * 60 + 30,
             glucoseUnitString: HKUnit.milligramsPerDeciliter.unitString,
