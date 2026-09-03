@@ -1152,6 +1152,8 @@ final class WatchLoopManager {
     var requestSensorRescan: (() -> Void)?
     /// Radio census for the [g7-drought] line — wired by StockLoopSession to the G7 manager.
     var g7RadioSnapshot: (() -> String?)?
+    /// True while our G7 session is up — wired by StockLoopSession to G7CGMManager.isConnected.
+    var g7SessionLive: (() -> Bool)?
     /// Radio Lab probe — wired by StockLoopSession.
     var requestG7Recycle: (() -> Void)?
     func recycleG7ConnectForLab() { requestG7Recycle?() }
@@ -1525,6 +1527,22 @@ final class WatchLoopManager {
         }
     }
 
+    static var podWaitForSessionEndEnabled: Bool {
+        UserDefaults.standard.object(forKey: "G7Lab.podWaitForSessionEnd") as? Bool ?? true
+    }
+    static let podRadioGateSettle: TimeInterval = 3
+    static let podRadioGateCeiling: TimeInterval = 20
+
+    enum PodRadioGateDecision: Equatable { case proceed(String), wait }
+
+    /// The session-end wait's decision, pure so it is testable: proceed once the G7 session has
+    /// been down for `podRadioGateSettle`, or at the ceiling regardless.
+    static func podRadioGateDecision(sessionLive: Bool, sinceSessionEnd: TimeInterval?, elapsed: TimeInterval) -> PodRadioGateDecision {
+        if elapsed >= podRadioGateCeiling { return .proceed("CEILING (\(Int(podRadioGateCeiling))s) — G7 session still \(sessionLive ? "live" : "settling")") }
+        if !sessionLive, let down = sinceSessionEnd, down >= podRadioGateSettle { return .proceed("G7 session ended (+\(Int(podRadioGateSettle))s settle)") }
+        return .wait
+    }
+
     /// The fragile phase is G7 CONNECT/AUTH ESTABLISHMENT, ~1.5 s straddling the grid point. An
     /// ESTABLISHED link coexists with pod traffic perfectly well — backfill and live reads land
     /// during pod handshakes — and the forensics say the same from the pod's side. So the
@@ -1542,6 +1560,40 @@ final class WatchLoopManager {
     private func deferPodRadioWhileG7AcquisitionResolves(_ proceed: @escaping () -> Void) {
         let directAge = lastGlucoseSourceStamps.direct.map { self.now().timeIntervalSince($0) }
         if let age = directAge, age < .minutes(6.5) {
+            // SESSION-END WAIT (Jeremy, 2026-09-02: "it just seems like bad design to rush the pod
+            // connection when we know these types of issues exist"). The gate above keys on the
+            // READING as the proxy for "the Dexcom is silent"; the real event is the session's
+            // END, which arrives 4.6-13.1 s later (bench) with backfill/comms in between — and one
+            // live session died by timeout 3 s into a pod handshake (field 2026-09-02 18:55).
+            // Hold the pod radio until the G7 session has been down for a short settle, with the
+            // same 20 s ceiling the stale branch uses. Cost: the dose enacts ~5-15 s later
+            // ("clinically nil" per the doc above). Switch: G7Lab.podWaitForSessionEnd, default ON.
+            if Self.podWaitForSessionEndEnabled, let live = g7SessionLive, live() {
+                let start = self.now()
+                var sessionEndedAt: Date? = nil
+                func pollSessionEnd() {
+                    let elapsed = self.now().timeIntervalSince(start)
+                    let isLive = self.g7SessionLive?() ?? false
+                    if isLive { sessionEndedAt = nil } else if sessionEndedAt == nil { sessionEndedAt = self.now() }
+                    switch Self.podRadioGateDecision(sessionLive: isLive,
+                                                     sinceSessionEnd: sessionEndedAt.map { self.now().timeIntervalSince($0) },
+                                                     elapsed: elapsed) {
+                    case .proceed(let why):
+                        SportLog.event("overlap", String(format: "session-end wait: released after %.1fs — %@ · pod radio opening %.1fs after the direct read", elapsed, why, age + elapsed))
+                        proceed()
+                    case .wait:
+                        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.5) { pollSessionEnd() }
+                    }
+                }
+                DispatchQueue.global(qos: .userInitiated).async { pollSessionEnd() }
+                return
+            }
+            // [overlap] (2026-09-02): the pod radio opens here, ~100 ms after the reading, while
+            // the G7 session that delivered it is usually still up (4.6-13.1 s past the read on
+            // the bench). One line per cycle so collisions become a per-window number, not an
+            // anecdote: the G7 snapshot says whether the session is live at this instant.
+            SportLog.event("overlap", String(format: "pod radio opening %.1fs after the direct read · G7 %@", age,
+                                             g7RadioSnapshot?() ?? "n/a"))
             proceed()
             return
         }

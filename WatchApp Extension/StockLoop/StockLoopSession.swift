@@ -89,6 +89,7 @@ final class StockLoopSession {
         G7RadioCensus.sensorSighted = { [weak self] name in self?.stack.loopManager.noteSensorSighted(name) }
         stack.loopManager.requestSensorRescan = { [weak self] in self?.stack.cgmManager.scanForNewSensor() }
         stack.loopManager.g7RadioSnapshot = { [weak self] in self?.stack.cgmManager.g7RadioSnapshot() }
+        stack.loopManager.g7SessionLive = { [weak self] in self?.stack.cgmManager.isConnected ?? false }
         stack.loopManager.requestG7Recycle = { [weak self] in self?.stack.cgmManager.recycleG7ConnectForLab() }
 
         // Main-thread stall detector. Runs from LAUNCH and never stops, unlike the loan-scoped
