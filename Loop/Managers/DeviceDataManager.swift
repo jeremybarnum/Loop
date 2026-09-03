@@ -1068,6 +1068,13 @@ extension DeviceDataManager: CGMManagerDelegate {
     }
 
     func cgmManager(_ manager: CGMManager, hasNew readingResult: CGMReadingResult) {
+        // The phone's own G7 witness (2026-09-02): during a watch-side mute the only thing that
+        // separated "sensor dead" from "watch deaf" was whether readings kept reaching the phone.
+        if case .newData(let samples) = readingResult, let last = samples.last {
+            PhoneLog.event("cgm", String(format: "INGEST src=phone-G7 n=%d latest %.0f mg/dL age %.0fs",
+                                         samples.count, last.quantity.doubleValue(for: .milligramsPerDeciliter),
+                                         Date().timeIntervalSince(last.date)))
+        }
         dispatchPrecondition(condition: .onQueue(queue))
         log.default("CGMManager:%{public}@ did update with %{public}@", String(describing: type(of: manager)), String(describing: readingResult))
         processCGMReadingResult(manager, readingResult: readingResult) {

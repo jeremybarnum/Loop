@@ -88,6 +88,8 @@ final class StockLoopSession {
         // holds both ends.
         G7RadioCensus.sensorSighted = { [weak self] name in self?.stack.loopManager.noteSensorSighted(name) }
         stack.loopManager.requestSensorRescan = { [weak self] in self?.stack.cgmManager.scanForNewSensor() }
+        stack.loopManager.g7RadioSnapshot = { [weak self] in self?.stack.cgmManager.g7RadioSnapshot() }
+        stack.loopManager.requestG7Recycle = { [weak self] in self?.stack.cgmManager.recycleG7ConnectForLab() }
 
         // Main-thread stall detector. Runs from LAUNCH and never stops, unlike the loan-scoped
         // heartbeat below: a wedged main thread is exactly the condition under which nothing else

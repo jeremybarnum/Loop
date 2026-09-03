@@ -1150,6 +1150,11 @@ final class WatchLoopManager {
     /// Wired by StockLoopSession to the stack's cgmManager.scanForNewSensor() — this manager
     /// is delegate to the CGM manager, not its owner.
     var requestSensorRescan: (() -> Void)?
+    /// Radio census for the [g7-drought] line — wired by StockLoopSession to the G7 manager.
+    var g7RadioSnapshot: (() -> String?)?
+    /// Radio Lab probe — wired by StockLoopSession.
+    var requestG7Recycle: (() -> Void)?
+    func recycleG7ConnectForLab() { requestG7Recycle?() }
     /// The last cycle's binding-constraint summary, for the diagnostic screen. Our screen
     /// only — never annotated onto a stock surface (the stock-parity ruling).
     private(set) var lastDosingDerivation: String?
@@ -1824,6 +1829,13 @@ final class WatchLoopManager {
         SportLog.event("freshness", String(format:
             "%@ · momentum %d pts · latest glucose age %@s (recency %.0fm) · RC discrepancies %d",
             verdict, momPts, ageS(glucoseDate), recency / 60, rcDisc))
+        // [g7-drought] — the one line that separates "our central is dead" from "the sensor is
+        // absent" while glucose is stale mid-loan (field 2026-09-02: 30 min of silence with the
+        // pre-fix scan gate, and the tape could not say which). Logged only while stale, so a
+        // healthy loan adds nothing.
+        if verdict == "stale", let snapshot = g7RadioSnapshot?() {
+            SportLog.event("g7-drought", "glucose age \(ageS(glucoseDate))s · \(snapshot)")
+        }
     }
 
     /// Sport Mode's momentum look-back window. Wider than stock's 15 min (`GlucoseMath`) so the

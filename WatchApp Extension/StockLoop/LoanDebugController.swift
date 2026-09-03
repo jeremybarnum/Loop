@@ -174,6 +174,16 @@ struct LoanDebugView: View {
                 // experiments are on demand. Ladybug-class: REMOVE PRE-PRODUCTION.
                 // Safe: worst case is a re-adoption delay while the relay covers, same as any
                 // new-sensor day; no therapy state is touched.
+                // Radio Lab probe (bench flag `Bench.radioLab`, default hidden): recycle the G7
+                // connection from scratch — the controlled form of the force-quit that has cured
+                // every mute in the field. Connection state only; no dosing path.
+                if UserDefaults.standard.bool(forKey: "Bench.radioLab") {
+                    Button("Recycle G7 connect (lab)") {
+                        SportLog.event("g7-ble", "*** LAB RECYCLE *** cancel + re-arm the G7 connection from scratch")
+        ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.recycleG7ConnectForLab()
+        lastAction = "G7 recycle requested"
+                    }
+                }
                 Button("Forget Sensor (re-acquire)") {
                     SportLog.event("g7-ble", "*** BENCH RE-ACQUIRE *** forgetting adopted sensor — cold acquisition starts now")
                     ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.scanForNewSensor()
