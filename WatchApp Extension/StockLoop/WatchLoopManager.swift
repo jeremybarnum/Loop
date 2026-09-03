@@ -1499,6 +1499,14 @@ final class WatchLoopManager {
         // missed cycle is the scan escalation's job; this keeps the miss from happening.
         guard age > .minutes(4),
               let reclaim = reclaimPodForDose else {
+            // [overlap] for the no-reclaim cycle too (field 2026-09-03 08:41): pump data fresh
+            // means the pod link is usually still up from the command that refreshed it — the
+            // G7 session that delivered this reading ran ON TOP of a live pod link, and the
+            // gate above never ran, so the collision census had a hole exactly where the
+            // overlap is total.
+            if let directAge = lastGlucoseSourceStamps.direct.map({ self.now().timeIntervalSince($0) }), directAge < .minutes(6.5) {
+                SportLog.event("overlap", String(format: "no reclaim (pump data %.0fs fresh) — pod link likely still up under the G7 session · G7 %@", age, g7RadioSnapshot?() ?? "n/a"))
+            }
             assertThenLoop({})
             return
         }

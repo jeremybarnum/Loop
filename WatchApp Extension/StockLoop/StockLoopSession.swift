@@ -287,6 +287,13 @@ final class StockLoopSession {
         timer.schedule(deadline: .now() + 300, repeating: 300, leeway: .seconds(20))
         timer.setEventHandler { [weak self] in
             self?.sendLogSnapshot("loan pulse")
+            // [g7-drought] on the PULSE, not the cycle (field 2026-09-03 08:41-09:21): with no
+            // glucose there is no cycle, so the cycle-bound census logged nothing for the whole
+            // 40-minute mute it was built for. The pulse fires every 300 s for as long as the
+            // loan lives, glucose or not.
+            if let mgr = self?.stack.loopManager, let age = mgr.latestGlucoseAge, age > .minutes(7) {
+                SportLog.event("g7-drought", "glucose age \(Int(age))s · \(self?.stack.cgmManager.g7RadioSnapshot() ?? "n/a") · reachable=\(WCSession.default.isReachable)")
+            }
             // Keepalive self-heal: a dead HKWorkoutSession used to wait for a FOREGROUND
             // activation, so a background session went reading-dead until the next wrist raise.
             // ensureRunning is refcount-aware and a no-op when healthy.

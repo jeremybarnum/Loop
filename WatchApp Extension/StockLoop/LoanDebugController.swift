@@ -177,7 +177,21 @@ struct LoanDebugView: View {
                 // Radio Lab probe (bench flag `Bench.radioLab`, default hidden): recycle the G7
                 // connection from scratch — the controlled form of the force-quit that has cured
                 // every mute in the field. Connection state only; no dosing path.
-                if UserDefaults.standard.bool(forKey: "Bench.radioLab") {
+                // Radio Lab is gated by BUNDLE ID, not a defaults key nobody can set on a
+                // watch: Jeremy's com.StockSportMode build shows it; Caitlin's com.Exercise
+                // build never does. The rows flip the UserDefaults switches the G7 stack and
+                // the pod-radio gate read at use, so bench arms need no reship.
+                if (Bundle.main.bundleIdentifier ?? "").contains("StockSportMode") {
+                    ForEach([("G7Lab.scanWhilePending", "Scan while pending (fix)", false),
+                             ("G7Lab.scanWatchdog", "Scan watchdog", false),
+                             ("G7Lab.podWaitForSessionEnd", "Pod waits for G7 session end", true)], id: \.0) { key, title, def in
+                        Button("\(title): \((UserDefaults.standard.object(forKey: key) as? Bool ?? def) ? "ON" : "OFF") → tap to flip") {
+                            let now = !((UserDefaults.standard.object(forKey: key) as? Bool) ?? def)
+                            UserDefaults.standard.set(now, forKey: key)
+                            SportLog.event("lab", "switch \(key) = \(now) (tapped on the Radio Lab)")
+                            lastAction = "\(title) → \(now ? "ON" : "OFF")"
+                        }
+                    }
                     Button("Recycle G7 connect (lab)") {
                         SportLog.event("g7-ble", "*** LAB RECYCLE *** cancel + re-arm the G7 connection from scratch")
         ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.recycleG7ConnectForLab()
