@@ -948,10 +948,14 @@ final class WatchLoopManager {
     /// Last sensorID written by cgmManagerDidUpdateState (extension can't hold
     /// storage) — the persist itself runs every state change; this only rate-limits the log line.
     var lastPersistedSensorID: String?
+    /// Diagnosis hook (2026-09-04): fired on every direct-G7 arrival so the session's window
+    /// monitor can anchor the expected-burst clock on the sensor's own phase.
+    var onDirectGlucose: ((Date) -> Void)?
     private func noteGlucoseSource(directG7: Bool) {
         bgSourceLock.lock()
         if directG7 { _lastDirectG7At = self.now() } else { _lastPhoneRelayAt = self.now() }
         bgSourceLock.unlock()
+        if directG7 { onDirectGlucose?(self.now()) }
         // Persisted because the Start gate reads it ACROSS launches. The first gate shipped
         // reading only the in-memory stamp, so every relaunch started from "never" and the
         // suspended hours before a tap looked like a dead sensor — the chicken-and-egg that

@@ -184,13 +184,28 @@ struct LoanDebugView: View {
                 if (Bundle.main.bundleIdentifier ?? "").contains("StockSportMode") {
                     ForEach([("G7Lab.scanWhilePending", "Scan while pending (fix)", false),
                              ("G7Lab.scanWatchdog", "Scan watchdog", false),
-                             ("G7Lab.podWaitForSessionEnd", "Pod waits for G7 session end", true)], id: \.0) { key, title, def in
+                             ("G7Lab.podWaitForSessionEnd", "Pod waits for G7 session end", true),
+                             (StockLoopSession.WCSilence.key, "WC silence (diagnosis)", false)], id: \.0) { key, title, def in
                         Button("\(title): \((UserDefaults.standard.object(forKey: key) as? Bool ?? def) ? "ON" : "OFF") → tap to flip") {
                             let now = !((UserDefaults.standard.object(forKey: key) as? Bool) ?? def)
                             UserDefaults.standard.set(now, forKey: key)
                             SportLog.event("lab", "switch \(key) = \(now) (tapped on the Radio Lab)")
                             lastAction = "\(title) → \(now ? "ON" : "OFF")"
+                            // WC silence: switching ON also clears whatever the phone-away loan has
+                            // already queued, so the A/B/A inside one loan starts from an empty backlog.
+                            if key == StockLoopSession.WCSilence.key {
+                                if now {
+                                    let c = StockLoopSession.WCSilence.cancelOutstanding()
+                                    lastAction = "WC silence ON · cancelled \(c.userInfo) msg + \(c.files) file(s)"
+                                } else {
+                                    SportLog.event("lab", "WC silence OFF — sends resume · backlog \(StockLoopSession.WCSilence.backlogSummary())")
+                                }
+                            }
                         }
+                    }
+                    Button("Log WC backlog") {
+                        SportLog.event("lab", "WC backlog \(StockLoopSession.WCSilence.backlogSummary()) · reachable=\(WCSession.default.isReachable) · silence=\(StockLoopSession.WCSilence.enabled)")
+                        lastAction = "backlog \(StockLoopSession.WCSilence.backlogSummary())"
                     }
                     Button("Recycle G7 connect (lab)") {
                         SportLog.event("g7-ble", "*** LAB RECYCLE *** cancel + re-arm the G7 connection from scratch")

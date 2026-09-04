@@ -100,6 +100,11 @@ final class StockLoopSession {
         // The one question the hand-back UI needs answered.
         loanController.isPhoneReachable = { WCSession.default.isReachable }
 
+        // G7 window monitor: anchor the expected-burst clock on every direct reading.
+        stack.loopManager.onDirectGlucose = { [weak self] date in
+            DispatchQueue.main.async { self?.noteDirectReading(at: date) }
+        }
+
         // The offer superseder's request-kind twin (#120 idiom): a request still queued for a
         // dark phone after the watch stops wanting it is a delayed detonator — delivered at
         // reunion inside the phone's 90 s freshness window, it re-grants over whatever loan
@@ -120,6 +125,12 @@ final class StockLoopSession {
             // and fall back to the queue on failure, so this is never less reliable.
             // See LoanMessage.isInteractiveHandshake for which kinds and why.
             let session = WCSession.default
+            // Diagnosis gate (2026-09-04, see WCSilence): while the bench switch is on the watch
+            // hands WatchConnectivity nothing at all, so a phone-away loan builds NO backlog.
+            if WCSilence.shouldSuppress(enabled: WCSilence.enabled) {
+                SportLog.event("wc", "SUPPRESSED (G7Lab.wcSilence) send \(dictionary.keys.joined(separator: ",")) — reachable \(session.isReachable) · backlog \(WCSilence.backlogSummary())")
+                return
+            }
             let urgent = LoanMessage.isInteractiveHandshake(transport: dictionary) && session.isReachable
             SportLog.event("wc", "send \(dictionary.keys.joined(separator: ",")) — session \(session.activationState.rawValue), reachable \(session.isReachable), path \(urgent ? "urgent" : "queued")")
 
@@ -275,8 +286,118 @@ final class StockLoopSession {
         //
         // It costs no extra lines: the log rotates at 512 KB keeping only a tail, so a
         // once-a-minute heartbeat would push out the content worth keeping. This piggybacks.
+        if WCSilence.shouldSuppress(enabled: WCSilence.enabled) {
+            SportLog.event("log", "snapshot SUPPRESSED (G7Lab.wcSilence) (\(reason)) reachable=\(WCSession.default.isReachable) · backlog \(WCSilence.backlogSummary())")
+            return
+        }
         SportLog.event("log", "snapshot → iPhone (\(reason)) reachable=\(WCSession.default.isReachable)")
         WCSession.default.transferFile(url, metadata: ["kind": "g7watch.log"])
+    }
+
+    // MARK: WC silence (diagnosis) + G7 window monitor (2026-09-04)
+
+    /// Bench switch `G7Lab.wcSilence`. While ON the watch hands WatchConnectivity NOTHING — no
+    /// record streams, no offers, no status, no log snapshots — and at the moment it is switched
+    /// on it cancels every queued transfer that is not already mid-flight.
+    ///
+    /// Why: every loan mute on record (her tennis and dinner, his breakfast, the 2026-09-03 night
+    /// pair) ran with the phone UNREACHABLE, which is the one condition under which a loan builds
+    /// a backlog of undeliverable transfers: a ~480 KB log file every 300 s pulse plus the record
+    /// streams, all held by WCSession across unreachability AND across a force-quit. The
+    /// force-quit test that night (00:36) left Dexcom dark with our process gone, so whatever
+    /// blocks the sensor link survives our process — and this backlog is the only loan-created
+    /// thing that does. Idle (no loan) and Dexcom-alone were clean in the same conditions.
+    /// This switch removes exactly that condition and nothing else, so an A/B/A inside one
+    /// phone-away loan can say whether it is the cause.
+    ///
+    /// Diagnosis only, not a product behaviour: records are journaled and unacked events resend
+    /// by design, so nothing is lost, but the hand-back needs the switch OFF to deliver.
+    enum WCSilence {
+        static let key = "G7Lab.wcSilence"
+        static var enabled: Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? false }
+        /// Pure: the gate's meaning, pinned so a test can hold it.
+        static func shouldSuppress(enabled: Bool) -> Bool { enabled }
+
+        @discardableResult
+        static func cancelOutstanding() -> (userInfo: Int, files: Int) {
+            let s = WCSession.default
+            let ui = s.outstandingUserInfoTransfers.filter { !$0.isTransferring }
+            let files = s.outstandingFileTransfers.filter { !$0.isTransferring }
+            ui.forEach { $0.cancel() }
+            files.forEach { $0.cancel() }
+            let inFlight = (s.outstandingUserInfoTransfers.count - ui.count) + (s.outstandingFileTransfers.count - files.count)
+            SportLog.event("lab", "WC SILENCE ON — cancelled \(ui.count) queued userInfo + \(files.count) queued file transfer(s); \(inFlight) mid-flight left alone")
+            return (ui.count, files.count)
+        }
+
+        static func backlogSummary() -> String {
+            let s = WCSession.default
+            return "userInfo=\(s.outstandingUserInfoTransfers.count) files=\(s.outstandingFileTransfers.count)"
+        }
+    }
+
+    /// One `[g7-window]` line per EXPECTED sensor burst, HIT or MISS, so a mute reads out of the
+    /// log as a table instead of being rebuilt by hand against the Mac scanner. Anchored on the
+    /// sensor's own phase: each direct reading marks a window, and the next verdict is due one
+    /// period later; on a miss the chain keeps firing every period from the last known phase,
+    /// which is exactly when the sensor keeps bursting.
+    enum G7WindowPolicy {
+        static let period: TimeInterval = 300
+        /// The burst lasts 3–7 s and the reading lands 2–8 s after it starts; a reading that
+        /// arrives up to a minute late (a between-burst connect, 2026-09-03 23:37:36) still
+        /// belongs to that window rather than to no window.
+        static let early: TimeInterval = 12
+        static let late: TimeInterval = 72
+        /// When to pass verdict on the burst expected one period after `anchor`.
+        static func nextVerdict(after anchor: Date) -> Date { anchor.addingTimeInterval(period + late) }
+        /// Pure: does a reading at `lastDirect` count as this window's?
+        static func verdict(lastDirect: Date?, expectedBurst: Date) -> String {
+            guard let d = lastDirect else { return "MISS" }
+            let dt = d.timeIntervalSince(expectedBurst)
+            return (dt >= -early && dt <= late) ? "HIT" : "MISS"
+        }
+    }
+
+    private var windowTimer: DispatchSourceTimer?
+    private var windowAnchor: Date?     // last direct reading, or the last expected burst while missing
+    private var lastDirectAt: Date?
+
+    private func noteDirectReading(at date: Date) {
+        lastDirectAt = date
+        if let anchor = windowAnchor {
+            let expected = anchor.addingTimeInterval(G7WindowPolicy.period)
+            if G7WindowPolicy.verdict(lastDirect: date, expectedBurst: expected) == "HIT" {
+                logWindowVerdict("HIT", expectedBurst: expected)
+            }
+        }
+        windowAnchor = date
+        armWindowVerdict()
+    }
+
+    private func armWindowVerdict() {
+        windowTimer?.cancel()
+        guard let anchor = windowAnchor else { return }
+        let expected = anchor.addingTimeInterval(G7WindowPolicy.period)
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now() + max(1, G7WindowPolicy.nextVerdict(after: anchor).timeIntervalSinceNow), leeway: .seconds(2))
+        t.setEventHandler { [weak self] in
+            guard let self else { return }
+            let v = G7WindowPolicy.verdict(lastDirect: self.lastDirectAt, expectedBurst: expected)
+            // A HIT was already logged on arrival; only a MISS is news here, and it re-arms the
+            // chain on the sensor's phase rather than on our clock.
+            if v == "MISS" {
+                self.logWindowVerdict("MISS", expectedBurst: expected)
+                self.windowAnchor = expected
+                self.armWindowVerdict()
+            }
+        }
+        t.resume()
+        windowTimer = t
+    }
+
+    private func logWindowVerdict(_ verdict: String, expectedBurst: Date) {
+        let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
+        SportLog.event("g7-window", "\(verdict) burst ~\(f.string(from: expectedBurst)) · \(stack.cgmManager.g7RadioSnapshot() ?? "n/a") · wc reachable=\(WCSession.default.isReachable) backlog \(WCSilence.backlogSummary()) silence=\(WCSilence.enabled) · loan=\(loanController.isLoanActive)")
     }
 
     private var logPulse: DispatchSourceTimer?
