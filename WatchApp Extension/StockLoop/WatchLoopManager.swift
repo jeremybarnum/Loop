@@ -3474,6 +3474,13 @@ extension WatchLoopManager: CGMManagerDelegate {
         // shipped nothing — halving my Mac-side visibility).
         guard Date().timeIntervalSince(lastLogTransfer) > 4.5 * 60 else { return }
         guard WCSession.default.activationState == .activated, let url = LogFile.url else { return }
+        // Diagnosis gate (2026-09-04): the first silenced overnight showed this per-reading hop
+        // still queuing a file every window (backlog files=1…6 while every other send was
+        // suppressed). The switch means NOTHING leaves the watch, or the A/B/A proves nothing.
+        if StockLoopSession.WCSilence.shouldSuppress(enabled: StockLoopSession.WCSilence.enabled) {
+            SportLog.event("log", "per-reading log transfer SUPPRESSED (G7Lab.wcSilence) · backlog \(StockLoopSession.WCSilence.backlogSummary())")
+            return
+        }
         lastLogTransfer = Date()
         WCSession.default.transferFile(url, metadata: ["kind": "g7watch.log"])
     }

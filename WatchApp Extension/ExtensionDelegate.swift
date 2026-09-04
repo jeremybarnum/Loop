@@ -265,7 +265,13 @@ extension ExtensionDelegate: WCSessionDelegate {
             if let url = LogFile.url,
                let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int,
                size > 2048 {
-                session.transferFile(url, metadata: ["kind": "g7watch.log"])
+                // Diagnosis gate (2026-09-04, see StockLoopSession.WCSilence): while the bench
+                // switch is on, nothing leaves the watch — this launch-time hop included.
+                if StockLoopSession.WCSilence.shouldSuppress(enabled: StockLoopSession.WCSilence.enabled) {
+                    SportLog.event("log", "launch log transfer SUPPRESSED (G7Lab.wcSilence)")
+                } else {
+                    session.transferFile(url, metadata: ["kind": "g7watch.log"])
+                }
             }
         }
     }
