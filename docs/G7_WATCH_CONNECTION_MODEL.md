@@ -94,9 +94,12 @@ discovery. (c) is the cold path. All three still need runtime to complete authen
 
 ## Connection budgets
 
-- **The sensor accepts ~3 concurrent centrals.** UNVERIFIED as a number (Dexcom marketing
-  material / community consensus, no primary source in hand). MEASURED weaker form: phone
-  G7SensorKit + Dexcom watch D2W + our watch client have coexisted without evident contention.
+- **The sensor serves three display devices: phone app, direct-to-watch, and the receiver.**
+  That is Dexcom's own documented topology (Jeremy, 2026-09-05 — not a community number).
+  What remains UNVERIFIED is whether three is a hard ceiling in the sensor or just the supported
+  set. MEASURED: the sensor counts DEVICES, not apps — every app on one device shares that
+  device's single link and bond — and a Pi as a third radio beside the phone and the watch was
+  served for 7 h (July 2026). Today's setup uses two: the phone and the watch.
 - **~2 BLE links per app on watchOS.** UNVERIFIED — attributed to a WWDC session in prior
   discussions, but nobody in this project has re-located the primary source. Treat as folklore
   with supporting evidence, not spec. Empirical anchors: (1) hold-for-loan starved the G7 with
