@@ -147,6 +147,9 @@ setup as of 09-05 (an afternoon of traps):
   stuck between both behaviours (17:01: link-up notice, "no pending connect of ours", no
   join). Recycle cured it in one burst (17:05:46 → read at 17:06:40). The Radio Lab now
   recycles on either flip (committed for the next build).
+  **171 verified on wrist 17:16:38→40:** sensor sighted → "adopted from the air, no request
+  of ours" (one line) → Dexcom's link up → join → auth OK → read; zero suppressed repeats
+  since launch. The walk-away loan test runs on 171.
 
 ## 3a. Q1 first result — ride-only E1, 09-05 14:08→15:51 (build 169, the switch alone)
 
