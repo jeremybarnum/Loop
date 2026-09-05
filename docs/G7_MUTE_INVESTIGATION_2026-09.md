@@ -60,6 +60,14 @@ sampling (nights are long and quiet).
    (E1: no pod, no loan) and both go dark within the hour. Whether our request from an ASLEEP
    app is enough is UNTESTED (the backgrounded arm was inconclusive, see the table); every
    long clean run had exactly that configuration overnight.
+   NOTE (Jeremy, 09-05): two readers on one bond is the NORMAL stock arrangement — on the
+   phone, Loop's G7SensorKit rides the Dexcom iPhone app's bond the same way, with the same
+   code and the same 2 s re-arm, and the phone collected straight through the 70-min apartment
+   mute. The sensor's slot limit is per device, not per app: two apps on one device share one
+   physical link (the second connect completes on the existing link — the "join" mechanism).
+   So neither "a second reader" nor slot arithmetic is the difference; whatever watchOS does
+   with a parked request beside another app's is. Do not describe this as a platform
+   difference in the arrangement.
 2. **Location (MEASURED):** below both apps, in the watch's Bluetooth stack. It survives our
    process being killed and a fresh process cannot get through it; a radio toggle clears it
    (N=1). The OS holds one connect entry per peripheral address for the whole watch; when that
