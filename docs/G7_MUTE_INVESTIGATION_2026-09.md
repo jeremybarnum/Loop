@@ -19,9 +19,13 @@ is a *different* failure from the one described here.
 - **Per-window signature.** Our own scan hears the sensor's advertisement (rssi −77…−86) and
   no connect callback follows; our pending connect ages untouched; zero connection events from
   any app. The watch is not deaf. It is not connecting.
-- **Recovery.** On the sensor's distress cadence (1-min short bursts, 0.3–2.8 s, after ~2
-  uncollected windows) when nobody collects the sensor. When the phone keeps collecting there
-  is no distress cadence and no recovery (apartment, 14 windows). A watch Bluetooth toggle
+- **Recovery.** On the sensor's one-minute cadence (short bursts, 0.3–2.8 s) — which is NOT
+  "distress because nobody collects": on 09-05 15:13→15:22 (sniffer, host-clock stamps) the
+  sensor ran the minute cadence while Dexcom's watch app read every window, with the PHONE in
+  a Faraday case. Read together with the apartment arm (phone collecting, watch muted, no
+  minute bursts, no recovery over 14 windows): the minute cadence appears when the PHONE — a
+  specific bonded collector — is absent, and it is what gives a muted watch its extra chances.
+  When the phone keeps collecting there is no minute cadence and no recovery. A watch Bluetooth toggle
   ended one mute at the next burst (09-05 13:05; N=1, the mute was one window old — repeat
   after ≥3 missed windows before treating as proven).
 - **The grid.** 275 bursts over 50 h: spacing 300.00 s ± 1.2 s, phase drifting +4 s/day
@@ -93,9 +97,29 @@ sampling (nights are long and quiet).
 marks), Dexcom's watch app by eye, and the Radio Lab switches: scan-while-pending, watchdog,
 pod-wait, quiet window, WC silence, **re-arm mode** (stock 2 s / 30 s / late-arm, build 168),
 **ride-only** (no request of ours while adopted, build 169), the E1 soak (167), the manual
-recycle, and the watch's own Bluetooth toggle. Off-watch: the Nordic nRF sniffer (plugin
-installed in the Mac's Wireshark; the dongle is to be located) — the only instrument that can
-show whether the watch transmits `CONNECT_IND` during a mute.
+recycle, and the watch's own Bluetooth toggle. Off-watch: the Nordic nRF sniffer — the only
+instrument that can show whether the watch transmits `CONNECT_IND` during a mute. Working
+setup as of 09-05 (an afternoon of traps):
+- The dongle enumerates as `/dev/cu.usbmodem1101`; the extcap interface is
+  `/dev/cu.usbmodem1101-4.6`. The plugin in `~/.config/wireshark/extcap` must run under its
+  own venv (`~/.config/wireshark/snifferenv`); put that venv's `bin` FIRST on `PATH` when
+  running tshark, or the `.py` copy runs under Homebrew's Python without pyserial and reports
+  "no such device" (the interface then shows as `…-None`).
+- The sensor advertises in plain LEGACY mode with a STATIC random address:
+  `f9:55:62:8d:5e:56` for DXCMbv (from the Pi's HCI trace, `btmon`). It does not use extended
+  or coded advertising — a stray `ADV_EXT_IND` at −82 dBm sent me down that hole for an hour.
+- Scan mode hops channels and misses `CONNECT_IND`; FOLLOW mode on the address is required.
+  The plugin only follows from Wireshark's toolbar, so `scratchpad/g7follow2.py` drives the
+  SnifferAPI directly (scan → follow(address) → pcap, re-arming after a quiet link).
+- The library's derived packet timestamps drift by up to two minutes across a capture; stamp
+  packets with the host clock at receipt (g7follow2 does) or nothing lines up with the watch log.
+- UNVERIFIED (09-05 15:15, 15:22): with the phone in a Faraday case, paired `CONNECT_IND`s
+  ~1 s apart from rotating Apple-style addresses reached the sniffer at −67…−74 dBm at the
+  MINUTE bursts, three master polls each, never a reply from the sensor. Best reading: the
+  caged phone leaking, too weak for the sensor to hear — not the watch, whose Dexcom app read
+  every window. Confirm from the watch log's `[g7-window]` lines for those minutes before
+  citing; if the watch did read at 15:22:39, this sniffer is missing the sensor's half of a
+  connection and its "no reply" is worthless.
 
 ## 4. Next tests, top-down, each with its predictions
 
