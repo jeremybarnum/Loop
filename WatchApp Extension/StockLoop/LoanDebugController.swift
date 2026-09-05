@@ -213,6 +213,21 @@ struct LoanDebugView: View {
         ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.recycleG7ConnectForLab()
         lastAction = "G7 recycle requested"
                     }
+                    // E1 standalone-G7 soak, restored 2026-09-05 (Jeremy: "give me E1 back"). The
+                    // toggle went in the diagnostics declutter; the session methods never did.
+                    // Our G7 client under a keepalive with NO grant, NO loan and NO pod central —
+                    // the "second monitor by itself" arm of the mute investigation: run it with
+                    // the phone away and read the [g7-window] lines. Refuses to start over a
+                    // live loan.
+                    Button(session.standaloneG7TestActive ? "Stop standalone G7 soak (E1)" : "Start standalone G7 soak (E1, no pod)") {
+                        if session.standaloneG7TestActive {
+                            session.stopStandaloneG7Test()
+                            lastAction = "E1 soak stopped"
+                        } else {
+                            session.startStandaloneG7Test()
+                            lastAction = session.standaloneG7TestActive ? "E1 soak running (no pod)" : "blocked — end the loan first"
+                        }
+                    }
                 }
                 Button("Forget Sensor (re-acquire)") {
                     SportLog.event("g7-ble", "*** BENCH RE-ACQUIRE *** forgetting adopted sensor — cold acquisition starts now")
