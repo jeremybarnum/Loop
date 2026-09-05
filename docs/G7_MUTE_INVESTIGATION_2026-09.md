@@ -155,8 +155,9 @@ requester addresses are unattributable after that); 169 still had the discovery-
 **The phone's return (MEASURED, phone log + sniffer):** the phone reconnected at 15:50:39 —
 a MINUTE-burst time, 243 s after the last grid reading, with a 15-reading backfill — so the
 sensor admits the phone at the minute bursts it refuses the watch at. The minute cadence
-had stopped by 15:52 (sniffer: no sensor advertising between grid bursts afterwards — see
-the 16:02 check below when recorded). Rule as it now stands: **the one-minute advertising is
+stopped with the phone home: the sniffer, which had seen the sensor advertise every minute
+from 15:13 to 15:48, saw it only at the grid bursts (15:51, 15:56, both answered) through
+15:58. Rule as it now stands: **the one-minute advertising is
 the sensor looking for the PHONE; it starts when the phone stops collecting, admits only the
 phone, and stops when the phone is back.** A missing watch does not start it.
 
