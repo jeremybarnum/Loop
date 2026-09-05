@@ -136,6 +136,30 @@ setup as of 09-05 (an afternoon of traps):
   when ride-only is on and the persisted identity is known, the discovery path must register
   for connection events and wait, not connect. NOT BUILT as of this note.
 
+## 3a. Q1 first result — ride-only E1, 09-05 14:08→15:51 (build 169, the switch alone)
+
+| | |
+|---|---|
+| windows under ride-only (from 14:11:49) | 19 |
+| read | 18 (every one on Dexcom's link, `pendingConnect=never`) |
+| missed | 1 — 15:21, a join that connected and got no data; single window |
+| mutes | **0** |
+| phone absent | 14:41→15:51 (microwave two rooms away; Wi-Fi trickle, no BLE) |
+| stock E1 the same morning | mute at ~35 min, again at 11:01 |
+
+Caveats: one run; the phone was present for the first 32 min; Caitlin's devices were in the
+room from ~15:30 (window results come from the watch log and are unaffected; the air's
+requester addresses are unattributable after that); 169 still had the discovery-path hole
+(§3), which reverted the arm to stock for 15:21:48→15:26:39 — closed in 170.
+
+**The phone's return (MEASURED, phone log + sniffer):** the phone reconnected at 15:50:39 —
+a MINUTE-burst time, 243 s after the last grid reading, with a 15-reading backfill — so the
+sensor admits the phone at the minute bursts it refuses the watch at. The minute cadence
+had stopped by 15:52 (sniffer: no sensor advertising between grid bursts afterwards — see
+the 16:02 check below when recorded). Rule as it now stands: **the one-minute advertising is
+the sensor looking for the PHONE; it starts when the phone stops collecting, admits only the
+phone, and stops when the phone is back.** A missing watch does not start it.
+
 ## 4. Next tests, top-down, each with its predictions
 
 **Q1 — Is it the existence of our request, its timing, or its order?** (the fix question)
