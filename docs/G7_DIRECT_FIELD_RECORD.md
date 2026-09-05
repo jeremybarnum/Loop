@@ -216,6 +216,13 @@ If yes, the cause is the sensor or the RF environment and our stack is a bystand
 the cause is ours. This is the single highest-value experiment remaining, and it needs both
 observations recorded at the same timestamps.
 
+**ANSWERED 2026-09-05** (`G7_MUTE_INVESTIGATION_2026-09.md`): yes, D2W fails at the same
+burst and recovers at the same burst, every instance — and the "if yes → bystander" inference
+above was wrong. The sensor is fine (Mac scanner hears every burst) and Dexcom ALONE is clean
+for 90 minutes; the shared failure is in the watch's Bluetooth stack and it needs OUR pending
+request on the bond to occur. Cause: ours. Fix under test: ride-only (no request of ours
+while adopted), build 169.
+
 ---
 
 ## 6. Radio priority framework (Jeremy's ruling, 2026-08-04)

@@ -125,3 +125,17 @@ discovery. (c) is the cold path. All three still need runtime to complete authen
   a connection event? (Would explain rare stray readings if any turn up.)
 - Where exactly is the 2-link budget enforced? Needs the discriminator.
 - Does Dexcom's D2W hold its link continuously or duty-cycle it? Bears on slot arithmetic.
+
+## 2026-09-05 addendum — a second law, and a correction
+
+The law above (runtime or nothing) still holds for the IDLE watch. A second, different failure
+is now measured and recorded in `G7_MUTE_INVESTIGATION_2026-09.md`: **with runtime present**,
+a pending connect of ours on the sensor bond beside Dexcom's puts the watch's Bluetooth stack
+into a state where neither app gets the link for 20–40 min ("the mute"). Dexcom alone is clean;
+our parked request — even from an asleep app — is the necessary ingredient. Read that document
+before touching `G7BluetoothManager`'s arming or re-arm code.
+
+Correction to a claim made in passing this week: Dexcom's D2W reads DIRECT whether or not the
+phone is nearby (the phone icon is its fallback when direct fails). The 09-03 afternoon tape has
+56 Dexcom-initiated connections with the phone present. Do not describe D2W as "phone-fed when
+the phone is near".
