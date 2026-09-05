@@ -30,6 +30,20 @@ final class G7RidePolicyTests: XCTestCase {
         XCTAssertFalse(G7RidePolicy.shouldJoin(rideOnly: false, connected: true, isAdoptedPeripheral: true, alreadyConnected: false), "switch off: the pending connect handles it, as it always has")
     }
 
+    // Field 2026-09-05 15:21→15:26: after a failed join stock forgot the sensor and the discovery
+    // path put our own request back on the bond for five minutes — the switch only gated the
+    // retrieve-known path. Known sensor sighted on the air under ride-only: adopt, don't ask.
+    func testRideOnlyAdoptsAKnownSensorFromTheAirWithoutARequest() {
+        XCTAssertFalse(G7RidePolicy.shouldRequestOnDiscovery(rideOnly: true, known: true, peripheralConnected: false),
+                       "known sensor advertising, ride-only: adopt it and wait for Dexcom's link")
+        XCTAssertTrue(G7RidePolicy.shouldRequestOnDiscovery(rideOnly: true, known: true, peripheralConnected: true),
+                      "Dexcom's link is already up: connect() completes at once — that IS the join")
+        XCTAssertTrue(G7RidePolicy.shouldRequestOnDiscovery(rideOnly: true, known: false, peripheralConnected: false),
+                      "unknown sensor: stock acquisition, nothing to ride yet")
+        XCTAssertTrue(G7RidePolicy.shouldRequestOnDiscovery(rideOnly: false, known: true, peripheralConnected: false),
+                      "switch off: stock behaviour")
+    }
+
     func testTheSwitchIsOffByDefault() {
         UserDefaults.standard.removeObject(forKey: G7RidePolicy.key)
         XCTAssertFalse(G7RidePolicy.rideOnlyEnabled)
