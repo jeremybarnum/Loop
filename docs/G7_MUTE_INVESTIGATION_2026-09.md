@@ -113,13 +113,27 @@ setup as of 09-05 (an afternoon of traps):
   SnifferAPI directly (scan → follow(address) → pcap, re-arming after a quiet link).
 - The library's derived packet timestamps drift by up to two minutes across a capture; stamp
   packets with the host clock at receipt (g7follow2 does) or nothing lines up with the watch log.
-- UNVERIFIED (09-05 15:15, 15:22): with the phone in a Faraday case, paired `CONNECT_IND`s
-  ~1 s apart from rotating Apple-style addresses reached the sniffer at −67…−74 dBm at the
-  MINUTE bursts, three master polls each, never a reply from the sensor. Best reading: the
-  caged phone leaking, too weak for the sensor to hear — not the watch, whose Dexcom app read
-  every window. Confirm from the watch log's `[g7-window]` lines for those minutes before
-  citing; if the watch did read at 15:22:39, this sniffer is missing the sensor's half of a
-  connection and its "no reply" is worthless.
+- **The sniffer catches a `CONNECT_IND` only about one time in three.** It listens on one of
+  the three advertising channels per advertising event; the request lands on whichever
+  channel the initiator heard. 09-05 15:21:40: the watch log shows a join onto Dexcom's link
+  (`didConnect`), the sniffer saw 118 advertisements in that burst and no request at all. A
+  request SEEN is strong evidence; a request NOT seen is weak. Never write "nobody asked"
+  from this instrument alone.
+- MEASURED (09-05 15:22→15:26, sniffer + watch log): the sensor IGNORES connection requests
+  at its minute bursts and accepts them at the five-minute burst. Same requester (the watch,
+  our own stock-path request after a forget) → 15:22:39, 15:23:37 ×3, 15:25:38: three master
+  polls each, no reply; 15:26:37.85: full link in 0.7 s (version, features, encryption).
+  The reference picture of a good connection is `scratchpad/sniff/follow2.pcap` frames from
+  15:26:37.868.
+- MEASURED (09-05 15:21): a ride-only join can connect and get nothing — `didConnect`
+  15:21:40.0, no discovery/auth lines, sensor drop at 15:21:48.3 (`#7`), stock forget. Cause
+  not on the tape. First failed join in 14 ride-only windows.
+- **Ride-only hole (found 09-05 15:21):** after any failed join, stock forgets the sensor and
+  the DISCOVERY path (`handleDiscoveredPeripheral` → `.makeActive` → `connect()`) issues our
+  own request again until the next successful read; the switch only gates the
+  retrieve-known path. Between 15:21:48 and 15:26:39 the arm was stock, not ride-only. Fix:
+  when ride-only is on and the persisted identity is known, the discovery path must register
+  for connection events and wait, not connect. NOT BUILT as of this note.
 
 ## 4. Next tests, top-down, each with its predictions
 
