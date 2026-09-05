@@ -118,7 +118,7 @@ final class StockLoopSession {
             return stale.count
         }
 
-        loanController.send = { [weak loanController] dictionary in
+        loanController.send = { [weak loanController, weak self] dictionary in
             // Two channels, chosen per message kind. transferUserInfo is queued and survives
             // reachability flaps and relaunches — the semantics the cursor/ID machinery assumes —
             // but it is non-urgent, which strands an interactive handshake. Those take sendMessage
@@ -129,6 +129,10 @@ final class StockLoopSession {
             // hands WatchConnectivity nothing at all, so a phone-away loan builds NO backlog.
             if WCSilence.shouldSuppress(enabled: WCSilence.enabled) {
                 SportLog.event("wc", "SUPPRESSED (G7Lab.wcSilence) send \(dictionary.keys.joined(separator: ",")) — reachable \(session.isReachable) · backlog \(WCSilence.backlogSummary())")
+                return
+            }
+            // Quiet window (2026-09-05): held, replayed the moment the bracket closes.
+            if let self, self.deferIfQuiet("wc send \(dictionary.keys.joined(separator: ","))", hold: { self.deferredSends.append(dictionary) }) {
                 return
             }
             let urgent = LoanMessage.isInteractiveHandshake(transport: dictionary) && session.isReachable
@@ -290,6 +294,8 @@ final class StockLoopSession {
             SportLog.event("log", "snapshot SUPPRESSED (G7Lab.wcSilence) (\(reason)) reachable=\(WCSession.default.isReachable) · backlog \(WCSilence.backlogSummary())")
             return
         }
+        // Quiet window (2026-09-05): one snapshot is enough at close; keep the latest reason.
+        if deferIfQuiet("log snapshot (\(reason))", hold: { deferredSnapshotReason = reason }) { return }
         SportLog.event("log", "snapshot → iPhone (\(reason)) reachable=\(WCSession.default.isReachable)")
         WCSession.default.transferFile(url, metadata: ["kind": "g7watch.log"])
     }
@@ -372,6 +378,127 @@ final class StockLoopSession {
         }
         windowAnchor = date
         armWindowVerdict()
+        // The read this bracket was protecting has landed — reopen the air, then arm the
+        // bracket for the next burst on the fresh anchor.
+        closeQuietWindow(reason: "direct read landed")
+        scheduleQuietWindow()
+    }
+
+    // MARK: G7 quiet window (2026-09-05)
+
+    /// Jeremy, 2026-09-05: "within whatever is the right safe window of the grid, no radio
+    /// activity from our app at all … other than what we need to pick up the G7." The sensor's
+    /// grid is locked (Mac scanner, 275 bursts over 50 h: spacing 300.00 s ± 1.2 s, phase
+    /// drifting +4 s/day), so the next burst is known to a second or two from the last direct
+    /// read, carried forward through misses. Inside the bracket nothing of ours touches the
+    /// radio: no cycle reclaim, no pod command, no takeover ladder, no manual bolus, no
+    /// WatchConnectivity send, no log transfer. Deferred work runs the moment the bracket
+    /// closes — on this window's direct read, or `lag` seconds after the burst if none came.
+    /// Worst case a dose lands 40 s later than today.
+    ///
+    /// What it is for: every mute on record begins with one missed burst; the apartment walk
+    /// (2026-09-04 20:26) showed a first miss with our pod reclaim mid-handshake at burst −1 s.
+    /// If phone-away loans stop producing first misses under this bracket, contention at the
+    /// burst is the cause; if misses keep appearing with the bracket provably silent, the
+    /// first miss is not ours. It does nothing for the parked state after a miss.
+    /// Switch: G7Lab.quietWindow (Radio Lab), default ON.
+    enum G7QuietPolicy {
+        static let period: TimeInterval = 300
+        static let lead: TimeInterval = 20     // open this long before the expected burst
+        static let lag: TimeInterval = 40      // close this long after it if no read lands
+        /// The next burst worth protecting: the first grid point whose bracket has not
+        /// already closed (anchor + k·period with burst + lag > now).
+        static func nextBurst(anchor: Date, now: Date) -> Date {
+            var burst = anchor.addingTimeInterval(period)
+            while burst.addingTimeInterval(lag) <= now { burst = burst.addingTimeInterval(period) }
+            return burst
+        }
+        static func bracket(anchor: Date, now: Date) -> (open: Date, burst: Date, close: Date) {
+            let b = nextBurst(anchor: anchor, now: now)
+            return (b.addingTimeInterval(-lead), b, b.addingTimeInterval(lag))
+        }
+        /// Pure: is the air closed at `now`? False when disabled, when there is no anchor, or
+        /// when this bracket's read already landed.
+        static func isClosed(anchor: Date?, readLandedFor burst: Date?, now: Date, enabled: Bool) -> Bool {
+            guard enabled, let anchor else { return false }
+            let br = bracket(anchor: anchor, now: now)
+            if let landed = burst, abs(landed.timeIntervalSince(br.burst)) < 1 { return false }
+            return now >= br.open && now < br.close
+        }
+    }
+
+    static var quietWindowEnabled: Bool { UserDefaults.standard.object(forKey: "G7Lab.quietWindow") as? Bool ?? true }
+
+    private static let quietLock = NSLock()
+    private static var _quietOpen = false
+    private static var _quietCloseAt: Date?
+    /// Seconds until the bracket closes, nil when the air is open. Callable from any queue —
+    /// the pod-radio gate, the takeover ladder, the manual bolus and the static log hop all ask.
+    static func quietRemainingNow() -> TimeInterval? {
+        quietLock.lock(); defer { quietLock.unlock() }
+        guard _quietOpen, let close = _quietCloseAt else { return nil }
+        return max(0.5, close.timeIntervalSinceNow)
+    }
+    static var quietWindowOpenNow: Bool { quietRemainingNow() != nil }
+
+    private var quietOpenTimer: DispatchSourceTimer?
+    private var quietCloseTimer: DispatchSourceTimer?
+    private var quietBurst: Date?
+    private var deferredSends: [[String: Any]] = []
+    private var deferredSnapshotReason: String?
+    private var deferredCount = 0
+
+    private func scheduleQuietWindow() {
+        quietOpenTimer?.cancel(); quietOpenTimer = nil
+        quietCloseTimer?.cancel(); quietCloseTimer = nil
+        guard Self.quietWindowEnabled, let anchor = windowAnchor else { return }
+        let br = G7QuietPolicy.bracket(anchor: anchor, now: Date())
+        let openIn = max(0, br.open.timeIntervalSinceNow)
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now() + openIn, leeway: .milliseconds(500))
+        t.setEventHandler { [weak self] in self?.openQuietWindow(for: br.burst, closeAt: br.close) }
+        t.resume()
+        quietOpenTimer = t
+    }
+
+    private func openQuietWindow(for burst: Date, closeAt: Date) {
+        guard Self.quietWindowEnabled else { return }
+        Self.quietLock.lock(); Self._quietOpen = true; Self._quietCloseAt = closeAt; Self.quietLock.unlock()
+        quietBurst = burst
+        let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
+        SportLog.event("quiet", "OPEN — burst ~\(f.string(from: burst)) in \(Int(burst.timeIntervalSinceNow))s · air closed until the read lands or +\(Int(G7QuietPolicy.lag))s · \(stack.cgmManager.g7RadioSnapshot() ?? "n/a")")
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now() + max(0.5, closeAt.timeIntervalSinceNow), leeway: .milliseconds(500))
+        t.setEventHandler { [weak self] in
+            self?.closeQuietWindow(reason: "+\(Int(G7QuietPolicy.lag))s, no read")
+            self?.scheduleQuietWindow()   // the monitor re-anchors on the miss; protect the next burst too
+        }
+        t.resume()
+        quietCloseTimer = t
+    }
+
+    private func closeQuietWindow(reason: String) {
+        Self.quietLock.lock()
+        let wasOpen = Self._quietOpen
+        Self._quietOpen = false; Self._quietCloseAt = nil
+        Self.quietLock.unlock()
+        quietCloseTimer?.cancel(); quietCloseTimer = nil
+        guard wasOpen else { return }
+        let sends = deferredSends; deferredSends = []
+        let snapshot = deferredSnapshotReason; deferredSnapshotReason = nil
+        let n = deferredCount; deferredCount = 0
+        SportLog.event("quiet", "CLOSE (\(reason)) · \(n) deferred action(s) released — \(sends.count) wc send(s)\(snapshot.map { ", snapshot(\($0))" } ?? "")")
+        sends.forEach { loanController.send?($0) }
+        if let snapshot { sendLogSnapshot(snapshot) }
+    }
+
+    /// Called by the send path and the snapshot path: true means "held, will replay at close".
+    private func deferIfQuiet(_ what: String, hold: () -> Void) -> Bool {
+        guard let remaining = Self.quietRemainingNow() else { return false }
+        deferredCount += 1
+        hold()
+        SportLog.event("quiet", String(format: "DEFERRED %@ — %.1fs to close", what, remaining))
+        return true
     }
 
     private func armWindowVerdict() {
@@ -389,6 +516,8 @@ final class StockLoopSession {
                 self.logWindowVerdict("MISS", expectedBurst: expected)
                 self.windowAnchor = expected
                 self.armWindowVerdict()
+                // Keep the bracket chained on the sensor's phase through the miss.
+                if !Self.quietWindowOpenNow { self.scheduleQuietWindow() }
             }
         }
         t.resume()
@@ -397,7 +526,7 @@ final class StockLoopSession {
 
     private func logWindowVerdict(_ verdict: String, expectedBurst: Date) {
         let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
-        SportLog.event("g7-window", "\(verdict) burst ~\(f.string(from: expectedBurst)) · \(stack.cgmManager.g7RadioSnapshot() ?? "n/a") · wc reachable=\(WCSession.default.isReachable) backlog \(WCSilence.backlogSummary()) silence=\(WCSilence.enabled) · loan=\(loanController.isLoanActive)")
+        SportLog.event("g7-window", "\(verdict) burst ~\(f.string(from: expectedBurst)) · \(stack.cgmManager.g7RadioSnapshot() ?? "n/a") · wc reachable=\(WCSession.default.isReachable) backlog \(WCSilence.backlogSummary()) silence=\(WCSilence.enabled) · quiet=\(Self.quietWindowEnabled ? (Self.quietWindowOpenNow ? "open" : "armed") : "off") deferred=\(deferredCount) · loan=\(loanController.isLoanActive)")
     }
 
     private var logPulse: DispatchSourceTimer?

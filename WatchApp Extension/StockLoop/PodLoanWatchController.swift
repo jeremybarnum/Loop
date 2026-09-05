@@ -1123,6 +1123,25 @@ final class PodLoanWatchController {
         // also believe the temp is running (guards the stale-C5-signature corner across
         // back-to-back loans), and its endDate is the only way to restore a 0 U/hr temp's span.
         let liveTempRecord = grant.seedDoseEntries(finishedBy: self.now()).live.first { $0.type == .tempBasal }
+        // Quiet window (2026-09-05): the takeover's pod scan and handshake are the loudest
+        // thing this app does on the radio; if the expected G7 burst is inside its bracket,
+        // wait for the bracket to close (≤ 60 s) before scanning. The lease keeps running and
+        // the ladder line below says how long it waited.
+        if let remaining = StockLoopSession.quietRemainingNow() {
+            SportLog.event("quiet", String(format: "DEFERRED takeover scan — burst bracket open, %.1fs to close", remaining))
+            queue.asyncAfter(deadline: .now() + remaining + 0.2) { [weak self] in
+                guard let self else { return }
+                if let again = StockLoopSession.quietRemainingNow() {
+                    SportLog.event("quiet", String(format: "takeover still bracketed (%.1fs) — proceeding anyway, the lease will not wait twice", again))
+                }
+                self.startTakeoverScan(manager: manager, grant: grant, liveTempRecord: liveTempRecord)
+            }
+            return
+        }
+        startTakeoverScan(manager: manager, grant: grant, liveTempRecord: liveTempRecord)
+    }
+
+    private func startTakeoverScan(manager: OmniPumpManager, grant: LoanGrant, liveTempRecord: DoseEntry?) {
         let scanning = manager.podLoanBeginTakeover(liveTempStart: liveTempRecord?.startDate,
                                                     liveTempEnd: liveTempRecord?.endDate)
         SportLog.event("loan", "pump rebuilt — \(scanning ? "scanning for the pod by address" : "no pod address!") for takeover")

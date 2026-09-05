@@ -185,6 +185,7 @@ struct LoanDebugView: View {
                     ForEach([("G7Lab.scanWhilePending", "Scan while pending (fix)", false),
                              ("G7Lab.scanWatchdog", "Scan watchdog", false),
                              ("G7Lab.podWaitForSessionEnd", "Pod waits for G7 session end", true),
+                             ("G7Lab.quietWindow", "Quiet window around G7 burst", true),
                              (StockLoopSession.WCSilence.key, "WC silence (diagnosis)", false)], id: \.0) { key, title, def in
                         Button("\(title): \((UserDefaults.standard.object(forKey: key) as? Bool ?? def) ? "ON" : "OFF") → tap to flip") {
                             let now = !((UserDefaults.standard.object(forKey: key) as? Bool) ?? def)

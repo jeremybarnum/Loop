@@ -1569,7 +1569,39 @@ final class WatchLoopManager {
     ///
     /// Worst case: the cycle's pod work starts 20s late and the dose enacts 20s late —
     /// clinically nil. A lost ride costs the session's entire direct-G7 coverage.
+    /// Quiet window (2026-09-05): if the air is closed around the expected G7 burst, run
+    /// `block` the moment it reopens (re-checking, since a miss chains the next bracket);
+    /// otherwise run it now. One log line per deferral, with the delay, so every dose that
+    /// waited is legible.
+    func afterG7QuietWindow(_ what: String, _ block: @escaping () -> Void) {
+        guard let remaining = StockLoopSession.quietRemainingNow() else { block(); return }
+        let start = self.now()
+        SportLog.event("quiet", String(format: "DEFERRED %@ — burst bracket open, %.1fs to close", what, remaining))
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + remaining + 0.2) { [weak self] in
+            guard let self else { return }
+            if let again = StockLoopSession.quietRemainingNow() {
+                // Closed and reopened while we waited (a miss chained the next bracket). Wait
+                // once more rather than forever: the second bracket is at most 60 s away from
+                // ending, and a dose 100 s late is still clinically nil.
+                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + again + 0.2) { [weak self] in
+                    guard let self else { return }
+                    SportLog.event("quiet", String(format: "%@ released after %.1fs (second bracket)", what, self.now().timeIntervalSince(start)))
+                    block()
+                }
+                return
+            }
+            SportLog.event("quiet", String(format: "%@ released after %.1fs", what, self.now().timeIntervalSince(start)))
+            block()
+        }
+    }
+
     private func deferPodRadioWhileG7AcquisitionResolves(_ proceed: @escaping () -> Void) {
+        // QUIET WINDOW first: nothing of ours on the air around the expected burst, whatever
+        // the acquisition state says.
+        if StockLoopSession.quietRemainingNow() != nil {
+            afterG7QuietWindow("pod reclaim") { [weak self] in self?.deferPodRadioWhileG7AcquisitionResolves(proceed) }
+            return
+        }
         let directAge = lastGlucoseSourceStamps.direct.map { self.now().timeIntervalSince($0) }
         if let age = directAge, age < .minutes(6.5) {
             // SESSION-END WAIT (Jeremy, 2026-09-02: "it just seems like bad design to rush the pod
@@ -3120,6 +3152,9 @@ final class WatchLoopManager {
             // The pod link is orphaned so the G7 can use the radio — reclaim it before the
             // bolus. User is PRESENT, so a few seconds' reconnect is fine; on failure FAIL
             // LOUDLY (never a silent no-bolus). No-op immediate when the link is already held.
+            // Quiet window (2026-09-05): a bolus tapped inside the burst bracket waits for it
+            // to close (≤ 60 s) — the crown tap is acknowledged at once, the pod is touched later.
+            self.afterG7QuietWindow("manual bolus \(String(format: "%.2f", rounded)) U") {
             if let reclaim = self.reclaimPodForDose {
                 reclaim { ok in
                     if ok {
@@ -3156,6 +3191,7 @@ final class WatchLoopManager {
             } else {
                 deliverBolus()
             }
+            }   // afterG7QuietWindow
         }
     }
 
@@ -3479,6 +3515,12 @@ extension WatchLoopManager: CGMManagerDelegate {
         // suppressed). The switch means NOTHING leaves the watch, or the A/B/A proves nothing.
         if StockLoopSession.WCSilence.shouldSuppress(enabled: StockLoopSession.WCSilence.enabled) {
             SportLog.event("log", "per-reading log transfer SUPPRESSED (G7Lab.wcSilence) · backlog \(StockLoopSession.WCSilence.backlogSummary())")
+            return
+        }
+        // Quiet window (2026-09-05): this hop rides the reading that just closed the bracket,
+        // but a relayed reading can arrive inside it — skip; the next reading retries.
+        if StockLoopSession.quietWindowOpenNow {
+            SportLog.event("quiet", "DEFERRED per-reading log transfer (skipped; next reading retries)")
             return
         }
         lastLogTransfer = Date()
