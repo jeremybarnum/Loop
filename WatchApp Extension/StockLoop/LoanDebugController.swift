@@ -204,6 +204,16 @@ struct LoanDebugView: View {
                             }
                         }
                     }
+                    // Re-arm timing after the sensor drops us (2026-09-05): stock 2 s → 30 s →
+                    // late (arm ~30 s before the next burst so Dexcom's request goes first).
+                    Button("Re-arm: \(G7RearmPolicy.current.rawValue) → tap to cycle") {
+                        let order: [G7RearmPolicy] = [.stock, .delay30, .lateArm]
+                        let i = order.firstIndex(of: G7RearmPolicy.current) ?? 0
+                        let next = order[(i + 1) % order.count]
+                        UserDefaults.standard.set(next.rawValue, forKey: G7RearmPolicy.key)
+                        SportLog.event("lab", "switch \(G7RearmPolicy.key) = \(next.rawValue) (tapped on the Radio Lab)")
+                        lastAction = "re-arm → \(next.rawValue)"
+                    }
                     Button("Log WC backlog") {
                         SportLog.event("lab", "WC backlog \(StockLoopSession.WCSilence.backlogSummary()) · reachable=\(WCSession.default.isReachable) · silence=\(StockLoopSession.WCSilence.enabled)")
                         lastAction = "backlog \(StockLoopSession.WCSilence.backlogSummary())"
