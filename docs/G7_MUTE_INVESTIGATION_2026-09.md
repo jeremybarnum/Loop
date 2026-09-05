@@ -176,6 +176,39 @@ from 15:13 to 15:48, saw it only at the grid bursts (15:51, 15:56, both answered
 the sensor looking for the PHONE; it starts when the phone stops collecting, admits only the
 phone, and stops when the phone is back.** A missing watch does not start it.
 
+## 3b. Q1 second result — ride-only LOAN, walk-away, 09-05 17:12→18:31 (build 171) — **MUTED**
+
+| | |
+|---|---|
+| 17:21:40 | read (join on Dexcom's link, no request of ours) |
+| 17:26:43 → 18:06:43 | **10 consecutive misses, 45 min**; `pendingConnect=never` on every verdict; no scan; app awake (soak keepalive, timers on schedule); Dexcom's watch app dark the whole time (Jeremy) |
+| pod | present (in his pocket: connect RSSI −77 at 17:21:52, −73 at 18:12:02) but IDLE from 17:22:09 to 18:12:00 — no glucose → no loop cycle → no reclaim; quiet window closed around every burst with 0 pod actions deferred |
+| ~18:10 | watch Bluetooth toggled (Settings; app suspended 62 s) → Dexcom read at the first burst after (18:11:43) → toggle cure **N=2**, this time on a 10-window mute |
+| 18:11:12 | force-quit + relaunch; 18:11:45 join → auth on a 6 s link → NO SERVICES (third failed join of the day: 15:21, 17:11, 18:11); seize 18:11:59 → loan re-taken (epoch 301) |
+| 18:16 → 18:31 | reads on Dexcom's link, joins clean; home 18:30, retro-ack + keep protocol OK on the phone |
+
+**What this kills:** "our pending request is the ingredient". The mute ran 45 minutes with no
+request of ours on the bond, no scan of ours, and the pod radio idle. Ride-only is NOT the
+fix. What survives: the mute is a watch-stack state both apps suffer; a radio toggle clears
+it (2/2); it has happened with our app AWAKE every time and never (yet) with our app
+suspended (Dexcom-alone control: 90 min clean).
+
+**The ride-only E1 soak (§3a) versus this loan — what differed:** loan/pod (idle at bursts,
+present), walking versus sitting at the desk, the Mac's active scanner beside the sensor
+during the soak and absent here (it sends SCAN_REQs at every burst), 103 min versus a mute
+at window 2. One run each; the soak's single miss at 15:21 may have been a mute that
+happened to clear at the next window.
+
+**Instruments on the walk: none.** The laptop stayed home; the sniffer heard 4 packets per
+10 min from 17:20 and the Mac scanner went nearly deaf at the same time (2–23 lines per
+10 min against ~270 before) and has not heard the sensor since — the scanner needs a
+restart before the next arm. There is still no air record of a mute.
+
+**Remaining discriminator (not built):** "keepalive only" — our G7 client fully off (no
+adoption, no connection-event registration, no scan) while the app is held awake, phone
+away, ≥90 min. Mute → being awake beside Dexcom's bond is enough and the fix is not in our
+radio code; clean → the standing connection-event registration is the ingredient.
+
 ## 4. Next tests, top-down, each with its predictions
 
 **Q1 — Is it the existence of our request, its timing, or its order?** (the fix question)
