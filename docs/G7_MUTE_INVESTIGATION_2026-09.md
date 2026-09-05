@@ -134,7 +134,14 @@ setup as of 09-05 (an afternoon of traps):
   own request again until the next successful read; the switch only gates the
   retrieve-known path. Between 15:21:48 and 15:26:39 the arm was stock, not ride-only. Fix:
   when ride-only is on and the persisted identity is known, the discovery path must register
-  for connection events and wait, not connect. NOT BUILT as of this note.
+  for connection events and wait, not connect. Built as 170 — and **170 broke the join**:
+  the gate asked the CBPeripheral whether it was connected, but each app holds its own handle
+  and ours reads `.disconnected` until WE connect, so the join never issued its connect(),
+  re-registered, the OS re-fired CONNECT, and it looped (965 repeats; zero direct reads from
+  the 16:19 install to 16:47, the watch on phone relay the whole time). 171 passes
+  `viaLinkUp` from the connection-event and system-connected callers instead. Lesson for
+  anything touching the join: the only proof is a direct read at the first burst after
+  install — check the tape before walking out the door.
 
 ## 3a. Q1 first result — ride-only E1, 09-05 14:08→15:51 (build 169, the switch alone)
 
