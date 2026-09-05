@@ -203,6 +203,18 @@ struct LoanDebugView: View {
                                     SportLog.event("lab", "WC silence OFF — sends resume · backlog \(StockLoopSession.WCSilence.backlogSummary())")
                                 }
                             }
+                            // Ride-only: flipping the switch must re-arm the radio at once, either
+                            // way. Field 2026-09-05 17:01 (build 170): switched OFF while adopted
+                            // with no request of ours and no scan, nothing re-armed (re-arm only
+                            // runs after a disconnect or at launch), Dexcom's link came up, we
+                            // neither held a request nor joined — stuck between both behaviours.
+                            // Switching ON likewise drops our standing request immediately instead
+                            // of at the next disconnect.
+                            if key == G7RidePolicy.key {
+                                SportLog.event("g7-ble", "*** ride-only switched \(now ? "ON" : "OFF") — recycling the G7 connection so the new posture takes effect now")
+                                ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.recycleG7ConnectForLab()
+                                lastAction += " · G7 re-armed"
+                            }
                         }
                     }
                     // Re-arm timing after the sensor drops us (2026-09-05): stock 2 s → 30 s →
