@@ -1416,6 +1416,38 @@ final class LoanOverrideTests: XCTestCase {
         XCTAssertTrue(outcome.annulledEventIDs.isEmpty, "confirmed records; annulment must not be the thing absorbing this")
     }
 
+    /// Field 2026-09-05, his overnight loan e298: a zero temp (02:41, 30 min) cancelled at
+    /// 02:51:44.6 with the zero-duration record; the checkpoint's odometer read one second
+    /// later, so the next audit window began at 02:51:45.8 — one second AFTER the cancel. The
+    /// pod resumed the schedule and metered six pulses (0.30 U) over the next 25 minutes; the
+    /// books, having clipped the cancel to a negative span and dropped it, kept the zero temp
+    /// standing until its programmed end and expected 0.05. The +0.25 carried to hand-back and
+    /// R32 opened the loop on honest books.
+    func testACancelOneSecondBeforeTheCheckpointWindowStillTerminatesTheTemp() {
+        let t0 = Date()
+        let zeroTemp = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
+                                 record: LoanDoseRecord(kind: .tempBasal, startDate: t0,
+                                                        endDate: t0.addingTimeInterval(1800), unitsPerHour: 0.0),
+                                 loggedAt: t0)
+        let cancel = LoanEvent(id: UUID(), seq: 2, provenance: .confirmed,
+                               record: LoanDoseRecord(kind: .tempBasal, startDate: t0.addingTimeInterval(600),
+                                                      endDate: t0.addingTimeInterval(600), unitsPerHour: 0.0),
+                               loggedAt: t0.addingTimeInterval(600))
+        // The checkpoint window opens one second after the cancel and runs 25 minutes — the
+        // whole of it on the schedule (1.0 U/hr, one pulse per 180 s: 1500 s → 8 pulses).
+        let windowStart = t0.addingTimeInterval(601)
+        let windowEnd = t0.addingTimeInterval(601 + 1500)
+
+        let expected = LoanReconciler.expectedInsulin(events: [zeroTemp, cancel], schedule: baseBasal,
+                                                      from: windowStart, to: windowEnd,
+                                                      includingBolusesAtEnd: false)
+
+        XCTAssertEqual(expected, 0.40, accuracy: 0.051,
+                       "the cancel terminates the zero temp at t0+600 even though it falls just before the window; " +
+                       "pre-fix the window kept the zero temp standing to t0+1800 and expected only the last ~5 min of schedule (0.05)")
+        XCTAssertGreaterThan(expected, 0.30, "a whole window of schedule, not the phantom's tail")
+    }
+
     override func tearDown() {
         // Same reasoning as LoanBooksHarnessTests above — do not race the async Core Data
         // stack to unlink a temp directory. Lazy creation already limited the blast radius here;
