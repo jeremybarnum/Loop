@@ -32,7 +32,7 @@ is a *different* failure from the one described here.
 | arm (date) | what was on the bond / running | result | kills |
 |---|---|---|---|
 | Dexcom alone, 90 min (09-05 11:14→12:38; our app had no request: `peripheral=none`, suspended) | Dexcom's request only, phone BT off, watch Wi-Fi off, Dexcom complication on the face | **clean, every glance** | "the OS + an unreachable phone do it alone" |
-| Backgrounded (09-05 12:42→) | Dexcom's + OUR pending request, our app ASLEEP, no keepalive, no loan, no pod | **mute at ~13:02** | our runtime, the pod, the loan, the transport, the quiet bracket |
+| Backgrounded (09-05 12:42→13:40) | Dexcom's + OUR pending request, our app ASLEEP, no keepalive, no loan, no pod | **INCONCLUSIVE**: Dexcom stale by eye at ~13:02 (one window), watch BT toggled 13:05, reading at 13:06. Our tape is blind here by construction (an asleep app only runs on wrist-up; its MISS lines mean "we did not read", true either way); the 13:22 wake delivered 16 queued connection events for 12:56→13:22, so links did come up in that span. A one-window stale has recovered on its own before. | nothing on its own; the pod/loan/transport exclusions come from E1, which was awake |
 | E1 soak (09-05 09:36→11:13) | ours + Dexcom's, our app AWAKE (keepalive), no loan, no pod | **mute 10:11→10:36; second mute from 11:01 with the phone REACHABLE** | pod, loan, transport; "phone must be unreachable" |
 | Quiet window (build 165, 09-05 overnight, 81 windows) | loan; bracket −20 s…+40 s around every burst, 0 deferred actions | first-window miss + 9-window mute with the air provably silent | contention from our app at the burst |
 | WC silence A/B/A (club 09-04, 23 windows) | loan; transport suppressed (the OS kept 21 transfers "in flight" anyway) | 15/15 hits with 50 files queued; 35-min mute with the switch OFF | the WatchConnectivity backlog |
@@ -55,9 +55,11 @@ sampling (nights are long and quiet).
 
 ## 2. The model (what the exclusions leave)
 
-1. **Necessary ingredient (MEASURED):** a pending connect request of ours on the sensor bond,
-   beside Dexcom's. Dexcom's request alone is fine for 90 minutes; add ours — even from an
-   app that is asleep — and both go dark within the hour.
+1. **Necessary ingredient (MEASURED):** our AWAKE client with its pending connect on the sensor
+   bond beside Dexcom's. Dexcom's request alone is fine for 90 minutes; add our awake client
+   (E1: no pod, no loan) and both go dark within the hour. Whether our request from an ASLEEP
+   app is enough is UNTESTED (the backgrounded arm was inconclusive, see the table); every
+   long clean run had exactly that configuration overnight.
 2. **Location (MEASURED):** below both apps, in the watch's Bluetooth stack. It survives our
    process being killed and a fresh process cannot get through it; a radio toggle clears it
    (N=1). The OS holds one connect entry per peripheral address for the whole watch; when that
