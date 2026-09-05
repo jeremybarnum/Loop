@@ -142,6 +142,11 @@ setup as of 09-05 (an afternoon of traps):
   `viaLinkUp` from the connection-event and system-connected callers instead. Lesson for
   anything touching the join: the only proof is a direct read at the first burst after
   install — check the tape before walking out the door.
+  Corollary found at 17:01: flipping ride-only OFF does not re-arm — re-arm runs only after
+  a disconnect or at launch — so an app that is adopted with no request and no scan stays
+  stuck between both behaviours (17:01: link-up notice, "no pending connect of ours", no
+  join). Recycle cured it in one burst (17:05:46 → read at 17:06:40). The Radio Lab now
+  recycles on either flip (committed for the next build).
 
 ## 3a. Q1 first result — ride-only E1, 09-05 14:08→15:51 (build 169, the switch alone)
 
