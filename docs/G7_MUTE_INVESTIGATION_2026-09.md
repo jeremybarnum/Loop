@@ -109,8 +109,9 @@ setup as of 09-05 (an afternoon of traps):
   `f9:55:62:8d:5e:56` for DXCMbv (from the Pi's HCI trace, `btmon`). It does not use extended
   or coded advertising — a stray `ADV_EXT_IND` at −82 dBm sent me down that hole for an hour.
 - Scan mode hops channels and misses `CONNECT_IND`; FOLLOW mode on the address is required.
-  The plugin only follows from Wireshark's toolbar, so `scratchpad/g7follow2.py` drives the
-  SnifferAPI directly (scan → follow(address) → pcap, re-arming after a quiet link).
+  The plugin only follows from Wireshark's toolbar, so `~/Downloads/Loop/ops/g7sniff/g7follow.py`
+  (README beside it) drives the SnifferAPI directly (scan → follow(address) → pcap, re-arming
+  after a quiet link).
 - The library's derived packet timestamps drift by up to two minutes across a capture; stamp
   packets with the host clock at receipt (g7follow2 does) or nothing lines up with the watch log.
 - **The sniffer catches a `CONNECT_IND` only about one time in three.** It listens on one of
