@@ -874,6 +874,24 @@ judgment carried at 1 — no toggle)
   falls back to the toggle ritual + touch-heal + failsafe.
 - The ride-only join keeps every window (reads at +0.1–0.5 s as today).
 
+## 3l. RUN 1 on build 173 — ride-only, NO scan of ours, pod policy `off`: WEDGED after one departure
+
+09-06 17:21 loan, phone off 17:27, judgment carried at 1 (count 15). 17:40:48 sysdiagnose.
+
+**Daemon (FACT):** 17:31:43 join (our sess301 connect on Dexcom's link) · **17:31:45.0 our pod
+reclaim: scan-adopt SCAN on the pod service 00004024 + connect; pod link up 17:31:45.6** ·
+17:31:53.4 sensor close (719) · Dexcom re-subscribe · 17:31:55.6 our registration (no scan of
+ours for the sensor anywhere in the capture — build 173 held) · **762 at 17:31:57.4 (+4 s,
+−100) · 762 at 17:32:04.7 (+11.2 s, after the fast scan) → −70** · pod released 17:32:04.5 ·
+17:36 no HCI event (the miss on the wrist) · 17:41:41 connection (touch-heal) → −100 rewrite.
+Count 15 → 17. Air: 17:31 tail 29 s with 11 CONNECT_INDs 17:31:53→17:32:03; 17:36 25 s, none.
+
+**Verdict:** with our G7 scan gone, the pod reclaim alone in the tail — its own scan on the pod
+service plus the link, +1 s to +19 s after the read — still produced the late failure and the
+−70. The pod gating is earned. Note the reclaim IS a scan on the chip: "no scan under ride-only"
+removed the G7 scan only. Run 2 = the same recipe with pod policy `slots` (build 173/174 holds
+every reclaim, scan included, to +70 s); expectation: no late 762, no −70, no wedge.
+
 ## 4. Next tests, top-down, each with its predictions
 
 **Q1 — Is it the existence of our request, its timing, or its order?** (the fix question)

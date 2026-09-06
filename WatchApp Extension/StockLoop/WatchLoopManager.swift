@@ -1511,7 +1511,14 @@ final class WatchLoopManager {
             if let directAge = lastGlucoseSourceStamps.direct.map({ self.now().timeIntervalSince($0) }), directAge < .minutes(6.5) {
                 SportLog.event("overlap", String(format: "no reclaim (pump data %.0fs fresh) — pod link likely still up under the G7 session · G7 %@", age, g7RadioSnapshot?() ?? "n/a"))
             }
-            assertThenLoop({})
+            // Build 175 (field 2026-09-06 18:09, run 2 on 173): the dose-path reclaim was gated
+            // INSIDE the reclaim closure, so the enactor's 25-s wait timed out while the pod
+            // was being held to +70 s — "pod not reconnected — automatic dose SKIPPED", a
+            // yellow ring and a lost correction every dose cycle. Hold the CYCLE here instead,
+            // exactly as the refresh path already does: the dose is computed after the window
+            // opens and the enactor then sees an open window and a prompt reclaim. Every cycle
+            // now completes at ~+74 s under `slots`, which also ends the alternating yellow.
+            afterG7QuietWindow("dose cycle") { assertThenLoop({}) }
             return
         }
 
