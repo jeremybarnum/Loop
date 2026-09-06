@@ -411,6 +411,14 @@ scan-while-pending OFF (it is the default; tonight's survey had it ON); (c) ride
 leaves Dexcom's re-subscribe (+12 s) to feed the tally at the initiator's Low duty — slower,
 not zero; (d) detect-and-tell.
 
+**Failsafe, RULED 09-05 night (Jeremy), not built:** a message on the WATCH for the corner
+cases — two missed windows with the app awake and the sensor known to be calling — telling
+the wearer to turn **the watch's** Bluetooth off and on (watch Settings → Bluetooth). It must
+say WATCH explicitly: most users will otherwise assume the phone, and the phone's Bluetooth
+does nothing for this. Some of today's instances were test artifacts (stock re-arm and
+scan-while-pending switched on for a survey; cold-start joins after installs and a reboot),
+which is exactly why the failsafe has to exist: the corner cases will not all be foreseen.
+
 **Remaining discriminator (not built):** "keepalive only" — our G7 client fully off (no
 adoption, no connection-event registration, no scan) while the app is held awake, phone
 away, ≥90 min. Mute → being awake beside Dexcom's bond is enough and the fix is not in our
