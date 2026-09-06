@@ -359,6 +359,19 @@ wearer the only known cures: Bluetooth toggle or restart; (d) test Dexcom-alone 
 phone-away — if that wedges too, this is D2W's own limit and Dexcom's "stay close to your
 phone" is describing exactly this.
 
+**Built 09-05 23:00 (Jeremy: "this feels like a harmless change"): the pod radio policy** —
+one Radio Lab row, `Pod radio: quietGate / slots / off`, replacing the "pod waits for G7
+session end" and "quiet window" rows (`G7Lab.podRadioPolicy`, default `quietGate` = the
+previous behaviour, so nothing changes untouched). `slots` = the pod may use the radio only at
++70…+110, +130…+170, +190…+230 and +250…+280 s after the burst — everywhere the sensor has
+never been seen active across 2,600 captured frames, with 10 s of margin either side of the
+burst+tail (0→~25 s) and of the phone-absent calls (+60/+120/+180/+240). Anchored to the last
+direct read and carried through misses on the sensor's grid; the pre-burst bracket stays on;
+WatchConnectivity sends and log hops still key on the bracket alone. Cost: the dose lands
+~70 s after the reading instead of ~13 s. Pure policy (`PodRadioSlotPolicy`) + 7 tests.
+Readout for whether it helps: a loan walk under `slots`, phone away, then the sysdiagnose —
+the daemon's `getNumDisconnectionsBySignalQuality` count must stay put where it used to rise.
+
 **Remaining discriminator (not built):** "keepalive only" — our G7 client fully off (no
 adoption, no connection-event registration, no scan) while the app is held awake, phone
 away, ≥90 min. Mute → being awake beside Dexcom's bond is enough and the fix is not in our
