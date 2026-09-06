@@ -234,6 +234,33 @@ min with the loan and instruments in range, or repeat the outdoor walk with the 
 bag — and take the watch sysdiagnose (Bluetooth logging profile installed 09-05 ~19:05 on
 watch and phone) when a wedge is three windows old, BEFORE any toggle.
 
+## 3c. THE FIRST WEDGE ON THE AIR — 09-05 20:46→21:04 (build 171, ride-only loan, indoor walking)
+
+Indoor walking from 20:42 (watch Wi-Fi off, phone BT off, laptop carried then set down
+beside him). Our app missed 20:46 and 20:51 (seen live: no BG by ~20:54); Dexcom's app
+dropped at 20:56. Instruments were deaf 20:44→20:53 (laptop carried against the body — both
+its radios go silent; leave it on a table) and 21:00→21:02, so 20:46, 20:51 and 21:01 are
+lost; **20:56 is captured in full:**
+
+- **The sensor advertised for 25 s** (20:56:38.48→20:57:03.49, 316 frames on the sniffer,
+  19 on the Mac scanner). Sensor-side wedge EXCLUDED. A healthy burst ends within ~7 s.
+- **Two nearby scanners sent it ~50 scan requests** during those 25 s (−43…−56 dBm at the
+  dongle — arm's reach). The watch's radio hears the sensor and actively scans it.
+- **Nobody sent a CONNECT_IND.** Not the watch, not anyone. At the minute bursts that
+  followed (20:57, 20:58, 20:59, 21:02→21:05, 3 s each) likewise: scans, no requests — where
+  before the wedge a watch hammered minute bursts with 4–9 requests each.
+- Our app: ride-only, `pendingConnect=never`, no scan, awake on the keepalive (tape pending).
+- **Reset:** crown+side held too long → force RESTART at 21:04 (not a sysdiagnose). First
+  burst after boot, 21:06:39: 2 frames on the sniffer, 4 on the Mac — an instant connect.
+  Reboot cure N=1, toggle cure N=2.
+
+**Reading:** during a wedge the watch's Bluetooth stack still scans the sensor (SCAN_REQ) but
+never initiates (no CONNECT_IND) — Dexcom's standing request and, in stock mode, ours are
+both parked below the app layer; a radio reset (toggle or reboot) is what frees the
+initiator. Sensor, pod, phone state, Wi-Fi, our request and our code are all excluded for
+this instance. Onset conditions: 4 min of real walking with the watch handled; sitting and
+fake motion never produced it (90 min, 18/18, the same evening).
+
 **Remaining discriminator (not built):** "keepalive only" — our G7 client fully off (no
 adoption, no connection-event registration, no scan) while the app is held awake, phone
 away, ≥90 min. Mute → being awake beside Dexcom's bond is enough and the fix is not in our
