@@ -204,6 +204,34 @@ happened to clear at the next window.
 10 min against ~270 before) and has not heard the sensor since — the scanner needs a
 restart before the next arm. There is still no air record of a mute.
 
+**Apartment reproduction attempt, 09-05 19:12→20:4x (build 171, ride-only loan): NO wedge.**
+Everything alive at the start, one good read, then phone Bluetooth OFF and (intended) watch
+Wi-Fi off at 19:19; sitting in the dining room, later "fake motion" at the table; Caitlin's
+devices in and out of range; pod on him. Reads at EVERY window from 19:16 through 20:11 (12/12 on
+Dexcom's link, no request of ours). 19:36 has no verdict line because the window monitor's
+timer was lost while the app was suspended (`GAP 52s — app was NOT executing` at 19:33:52,
+despite the soak keepalive) — the read itself landed at 19:36:39.9 when the connection event
+woke the app. Two such suspensions during a keepalive-held loan (19:20, 19:33) are worth
+knowing about but are not the wedge. Wrist-wake counts 1–14 per 10 min against ~25 in the
+11 min before the walk's wedge. Jeremy saw one miss by eye; the tape after 20:11 is pending. Phone-side dosing audit: 14 checkpoints accepted, every residual ≤ 0.05 U.
+
+Sniffer, advertising-only follow, beside him the whole time: at MINUTE bursts a wrist-distance
+requester sent 4 requests in 2 s (20:15) and 9 in 3 s (20:18), all ignored — the first look at
+the retry behaviour when the sensor refuses a device. Attribution is impossible while
+Caitlin's un-adopted watch is in range (it tries any DXCM it sights). Calibration: the 20:26
+grid burst, ten seconds of advertising with no request captured, was a clean read — burst
+length and "no request seen" mean nothing; only the tape decides HIT/MISS.
+
+**What separates the wedges from the clean runs after tonight:** every wedge on record came
+during real walking with the watch handled often (today's walk, the apartment walk 09-04, the
+club); every clean multi-hour run was still or lightly handled (overnights, the desk soak,
+tonight). Not the app, not the switch, not the pod, not the phone's state, not Wi-Fi. The
+watch's own wake path in our code touches nothing radio-related (checked: WC activation,
+ensureKeepalive, a glance refresh). Next reproduction: real walking — pace the apartment 20–30
+min with the loan and instruments in range, or repeat the outdoor walk with the laptop in a
+bag — and take the watch sysdiagnose (Bluetooth logging profile installed 09-05 ~19:05 on
+watch and phone) when a wedge is three windows old, BEFORE any toggle.
+
 **Remaining discriminator (not built):** "keepalive only" — our G7 client fully off (no
 adoption, no connection-event registration, no scan) while the app is held awake, phone
 away, ≥90 min. Mute → being awake beside Dexcom's bond is enough and the fix is not in our
