@@ -57,7 +57,13 @@ sufficient; "awake + our request" is what has muted, "asleep + our request" has 
 whether that is causal (the watch's own activity when worn awake) or a coincidence of
 sampling (nights are long and quiet).
 
-## 2. The model (what the exclusions leave)
+## 2. The model (what the exclusions leave) — SUPERSEDED 09-05 night by §3d
+
+Everything below §2 was written before the watch sysdiagnose. Read §3d first: the mechanism
+is bluetoothd's per-device signal-quality tally raising a −70 dBm gate on the shared
+auto-connection. Items 1–3 here are kept as the history of how the exclusions were reached;
+where they conflict with §3d, §3d wins ("our request is the ingredient" is DEAD — see §3b/§3d).
+
 
 1. **Necessary ingredient (MEASURED):** our AWAKE client with its pending connect on the sensor
    bond beside Dexcom's. Dexcom's request alone is fine for 90 minutes; add our awake client
@@ -268,6 +274,65 @@ both parked below the app layer; a radio reset (toggle or reboot) is what frees 
 initiator. Sensor, pod, phone state, Wi-Fi, our request and our code are all excluded for
 this instance. Onset conditions: 4 min of real walking with the watch handled; sitting and
 fake motion never produced it (90 min, 18/18, the same evening).
+
+## 3d. THE MECHANISM, IN bluetoothd's OWN WORDS — watch sysdiagnose taken 21:15 (log archive covers 17:00→21:16)
+
+`logs/Bluetooth/*.pklg` only cover the post-reboot minutes (21:03→21:16) and the host issues
+no scans, so the radio trace is a healthy reference only. The unified log archive
+(`system_logs.logarchive`, read with `/usr/bin/log show --archive … --predicate 'process ==
+"bluetoothd"'` — NOT the zsh builtin `log`) covers the wedge itself. What it says:
+
+1. **One auto-connection per device, shared by every app.** Dexcom's app and ours are
+   "interested in" device B484E4A3… (DXCMbv); bluetoothd keeps ONE entry for it on the
+   controller's connection filter-accept list and runs "auto connection for 1 devices" with a
+   connection scan (Low: 30 ms per 300 ms). Every app-level request rides that entry. That is
+   the shared fate, mechanically.
+2. **A per-device "signal-quality disconnection" tally with a 20,864 s (5.8 h) window.** The
+   sensor's normal end-of-read close (`reason 719, encrypted:1`) does NOT count — 13 of them
+   17:00→20:46 left the count at 3. A link that comes up and dies before encryption
+   (`"successful but already disconnected"`, `reason 762, encrypted:0`, `"Connection failed
+   to device SENSOR, Retrying"`) DOES count. Two of those at 20:47:01 and 20:47:06 took the
+   count 3→4→5.
+3. **At count 5 the daemon flips `updateLeConnectionRSSIThresholdState … from 0 to 1`** and
+   re-adds the sensor to the accept list with **`minRSSI=-70`** (every healthy add, 19:36,
+   19:41, 19:46, 20:41, 20:46, 21:07, 21:08, 21:11, was `minRSSI=-100`). From 20:47:06 the
+   controller ignores every advertisement from the sensor weaker than −70 dBm. That is the
+   wedge: the sensor calls in the clear, the watch's scanner even sends it scan requests, and
+   the initiator never answers because the gate says the signal is too weak.
+4. **What the 762s are:** the daemon's auto-connection latching onto one of the sensor's calls
+   that are not for the watch (the one-minute calls for the absent phone, or the post-read
+   tail): the link forms and the sensor kills it before encryption — exactly the
+   `CONNECT_IND → three master polls → no reply` the sniffer saw at minute bursts all day.
+   Each such refusal is booked by bluetoothd as a signal-quality failure of the DEVICE.
+5. **Reset:** the reboot at 21:04 zeroed the count (`count 0` at 21:08:42, `minRSSI=-100`).
+   A Bluetooth toggle presumably does the same (cure N=2). Whether a strong-signal success
+   resets the state, or the window simply ages events out, is what makes some mutes
+   self-clear in 20–45 min — not established.
+
+**Why walking, why phone-away, why never asleep — in this light:**
+- phone absent → the sensor calls every minute and refuses the watch → material for 762s;
+- walking → the daemon cancels/re-issues the pending connection every few seconds (scan
+  parameter flaps, some following our app's foreground/background updates) → many fresh
+  initiator windows → a higher chance of catching a refused call → 762s accumulate; sitting
+  the same evening produced 13 × 719 and zero 762s;
+- walking also swings the wrist-to-sensor path so the real bursts arrive below −70 once the
+  gate is up; sitting, the gate may be armed and still not bind;
+- asleep: no minute calls' refusals get caught (no churn), no RSSI swing, and the phone is
+  usually near.
+
+**Excluded by this capture:** cellular coexistence (`No CoexRequested` throughout), the
+sensor, the pod, Wi-Fi, our request (ride-only, `pendingConnect=never`), our code.
+
+**What this means for a fix (NOT built — Jeremy's call):** the gate is bluetoothd's, per
+device, fed by every app's requests, and Dexcom's standing request alone can fill it. So
+nothing in our radio code can prevent it outright. Levers that exist: (a) keep no standing
+request of ours and issue none near the minute calls (phase-locked connect around the
+five-minute burst only) so we never add 762s; (b) minimise our churn of the daemon's
+connection-scan parameters (scan restarts, connection-event re-registration, state churn);
+(c) detect the gate (two missed windows with the sensor known to be calling) and tell the
+wearer the only known cures: Bluetooth toggle or restart; (d) test Dexcom-alone walking
+phone-away — if that wedges too, this is D2W's own limit and Dexcom's "stay close to your
+phone" is describing exactly this.
 
 **Remaining discriminator (not built):** "keepalive only" — our G7 client fully off (no
 adoption, no connection-event registration, no scan) while the app is held awake, phone
