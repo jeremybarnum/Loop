@@ -315,10 +315,23 @@ no scans, so the radio trace is a healthy reference only. The unified log archiv
   parameter flaps, some following our app's foreground/background updates) → many fresh
   initiator windows → a higher chance of catching a refused call → 762s accumulate; sitting
   the same evening produced 13 × 719 and zero 762s;
-- walking also swings the wrist-to-sensor path so the real bursts arrive below −70 once the
-  gate is up; sitting, the gate may be armed and still not bind;
+- the gate BINDS at ordinary wrist-to-sensor distance: the only two sensor RSSI readings the
+  daemon logged are −69 (20:46:54) and −75 (21:07:38). Once up, the gate stops the reads
+  whether walking or sitting. The sitting run 19:36→20:36 was clean with the tally at 3 and
+  the gate DOWN (−100) at every add — so walking's role is in PRODUCING the two 762s, not
+  (only) in weakening the signal;
 - asleep: no minute calls' refusals get caught (no churn), no RSSI swing, and the phone is
   usually near.
+
+**Adversarial checks run (09-05 night):** the archive keeps bluetoothd's debug-level lines
+only from ~19:30 (≈1.75 h before the capture); the afternoon wedge 17:26→18:06 is NOT in
+it (24 lines), so the mechanism is established for ONE wedge, tonight's. The threshold "5" is
+read off a single 4→5 transition. Why the sensor was advertising at 20:47:01 and 20:47:06
+(off its :38 minute grid, 20 s after the read, during our pod reclaim cycle) is unknown — the
+sniffer was deaf then; both 762s fell inside the pod link (20:46:55→20:47:13), which puts the
+pod back on the list as a possible FIRST-cause contributor, not as the sustainer. The
+self-clearing of earlier mutes (20–45 min) is not explained by a 5.8 h window. Take the next
+wedge's sysdiagnose within an hour of onset or the detail is gone.
 
 **Excluded by this capture:** cellular coexistence (`No CoexRequested` throughout), the
 sensor, the pod, Wi-Fi, our request (ride-only, `pendingConnect=never`), our code.
