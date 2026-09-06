@@ -212,8 +212,10 @@ Dexcom's link, no request of ours). 19:36 has no verdict line because the window
 timer was lost while the app was suspended (`GAP 52s — app was NOT executing` at 19:33:52,
 despite the soak keepalive) — the read itself landed at 19:36:39.9 when the connection event
 woke the app. Two such suspensions during a keepalive-held loan (19:20, 19:33) are worth
-knowing about but are not the wedge. Wrist-wake counts 1–14 per 10 min against ~25 in the
-11 min before the walk's wedge. Jeremy saw one miss by eye; the tape after 20:11 is pending. Phone-side dosing audit: 14 checkpoints accepted, every residual ≤ 0.05 U.
+knowing about but are not the wedge. Full tape (uploaded 20:42): **18/18 direct reads 19:16→20:41, zero misses** — the "one miss"
+seen by eye was a glance showing a stale age, not a missed window. Wrist-wake counts 1–14 per
+10 min while sitting, rising to 19 per 10 min during the fake-motion stretch (20:30s), against
+~25 in the 11 min before the walk's wedge; still no wedge. Phone-side dosing audit: 14 checkpoints accepted, every residual ≤ 0.05 U.
 
 Sniffer, advertising-only follow, beside him the whole time: at MINUTE bursts a wrist-distance
 requester sent 4 requests in 2 s (20:15) and 9 in 3 s (20:18), all ignored — the first look at
