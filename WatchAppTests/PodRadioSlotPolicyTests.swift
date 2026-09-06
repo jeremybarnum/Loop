@@ -72,3 +72,44 @@ final class PodRadioSlotPolicyTests: XCTestCase {
         XCTAssertEqual(worst, 70, accuracy: 0.001, "a dose never waits longer than 70 s for the schedule")
     }
 }
+
+
+// Build 174 — the per-window tail-exposure verdict (mute record §5): our pod link or scan in the
+// 40 s after a sensor close, and whether it touched the late zone (+6→+29 s) where every −70
+// write on record came from.
+final class TailExposureTests: XCTestCase {
+    typealias E = TailExposure.Event
+
+    func testNothingOfOursIsClean() {
+        XCTAssertTrue(TailExposure.summary(events: [], podUpAtClose: false).hasPrefix("CLEAN"))
+    }
+
+    func testTheDoseCyclePodLinkTouchesTheLateZone() {
+        // 09-06 00:26: pod link +1 s after the read … released +18 s; the close came at +9 s.
+        let s = TailExposure.summary(events: [E(kind: "pod↑", offset: 1.2), E(kind: "pod↓", offset: 18.4)], podUpAtClose: false)
+        XCTAssertTrue(s.contains("pod link +1.2→+18.4 s"), s)
+        XCTAssertTrue(s.hasSuffix("TOUCHED"), s)
+    }
+
+    func testAPodLinkThatEndsBeforeTheFastScanExpiresIsClear() {
+        let s = TailExposure.summary(events: [E(kind: "pod↑", offset: 0.5), E(kind: "pod↓", offset: 4.0)], podUpAtClose: false)
+        XCTAssertTrue(s.hasSuffix("clear"), s)
+    }
+
+    func testAScanInTheTailTouches() {
+        // 16:06:53: stock forget-and-scan two seconds after the close.
+        let s = TailExposure.summary(events: [E(kind: "scan", offset: 2.0)], podUpAtClose: false)
+        XCTAssertTrue(s.contains("scan +2.0 s") && s.hasSuffix("TOUCHED"), s)
+    }
+
+    func testAPodLinkAlreadyUpAtTheCloseCountsFromZero() {
+        let s = TailExposure.summary(events: [E(kind: "pod↓", offset: 9.0)], podUpAtClose: true)
+        XCTAssertTrue(s.contains("pod link +0.0→+9.0 s") && s.hasSuffix("TOUCHED"), s)
+    }
+
+    func testALinkStillUpAtTheWindowEndIsReported() {
+        let s = TailExposure.summary(events: [E(kind: "pod↑", offset: 30.0)], podUpAtClose: false)
+        XCTAssertTrue(s.contains("still up at +40 s"), s)
+        XCTAssertTrue(s.hasSuffix("clear"), "a link that starts after the tail ended is not in the late zone: \(s)")
+    }
+}

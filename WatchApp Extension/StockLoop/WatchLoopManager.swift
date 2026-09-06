@@ -3844,6 +3844,12 @@ extension WatchLoopManager: CGMManagerDelegate {
         // truth, so use it rather than pattern-matching "DXCM" against a peripheral name, which
         // would be another label asserting something it cannot actually verify.
         let source = manager is G7CGMManager ? "cgm" : "pod-ble"
+        // Build 174 tail-exposure instrument: the pod link's edges, as OmniPumpManager reports
+        // them ("Pod connected …" / "Pod disconnected …"), feed the per-window `[tail]` line.
+        if source == "pod-ble" {
+            if message.hasPrefix("Pod connected") { TailExposure.notePodLink(up: true) }
+            else if message.hasPrefix("Pod disconnected") { TailExposure.notePodLink(up: false) }
+        }
         // DEDUPE THE STORM. A Code=11 connect-retry loop pushed ~2,000
         // IDENTICAL lines/second through here (1051 in 0.52s) — each one a
         // synchronous NSLog plus a file-append — jamming syslogd and the log queue hard enough

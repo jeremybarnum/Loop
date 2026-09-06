@@ -62,6 +62,9 @@ final class StockLoopSession {
         // which never reaches the file the field analysis reads. Watch only — the phone leaves the
         // sink nil and keeps os_log.
         PodLoanConnectClock.podLoanLogSink = { line in SportLog.event("pod-ble", line) }
+        // Build 174: per-window tail exposure (see TailExposure below).
+        G7RadioCensus.sensorClosed = { name in TailExposure.noteSensorClosed(name) }
+        G7RadioCensus.scanStarted = { TailExposure.noteScanStarted() }
 
         // The G7 radio census — names which of the three acquisition triggers fires
         // (system-connected piggyback / connection event / ad scan), D2W's rhythm, and connect
@@ -726,5 +729,90 @@ enum CensusThrottle {
 
         guard write else { return }
         SportLog.event("g7-ble", pending > 0 ? "\(line)  [+\(pending) like this suppressed]" : line)
+    }
+}
+
+
+/// Build 174 — TAIL EXPOSURE (2026-09-06, mute record §5).
+///
+/// bluetoothd's per-device signal-quality gate mutes the watch when a connection attempt fails
+/// AFTER its 6-s fast scan, in the sensor's ~29-s advertising tail, with the judgment already at
+/// state 1. The daemon never tells an app about that failure, so it cannot be logged here. What
+/// can be logged is our half of it: for 40 s after every close of the adopted sensor's link,
+/// whether our pod link or our own scan was on the radio and when. One `[tail]` line per window;
+/// join it to a sysdiagnose's 762 times by window to attribute the late failures — the
+/// pod-isolation instrument. Every late failure on record had one of these in the tail.
+enum TailExposure {
+    struct Event: Equatable { let kind: String; let offset: TimeInterval }   // kind: "pod↑" "pod↓" "scan"
+
+    static let window: TimeInterval = 40
+    /// After the fast scan (+6 s from Dexcom's re-subscribe, itself ~+0 from the close) to the
+    /// end of the sensor's long tail as measured on the air.
+    static let lateZone: ClosedRange<TimeInterval> = 6...29
+
+    private static let lock = NSLock()
+    private static var closedAt: Date?
+    private static var closedName = ""
+    private static var events: [Event] = []
+    private static var podUp = false            // last known pod link state, kept across windows
+    private static var podUpAtClose = false
+
+    static func noteSensorClosed(_ name: String, now: Date = Date()) {
+        lock.lock()
+        closedAt = now; closedName = name; events = []; podUpAtClose = podUp
+        lock.unlock()
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + window + 0.5) { report(for: now) }
+    }
+
+    static func notePodLink(up: Bool, now: Date = Date()) {
+        lock.lock(); defer { lock.unlock() }
+        podUp = up
+        guard let t0 = closedAt else { return }
+        let dt = now.timeIntervalSince(t0)
+        if dt >= 0 && dt <= window { events.append(Event(kind: up ? "pod↑" : "pod↓", offset: dt)) }
+    }
+
+    static func noteScanStarted(now: Date = Date()) {
+        lock.lock(); defer { lock.unlock() }
+        guard let t0 = closedAt else { return }
+        let dt = now.timeIntervalSince(t0)
+        if dt >= 0 && dt <= window { events.append(Event(kind: "scan", offset: dt)) }
+    }
+
+    private static func report(for start: Date) {
+        lock.lock()
+        guard closedAt == start else { lock.unlock(); return }   // a newer close superseded this window
+        let name = closedName, evs = events, upAtClose = podUpAtClose
+        lock.unlock()
+        SportLog.event("tail", "after \(name) close: \(summary(events: evs, podUpAtClose: upAtClose))")
+    }
+
+    /// Pure, pinned by WatchAppTests: the one-line verdict for a window.
+    static func summary(events: [Event], podUpAtClose: Bool, window: TimeInterval = window, lateZone: ClosedRange<TimeInterval> = lateZone) -> String {
+        var parts: [String] = []
+        var touched = false
+        // Pod intervals: an up at `offset` (or already up at the close) until the next down or the window end.
+        var openAt: TimeInterval? = podUpAtClose ? 0 : nil
+        for e in events.sorted(by: { $0.offset < $1.offset }) {
+            switch e.kind {
+            case "pod↑": if openAt == nil { openAt = e.offset }
+            case "pod↓":
+                if let a = openAt {
+                    parts.append(String(format: "pod link +%.1f→+%.1f s", a, e.offset))
+                    if a <= lateZone.upperBound && e.offset >= lateZone.lowerBound { touched = true }
+                    openAt = nil
+                }
+            case "scan":
+                parts.append(String(format: "scan +%.1f s", e.offset))
+                if e.offset <= lateZone.upperBound { touched = true }
+            default: break
+            }
+        }
+        if let a = openAt {
+            parts.append(String(format: "pod link +%.1f→(still up at +%.0f s)", a, window))
+            if a <= lateZone.upperBound { touched = true }
+        }
+        if parts.isEmpty { return "CLEAN (nothing of ours on the radio for \(Int(window)) s)" }
+        return parts.joined(separator: " · ") + " · late zone +\(Int(lateZone.lowerBound))→+\(Int(lateZone.upperBound)) s: \(touched ? "TOUCHED" : "clear")"
     }
 }

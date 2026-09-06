@@ -44,7 +44,13 @@ final class WorkoutKeepalive: NSObject, HKWorkoutSessionDelegate {
     }
 
     /// Want the keepalive for `reason`; starts the session if it wasn't running. Idempotent.
-    func acquire(_ reason: String) { onMain { self.holders.insert(reason); self.startSessionIfNeeded() } }
+    func acquire(_ reason: String) {
+        // Build 174: the `[runtime]` tag read "keepalive ?" through whole soaks (2026-09-06) — the
+        // static probe still pointed at a keepalive instance that had been replaced. Re-point it
+        // on every acquire, from the instance that is actually holding the session.
+        RuntimeStateLog.keepaliveProbe = { [weak self] in self?.stateTag ?? "keepalive ?" }
+        onMain { self.holders.insert(reason); self.startSessionIfNeeded() }
+    }
 
     /// Stop wanting the keepalive for `reason`; ends the session only when NO reason remains.
     /// Removing an absent reason is a harmless no-op (safe to call twice from racing teardowns).
