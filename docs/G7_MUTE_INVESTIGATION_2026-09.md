@@ -249,7 +249,15 @@ lost; **20:56 is captured in full:**
 - **Nobody sent a CONNECT_IND.** Not the watch, not anyone. At the minute bursts that
   followed (20:57, 20:58, 20:59, 21:02→21:05, 3 s each) likewise: scans, no requests — where
   before the wedge a watch hammered minute bursts with 4–9 requests each.
-- Our app: ride-only, `pendingConnect=never`, no scan, awake on the keepalive (tape pending).
+- **The watch's own tape (flushed 21:07):** last good read 20:46:41 (a join on Dexcom's link);
+  pod reclaim cycle 20:46:54→20:47:16 (dose program sent, link released), then the pod idle
+  for the rest; misses at 20:51, 20:56, 21:01 with `pendingConnect=never`, `scanning=false`,
+  and NOT ONE connection event delivered by the OS in those 15 minutes — so from inside the
+  watch no link to the sensor ever came up, while from outside the sensor advertised and the
+  watch scanned it. App awake throughout (quiet-window timers on schedule), wrist wakes 22 in
+  the five minutes before the first miss (12 in the five before that). The first miss (20:51)
+  came at the second burst after walking began at 20:42 — the same onset as the outdoor walk
+  (17:21 read, 17:26 miss, walking from ~17:20).
 - **Reset:** crown+side held too long → force RESTART at 21:04 (not a sysdiagnose). First
   burst after boot, 21:06:39: 2 frames on the sniffer, 4 on the Mac — an instant connect.
   Reboot cure N=1, toggle cure N=2.
