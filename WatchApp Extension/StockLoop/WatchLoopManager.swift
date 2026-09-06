@@ -1539,9 +1539,9 @@ final class WatchLoopManager {
         }
     }
 
-    static var podWaitForSessionEndEnabled: Bool {
-        UserDefaults.standard.object(forKey: "G7Lab.podWaitForSessionEnd") as? Bool ?? true
-    }
+    /// The session-end gate belongs to the `quietGate` policy; under `slots` the schedule holds
+    /// the pod until +70 s, which outlasts any gate, and under `off` nothing holds.
+    static var podWaitForSessionEndEnabled: Bool { StockLoopSession.PodRadioPolicy.current == .quietGate }
     static let podRadioGateSettle: TimeInterval = 3
     static let podRadioGateCeiling: TimeInterval = 20
 
@@ -1576,7 +1576,7 @@ final class WatchLoopManager {
     func afterG7QuietWindow(_ what: String, _ block: @escaping () -> Void) {
         guard let remaining = StockLoopSession.quietRemainingNow() else { block(); return }
         let start = self.now()
-        SportLog.event("quiet", String(format: "DEFERRED %@ — burst bracket open, %.1fs to close", what, remaining))
+        SportLog.event("quiet", String(format: "DEFERRED %@ — air closed (%@), %.1fs to open", what, StockLoopSession.PodRadioPolicy.current.rawValue, remaining))
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + remaining + 0.2) { [weak self] in
             guard let self else { return }
             if let again = StockLoopSession.quietRemainingNow() {
@@ -1611,7 +1611,8 @@ final class WatchLoopManager {
             // live session died by timeout 3 s into a pod handshake (field 2026-09-02 18:55).
             // Hold the pod radio until the G7 session has been down for a short settle, with the
             // same 20 s ceiling the stale branch uses. Cost: the dose enacts ~5-15 s later
-            // ("clinically nil" per the doc above). Switch: G7Lab.podWaitForSessionEnd, default ON.
+            // ("clinically nil" per the doc above). Belongs to the `quietGate` pod-radio policy
+            // (G7Lab.podRadioPolicy, the default); `slots` holds longer, `off` holds nothing.
             if Self.podWaitForSessionEndEnabled, let live = g7SessionLive, live() {
                 let start = self.now()
                 var sessionEndedAt: Date? = nil
@@ -3519,7 +3520,7 @@ extension WatchLoopManager: CGMManagerDelegate {
         }
         // Quiet window (2026-09-05): this hop rides the reading that just closed the bracket,
         // but a relayed reading can arrive inside it — skip; the next reading retries.
-        if StockLoopSession.quietWindowOpenNow {
+        if StockLoopSession.quietBracketOpenNow {
             SportLog.event("quiet", "DEFERRED per-reading log transfer (skipped; next reading retries)")
             return
         }

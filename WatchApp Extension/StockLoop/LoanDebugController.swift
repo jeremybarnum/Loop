@@ -184,8 +184,6 @@ struct LoanDebugView: View {
                 if (Bundle.main.bundleIdentifier ?? "").contains("StockSportMode") {
                     ForEach([("G7Lab.scanWhilePending", "Scan while pending (fix)", false),
                              ("G7Lab.scanWatchdog", "Scan watchdog", false),
-                             ("G7Lab.podWaitForSessionEnd", "Pod waits for G7 session end", true),
-                             ("G7Lab.quietWindow", "Quiet window around G7 burst", true),
                              (G7RidePolicy.key, "Ride-only (no request of ours)", false),
                              (StockLoopSession.WCSilence.key, "WC silence (diagnosis)", false)], id: \.0) { key, title, def in
                         Button("\(title): \((UserDefaults.standard.object(forKey: key) as? Bool ?? def) ? "ON" : "OFF") → tap to flip") {
@@ -226,6 +224,18 @@ struct LoanDebugView: View {
                         UserDefaults.standard.set(next.rawValue, forKey: G7RearmPolicy.key)
                         SportLog.event("lab", "switch \(G7RearmPolicy.key) = \(next.rawValue) (tapped on the Radio Lab)")
                         lastAction = "re-arm → \(next.rawValue)"
+                    }
+                    // Pod radio policy (2026-09-05 night): replaces the "pod waits for G7 session end"
+                    // and "quiet window" rows. quietGate = both of those (the default); slots = pod
+                    // on the air only at +70…+110, +130…+170, +190…+230, +250…+280 after the burst
+                    // (everywhere the sensor has never been seen active); off = no holds (control).
+                    Button("Pod radio: \(StockLoopSession.PodRadioPolicy.current.rawValue) → tap to cycle") {
+                        let order = StockLoopSession.PodRadioPolicy.allCases
+                        let i = order.firstIndex(of: StockLoopSession.PodRadioPolicy.current) ?? 0
+                        let next = order[(i + 1) % order.count]
+                        UserDefaults.standard.set(next.rawValue, forKey: StockLoopSession.PodRadioPolicy.key)
+                        SportLog.event("lab", "switch \(StockLoopSession.PodRadioPolicy.key) = \(next.rawValue) (tapped on the Radio Lab)")
+                        lastAction = "pod radio → \(next.rawValue)"
                     }
                     Button("Log WC backlog") {
                         SportLog.event("lab", "WC backlog \(StockLoopSession.WCSilence.backlogSummary()) · reachable=\(WCSession.default.isReachable) · silence=\(StockLoopSession.WCSilence.enabled)")

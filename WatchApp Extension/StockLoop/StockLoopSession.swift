@@ -377,6 +377,7 @@ final class StockLoopSession {
             }
         }
         windowAnchor = date
+        Self.setSlotAnchor(date)
         armWindowVerdict()
         // The read this bracket was protecting has landed — reopen the air, then arm the
         // bracket for the next burst on the fresh anchor.
@@ -401,7 +402,8 @@ final class StockLoopSession {
     /// If phone-away loans stop producing first misses under this bracket, contention at the
     /// burst is the cause; if misses keep appearing with the bracket provably silent, the
     /// first miss is not ours. It does nothing for the parked state after a miss.
-    /// Switch: G7Lab.quietWindow (Radio Lab), default ON.
+    /// Switch: the Radio Lab's pod-radio policy (G7Lab.podRadioPolicy) — the bracket is on
+    /// under `quietGate` and `slots`, off under `off`.
     enum G7QuietPolicy {
         static let period: TimeInterval = 300
         static let lead: TimeInterval = 20     // open this long before the expected burst
@@ -427,19 +429,78 @@ final class StockLoopSession {
         }
     }
 
-    static var quietWindowEnabled: Bool { UserDefaults.standard.object(forKey: "G7Lab.quietWindow") as? Bool ?? true }
+    static var quietWindowEnabled: Bool { PodRadioPolicy.current != .off }
+
+    // MARK: Pod radio policy (2026-09-05 night) — one three-way control for the pod's radio
+
+    /// Sniffer histograms (2,600 sensor frames, 09-05): the sensor is on the air 0→~25 s after a
+    /// reading (burst + tail) and, with the phone absent, calls for it at +60/+120/+180/+240
+    /// (±5 s); everything else is silent in BOTH regimes. bluetoothd's per-device
+    /// signal-quality tally (watch sysdiagnose 09-05, mute record §3d) rose on two links that
+    /// formed and collapsed inside our pod exchange at +20/+25 s, and at count 5 it gated the
+    /// sensor at −70 dBm — the wedge. `slots` keeps the pod off the air everywhere the sensor
+    /// has ever been seen active, with 10 s of margin: pod allowed only at +70…+110, +130…+170,
+    /// +190…+230, +250…+280 after the burst. `quietGate` is the previous behaviour (the
+    /// pre-burst bracket plus the session-end gate); `off` holds nothing (control arm).
+    /// Replaces the two Radio Lab rows it subsumes. Key `G7Lab.podRadioPolicy`, default quietGate.
+    enum PodRadioPolicy: String, CaseIterable {
+        case quietGate, slots, off
+        static let key = "G7Lab.podRadioPolicy"
+        static var current: PodRadioPolicy {
+            PodRadioPolicy(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .quietGate
+        }
+    }
+
+    enum PodRadioSlotPolicy {
+        static let period: TimeInterval = 300
+        /// Closed phases in seconds after the burst: the burst + tail + the +60 call, then a
+        /// ±10 s blackout around each later call, then the next window's lead.
+        static let closed: [(from: TimeInterval, to: TimeInterval)] = [(0, 70), (110, 130), (170, 190), (230, 250), (280, 300)]
+        /// Seconds since the most recent grid burst (the sensor's phase, carried through misses).
+        static func phase(anchor: Date, now: Date) -> TimeInterval {
+            var last = G7QuietPolicy.nextBurst(anchor: anchor, now: now)
+            while last > now { last = last.addingTimeInterval(-period) }
+            return now.timeIntervalSince(last)
+        }
+        /// Seconds until the pod may use the radio at this phase; nil when it may now.
+        static func closedRemaining(phase: TimeInterval) -> TimeInterval? {
+            let p = ((phase.truncatingRemainder(dividingBy: period)) + period).truncatingRemainder(dividingBy: period)
+            for slot in closed where p >= slot.from && p < slot.to { return slot.to - p }
+            return nil
+        }
+        static func closedRemaining(anchor: Date?, now: Date, policy: PodRadioPolicy) -> TimeInterval? {
+            guard policy == .slots, let anchor else { return nil }
+            return closedRemaining(phase: phase(anchor: anchor, now: now))
+        }
+    }
 
     private static let quietLock = NSLock()
     private static var _quietOpen = false
     private static var _quietCloseAt: Date?
-    /// Seconds until the bracket closes, nil when the air is open. Callable from any queue —
-    /// the pod-radio gate, the takeover ladder, the manual bolus and the static log hop all ask.
-    static func quietRemainingNow() -> TimeInterval? {
+    private static var _slotAnchor: Date?
+    static func setSlotAnchor(_ date: Date) { quietLock.lock(); _slotAnchor = date; quietLock.unlock() }
+    /// Seconds until the pre-burst BRACKET closes, nil when it is not open. WatchConnectivity
+    /// sends and log hops key on this alone — they are replayed at the bracket's close.
+    static func bracketRemainingNow() -> TimeInterval? {
         quietLock.lock(); defer { quietLock.unlock() }
         guard _quietOpen, let close = _quietCloseAt else { return nil }
         return max(0.5, close.timeIntervalSinceNow)
     }
+    /// What the POD RADIO asks (the reclaim gate, the takeover ladder, the manual bolus): the
+    /// bracket, or under `slots` the schedule — whichever holds longer. Callable from any queue.
+    static func quietRemainingNow() -> TimeInterval? {
+        let bracket = bracketRemainingNow()
+        quietLock.lock(); let anchor = _slotAnchor; quietLock.unlock()
+        let slot = PodRadioSlotPolicy.closedRemaining(anchor: anchor, now: Date(), policy: PodRadioPolicy.current).map { max(0.5, $0) }
+        switch (bracket, slot) {
+        case (nil, nil): return nil
+        case (let b?, nil): return b
+        case (nil, let s?): return s
+        case (let b?, let s?): return max(b, s)
+        }
+    }
     static var quietWindowOpenNow: Bool { quietRemainingNow() != nil }
+    static var quietBracketOpenNow: Bool { bracketRemainingNow() != nil }
 
     private var quietOpenTimer: DispatchSourceTimer?
     private var quietCloseTimer: DispatchSourceTimer?
@@ -494,7 +555,7 @@ final class StockLoopSession {
 
     /// Called by the send path and the snapshot path: true means "held, will replay at close".
     private func deferIfQuiet(_ what: String, hold: () -> Void) -> Bool {
-        guard let remaining = Self.quietRemainingNow() else { return false }
+        guard let remaining = Self.bracketRemainingNow() else { return false }
         deferredCount += 1
         hold()
         SportLog.event("quiet", String(format: "DEFERRED %@ — %.1fs to close", what, remaining))
@@ -515,6 +576,7 @@ final class StockLoopSession {
             if v == "MISS" {
                 self.logWindowVerdict("MISS", expectedBurst: expected)
                 self.windowAnchor = expected
+                Self.setSlotAnchor(expected)
                 self.armWindowVerdict()
                 // Keep the bracket chained on the sensor's phase through the miss.
                 if !Self.quietWindowOpenNow { self.scheduleQuietWindow() }
@@ -526,7 +588,7 @@ final class StockLoopSession {
 
     private func logWindowVerdict(_ verdict: String, expectedBurst: Date) {
         let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
-        SportLog.event("g7-window", "\(verdict) burst ~\(f.string(from: expectedBurst)) · \(stack.cgmManager.g7RadioSnapshot() ?? "n/a") · wc reachable=\(WCSession.default.isReachable) backlog \(WCSilence.backlogSummary()) silence=\(WCSilence.enabled) · quiet=\(Self.quietWindowEnabled ? (Self.quietWindowOpenNow ? "open" : "armed") : "off") deferred=\(deferredCount) · loan=\(loanController.isLoanActive)")
+        SportLog.event("g7-window", "\(verdict) burst ~\(f.string(from: expectedBurst)) · \(stack.cgmManager.g7RadioSnapshot() ?? "n/a") · wc reachable=\(WCSession.default.isReachable) backlog \(WCSilence.backlogSummary()) silence=\(WCSilence.enabled) · quiet=\(Self.quietWindowEnabled ? (Self.quietBracketOpenNow ? "open" : "armed") : "off") pod=\(Self.PodRadioPolicy.current.rawValue) deferred=\(deferredCount) · loan=\(loanController.isLoanActive)")
     }
 
     private var logPulse: DispatchSourceTimer?
