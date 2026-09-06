@@ -25,7 +25,12 @@ is a *different* failure from the one described here.
   a Faraday case. Read together with the apartment arm (phone collecting, watch muted, no
   minute bursts, no recovery over 14 windows): the minute cadence appears when the PHONE — a
   specific bonded collector — is absent, and it is what gives a muted watch its extra chances.
-  When the phone keeps collecting there is no minute cadence and no recovery. A watch Bluetooth toggle
+  When the phone keeps collecting there is no minute cadence and no recovery.
+  **ESTABLISHED 09-05 23:26→23:37 (sniffer, phone BT off, watch BT off, our app quit — nobody
+  asking, the Mac's scanner the only scanner on the air):** the sensor called at 23:27:38,
+  :28, :29, :30, :32, :33, :34, :35, :36 (3 s each) and ran its grid bursts at 23:26:38 and
+  23:31:38 for the full ~25 s. The minute cadence is the SENSOR's own behaviour when the phone
+  is absent; it does not depend on any watch asking. A watch Bluetooth toggle
   ended one mute at the next burst (09-05 13:05; N=1, the mute was one window old — repeat
   after ≥3 missed windows before treating as proven).
 - **The grid.** 275 bursts over 50 h: spacing 300.00 s ± 1.2 s, phase drifting +4 s/day
