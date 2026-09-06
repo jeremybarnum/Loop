@@ -216,9 +216,19 @@ final class StockLoopSession {
         // Reclaim the orphaned pod to dose, then re-release it for G7. Unconditional on both
         // sides: reclaimPodForDose already no-ops when the link is held, so one wiring
         // covers every case and can never strand a released bid.
+        // Build 173 (2026-09-06): EVERY reclaim — dose path included — waits out the quiet
+        // window / closed slot. Field 09-06 00:15→00:53: under `slots` only the pump-data
+        // refresh was gated, so on alternate cycles the dose reclaim put the pod on the air at
+        // +0 s, inside the sensor's 29-s tail; four of the five late sensor failures that
+        // wrote the −70 floor had that pod link (scan-adopt + connection) on the chip. The
+        // refresh and manual-bolus paths already gate before calling this; a second check
+        // there finds the window open and costs nothing. `off` still holds nothing.
         stack.loopManager.reclaimPodForDose = { [weak self] completion in
             guard let self = self else { completion(false); return }
-            self.loanController.reclaimPodForDose(completion)
+            self.stack.loopManager.afterG7QuietWindow("pod reclaim (dose path)") { [weak self] in
+                guard let self = self else { completion(false); return }
+                self.loanController.reclaimPodForDose(completion)
+            }
         }
         stack.loopManager.releasePodAfterDose = { [weak self] in
             self?.loanController.releasePodAfterDose()

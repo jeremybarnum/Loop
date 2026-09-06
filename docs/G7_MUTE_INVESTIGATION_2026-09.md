@@ -433,6 +433,447 @@ adoption, no connection-event registration, no scan) while the app is held awake
 away, ≥90 min. Mute → being awake beside Dexcom's bond is enough and the fix is not in our
 radio code; clean → the standing connection-event registration is the ingredient.
 
+## 3f. BASE-CASE LOAN WALK, NO WEDGE — 09-06 00:15→00:53 (build 172) — with the 01:28 sysdiagnose
+
+Settings (watch log): ride-only ON (recycled 00:04:22), scan-while-pending OFF, re-arm stock,
+pod radio `slots` (set 00:09:15). Phone BT off and watch Wi-Fi off after the first read; the
+phone came back ~00:53:30. Watch BT had been toggled at 23:38 (count presumed zeroed — the
+sysdiagnose taken before the loan ended will say).
+
+**Result (FACT):** loan e304, 39 min, 9 cycles. Every window read on the wrist: 00:16 (join),
+00:21, 00:26 (join), 00:31, 00:36 (join), 00:41 all `HIT`; the watch log ends 00:45:23, and the
+phone's checkpoint cadence (#8 3.8 min, #9 6.2 min, last at 00:52:5x) shows the watch dosing
+every window through 00:51. Zero `MISS`. Reclaim VERIFIED +5 s; loan residual +0.10 U, every
+window verdict within ±0.05. Jeremy: "I couldn't reproduce the wedge."
+
+**Contrast with 20:42 (§3c), which DID wedge under the same watch switches** (the 20:52 MISS
+line reads `scanWhilePending=false rearm=stock ride=true`): the differences are the pod policy
+(quietGate → slots, only half-applied — next paragraph), the starting count (3 at 20:42, from
+the day; tonight presumably 0 after the 23:38 toggle — UNVERIFIED until the sysdiagnose), and
+whatever the walk itself was (duration/route not yet reported).
+
+**Slots gap found in the log (FACT, mechanism read from the code):** the hold alternated.
+Refresh reclaims were deferred 70 s at 00:21, 00:31, 00:41 (`DEFERRED pod reclaim — air
+closed (slots)`, released +70.9/71.1/71.0 s). At 00:26:42 and 00:36:43 the pod went on the air
+at +0.05 s (`no reclaim (pump data 222s fresh)` → dose → `E4: reclaim starting`, pod scan
+00:26:42.155, dose, release 00:27:03) — inside the sensor's tail, with Dexcom's link still up
+until +9 s. Why: the 70 s hold pushes the refresh to +74 s, so at the next read the pump data
+is ~226 s old, under the 4-min refresh threshold (`WatchLoopManager.swift:1505`); the cycle
+skips the refresh and the ENACT path calls `reclaimPodForDose` directly
+(`PodLoanWatchController.swift:1541`), which passes through no quiet/slot gate. Only the
+refresh path runs `deferPodRadioWhileG7AcquisitionResolves`. Under quietGate the refresh ran
+every cycle (pump age ~290 s), so the gate applied every cycle and the gap was invisible.
+Fix (NOT BUILT, Jeremy's call): route the enact reclaim through `afterG7QuietWindow` under
+`slots` (the manual bolus already does, `WatchLoopManager.swift:3158`).
+
+**What it argues (INFERENCE):** four ungated pod contentions at +0 s plus Dexcom's re-subscribes
+into the tail (00:21: 10 requests from the watch's address over 21:41→22:07 after the read
+landed at 21:43 and the link dropped at 21:51) did not produce a wedge in 39 min. If the
+sysdiagnose shows the count stayed low through those, the pod is not sufficient and the
+tail re-subscribe alone is a slow feeder — consistent with the 60-min frozen count in §3a.
+
+**Air (sniffer, laptop carried part of the time so partly deaf):** minute calls with requests
+at 00:34 (×4), 00:38 (×3), 00:40 (×1), 00:49 (×3) — under ride-only these are the shared
+request (Dexcom's) re-issued by the daemon, refused by the sensor. 00:53:39: a request from a
+fresh address at the +120 s minute call, and the phone read the sensor at 00:53:41 (phone BT
+back ~00:53:30) — the phone accepted at a minute call again (second observation, cf. 15:50:39).
+
+**Watch sysdiagnose taken 01:28:05 (bluetoothd log 23:20→01:28) — the answers (FACT unless marked):**
+
+- **The 23:38 watch-BT toggle zeroed the tally.** First query after it, 00:13:41: `count 0`, and the
+  disconnection history held one entry (that moment's 719). The five 23:02→23:13 collapses were
+  well inside the 5.8-h window and are gone. A watch BT off/on resets the count; a reboot did the
+  same on 09-05 21:08.
+- **Count series (sensor B484E4A3):** 0 at 00:13:41 · 0 at 00:21:51 · **1 at 00:21:55** · **2 at
+  00:26:56** · **3 at 00:27:07** · 3 at every query from 00:31:50 through 01:26:53 (twelve
+  queries, an hour, count frozen). Threshold state `0 → 0` at every query; every accept-list add
+  carried `minRSSI=-100`. No gate, no wedge — consistent with 8/8 reads.
+- **All three counted collapses are reason 762 in the sensor's tail, each ~4 s after Dexcom's
+  watch app re-subscribed** (`com.dexcom.g7app.watchkitapp` `CBMsgIdConnectPeripheral` 35–50 ms
+  after every 719 close: 00:21:51.548, 00:26:52.045, 00:31:50.547, …). 00:21:51.5 close → 762 at
+  00:21:55.39; 00:26:52.0 close → 762 at 00:26:56.18 and again 00:27:07.46 (the retry).
+  The daemon's text: "Outgoing LE Connection complete … status 0" then "_GATT_LE_DisconnectedCB
+  … STATUS 762", "was successful but already disconnected", "Connection failed to device,
+  Retrying", `encrypted:0`.
+- **762 decoded (INFERENCE, strong):** the daemon's reason = 700 + HCI error code — 719 = 0x13
+  Remote User Terminated (every normal close), 722 = 0x16 Terminated by Local Host (every pod
+  release we initiate), 702 = 0x02 Unknown Connection Identifier (after a cancel). So 762 = 0x3E
+  **"Connection Failed to be Established"**: the sensor answered the CONNECT_IND at the link
+  layer and then went silent (or was not heard back) before the link was up. That is precisely a
+  signal-quality outcome, which is why Apple's tally is named
+  `getNumDisconnectionsBySignalQuality` and why its remedy is an RSSI floor.
+- **The pod is not necessary:** at 00:21:55 the pod was off the air (reclaim deferred to 00:22:53).
+  At 00:26:56/00:27:07 the pod link was up/just closed (00:26:42→00:27:00, the ungated dose
+  reclaim). At 00:36 and 00:46 the pod was on the air at +0 s the same way and nothing counted.
+- **Nothing of ours stood on the bond.** Our session (`…LoopWatch-central-797-178`) sent
+  `CBMsgIdConnectPeripheral` at every burst (00:21:42.357, 00:26:41.509, 00:31:39.652, …) — that
+  is the ride-only JOIN, a connect on a link already up, satisfied instantly, gone with the close.
+  After each close we only re-register for connection events (00:21:53.6, 00:26:54.1, …). Every
+  accept-list add for the sensor was Dexcom's re-subscribe.
+- **Unanswered CONNECT_INDs at the minute calls do not count.** The sniffer saw the watch request
+  at 00:34 (×4), 00:38 (×3), 00:40, 00:49 (×3); the daemon has no HCI outcome at any of them.
+  The chip keeps initiating silently; only a link that the sensor answers and then loses reaches
+  the host as a 762.
+- **What differed in 00:21→00:27 vs 00:31→01:27 (OPEN — two candidates, one question for Jeremy):**
+  (a) *arm swinging* — RF at establishment is exactly what 0x3E measures; if the swinging was
+  00:20→00:28, this is it. (b) *the phone had just left* — the sensor's post-read advertising ran
+  29 s at 00:21 (sniffer healthy, 245 packets) but ~7 s from 00:31 on, i.e. it stopped looking
+  for a second central; a long tail gives Dexcom's +12 s re-subscribe something to connect to.
+  Jeremy's walk timing decides which; the 20:47 pair (walking, phone gone 90 min) argues (a).
+
+## 3g. MORNING LOAN WALK — 09-06 08:29→10:27 (build 172): 15 hits, then a 30-min WEDGE — with the 09:26 and 10:55 sysdiagnoses
+
+Loan e305, 118 min, 41 cycles, 10.45 U (boluses 3.70 @08:50:02, 1.45 @09:01:31, 1.00 @09:04:30,
+0.70 @09:07:55 (held 90 s by `slots` across the 09:06:41 burst), 1.65 @09:09:31, then 0.10–0.50 U
+09:12→09:21). Phone away 08:32→09:25 and 09:32→10:27. Sniffer: laptop left behind 09:40→10:27
+(1–2 packets/min) — no air for the mute.
+
+**Windows (FACT):** HIT 08:31→09:41 (15 straight). **MISS 09:46, 09:51, 09:56, 10:01, 10:06** —
+direct reads 09:41:41 → 10:11:42, a 30-min drought (glance `bgAge=1592s` at 10:08, `CYCLE VERDICT
+… lastCompletedAge=1799s` at 10:11:47; no pod contact 09:44→10:11 because no glucose). Healed
+on its own at 10:11 (no toggle, no recycle; join at 10:11:42.287, backfill 6/7). Then HIT 10:11,
+10:16, 10:21, 10:26. Jeremy's impression was "G7 solid the whole time"; the log says otherwise.
+
+**Pod policy was `off` from 09:08:44** (four taps on the cycler: off → quietGate → slots → off).
+So the mute happened with no pod gating and no quiet bracket; the boluses 09:09→09:21 and every
+dose reclaim went on the air at +0 s. Whether the tally reached 5, and from what, is the
+question for the 10:27 sysdiagnose.
+
+**The yellow (08:38, FACT):** not `slots` timing as such. The 08:36:41 deferral fired 94.5 s late
+because the app was suspended (`runtime GAP 51s — app was NOT executing`); the pod handshake then
+failed once (EAP AKA challenge, pod dropped after 7 s), reconnected, and the temp-basal command at
+08:38:31 got no answer before the +12 s release → `enact FAILED incorrectResponse`,
+`lastCompletedAge=427s`; the next cycle completed at 08:41:47 (`601s`). Four app suspensions of
+50–92 s during the loan (08:38, 08:43, 09:05, 09:19).
+
+**09:26 sysdiagnose (bluetoothd 07:30→09:27) + the walk-1 air, laptop carried (FACT):**
+
+| window | sensor advertising after the burst | watch CONNECT_INDs | count |
+|---|---|---|---|
+| 08:31 (phone still near) | 7 s | 2 | 0 |
+| **08:36** (phone gone ~4 min) | **29 s** (36:39.8→37:08.4) | **17** | **1** — 762 at 08:36:56.9, 4.5 s after Dexcom's re-subscribe (08:36:52.444), pod OFF the air (deferred) |
+| **08:41** | **29 s** (41:39.8→42:08.9) | **23** | **2** — 762 at 08:41:55.4, 4.4 s after the re-subscribe (08:41:50.941), pod link UP (ungated dose reclaim) |
+| 08:46 → 09:26 (nine windows, walking until ~09:08, then the bolus barrage under pod=off) | 7–8 s each; minute calls from 08:47 on | 1 at each burst, 4–8 at minute calls (unanswered) | 2, unchanged through 09:26:57 |
+
+The count at 07:56:54 was 0: last night's three 762s (00:21→00:27) had aged out of the 5.8-h
+window (the history still lists them). No gate change; every sensor add `minRSSI=-100`.
+
+**THE FEEDER, ON THE AIR (FACT, two sessions):** in the first ~10 minutes after the phone leaves,
+the sensor advertises ~29 s after each read instead of ~7 s and makes no minute calls — it is
+still looking for its second central. Dexcom's watch app re-subscribes 40 ms after every close;
+the chip fires 16–23 CONNECT_INDs into that long tail; the sensor ignores almost all of them and
+one registers as a link-layer connection that fails to establish (762 = 0x3E) — one count per
+long-tail window, occasionally two (the 00:27:07 retry). Once the sensor switches to
+phone-absent mode (short tails + minute calls) the re-subscribe finds nothing to connect to and
+the minute-call CONNECT_INDs go unanswered and uncounted. Same shape both nights: last night
+00:21/00:26 (phone left ~00:18), this morning 08:36/08:41 (phone left ~08:32); nothing after,
+walking or sitting, pod gated or not, boluses or not.
+
+**So a phone departure costs 2–3 counts, and the window is 5.8 h.** Last night: toggle at 23:38
+(0), one departure (+3), no wedge. This morning: 0 at 07:56 by rollover, departure 1 at 08:32
+(→2), home 09:25→09:32, departure 2 (→ predicted 4–5) → wedge from 09:46. Yesterday 20:47's
+pair (phone gone 90 min) does not fit this shape and stays attributed to walking RF; both feed
+the same counter.
+
+**PREDICTION for the 10:27 sysdiagnose, written before reading it:** count 2 at 09:31 → 3 at
+~09:36:5x → 4 at ~09:41:5x → 5 by 09:46:41 (a retry pair somewhere), `updateLeConnectionRSSIThresholdState 0→1`,
+sensor re-added with `minRSSI=-70`, MISS from 09:46; then something at ~10:11 that let the join
+happen (state 1→0, or a burst heard above −70).
+
+**Corollary (INFERENCE, testable):** Dexcom's app alone accrues the same counts — the request is
+theirs and the daemon's tally is per device. The control is now well-defined and cheap: our app
+quit, two phone departures inside 6 h, read the tally. This is a mechanism prediction, not a
+presumption that D2W is broken.
+
+**10:55 watch sysdiagnose (bluetoothd 09:00→10:57) — THE PREDICTION HELD (FACT):**
+
+| time | count | event |
+|---|---|---|
+| 09:01:50 → 09:31:51 | 2 | seven windows incl. the whole bolus barrage under pod=off; phone back 09:25→09:32 |
+| 09:37:05.8 | **3** | 762, 11.5 s after the 09:36:54 close (first window after the phone left ~09:32) |
+| 09:41:57.0 | **4** | 762, 4.2 s after the 09:41:52 close |
+| 09:42:07.7 | **5** | 762 on the retry → `updateLeConnectionRSSIThresholdState 0 → 1` → sensor re-added with **`minRSSI=-70`** |
+| 09:42:08 → 10:11:40 | 5 | NO HCI event for the sensor at all: five bursts (09:46…10:06) never heard above −70. Dexcom's app re-issued its connect at 09:53:07 and 10:01:22 — coalesced into the pending entry, no new add, the −70 stayed |
+| 10:11:41.7 | 5 | a burst heard at ≥ −70 → connected → read → close 10:11:51 → Dexcom re-subscribes → add at **−100** ("requested in connectOptions") although state is still 1 (`from 1 to 1`) |
+| 10:16 → 10:56 | 5 | every add −100, reads normal, state 1 |
+
+**How the gate actually acts (FACT from the lines):** the −70 floor is written by the daemon's own
+RETRY path after a 762 when the state is 1 (09:42:07: "Retrying" → options `minRSSI=-70`). An
+app-initiated connect writes the app's requested floor (Dexcom asks −100; our join asks 0). So
+the wedge = a −70 entry parked in the controller until something replaces it, and only a
+successful connection lets an app replace it. That is why it self-heals on one strong burst
+(10:11:41, 29 min in) and why a BT toggle/reboot fixes it at once (daemon restart: state and
+count gone — no `1 → 0` transition exists in any of the six captures). Consequence: **state 1
+and count 5 persist ~5.8 h after the last 762**; the next 762 retry in that time re-arms −70
+immediately — one phone departure this afternoon before ~14:30 wedges on its first long-tail
+window.
+
+**The three floors (FACT from all six captures):** −100 is what Dexcom's app REQUESTS on every
+connect ("requested in connectOptions"); 0 is our app requesting nothing; −70 is the daemon's own
+penalty, written only by its retry-after-failure path once the count is 5 (the same retry writes
+−100 under 5). Only two events write the chip's entry: a fresh app request when nothing is
+pending (app's floor) and a daemon retry (judgment floor). A request while one is pending writes
+nothing — Dexcom's two mid-wedge re-requests and every one of our stock-mode requests two
+seconds behind Dexcom's changed nothing. So nothing can overwrite a parked −70 except a
+completed connection followed by Dexcom's fresh request. Not a lever for us.
+
+**Correction on minute calls:** in the stock-mode flood the fifth 762 (23:13:40) came at the
++120 s minute call, not in a tail — with our stock re-arm + scan-while-pending scanning at that
+moment. Under ride-only, four minute calls with CONNECT_INDs counted nothing. Minute calls CAN
+count when our scan is up; that contribution is gone in the base case.
+
+**Placement (Jeremy, 09-06):** the back of the upper arm is the G7's approved site, so the
+tricep/wrist geometry is the standard D2W geometry — the "abdomen users heal faster" reconciliation
+is withdrawn. If D2W alone accrues 2–3 per departure, ordinary users with two departures in 6 h
+get the same 30-min gap; either that goes unnoticed or our presence (keepalive = the only named
+candidate) is necessary. The sitting control (§4) decides; held at ~even odds.
+
+**BANKED, not pursued (Jeremy 09-06: "a distraction for now"):** the dead-man ladder was ARMED at
+08:29:26 (20/40 min timeSensitive rungs, OS-scheduled notifications) and NO rung reached the
+wrist during the 09:41→10:11 drought (`lastCompletedAge=1799s`). The rungs are re-armed on every
+completed loop, so either the last re-arm at 09:41:47 did not schedule, or delivery was
+suppressed. Needs its own look before the failsafe message work.
+
+**The 3.70 U bolus (08:50:02→08:52:30) crossed the 08:51:41 burst with the pod link DOWN**: the
+link releases 12 s after the command (08:50:21) and the pod delivers on its own. A bolus does
+not hold the radio across the grid; only a command within ~12 s of the burst does.
+
+## 3h. "D2W-ALONE" SITTING CONTROL — 09-06 11:21→12:34 — CONTAMINATED, but two findings
+
+Recipe: watch-BT toggle (daemon restart ~11:21:42, count 0), our app force-quit (unregistered
+11:39:45), phone BT off 11:46, on 11:58, off 12:09, watch sysdiagnose 12:34. Sniffer beside him.
+
+**Contamination (FACT):** watchOS relaunched our app in the background at 11:45:24 (new pid 530,
+`running-active-NotVisible` → suspended a second later). On that launch the un-adopted G7 manager
+did what stock does: RetrieveConnectedPeripherals, RegisterForConnectionEvents, and a SCAN that
+stayed registered 11:45:24→12:06:43 (`canScanNow … allowed:1` ×842; refused "cannot scan in
+background" only 13×). It issued a real ConnectPeripheral at 12:02:32, took the 12:06:42 link
+itself (discover/notify at 12:06:43), then at 12:09:21 cancelled, re-registered and scanned again.
+So all three 762s happened with our scan or request live. NOT a D2W-alone arm. **Relauncher identified
+(system log, FACT): WatchConnectivity.** 11:45:23.432 `wcd`: the phone's Loop app pushed an
+ApplicationContext (528 B) → `dasd` scheduled
+`com.apple.watchconnectivity.com.StockSportMode.Loop.LoopWatch`, launch reason
+`wkpendingdata` → Carousel bootstrapped the app `background-utility` with
+`CSLHandleBackgroundWCSessionAction`. Not the complication (his face carries Dexcom's), not
+CoreBluetooth restoration (the daemon tracks only Dexcom's app for that), not workout recovery
+(the keepalive had ended 10:27:39). Our background-task handler logs via os_log, so the launch is
+invisible in our own file. Any WC send from the phone app — application context, dormant grant,
+snapshot request — relaunches the watch app whenever the phone is reachable.
+
+**Counts anyway (FACT):** 0 (11:21:58) → 1 (11:46:55, 762) → 2 (11:51:53, 762) → 2 through the
+phone-back phase and 12:11 (a 28-s tail with 27 CONNECT_INDs, no 762) → 3 (12:16:56, 762) → 3 at
+12:31:50. No gate, every add −100. Two departures = +2 and +1. Air: 11:46 27 s/11 req, 11:51
+~19 s (sniffer weak), 11:56 9 s + minute call; 12:11 28 s/27 req, 12:16 28 s/14 req, 12:21 63 s/0 req.
+
+**The 12:21 miss was NOT the gate (FACT):** no −70 anywhere; no HCI event for the sensor at 12:21.
+The watch was cycling system sleep (`PowerManagement event: systemWillSleep` ×6 and
+`kIOMessageSystemHasPoweredOn` ×5 inside 12:21, `enableSystemWakesForUpdate returned (null)`), and
+the pending connection did not wake it for that burst. Every other connect in this arm carried
+`wakeEvent:1` (the chip woke the system) and came 1.8–8.8 s into the burst, with 1.5-s sessions at
+12:26/12:31 — versus +0.1–0.5 s and 10–12-s sessions under the loan's keepalive. So without our
+keepalive the watch sleeps between bursts and can miss one outright; the keepalive is a benefit
+on that axis, not a cost.
+
+**Clean control recipe:** force-quit the PHONE Loop app first (it is the WC sender; the pod keeps
+its scheduled basal on its own — bench pod), then force-quit the watch app, then the three
+phases; confirm afterward that the daemon log has no `StockSportMode` session registration.
+
+## 3i. THIRD CONTROL, 09-06 13:16→14:27 — D2W ACCRUES ALONE, BUT THE −70 NEEDS A LATE FAILURE
+
+Recipe: watch-BT toggle (daemon restart 13:16), phone off 13:17, on 13:35, off 13:44, on ~14:08,
+off ~14:18, watch sysdiagnose 14:27. Phone Loop app force-quit; watch app force-quit — **but
+relaunched again at 13:39:47 by WatchConnectivity** (four minutes after the phone came back;
+queued sends), scanned 13:39→14:08, connected itself 13:47/14:08/14:16. Not near the sniffer.
+
+**Count series (FACT):** 3 → **0 at 13:16:52 (toggle)** → 1 (13:16:55) → 2 (13:17:05) [the toggle's
+own transition: the sensor lost the watch and went looking] → 3 (13:21:56, departure 1) → 3
+through the phone-back phase → 4 (13:46:57) → **5 (13:51:59, state 0→1)** → 6 (14:21:53) →
+7 (14:26:57). **Every accept-list write −100, including the three retries at state 1. No wedge;
+every burst 13:56→14:26 connected.** So the counter accrues with or without our app at the same
+~2 per departure (plus 2 for the toggle itself), and reaching 5 is not sufficient for the gate.
+
+**What decides −70 vs −100 at state 1 (FACT, 6 of 6):** the retry's floor is −70 only when the
+failure falls AFTER the daemon's 6-s fast connection scan has expired
+(`shouldEnableFastConnectionScan:0 … reached:1`, scan state Low): 20:47:06 (+15.6 s after
+Dexcom's subscribe), 23:13:40 (+108.6 s, a minute call), 09:42:07 (+14.8 s). Retries at state 1
+inside the fast scan wrote −100: 13:51:59 (+5.6 s), 14:21:53 (+4.1 s), 14:26:57 (+4.0 s). Reads
+as a power policy: in low-duty scanning, a device with a bad history is only worth strong bursts.
+
+**Where our app comes in (INFERENCE, the best fit):** late failures (after +6 s) have occurred only
+with our app running — 00:27:07, 09:37:05, 09:42:07, 20:47:06, 23:13:40 — and never in the clean
+arm's seven retries (all +3.5→5.6 s). Two candidate mechanisms, both ours: (a) the keepalive keeps
+the watch awake, so the low-duty scan keeps attempting through the 29-s tail (the clean arm's
+watch cycled system sleep between bursts); (b) our ride-only re-registration for connection
+events ~2 s after every close churns the pending request. Either way the counter is Dexcom's and
+the sensor's; the −70 needs a failure the sleeping D2W watch does not make.
+
+**The awake mechanism, in the daemon's words (FACT):** during the loan arms the watch logged ZERO
+system-sleep events (09:30→09:45, 00:20→00:30 — the keepalive holds it). In the clean arm it
+slept 5× per minute; at 13:52:03, four seconds after the 13:51:59 retry, `LeObserver Power :
+We're going to sleep!`, then asleep 13:52:13→13:52:37 — the rest of the 29-s tail. A sleeping
+watch makes no low-duty attempts, so no late failure, so no −70. That is why D2W alone accrues
+counts but never wedges here, and why every wedge had our keepalive under it.
+
+**The pod is NOT exonerated for late failures (correction):** it was cleared for the COUNT (early
+failures happen without it), but the late failures line up with the pod on the air in the tail:
+pod-in-tail long-tail windows 00:26 ✓, 08:41 ✗, 09:36 ✓, 09:41 ✓, 20:46 ✓ (4/5 late failures);
+awake windows with the pod deferred 00:21 ✗, 08:36 ✗ (0/2); asleep windows 0/6. The pod's own
+release does not re-trigger the connecting list (00:27:00 "skipping processConnectingList"), so if
+the pod matters it is as radio contention during the late attempts, on top of the awake state.
+23:13:40 (late, no pod, our stock scan running, app foreground) says awake-plus-our-radio-activity
+is enough without the pod.
+
+**Discriminating tests (no build needed for the first two):**
+- **A — awake, no pod:** E1 soak, keepalive on, ride-only, no loan, two or three departures. Late
+  failures and a −70 → awake suffices; pod cleared.
+- **P — awake + pod in every tail:** loan with pod policy `off`, same departures. Late failures
+  only here and not in A → the pod's radio time in the tail is required on top of awake.
+- Registration deferral (a build) is third; 00:21/08:36 had the re-registration and no late
+  failure, so it is the weakest candidate.
+## 3j. ARM A — awake (keepalive soak), ride-only, NO loan, NO pod: WEDGED on the first departure
+
+09-06 15:01 E1 soak started (count 7 / state 1 carried from §3i, deliberately not toggled), phone
+off ~15:02, sitting by the sniffer. Our app was un-adopted after the morning's churn (diagnostic
+"sensor none"; Recycle tapped ~15:17). Air: 15:06 taken in 5 s; **15:11 a 25-s tail with no request
+seen; 15:16 62 s of advertising and nobody connected** — the parked-entry signature. Jeremy at
+15:23: "Dexcom is wedged." Prediction for the sysdiagnose: a 762 late in the 15:11 tail (after the
+fast scan), retry written at −70 (state 1), 15:16 and 15:21 with no HCI event.
+
+**15:21 sysdiagnose (FACT):** count 7 → 8 at 15:06:57 (762 at +4.6 s after Dexcom's 15:06:53
+re-subscribe, written −100) → **9 at 15:07:03.7 (762 at +10.6 s, after the fast scan) → written
+−70**. No HCI event for the sensor from 15:08 to 15:23: 15:11, 15:16, 15:21 unheard. Our app's
+join set "minimum RSSI level 0" on the device at 15:06:44 during the link; our app was awake on
+the keepalive (zero system-sleep events 15:00→15:22). The prediction held line for line.
+
+**Touch-heal (Jeremy, 15:41):** watch held on the sensor across the 15:41 burst → connected → D2W
+back to direct. A heal, as predicted, not a reset (count 9, state 1 remain).
+
+**What our app was doing in that tail (FACT):** at the 15:06:53 close the un-adopted manager
+cancelled, re-registered and started a SCAN (15:06:53.112, again 15:06:55.178); the late 762
+came at 15:07:03.7 with that scan up. So every late failure on record had our radio activity in
+the tail alongside the awake watch: a scan (23:13:40, 15:07:03) or the pod link (00:27:07,
+09:37:05, 09:42:07, 20:47:06). The two awake windows with neither (00:21, 08:36: registration
+only, pod deferred) had no late failure; the six sleeping windows had none. Best current model:
+**awake + our own scan or connection on the chip during the sensor's tail → a late attempt → the
+−70 at state 1.** Registration alone has not produced one.
+
+**Verdict:** the pod and the loan are not needed. An awake watch with our app running is enough
+to turn a state-1 count into the −70. Remaining split: awake *per se* (any workout would do it —
+then D2W runners are exposed) versus our app's radio activity while awake (registration, scan,
+recycle). Cheapest discriminator, no build: **Arm W — both our apps quit, Apple's Workout app
+running an Outdoor Walk (keeps the watch awake), three departures.** A wedge there is a pure
+D2W-plus-workout wedge; none there confirms it is our scan/pod activity in the tail — and then
+the fixes are ours: (1) no acquisition scan within ~40 s after a sensor close; (2) hold the pod
+off the air for the whole tail (the `slots` dose-reclaim gap, hold ≥40 s); (3) registration may
+stay. Plus the toggle-before-outing ritual and the touch-heal for the field.
+
+**Next-build note (Jeremy, 09-06 16:20):** put the actual BG value and its reading time on the
+diagnostic screen beside the connection state, so a missed window can be told from Dexcom's app
+holding the previous value across one grid point.
+
+## 3k. ARM A′ — adopted, ride-only, keepalive, no loan/pod, 16:03→16:31: WEDGED AGAIN, and the watch log names the activity
+
+Recycle 15:59, adopted and reading at 16:01 (join). Phone off 16:03, arm kept straight. Keepalive
+soak running (15:59:28 →). Judgment 1 carried (count 9).
+
+**Watch log (FACT):** 16:06:42 "Sensor connected" (join) but NO reading delivered; 16:06:51 the
+sensor closed → stock G7SensorKit: `Sensor disconnected: suspectedEndOfSession=true` →
+**`Forgetting existing sensor and starting scan for new sensor`** → our scan was up through the
+16:06 tail (late request seen at 16:06:59) and the 16:11 tail (`ad DISCOVERED (trigger c)` at
+16:11:40 → our own connect → read 123 → close 16:11:53 → 11 requests 16:11:54→16:12:05 on the
+air) until `adopted from the air — scan stopped` at 16:16:40. Then MISS 16:16, MISS 16:21 (arm
+straight), a read at 16:26:42 (arm), touch-heal across 16:31. Phone log: phone absent 16:03→16:28.
+
+**16:28 sysdiagnose (FACT):** count 10 (15:51) → 11 at 16:06:57 (+5.7 s, −100) → **12 at 16:07:03
+(+11.5 s, after the fast scan) → −70** → 13 at 16:11:57 (+4 s, −100) → **14 at 16:12:04 (+11 s)
+→ −70** → 16:16 and 16:21 with no HCI event → 16:26:42 a connection with the entry still at −70
+(arm position) → close → Dexcom's re-subscribe rewrote −100. The two late failures sit exactly
+where our scan was up. The 15:41 touch-heal also cost one early 762 (count 10) before it
+connected. Count 14, state 1 at 16:29; the last entries age out ~22:00.
+
+**A heal lever we did not know we had (INFERENCE, strong):** at 16:11:40.79 our scan heard the
+sensor at −79, our session called connect, and the link formed 0.8 s later with the entry still
+parked at −70 and no accept-list write in between. The chip's own initiator would not have taken
+a −79 burst (16:16 and 16:21 went unheard at that level). A direct connect to a peripheral just
+seen in an active scan is not subject to the parked floor. So an in-app heal exists: on a
+detected wedge, scan across ONE burst (T−5 s → T+5 s), connect directly, read, stop — and never
+let that scan run into the tail, which is what caused the write in the first place.
+
+**So A′ did not test "registration only" either.** The stock forget-and-scan fired on a
+disconnect-without-read — the #104 signal problem (a bare disconnect read as end-of-session) —
+and put our scan into two consecutive tails. Every wedge on record now has our scan or our pod
+link in the tail: 20:47 pod · 23:13 scan · 09:42 pod · 15:07 scan · 16:1x scan.
+
+**The fix list, unchanged and sharper:** (1) on the watch, never forget-and-scan on a
+disconnect-without-read under ride-only (keep the identity, wait for Dexcom's next link);
+(2) no acquisition scan within ~40 s of a sensor close; (3) pod off the air for the whole tail
+(the `slots` dose-reclaim gap). Registration-only stays untested and least likely.
+
+## 5. THE MECHANISM, COMPLETE — and the preregistered build (written 09-06 17:10, before building)
+
+### 5a. Facts (read from bluetoothd's own log, six watch captures, 09-05 21:15 → 09-06 16:28)
+1. bluetoothd keeps one accept-list entry per device, shared by every app that wants it, and a
+   per-device tally `getNumDisconnectionsBySignalQuality` over a 20 864-s (5.8-h) window.
+2. Only reason 762 counts: 700 + HCI 0x3E "connection failed to be established" — the chip sent
+   a CONNECT_IND, the link did not come up. Normal closes (719) and our own releases (722) do not.
+3. 762s happen when a connect request is pending while the sensor is in its LONG tail: for ~10
+   min after the phone leaves, the sensor advertises ~29 s after each read (7 s otherwise, 63 s
+   when nobody takes the burst) and makes no minute calls. Dexcom's watch app re-subscribes
+   40 ms after every close; the daemon runs a 6-s full-duty "fast connection scan"; the chip fires
+   16–27 CONNECT_INDs into the tail; one or two book as 762. ≈ 2 per departure, +2 for a watch-BT
+   toggle (the sensor treats the watch's disappearance the same way). Unanswered CONNECT_INDs at
+   minute calls do not count. Accrual is identical with our app quit (0→7 across 13:16→14:27).
+4. At count 5 the judgment flips (`updateLeConnectionRSSIThresholdState 0→1`). It has never been
+   seen going back to 0; a toggle or reboot restarts the daemon and zeroes everything.
+5. The −70 is written only by the daemon's RETRY after a failure, only at state 1, and only when
+   that failure came AFTER the 6-s fast scan expired (6/6: −70 at +15.6, +108.6, +14.8, +11.5,
+   +11 s; −100 at +4.0, +4.1, +5.6 s). An app's own request writes the app's floor (Dexcom −100).
+   A request while one is pending writes nothing. The −70 entry stays until a burst ≥ −70 (or a
+   direct connect from a scan hit — 16:11:41 at −79) forms a link and Dexcom's next request
+   rewrites −100. Count and judgment survive the heal; the next late failure re-arms −70 at once.
+6. Late failures (after +6 s) have occurred only with our app running, and in every case with
+   our scan or our pod link on the chip during the tail: 20:47 pod · 23:13 scan · 00:27 pod ·
+   09:37 pod · 09:42 pod · 15:07 scan · 16:07 scan · 16:12 scan. Awake windows with only the
+   registration (00:21, 08:36): none. Sleeping D2W-alone windows (13:2x→14:26): none — the watch
+   goes to sleep 4 s after the retry and stays asleep through the tail.
+7. Our scans in those tails came from stock G7SensorKit's forget-and-scan: `G7Sensor.swift:245`
+   flags a REMOTE disconnect while `pendingAuth` as `suspectedEndOfSession`, and
+   `G7CGMManager.sensorDisconnected` (:358) answers with `scanForNewSensor()` — identity wiped,
+   scan started, two seconds after the close. Under ride-only a join that the sensor closes
+   before auth completes trips it every time (16:06:51, 15:06:53). Our pod links in those tails
+   came from the dose reclaim at +0 s, which the `slots` gate does not cover (§3f).
+
+### 5b. Inferences (labelled)
+- The tally is a power policy: in low-duty scanning, don't chase a device with a bad history
+  unless it is loud. Strong.
+- Awake + our own radio activity in the tail → late attempt → 762 → −70. Correlational (8/8 vs
+  0/2 vs 0/6); never tested with a clean awake-and-idle arm because the code itself contaminated
+  every attempt. The build is that arm.
+- D2W alone does not wedge in practice because the sleeping watch cannot fail late. Consistent
+  with the absence of field reports; not proven.
+
+### 5c. What we build (build 173) — two changes, nothing else
+1. **No scan under ride-only.** `sensorDisconnected(suspectedEndOfSession:)`: when ride-only is on
+   and a sensor is adopted, keep the identity and do not scan (log it). And
+   `managerQueue_scanForPeripheral` under ride-only: register for connection events (service
+   UUIDs — already how adoption-from-the-air works, 16:16:40) and never call `scanForPeripherals`.
+   Net effect: under ride-only our app never scans, adopted or not.
+2. **Pod off the air for the whole tail.** Route the enact-path `reclaimPodForDose` through the
+   same `afterG7QuietWindow` gate as the refresh (the §3f gap), and make `slots` the default pod
+   policy. Net effect: no pod link earlier than +70 s after a read.
+Held in reserve, NOT built: the single-burst scan-and-connect heal; detect-and-tell; the failsafe
+message. Jeremy: "in theory we shouldn't need it and it may do more harm than good."
+
+### 5d. Preregistered expectations for build 173 (loan or E1, ride-only, slots, three departures,
+judgment carried at 1 — no toggle)
+- Early 762s still accrue, ~2 per departure (the sensor's and Dexcom's, untouched).
+- **No 762 later than 6 s after a re-subscribe in any tail. No −70 write. No wedge.**
+- Daemon: no `CBMsgIdScan` from our session; no pod link earlier than +70 s after any read.
+- If a late 762 / −70 appears with none of our activity in that tail → awake alone suffices →
+  Arm W (our apps quit, Apple Workout running) decides Dexcom's exposure, and our mitigation
+  falls back to the toggle ritual + touch-heal + failsafe.
+- The ride-only join keeps every window (reads at +0.1–0.5 s as today).
+
 ## 4. Next tests, top-down, each with its predictions
 
 **Q1 — Is it the existence of our request, its timing, or its order?** (the fix question)

@@ -44,6 +44,23 @@ final class G7RidePolicyTests: XCTestCase {
                       "switch off: stock behaviour")
     }
 
+    // Build 173 (2026-09-06): six watch sysdiagnoses — every late sensor failure that wrote the
+    // −70 dBm floor had our scan or our pod link on the chip in the sensor's tail; adoption from
+    // the air needs no scan. Under ride-only we never scan, adopted or not.
+    func testRideOnlyNeverScansToAcquire() {
+        XCTAssertFalse(G7RidePolicy.shouldScanToAcquire(rideOnly: true))
+        XCTAssertTrue(G7RidePolicy.shouldScanToAcquire(rideOnly: false), "switch off: stock acquisition scan")
+    }
+
+    // Field 15:06:53 / 16:06:51: a join the sensor closed before auth completed made stock forget
+    // the sensor and scan — into the tail. Ride-only keeps the identity; a real replacement
+    // arrives on Dexcom's next link.
+    func testRideOnlyKeepsTheSensorOnADisconnectBeforeAuth() {
+        XCTAssertFalse(G7RidePolicy.shouldForgetOnBareDisconnect(rideOnly: true, adopted: true))
+        XCTAssertTrue(G7RidePolicy.shouldForgetOnBareDisconnect(rideOnly: true, adopted: false), "nothing adopted: nothing to keep")
+        XCTAssertTrue(G7RidePolicy.shouldForgetOnBareDisconnect(rideOnly: false, adopted: true), "switch off: stock behaviour")
+    }
+
     func testTheSwitchIsOffByDefault() {
         UserDefaults.standard.removeObject(forKey: G7RidePolicy.key)
         XCTAssertFalse(G7RidePolicy.rideOnlyEnabled)
