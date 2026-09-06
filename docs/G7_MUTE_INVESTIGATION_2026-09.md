@@ -336,6 +336,18 @@ wedge's sysdiagnose within an hour of onset or the detail is gone.
 **Excluded by this capture:** cellular coexistence (`No CoexRequested` throughout), the
 sensor, the pod, Wi-Fi, our request (ride-only, `pendingConnect=never`), our code.
 
+**Framing correction (Jeremy, 09-05 night):** do not presume D2W fails in normal use — it
+works for many people walking without their phones. The tally was fed by two specific failed
+links, and the suspects for producing them are things only OUR loan adds: both 762s fell
+inside our pod reclaim link (20:46:55→20:47:13), and both of today's wedges began at the burst
+after a read that was followed by a pod cycle. The sitting run had pod cycles too and no
+762s, so the pod link is not sufficient alone; walking adds radio timing under motion and/or
+the sensor advertising again ~20 s after the read (sniffer deaf then). First test = isolate
+OUR contribution: walk with the soak (app awake, no loan, no pod), phone away, sysdiagnose
+within an hour of any wedge; clean soak + wedging loan → the post-read pod link is the
+suspect and the fix candidate is ours and small (extend the quiet window through the sensor's
+post-read period). A Dexcom-alone walk is a control of last resort, not the first arm.
+
 **What this means for a fix (NOT built — Jeremy's call):** the gate is bluetoothd's, per
 device, fed by every app's requests, and Dexcom's standing request alone can fill it. So
 nothing in our radio code can prevent it outright. Levers that exist: (a) keep no standing
