@@ -372,6 +372,40 @@ WatchConnectivity sends and log hops still key on the bracket alone. Cost: the d
 Readout for whether it helps: a loan walk under `slots`, phone away, then the sysdiagnose —
 the daemon's `getNumDisconnectionsBySignalQuality` count must stay put where it used to rise.
 
+## 3e. SECOND INSTANCE, SITTING STILL — watch sysdiagnose taken 23:16 (log 22:55→23:17)
+
+Ride-only OFF, scan-while-pending ON, E1 soak, no loan, no pod, phone BT off, sitting at the
+table for the RSSI survey. The daemon's tally, step by step:
+
+| time | what the daemon logged | tally |
+|---|---|---|
+| 22:56:54 | normal read + close (719); re-armed at −100 | 0 |
+| 23:01:41→50 | read (Dexcom's link), close 719; **re-armed 2 s later, into the sensor's post-read tail** | 0 |
+| 23:02:02 | link formed on the tail and collapsed before encryption (762) | 1 |
+| 23:06:51 | read, close 719, re-arm into the tail | 1 |
+| 23:06:54, 23:07:01, 23:07:06 | three collapses on the tail (762 ×3) | 4 |
+| 23:11:51 | read, close 719, re-arm | 4 |
+| 23:13:40 | the +120 s minute call: link formed, collapsed (762) | **5 → threshold 0→1, minRSSI −70** |
+| 23:16 | no connection (2 cancels) — the wedge Jeremy reported | |
+
+Sniffer view of 23:01: seventeen `CONNECT_IND`s from the watch inside the burst's 28 s,
+mostly unanswered — that is the re-armed auto-connection hammering the tail. **So the tally
+is fed with no walking, no pod, no loan: whatever makes the watch's initiator sample the air
+during the sensor's tail (+10…+25 s) or its minute calls produces collapsed links.** Tonight
+that was our STOCK re-arm (2 s after the close) plus scan-while-pending (the controller
+listening continuously); the ride-only sitting run earlier (no request, no scan of ours) went
+60 min with the count frozen at 3; walking supplies the same sampling through the daemon's
+scan-parameter churn. The threshold of 5 is now seen twice. Every arm position in the RSSI
+survey sat at or below the gate (see the daemon's readings above), so once the gate is up no
+wrist position reads.
+
+**Fix levers this instance sharpens (none built beyond 172):** (a) never re-arm our request
+into the tail — the re-arm knob's `delay30`/`lateArm` modes (168) exist for exactly this, and
+`lateArm` (arm ~30 s before the next burst) avoids the tail AND the minute calls; (b) keep
+scan-while-pending OFF (it is the default; tonight's survey had it ON); (c) ride-only still
+leaves Dexcom's re-subscribe (+12 s) to feed the tally at the initiator's Low duty — slower,
+not zero; (d) detect-and-tell.
+
 **Remaining discriminator (not built):** "keepalive only" — our G7 client fully off (no
 adoption, no connection-event registration, no scan) while the app is held awake, phone
 away, ≥90 min. Mute → being awake beside Dexcom's bond is enough and the fix is not in our
