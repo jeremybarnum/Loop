@@ -419,6 +419,15 @@ does nothing for this. Some of today's instances were test artifacts (stock re-a
 scan-while-pending switched on for a survey; cold-start joins after installs and a reboot),
 which is exactly why the failsafe has to exist: the corner cases will not all be foreseen.
 
+**Candidate practice, to debate (Jeremy, 09-05 night): toggle the WATCH's Bluetooth right
+after the loan is established**, so a walk starts with the daemon's tally reset. What it
+does: removes the six-hour carry-over (the afternoon walk began with the count already at 3).
+What it does not do: stop the count rising during the walk (0→5 in 12 min in the worst
+configuration; unmeasured under ride-only while walking). Cost: drops the pod, sensor and
+phone links (all recover) and is a manual ritual in the watch's Settings — last resort, not
+best practice. Unknown: whether a toggle zeroes the count like the reboot did or only lowers
+the threshold state — measure with toggle → sysdiagnose → count before weighing it.
+
 **Remaining discriminator (not built):** "keepalive only" — our G7 client fully off (no
 adoption, no connection-event registration, no scan) while the app is held awake, phone
 away, ≥90 min. Mute → being awake beside Dexcom's bond is enough and the fix is not in our
