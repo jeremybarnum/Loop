@@ -17,16 +17,20 @@ final class PodRadioSlotPolicyTests: XCTestCase {
     private typealias P = StockLoopSession.PodRadioPolicy
     private let anchor = Date(timeIntervalSince1970: 1_800_000_000)   // a direct read = a burst
 
-    func testThePodIsHeldThroughTheBurstTheTailAndTheFirstCall() {
-        for phase: TimeInterval in [0, 5, 24, 25, 40, 59, 60, 65, 69] {
+    // Build 177: the hold covers the burst and the measured tail (~+29 s) with margin — 40 s.
+    // The +60 s minute call is no longer inside it: unanswered CONNECT_INDs there never booked
+    // a failure under ride-only (mute record §5), and the pod's scan + link at +40…+60 s end
+    // before it.
+    func testThePodIsHeldThroughTheBurstAndTheTail() {
+        for phase: TimeInterval in [0, 5, 24, 25, 30, 35, 39] {
             XCTAssertNotNil(S.closedRemaining(phase: phase), "phase +\(Int(phase)) s must be closed")
         }
-        XCTAssertEqual(S.closedRemaining(phase: 0)!, 70, accuracy: 0.001)
-        XCTAssertEqual(S.closedRemaining(phase: 25)!, 45, accuracy: 0.001)
+        XCTAssertEqual(S.closedRemaining(phase: 0)!, 40, accuracy: 0.001)
+        XCTAssertEqual(S.closedRemaining(phase: 25)!, 15, accuracy: 0.001)
     }
 
     func testTheFourSlotsAreOpen() {
-        for phase: TimeInterval in [70, 90, 109, 130, 150, 169, 190, 210, 229, 250, 265, 279] {
+        for phase: TimeInterval in [40, 45, 60, 70, 90, 109, 130, 150, 169, 190, 210, 229, 250, 265, 279] {
             XCTAssertNil(S.closedRemaining(phase: phase), "phase +\(Int(phase)) s must be open")
         }
     }
