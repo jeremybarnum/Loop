@@ -964,6 +964,40 @@ the counter is Dexcom's and the sensor's, the −70 was ours, and 175 removes it
 ours under ride-only, every dose enacted. Cost: an automatic dose or bolus requested in the
 first 70 s after a read waits until +70 s; the hold could be trimmed to 40 s later.
 
+## 6. PORT MANIFEST for next-dev (`SportMode-next-dev`) — by content, not by SHA
+
+Jeremy 2026-09-06: "next dev might be nuanced given that pod comms are different." The port's
+G7SensorKit (`SportMode-next-dev`, 44 commits ahead / 28 behind `g7-unproven-drop`) has no
+`G7RidePolicy` at all; its watch pod reclaim is its own design. So this is a content port for a
+port-line session with bench time, not a cherry-pick.
+
+**G7 side (shared module; port the behaviour into the port's G7BluetoothManager):**
+1. Ride-only: while a sensor is adopted, no connect request of ours on the bond; register for
+   connection events (service UUIDs) and JOIN Dexcom's link on `.peerConnected` for the adopted
+   peripheral (connect() on a link already up completes at once). The join must pass "the link
+   is up" from the caller, not read `CBPeripheral.state` (per-app; the 170 loop).
+2. Never scan under ride-only, adopted or not — adoption from the air via the connection-event
+   registration works (16:16:40). No forget-and-scan on a remote disconnect while auth is
+   pending (`G7Sensor.pendingAuth && wasRemoteDisconnect`): keep the identity, wait for the next
+   link. Default ON on watchOS only.
+3. Census hooks: sensor closed, scan started — for the per-window `[tail]` line.
+
+**Pod side (principle; the port's reclaim mechanics are its own):** nothing of ours on the chip
+— no scan, no connection, no cancel — from the sensor's close (+9…+16 s after the read) to the
+end of its long tail (~+29 s after the burst). The Caitlin line holds every reclaim to +40 s
+after the read (build 177; 70 s in 175/176), and holds the CYCLE, not the reclaim inside the
+enactor's 25-s wait (the 173 tangle: a held reclaim inside a timed-out enactor left the link up
+through the next tail). Optional: 20 s outside the 15-min window after a phone-reachability
+change / loan start / launch (`tailHoldAdaptive`, off by default until one more run).
+
+**Instrument:** the `[tail]` line (40 s after each close: our pod link / scan offsets, late zone
++6→+29 s TOUCHED/clear, phone reachability, transition state) — the pod-isolation instrument.
+
+**Acceptance on the port, preregistered:** ride-only, hold on, three phone departures with the
+daemon's judgment carried at 1 (or after a toggle, five early failures first): early 762s only
+(+4…+6 s), no failure after +6 s, no −70, no wedge, no skipped doses; sysdiagnose recipe in
+memory `sysdiagnose-folder`.
+
 ## 4. Next tests, top-down, each with its predictions
 
 **Q1 — Is it the existence of our request, its timing, or its order?** (the fix question)
