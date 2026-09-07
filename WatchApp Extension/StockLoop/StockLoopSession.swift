@@ -62,6 +62,10 @@ final class StockLoopSession {
         // which never reaches the file the field analysis reads. Watch only — the phone leaves the
         // sink nil and keeps os_log.
         PodLoanConnectClock.podLoanLogSink = { line in SportLog.event("pod-ble", line) }
+        // Build 174: per-window tail exposure (see TailExposure below).
+        G7RadioCensus.sensorClosed = { name in TailExposure.noteSensorClosed(name) }
+        G7RadioCensus.scanStarted = { TailExposure.noteScanStarted() }
+        TailTransition.note("launch")
 
         // The G7 radio census — names which of the three acquisition triggers fires
         // (system-connected piggyback / connection event / ad scan), D2W's rhythm, and connect
@@ -88,6 +92,9 @@ final class StockLoopSession {
         // holds both ends.
         G7RadioCensus.sensorSighted = { [weak self] name in self?.stack.loopManager.noteSensorSighted(name) }
         stack.loopManager.requestSensorRescan = { [weak self] in self?.stack.cgmManager.scanForNewSensor() }
+        stack.loopManager.g7RadioSnapshot = { [weak self] in self?.stack.cgmManager.g7RadioSnapshot() }
+        stack.loopManager.g7SessionLive = { [weak self] in self?.stack.cgmManager.isConnected ?? false }
+        stack.loopManager.requestG7Recycle = { [weak self] in self?.stack.cgmManager.recycleG7ConnectForLab() }
 
         // Main-thread stall detector. Runs from LAUNCH and never stops, unlike the loan-scoped
         // heartbeat below: a wedged main thread is exactly the condition under which nothing else
@@ -96,6 +103,11 @@ final class StockLoopSession {
 
         // The one question the hand-back UI needs answered.
         loanController.isPhoneReachable = { WCSession.default.isReachable }
+
+        // G7 window monitor: anchor the expected-burst clock on every direct reading.
+        stack.loopManager.onDirectGlucose = { [weak self] date in
+            DispatchQueue.main.async { self?.noteDirectReading(at: date) }
+        }
 
         // The offer superseder's request-kind twin (#120 idiom): a request still queued for a
         // dark phone after the watch stops wanting it is a delayed detonator — delivered at
@@ -110,13 +122,23 @@ final class StockLoopSession {
             return stale.count
         }
 
-        loanController.send = { [weak loanController] dictionary in
+        loanController.send = { [weak loanController, weak self] dictionary in
             // Two channels, chosen per message kind. transferUserInfo is queued and survives
             // reachability flaps and relaunches — the semantics the cursor/ID machinery assumes —
             // but it is non-urgent, which strands an interactive handshake. Those take sendMessage
             // and fall back to the queue on failure, so this is never less reliable.
             // See LoanMessage.isInteractiveHandshake for which kinds and why.
             let session = WCSession.default
+            // Diagnosis gate (2026-09-04, see WCSilence): while the bench switch is on the watch
+            // hands WatchConnectivity nothing at all, so a phone-away loan builds NO backlog.
+            if WCSilence.shouldSuppress(enabled: WCSilence.enabled) {
+                SportLog.event("wc", "SUPPRESSED (G7Lab.wcSilence) send \(dictionary.keys.joined(separator: ",")) — reachable \(session.isReachable) · backlog \(WCSilence.backlogSummary())")
+                return
+            }
+            // Quiet window (2026-09-05): held, replayed the moment the bracket closes.
+            if let self, self.deferIfQuiet("wc send \(dictionary.keys.joined(separator: ","))", hold: { self.deferredSends.append(dictionary) }) {
+                return
+            }
             let urgent = LoanMessage.isInteractiveHandshake(transport: dictionary) && session.isReachable
             SportLog.event("wc", "send \(dictionary.keys.joined(separator: ",")) — session \(session.activationState.rawValue), reachable \(session.isReachable), path \(urgent ? "urgent" : "queued")")
 
@@ -198,9 +220,19 @@ final class StockLoopSession {
         // Reclaim the orphaned pod to dose, then re-release it for G7. Unconditional on both
         // sides: reclaimPodForDose already no-ops when the link is held, so one wiring
         // covers every case and can never strand a released bid.
+        // Build 173 (2026-09-06): EVERY reclaim — dose path included — waits out the quiet
+        // window / closed slot. Field 09-06 00:15→00:53: under `slots` only the pump-data
+        // refresh was gated, so on alternate cycles the dose reclaim put the pod on the air at
+        // +0 s, inside the sensor's 29-s tail; four of the five late sensor failures that
+        // wrote the −70 floor had that pod link (scan-adopt + connection) on the chip. The
+        // refresh and manual-bolus paths already gate before calling this; a second check
+        // there finds the window open and costs nothing. `off` still holds nothing.
         stack.loopManager.reclaimPodForDose = { [weak self] completion in
             guard let self = self else { completion(false); return }
-            self.loanController.reclaimPodForDose(completion)
+            self.stack.loopManager.afterG7QuietWindow("pod reclaim (dose path)") { [weak self] in
+                guard let self = self else { completion(false); return }
+                self.loanController.reclaimPodForDose(completion)
+            }
         }
         stack.loopManager.releasePodAfterDose = { [weak self] in
             self?.loanController.releasePodAfterDose()
@@ -214,6 +246,7 @@ final class StockLoopSession {
                 // Deliberately NOT re-asserted here: this also fires on the
                 // hand-back-timeout resume path, where the user's own choice must survive.
                 self.setKeepalive(true, reason: "soak")
+                TailTransition.note("loan start")
                 // Loop-Failure ladder (stock parity): every live cycle re-defers all four rungs.
                 LoopStallWatchdog.refresh()
                 SportLog.event("deadman", "ladder ARMED — 20/40m timeSensitive + 1/2h critical rungs [deadman]")
@@ -272,8 +305,347 @@ final class StockLoopSession {
         //
         // It costs no extra lines: the log rotates at 512 KB keeping only a tail, so a
         // once-a-minute heartbeat would push out the content worth keeping. This piggybacks.
+        if WCSilence.shouldSuppress(enabled: WCSilence.enabled) {
+            SportLog.event("log", "snapshot SUPPRESSED (G7Lab.wcSilence) (\(reason)) reachable=\(WCSession.default.isReachable) · backlog \(WCSilence.backlogSummary())")
+            return
+        }
+        // Quiet window (2026-09-05): one snapshot is enough at close; keep the latest reason.
+        if deferIfQuiet("log snapshot (\(reason))", hold: { deferredSnapshotReason = reason }) { return }
         SportLog.event("log", "snapshot → iPhone (\(reason)) reachable=\(WCSession.default.isReachable)")
         WCSession.default.transferFile(url, metadata: ["kind": "g7watch.log"])
+    }
+
+    // MARK: WC silence (diagnosis) + G7 window monitor (2026-09-04)
+
+    /// Bench switch `G7Lab.wcSilence`. While ON the watch hands WatchConnectivity NOTHING — no
+    /// record streams, no offers, no status, no log snapshots — and at the moment it is switched
+    /// on it cancels every queued transfer that is not already mid-flight.
+    ///
+    /// Why: every loan mute on record (her tennis and dinner, his breakfast, the 2026-09-03 night
+    /// pair) ran with the phone UNREACHABLE, which is the one condition under which a loan builds
+    /// a backlog of undeliverable transfers: a ~480 KB log file every 300 s pulse plus the record
+    /// streams, all held by WCSession across unreachability AND across a force-quit. The
+    /// force-quit test that night (00:36) left Dexcom dark with our process gone, so whatever
+    /// blocks the sensor link survives our process — and this backlog is the only loan-created
+    /// thing that does. Idle (no loan) and Dexcom-alone were clean in the same conditions.
+    /// This switch removes exactly that condition and nothing else, so an A/B/A inside one
+    /// phone-away loan can say whether it is the cause.
+    ///
+    /// Diagnosis only, not a product behaviour: records are journaled and unacked events resend
+    /// by design, so nothing is lost, but the hand-back needs the switch OFF to deliver.
+    enum WCSilence {
+        static let key = "G7Lab.wcSilence"
+        static var enabled: Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? false }
+        /// Pure: the gate's meaning, pinned so a test can hold it.
+        static func shouldSuppress(enabled: Bool) -> Bool { enabled }
+
+        @discardableResult
+        static func cancelOutstanding() -> (userInfo: Int, files: Int) {
+            let s = WCSession.default
+            let ui = s.outstandingUserInfoTransfers.filter { !$0.isTransferring }
+            let files = s.outstandingFileTransfers.filter { !$0.isTransferring }
+            ui.forEach { $0.cancel() }
+            files.forEach { $0.cancel() }
+            let inFlight = (s.outstandingUserInfoTransfers.count - ui.count) + (s.outstandingFileTransfers.count - files.count)
+            SportLog.event("lab", "WC SILENCE ON — cancelled \(ui.count) queued userInfo + \(files.count) queued file transfer(s); \(inFlight) mid-flight left alone")
+            return (ui.count, files.count)
+        }
+
+        static func backlogSummary() -> String {
+            let s = WCSession.default
+            return "userInfo=\(s.outstandingUserInfoTransfers.count) files=\(s.outstandingFileTransfers.count)"
+        }
+    }
+
+    /// One `[g7-window]` line per EXPECTED sensor burst, HIT or MISS, so a mute reads out of the
+    /// log as a table instead of being rebuilt by hand against the Mac scanner. Anchored on the
+    /// sensor's own phase: each direct reading marks a window, and the next verdict is due one
+    /// period later; on a miss the chain keeps firing every period from the last known phase,
+    /// which is exactly when the sensor keeps bursting.
+    enum G7WindowPolicy {
+        static let period: TimeInterval = 300
+        /// The burst lasts 3–7 s and the reading lands 2–8 s after it starts; a reading that
+        /// arrives up to a minute late (a between-burst connect, 2026-09-03 23:37:36) still
+        /// belongs to that window rather than to no window.
+        static let early: TimeInterval = 12
+        static let late: TimeInterval = 72
+        /// When to pass verdict on the burst expected one period after `anchor`.
+        static func nextVerdict(after anchor: Date) -> Date { anchor.addingTimeInterval(period + late) }
+        /// Pure: does a reading at `lastDirect` count as this window's?
+        static func verdict(lastDirect: Date?, expectedBurst: Date) -> String {
+            guard let d = lastDirect else { return "MISS" }
+            let dt = d.timeIntervalSince(expectedBurst)
+            return (dt >= -early && dt <= late) ? "HIT" : "MISS"
+        }
+    }
+
+    private var windowTimer: DispatchSourceTimer?
+    private var windowAnchor: Date?     // last direct reading, or the last expected burst while missing
+    private var lastDirectAt: Date?
+
+    private func noteDirectReading(at date: Date) {
+        lastDirectAt = date
+        if let anchor = windowAnchor {
+            let expected = anchor.addingTimeInterval(G7WindowPolicy.period)
+            if G7WindowPolicy.verdict(lastDirect: date, expectedBurst: expected) == "HIT" {
+                logWindowVerdict("HIT", expectedBurst: expected)
+            }
+        }
+        windowAnchor = date
+        Self.setSlotAnchor(date)
+        armWindowVerdict()
+        // The read this bracket was protecting has landed — reopen the air, then arm the
+        // bracket for the next burst on the fresh anchor.
+        closeQuietWindow(reason: "direct read landed")
+        scheduleQuietWindow()
+    }
+
+    // MARK: G7 quiet window (2026-09-05)
+
+    /// Jeremy, 2026-09-05: "within whatever is the right safe window of the grid, no radio
+    /// activity from our app at all … other than what we need to pick up the G7." The sensor's
+    /// grid is locked (Mac scanner, 275 bursts over 50 h: spacing 300.00 s ± 1.2 s, phase
+    /// drifting +4 s/day), so the next burst is known to a second or two from the last direct
+    /// read, carried forward through misses. Inside the bracket nothing of ours touches the
+    /// radio: no cycle reclaim, no pod command, no takeover ladder, no manual bolus, no
+    /// WatchConnectivity send, no log transfer. Deferred work runs the moment the bracket
+    /// closes — on this window's direct read, or `lag` seconds after the burst if none came.
+    /// Worst case a dose lands 40 s later than today.
+    ///
+    /// What it is for: every mute on record begins with one missed burst; the apartment walk
+    /// (2026-09-04 20:26) showed a first miss with our pod reclaim mid-handshake at burst −1 s.
+    /// If phone-away loans stop producing first misses under this bracket, contention at the
+    /// burst is the cause; if misses keep appearing with the bracket provably silent, the
+    /// first miss is not ours. It does nothing for the parked state after a miss.
+    /// Switch: the Radio Lab's pod-radio policy (G7Lab.podRadioPolicy) — the bracket is on
+    /// under `quietGate` and `slots`, off under `off`.
+    enum G7QuietPolicy {
+        static let period: TimeInterval = 300
+        static let lead: TimeInterval = 20     // open this long before the expected burst
+        static let lag: TimeInterval = 40      // close this long after it if no read lands
+        /// The next burst worth protecting: the first grid point whose bracket has not
+        /// already closed (anchor + k·period with burst + lag > now).
+        static func nextBurst(anchor: Date, now: Date) -> Date {
+            var burst = anchor.addingTimeInterval(period)
+            while burst.addingTimeInterval(lag) <= now { burst = burst.addingTimeInterval(period) }
+            return burst
+        }
+        static func bracket(anchor: Date, now: Date) -> (open: Date, burst: Date, close: Date) {
+            let b = nextBurst(anchor: anchor, now: now)
+            return (b.addingTimeInterval(-lead), b, b.addingTimeInterval(lag))
+        }
+        /// Pure: is the air closed at `now`? False when disabled, when there is no anchor, or
+        /// when this bracket's read already landed.
+        static func isClosed(anchor: Date?, readLandedFor burst: Date?, now: Date, enabled: Bool) -> Bool {
+            guard enabled, let anchor else { return false }
+            let br = bracket(anchor: anchor, now: now)
+            if let landed = burst, abs(landed.timeIntervalSince(br.burst)) < 1 { return false }
+            return now >= br.open && now < br.close
+        }
+    }
+
+    static var quietWindowEnabled: Bool { PodRadioPolicy.current != .off }
+
+    // MARK: Pod radio policy (2026-09-05 night) — one three-way control for the pod's radio
+
+    /// Sniffer histograms (2,600 sensor frames, 09-05): the sensor is on the air 0→~25 s after a
+    /// reading (burst + tail) and, with the phone absent, calls for it at +60/+120/+180/+240
+    /// (±5 s); everything else is silent in BOTH regimes. bluetoothd's per-device
+    /// signal-quality tally (watch sysdiagnose 09-05, mute record §3d) rose on two links that
+    /// formed and collapsed inside our pod exchange at +20/+25 s, and at count 5 it gated the
+    /// sensor at −70 dBm — the wedge. `slots` keeps the pod off the air everywhere the sensor
+    /// has ever been seen active, with 10 s of margin: pod allowed only at +70…+110, +130…+170,
+    /// +190…+230, +250…+280 after the burst. `quietGate` is the previous behaviour (the
+    /// pre-burst bracket plus the session-end gate); `off` holds nothing (control arm).
+    /// Replaces the two Radio Lab rows it subsumes. Key `G7Lab.podRadioPolicy`, default quietGate.
+    enum PodRadioPolicy: String, CaseIterable {
+        case quietGate, slots, off
+        static let key = "G7Lab.podRadioPolicy"
+        static var current: PodRadioPolicy {
+            // DEFAULT `slots` since build 176 (2026-09-06): with the hold at the loop level (175)
+            // the pod never touches the sensor's tail — run 3's eleven CLEAN tails, no −70.
+            // `quietGate` put the pod on the air at the session's end, inside the tail (20:47).
+            PodRadioPolicy(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .slots
+        }
+    }
+
+    enum PodRadioSlotPolicy {
+        static let period: TimeInterval = 300
+        /// Closed phases in seconds after the burst: the burst + tail, then a ±10 s blackout
+        /// around each minute call, then the next window's lead.
+        ///
+        /// Build 177 (2026-09-06): the first phase is 40 s, not 70. Measured: the sensor closes
+        /// our session at +9…+16 s, every late failure on record landed 11–16 s after that
+        /// close, and the long tail ends ~+29 s after the burst. 40 covers it with margin, and
+        /// the pod's scan + link (+40…+60 s) finish before the +60 s minute call. Run 3 at +70
+        /// was the proof; 70 was a margin, not a measurement.
+        static let closed: [(from: TimeInterval, to: TimeInterval)] = [(0, 40), (110, 130), (170, 190), (230, 250), (280, 300)]
+        /// STEADY STATE (adaptive hold, `G7Lab.tailHoldAdaptive`, default off until one more
+        /// departure run): the long tail exists only for ~10 min after the phone leaves. With the
+        /// phone present, and again once the sensor has given up on it, tails are 7 s and there
+        /// is nothing to fail into — 08:46→09:06 and 00:31→00:51 put the pod on the air at +0 s
+        /// across ~10 steady windows and booked nothing. So outside a transition the first
+        /// phase is 20 s: past the latest observed close (+16 s) with margin.
+        static let closedSteady: [(from: TimeInterval, to: TimeInterval)] = [(0, 20), (110, 130), (170, 190), (230, 250), (280, 300)]
+        /// Seconds since the most recent grid burst (the sensor's phase, carried through misses).
+        static func phase(anchor: Date, now: Date) -> TimeInterval {
+            var last = G7QuietPolicy.nextBurst(anchor: anchor, now: now)
+            while last > now { last = last.addingTimeInterval(-period) }
+            return now.timeIntervalSince(last)
+        }
+        /// Seconds until the pod may use the radio at this phase; nil when it may now.
+        /// `transition` = the sensor may be in its long-tail state (default: assume so).
+        static func closedRemaining(phase: TimeInterval, transition: Bool = true) -> TimeInterval? {
+            let p = ((phase.truncatingRemainder(dividingBy: period)) + period).truncatingRemainder(dividingBy: period)
+            for slot in (transition ? closed : closedSteady) where p >= slot.from && p < slot.to { return slot.to - p }
+            return nil
+        }
+        static func closedRemaining(anchor: Date?, now: Date, policy: PodRadioPolicy) -> TimeInterval? {
+            guard policy == .slots, let anchor else { return nil }
+            let transition = TailTransition.adaptiveEnabled ? TailTransition.isActive(now: now) : true
+            return closedRemaining(phase: phase(anchor: anchor, now: now), transition: transition)
+        }
+    }
+
+    /// Build 177 — when might the sensor be in its LONG-TAIL state? For ~10 min after the phone
+    /// leaves (measured twice on the air: 29-s tails for two windows, then 7 s), and, to be
+    /// safe, after anything that changes who the sensor is talking to: the phone becoming
+    /// reachable or unreachable, a loan starting, the app launching. 15 minutes after any of
+    /// those the pod hold is the full 40 s; otherwise, with the adaptive switch on, 20 s.
+    enum TailTransition {
+        static let adaptiveKey = "G7Lab.tailHoldAdaptive"
+        static var adaptiveEnabled: Bool { UserDefaults.standard.object(forKey: adaptiveKey) as? Bool ?? false }
+        static let length: TimeInterval = 15 * 60
+        private static let lock = NSLock()
+        private static var _until: Date?
+        static func note(_ reason: String, now: Date = Date()) {
+            lock.lock(); _until = now.addingTimeInterval(length); lock.unlock()
+            SportLog.event("tail", "transition started (\(reason)) — full 40-s hold for \(Int(length / 60)) min")
+        }
+        static func isActive(now: Date = Date()) -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard let u = _until else { return false }
+            return now < u
+        }
+        /// Pure form for the bench.
+        static func isActive(until: Date?, now: Date) -> Bool { until.map { now < $0 } ?? false }
+    }
+
+    private static let quietLock = NSLock()
+    private static var _quietOpen = false
+    private static var _quietCloseAt: Date?
+    private static var _slotAnchor: Date?
+    static func setSlotAnchor(_ date: Date) { quietLock.lock(); _slotAnchor = date; quietLock.unlock() }
+    /// Seconds until the pre-burst BRACKET closes, nil when it is not open. WatchConnectivity
+    /// sends and log hops key on this alone — they are replayed at the bracket's close.
+    static func bracketRemainingNow() -> TimeInterval? {
+        quietLock.lock(); defer { quietLock.unlock() }
+        guard _quietOpen, let close = _quietCloseAt else { return nil }
+        return max(0.5, close.timeIntervalSinceNow)
+    }
+    /// What the POD RADIO asks (the reclaim gate, the takeover ladder, the manual bolus): the
+    /// bracket, or under `slots` the schedule — whichever holds longer. Callable from any queue.
+    static func quietRemainingNow() -> TimeInterval? {
+        let bracket = bracketRemainingNow()
+        quietLock.lock(); let anchor = _slotAnchor; quietLock.unlock()
+        let slot = PodRadioSlotPolicy.closedRemaining(anchor: anchor, now: Date(), policy: PodRadioPolicy.current).map { max(0.5, $0) }
+        switch (bracket, slot) {
+        case (nil, nil): return nil
+        case (let b?, nil): return b
+        case (nil, let s?): return s
+        case (let b?, let s?): return max(b, s)
+        }
+    }
+    static var quietWindowOpenNow: Bool { quietRemainingNow() != nil }
+    static var quietBracketOpenNow: Bool { bracketRemainingNow() != nil }
+
+    private var quietOpenTimer: DispatchSourceTimer?
+    private var quietCloseTimer: DispatchSourceTimer?
+    private var quietBurst: Date?
+    private var deferredSends: [[String: Any]] = []
+    private var deferredSnapshotReason: String?
+    private var deferredCount = 0
+
+    private func scheduleQuietWindow() {
+        quietOpenTimer?.cancel(); quietOpenTimer = nil
+        quietCloseTimer?.cancel(); quietCloseTimer = nil
+        guard Self.quietWindowEnabled, let anchor = windowAnchor else { return }
+        let br = G7QuietPolicy.bracket(anchor: anchor, now: Date())
+        let openIn = max(0, br.open.timeIntervalSinceNow)
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now() + openIn, leeway: .milliseconds(500))
+        t.setEventHandler { [weak self] in self?.openQuietWindow(for: br.burst, closeAt: br.close) }
+        t.resume()
+        quietOpenTimer = t
+    }
+
+    private func openQuietWindow(for burst: Date, closeAt: Date) {
+        guard Self.quietWindowEnabled else { return }
+        Self.quietLock.lock(); Self._quietOpen = true; Self._quietCloseAt = closeAt; Self.quietLock.unlock()
+        quietBurst = burst
+        let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
+        SportLog.event("quiet", "OPEN — burst ~\(f.string(from: burst)) in \(Int(burst.timeIntervalSinceNow))s · air closed until the read lands or +\(Int(G7QuietPolicy.lag))s · \(stack.cgmManager.g7RadioSnapshot() ?? "n/a")")
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now() + max(0.5, closeAt.timeIntervalSinceNow), leeway: .milliseconds(500))
+        t.setEventHandler { [weak self] in
+            self?.closeQuietWindow(reason: "+\(Int(G7QuietPolicy.lag))s, no read")
+            self?.scheduleQuietWindow()   // the monitor re-anchors on the miss; protect the next burst too
+        }
+        t.resume()
+        quietCloseTimer = t
+    }
+
+    private func closeQuietWindow(reason: String) {
+        Self.quietLock.lock()
+        let wasOpen = Self._quietOpen
+        Self._quietOpen = false; Self._quietCloseAt = nil
+        Self.quietLock.unlock()
+        quietCloseTimer?.cancel(); quietCloseTimer = nil
+        guard wasOpen else { return }
+        let sends = deferredSends; deferredSends = []
+        let snapshot = deferredSnapshotReason; deferredSnapshotReason = nil
+        let n = deferredCount; deferredCount = 0
+        SportLog.event("quiet", "CLOSE (\(reason)) · \(n) deferred action(s) released — \(sends.count) wc send(s)\(snapshot.map { ", snapshot(\($0))" } ?? "")")
+        sends.forEach { loanController.send?($0) }
+        if let snapshot { sendLogSnapshot(snapshot) }
+    }
+
+    /// Called by the send path and the snapshot path: true means "held, will replay at close".
+    private func deferIfQuiet(_ what: String, hold: () -> Void) -> Bool {
+        guard let remaining = Self.bracketRemainingNow() else { return false }
+        deferredCount += 1
+        hold()
+        SportLog.event("quiet", String(format: "DEFERRED %@ — %.1fs to close", what, remaining))
+        return true
+    }
+
+    private func armWindowVerdict() {
+        windowTimer?.cancel()
+        guard let anchor = windowAnchor else { return }
+        let expected = anchor.addingTimeInterval(G7WindowPolicy.period)
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now() + max(1, G7WindowPolicy.nextVerdict(after: anchor).timeIntervalSinceNow), leeway: .seconds(2))
+        t.setEventHandler { [weak self] in
+            guard let self else { return }
+            let v = G7WindowPolicy.verdict(lastDirect: self.lastDirectAt, expectedBurst: expected)
+            // A HIT was already logged on arrival; only a MISS is news here, and it re-arms the
+            // chain on the sensor's phase rather than on our clock.
+            if v == "MISS" {
+                self.logWindowVerdict("MISS", expectedBurst: expected)
+                self.windowAnchor = expected
+                Self.setSlotAnchor(expected)
+                self.armWindowVerdict()
+                // Keep the bracket chained on the sensor's phase through the miss.
+                if !Self.quietWindowOpenNow { self.scheduleQuietWindow() }
+            }
+        }
+        t.resume()
+        windowTimer = t
+    }
+
+    private func logWindowVerdict(_ verdict: String, expectedBurst: Date) {
+        let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
+        SportLog.event("g7-window", "\(verdict) burst ~\(f.string(from: expectedBurst)) · \(stack.cgmManager.g7RadioSnapshot() ?? "n/a") · wc reachable=\(WCSession.default.isReachable) backlog \(WCSilence.backlogSummary()) silence=\(WCSilence.enabled) · quiet=\(Self.quietWindowEnabled ? (Self.quietBracketOpenNow ? "open" : "armed") : "off") pod=\(Self.PodRadioPolicy.current.rawValue) deferred=\(deferredCount) · loan=\(loanController.isLoanActive)")
     }
 
     private var logPulse: DispatchSourceTimer?
@@ -284,6 +656,13 @@ final class StockLoopSession {
         timer.schedule(deadline: .now() + 300, repeating: 300, leeway: .seconds(20))
         timer.setEventHandler { [weak self] in
             self?.sendLogSnapshot("loan pulse")
+            // [g7-drought] on the PULSE, not the cycle (field 2026-09-03 08:41-09:21): with no
+            // glucose there is no cycle, so the cycle-bound census logged nothing for the whole
+            // 40-minute mute it was built for. The pulse fires every 300 s for as long as the
+            // loan lives, glucose or not.
+            if let mgr = self?.stack.loopManager, let age = mgr.latestGlucoseAge, age > .minutes(7) {
+                SportLog.event("g7-drought", "glucose age \(Int(age))s · \(self?.stack.cgmManager.g7RadioSnapshot() ?? "n/a") · reachable=\(WCSession.default.isReachable)")
+            }
             // Keepalive self-heal: a dead HKWorkoutSession used to wait for a FOREGROUND
             // activation, so a background session went reading-dead until the next wrist raise.
             // ensureRunning is refcount-aware and a no-op when healthy.
@@ -394,5 +773,90 @@ enum CensusThrottle {
 
         guard write else { return }
         SportLog.event("g7-ble", pending > 0 ? "\(line)  [+\(pending) like this suppressed]" : line)
+    }
+}
+
+
+/// Build 174 — TAIL EXPOSURE (2026-09-06, mute record §5).
+///
+/// bluetoothd's per-device signal-quality gate mutes the watch when a connection attempt fails
+/// AFTER its 6-s fast scan, in the sensor's ~29-s advertising tail, with the judgment already at
+/// state 1. The daemon never tells an app about that failure, so it cannot be logged here. What
+/// can be logged is our half of it: for 40 s after every close of the adopted sensor's link,
+/// whether our pod link or our own scan was on the radio and when. One `[tail]` line per window;
+/// join it to a sysdiagnose's 762 times by window to attribute the late failures — the
+/// pod-isolation instrument. Every late failure on record had one of these in the tail.
+enum TailExposure {
+    struct Event: Equatable { let kind: String; let offset: TimeInterval }   // kind: "pod↑" "pod↓" "scan"
+
+    static let window: TimeInterval = 40
+    /// After the fast scan (+6 s from Dexcom's re-subscribe, itself ~+0 from the close) to the
+    /// end of the sensor's long tail as measured on the air.
+    static let lateZone: ClosedRange<TimeInterval> = 6...29
+
+    private static let lock = NSLock()
+    private static var closedAt: Date?
+    private static var closedName = ""
+    private static var events: [Event] = []
+    private static var podUp = false            // last known pod link state, kept across windows
+    private static var podUpAtClose = false
+
+    static func noteSensorClosed(_ name: String, now: Date = Date()) {
+        lock.lock()
+        closedAt = now; closedName = name; events = []; podUpAtClose = podUp
+        lock.unlock()
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + window + 0.5) { report(for: now) }
+    }
+
+    static func notePodLink(up: Bool, now: Date = Date()) {
+        lock.lock(); defer { lock.unlock() }
+        podUp = up
+        guard let t0 = closedAt else { return }
+        let dt = now.timeIntervalSince(t0)
+        if dt >= 0 && dt <= window { events.append(Event(kind: up ? "pod↑" : "pod↓", offset: dt)) }
+    }
+
+    static func noteScanStarted(now: Date = Date()) {
+        lock.lock(); defer { lock.unlock() }
+        guard let t0 = closedAt else { return }
+        let dt = now.timeIntervalSince(t0)
+        if dt >= 0 && dt <= window { events.append(Event(kind: "scan", offset: dt)) }
+    }
+
+    private static func report(for start: Date) {
+        lock.lock()
+        guard closedAt == start else { lock.unlock(); return }   // a newer close superseded this window
+        let name = closedName, evs = events, upAtClose = podUpAtClose
+        lock.unlock()
+        SportLog.event("tail", "after \(name) close: \(summary(events: evs, podUpAtClose: upAtClose)) · phone \(WCSession.default.isReachable ? "reachable" : "away") · transition \(StockLoopSession.TailTransition.isActive() ? "ACTIVE" : "over") · adaptive \(StockLoopSession.TailTransition.adaptiveEnabled ? "on" : "off")")
+    }
+
+    /// Pure, pinned by WatchAppTests: the one-line verdict for a window.
+    static func summary(events: [Event], podUpAtClose: Bool, window: TimeInterval = window, lateZone: ClosedRange<TimeInterval> = lateZone) -> String {
+        var parts: [String] = []
+        var touched = false
+        // Pod intervals: an up at `offset` (or already up at the close) until the next down or the window end.
+        var openAt: TimeInterval? = podUpAtClose ? 0 : nil
+        for e in events.sorted(by: { $0.offset < $1.offset }) {
+            switch e.kind {
+            case "pod↑": if openAt == nil { openAt = e.offset }
+            case "pod↓":
+                if let a = openAt {
+                    parts.append(String(format: "pod link +%.1f→+%.1f s", a, e.offset))
+                    if a <= lateZone.upperBound && e.offset >= lateZone.lowerBound { touched = true }
+                    openAt = nil
+                }
+            case "scan":
+                parts.append(String(format: "scan +%.1f s", e.offset))
+                if e.offset <= lateZone.upperBound { touched = true }
+            default: break
+            }
+        }
+        if let a = openAt {
+            parts.append(String(format: "pod link +%.1f→(still up at +%.0f s)", a, window))
+            if a <= lateZone.upperBound { touched = true }
+        }
+        if parts.isEmpty { return "CLEAN (nothing of ours on the radio for \(Int(window)) s)" }
+        return parts.joined(separator: " · ") + " · late zone +\(Int(lateZone.lowerBound))→+\(Int(lateZone.upperBound)) s: \(touched ? "TOUCHED" : "clear")"
     }
 }

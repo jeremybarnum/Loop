@@ -816,6 +816,23 @@ final class WatchStoreEffectsTests: XCTestCase {
     private func flatSchedule(_ rate: Double = 1.0) -> BasalRateSchedule {
         BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: rate)])!
     }
+
+    /// #125 pin: a real "now" floored to the 5-minute grid. Both IOB paths evaluate a timeline
+    /// at 5-minute steps and take max(before, after) around the query date, and the delivery
+    /// bound is floor((time + delay) / delta) — with instants derived from an arbitrary Date()
+    /// the sums land on exact multiples of 300 s ± floating-point dust, and floor() flips
+    /// between k and k-1 depending on the sub-second phase of the wall clock (observed tonight:
+    /// the same test returned deltas of 0.0, 0.083 and 0.247 at three clock times on identical
+    /// code). An exact multiple of 300 keeps every sum an exact integer in Double, so the
+    /// arithmetic is deterministic while the dates stay inside the stores' cache windows.
+    static func gridNow() -> Date {
+        // MID-grid, not on-grid: on an exact grid point the before/after bracket degenerates
+        // (both neighbours are the same sample) and the two paths return 0 and 3 steps
+        // (measured 00:00 2026-09-03). Half a step off the grid, every query date sits
+        // strictly between two samples and the delta is exactly one step of delivery.
+        Date(timeIntervalSince1970: (Date().timeIntervalSince1970 / 300).rounded(.down) * 300 + 150)
+    }
+
     private func makeLedger(basalRate: Double = 1.0) -> SessionInsulinLedger {
         SessionInsulinLedger(
             insulinModelProvider: PresetInsulinModelProvider(defaultRapidActingModel: nil),
@@ -889,7 +906,7 @@ final class WatchStoreEffectsTests: XCTestCase {
     /// tracks its delivery in real time — no re-arm, no mutability machinery.
     func testLedgerLiveTempTracksDelivery() {
         var ledger = makeLedger()   // schedule 1.0
-        let start = Date().addingTimeInterval(-.minutes(10))
+        let start = Self.gridNow().addingTimeInterval(-.minutes(10))   // #125 pin
         ledger.seed(finished: [], live: [
             DoseEntry(type: .tempBasal, startDate: start,
                       endDate: start.addingTimeInterval(.minutes(30)),
@@ -916,7 +933,7 @@ final class WatchStoreEffectsTests: XCTestCase {
     /// row by hand and cannot certify that layer.
     func testPodOwnedMutableTempTracksDeliveryInIOB() {
         let (doseStore, _) = makeStoresFixed()   // schedule 1.0 U/hr
-        let now = Date()
+        let now = Self.gridNow()   // #125 pin
         let start = now.addingTimeInterval(-.minutes(10))
         // The pod manager's report: mutable, full programmed span, pod-native raw. No seeded row.
         let running = DoseEntry(type: .tempBasal, startDate: start,

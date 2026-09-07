@@ -948,10 +948,14 @@ final class WatchLoopManager {
     /// Last sensorID written by cgmManagerDidUpdateState (extension can't hold
     /// storage) — the persist itself runs every state change; this only rate-limits the log line.
     var lastPersistedSensorID: String?
+    /// Diagnosis hook (2026-09-04): fired on every direct-G7 arrival so the session's window
+    /// monitor can anchor the expected-burst clock on the sensor's own phase.
+    var onDirectGlucose: ((Date) -> Void)?
     private func noteGlucoseSource(directG7: Bool) {
         bgSourceLock.lock()
         if directG7 { _lastDirectG7At = self.now() } else { _lastPhoneRelayAt = self.now() }
         bgSourceLock.unlock()
+        if directG7 { onDirectGlucose?(self.now()) }
         // Persisted because the Start gate reads it ACROSS launches. The first gate shipped
         // reading only the in-memory stamp, so every relaunch started from "never" and the
         // suspended hours before a tap looked like a dead sensor — the chicken-and-egg that
@@ -1150,6 +1154,13 @@ final class WatchLoopManager {
     /// Wired by StockLoopSession to the stack's cgmManager.scanForNewSensor() — this manager
     /// is delegate to the CGM manager, not its owner.
     var requestSensorRescan: (() -> Void)?
+    /// Radio census for the [g7-drought] line — wired by StockLoopSession to the G7 manager.
+    var g7RadioSnapshot: (() -> String?)?
+    /// True while our G7 session is up — wired by StockLoopSession to G7CGMManager.isConnected.
+    var g7SessionLive: (() -> Bool)?
+    /// Radio Lab probe — wired by StockLoopSession.
+    var requestG7Recycle: (() -> Void)?
+    func recycleG7ConnectForLab() { requestG7Recycle?() }
     /// The last cycle's binding-constraint summary, for the diagnostic screen. Our screen
     /// only — never annotated onto a stock surface (the stock-parity ruling).
     private(set) var lastDosingDerivation: String?
@@ -1492,7 +1503,22 @@ final class WatchLoopManager {
         // missed cycle is the scan escalation's job; this keeps the miss from happening.
         guard age > .minutes(4),
               let reclaim = reclaimPodForDose else {
-            assertThenLoop({})
+            // [overlap] for the no-reclaim cycle too (field 2026-09-03 08:41): pump data fresh
+            // means the pod link is usually still up from the command that refreshed it — the
+            // G7 session that delivered this reading ran ON TOP of a live pod link, and the
+            // gate above never ran, so the collision census had a hole exactly where the
+            // overlap is total.
+            if let directAge = lastGlucoseSourceStamps.direct.map({ self.now().timeIntervalSince($0) }), directAge < .minutes(6.5) {
+                SportLog.event("overlap", String(format: "no reclaim (pump data %.0fs fresh) — pod link likely still up under the G7 session · G7 %@", age, g7RadioSnapshot?() ?? "n/a"))
+            }
+            // Build 175 (field 2026-09-06 18:09, run 2 on 173): the dose-path reclaim was gated
+            // INSIDE the reclaim closure, so the enactor's 25-s wait timed out while the pod
+            // was being held to +70 s — "pod not reconnected — automatic dose SKIPPED", a
+            // yellow ring and a lost correction every dose cycle. Hold the CYCLE here instead,
+            // exactly as the refresh path already does: the dose is computed after the window
+            // opens and the enactor then sees an open window and a prompt reclaim. Every cycle
+            // now completes at ~+74 s under `slots`, which also ends the alternating yellow.
+            afterG7QuietWindow("dose cycle") { assertThenLoop({}) }
             return
         }
 
@@ -1520,6 +1546,22 @@ final class WatchLoopManager {
         }
     }
 
+    /// The session-end gate belongs to the `quietGate` policy; under `slots` the schedule holds
+    /// the pod until +70 s, which outlasts any gate, and under `off` nothing holds.
+    static var podWaitForSessionEndEnabled: Bool { StockLoopSession.PodRadioPolicy.current == .quietGate }
+    static let podRadioGateSettle: TimeInterval = 3
+    static let podRadioGateCeiling: TimeInterval = 20
+
+    enum PodRadioGateDecision: Equatable { case proceed(String), wait }
+
+    /// The session-end wait's decision, pure so it is testable: proceed once the G7 session has
+    /// been down for `podRadioGateSettle`, or at the ceiling regardless.
+    static func podRadioGateDecision(sessionLive: Bool, sinceSessionEnd: TimeInterval?, elapsed: TimeInterval) -> PodRadioGateDecision {
+        if elapsed >= podRadioGateCeiling { return .proceed("CEILING (\(Int(podRadioGateCeiling))s) — G7 session still \(sessionLive ? "live" : "settling")") }
+        if !sessionLive, let down = sinceSessionEnd, down >= podRadioGateSettle { return .proceed("G7 session ended (+\(Int(podRadioGateSettle))s settle)") }
+        return .wait
+    }
+
     /// The fragile phase is G7 CONNECT/AUTH ESTABLISHMENT, ~1.5 s straddling the grid point. An
     /// ESTABLISHED link coexists with pod traffic perfectly well — backfill and live reads land
     /// during pod handshakes — and the forensics say the same from the pod's side. So the
@@ -1534,9 +1576,76 @@ final class WatchLoopManager {
     ///
     /// Worst case: the cycle's pod work starts 20s late and the dose enacts 20s late —
     /// clinically nil. A lost ride costs the session's entire direct-G7 coverage.
+    /// Quiet window (2026-09-05): if the air is closed around the expected G7 burst, run
+    /// `block` the moment it reopens (re-checking, since a miss chains the next bracket);
+    /// otherwise run it now. One log line per deferral, with the delay, so every dose that
+    /// waited is legible.
+    func afterG7QuietWindow(_ what: String, _ block: @escaping () -> Void) {
+        guard let remaining = StockLoopSession.quietRemainingNow() else { block(); return }
+        let start = self.now()
+        SportLog.event("quiet", String(format: "DEFERRED %@ — air closed (%@), %.1fs to open", what, StockLoopSession.PodRadioPolicy.current.rawValue, remaining))
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + remaining + 0.2) { [weak self] in
+            guard let self else { return }
+            if let again = StockLoopSession.quietRemainingNow() {
+                // Closed and reopened while we waited (a miss chained the next bracket). Wait
+                // once more rather than forever: the second bracket is at most 60 s away from
+                // ending, and a dose 100 s late is still clinically nil.
+                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + again + 0.2) { [weak self] in
+                    guard let self else { return }
+                    SportLog.event("quiet", String(format: "%@ released after %.1fs (second bracket)", what, self.now().timeIntervalSince(start)))
+                    block()
+                }
+                return
+            }
+            SportLog.event("quiet", String(format: "%@ released after %.1fs", what, self.now().timeIntervalSince(start)))
+            block()
+        }
+    }
+
     private func deferPodRadioWhileG7AcquisitionResolves(_ proceed: @escaping () -> Void) {
+        // QUIET WINDOW first: nothing of ours on the air around the expected burst, whatever
+        // the acquisition state says.
+        if StockLoopSession.quietRemainingNow() != nil {
+            afterG7QuietWindow("pod reclaim") { [weak self] in self?.deferPodRadioWhileG7AcquisitionResolves(proceed) }
+            return
+        }
         let directAge = lastGlucoseSourceStamps.direct.map { self.now().timeIntervalSince($0) }
         if let age = directAge, age < .minutes(6.5) {
+            // SESSION-END WAIT (Jeremy, 2026-09-02: "it just seems like bad design to rush the pod
+            // connection when we know these types of issues exist"). The gate above keys on the
+            // READING as the proxy for "the Dexcom is silent"; the real event is the session's
+            // END, which arrives 4.6-13.1 s later (bench) with backfill/comms in between — and one
+            // live session died by timeout 3 s into a pod handshake (field 2026-09-02 18:55).
+            // Hold the pod radio until the G7 session has been down for a short settle, with the
+            // same 20 s ceiling the stale branch uses. Cost: the dose enacts ~5-15 s later
+            // ("clinically nil" per the doc above). Belongs to the `quietGate` pod-radio policy
+            // (G7Lab.podRadioPolicy, the default); `slots` holds longer, `off` holds nothing.
+            if Self.podWaitForSessionEndEnabled, let live = g7SessionLive, live() {
+                let start = self.now()
+                var sessionEndedAt: Date? = nil
+                func pollSessionEnd() {
+                    let elapsed = self.now().timeIntervalSince(start)
+                    let isLive = self.g7SessionLive?() ?? false
+                    if isLive { sessionEndedAt = nil } else if sessionEndedAt == nil { sessionEndedAt = self.now() }
+                    switch Self.podRadioGateDecision(sessionLive: isLive,
+                                                     sinceSessionEnd: sessionEndedAt.map { self.now().timeIntervalSince($0) },
+                                                     elapsed: elapsed) {
+                    case .proceed(let why):
+                        SportLog.event("overlap", String(format: "session-end wait: released after %.1fs — %@ · pod radio opening %.1fs after the direct read", elapsed, why, age + elapsed))
+                        proceed()
+                    case .wait:
+                        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.5) { pollSessionEnd() }
+                    }
+                }
+                DispatchQueue.global(qos: .userInitiated).async { pollSessionEnd() }
+                return
+            }
+            // [overlap] (2026-09-02): the pod radio opens here, ~100 ms after the reading, while
+            // the G7 session that delivered it is usually still up (4.6-13.1 s past the read on
+            // the bench). One line per cycle so collisions become a per-window number, not an
+            // anecdote: the G7 snapshot says whether the session is live at this instant.
+            SportLog.event("overlap", String(format: "pod radio opening %.1fs after the direct read · G7 %@", age,
+                                             g7RadioSnapshot?() ?? "n/a"))
             proceed()
             return
         }
@@ -1814,6 +1923,13 @@ final class WatchLoopManager {
         SportLog.event("freshness", String(format:
             "%@ · momentum %d pts · latest glucose age %@s (recency %.0fm) · RC discrepancies %d",
             verdict, momPts, ageS(glucoseDate), recency / 60, rcDisc))
+        // [g7-drought] — the one line that separates "our central is dead" from "the sensor is
+        // absent" while glucose is stale mid-loan (field 2026-09-02: 30 min of silence with the
+        // pre-fix scan gate, and the tape could not say which). Logged only while stale, so a
+        // healthy loan adds nothing.
+        if verdict == "stale", let snapshot = g7RadioSnapshot?() {
+            SportLog.event("g7-drought", "glucose age \(ageS(glucoseDate))s · \(snapshot)")
+        }
     }
 
     /// Sport Mode's momentum look-back window. Wider than stock's 15 min (`GlucoseMath`) so the
@@ -2838,6 +2954,9 @@ final class WatchLoopManager {
             // The pod link is orphaned so the G7 can use the radio — reclaim it before the
             // bolus. User is PRESENT, so a few seconds' reconnect is fine; on failure FAIL
             // LOUDLY (never a silent no-bolus). No-op immediate when the link is already held.
+            // Quiet window (2026-09-05): a bolus tapped inside the burst bracket waits for it
+            // to close (≤ 60 s) — the crown tap is acknowledged at once, the pod is touched later.
+            self.afterG7QuietWindow("manual bolus \(String(format: "%.2f", rounded)) U") {
             if let reclaim = self.reclaimPodForDose {
                 reclaim { ok in
                     if ok {
@@ -2874,6 +2993,7 @@ final class WatchLoopManager {
             } else {
                 deliverBolus()
             }
+            }   // afterG7QuietWindow
         }
     }
 
@@ -3192,6 +3312,19 @@ extension WatchLoopManager: CGMManagerDelegate {
         // shipped nothing — halving my Mac-side visibility).
         guard Date().timeIntervalSince(lastLogTransfer) > 4.5 * 60 else { return }
         guard WCSession.default.activationState == .activated, let url = LogFile.url else { return }
+        // Diagnosis gate (2026-09-04): the first silenced overnight showed this per-reading hop
+        // still queuing a file every window (backlog files=1…6 while every other send was
+        // suppressed). The switch means NOTHING leaves the watch, or the A/B/A proves nothing.
+        if StockLoopSession.WCSilence.shouldSuppress(enabled: StockLoopSession.WCSilence.enabled) {
+            SportLog.event("log", "per-reading log transfer SUPPRESSED (G7Lab.wcSilence) · backlog \(StockLoopSession.WCSilence.backlogSummary())")
+            return
+        }
+        // Quiet window (2026-09-05): this hop rides the reading that just closed the bracket,
+        // but a relayed reading can arrive inside it — skip; the next reading retries.
+        if StockLoopSession.quietBracketOpenNow {
+            SportLog.event("quiet", "DEFERRED per-reading log transfer (skipped; next reading retries)")
+            return
+        }
         lastLogTransfer = Date()
         WCSession.default.transferFile(url, metadata: ["kind": "g7watch.log"])
     }
@@ -3254,6 +3387,9 @@ extension WatchLoopManager: CGMManagerDelegate {
                 // `if glucoseMomentumEffect == nil` guard never fired again. Every [predict]
                 // read `momentum —` while BG swung ±20/cycle, leaving the prediction trend-blind.
                 self.dataAccessQueue.async { self.glucoseMomentumEffect = nil }
+                // UI batch (build 176): publish a fresh glance mirror on every reading, so the
+                // glance repaints on arrival even while inactive (face-up on a table).
+                self.refreshGlanceData()
                 completion()
             }
             }
@@ -3311,6 +3447,7 @@ extension WatchLoopManager: CGMManagerDelegate {
                     return
                 }
                 self.dataAccessQueue.async { self.glucoseMomentumEffect = nil }   // Momentum-invalidation parity
+                self.refreshGlanceData()   // UI batch (build 176): repaint on arrival, inactive or not
                 let mgdl = Int(sample.quantity.doubleValue(for: .milligramsPerDeciliter))
                 self.noteGlucoseSource(directG7: false)
                 SportLog.event("glucose",
@@ -3512,6 +3649,12 @@ extension WatchLoopManager: CGMManagerDelegate {
         // truth, so use it rather than pattern-matching "DXCM" against a peripheral name, which
         // would be another label asserting something it cannot actually verify.
         let source = manager is G7CGMManager ? "cgm" : "pod-ble"
+        // Build 174 tail-exposure instrument: the pod link's edges, as OmniPumpManager reports
+        // them ("Pod connected …" / "Pod disconnected …"), feed the per-window `[tail]` line.
+        if source == "pod-ble" {
+            if message.hasPrefix("Pod connected") { TailExposure.notePodLink(up: true) }
+            else if message.hasPrefix("Pod disconnected") { TailExposure.notePodLink(up: false) }
+        }
         // DEDUPE THE STORM. A Code=11 connect-retry loop pushed ~2,000
         // IDENTICAL lines/second through here (1051 in 0.52s) — each one a
         // synchronous NSLog plus a file-append — jamming syslogd and the log queue hard enough

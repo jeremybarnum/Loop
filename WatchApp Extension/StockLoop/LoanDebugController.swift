@@ -32,6 +32,9 @@ final class LoanDebugController: WKHostingController<LoanDebugView> {
 struct CGMHealth {
     let sensorName: String?
     let lastReadingAge: TimeInterval?
+    /// Build 174 (Jeremy, 2026-09-06): the value and its reading time, so a missed window can be
+    /// told from Dexcom's app holding the previous value across one grid point.
+    let bgLine: String
     let linkState: String
     let lifecycle: String
     let expiresIn: String
@@ -39,6 +42,12 @@ struct CGMHealth {
     init(_ manager: G7CGMManager) {
         sensorName = manager.sensorName
         lastReadingAge = manager.latestReadingTimestamp.map { Date().timeIntervalSince($0) }
+        if let g = manager.latestReading?.glucose, let t = manager.latestReadingTimestamp {
+            let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
+            bgLine = String(format: "%d mg/dL · %@ (%.0fs ago)", Int(g), f.string(from: t), Date().timeIntervalSince(t))
+        } else {
+            bgLine = "—"
+        }
         // Scanning AND connected are both normal states in the connect-per-reading rhythm: the
         // sensor hangs up after each reading, so "scanning" between windows is health, not failure.
         linkState = manager.isConnected ? "connected" : (manager.isScanning ? "scanning" : "idle")
@@ -151,6 +160,7 @@ struct LoanDebugView: View {
                 Text("CGM HEALTH").font(.footnote).foregroundColor(.secondary)
                 row("sensor", cgm?.sensorName ?? "none")
                 row("last reading", cgm?.lastReadingAge.map { String(format: "%.0fs ago", $0) } ?? "never")
+                row("bg", cgm?.bgLine ?? "—")
                 row("link", cgm?.linkState ?? "—")
                 row("state", cgm?.lifecycle ?? "—")
                 row("expires", cgm?.expiresIn ?? "—")
@@ -174,6 +184,88 @@ struct LoanDebugView: View {
                 // experiments are on demand. Ladybug-class: REMOVE PRE-PRODUCTION.
                 // Safe: worst case is a re-adoption delay while the relay covers, same as any
                 // new-sensor day; no therapy state is touched.
+                // Radio Lab probe (bench flag `Bench.radioLab`, default hidden): recycle the G7
+                // connection from scratch — the controlled form of the force-quit that has cured
+                // every mute in the field. Connection state only; no dosing path.
+                // Radio Lab is gated by BUNDLE ID, not a defaults key nobody can set on a
+                // watch: Jeremy's com.StockSportMode build shows it; Caitlin's com.Exercise
+                // build never does. The rows flip the UserDefaults switches the G7 stack and
+                // the pod-radio gate read at use, so bench arms need no reship.
+                if (Bundle.main.bundleIdentifier ?? "").contains("StockSportMode") {
+                    // Build 176 cleanup: "Scan while pending" and "Scan watchdog" are gone from the
+                    // lab — under ride-only (now the default) our app never scans, so both were
+                    // inert; the keys still exist for a ride-only-OFF diagnosis via the shell.
+                    ForEach([(G7RidePolicy.key, "Ride-only (no request of ours)", true),
+                             (StockLoopSession.TailTransition.adaptiveKey, "Adaptive tail hold (40 s / 20 s steady)", false),
+                             (StockLoopSession.WCSilence.key, "WC silence (diagnosis)", false)], id: \.0) { key, title, def in
+                        Button("\(title): \((UserDefaults.standard.object(forKey: key) as? Bool ?? def) ? "ON" : "OFF") → tap to flip") {
+                            let now = !((UserDefaults.standard.object(forKey: key) as? Bool) ?? def)
+                            UserDefaults.standard.set(now, forKey: key)
+                            SportLog.event("lab", "switch \(key) = \(now) (tapped on the Radio Lab)")
+                            lastAction = "\(title) → \(now ? "ON" : "OFF")"
+                            // WC silence: switching ON also clears whatever the phone-away loan has
+                            // already queued, so the A/B/A inside one loan starts from an empty backlog.
+                            if key == StockLoopSession.WCSilence.key {
+                                if now {
+                                    let c = StockLoopSession.WCSilence.cancelOutstanding()
+                                    lastAction = "WC silence ON · cancelled \(c.userInfo) msg + \(c.files) file(s)"
+                                } else {
+                                    SportLog.event("lab", "WC silence OFF — sends resume · backlog \(StockLoopSession.WCSilence.backlogSummary())")
+                                }
+                            }
+                            // Ride-only: flipping the switch must re-arm the radio at once, either
+                            // way. Field 2026-09-05 17:01 (build 170): switched OFF while adopted
+                            // with no request of ours and no scan, nothing re-armed (re-arm only
+                            // runs after a disconnect or at launch), Dexcom's link came up, we
+                            // neither held a request nor joined — stuck between both behaviours.
+                            // Switching ON likewise drops our standing request immediately instead
+                            // of at the next disconnect.
+                            if key == G7RidePolicy.key {
+                                SportLog.event("g7-ble", "*** ride-only switched \(now ? "ON" : "OFF") — recycling the G7 connection so the new posture takes effect now")
+                                ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.recycleG7ConnectForLab()
+                                lastAction += " · G7 re-armed"
+                            }
+                        }
+                    }
+                    // Build 176 cleanup: the re-arm cycler (stock / delay30 / lateArm) is gone from
+                    // the lab — it timed a request ride-only never makes. The policy enum stays.
+                    // Pod radio policy (2026-09-05 night): replaces the "pod waits for G7 session end"
+                    // and "quiet window" rows. quietGate = both of those (the default); slots = pod
+                    // on the air only at +70…+110, +130…+170, +190…+230, +250…+280 after the burst
+                    // (everywhere the sensor has never been seen active); off = no holds (control).
+                    Button("Pod radio: \(StockLoopSession.PodRadioPolicy.current.rawValue) → tap to cycle") {
+                        let order = StockLoopSession.PodRadioPolicy.allCases
+                        let i = order.firstIndex(of: StockLoopSession.PodRadioPolicy.current) ?? 0
+                        let next = order[(i + 1) % order.count]
+                        UserDefaults.standard.set(next.rawValue, forKey: StockLoopSession.PodRadioPolicy.key)
+                        SportLog.event("lab", "switch \(StockLoopSession.PodRadioPolicy.key) = \(next.rawValue) (tapped on the Radio Lab)")
+                        lastAction = "pod radio → \(next.rawValue)"
+                    }
+                    Button("Log WC backlog") {
+                        SportLog.event("lab", "WC backlog \(StockLoopSession.WCSilence.backlogSummary()) · reachable=\(WCSession.default.isReachable) · silence=\(StockLoopSession.WCSilence.enabled)")
+                        lastAction = "backlog \(StockLoopSession.WCSilence.backlogSummary())"
+                    }
+                    Button("Recycle G7 connect (lab)") {
+                        SportLog.event("g7-ble", "*** LAB RECYCLE *** cancel + re-arm the G7 connection from scratch")
+        ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.recycleG7ConnectForLab()
+        lastAction = "G7 recycle requested"
+                    }
+                    // E1 standalone-G7 soak, restored 2026-09-05 (Jeremy: "give me E1 back"). The
+                    // toggle went in the diagnostics declutter; the session methods never did.
+                    // Our G7 client under a keepalive with NO grant, NO loan and NO pod central —
+                    // the "second monitor by itself" arm of the mute investigation: run it with
+                    // the phone away and read the [g7-window] lines. Refuses to start over a
+                    // live loan.
+                    Button(session.standaloneG7TestActive ? "Stop standalone G7 soak (E1)" : "Start standalone G7 soak (E1, no pod)") {
+                        if session.standaloneG7TestActive {
+                            session.stopStandaloneG7Test()
+                            lastAction = "E1 soak stopped"
+                        } else {
+                            session.startStandaloneG7Test()
+                            lastAction = session.standaloneG7TestActive ? "E1 soak running (no pod)" : "blocked — end the loan first"
+                        }
+                    }
+                }
                 Button("Forget Sensor (re-acquire)") {
                     SportLog.event("g7-ble", "*** BENCH RE-ACQUIRE *** forgetting adopted sensor — cold acquisition starts now")
                     ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.scanForNewSensor()

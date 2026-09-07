@@ -85,11 +85,25 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         _ = stockLoopSession
     }
 
+    /// UI batch (build 176, raised 2026-08-18): a relaunch used to land wherever stock's page
+    /// bookkeeping left it and the user swiped to the glance. Sport Mode's landing surface is
+    /// the glance, so the FIRST activation of a process goes there.
+    private var landedOnGlance = false
+
     func applicationDidBecomeActive() {
         // 135 instrumentation (Jeremy 2026-07-20: "does the log know foreground vs
         // background?"): every radio event between these markers is attributable to
         // an app state — turns the background-degrades-the-pounce anecdote into data.
         RuntimeStateLog.mark("app.didBecomeActive")
+        if !landedOnGlance {
+            landedOnGlance = true
+            DispatchQueue.main.async {
+                if let glance = GlanceController.current {
+                    glance.becomeCurrentPage()
+                    SportLog.event("app", "first activation — landed on the glance")
+                }
+            }
+        }
         SportLog.event("app", "ACTIVE (wrist up, frontmost) · \(RuntimeStateLog.snapshot())")
         if WCSession.default.activationState != .activated {
             WCSession.default.activate()
@@ -265,7 +279,13 @@ extension ExtensionDelegate: WCSessionDelegate {
             if let url = LogFile.url,
                let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int,
                size > 2048 {
-                session.transferFile(url, metadata: ["kind": "g7watch.log"])
+                // Diagnosis gate (2026-09-04, see StockLoopSession.WCSilence): while the bench
+                // switch is on, nothing leaves the watch — this launch-time hop included.
+                if StockLoopSession.WCSilence.shouldSuppress(enabled: StockLoopSession.WCSilence.enabled) {
+                    SportLog.event("log", "launch log transfer SUPPRESSED (G7Lab.wcSilence)")
+                } else {
+                    session.transferFile(url, metadata: ["kind": "g7watch.log"])
+                }
             }
         }
     }
@@ -280,6 +300,7 @@ extension ExtensionDelegate: WCSessionDelegate {
         // R40 reunion: a seized loan ends (debounced, via the normal hand-back) when the
         // phone genuinely returns — the controller ignores everything but that case.
         stockLoopSession.loanController.noteReachabilityChanged(session.isReachable)
+        StockLoopSession.TailTransition.note(session.isReachable ? "phone reachable" : "phone unreachable")
     }
 
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String : Any]) {

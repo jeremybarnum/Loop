@@ -94,9 +94,12 @@ discovery. (c) is the cold path. All three still need runtime to complete authen
 
 ## Connection budgets
 
-- **The sensor accepts ~3 concurrent centrals.** UNVERIFIED as a number (Dexcom marketing
-  material / community consensus, no primary source in hand). MEASURED weaker form: phone
-  G7SensorKit + Dexcom watch D2W + our watch client have coexisted without evident contention.
+- **The sensor serves three display devices: phone app, direct-to-watch, and the receiver.**
+  That is Dexcom's own documented topology (Jeremy, 2026-09-05 — not a community number).
+  What remains UNVERIFIED is whether three is a hard ceiling in the sensor or just the supported
+  set. MEASURED: the sensor counts DEVICES, not apps — every app on one device shares that
+  device's single link and bond — and a Pi as a third radio beside the phone and the watch was
+  served for 7 h (July 2026). Today's setup uses two: the phone and the watch.
 - **~2 BLE links per app on watchOS.** UNVERIFIED — attributed to a WWDC session in prior
   discussions, but nobody in this project has re-located the primary source. Treat as folklore
   with supporting evidence, not spec. Empirical anchors: (1) hold-for-loan starved the G7 with
@@ -125,3 +128,17 @@ discovery. (c) is the cold path. All three still need runtime to complete authen
   a connection event? (Would explain rare stray readings if any turn up.)
 - Where exactly is the 2-link budget enforced? Needs the discriminator.
 - Does Dexcom's D2W hold its link continuously or duty-cycle it? Bears on slot arithmetic.
+
+## 2026-09-05 addendum — a second law, and a correction
+
+The law above (runtime or nothing) still holds for the IDLE watch. A second, different failure
+is now measured and recorded in `G7_MUTE_INVESTIGATION_2026-09.md`: **with runtime present**,
+a pending connect of ours on the sensor bond beside Dexcom's puts the watch's Bluetooth stack
+into a state where neither app gets the link for 20–40 min ("the mute"). Dexcom alone is clean;
+our parked request — even from an asleep app — is the necessary ingredient. Read that document
+before touching `G7BluetoothManager`'s arming or re-arm code.
+
+Correction to a claim made in passing this week: Dexcom's D2W reads DIRECT whether or not the
+phone is nearby (the phone icon is its fallback when direct fails). The 09-03 afternoon tape has
+56 Dexcom-initiated connections with the phone present. Do not describe D2W as "phone-fed when
+the phone is near".

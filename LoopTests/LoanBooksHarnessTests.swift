@@ -440,7 +440,7 @@ final class LoanBooksHarnessTests: XCTestCase {
     /// full-span truth → the divergence must GROW at ≈ 0.70 U/hr × Δt. The store side is
     /// the KNOWN-WRONG book here; the assertion pins the failure signature, not health.
     func testInheritedTempSpanBooksOnBothSides() {
-        let now = Date()
+        let now = Date(timeIntervalSince1970: (Date().timeIntervalSince1970 / 300).rounded(.down) * 300 + 150)   // #125 pin: mid-grid now
         let t0 = now.addingTimeInterval(-.minutes(20))                    // seed instant
         let tempStart = t0.addingTimeInterval(-.minutes(7))               // field geometry
         let tempEnd = tempStart.addingTimeInterval(.minutes(30))
