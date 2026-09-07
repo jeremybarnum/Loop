@@ -1024,6 +1024,48 @@ evidence of safety. **The switch stays OFF and the adaptive code is withdrawn** 
 next cleanup). Recalibrate the `[tail]` late-zone marker to close+6→+20 s (the tail ends
 ~+19 s after the close; failures ended by +16).
 
+## 7. THE POD-SIDE DESIGN, FROM THE COMPLETE PICTURE (written 09-06 23:30; to test 09-07)
+
+**What a wedge needs, and which parts are ours.** (1) The judgment at state 1 — five failed
+establishments inside 5.8 h. Fed by Dexcom's re-subscribe into the sensor's long tails, ~2 per
+phone departure and ~2 per watch-BT toggle; not ours to prevent. Assume state 1 from the second
+outing until the next toggle or reboot. (2) A failed establishment AFTER the 6-s fast scan. The
+chip only attempts late while the sensor is advertising after close+6 s: the LONG TAIL (to
+~close+19 s; only in the ~10 min after the phone leaves) and, in phone-absent mode, the MINUTE
+CALLS (3-s spurts at burst+60/120/180/240). (3) Something that makes the attempt fail: in the
+tail, our scan or our pod link on the chip (8/8 wedges; 0/2 awake-registration-only; 0/6
+asleep). At minute calls, nothing on record under ride-only (4 calls with CONNECT_INDs, no
+booking); the one minute-call booking ever (23:13:40) had our stock SCAN running. Whether the
+POD on the air across a minute call books a failure is UNTESTED — not part of the root cause
+as observed, but not cleared either.
+
+**Design: hold only when the sensor can be advertising after the fast scan.**
+- *Two-central windows* (the phone's own read reached the watch as a relay for this window,
+  `INGEST src=phone-relay` just before the direct read): the sensor makes 7-s tails and no
+  minute calls. Release the pod at close+3 s; no blackouts. Bolus delay ≤ ~12 s, only in the
+  first ~12 s after a read (~4 % of the cycle). Evidence: ~10 steady windows with the pod at
+  +0 s and no failure (08:46→09:06, 00:31→00:51).
+- *Absent/transition windows* (no relay for this window): hold to close+25 s (fallback read+40
+  if no close is seen). Minute-call blackouts (110–130, 170–190, 230–250) kept until T1 says
+  otherwise; the pre-burst lead trimmed to 290–300 pending T3.
+- The relay is the honest sensor-state signal: it proves the phone's Dexcom app connected this
+  window. `WCSession.isReachable` is not (§3o). No relay → the safe hold, automatically, which
+  is exactly the transition.
+
+**Costs, per 300-s cycle:** phone present ~4 % of the cycle, ≤12 s; phone absent 12 % (the
+tail hold) + 27 % (blackouts) = 39 % until T1, 12 % after if T1 is clean.
+
+**Tests (judgment carried at 1, sysdiagnose + watch log each):**
+- **T1 — pod at the minute calls.** Departure run, phone away, blackouts OFF (test policy), the
+  reclaim at +40…+60 s straddling the +60 call, plus 2–3 manual boluses timed into +115…+125 and
+  +175…+185. Prediction: no 762 at any minute call (60/40). Clean → blackouts retired.
+- **T2 — two-central short hold at home.** Phone present two hours, relay-gated close+3 s
+  release. Prediction: no late failure, tails 7 s in the `[tail]` lines.
+- **T3 — composite acceptance.** Three departures under the full design: no late 762, no −70,
+  bolus lag read off the `[quiet]` lines.
+Build the policy as one switchable `PodRadioPolicy` case (`relayGated`) with the blackout set
+as a second switch, so T1/T2/T3 run on one build.
+
 ## 4. Next tests, top-down, each with its predictions
 
 **Q1 — Is it the existence of our request, its timing, or its order?** (the fix question)
