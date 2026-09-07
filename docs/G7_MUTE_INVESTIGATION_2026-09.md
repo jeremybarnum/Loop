@@ -998,6 +998,32 @@ daemon's judgment carried at 1 (or after a toggle, five early failures first): e
 (+4…+6 s), no failure after +6 s, no −70, no wedge, no skipped doses; sysdiagnose recipe in
 memory `sysdiagnose-folder`.
 
+## 3o. ADAPTIVE-HOLD WALK, 09-06 22:08→22:38 (build 177, switch ON from 22:10): no wedge — and the adaptive spec is WITHDRAWN
+
+Loan 21:07→22:57, 22 cycles. Phone present until ~22:08, absent 22:11→22:36 (phone log: no
+phone-G7 reads; watch: no relay), back 22:39. Nine windows 22:01→22:46 all HIT; no skipped doses.
+
+**Two errors in the adaptive spec, both visible in the `[tail]` lines:**
+1. **Wrong reference frame.** The 20-s steady hold is measured from the READ; the late failures
+   are +11…+16 s after the CLOSE, i.e. +23…+28 s after the burst (16:07:03, 18:27:08, 09:42:07,
+   17:32:04). With the close at +9…+12 s, a 20-s hold puts the pod link at close+13…+21 s —
+   inside the failure zone: 22:12 "pod link +20.5→+37.4 s", 22:17 "+16.3→+35.0", 22:22
+   "+20.9→+37.5", 22:27 "+13.7→+31.0", all TOUCHED. The closes also vary more than assumed
+   (0.4 s after the read at 22:11, 22:21, 22:37; 15 s at 22:41), which a burst-relative constant
+   cannot track. The 40-s hold clears close+24 s in the worst observed case and stays.
+2. **Invalid proxy.** `WCSession.isReachable` stayed true from 22:08 through 22:27 (Wi-Fi) while
+   the phone's sensor link was gone the whole time, so the app called it "transition over" and
+   used the short hold exactly during the long-tail windows. Reachability then flapped
+   22:27→22:44 at the edge of range, re-arming transitions at random. The only honest signal
+   of the sensor's two-central state would be the phone's own reads, which the watch cannot
+   see in real time.
+
+No wedge occurred (state 1 probably still carried; four long-tail windows with the pod link
+at close+13…+21 s) — luck or a narrower failure zone than the tail marker assumes; not
+evidence of safety. **The switch stays OFF and the adaptive code is withdrawn** (delete in the
+next cleanup). Recalibrate the `[tail]` late-zone marker to close+6→+20 s (the tail ends
+~+19 s after the close; failures ended by +16).
+
 ## 4. Next tests, top-down, each with its predictions
 
 **Q1 — Is it the existence of our request, its timing, or its order?** (the fix question)
