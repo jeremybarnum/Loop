@@ -2,10 +2,11 @@
 //  PodRadioSlotPolicyTests.swift
 //  WatchAppTests
 //
-//  The pod-radio slot schedule (2026-09-05 night). Sniffer histograms: the sensor is on the air
-//  0→~25 s after a reading and, phone absent, at +60/+120/+180/+240 (±5 s); silent otherwise.
-//  bluetoothd gated the sensor at −70 dBm after two links collapsed inside our pod exchange at
-//  +20/+25 s. The schedule keeps the pod off the air everywhere the sensor has been seen active.
+//  Build 179 (mute record §7a–7c, 2026-09-07): ONE pod hold, and only in the sensor's extended
+//  phase — the first two windows without the phone's relay after windows that had it, where
+//  every counted failure and the one −70 write of the day came from. Phone present and steady
+//  phone-absent are unrestricted: 17 pod-on-minute-call collisions at both judgment states
+//  counted nothing.
 //
 
 import XCTest
@@ -14,37 +15,73 @@ import XCTest
 final class PodRadioSlotPolicyTests: XCTestCase {
 
     private typealias S = StockLoopSession.PodRadioSlotPolicy
-    private typealias P = StockLoopSession.PodRadioPolicy
     private let anchor = Date(timeIntervalSince1970: 1_800_000_000)   // a direct read = a burst
 
-    // Build 177: the hold covers the burst and the measured tail (~+29 s) with margin — 40 s.
-    // The +60 s minute call is no longer inside it: unanswered CONNECT_INDs there never booked
-    // a failure under ride-only (mute record §5), and the pod's scan + link at +40…+60 s end
-    // before it.
-    func testThePodIsHeldThroughTheBurstAndTheTail() {
-        for phase: TimeInterval in [0, 5, 24, 25, 30, 35, 39] {
-            XCTAssertNotNil(S.closedRemaining(phase: phase), "phase +\(Int(phase)) s must be closed")
-        }
-        XCTAssertEqual(S.closedRemaining(phase: 0)!, 40, accuracy: 0.001)
-        XCTAssertEqual(S.closedRemaining(phase: 25)!, 15, accuracy: 0.001)
+    // The extended phase: no relay THIS window, and one within 12.5 min (two windows, three when
+    // the departure cut a window short). Today: 11:06 and 11:11 long tails, 11:16 short.
+    func testTheExtendedPhaseIsTheFirstTwoWindowsAfterTheRelayStops() {
+        let now = anchor
+        XCTAssertTrue(S.isExtendedPhase(lastRelay: now.addingTimeInterval(-5 * 60), now: now, relayThisWindow: false), "first window without a relay")
+        XCTAssertTrue(S.isExtendedPhase(lastRelay: now.addingTimeInterval(-10 * 60), now: now, relayThisWindow: false), "second window without a relay")
+        XCTAssertFalse(S.isExtendedPhase(lastRelay: now.addingTimeInterval(-15 * 60), now: now, relayThisWindow: false), "third burst is already short — minute calls, no tail")
+        XCTAssertFalse(S.isExtendedPhase(lastRelay: now.addingTimeInterval(-40 * 60), now: now, relayThisWindow: false), "steady phone-absent")
     }
 
-    func testTheFourSlotsAreOpen() {
-        for phase: TimeInterval in [40, 45, 60, 70, 90, 109, 130, 150, 169, 190, 210, 229, 250, 265, 279] {
-            XCTAssertNil(S.closedRemaining(phase: phase), "phase +\(Int(phase)) s must be open")
+    func testAWindowWithTheRelayIsNeverExtended() {
+        XCTAssertFalse(S.isExtendedPhase(lastRelay: anchor.addingTimeInterval(-3), now: anchor, relayThisWindow: true), "phone present: 7-s tail, nothing to fail into")
+    }
+
+    func testNoRelayEverMeansSteadyPhoneAbsentNotExtended() {
+        XCTAssertFalse(S.isExtendedPhase(lastRelay: nil, now: anchor, relayThisWindow: false), "a loan that began with the phone away, or a relaunch: the sensor is on minute calls")
+    }
+
+    // Inside the extended phase: hold through the burst and the tail, close+25 s capped at +40,
+    // read-relative 40 until the close is seen — build 177/178's proven numbers.
+    func testTheExtendedPhaseHoldsThroughTheTail() {
+        XCTAssertEqual(S.firstPhaseEnd(extended: true, closeOffset: 9), 34, accuracy: 0.001)
+        XCTAssertEqual(S.firstPhaseEnd(extended: true, closeOffset: 0.4), 25.4, accuracy: 0.001)
+        XCTAssertEqual(S.firstPhaseEnd(extended: true, closeOffset: 16), 40, accuracy: 0.001, "a late close is capped by what run 3 proved")
+        XCTAssertEqual(S.firstPhaseEnd(extended: true, closeOffset: nil), 40, "no close seen: the read-relative fallback")
+        let phases = S.closedPhases(extended: true, closeOffset: 9)
+        for phase: TimeInterval in [0, 5, 24, 33] {
+            XCTAssertNotNil(S.closedRemaining(phase: phase, phases: phases), "phase +\(Int(phase)) s must be closed")
+        }
+        XCTAssertEqual(S.closedRemaining(phase: 0, phases: phases)!, 34, accuracy: 0.001)
+    }
+
+    // The minute calls are open even in the extended phase (T1: 13 collisions at state 0, T1c: 4 at
+    // state 1, none counted); only the 20-s lead before the next burst is closed.
+    func testTheMinuteCallsAreOpenAndTheLeadIsClosedInTheExtendedPhase() {
+        let phases = S.closedPhases(extended: true, closeOffset: 9)
+        for phase: TimeInterval in [34, 45, 60, 115, 120, 180, 240, 279] {
+            XCTAssertNil(S.closedRemaining(phase: phase, phases: phases), "phase +\(Int(phase)) s must be open")
+        }
+        XCTAssertNotNil(S.closedRemaining(phase: 280, phases: phases), "the next window's lead (+280→+300) is closed")
+        XCTAssertNotNil(S.closedRemaining(phase: 299, phases: phases))
+    }
+
+    // Outside the extended phase: nothing, anywhere in the window — Jeremy, 2026-09-07: "outside
+    // of that mode, pod is unrestricted".
+    func testOutsideTheExtendedPhaseNothingIsHeld() {
+        XCTAssertEqual(S.firstPhaseEnd(extended: false, closeOffset: 9), 0)
+        XCTAssertTrue(S.closedPhases(extended: false, closeOffset: 9).isEmpty)
+        var p: TimeInterval = 0
+        while p < 300 {
+            XCTAssertNil(S.closedRemaining(anchor: anchor, now: anchor.addingTimeInterval(p), extended: false, closeOffset: 9), "phase +\(Int(p)) s")
+            p += 0.5
         }
     }
 
-    func testEveryMinuteCallIsBlackedOutWithTenSecondsOfMargin() {
-        for call: TimeInterval in [120, 180, 240] {
-            XCTAssertNil(S.closedRemaining(phase: call - 11))
-            XCTAssertNotNil(S.closedRemaining(phase: call - 10))
-            XCTAssertNotNil(S.closedRemaining(phase: call))
-            XCTAssertNotNil(S.closedRemaining(phase: call + 9))
-            XCTAssertNil(S.closedRemaining(phase: call + 10))
-        }
-        XCTAssertNotNil(S.closedRemaining(phase: 280), "the next window's lead (+280→+300) is closed")
-        XCTAssertNotNil(S.closedRemaining(phase: 299))
+    func testTheLongestHoldIsFortySeconds() {
+        var worst: TimeInterval = 0
+        var p: TimeInterval = 0
+        let phases = S.closedPhases(extended: true, closeOffset: nil)
+        while p < 300 { if let r = S.closedRemaining(phase: p, phases: phases) { worst = max(worst, r) }; p += 0.5 }
+        XCTAssertEqual(worst, 40, accuracy: 0.001, "a dose never waits longer than 40 s")
+    }
+
+    func testNeverWithoutAnAnchor() {
+        XCTAssertNil(S.closedRemaining(anchor: nil, now: anchor, extended: true, closeOffset: nil), "no direct read yet means no phase — never hold a dose on a guess")
     }
 
     func testThePhaseIsTheSensorsAndCarriesThroughMisses() {
@@ -55,58 +92,30 @@ final class PodRadioSlotPolicyTests: XCTestCase {
         XCTAssertEqual(S.phase(anchor: anchor, now: anchor.addingTimeInterval(4 * 300 + 200)), 200, accuracy: 0.001)
     }
 
-    func testOnlyTheSlotsPolicyHoldsAndNeverWithoutAnAnchor() {
-        let now = anchor.addingTimeInterval(20)
-        XCTAssertNotNil(S.closedRemaining(anchor: anchor, now: now, policy: .slots))
-        XCTAssertNil(S.closedRemaining(anchor: anchor, now: now, policy: .quietGate), "quietGate keeps the old bracket + gate, not the schedule")
-        XCTAssertNil(S.closedRemaining(anchor: anchor, now: now, policy: .off))
-        XCTAssertNil(S.closedRemaining(anchor: nil, now: now, policy: .slots), "no direct read yet means no phase — never hold a dose on a guess")
+    // The bench switch is the only control left, and nothing on the wrist sets it.
+    func testTheHoldIsOnByDefault() {
+        UserDefaults.standard.removeObject(forKey: StockLoopSession.PodRadioHold.key)
+        XCTAssertFalse(StockLoopSession.PodRadioHold.disabled)
+        XCTAssertTrue(StockLoopSession.quietWindowEnabled)
     }
+}
 
-    // Build 176: `slots` is the shipping policy — the pod never touches the sensor's tail.
-    func testTheDefaultIsSlots() {
-        UserDefaults.standard.removeObject(forKey: P.key)
-        XCTAssertEqual(P.current, .slots)
-        XCTAssertTrue(StockLoopSession.quietWindowEnabled, "the pre-burst bracket stays on under the default")
+// Build 179 — the glance's wedge hint (mute record §7c): two or more consecutive missed bursts
+// with the phone not relaying, on a stale number. Not an alert; it names the WATCH's Bluetooth.
+final class WedgeHintTests: XCTestCase {
+    func testTwoMissesWithThePhoneAwayNameTheWatchBluetooth() {
+        let hint = GlanceViewModel.wedgeHint(staleAge: 12 * 60, consecutiveMisses: 2, relayRecent: false)
+        XCTAssertEqual(hint, "G7 silent 12 min · try toggling watch Bluetooth")
     }
-
-    // Build 177: 40 s covers the measured tail (+29 s) and the latest close (+16 s) with margin.
-    func testTheLongestHoldIsFortySeconds() {
-        var worst: TimeInterval = 0
-        var p: TimeInterval = 0
-        while p < 300 { if let r = S.closedRemaining(phase: p) { worst = max(worst, r) }; p += 0.5 }
-        XCTAssertEqual(worst, 40, accuracy: 0.001, "a dose never waits longer than 40 s for the schedule")
+    func testOneMissIsNotAWedge() {
+        XCTAssertNil(GlanceViewModel.wedgeHint(staleAge: 12 * 60, consecutiveMisses: 1, relayRecent: false))
     }
-
-    // Build 178 — the relay-gated schedule (mute record §7), pinned per window.
-    func testSlotsIsTheProvenFortySecondsWhateverTheWindowShows() {
-        XCTAssertEqual(S.firstPhaseEnd(policy: .slots, closeOffset: 9, relaySeen: true), 40)
-        XCTAssertEqual(S.firstPhaseEnd(policy: .slots, closeOffset: nil, relaySeen: false), 40)
+    func testAPhoneThatIsRelayingIsNotAWedge() {
+        XCTAssertNil(GlanceViewModel.wedgeHint(staleAge: 12 * 60, consecutiveMisses: 3, relayRecent: true), "the number is stale for another reason — the relay is landing")
     }
-
-    func testRelayGatedWithNoRelayHoldsToTwentyFiveAfterTheCloseCappedAtForty() {
-        XCTAssertEqual(S.firstPhaseEnd(policy: .relayGated, closeOffset: 9, relaySeen: false), 34, accuracy: 0.001)
-        XCTAssertEqual(S.firstPhaseEnd(policy: .relayGated, closeOffset: 0.4, relaySeen: false), 25.4, accuracy: 0.001)
-        XCTAssertEqual(S.firstPhaseEnd(policy: .relayGated, closeOffset: 16, relaySeen: false), 40, accuracy: 0.001, "a late close is capped by what run 3 proved")
-        XCTAssertEqual(S.firstPhaseEnd(policy: .relayGated, closeOffset: nil, relaySeen: false), 40, "no close seen: the read-relative fallback")
-    }
-
-    func testRelayGatedWithTheRelayReleasesThreeSecondsAfterTheClose() {
-        XCTAssertEqual(S.firstPhaseEnd(policy: .relayGated, closeOffset: 9, relaySeen: true), 12, accuracy: 0.001)
-        XCTAssertEqual(S.firstPhaseEnd(policy: .relayGated, closeOffset: nil, relaySeen: true), 15, "no close yet: a short fallback")
-    }
-
-    func testMinuteCallBlackoutsFollowTheSwitchAndVanishForATwoCentralWindow() {
-        let on = S.closedPhases(policy: .slots, closeOffset: nil, relaySeen: false, blackouts: true)
-        XCTAssertNotNil(S.closedRemaining(phase: 115, phases: on), "blackouts on: +115 s is closed")
-        let off = S.closedPhases(policy: .slots, closeOffset: nil, relaySeen: false, blackouts: false)
-        XCTAssertNil(S.closedRemaining(phase: 115, phases: off), "blackouts off (T1): +115 s is open")
-        XCTAssertNotNil(S.closedRemaining(phase: 285, phases: off), "the pre-burst lead stays either way")
-        let twoCentral = S.closedPhases(policy: .relayGated, closeOffset: 9, relaySeen: true, blackouts: true)
-        XCTAssertNil(S.closedRemaining(phase: 115, phases: twoCentral), "phone present: the sensor makes no minute calls")
-        XCTAssertNil(S.closedRemaining(phase: 13, phases: twoCentral), "phone present: open at close+4 s")
-        UserDefaults.standard.removeObject(forKey: S.blackoutsKey)
-        XCTAssertTrue(S.blackoutsEnabled, "blackouts are on by default until T1")
+    func testAFreshNumberNeverCarriesTheHint() {
+        XCTAssertNil(GlanceViewModel.wedgeHint(staleAge: 4 * 60, consecutiveMisses: 2, relayRecent: false))
+        XCTAssertNil(GlanceViewModel.wedgeHint(staleAge: nil, consecutiveMisses: 2, relayRecent: false))
     }
 }
 

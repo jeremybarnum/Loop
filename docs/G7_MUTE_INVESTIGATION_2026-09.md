@@ -1090,3 +1090,198 @@ of the trigger; a mute → the overnight runs were luck of sampling.
 
 Order by information per hour: Q1 ride-only (also the candidate fix), then Q1 late-arm, then
 Q3 overnight (free), sniffer and toggle as they become available. One variable per arm.
+
+## 7a. T1 RESULT — 09-07 11:05→11:38, build 178: pod radio at minute calls counts NOTHING; the departure feeder did not fire (unexplained)
+
+**Setup.** Loan from 11:00:30 (direct G7 at 11:02). Radio Lab: pod `slots`, Minute-call
+blackouts OFF, ride-only ON. Phone Bluetooth OFF 11:05:00→11:38:30 with the phone physically
+next to the watch (on the Mac's USB); watch Wi-Fi ON. Sensor bursts on the :42 grid. nRF sniffer
+in advertising mode on the sensor; a lossy live bluetoothd tap through the phone (see 7b);
+watch sysdiagnose pressed 11:42:30. Ten manual boluses timed 1:55/2:55 after reads
+(11:08:40, 11:09:45, 11:13:40, 11:14:40, 11:18:40, 11:19:40, ~11:23:50, 11:28:40, 11:29:40,
+~11:34:00, 11:34:45) plus the loop's own pod link ~+45 s after every read.
+
+**Preregistered before the archive was read (11:44):** (A) count 2 → 4..5 from the two
+long-tail windows, minute-call requests not counted; ≥8 would mean they are. (B) −70 only if
+the count reached 5 inside the 11:06 tail. (C) judgment 0→1 only if the count reached 5.
+
+**Result (archive, bluetoothd, 10:50→11:43):**
+
+| what | result |
+|---|---|
+| tally, every evaluation 10:52→11:41:54 | **count 2, unchanged** (the two morning 708s) |
+| judgment | 0 throughout |
+| −70 writes | none; every add carried Dexcom's −100 |
+| sensor links | 11 of 11 windows connected (11:01…11:41), every close 719, link ages 2–12 s |
+| watch `CONNECT_IND`s at minute calls (sniffer) | 13 (11:17, :18, :19, :22, :23, :25, :28, :29, :34, :35, :37, :38, :39), **6 with a pod link up in the same second** (11:18:43, 11:19:44, 11:22:43, 11:28:42, 11:29:43, 11:34:44) — **none counted** |
+| long-tail windows after the departure | 11:06 (27-s tail, 7 requests) and 11:11 (29-s tail, 2 requests, last at +28 s) — **no 762 from either** |
+| watch reads | every window (Jeremy: loop never changed colour, Dexcom fine) |
+| the bolus Jeremy thought had failed (11:18:40) | delivered: watch log "MANUAL BOLUS 0.10 U — enacting" 11:18:45.0, "delivering … done in 4s" 11:18:46.4, phone checkpoint #9 accepted 11:18:46.7; pod connect RSSI −60, handshake 1.58 s, inside the 11:18:42 minute call |
+
+(A) was wrong in the direction that matters: the count did not move at all. The 13
+minute-call requests, six of them colliding with pod links, added nothing — **pod radio at
+minute calls is harmless to the tally**, which is what T1 was built to test. (B) and (C) held
+trivially.
+
+**The unexplained part is the feeder.** Every earlier departure, including yesterday's phone-
+and watch-Bluetooth toggles at home with nobody walking anywhere, cost ~2 early 762s inside
+the first two long-tail windows (§5a; run 3 on 175 accrued six that way in 45 minutes). Today's
+toggle put the sensor into phone-absent mode exactly as before (27–29-s tails, minute calls from
+11:17, Dexcom re-subscribing after every close, the controller's requests going into the tails)
+and **none of them failed.** No theory is offered for that here; it is the same procedure as run
+3 with a different outcome, and the things that differed are listed as candidates to test, not
+explanations: build 178 vs 175; the phone on the Mac's USB with two watch-log relay sessions open
+through it the whole time; whatever state the sensor was in at 11:05 (it had been in two-central
+mode all morning); sampling. Two windows are a small sample of a ~1-per-window event.
+
+**Instrument facts established the same morning (7b):**
+- **Reason 708 counts** (supervision timeout of an established link), not only 762: the count
+  went 0→1 on a 708 at 08:26:55 and 1→2 on another at 09:26:57, both at home with the phone
+  near. §5a's "only 762" is corrected to "762 or 708".
+- **The judgment reset to 0 overnight without an evaluation.** State 1 at 23:06 (count ≥ 9);
+  the first evaluation of the morning, 08:21:59, printed `from 0 to 0`, so the stored state was
+  already 0. Nothing in the log clears it; the store is purged before 23:48, so a daemon restart
+  vs the 02:00 charger sleep cycles is undecidable. Practical: a night on the charger clears it.
+- **The watch's live log CAN be streamed to the Mac through the phone's USB link**
+  (pymobiledevice3: companion proxy → forwarded lockdown → pair → os_trace_relay, each service
+  port forwarded through the proxy), no root, no Files — **but bluetoothd arrives for only 8–20 s
+  of every 60**, in bursts, regardless of screen, loan or a fresh session; Console.app rides the
+  same relay and has the same holes. `log collect --device-udid <watch>` needs root and then
+  fails "Device not configured"; the proxy's archive pull streams the whole store at 72 KB/s
+  (~1 h) and a size cap yields nothing. **Sysdiagnose stays the record; stream and sniffer are
+  taps.**
+- **The sniffer catches about one `CONNECT_IND` in three.** `requests=0` on a burst is not
+  evidence the watch did not connect: the 11:16:42 burst showed no request on the air and the
+  archive shows the watch connected at 11:16:44.5. Read the sniffer for tails and minute calls,
+  the archive for links.
+
+**Standing after T1:** the pod-side design in §7 is not contradicted, and the blackouts are
+not needed for the tally. The count feeder did not fire today and that is unexplained; T3
+(three departures on 178, sysdiagnose after) is the next sample of it, and T2 (`relayGated` at
+home) stays as designed.
+
+## 7b. T1b — 09-07 12:16→12:47: the same toggles with the phone unplugged and watch Wi-Fi off — the feeder fires 4/4, preregistration held
+
+**Setup.** E1 (keepalive only, no loan, no pod), ride-only. Phone **unplugged** from the Mac (no
+watch-log relay sessions), watch **Wi-Fi OFF**. Two phone-Bluetooth departures: 12:16:00→12:27:00
+and 12:33:00→12:43:00, the phone taking one burst (12:31:42, 7-s tail) between them. Sniffer
+throughout; sysdiagnose 12:48:00. Preregistered at 12:15 and restated at 12:48: count 2 → ~4 →
+~6, judgment 0→1 at the first re-add after 5, no −70 unless a late failure at state 1, every 762
+preceded by a completed connection 5–8 ms earlier.
+
+| what | result |
+|---|---|
+| tails (sniffer) | 12:16 32 s / 21 requests · 12:21 28 s / 20 · 12:26 8 s (extended phase over, minute call at 12:27:42) · 12:36 31 s / 21 · 12:41 30 s / 18 |
+| count | 2 → 3 (12:17:02.7) → 4 (12:21:59.2) → 5 (12:37:02.4) → 6 (12:41:58.8) — **one per tail window, 4 of 4**, each 4.5 s after Dexcom's re-subscribe |
+| shape | each: `Outgoing LE Connection complete` then `reason 762` 9 ms later, `Connection failed, Retrying`, re-add |
+| judgment | **0 → 1 at 12:37:02**, the re-add right after the third failure; 1 through 12:47 |
+| floor | none — all four failures early (inside the 6-s fast scan); the tail requests after +6 s were ignored, as at 11:06/11:11 |
+| reads | every window, phone-present tails 7 s at 12:31 and 12:46 |
+
+**Held on all four points.** And it gives the morning a controlled partner: the same
+procedure (phone-Bluetooth departure, nobody moving) produced **0 failures in 2 tail windows at
+11:06/11:11** with the phone on the Mac's USB, watch Wi-Fi on and two log-relay sessions open
+through the phone, and **4 failures in 4 tail windows at 12:16–12:41** with the phone unplugged,
+Wi-Fi off, no sessions. The failures are the sensor answering the request and the link dying
+at once; the silent case is the sensor not answering at all. Which of the three changed
+conditions matters, and why the sensor's answer depends on any of them, is not known. It is a
+candidate to split (one change at a time), not a cause.
+
+**Standing at 12:48:** the watch is at **state 1 with count 6**; the first late-tail failure
+from here writes −70. That is the "judgment carried" precondition the §7 tests were written
+for, so T2 or a rerun of T1 this afternoon would be the strict arm. The count's oldest entry
+(12:17) ages out at ~18:05; whether the state follows the count down has never been observed —
+only the overnight reset (7a).
+
+## 7c. T1c — 09-07 13:13→13:47: a wedge on purpose at state 1, healed by touch, then the pod on minute calls at state 1
+
+**Setup.** State 1 carried from 7b (count 6). Loan, phone Bluetooth off 13:13:00 (phone unplugged,
+watch Wi-Fi off), ride-only, blackouts off. Pod radio was still `slots` during the first tail (the
+13:16:57 bolus waited out the hold), `off` from 13:19, `slots` again after the heal. Sniffer
+throughout; watch sysdiagnose 13:46:24.
+
+| when | archive |
+|---|---|
+| 13:16:42 burst | watch read at :48.8, close :50.3; Dexcom re-subscribed with −100 |
+| 13:16:54.38 | early 762 (+4 s, in the fast scan) → count 7 |
+| **13:17:06.62** | **late 762 (+16 s, after the fast scan) → count 8; the daemon's retry re-added the sensor with `option RSSI:-70`** |
+| 13:21:42, 13:26:42 | bursts on the air 25 s each, **zero watch requests** — parked; no link in the archive |
+| 13:27:19 | Dexcom's own new request while the −70 entry was pending: wrote nothing |
+| 13:27:42 minute call | watch held on the sensor → link 13:27:43.7 (close-range burst clears −70) → close :45.2 → Dexcom re-subscribe → add with −100 → **healed** |
+| 13:31→13:46 | every burst connected (Dexcom); our client failed to ride 13:31 and 13:36 — app-side, see below |
+| 13:38:42, 13:39:42, 13:43:42, 13:44:42 | minute calls with a pod link up and the watch's requests in the same seconds, **at state 1**: count flat at 8, no −70 |
+
+**What this settles.**
+1. **The wedge does not need the pod.** The late failure that wrote −70 came with the pod held
+   off the radio by `slots`. State 1 plus a late failure in an extended-phase tail is sufficient.
+   The 175 hold removes one way of adding a late failure; it does not remove the wedge.
+2. **The floor is written as the accept-list option on the retry, not as a "Setting minimum
+   RSSI level" line.** Earlier greps that looked only for the latter would miss it. `Adding
+   device … with option RSSI:-70` is the line.
+3. **Minute calls are harmless at state 1 too.** Four pod-on-call collisions with the daemon
+   armed: nothing counted, nothing written. T1's "judgment carried" arm is now done.
+4. **The exposure is the extended phase only.** Both counted failures and the −70 came inside
+   the long tails of the first ten minutes after the phone stopped collecting; the minute-call
+   phase produced nothing all day at either state. Pod and reclaim restrictions, if any, belong
+   in those tails and nowhere else.
+5. **Touch-heal works at a minute call**, which carries no reading: Dexcom's app reports healthy
+   on a stale value until the next five-minute burst.
+
+**App-side, recorded, no code (Jeremy's call: these scenarios are extreme).** Our client's join at
+the 13:28 minute call was left pending when the call closed; it resolved onto the 13:31:42 link as
+it was closing (connected/disconnected 22 ms apart, "auth subscribe FAILED … NO SERVICES"); the next
+join at 13:36:44 connected but never authenticated in 12 s; the lab recycle did not clear it;
+force-quit did (13:41:44 auth in 0.2 s). The force-quit ended loan 310; the seize made 311; the
+phone, back at 13:45:41, dropped 311's checkpoint batches while reconciling 310 and then
+reconciled 311 with zero checkpoints, R32 WARN −0.40 U — probably phantom, unverified.
+
+## 7d. BUILD 179 — one hold, the extended phase only; the wedge hint; the lab trimmed (written 09-07 15:25, before the field test)
+
+**Jeremy's rule (09-07 14:45):** "my goal is to simply not make it any worse than Dexcom … detect
+phone absence going into 10 minute mode. During that mode, avoid bolus collisions. Outside of that
+mode, pod is unrestricted." No scan-hit heal. No new alert. No code for the app-side observations
+in 7c. Fewer lab buttons.
+
+**What changed.**
+1. `PodRadioPolicy` (quietGate / slots / relayGated / off), the minute-call blackouts and the
+   two-central close+3 hold are gone. One rule in `PodRadioSlotPolicy`: the sensor is in its
+   **extended phase** when THIS window has no phone relay and a relay landed within 12.5 min
+   (two windows, three when the departure cut one short — the third burst is already short).
+   In that phase the pod is held from the burst to close+25 s (capped burst+40, read-relative 40
+   until the close is seen) and for the 20-s lead before the next burst. Outside it — phone
+   present, steady phone-absent, a loan that began with the phone already away, a relaunch —
+   **nothing is held**: the pre-burst bracket keeps deferring WatchConnectivity sends and log
+   hops around the burst, but the pod path ignores it. The session-end gate of `quietGate` is
+   retired. Bench switch `G7Lab.podRadioHoldOff` removes every hold; nothing on the wrist sets it.
+2. **The wedge hint.** On the glance, under a stale number, when two or more consecutive expected
+   bursts had no read and the phone has not relayed for two windows, the provenance line reads
+   "G7 silent 12 min · try toggling watch Bluetooth" (minutes live). No alert; it names the watch.
+3. **Radio Lab:** ride-only, WC silence and the E1 soak remain; the pod-radio cycler, the blackouts
+   row, "Log WC backlog" and "Recycle G7 connect" are gone; a read-only "pod hold: none /
+   extended-phase / off" line shows what the rule is doing. Log lines carry the same word:
+   `[tail] … hold extended-phase`, `[g7-window] … hold=none`, `[quiet] DEFERRED … (extended-phase)`.
+4. Tests: `PodRadioSlotPolicyTests` rewritten for the rule (extended-phase detection, the hold,
+   the open minute calls, nothing held outside, 40-s cap, no anchor no hold, bench switch off by
+   default); `WedgeHintTests` (two misses + phone away + stale → the line; one miss, a relaying
+   phone, or a fresh number → nothing).
+
+**Two review fixes before shipping (15:45).** (a) The relay stamp that the rule keys on was set
+when a relayed reading was STORED (178) — and the store drops the relay whenever the watch's own
+direct read beat it, the common case near the phone, so phone-present windows often left no stamp
+and a departure then looked like steady phone-absent: no extended phase, no hold. It is now
+stamped on ARRIVAL of a new relayed reading, before the fill-a-gap skip (the same lesson as the
+direct-G7 provenance stamp, OPTION C). (b) The pod deferral polls the hold every ≤5 s instead of
+sleeping through it, ceiling 100 s, so a hold that ends early — this window's relay landing a few
+seconds after the direct read — releases the dose at once instead of 40 s later.
+
+**Preregistered field test (T4, the T1b procedure on 179):** phone unplugged, watch Wi-Fi off,
+loan, two phone-Bluetooth departures with a window in between, boluses tapped at +15 s of the
+first two bursts after each departure and at +15 s of two later windows, sysdiagnose after.
+- Watch log: `[quiet] DEFERRED manual bolus … (extended-phase)` ONLY for the taps in the first two
+  windows after each departure, released by +40 s; the later taps enact at once (no DEFERRED);
+  `[tail]` lines say `hold extended-phase` in those windows and `hold none` everywhere else,
+  including every phone-present window.
+- Archive: the count moves by the daemon's own tail failures only (~+2 per departure, as 7b);
+  no −70 unless the daemon's own late failure lands at state 1 — and if it does, the glance
+  shows the hint by the second missed burst.
+- Air: the pod link never inside a long tail before +40 s; on the minute calls freely.

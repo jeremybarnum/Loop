@@ -515,6 +515,10 @@ final class WatchLoopManager {
         /// whether or not its copy was kept.
         let directG7At: Date?
         let phoneRelayAt: Date?
+        /// Build 179, the glance's wedge hint: consecutive expected bursts the watch did not
+        /// read, and whether the phone relayed within the last two windows.
+        var g7ConsecutiveMisses: Int = 0
+        var relayRecent: Bool = false
         let trend: GlucoseTrend?
         let eventual: HKQuantity?
         let iob: Double?
@@ -679,6 +683,8 @@ final class WatchLoopManager {
                 glucoseDate: latest?.startDate,
                 directG7At: sources.direct,
                 phoneRelayAt: sources.phone,
+                g7ConsecutiveMisses: StockLoopSession.g7ConsecutiveMisses,
+                relayRecent: StockLoopSession.relayRecent(now: now()),
                 trend: (latest as? StoredGlucoseSample)?.trend,
                 // Keep the eventual VISIBLE; the glance grades its
                 // freshness (fresh/aging/stale on the loop dot — stock's HUDInterfaceController
@@ -1546,9 +1552,9 @@ final class WatchLoopManager {
         }
     }
 
-    /// The session-end gate belongs to the `quietGate` policy; under `slots` the schedule holds
-    /// the pod until +70 s, which outlasts any gate, and under `off` nothing holds.
-    static var podWaitForSessionEndEnabled: Bool { StockLoopSession.PodRadioPolicy.current == .quietGate }
+    /// The session-end gate belonged to the retired `quietGate` policy (build 179): the
+    /// extended-phase hold in `StockLoopSession.quietRemainingNow()` is the only pod hold now.
+    static var podWaitForSessionEndEnabled: Bool { false }
     static let podRadioGateSettle: TimeInterval = 3
     static let podRadioGateCeiling: TimeInterval = 20
 
@@ -1583,23 +1589,24 @@ final class WatchLoopManager {
     func afterG7QuietWindow(_ what: String, _ block: @escaping () -> Void) {
         guard let remaining = StockLoopSession.quietRemainingNow() else { block(); return }
         let start = self.now()
-        SportLog.event("quiet", String(format: "DEFERRED %@ — air closed (%@), %.1fs to open", what, StockLoopSession.PodRadioPolicy.current.rawValue, remaining))
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + remaining + 0.2) { [weak self] in
-            guard let self else { return }
-            if let again = StockLoopSession.quietRemainingNow() {
-                // Closed and reopened while we waited (a miss chained the next bracket). Wait
-                // once more rather than forever: the second bracket is at most 60 s away from
-                // ending, and a dose 100 s late is still clinically nil.
-                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + again + 0.2) { [weak self] in
-                    guard let self else { return }
-                    SportLog.event("quiet", String(format: "%@ released after %.1fs (second bracket)", what, self.now().timeIntervalSince(start)))
-                    block()
-                }
-                return
+        SportLog.event("quiet", String(format: "DEFERRED %@ — air closed (%@), %.1fs to open", what, StockLoopSession.holdModeText, remaining))
+        pollQuietWindow(what, start: start, block)
+    }
+
+    /// Build 179: re-check every few seconds rather than sleeping through the whole hold. The
+    /// hold can end early — this window's relay lands a few seconds after the direct read and
+    /// a phone-present window is then unrestricted — and it can chain once more on a miss.
+    /// Ceiling 100 s: a dose 100 s late is still clinically nil, and nothing waits forever.
+    private func pollQuietWindow(_ what: String, start: Date, _ block: @escaping () -> Void) {
+        let elapsed = self.now().timeIntervalSince(start)
+        if let again = StockLoopSession.quietRemainingNow(), elapsed < 100 {
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + min(again, 5) + 0.2) { [weak self] in
+                self?.pollQuietWindow(what, start: start, block)
             }
-            SportLog.event("quiet", String(format: "%@ released after %.1fs", what, self.now().timeIntervalSince(start)))
-            block()
+            return
         }
+        SportLog.event("quiet", String(format: "%@ released after %.1fs%@", what, elapsed, elapsed >= 100 ? " (ceiling)" : ""))
+        block()
     }
 
     private func deferPodRadioWhileG7AcquisitionResolves(_ proceed: @escaping () -> Void) {
@@ -1619,7 +1626,7 @@ final class WatchLoopManager {
             // Hold the pod radio until the G7 session has been down for a short settle, with the
             // same 20 s ceiling the stale branch uses. Cost: the dose enacts ~5-15 s later
             // ("clinically nil" per the doc above). Belongs to the `quietGate` pod-radio policy
-            // (G7Lab.podRadioPolicy, the default); `slots` holds longer, `off` holds nothing.
+            // (build 179: the extended-phase hold in StockLoopSession is the only hold; this gate is off)
             if Self.podWaitForSessionEndEnabled, let live = g7SessionLive, live() {
                 let start = self.now()
                 var sessionEndedAt: Date? = nil
@@ -3642,6 +3649,12 @@ extension WatchLoopManager: CGMManagerDelegate {
             // on the serial deviceQueue so repeats bail before the add.
             if sample.syncIdentifier == self.lastPhoneFallbackSyncId { return }
             self.lastPhoneFallbackSyncId = sample.syncIdentifier
+            // Build 179: the relay is the watch's only sign that the phone is collecting, so stamp
+            // it on ARRIVAL of a new relayed reading — before the fill-a-gap skip below, which drops
+            // the relay whenever the watch's own direct read beat it (the common case near the
+            // phone). Stamped on storage (178) it went missing exactly in phone-present windows,
+            // and a departure then looked like steady phone-absent: no extended phase, no hold.
+            StockLoopSession.noteRelayReading(self.now())
             // Fill a gap only: skip if the store already has a reading at/after this one (a fresher
             // direct-G7 read wins). syncId dedup in the store is the belt for the exact-overlap case.
             if let latest = self.glucoseStore.latestGlucose?.startDate, latest >= sample.date { return }
@@ -3656,7 +3669,6 @@ extension WatchLoopManager: CGMManagerDelegate {
                 self.refreshGlanceData()   // UI batch (build 176): repaint on arrival, inactive or not
                 let mgdl = Int(sample.quantity.doubleValue(for: .milligramsPerDeciliter))
                 self.noteGlucoseSource(directG7: false)
-                StockLoopSession.noteRelayReading(self.now())   // build 178: this window is two-central
                 SportLog.event("glucose",
                     "INGEST src=phone-relay stored=1/1 · latest \(mgdl) mg/dL age \(Int(self.now().timeIntervalSince(sample.date)))s (direct-G7 gap)")
                 SportLog.event("loan", "phone-BG fallback: ingested \(mgdl) mg/dL syncId=\(sample.syncIdentifier ?? "?") (direct-G7 gap) — triggering loop")
