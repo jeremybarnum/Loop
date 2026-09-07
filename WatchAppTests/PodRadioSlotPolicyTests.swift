@@ -66,11 +66,34 @@ final class PodRadioSlotPolicyTests: XCTestCase {
         XCTAssertTrue(StockLoopSession.quietWindowEnabled, "the pre-burst bracket stays on under the default")
     }
 
-    func testTheLongestHoldIsSeventySeconds() {
+    // Build 177: 40 s covers the measured tail (+29 s) and the latest close (+16 s) with margin.
+    func testTheLongestHoldIsFortySeconds() {
         var worst: TimeInterval = 0
         var p: TimeInterval = 0
         while p < 300 { if let r = S.closedRemaining(phase: p) { worst = max(worst, r) }; p += 0.5 }
-        XCTAssertEqual(worst, 70, accuracy: 0.001, "a dose never waits longer than 70 s for the schedule")
+        XCTAssertEqual(worst, 40, accuracy: 0.001, "a dose never waits longer than 40 s for the schedule")
+    }
+
+    // Build 177: outside a transition the hold is 20 s — past the latest observed close.
+    func testTheSteadyStateHoldIsTwentySeconds() {
+        var worst: TimeInterval = 0
+        var p: TimeInterval = 0
+        while p < 300 { if let r = S.closedRemaining(phase: p, transition: false) { worst = max(worst, r) }; p += 0.5 }
+        XCTAssertEqual(worst, 20, accuracy: 0.001)
+        XCTAssertNil(S.closedRemaining(phase: 25, transition: false), "steady: open at +25 s")
+        XCTAssertNotNil(S.closedRemaining(phase: 25, transition: true), "transition: still closed at +25 s")
+        XCTAssertNotNil(S.closedRemaining(phase: 115, transition: false), "the minute-call blackouts stay in both tables")
+    }
+
+    func testATransitionLastsFifteenMinutesFromItsTrigger() {
+        typealias T = StockLoopSession.TailTransition
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        let until = t0.addingTimeInterval(T.length)
+        XCTAssertTrue(T.isActive(until: until, now: t0.addingTimeInterval(14 * 60)))
+        XCTAssertFalse(T.isActive(until: until, now: t0.addingTimeInterval(16 * 60)))
+        XCTAssertFalse(T.isActive(until: nil, now: t0), "no trigger yet: not in transition")
+        UserDefaults.standard.removeObject(forKey: T.adaptiveKey)
+        XCTAssertFalse(T.adaptiveEnabled, "adaptive hold is off by default until one more departure run")
     }
 }
 

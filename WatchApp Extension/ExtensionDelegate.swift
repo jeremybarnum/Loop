@@ -300,6 +300,7 @@ extension ExtensionDelegate: WCSessionDelegate {
         // R40 reunion: a seized loan ends (debounced, via the normal hand-back) when the
         // phone genuinely returns — the controller ignores everything but that case.
         stockLoopSession.loanController.noteReachabilityChanged(session.isReachable)
+        StockLoopSession.TailTransition.note(session.isReachable ? "phone reachable" : "phone unreachable")
     }
 
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String : Any]) {

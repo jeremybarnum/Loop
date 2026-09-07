@@ -196,6 +196,7 @@ struct LoanDebugView: View {
                     // lab — under ride-only (now the default) our app never scans, so both were
                     // inert; the keys still exist for a ride-only-OFF diagnosis via the shell.
                     ForEach([(G7RidePolicy.key, "Ride-only (no request of ours)", true),
+                             (StockLoopSession.TailTransition.adaptiveKey, "Adaptive tail hold (40 s / 20 s steady)", false),
                              (StockLoopSession.WCSilence.key, "WC silence (diagnosis)", false)], id: \.0) { key, title, def in
                         Button("\(title): \((UserDefaults.standard.object(forKey: key) as? Bool ?? def) ? "ON" : "OFF") → tap to flip") {
                             let now = !((UserDefaults.standard.object(forKey: key) as? Bool) ?? def)
