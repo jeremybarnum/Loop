@@ -59,9 +59,10 @@ final class PodRadioSlotPolicyTests: XCTestCase {
         XCTAssertNil(S.closedRemaining(anchor: nil, now: now, policy: .slots), "no direct read yet means no phase — never hold a dose on a guess")
     }
 
-    func testTheDefaultIsThePreviousBehaviour() {
+    // Build 176: `slots` is the shipping policy — the pod never touches the sensor's tail.
+    func testTheDefaultIsSlots() {
         UserDefaults.standard.removeObject(forKey: P.key)
-        XCTAssertEqual(P.current, .quietGate)
+        XCTAssertEqual(P.current, .slots)
         XCTAssertTrue(StockLoopSession.quietWindowEnabled, "the pre-burst bracket stays on under the default")
     }
 

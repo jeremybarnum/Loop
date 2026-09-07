@@ -460,7 +460,10 @@ final class StockLoopSession {
         case quietGate, slots, off
         static let key = "G7Lab.podRadioPolicy"
         static var current: PodRadioPolicy {
-            PodRadioPolicy(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .quietGate
+            // DEFAULT `slots` since build 176 (2026-09-06): with the hold at the loop level (175)
+            // the pod never touches the sensor's tail — run 3's eleven CLEAN tails, no −70.
+            // `quietGate` put the pod on the air at the session's end, inside the tail (20:47).
+            PodRadioPolicy(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .slots
         }
     }
 

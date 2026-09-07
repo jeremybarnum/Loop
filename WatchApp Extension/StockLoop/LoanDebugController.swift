@@ -192,9 +192,10 @@ struct LoanDebugView: View {
                 // build never does. The rows flip the UserDefaults switches the G7 stack and
                 // the pod-radio gate read at use, so bench arms need no reship.
                 if (Bundle.main.bundleIdentifier ?? "").contains("StockSportMode") {
-                    ForEach([("G7Lab.scanWhilePending", "Scan while pending (fix)", false),
-                             ("G7Lab.scanWatchdog", "Scan watchdog", false),
-                             (G7RidePolicy.key, "Ride-only (no request of ours)", false),
+                    // Build 176 cleanup: "Scan while pending" and "Scan watchdog" are gone from the
+                    // lab — under ride-only (now the default) our app never scans, so both were
+                    // inert; the keys still exist for a ride-only-OFF diagnosis via the shell.
+                    ForEach([(G7RidePolicy.key, "Ride-only (no request of ours)", true),
                              (StockLoopSession.WCSilence.key, "WC silence (diagnosis)", false)], id: \.0) { key, title, def in
                         Button("\(title): \((UserDefaults.standard.object(forKey: key) as? Bool ?? def) ? "ON" : "OFF") → tap to flip") {
                             let now = !((UserDefaults.standard.object(forKey: key) as? Bool) ?? def)
@@ -225,16 +226,8 @@ struct LoanDebugView: View {
                             }
                         }
                     }
-                    // Re-arm timing after the sensor drops us (2026-09-05): stock 2 s → 30 s →
-                    // late (arm ~30 s before the next burst so Dexcom's request goes first).
-                    Button("Re-arm: \(G7RearmPolicy.current.rawValue) → tap to cycle") {
-                        let order: [G7RearmPolicy] = [.stock, .delay30, .lateArm]
-                        let i = order.firstIndex(of: G7RearmPolicy.current) ?? 0
-                        let next = order[(i + 1) % order.count]
-                        UserDefaults.standard.set(next.rawValue, forKey: G7RearmPolicy.key)
-                        SportLog.event("lab", "switch \(G7RearmPolicy.key) = \(next.rawValue) (tapped on the Radio Lab)")
-                        lastAction = "re-arm → \(next.rawValue)"
-                    }
+                    // Build 176 cleanup: the re-arm cycler (stock / delay30 / lateArm) is gone from
+                    // the lab — it timed a request ride-only never makes. The policy enum stays.
                     // Pod radio policy (2026-09-05 night): replaces the "pod waits for G7 session end"
                     // and "quiet window" rows. quietGate = both of those (the default); slots = pod
                     // on the air only at +70…+110, +130…+170, +190…+230, +250…+280 after the burst

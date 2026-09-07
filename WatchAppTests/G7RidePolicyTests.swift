@@ -61,8 +61,9 @@ final class G7RidePolicyTests: XCTestCase {
         XCTAssertTrue(G7RidePolicy.shouldForgetOnBareDisconnect(rideOnly: false, adopted: true), "switch off: stock behaviour")
     }
 
-    func testTheSwitchIsOffByDefault() {
+    // Build 176: ride-only is the shipping behaviour (mute record §5, run 3 acceptance).
+    func testTheSwitchIsOnByDefault() {
         UserDefaults.standard.removeObject(forKey: G7RidePolicy.key)
-        XCTAssertFalse(G7RidePolicy.rideOnlyEnabled)
+        XCTAssertTrue(G7RidePolicy.rideOnlyEnabled)
     }
 }

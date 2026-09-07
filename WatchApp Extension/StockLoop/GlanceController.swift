@@ -254,11 +254,7 @@ final class GlanceViewModel: ObservableObject {
     func startRefreshing() {
         guard !isPreview else { return }
         RuntimeStateLog.mark("glance.startRefreshing")
-        if mirrorObserver == nil {
-            mirrorObserver = NotificationCenter.default.addObserver(
-                forName: WatchLoopManager.glanceMirrorDidUpdate, object: nil, queue: .main
-            ) { [weak self] _ in self?.refresh(kickMirror: false) }
-        }
+        armMirrorObserver()
         // ALWAYS catch up first. This used to sit BEHIND `guard timer == nil`, so any re-entry
         // with a live timer skipped the immediate render — the recovery path was as silent as
         // the failure. Cheap (one queue-free read) and it makes re-entry self-healing.
@@ -285,9 +281,21 @@ final class GlanceViewModel: ObservableObject {
     /// controller's queue, which the pump also uses.
     func stopRefreshing() {
         RuntimeStateLog.mark("glance.stopRefreshing")
-        if let o = mirrorObserver { NotificationCenter.default.removeObserver(o); mirrorObserver = nil }
+        // UI batch (build 176, raised 2026-08-22): the mirror observer used to die here too, so a
+        // reading that landed while the watch lay face-up on a table (inactive, always-on
+        // display) painted only on the next wrist-raise — bgAge=60s at render, zero RENDER lines
+        // between ingest and interaction. The 2-s tick still stops; the observer stays, and
+        // WatchLoopManager now rebuilds the mirror on every ingest, so one render per reading
+        // reaches the dimmed screen. It is removed in deinit.
         timer?.invalidate()
         timer = nil
+    }
+
+    private func armMirrorObserver() {
+        guard mirrorObserver == nil else { return }
+        mirrorObserver = NotificationCenter.default.addObserver(
+            forName: WatchLoopManager.glanceMirrorDidUpdate, object: nil, queue: .main
+        ) { [weak self] _ in self?.refresh(kickMirror: false) }
     }
 
     /// Preview-only: fixed state, no timer, no store access.
@@ -297,6 +305,7 @@ final class GlanceViewModel: ObservableObject {
     }
 
     deinit {
+        if let o = mirrorObserver { NotificationCenter.default.removeObserver(o); mirrorObserver = nil }
         timer?.invalidate()
         appStateObservers.forEach(NotificationCenter.default.removeObserver)
     }
@@ -955,6 +964,9 @@ struct GlanceView: View {
 
     /// Open (stop dosing) is fail-safe → immediate. Close (start dosing) → confirm.
     private func onLoopTap() {
+        // UI batch (build 176, raised 2026-08-18): the loop pill is a small target under a
+        // fingertip; acknowledge the tap the way End/Cancel already do.
+        WKInterfaceDevice.current().play(.click)
         if model.state.loopClosed {
             model.setLoopClosed(false)
         } else {

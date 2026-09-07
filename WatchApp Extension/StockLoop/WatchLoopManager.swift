@@ -3593,6 +3593,9 @@ extension WatchLoopManager: CGMManagerDelegate {
                 // `if glucoseMomentumEffect == nil` guard never fired again. Every [predict]
                 // read `momentum —` while BG swung ±20/cycle, leaving the prediction trend-blind.
                 self.dataAccessQueue.async { self.glucoseMomentumEffect = nil }
+                // UI batch (build 176): publish a fresh glance mirror on every reading, so the
+                // glance repaints on arrival even while inactive (face-up on a table).
+                self.refreshGlanceData()
                 completion()
             }
             }
@@ -3650,6 +3653,7 @@ extension WatchLoopManager: CGMManagerDelegate {
                     return
                 }
                 self.dataAccessQueue.async { self.glucoseMomentumEffect = nil }   // Momentum-invalidation parity
+                self.refreshGlanceData()   // UI batch (build 176): repaint on arrival, inactive or not
                 let mgdl = Int(sample.quantity.doubleValue(for: .milligramsPerDeciliter))
                 self.noteGlucoseSource(directG7: false)
                 SportLog.event("glucose",

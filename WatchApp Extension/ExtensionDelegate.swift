@@ -85,11 +85,25 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         _ = stockLoopSession
     }
 
+    /// UI batch (build 176, raised 2026-08-18): a relaunch used to land wherever stock's page
+    /// bookkeeping left it and the user swiped to the glance. Sport Mode's landing surface is
+    /// the glance, so the FIRST activation of a process goes there.
+    private var landedOnGlance = false
+
     func applicationDidBecomeActive() {
         // 135 instrumentation (Jeremy 2026-07-20: "does the log know foreground vs
         // background?"): every radio event between these markers is attributable to
         // an app state — turns the background-degrades-the-pounce anecdote into data.
         RuntimeStateLog.mark("app.didBecomeActive")
+        if !landedOnGlance {
+            landedOnGlance = true
+            DispatchQueue.main.async {
+                if let glance = GlanceController.current {
+                    glance.becomeCurrentPage()
+                    SportLog.event("app", "first activation — landed on the glance")
+                }
+            }
+        }
         SportLog.event("app", "ACTIVE (wrist up, frontmost) · \(RuntimeStateLog.snapshot())")
         if WCSession.default.activationState != .activated {
             WCSession.default.activate()
