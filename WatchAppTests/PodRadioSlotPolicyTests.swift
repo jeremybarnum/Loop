@@ -78,26 +78,35 @@ final class PodRadioSlotPolicyTests: XCTestCase {
         XCTAssertEqual(worst, 40, accuracy: 0.001, "a dose never waits longer than 40 s for the schedule")
     }
 
-    // Build 177: outside a transition the hold is 20 s — past the latest observed close.
-    func testTheSteadyStateHoldIsTwentySeconds() {
-        var worst: TimeInterval = 0
-        var p: TimeInterval = 0
-        while p < 300 { if let r = S.closedRemaining(phase: p, transition: false) { worst = max(worst, r) }; p += 0.5 }
-        XCTAssertEqual(worst, 20, accuracy: 0.001)
-        XCTAssertNil(S.closedRemaining(phase: 25, transition: false), "steady: open at +25 s")
-        XCTAssertNotNil(S.closedRemaining(phase: 25, transition: true), "transition: still closed at +25 s")
-        XCTAssertNotNil(S.closedRemaining(phase: 115, transition: false), "the minute-call blackouts stay in both tables")
+    // Build 178 — the relay-gated schedule (mute record §7), pinned per window.
+    func testSlotsIsTheProvenFortySecondsWhateverTheWindowShows() {
+        XCTAssertEqual(S.firstPhaseEnd(policy: .slots, closeOffset: 9, relaySeen: true), 40)
+        XCTAssertEqual(S.firstPhaseEnd(policy: .slots, closeOffset: nil, relaySeen: false), 40)
     }
 
-    func testATransitionLastsFifteenMinutesFromItsTrigger() {
-        typealias T = StockLoopSession.TailTransition
-        let t0 = Date(timeIntervalSince1970: 1_000_000)
-        let until = t0.addingTimeInterval(T.length)
-        XCTAssertTrue(T.isActive(until: until, now: t0.addingTimeInterval(14 * 60)))
-        XCTAssertFalse(T.isActive(until: until, now: t0.addingTimeInterval(16 * 60)))
-        XCTAssertFalse(T.isActive(until: nil, now: t0), "no trigger yet: not in transition")
-        UserDefaults.standard.removeObject(forKey: T.adaptiveKey)
-        XCTAssertFalse(T.adaptiveEnabled, "adaptive hold is off by default until one more departure run")
+    func testRelayGatedWithNoRelayHoldsToTwentyFiveAfterTheCloseCappedAtForty() {
+        XCTAssertEqual(S.firstPhaseEnd(policy: .relayGated, closeOffset: 9, relaySeen: false), 34, accuracy: 0.001)
+        XCTAssertEqual(S.firstPhaseEnd(policy: .relayGated, closeOffset: 0.4, relaySeen: false), 25.4, accuracy: 0.001)
+        XCTAssertEqual(S.firstPhaseEnd(policy: .relayGated, closeOffset: 16, relaySeen: false), 40, accuracy: 0.001, "a late close is capped by what run 3 proved")
+        XCTAssertEqual(S.firstPhaseEnd(policy: .relayGated, closeOffset: nil, relaySeen: false), 40, "no close seen: the read-relative fallback")
+    }
+
+    func testRelayGatedWithTheRelayReleasesThreeSecondsAfterTheClose() {
+        XCTAssertEqual(S.firstPhaseEnd(policy: .relayGated, closeOffset: 9, relaySeen: true), 12, accuracy: 0.001)
+        XCTAssertEqual(S.firstPhaseEnd(policy: .relayGated, closeOffset: nil, relaySeen: true), 15, "no close yet: a short fallback")
+    }
+
+    func testMinuteCallBlackoutsFollowTheSwitchAndVanishForATwoCentralWindow() {
+        let on = S.closedPhases(policy: .slots, closeOffset: nil, relaySeen: false, blackouts: true)
+        XCTAssertNotNil(S.closedRemaining(phase: 115, phases: on), "blackouts on: +115 s is closed")
+        let off = S.closedPhases(policy: .slots, closeOffset: nil, relaySeen: false, blackouts: false)
+        XCTAssertNil(S.closedRemaining(phase: 115, phases: off), "blackouts off (T1): +115 s is open")
+        XCTAssertNotNil(S.closedRemaining(phase: 285, phases: off), "the pre-burst lead stays either way")
+        let twoCentral = S.closedPhases(policy: .relayGated, closeOffset: 9, relaySeen: true, blackouts: true)
+        XCTAssertNil(S.closedRemaining(phase: 115, phases: twoCentral), "phone present: the sensor makes no minute calls")
+        XCTAssertNil(S.closedRemaining(phase: 13, phases: twoCentral), "phone present: open at close+4 s")
+        UserDefaults.standard.removeObject(forKey: S.blackoutsKey)
+        XCTAssertTrue(S.blackoutsEnabled, "blackouts are on by default until T1")
     }
 }
 

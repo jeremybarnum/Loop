@@ -65,7 +65,6 @@ final class StockLoopSession {
         // Build 174: per-window tail exposure (see TailExposure below).
         G7RadioCensus.sensorClosed = { name in TailExposure.noteSensorClosed(name) }
         G7RadioCensus.scanStarted = { TailExposure.noteScanStarted() }
-        TailTransition.note("launch")
 
         // The G7 radio census — names which of the three acquisition triggers fires
         // (system-connected piggyback / connection event / ad scan), D2W's rhythm, and connect
@@ -246,7 +245,6 @@ final class StockLoopSession {
                 // Deliberately NOT re-asserted here: this also fires on the
                 // hand-back-timeout resume path, where the user's own choice must survive.
                 self.setKeepalive(true, reason: "soak")
-                TailTransition.note("loan start")
                 // Loop-Failure ladder (stock parity): every live cycle re-defers all four rungs.
                 LoopStallWatchdog.refresh()
                 SportLog.event("deadman", "ladder ARMED — 20/40m timeSensitive + 1/2h critical rungs [deadman]")
@@ -459,7 +457,12 @@ final class StockLoopSession {
     /// pre-burst bracket plus the session-end gate); `off` holds nothing (control arm).
     /// Replaces the two Radio Lab rows it subsumes. Key `G7Lab.podRadioPolicy`, default quietGate.
     enum PodRadioPolicy: String, CaseIterable {
-        case quietGate, slots, off
+        /// `relayGated` (build 178, mute record §7): hold the pod only while the sensor can be
+        /// advertising after the fast scan. When the phone's own reading reached the watch as
+        /// a relay for this window (the sensor has both centrals: 7-s tail, no minute calls),
+        /// release at close+3 s and skip the minute-call blackouts; otherwise release at
+        /// close+25 s (read+40 if no close was seen) and keep the blackouts. T1/T2/T3 arm.
+        case quietGate, slots, relayGated, off
         static let key = "G7Lab.podRadioPolicy"
         static var current: PodRadioPolicy {
             // DEFAULT `slots` since build 176 (2026-09-06): with the hold at the loop level (175)
@@ -471,71 +474,90 @@ final class StockLoopSession {
 
     enum PodRadioSlotPolicy {
         static let period: TimeInterval = 300
-        /// Closed phases in seconds after the burst: the burst + tail, then a ±10 s blackout
-        /// around each minute call, then the next window's lead.
-        ///
-        /// Build 177 (2026-09-06): the first phase is 40 s, not 70. Measured: the sensor closes
-        /// our session at +9…+16 s, every late failure on record landed 11–16 s after that
-        /// close, and the long tail ends ~+29 s after the burst. 40 covers it with margin, and
-        /// the pod's scan + link (+40…+60 s) finish before the +60 s minute call. Run 3 at +70
-        /// was the proof; 70 was a margin, not a measurement.
-        static let closed: [(from: TimeInterval, to: TimeInterval)] = [(0, 40), (110, 130), (170, 190), (230, 250), (280, 300)]
-        /// STEADY STATE (adaptive hold, `G7Lab.tailHoldAdaptive`, default off until one more
-        /// departure run): the long tail exists only for ~10 min after the phone leaves. With the
-        /// phone present, and again once the sensor has given up on it, tails are 7 s and there
-        /// is nothing to fail into — 08:46→09:06 and 00:31→00:51 put the pod on the air at +0 s
-        /// across ~10 steady windows and booked nothing. So outside a transition the first
-        /// phase is 20 s: past the latest observed close (+16 s) with margin.
-        static let closedSteady: [(from: TimeInterval, to: TimeInterval)] = [(0, 20), (110, 130), (170, 190), (230, 250), (280, 300)]
+        /// Read-relative fallback, proven by run 3 at +70 and run 4 at +40 (build 177): the
+        /// sensor closes our session at +9…+16 s, every late failure sat 11–16 s after that
+        /// close, the long tail ends ~+29 s after the burst.
+        static let tailHold: TimeInterval = 40
+        /// Close-relative hold for a window with no relay (phone away or just gone): past the
+        /// failure zone (close+11…+16) and the tail end (~close+19) with margin. Capped by
+        /// `tailHold` so a late close cannot push the pod past what run 3 proved.
+        static let afterCloseHold: TimeInterval = 25
+        /// Close-relative hold for a two-central window (the phone's relay landed): the tail
+        /// is 7 s, there is nothing to fail into; ~10 steady windows with the pod at +0 s
+        /// booked nothing (08:46→09:06, 00:31→00:51).
+        static let twoCentralHold: TimeInterval = 3
+        static let twoCentralFallbackEnd: TimeInterval = 15    // no close seen yet in a two-central window
+        /// ±10 s around the +120/+180/+240 minute calls. Untested with the pod on the air —
+        /// T1 (`G7Lab.minuteCallBlackouts` off) decides whether they stay.
+        static let blackouts: [(from: TimeInterval, to: TimeInterval)] = [(110, 130), (170, 190), (230, 250)]
+        static let lead: (from: TimeInterval, to: TimeInterval) = (280, 300)
+        static let blackoutsKey = "G7Lab.minuteCallBlackouts"
+        static var blackoutsEnabled: Bool { UserDefaults.standard.object(forKey: blackoutsKey) as? Bool ?? true }
+
         /// Seconds since the most recent grid burst (the sensor's phase, carried through misses).
         static func phase(anchor: Date, now: Date) -> TimeInterval {
             var last = G7QuietPolicy.nextBurst(anchor: anchor, now: now)
             while last > now { last = last.addingTimeInterval(-period) }
             return now.timeIntervalSince(last)
         }
-        /// Seconds until the pod may use the radio at this phase; nil when it may now.
-        /// `transition` = the sensor may be in its long-tail state (default: assume so).
-        static func closedRemaining(phase: TimeInterval, transition: Bool = true) -> TimeInterval? {
+        /// Where the first closed phase ends, from the burst, given the policy and what this
+        /// window has shown so far. Pure, pinned by WatchAppTests.
+        static func firstPhaseEnd(policy: PodRadioPolicy, closeOffset: TimeInterval?, relaySeen: Bool) -> TimeInterval {
+            switch policy {
+            case .slots:
+                return tailHold
+            case .relayGated:
+                if relaySeen { return closeOffset.map { $0 + twoCentralHold } ?? twoCentralFallbackEnd }
+                if let c = closeOffset { return min(tailHold, c + afterCloseHold) }
+                return tailHold
+            case .quietGate, .off:
+                return 0
+            }
+        }
+        static func closedPhases(policy: PodRadioPolicy, closeOffset: TimeInterval?, relaySeen: Bool, blackouts: Bool) -> [(from: TimeInterval, to: TimeInterval)] {
+            var phases: [(from: TimeInterval, to: TimeInterval)] = [(0, firstPhaseEnd(policy: policy, closeOffset: closeOffset, relaySeen: relaySeen))]
+            // A two-central sensor makes no minute calls, so the blackouts have nothing to protect.
+            if blackouts && !(policy == .relayGated && relaySeen) { phases += Self.blackouts }
+            phases.append(lead)
+            return phases
+        }
+        static func closedRemaining(phase: TimeInterval, phases: [(from: TimeInterval, to: TimeInterval)]) -> TimeInterval? {
             let p = ((phase.truncatingRemainder(dividingBy: period)) + period).truncatingRemainder(dividingBy: period)
-            for slot in (transition ? closed : closedSteady) where p >= slot.from && p < slot.to { return slot.to - p }
+            for slot in phases where p >= slot.from && p < slot.to { return slot.to - p }
             return nil
         }
-        static func closedRemaining(anchor: Date?, now: Date, policy: PodRadioPolicy) -> TimeInterval? {
-            guard policy == .slots, let anchor else { return nil }
-            let transition = TailTransition.adaptiveEnabled ? TailTransition.isActive(now: now) : true
-            return closedRemaining(phase: phase(anchor: anchor, now: now), transition: transition)
+        /// The proven `slots` schedule with blackouts, for the bench and the old call sites.
+        static func closedRemaining(phase: TimeInterval) -> TimeInterval? {
+            closedRemaining(phase: phase, phases: closedPhases(policy: .slots, closeOffset: nil, relaySeen: false, blackouts: true))
         }
-    }
-
-    /// Build 177 — when might the sensor be in its LONG-TAIL state? For ~10 min after the phone
-    /// leaves (measured twice on the air: 29-s tails for two windows, then 7 s), and, to be
-    /// safe, after anything that changes who the sensor is talking to: the phone becoming
-    /// reachable or unreachable, a loan starting, the app launching. 15 minutes after any of
-    /// those the pod hold is the full 40 s; otherwise, with the adaptive switch on, 20 s.
-    enum TailTransition {
-        static let adaptiveKey = "G7Lab.tailHoldAdaptive"
-        static var adaptiveEnabled: Bool { UserDefaults.standard.object(forKey: adaptiveKey) as? Bool ?? false }
-        static let length: TimeInterval = 15 * 60
-        private static let lock = NSLock()
-        private static var _until: Date?
-        static func note(_ reason: String, now: Date = Date()) {
-            lock.lock(); _until = now.addingTimeInterval(length); lock.unlock()
-            SportLog.event("tail", "transition started (\(reason)) — full 40-s hold for \(Int(length / 60)) min")
+        static func closedRemaining(anchor: Date?, now: Date, policy: PodRadioPolicy,
+                                    closeOffset: TimeInterval? = nil, relaySeen: Bool = false, blackouts: Bool = true) -> TimeInterval? {
+            guard policy == .slots || policy == .relayGated, let anchor else { return nil }
+            let phases = closedPhases(policy: policy, closeOffset: closeOffset, relaySeen: relaySeen, blackouts: blackouts)
+            return closedRemaining(phase: phase(anchor: anchor, now: now), phases: phases)
         }
-        static func isActive(now: Date = Date()) -> Bool {
-            lock.lock(); defer { lock.unlock() }
-            guard let u = _until else { return false }
-            return now < u
-        }
-        /// Pure form for the bench.
-        static func isActive(until: Date?, now: Date) -> Bool { until.map { now < $0 } ?? false }
     }
 
     private static let quietLock = NSLock()
     private static var _quietOpen = false
     private static var _quietCloseAt: Date?
     private static var _slotAnchor: Date?
-    static func setSlotAnchor(_ date: Date) { quietLock.lock(); _slotAnchor = date; quietLock.unlock() }
+    private static var _slotCloseAt: Date?
+    private static var _relayAt: Date?
+    static func setSlotAnchor(_ date: Date) { quietLock.lock(); _slotAnchor = date; _slotCloseAt = nil; quietLock.unlock() }
+    /// Build 178: the adopted sensor's link just closed — the close-relative hold starts here.
+    static func noteSensorClose(_ date: Date = Date()) { quietLock.lock(); _slotCloseAt = date; quietLock.unlock() }
+    /// Build 178: the phone's own reading reached the watch as a relay — this window is two-central.
+    static func noteRelayReading(_ date: Date = Date()) { quietLock.lock(); _relayAt = date; quietLock.unlock() }
+    /// What this window has shown: the close offset from the anchor (nil until the close), and
+    /// whether the phone's relay landed within 90 s before the anchor or 60 s after.
+    static func windowFacts(now: Date = Date()) -> (anchor: Date?, closeOffset: TimeInterval?, relaySeen: Bool) {
+        quietLock.lock(); defer { quietLock.unlock() }
+        guard let a = _slotAnchor else { return (nil, nil, false) }
+        let close = _slotCloseAt.flatMap { c -> TimeInterval? in let d = c.timeIntervalSince(a); return (d >= 0 && d < 90) ? d : nil }
+        let relay = _relayAt.map { r -> Bool in let d = r.timeIntervalSince(a); return d > -90 && d < 60 } ?? false
+        return (a, close, relay)
+    }
     /// Seconds until the pre-burst BRACKET closes, nil when it is not open. WatchConnectivity
     /// sends and log hops key on this alone — they are replayed at the bracket's close.
     static func bracketRemainingNow() -> TimeInterval? {
@@ -547,8 +569,10 @@ final class StockLoopSession {
     /// bracket, or under `slots` the schedule — whichever holds longer. Callable from any queue.
     static func quietRemainingNow() -> TimeInterval? {
         let bracket = bracketRemainingNow()
-        quietLock.lock(); let anchor = _slotAnchor; quietLock.unlock()
-        let slot = PodRadioSlotPolicy.closedRemaining(anchor: anchor, now: Date(), policy: PodRadioPolicy.current).map { max(0.5, $0) }
+        let facts = windowFacts()
+        let slot = PodRadioSlotPolicy.closedRemaining(anchor: facts.anchor, now: Date(), policy: PodRadioPolicy.current,
+                                                      closeOffset: facts.closeOffset, relaySeen: facts.relaySeen,
+                                                      blackouts: PodRadioSlotPolicy.blackoutsEnabled).map { max(0.5, $0) }
         switch (bracket, slot) {
         case (nil, nil): return nil
         case (let b?, nil): return b
@@ -802,6 +826,7 @@ enum TailExposure {
     private static var podUpAtClose = false
 
     static func noteSensorClosed(_ name: String, now: Date = Date()) {
+        StockLoopSession.noteSensorClose(now)
         lock.lock()
         closedAt = now; closedName = name; events = []; podUpAtClose = podUp
         lock.unlock()
@@ -828,7 +853,7 @@ enum TailExposure {
         guard closedAt == start else { lock.unlock(); return }   // a newer close superseded this window
         let name = closedName, evs = events, upAtClose = podUpAtClose
         lock.unlock()
-        SportLog.event("tail", "after \(name) close: \(summary(events: evs, podUpAtClose: upAtClose)) · phone \(WCSession.default.isReachable ? "reachable" : "away") · transition \(StockLoopSession.TailTransition.isActive() ? "ACTIVE" : "over") · adaptive \(StockLoopSession.TailTransition.adaptiveEnabled ? "on" : "off")")
+        SportLog.event("tail", "after \(name) close: \(summary(events: evs, podUpAtClose: upAtClose)) · phone \(WCSession.default.isReachable ? "reachable" : "away") · relay \(StockLoopSession.windowFacts().relaySeen ? "this window" : "none") · policy \(StockLoopSession.PodRadioPolicy.current.rawValue) · blackouts \(StockLoopSession.PodRadioSlotPolicy.blackoutsEnabled ? "on" : "off")")
     }
 
     /// Pure, pinned by WatchAppTests: the one-line verdict for a window.

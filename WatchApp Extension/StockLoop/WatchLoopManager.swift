@@ -3656,6 +3656,7 @@ extension WatchLoopManager: CGMManagerDelegate {
                 self.refreshGlanceData()   // UI batch (build 176): repaint on arrival, inactive or not
                 let mgdl = Int(sample.quantity.doubleValue(for: .milligramsPerDeciliter))
                 self.noteGlucoseSource(directG7: false)
+                StockLoopSession.noteRelayReading(self.now())   // build 178: this window is two-central
                 SportLog.event("glucose",
                     "INGEST src=phone-relay stored=1/1 · latest \(mgdl) mg/dL age \(Int(self.now().timeIntervalSince(sample.date)))s (direct-G7 gap)")
                 SportLog.event("loan", "phone-BG fallback: ingested \(mgdl) mg/dL syncId=\(sample.syncIdentifier ?? "?") (direct-G7 gap) — triggering loop")
