@@ -828,7 +828,7 @@ enum TailExposure {
         guard closedAt == start else { lock.unlock(); return }   // a newer close superseded this window
         let name = closedName, evs = events, upAtClose = podUpAtClose
         lock.unlock()
-        SportLog.event("tail", "after \(name) close: \(summary(events: evs, podUpAtClose: upAtClose)) · phone \(WCSession.default.isReachable ? "reachable" : "away") · transition \(TailTransition.isActive() ? "ACTIVE" : "over") · adaptive \(TailTransition.adaptiveEnabled ? "on" : "off")")
+        SportLog.event("tail", "after \(name) close: \(summary(events: evs, podUpAtClose: upAtClose)) · phone \(WCSession.default.isReachable ? "reachable" : "away") · transition \(StockLoopSession.TailTransition.isActive() ? "ACTIVE" : "over") · adaptive \(StockLoopSession.TailTransition.adaptiveEnabled ? "on" : "off")")
     }
 
     /// Pure, pinned by WatchAppTests: the one-line verdict for a window.
