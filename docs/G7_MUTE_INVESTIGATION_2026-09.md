@@ -892,6 +892,78 @@ service plus the link, +1 s to +19 s after the read — still produced the late 
 removed the G7 scan only. Run 2 = the same recipe with pod policy `slots` (build 173/174 holds
 every reclaim, scan included, to +70 s); expectation: no late 762, no −70, no wedge.
 
+## 3m. RUN 2 on build 173 — ride-only, pod `slots`: WEDGED anyway (18:31/18:36) — preregistered before the capture
+
+Phone off 18:00, on ~18:14, off 18:22; wedge noticed at the 18:31 miss, Dexcom confirmed; capture
+taken ~18:40 with phone BT on, then touch-heal. Loop was red throughout: on 173 the `slots` hold
+sat inside the reclaim closure, so every automatic dose cycle timed out at 25 s ("pod not
+reconnected — automatic dose SKIPPED") and ran `releasePodAfterDose` — **at +25 s after the
+read, i.e. ~+13 s after the close, in the late zone.** The deferred reclaim still fired at +70 s
+(scan-adopt scan + link ~+71→+90 s, outside the tail).
+
+**Written 18:45, before reading the daemon:**
+1. The −70 write sits in a long-tail window after the 18:22 departure (18:26 or 18:31), on a 762
+   later than +6 s after Dexcom's re-subscribe.
+2. No `CBMsgIdScan` for the sensor from our session anywhere (173's no-scan holds).
+3. What of ours was on the chip in that tail — ranked: **(a) the skipped-dose path's
+   `releasePodAfterDose` at ~+25 s: a pod-session `CBMsgIdCancelPeripheralConnection` / pod
+   disconnect in the late zone** (my expectation); (b) the registration at +2 s only — then
+   awake + registration suffices and the residual is real; (c) the +70 s pod reclaim inside the
+   tail — should not be, the tail ends at +29 s.
+4. If (a): 175 (the cycle-level hold) already removes it, since a held cycle never reaches the
+   enactor's timeout; the acceptance run of 175 then decides. If (b): Arm W (our apps quit, Apple
+   Workout awake) and a build that defers the post-close registration to T−20 s.
+
+**Watch log, read 18:50 (FACT) — the pod WAS in the tail, carried over from the previous cycle:**
+on 173 under `slots` the deferred reclaim fires at +70 s and connects the pod, but the enactor
+had already timed out at +25 s and run its release BEFORE that connect, so nothing releases
+the link afterwards — it stays up through the next read and its whole tail until the next
+cycle's timeout-release at +38 s. 18:21:42 read → close 18:21:56 → pod link up throughout →
+released 18:22:20; reclaim 18:22:56 → link up → drop/reconnect 18:26:00 → **18:26:45 read →
+close 18:26:52 → pod link up through the whole tail → released 18:27:22** → 18:31 unheard.
+So run 2 was not a pod-held arm at all; the hold moved the link INTO the next tail. Prediction
+3 revised before the capture: the −70 write is in the 18:26 tail with the pod link up at the
+close (the 174 `[tail]` line would read "pod link +0.0→+30 s"); our session did join +
+registration only, no scan. 175's cycle-level hold releases the pod at ~+95 s (reclaim at +70,
+dose, release +12 s), so the next tail is clean — run 3 on 175 is the acceptance arm.
+
+**18:38 sysdiagnose (FACT) — the revised prediction held:** count 19 → **20 at 18:26:57 (762 at
++5 s after the 18:26:52 close, −100) → 21 at 18:27:08 (762 at +16 s, after the fast scan) →
+−70**. Pod link (64:00:9C) up 18:26:01 → 18:27:22 — through the read, the close and the whole
+tail; 18:31 with no HCI event. Our sensor session (301): join 18:26:44, registration 18:26:55,
+nothing else; no `CBMsgIdScan` for the sensor anywhere. The 18:21 tail had the pod link up too
+(18:20:57→18:22:20) and no late failure — a 1-in-5 miss like 08:41. Earlier: 18:01:56 and
+18:06:56 early 762s (the first departure's long tails). Also visible: the pod's own link drops
+(719) every ~3 min with our immediate reconnect (18:16:00, 18:20:57, 18:26:00, 18:31:00) — the
+173 tangle kept a link that was never released.
+
+**Run 3 preregistered (build 175, ride-only, `slots`, judgment carried, three departures):**
+every `[tail]` line reads CLEAN in the long-tail windows (reclaim at +70 s, release ~+95 s, no
+link at the next close); early 762s still accrue; no 762 after +6 s; no −70; no wedge; no
+skipped doses and no yellow. A late 762 with a CLEAN tail line is the residual (awake +
+registration) and sends us to Arm W.
+
+## 3n. RUN 3 on build 175 — ride-only, `slots` with the cycle-level hold: NO WEDGE — ACCEPTANCE PASSED
+
+Loan 18:51→19:49 (8 cycles in 59 min, every automatic dose enacted — the 173 skips are gone).
+Phone off 18:54, on 19:02, off 19:12, on 19:24, off 19:34; judgment carried (count 21).
+**Every `[tail]` line CLEAN — eleven windows 18:52→19:47, "nothing of ours on the radio for
+40 s".** One window (19:31, phone present) was covered by the phone relay with a direct-G7 gap
+— a join that did not happen, not a gate event (the tails either side are clean and 19:36 read
+direct with the phone gone). Air where audible: requests only inside the fast scan.
+
+**19:48 sysdiagnose (FACT) — the preregistration held in full:** six 762s, one per long-tail
+window, at +4.8, +4.5, +5.0, +4.6, +4.3 and +4.1 s after Dexcom's re-subscribe (18:56:58,
+19:01:58, 19:16:53, 19:21:53, 19:36:56, 19:42:00) — every one inside the fast scan, every one
+written −100 with the judgment at state 1 the whole hour. **No failure after +6 s. No −70. No
+wedge.** Count 22 → 24 → 21 → 23 as old entries aged out and new ones came in. Zero sensor
+scans from our session. Eleven CLEAN tail lines on our side, six early failures on the daemon's:
+the counter is Dexcom's and the sensor's, the −70 was ours, and 175 removes it.
+
+**Acceptance: PASSED.** Pod held out of the tail (reclaim at +70 s, release ~+95 s), no scan of
+ours under ride-only, every dose enacted. Cost: an automatic dose or bolus requested in the
+first 70 s after a read waits until +70 s; the hold could be trimmed to 40 s later.
+
 ## 4. Next tests, top-down, each with its predictions
 
 **Q1 — Is it the existence of our request, its timing, or its order?** (the fix question)
