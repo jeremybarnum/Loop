@@ -1133,7 +1133,10 @@ final class WatchLoopManager {
         bgSourceLock.lock()
         if directG7 { _lastDirectG7At = self.now() } else { _lastPhoneRelayAt = self.now() }
         bgSourceLock.unlock()
-        if directG7 { defaults.set(self.now(), forKey: Self.lastDirectG7DefaultsKey) }
+        if directG7 {
+            defaults.set(self.now(), forKey: Self.lastDirectG7DefaultsKey)
+            PodRadioHold.noteDirectRead(self.now())   // the sensor's grid phase re-anchors on every direct read
+        }
     }
 
     /// The grant seed counts as the PHONE. (Jeremy, 2026-08-05: "treat the seed as the same as
@@ -1543,7 +1546,12 @@ final class WatchLoopManager {
         // missed cycle is the scan escalation's job; this keeps the miss from happening.
         guard age > .minutes(4),
               let reclaim = reclaimPodForDose else {
-            assertThenLoop({})
+            // The hold sits at the CYCLE level, on both entries: the dose is computed after the
+            // window opens and the enactor then sees an open window and a prompt reclaim. (Her
+            // 173 tangle: gating inside the reclaim closure let the enactor's wait time out —
+            // "automatic dose SKIPPED" every cycle.) Outside the extended phase this is a
+            // synchronous pass-through and the cycle is byte-identical to today.
+            afterPodRadioHold("dose cycle") { assertThenLoop({}) }
             return
         }
 
@@ -1552,9 +1560,36 @@ final class WatchLoopManager {
         // that is the exact moment the D2W ride appears, and the pod scan kills the G7
         // connect. Hold the pod radio until the ride resolves.
         // Steady state (fresh direct G7) passes straight through.
-        deferPodRadioWhileG7AcquisitionResolves {
-            self.reclaimForRefresh(reclaim, assertThenLoop: assertThenLoop)
+        afterPodRadioHold("pump-data refresh") {
+            self.deferPodRadioWhileG7AcquisitionResolves {
+                self.reclaimForRefresh(reclaim, assertThenLoop: assertThenLoop)
+            }
         }
+    }
+
+    /// The extended-phase pod hold (PodRadioHold.swift): run `block` once the pod may use the
+    /// radio. Synchronous when nothing is held — the common case, so threading and timing are
+    /// untouched outside the sensor's extended phase. Otherwise re-checked every ≤5 s rather
+    /// than slept through: the hold can end early (this window's relay lands a few seconds
+    /// after the direct read and the window is then unrestricted). Ceiling 100 s: a dose
+    /// 100 s late is still clinically nil, and nothing waits forever.
+    func afterPodRadioHold(_ what: String, _ block: @escaping () -> Void) {
+        guard let remaining = PodRadioHold.remainingNow(now: self.now()) else { block(); return }
+        let start = self.now()
+        SportLog.event("hold", String(format: "DEFERRED %@ — pod radio held (%@), %.1fs to open", what, PodRadioHold.modeText, remaining))
+        pollPodRadioHold(what, start: start, block)
+    }
+
+    private func pollPodRadioHold(_ what: String, start: Date, _ block: @escaping () -> Void) {
+        let elapsed = self.now().timeIntervalSince(start)
+        if let again = PodRadioHold.remainingNow(now: self.now()), elapsed < 100 {
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + min(again, 5) + 0.2) { [weak self] in
+                self?.pollPodRadioHold(what, start: start, block)
+            }
+            return
+        }
+        SportLog.event("hold", String(format: "%@ released after %.1fs%@", what, elapsed, elapsed >= 100 ? " (ceiling)" : ""))
+        block()
     }
 
     private func reclaimForRefresh(_ reclaim: (@escaping (Bool) -> Void) -> Void, assertThenLoop: @escaping (@escaping () -> Void) -> Void) {
@@ -2463,6 +2498,10 @@ final class WatchLoopManager {
             // The pod link is orphaned so the G7 can use the radio — reclaim it before the
             // bolus. User is PRESENT, so a few seconds' reconnect is fine; on failure FAIL
             // LOUDLY (never a silent no-bolus). No-op immediate when the link is already held.
+            // In the sensor's extended phase the bolus waits out the tail hold first (≤40 s,
+            // only in the first ~2 windows after the phone leaves) — a bolus tapped into the
+            // tail is exactly the collision the hold exists for. Synchronous otherwise.
+            self.afterPodRadioHold("manual bolus") {
             if let reclaim = self.reclaimPodForDose {
                 reclaim { ok in
                     if ok {
@@ -2497,7 +2536,9 @@ final class WatchLoopManager {
                     }
                 }
             } else {
-                deliverBolus()
+                // Held path may arrive here off dataAccessQueue; deliverBolus expects it.
+                self.dataAccessQueue.async { deliverBolus() }
+            }
             }
         }
     }
@@ -2933,6 +2974,12 @@ extension WatchLoopManager: CGMManagerDelegate {
             // on the serial deviceQueue so repeats bail before the add.
             if sample.syncIdentifier == self.lastPhoneFallbackSyncId { return }
             self.lastPhoneFallbackSyncId = sample.syncIdentifier
+            // The relay is the watch's only sign that the phone is collecting, so stamp it on
+            // ARRIVAL of a new relayed reading — before the fill-a-gap skip below, which drops
+            // the relay whenever the watch's own direct read beat it (the common case near the
+            // phone). Stamped on storage it went missing exactly in phone-present windows on her
+            // line, and a departure then looked like steady phone-absent: no extended phase, no hold.
+            PodRadioHold.noteRelay(self.now())
             // Fill a gap only: skip if the store already has a reading at/after this one (a fresher
             // direct-G7 read wins). syncId dedup in the store is the belt for the exact-overlap case.
             if let latest = self.glucoseStore.latestGlucose?.startDate, latest >= sample.date { return }
@@ -3150,6 +3197,12 @@ extension WatchLoopManager: CGMManagerDelegate {
         // truth, so use it rather than pattern-matching "DXCM" against a peripheral name, which
         // would be another label asserting something it cannot actually verify.
         let source = manager is G7CGMManager ? "cgm" : "pod-ble"
+        // Tail-exposure instrument: the pod link's edges, as OmniPumpManager reports them
+        // ("Pod connected …" / "Pod disconnected …"), feed the per-window [tail] line.
+        if source == "pod-ble" {
+            if message.hasPrefix("Pod connected") { TailExposure.notePodLink(up: true) }
+            else if message.hasPrefix("Pod disconnected") { TailExposure.notePodLink(up: false) }
+        }
         // DEDUPE THE STORM. A Code=11 connect-retry loop pushed ~2,000
         // IDENTICAL lines/second through here (1051 in 0.52s) — each one a
         // synchronous NSLog plus a file-append — jamming syslogd and the log queue hard enough

@@ -842,6 +842,12 @@ final class GlanceViewModel: ObservableObject {
             // promise a clock time with slack instead — the ladder may need a cycle.
             let missedAWindow = (age ?? .infinity) > 8 * 60
             s.g7EtaText = g7EtaText(lastReading: data.glucoseDate ?? phoneGlucoseDate, now: now, firstConnect: missedAWindow)
+            // The wedge hint (mute record §7c, ruled wording): two missed bursts with the phone
+            // not relaying names the one thing that heals a parked watch stack. Not an alert.
+            if let hint = PodRadioHold.wedgeHint(directAge: data.directG7At.map { now.timeIntervalSince($0) },
+                                                 relayAge: data.phoneRelayAt.map { now.timeIntervalSince($0) }) {
+                s.g7EtaText = hint
+            }
         } else if let eventual = data.eventual {
             s.eventualText = String(format: "%.0f", eventual.doubleValue(for: .milligramsPerDeciliter))
         }

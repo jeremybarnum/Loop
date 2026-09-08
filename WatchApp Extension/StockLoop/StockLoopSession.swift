@@ -66,6 +66,11 @@ final class StockLoopSession {
         // (system-connected piggyback / connection event / ad scan), D2W's rhythm, and connect
         // verdicts. Made the acquisition mechanism observed rather than inferred.
         G7RadioCensus.sink = { line in SportLog.event("g7-ble", line) }
+        // Tail exposure + the pod hold's close-relative clock (PodRadioHold.swift): the adopted
+        // sensor's link closing starts the window; a scan of ours (never under ride-only) is
+        // one of the two things the [tail] line exists to catch.
+        G7RadioCensus.sensorClosed = { name in TailExposure.noteSensorClosed(name) }
+        G7RadioCensus.scanStarted = { TailExposure.noteScanStarted() }
 
         // Main-thread stall detector. Runs from LAUNCH and never stops, unlike the loan-scoped
         // heartbeat below: a wedged main thread is exactly the condition under which nothing else
