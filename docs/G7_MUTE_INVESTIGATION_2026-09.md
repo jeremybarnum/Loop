@@ -1436,3 +1436,44 @@ item by item against the port; PRESENT/MISSING as of f68174e6:
 | `TailExposure.notePodLink` routing, wedge hint | mute fix | PRESENT |
 
 All of these are cosmetic or diagnostic; none touches dosing. The haptic is one line.
+
+## 8. IN-APP DETECTION of the daemon's counted failures — what we can see without a sysdiagnose (checked 09-08, nothing built)
+
+Question (Jeremy, 09-08): can the app detect the disconnections that feed bluetoothd's tally,
+without pulling a sysdiagnose? Answer is split, and the split is mechanical.
+
+**Reason 708 (supervision timeout): VISIBLE, exactly, and already in our log.** A 708 kills a link
+we are riding, so it arrives as our own CoreBluetooth callback. Watch log 2026-09-07:
+
+    08:26:55.495 [g7-ble] didDisconnect DXCMbv error=The connection has timed out unexpectedly. [CBErrorDomain#6]
+
+The archive (sysd13) records `reason 708` for that sensor at 08:26:55.480 — 15 ms apart, the same
+event. Across the uploaded watch logs: 17 `CBErrorDomain#6` lines on 8 distinct occasions, against
+1,220 `CBErrorDomain#7` ("The specified device has disconnected from us"), which is the sensor
+ending a read normally and is NOT counted. **Code 6 is a tally point; code 7 is not.** We log both
+today and interpret neither.
+
+**Reason 762 (failed to establish): INVISIBLE.** Checked our log at five archive-confirmed 762s
+(13:16:54.38, 13:17:06.62, 16:17:03.14, 16:22:03.03, 16:22:13.14): zero lines from us at four of
+them; the two at 16:22:03 are an unrelated `[timer]` line. Not a throttling artifact —
+`DeviceLogThrottle` collapses only identical consecutive lines inside 2 s, and the nearest
+preceding line at each instant is 4–16 s earlier with different text. Mechanically: a 762 is a
+link that never became usable, belonging to DEXCOM's connect request; CoreBluetooth delivers a
+connection event only for links that come up. Compare 13:16:49 (the successful read, in our log as
+`connection-event CONNECT` + `didConnect`) with 13:16:54 and 13:17:06 (nothing).
+
+**What could be built (NOT built; Jeremy's call):**
+1. Count `CBError.connectionTimeout` (code 6) disconnects, decayed over the daemon's 20,864-s
+   window. Exact, free, already logged — only the counting and the label are missing.
+2. Estimate the 762s from their cause, which we CAN see: no relay this window → the sensor is in
+   its long tails → the daemon fails ~once per tail. Calibration from 09-07: T1b 4 tails → 4
+   failures; T5 2 → 2; T1c 1 → 2; T4 2 → 3. So 1–1.5 per no-relay window for the first two after
+   the relay stops; report as a lower bound, never as a measurement.
+3. Sum, flag at 5, surface on the diagnostic screen plus one line per window in the log. On both
+   of 09-07's wedges this estimate would have been signalling danger beforehand.
+4. Free calibration: whenever a sysdiagnose IS taken, compare the estimate to the archive.
+
+**Not available:** the daemon's tables are private; nothing in-app makes this exact. The one
+observable that would CONFIRM a parked floor without a sysdiagnose is a brief scan after a missed
+window, outside the tail (sensor advertising + no link = parked). That is a radio change in the
+direction §7 spent a week removing, so it needs preregistration, not a quiet addition.
