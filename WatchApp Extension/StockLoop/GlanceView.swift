@@ -297,7 +297,12 @@ final class GlanceViewModel: ObservableObject {
     func stopRefreshing() {
         RuntimeStateLog.mark("glance.stopRefreshing")
         SportLog.event("glance", "render loop STOPPED [glance-life]")
-        if let o = mirrorObserver { NotificationCenter.default.removeObserver(o); mirrorObserver = nil }
+        // The mirror observer SURVIVES (raised 2026-08-22): a reading that landed while the
+        // watch lay face-up on a table (inactive, always-on display) used to paint only on the
+        // next wrist-raise, because this tore the observer down with the tick. The 2-s tick
+        // still stops — that is the expensive part — and WatchLoopManager now rebuilds the
+        // mirror on every ingest, so one render per reading reaches the dimmed screen.
+        // Removed in deinit.
         timer?.invalidate()
         timer = nil
     }
@@ -309,6 +314,8 @@ final class GlanceViewModel: ObservableObject {
     }
 
     deinit {
+        if let o = mirrorObserver { NotificationCenter.default.removeObserver(o) }
+        if let o = oneShotMirrorObserver { NotificationCenter.default.removeObserver(o) }
         timer?.invalidate()
         appStateObservers.forEach(NotificationCenter.default.removeObserver)
     }
@@ -1058,14 +1065,31 @@ struct GlanceView: View {
             // Ring only (like the stock screen): shape carries closed/open, color carries
             // BG-recency freshness. No text — the ring says it all.
             Image(loopAssetName, bundle: Self.watchAppBundle)
+                .renderingMode(.template)
                 .resizable()
                 .frame(width: 26, height: 26)
+                .foregroundColor(ringColor)
         } else if model.state.phase != .idle {
             // starting / handing back / draining: the phase text. IDLE shows nothing —
             // the "Start Sport Mode" button is the whole message (Jeremy 2026-07-24).
             Text(model.state.loopStatusText)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundColor(.glanceDim)
+        }
+    }
+
+    /// One freshness palette for BOTH devices (Caitlin, 2026-09-02: the ring's aging ORANGE —
+    /// the tint baked into stock's old watch PNGs — matched nothing she knows from the phone,
+    /// whose aging is the "warning" yellow, and she did not recognise it during a radio
+    /// drought). The stock assets render as templates (shape only: solid = closed, gapped =
+    /// open) and take their colour from here, the phone's palette verbatim, so the two devices
+    /// cannot drift again. Fresh and stale are visually unchanged.
+    private var ringColor: Color {
+        switch model.state.loopFreshness {
+        case .fresh:   return Color(red: 10/255, green: 180/255, blue: 67/255)   // #0AB443
+        case .aging:   return Color(red: 233/255, green: 194/255, blue: 68/255)  // #E9C244 — the phone's "warning"
+        case .stale:   return Color(red: 255/255, green: 69/255, blue: 58/255)   // #FF453A
+        case .unknown: return .glanceDim
         }
     }
 
@@ -1083,6 +1107,9 @@ struct GlanceView: View {
 
     /// Open (stop dosing) is fail-safe → immediate. Close (start dosing) → confirm.
     private func onLoopTap() {
+        // The loop pill is a small target under a fingertip; acknowledge the tap the way
+        // End/Cancel already do (Jeremy, 2026-08-18).
+        WKInterfaceDevice.current().play(.click)
         if model.state.loopClosed {
             model.setLoopClosed(false)
         } else {

@@ -779,7 +779,34 @@ final class WatchLoopManager {
                 retrospectiveDiscrepancyCount: lastAlgorithmEffects?.retrospectiveGlucoseDiscrepancies.count ?? 0,
                 overrideLabel: {
                     guard let o = scheduleOverride, o.isActive() else { return nil }
-                    return o.context.presetNameForLog
+                    // Icon + numbers, not the name (Jeremy, 2026-09-02): preset names are
+                    // unbounded free text and truncate on a small watch ("50 Percent/Post T…"),
+                    // while the numeric summary is bounded AND is the operative content — how
+                    // much insulin, steering toward what. The target shows the MIDPOINT
+                    // ("140-160" spends row width to say "150" — same ruling). An override with
+                    // no renderable symbol gets a generic glyph, so the indicator never vanishes.
+                    //
+                    // This line's presets carry a PresetSymbol, which may be an SF Symbol or an
+                    // image with no text form — `textualRepresentation` is nil for those, and
+                    // they fall through to the glyph rather than rendering blank.
+                    var parts: [String] = []
+                    if case .preset(let p) = o.context,
+                       let symbol = p.symbol?.textualRepresentation, !symbol.isEmpty {
+                        parts.append(symbol)
+                    } else {
+                        parts.append("⏱")
+                    }
+                    if let scale = o.settings.insulinNeedsScaleFactor {
+                        parts.append("\(Int((scale * 100).rounded()))%")
+                    }
+                    if let range = o.settings.targetRange {
+                        // LoopUnit here, not HKUnit — this line's quantities moved to
+                        // LoopAlgorithm's own unit type (same idiom as the override log lines).
+                        let mid = (range.lowerBound.doubleValue(for: .milligramsPerDeciliter)
+                                   + range.upperBound.doubleValue(for: .milligramsPerDeciliter)) / 2
+                        parts.append(String(format: "%.0f", mid))
+                    }
+                    return parts.joined(separator: " ")
                 }())
     }
 
@@ -1137,6 +1164,12 @@ final class WatchLoopManager {
             defaults.set(self.now(), forKey: Self.lastDirectG7DefaultsKey)
             PodRadioHold.noteDirectRead(self.now())   // the sensor's grid phase re-anchors on every direct read
         }
+        // Publish a fresh mirror on EVERY reading, so the glance repaints on arrival even while
+        // inactive (face-up on a table, always-on display): the observer now outlives the 2-s
+        // tick, and this is what it listens for. One funnel rather than a call at each ingest —
+        // it also covers the loan controller's relay path (notePhoneGlucoseDelivered), and the
+        // rebuild coalesces and returns immediately, so it is safe from any queue.
+        refreshGlanceData()
     }
 
     /// The grant seed counts as the PHONE. (Jeremy, 2026-08-05: "treat the seed as the same as
