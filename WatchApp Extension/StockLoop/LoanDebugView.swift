@@ -17,6 +17,10 @@ import G7SensorKit // CGM HEALTH panel reads the stock manager directly
 struct CGMHealth {
     let sensorName: String?
     let lastReadingAge: TimeInterval?
+    /// The value and its reading time (Jeremy, 2026-09-06), so a missed window can be told
+    /// from Dexcom's app holding the previous value across one grid point — the two look
+    /// identical on the glance.
+    let bgLine: String
     let linkState: String
     let lifecycle: String
     let expiresIn: String
@@ -24,6 +28,12 @@ struct CGMHealth {
     init(_ manager: G7CGMManager) {
         sensorName = manager.sensorName
         lastReadingAge = manager.latestReadingTimestamp.map { Date().timeIntervalSince($0) }
+        if let g = manager.latestReading?.glucose, let t = manager.latestReadingTimestamp {
+            let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
+            bgLine = String(format: "%d mg/dL · %@ (%.0fs ago)", Int(g), f.string(from: t), Date().timeIntervalSince(t))
+        } else {
+            bgLine = "—"
+        }
         // Scanning AND connected are both normal states in the connect-per-reading rhythm: the
         // sensor hangs up after each reading, so "scanning" between windows is health, not failure.
         linkState = manager.isConnected ? "connected" : (manager.isScanning ? "scanning" : "idle")
@@ -140,6 +150,7 @@ struct LoanDebugView: View {
                 Text("CGM HEALTH").font(.footnote).foregroundColor(.secondary)
                 row("sensor", cgm?.sensorName ?? "none")
                 row("last reading", cgm?.lastReadingAge.map { String(format: "%.0fs ago", $0) } ?? "never")
+                row("bg", cgm?.bgLine ?? "—")
                 row("link", cgm?.linkState ?? "—")
                 row("state", cgm?.lifecycle ?? "—")
                 row("expires", cgm?.expiresIn ?? "—")
