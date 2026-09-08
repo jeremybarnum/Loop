@@ -687,6 +687,16 @@ final class GlanceViewModel: ObservableObject {
                       seconds / 60, seconds % 60)
     }
 
+    /// Build 179 (mute record §7c): the indicia of a parked watch stack are two or more
+    /// consecutive expected bursts with no read, with the phone not relaying — Dexcom's own
+    /// app is muted the same way, and the record's only cure short of waiting 20–40 minutes
+    /// is the watch's Bluetooth off and on (ruled wording: it must name the WATCH). Pure,
+    /// pinned by WatchAppTests. Nil = keep the ordinary line.
+    static func wedgeHint(staleAge: TimeInterval?, consecutiveMisses: Int, relayRecent: Bool) -> String? {
+        guard consecutiveMisses >= 2, !relayRecent, let age = staleAge, age >= 8 * 60 else { return nil }
+        return String(format: NSLocalizedString("G7 silent %d min · try toggling watch Bluetooth", comment: "Glance line when the watch has missed two or more sensor bursts with the phone away"), Int(age / 60))
+    }
+
     static func activeState(data: WatchLoopManager.GlanceData, cob: Double?, now: Date, phoneGlucoseDate: Date? = nil) -> GlanceUIState {
         var s = GlanceUIState()
         s.overrideLabel = data.overrideLabel
@@ -751,6 +761,11 @@ final class GlanceViewModel: ObservableObject {
             // promise a clock time with slack instead — the ladder may need a cycle.
             let missedAWindow = (age ?? .infinity) > 8 * 60
             s.g7EtaText = g7EtaText(lastReading: data.glucoseDate ?? phoneGlucoseDate, now: now, firstConnect: missedAWindow)
+            // Build 179: the wedge hint. Not an alert (Jeremy, 2026-09-07) — the provenance
+            // line under a stale number names the one thing that heals a parked watch stack.
+            if let hint = wedgeHint(staleAge: age, consecutiveMisses: data.g7ConsecutiveMisses, relayRecent: data.relayRecent) {
+                s.g7EtaText = hint
+            }
         } else if let eventual = data.eventual {
             s.eventualText = String(format: "%.0f", eventual.doubleValue(for: .milligramsPerDeciliter))
         }
