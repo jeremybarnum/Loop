@@ -1378,6 +1378,12 @@ tails for 12 min after a loan starts". Do not add a freshness check by itself. F
 blackouts, two-central hold and the session-end gate are gone; bench key `G7Lab.podRadioHoldOff`.
 Cost per departure: ≤3 windows with a bolus delayed ≤40 s if tapped inside the tail.
 
+**Post-install stall: REFUTED 09-07 22:0x.** Build 180 (identical code to 179) was installed and the
+phone app deliberately NOT opened: it was background-launched at 21:59:17 and delivered its first
+reading at 22:06:45, then every window, relaying to the watch throughout. So the two-hour silence
+after the 179 install (§7e) is a genuine one-off, unexplained and unreproduced; there is no
+install-time rule and no user guidance needed.
+
 **Known hole, accepted (§7e):** the relay is Loop-phone's reading, not Dexcom-phone's
 connection. If Loop-phone is silent while the phone still collects (seen twice on 09-07 after a
 TestFlight install, recovered untouched, not diagnosed), the clock starts early and a departure's
@@ -1410,3 +1416,23 @@ the daemon's ~2 per departure; no −70 unless the daemon's own late failure at 
 judgment / floor writes / links / adds / history from an extract) and `air.sh <pcap> HH:MM`.
 Live watch-log streaming through the phone (pymobiledevice3 companion proxy) works but drops
 most of bluetoothd; a stored-log pull runs at 72 KB/s; neither replaces sysdiagnose.
+
+## 6c. UI-BATCH DELTA for next-dev (checked 09-08 against trees/port-nextdev @ f68174e6)
+
+Not part of the mute fix; a separate batch of small watch-UI changes that landed on the Caitlin
+line in builds 174–176 and never travelled. Jeremy noticed the first one on next-dev. Checked
+item by item against the port; PRESENT/MISSING as of f68174e6:
+
+| item | Caitlin commit | port |
+|---|---|---|
+| Loop-tap haptic: `WKInterfaceDevice.current().play(.click)` first line of `onLoopTap()` | 8d95e80c | **MISSING** (the port has the End/Cancel haptics at GlanceView.swift 324/426, not this one) |
+| Land on the glance: `landedOnGlance` in ExtensionDelegate, first activation of a process calls `becomeCurrentPage()` | 8d95e80c | **MISSING** — and the port is SwiftUI-navigation, not WatchKit pages, so this needs its own mechanism or may be moot |
+| Repaint while inactive: mirror observer armed by `armMirrorObserver()` and NOT torn down in `stopRefreshing()` (only the 2-s tick stops), plus `refreshGlanceData()` after every direct-G7 and phone-relay ingest | 8d95e80c | **MISSING** (port has 1 `refreshGlanceData` call site) |
+| Ring palette parity: stock ring assets `.renderingMode(.template)` + `ringColor` from the phone's palette (fresh #0AB443, aging #E9C244, stale #FF453A) | 4700cbbc | **MISSING** |
+| Override chip as icon + numbers rather than the preset name (symbol, insulin %, target midpoint) | 4700cbbc | **MISSING** |
+| Stuck listening screen offers "Re-acquire Sensor" as a button, force-quit demoted to the footer | dc038d6c | **MISSING** |
+| Diagnostic screen: BG value + reading time (`CGMHealth.bgLine`, `row("bg", …)`) | a5bcfa3b | **MISSING** |
+| Keepalive probe re-pointed on every `acquire` | a5bcfa3b | PRESENT |
+| `TailExposure.notePodLink` routing, wedge hint | mute fix | PRESENT |
+
+All of these are cosmetic or diagnostic; none touches dosing. The haptic is one line.
