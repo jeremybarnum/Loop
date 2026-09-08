@@ -99,9 +99,46 @@ enum PodRadioHold {
     static func noteDirectRead(_ date: Date = Date()) { lock.lock(); anchor = date; closeAt = nil; lock.unlock() }
     /// The adopted sensor's link just closed — the close-relative hold starts here.
     static func noteSensorClose(_ date: Date = Date()) { lock.lock(); closeAt = date; lock.unlock() }
-    /// The phone's own reading reached the watch (or a loan just started, which counts): this
-    /// window is two-central, and the extended-phase clock runs from here.
-    static func noteRelay(_ date: Date = Date()) { lock.lock(); relayAt = date; lock.unlock() }
+    /// How recent the phone's relayed READING must be to count as "the phone is collecting".
+    /// The phone reads on the sensor's 5-minute grid and relays within seconds, so one window
+    /// plus slack clears every phone-present case; a reading older than this was taken before
+    /// the phone stopped collecting and says nothing about now.
+    static let relayFreshness: TimeInterval = 6 * 60
+
+    /// Pure, pinned by WatchAppTests: does this relayed reading count as evidence the phone is
+    /// collecting right now?
+    static func relayCounts(readingDate: Date, now: Date) -> Bool {
+        let age = now.timeIntervalSince(readingDate)
+        return age >= 0 && age <= relayFreshness
+    }
+
+    /// The phone's own reading reached the watch as a relay. Only a RECENT reading counts.
+    ///
+    /// Field 2026-09-07 23:02: the phone's radio had been off for ten minutes, but it relayed
+    /// its last (22:51) reading once; stamping on arrival alone read that as "the phone is
+    /// collecting" and suppressed the hold for a window that was in the sensor's extended
+    /// phase. A stale relay also RESTARTED the 12.5-minute clock, dating the extended phase
+    /// from the wrong moment. The stamp stays on ARRIVAL rather than on storage (the fill-a-gap
+    /// skip drops the relay whenever our own direct read won the race, which is the common
+    /// phone-present case) — freshness is the only thing added.
+    ///
+    /// Her line deliberately did NOT gate this ("the grant context's sample counts even when
+    /// stale — that is load-bearing: it starts the clock at the loan grant"). That reason does
+    /// not apply here: this line stamps the loan start explicitly, below.
+    /// Returns whether the relay counted, so the caller can log the ignore.
+    @discardableResult
+    static func noteRelay(readingDate: Date, at now: Date = Date()) -> Bool {
+        guard relayCounts(readingDate: readingDate, now: now) else { return false }
+        lock.lock(); relayAt = now; lock.unlock()
+        return true
+    }
+
+    /// A loan went ACTIVE: the phone was collecting up to the grant (or, for a seize, may have
+    /// just stopped), so the first ~12 minutes of tails are held whether or not a relay ever
+    /// lands. Never freshness-gated — this IS the freshness. Separate entry point on purpose:
+    /// it is the signal her line got from the stale grant sample, and keeping it distinct is
+    /// what makes the gate above safe.
+    static func noteLoanStarted(_ date: Date = Date()) { lock.lock(); relayAt = date; lock.unlock() }
 
     struct Facts { let anchor: Date?; let closeOffset: TimeInterval?; let relayThisWindow: Bool; let lastRelay: Date? }
 

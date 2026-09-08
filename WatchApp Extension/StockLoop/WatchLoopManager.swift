@@ -2979,7 +2979,12 @@ extension WatchLoopManager: CGMManagerDelegate {
             // the relay whenever the watch's own direct read beat it (the common case near the
             // phone). Stamped on storage it went missing exactly in phone-present windows on her
             // line, and a departure then looked like steady phone-absent: no extended phase, no hold.
-            PodRadioHold.noteRelay(self.now())
+            // Only a RECENT reading counts (see PodRadioHold.noteRelay): a phone whose radio is
+            // off still relays its last reading once, and that is not evidence of collection.
+            if !PodRadioHold.noteRelay(readingDate: sample.date, at: self.now()) {
+                SportLog.event("hold", String(format: "relay IGNORED for the pod hold — the phone's reading is %.0f min old, not evidence it is collecting",
+                                              self.now().timeIntervalSince(sample.date) / 60))
+            }
             // Fill a gap only: skip if the store already has a reading at/after this one (a fresher
             // direct-G7 read wins). syncId dedup in the store is the belt for the exact-overlap case.
             if let latest = self.glucoseStore.latestGlucose?.startDate, latest >= sample.date { return }
