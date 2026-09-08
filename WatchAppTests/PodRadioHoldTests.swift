@@ -36,6 +36,38 @@ final class PodRadioHoldTests: XCTestCase {
                        "minute calls, no tails, nothing to hold for")
     }
 
+    // MARK: The relay's freshness gate
+
+    func testAFreshRelayCountsAsThePhoneCollecting() {
+        XCTAssertTrue(PodRadioHold.relayCounts(readingDate: t0, now: t0.addingTimeInterval(5)),
+                      "the phone reads on the grid and relays within seconds")
+        XCTAssertTrue(PodRadioHold.relayCounts(readingDate: t0, now: t0.addingTimeInterval(5 * 60)),
+                      "a whole window of transport lag still counts")
+    }
+
+    /// Field 2026-09-07 23:02: the phone's radio had been off for ten minutes, but it relayed
+    /// its last reading once. Stamped on arrival alone that read as "the phone is collecting"
+    /// and suppressed the hold for a window in the sensor's extended phase.
+    func testAStaleRelayFromAPhoneThatStoppedCollectingDoesNotCount() {
+        XCTAssertFalse(PodRadioHold.relayCounts(readingDate: t0, now: t0.addingTimeInterval(10 * 60)),
+                       "a ten-minute-old reading says nothing about whether the phone is collecting now")
+        XCTAssertFalse(PodRadioHold.relayCounts(readingDate: t0, now: t0.addingTimeInterval(6 * 60 + 1)),
+                       "just past the gate")
+    }
+
+    func testAReadingFromTheFutureDoesNotCount() {
+        XCTAssertFalse(PodRadioHold.relayCounts(readingDate: t0.addingTimeInterval(60), now: t0),
+                       "clock skew must not manufacture evidence")
+    }
+
+    /// The gate is safe here only because the loan start has its own entry point — her line
+    /// relies on the stale grant sample for exactly this and warns against gating it.
+    func testTheLoanStartIsNeverFreshnessGated() {
+        PodRadioHold.noteLoanStarted(t0)
+        XCTAssertTrue(PodRadioHold.isExtendedPhase(lastRelay: t0, now: t0.addingTimeInterval(5 * 60), relayThisWindow: false),
+                      "a loan that begins as the phone leaves must still hold its first tails")
+    }
+
     // MARK: The hold
 
     func testTheExtendedPhaseHoldsThroughTheTail() {

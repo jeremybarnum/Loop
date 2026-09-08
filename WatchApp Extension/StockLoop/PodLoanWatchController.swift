@@ -1387,10 +1387,10 @@ final class PodLoanWatchController {
                     self.revokeCapturedDeliveredAt = nil
                     self.deliveredAtTakeover = delivered
                     self.phase = .active
-                    // Pod hold clock (PodRadioHold): a loan start counts as a relay — the phone
-                    // was collecting up to the grant (or, for a seize, may just have left), so
-                    // the first ~12 min of tails are held whether or not a relay ever lands.
-                    PodRadioHold.noteRelay(self.now())
+                    // Pod hold clock (PodRadioHold): the loan start itself starts the clock — the
+                    // phone was collecting up to the grant (or, for a seize, may just have left),
+                    // so the first ~12 min of tails are held whether or not a relay ever lands.
+                    PodRadioHold.noteLoanStarted(self.now())
                     // R40 reunion identity: the seize is PROVEN only now — persist its token
                     // so the loan's offers echo it and the phone can retro-acknowledge. Every
                     // failed activation leaves this un-promoted, so nothing stale can match.
