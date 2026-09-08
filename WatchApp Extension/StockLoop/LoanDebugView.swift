@@ -78,8 +78,6 @@ struct LoanDebugView: View {
                 // is a diagnostic question, and this is the page you are already on when you ask.
                 Text("build \(BuildDetails.default.codeIdentity)")
                     .font(.footnote).foregroundColor(.secondary)
-                NavigationLink("Radio Lab") { RadioLabView() }
-                    .font(.footnote)
                 Text("DOSING").font(.footnote).foregroundColor(.secondary)
                 row("closed?", (dosing?.closedLoopEnabled ?? false) ? "YES" : "no")
                 row("BG now", dosing?.glucose.map { String(format: "%.0f", $0.doubleValue(for: .milligramsPerDeciliter)) } ?? "—")
@@ -93,7 +91,7 @@ struct LoanDebugView: View {
 
                 Divider().padding(.vertical, 2)
 
-                Text("LOAN v2 BENCH").font(.footnote).foregroundColor(.secondary)
+                Text("LOAN").font(.footnote).foregroundColor(.secondary)
 
                 row("phase", snapshot.map { String(describing: $0.phase) } ?? "—")
                 row("epoch", snapshot?.epoch.map(String.init) ?? "—")
@@ -124,7 +122,7 @@ struct LoanDebugView: View {
                 //
                 // Read Status stays: read-only, no command, no state change — a live pod
                 // reachability ping, which is the one question this screen cannot infer.
-                Button("Read Status") {
+                Button("Read Pod Status") {
                     lastAction = "reading…"
                     session?.loanController.debugReadStatus { ok in
                         DispatchQueue.main.async {
@@ -174,11 +172,67 @@ struct LoanDebugView: View {
                 // experiments are on demand. Ladybug-class: REMOVE PRE-PRODUCTION.
                 // Safe: worst case is a re-adoption delay while the relay covers, same as any
                 // new-sensor day; no therapy state is touched.
-                Button("Forget Sensor (re-acquire)") {
+                Text("CGM ACTIONS").font(.footnote).foregroundColor(.secondary)
+
+                // Ordered CHEAPEST FIRST, because the screen is read while something is wrong
+                // and the top button should be the one to try first.
+                //
+                // RECONNECT keeps the sensor's identity — it drops our link and re-acquires the
+                // SAME sensor. This is the first move for a client that has stopped delivering.
+                // It deliberately forces one acquisition pass THROUGH ride-only (Jeremy,
+                // 2026-09-08: "we can violate ride only when it's a button that I push"): the
+                // policy exists to keep our radio out of the sensor's tail automatically, and a
+                // tap is not the automatic case. Without the bypass this button would only
+                // re-register for connection events and then wait up to a full 5-minute window
+                // for Dexcom's next link, which is not what someone pressing a button wants.
+                // The override is consumed by that one pass; the next re-arm is ride-only again.
+                //
+                // It does NOT clear a parked -70 floor. Nothing in our process can: that lives
+                // in bluetoothd's accept list and only a Bluetooth toggle, a strong burst or a
+                // reboot clears it. If reconnect changes nothing and the sensor is silent, the
+                // watch's own Bluetooth is the next thing to try, not this.
+                Button("Reconnect CGM") {
+                    SportLog.event("g7-ble", "*** USER RECONNECT *** dropping the G7 link and re-acquiring the same sensor")
+                    ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager.recycleG7ConnectForLab()
+                    lastAction = "CGM reconnect started"
+                }
+
+                // RE-ACQUIRE forgets the adopted sensor and rebuilds cold — scan, connect,
+                // discovery, auth subscribe, adoption. Strictly more disruptive than Reconnect,
+                // so it sits below it. Safe: the worst case is a re-adoption delay while the
+                // phone relay covers, exactly like any new-sensor day. No therapy state is
+                // touched. Ladybug-class: REMOVE PRE-PRODUCTION.
+                Button("Re-acquire Sensor (cold)") {
                     SportLog.event("g7-ble", "*** BENCH RE-ACQUIRE *** forgetting adopted sensor — cold acquisition starts now")
                     ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager.scanForNewSensor()
                     lastAction = "G7 re-acquire started"
                 }
+
+                // E1 kept by request, but not under that name: "E1" means nothing to a reader
+                // who has not read the investigation. What it DOES is run our G7 client with no
+                // pod loan, no pod central and no dosing — the only way to ask "is this the CGM
+                // or is this Loop?" and get an unambiguous answer. Refuses to start over a live
+                // loan.
+                if let session = session {
+                    Button(session.standaloneG7TestActive
+                           ? "Stop CGM-only test"
+                           : "CGM-only test (no pod, no dosing)") {
+                        if session.standaloneG7TestActive {
+                            session.stopStandaloneG7Test()
+                            lastAction = "CGM-only test stopped"
+                        } else {
+                            session.startStandaloneG7Test()
+                            lastAction = session.standaloneG7TestActive
+                                ? "CGM-only test running (E1)"
+                                : "blocked — end the loan first"
+                        }
+                    }
+                }
+
+                // The pod hold's current mode, so a deferred cycle on this screen is legible
+                // rather than looking like a stall.
+                Text("pod hold: \(PodRadioHold.modeText)")
+                    .font(.caption2).foregroundColor(.secondary)
 
                 // RADIO STRESS RETIRED: the question it existed to
                 // answer — does a pod command every single cycle disturb the CGM? — came back
@@ -396,74 +450,13 @@ struct LogView: View {
 }
 
 
-// MARK: - Radio Lab (2026-08-20)
-//
-// Runtime switches over the radio configuration space (docs/RADIO_LAB.md), so experiments are a
-// 10-second toggle instead of a 30-90 minute install cycle that can poison the companion
-// registration. Deliberately in the RELEASE build (Jeremy 2026-08-20: "make the lab regular, we can
-// take it out later") because local installs are the thing being routed around. Every key is read AT
-// USE with the shipped default as fallback — an untouched lab changes nothing.
-//
-// Changes apply at the next scan/connect cycle, never mid-dose.
-struct RadioLabView: View {
-    // (The G7 doorway toggles are gone — settled 2026-08-25, hardcoded in G7BluetoothManager.)
-    // Pod link — keys OmnipodKit has always read live. (Connect-on-demand is no longer here:
-    // it won its trial and is hardcoded in BluetoothManager — see connectOnDemandEnabled.)
-    @AppStorage("OmnipodKit.lowPowerMonitorEnabled") private var alarmScan = true
-
-    // Bench exerciser controls (see the Reclaim exerciser section below).
-    @State private var benchIdleSeconds = 60
-    @State private var benchReps = 5
-    @State private var benchStatus = ""
-
-    private var session: StockLoopSession? { ExtensionDelegate.sharedIfAvailable()?.stockLoopSession }
-    private var configLine: String {
-        "alarm=\(alarmScan ? "on" : "off")"
-    }
-
-    var body: some View {
-        Form {
-            Section("Pod link") {
-                Toggle("Alarm scan (C00A)", isOn: $alarmScan)
-            }
-            // BENCH: drives the real reclaimPodForDose on a chosen cadence — orphan, idle,
-            // reclaim, timed. Read-only (the probe is a status read); needs an ACTIVE loan;
-            // dies with the loan (every wait is epoch-scoped). Results land in the log as
-            // [bench] lines and the last result shows here.
-            Section("Reclaim exerciser") {
-                Picker("Idle before reclaim", selection: $benchIdleSeconds) {
-                    Text("0s").tag(0); Text("60s").tag(60); Text("180s").tag(180); Text("300s").tag(300)
-                }
-                Picker("Reps", selection: $benchReps) {
-                    Text("3").tag(3); Text("5").tag(5); Text("10").tag(10)
-                }
-                Button("Start") {
-                    benchStatus = "starting…"
-                    session?.loanController.benchReclaimStart(idle: TimeInterval(benchIdleSeconds), reps: benchReps) { line in
-                        DispatchQueue.main.async { benchStatus = line }
-                    }
-                }
-                Button("Stop") { session?.loanController.benchReclaimStop() }
-                if !benchStatus.isEmpty {
-                    Text(benchStatus).font(.system(size: 11, design: .monospaced)).foregroundColor(.secondary)
-                }
-            }
-            Section("Live") {
-                Text(configLine).font(.system(size: 11, design: .monospaced))
-                Text(podCensus).font(.system(size: 10, design: .monospaced)).foregroundColor(.secondary)
-                Text("Applies at the next scan/connect cycle.").font(.system(size: 10)).foregroundColor(.secondary)
-            }
-        }
-        .navigationTitle("Radio Lab")
-        .onChange(of: configLine) { _, line in SportLog.event("lab", "config: \(line)") }
-        .onAppear { SportLog.event("lab", "opened — config: \(configLine)") }
-    }
-
-    /// The pod central's own view — advert census, any-discovery count, watchdog restarts —
-    /// via the same diagnostics string the settle prints.
-    private var podCensus: String {
-        guard let lendable = session?.loanController.pumpManagerForDiagnostics as? PumpConnectionLendable,
-              let diag = lendable.connectionDiagnostics() else { return "pod central: no pump on watch" }
-        return diag
-    }
-}
+// RADIO LAB REMOVED 2026-09-08 (Jeremy: "we don't need the radio lab anymore").
+// Every question it existed to answer has been settled and the answers are hardcoded:
+//   - the G7 doorway toggles went in the 2026-08-25 settlement (now one G7RidePolicy);
+//   - "Alarm scan (C00A)" was one OmnipodKit key nobody had flipped in weeks, and it stays
+//     at its shipped default (the key is still read at use, so a shell default still works);
+//   - the reclaim exerciser answered the reclaim-cadence question months ago.
+// The PLUMBING is untouched — `loanController.benchReclaimStart/Stop` and
+// `connectionDiagnostics()` are all still there — so a bench drill is one small view away.
+// What replaced it: the actions that are actually used, on the main screen, named for a
+// reader who is not us.
