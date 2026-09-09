@@ -62,7 +62,7 @@ struct LoanDebugView: View {
     /// The C00A pod fault listener. Restored to the screen 2026-09-08, hours after its Radio Lab
     /// toggle was removed, because Jeremy's adversarial review reopened the question it answers.
     /// Read at use in OmnipodKit, so flipping it takes effect on the next scan arm — no relaunch.
-    @AppStorage("OmnipodKit.lowPowerMonitorEnabled") private var alarmScan = true
+    @AppStorage("OmnipodKit.lowPowerMonitorEnabled") private var alarmScan = false   // matches the watchOS shipped default in OmnipodKit
 
     private let refresh = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
@@ -265,8 +265,10 @@ struct LoanDebugView: View {
                     SportLog.event("lab", "C00A pod fault scan = \(alarmScan ? "ON" : "OFF") — takes effect at the next scan arm")
                     lastAction = "C00A fault scan → \(alarmScan ? "ON" : "OFF")"
                 }
-                if !alarmScan {
-                    Text("fault scan OFF — experiment running; turn back ON when done")
+                // OFF is now the shipped default (2026-09-09: it is what parks the -70 floor).
+                // The warning therefore points the other way — ON is the experimental state.
+                if alarmScan {
+                    Text("fault scan ON — this is what wedges the G7; turn OFF unless testing")
                         .font(.caption2).foregroundColor(.orange)
                 }
 
