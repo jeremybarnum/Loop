@@ -1377,8 +1377,16 @@ final class PodLoanWatchController {
                 guard self.now() < grant.expiresAt else {
                     self.teardownPump()
                     self.returnToRestingPhase()
-                    self.lastIdleNote = NSLocalizedString("Sport Mode start expired before the pod answered. Tap Start to try again.", comment: "Glance: grant lease expired mid-takeover")
-                    SportLog.event("loan", "TAKEOVER ABORTED — grant lease expired mid-takeover after \(attempt + 1) read(s), epoch \(grant.epoch)\(self.seizeMarkerActive ? " [seize]" : "")")
+                    // Reconciled to Caitlin's line 2026-09-09: only a clean transient (pod
+                    // seen, connects attempted, no #11) earns "try again"; the wedge
+                    // signature names the cure instead. Port API is wedgeSignature(since:).
+                    let wedged = PodLoanConnectClock.wedgeSignature(since: self.attemptStartedAt)
+                    if wedged {
+                        self.lastIdleNote = NSLocalizedString("The pod didn't answer. Turn watch Bluetooth off and on, then try again.", comment: "Glance: takeover failed with the BLE-wedge signature")
+                    } else {
+                        self.lastIdleNote = NSLocalizedString("Sport Mode start expired before the pod answered. Tap Start to try again.", comment: "Glance: grant lease expired mid-takeover")
+                    }
+                    SportLog.event("loan", "TAKEOVER ABORTED — grant lease expired mid-takeover after \(attempt + 1) read(s), epoch \(grant.epoch), wedgeSignature=\(wedged)\(self.seizeMarkerActive ? " [seize]" : "")")
                     self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "grant expired mid-takeover")))
                     return
                 }

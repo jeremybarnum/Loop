@@ -934,6 +934,18 @@ final class WatchDataManager: NSObject {
             throw WatchDataManagerError.expiredBolusRecommendation
         }
 
+        // While the pod is loaned to the watch this phone cannot deliver — its pod link is
+        // deliberately released. Refuse loudly rather than letting the request die in a BLE
+        // timeout. Delivery only is refused: an attached carb entry still stores below, because
+        // dropping it would lose the meal from the record entirely.
+        // (Reconciled from Caitlin's line 2026-09-09. The port had NO guard here: a watch
+        // bolus during a loan went straight to enactBolus against a released pod link.)
+        let deliveryRefusedForLoan = bolus.value > 0 && podLoanController.isPodLoanedOut
+        if deliveryRefusedForLoan {
+            log.error("Refusing watch bolus while the pod is on loan: %{public}@", String(describing: message))
+            NotificationManager.sendBolusFailureNotificationForPodLoan(units: bolus.value)
+        }
+
         var dosingDecision: BolusDosingDecision
         if let contextDate = bolus.contextDate, let contextDosingDecision = contextDosingDecisions[contextDate] {
             dosingDecision = contextDosingDecision
@@ -951,6 +963,9 @@ final class WatchDataManager: NSObject {
 
         dosingDecision.manualBolusRequested = bolus.value
         await loopDataManager.storeManualBolusDosingDecision(dosingDecision, withDate: bolus.startDate)
+
+        // Loan-time refusal: the decision and any carbs are stored above; delivery is not attempted.
+        guard !deliveryRefusedForLoan else { return }
 
         try await deviceManager.enactBolus(units: bolus.value, decisionId: dosingDecision.id, activationType: bolus.activationType)
         self.analyticsServicesManager?.didBolus(source: "Watch", units: bolus.value)
