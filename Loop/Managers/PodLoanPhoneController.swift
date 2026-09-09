@@ -2446,10 +2446,10 @@ final class PodLoanPhoneController {
             // are two independent symptoms of the same wedge — WCSession queueing everything we
             // send. The watch cannot see this flag; only the phone can, so only the phone can
             // tell the user. The reliable field remedy is a Bluetooth toggle on this phone.
+            // Reconciled to Caitlin's line 2026-09-09: the one-way-wedge evidence is logged, not
+            // posted as a notice.
             if !self.deps.watchAppInstalled() {
-                self.handbackDiag(grantEpoch, "grant unconfirmed AND isWatchAppInstalled=false — one-way wedge; alerting the user (BT toggle)")
-                self.deps.issueNotice("Watch Link Is Stuck",
-                                      "This phone thinks the watch app isn't installed, so messages to the watch are being silently queued. Toggle Bluetooth off and on (Control Center), open Loop, and start the loan again.")
+                self.handbackDiag(grantEpoch, "grant unconfirmed AND isWatchAppInstalled=false — one-way wedge signature")
             }
             self.sendMessage(.statusQuery(StatusQuery(epoch: grantEpoch)))
         }
