@@ -59,6 +59,11 @@ struct LoanDebugView: View {
     @State private var dosing: WatchLoopManager.GlanceData?
     @State private var cobText: String = "—"
 
+    /// The C00A pod fault listener. Restored to the screen 2026-09-08, hours after its Radio Lab
+    /// toggle was removed, because Jeremy's adversarial review reopened the question it answers.
+    /// Read at use in OmnipodKit, so flipping it takes effect on the next scan arm — no relaunch.
+    @AppStorage("OmnipodKit.lowPowerMonitorEnabled") private var alarmScan = true
+
     private let refresh = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     /// nil until the stack finishes starting at launch; the readouts render "—" in that window
@@ -233,6 +238,37 @@ struct LoanDebugView: View {
                 // rather than looking like a stall.
                 Text("pod hold: \(PodRadioHold.modeText)")
                     .font(.caption2).foregroundColor(.secondary)
+
+                Divider().padding(.vertical, 2)
+                Text("RADIO EXPERIMENT").font(.footnote).foregroundColor(.secondary)
+
+                // WHY THIS IS BACK. The alarm scan is next-dev-only: Caitlin's branch has no
+                // C00A listener at all, yet wedges just as readily — so it is not necessary for
+                // the mute. But the 09-08 capture shows our pod scan escalating to its top level
+                // ~115 s after the pod orphans, which is ~110 s after the SENSOR closes, because
+                // both hang off the same 5-minute cycle. Today's failed sensor connections landed
+                // at close +109…+110 s: on two of four, our escalation and the failure share a
+                // second. So we put a scan on the radio at almost exactly the moment the daemon
+                // retries the sensor, every cycle, by construction.
+                //
+                // Not sufficient either: the same collision recurs six times in the clean window
+                // after 11:00 with 27/27 connections succeeding. So this is a candidate
+                // AGGRAVATOR, and the only way to price it is to turn it off and repeat a
+                // phone-away arm.
+                //
+                // COST OF OFF: no connectionless pod-fault detection while the pod is orphaned —
+                // a fault is then found at the next cycle's connect instead of within ~1 min.
+                // Alerts are unaffected (they never changed the advertised UUID; the heartbeat
+                // probe surfaces those). Fine on a bench pod, a real consideration on a live one.
+                Button("Pod fault scan (C00A): \(alarmScan ? "ON" : "OFF") → tap to flip") {
+                    alarmScan.toggle()
+                    SportLog.event("lab", "C00A pod fault scan = \(alarmScan ? "ON" : "OFF") — takes effect at the next scan arm")
+                    lastAction = "C00A fault scan → \(alarmScan ? "ON" : "OFF")"
+                }
+                if !alarmScan {
+                    Text("fault scan OFF — experiment running; turn back ON when done")
+                        .font(.caption2).foregroundColor(.orange)
+                }
 
                 // RADIO STRESS RETIRED: the question it existed to
                 // answer — does a pod command every single cycle disturb the CGM? — came back
