@@ -855,10 +855,11 @@ final class PodLoanWatchController {
                 // field remedy is toggling Bluetooth on the PHONE. Say exactly that, at the
                 // moment the user is looking at a failed start, instead of the old generic
                 // "refused or busy" which sent them hunting in the wrong places.
+                // Reconciled to Caitlin's line 2026-09-09: one note for every timeout. The
+                // one-way-wedge signature (#113) is still logged; it just no longer gets its
+                // own on-wrist remedy text.
                 if self.isPhoneReachable() {
-                    self.lastIdleNote = NSLocalizedString("iPhone looks connected but isn't answering — the link is stuck one-way. On the PHONE: toggle Bluetooth off and on (Control Center), open Loop, then try again.", comment: "Glance idle note: request timed out while reachable (one-way WCSession wedge)")
-                    SportLog.event("loan", "REQUEST TIMED OUT with phone REACHABLE — one-way wedge signature (#113); told the user: BT toggle on the phone")
-                    return
+                    SportLog.event("loan", "REQUEST TIMED OUT with phone REACHABLE — one-way wedge signature (#113)")
                 }
                 self.lastIdleNote = NSLocalizedString("No response from iPhone — check the phone (loan refused, or busy) and try again.", comment: "Glance: loan request timed out")
                 SportLog.event("loan", "REQUEST TIMED OUT — no grant in \(Int(timeout))s (phone refused / busy / unreachable)")
@@ -1569,21 +1570,13 @@ final class PodLoanWatchController {
                         // pure line 2026-08-21: refused-with-#11 escalated to zero adverts in
                         // 108 s across retries; a watch Bluetooth toggle cleared it first try).
                         // Say the remedy that works instead of the one that feeds the failure.
-                        if wedged {
-                            self.lastIdleNote = String(format: NSLocalizedString(
-                                "Sport Mode didn't start (%.0fs) — the watch's Bluetooth is wedged. Turn watch Bluetooth off and on (Control Center), then try again. Your phone still has the pod and is still looping.",
-                                comment: "Glance: takeover failed with the BLE-wedge signature — retrying without a Bluetooth toggle makes it worse"), failSecs)
-                        } else {
-                            // State the fact and stop ("if there is no pod, there is no pod" —
-                            // Jeremy, 2026-09-02, trimming the seconds and the "wait ~30s"
-                            // coaching): nothing moved, the pod couldn't be reached, and the
-                            // Start button is right there. The seconds and the retry-timing
-                            // evidence live in the TAKEOVER FAILED log line below. The wedge
-                            // variant above keeps its remedy — that one is field-proven.
-                            self.lastIdleNote = NSLocalizedString(
-                                "Sport Mode didn't start — the pod couldn't be reached. Your phone still has it and is still looping.",
-                                comment: "Glance: takeover failed — the pod link never established")
-                        }
+                        // State the fact and stop ("if there is no pod, there is no pod" —
+                        // Jeremy, 2026-09-02). Reconciled to Caitlin's line 2026-09-09: the
+                        // wedge variant's on-wrist remedy text is gone; `wedged` still drives
+                        // the TAKEOVER FAILED log line and the reason sent to the phone.
+                        self.lastIdleNote = NSLocalizedString(
+                            "Sport Mode didn't start — the pod couldn't be reached. Your phone still has it and is still looping.",
+                            comment: "Glance: takeover failed — the pod link never established")
                     }
                     SportLog.event("loan", String(format: "TAKEOVER FAILED wedge=%@ — %@ after %d reads in %.1fs [takeover-timing], max inter-read gap %.1fs (event-driven; 8s backstop when no event fires), %@, final BLE state %@, %@, %@, epoch %d%@",
                                                   wedged ? "YES" : "no",

@@ -1343,17 +1343,9 @@ extension WatchDataManager: WCSessionDelegate {
             guard let self = self else { return }
             self.appInstalledGlitchWork = nil
             self.appInstalledGlitchNotified = true
-            PhoneLog.event("link", "appInstalled=false has PERSISTED 75s — surfacing the watch-BT-toggle remedy [appinstalled-glitch]")
-            let content = UNMutableNotificationContent()
-            content.title = NSLocalizedString("Watch Link Glitch", comment: "Notification title for the persistent appInstalled=false glitch")
-            content.body = NSLocalizedString("The watch is reporting Sport Mode as not installed — usually a Bluetooth glitch, not a real uninstall. On the watch: swipe up for Control Center, turn Bluetooth off and back on.", comment: "Notification body: remedy for the appInstalled=false glitch")
-            content.sound = .default
-            // timeSensitive or a Focus mode eats it silently — field 2026-08-23: the detector's
-            // first firing produced no banner on a phone in flight-mode-adjacent Focus, while
-            // the .timeSensitive urgent notices have always shown. Same justification as that
-            // channel: the phone is the only device able to say this (the watch link is down).
-            content.interruptionLevel = .timeSensitive
-            UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "podloan.appinstalled.glitch", content: content, trigger: nil))
+            // Reconciled to Caitlin's line 2026-09-09: the 75-s persistence is still detected and
+            // logged (it was the signature of both of 09-08's silences); it no longer posts.
+            PhoneLog.event("link", "appInstalled=false has PERSISTED 75s [appinstalled-glitch]")
         }
         appInstalledGlitchWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 75, execute: work)

@@ -365,11 +365,10 @@ final class GlanceViewModel: ObservableObject {
         guard let session = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession else {
             let why = ExtensionDelegate.sharedIfAvailable() == nil ? "no app delegate" : "no session"
             SportLog.event("session", "START TAPPED but Sport Mode is unavailable (\(why)) — the stack never assembled · build \(build)")
-            state.idleNote = NSLocalizedString("Sport Mode didn't start up on this watch. Force-quit the watch app, open it again, and try Start.",
-                                               comment: "Glance: the loan stack failed to assemble, so Start cannot work")
             return
         }
-        // START GATE (2026-08-21). Whatever we know about the sensor link now is everything we
+        // START GATE (2026-08-21; on-wrist notes removed 2026-09-09 to match Caitlin's line —
+        // the gate still logs each state). Whatever we know about the sensor link now is everything we
         // will ever know — the G7 client runs continuously, so starting a loan cannot improve the
         // odds of direct BG. Refuse here, where the wearer can still act, rather than alerting
         // mid-loan when they cannot. Only fires for a REAL enrolled sensor; see
@@ -382,14 +381,10 @@ final class GlanceViewModel: ObservableObject {
             // but this state is indistinguishable from a bench rig deliberately running without a
             // sensor — so say it and continue. The note stays on screen under the active loan.
             SportLog.event("loan", "START with NO SENSOR EVER ENROLLED — loan will run on relayed BG alone and will stop looping if the phone leaves; proceeding (bench rigs look identical from here)")
-            state.idleNote = NSLocalizedString("No sensor set up on this watch — Sport Mode is running on BG relayed from your phone, so it will stop looping if you walk away from it.",
-                                               comment: "Glance: Sport Mode started with no watch sensor, relay-only warning")
         case .waitingForFirstReading(let sensorName):
             // Not a fault: a fresh enrollment legitimately takes minutes, and between loans the
             // radio cannot deliver at all. Say it, proceed.
             SportLog.event("loan", "START with sensor \(sensorName) enrolled but no direct reading yet on this watch — proceeding")
-            state.idleNote = NSLocalizedString("Waiting for direct BG from your sensor. Usually a few minutes. Longer? Check Dexcom on your watch.",
-                                               comment: "Glance: Sport Mode started, sensor enrolled but no reading yet")
         case .noDirectConnection(let sensorName, let silentMinutes):
             // The question IS the diagnostic, and the wearer answers it in five seconds. Dexcom
             // showing BG means the sensor talks to this watch fine, so OUR client is following the
@@ -400,8 +395,6 @@ final class GlanceViewModel: ObservableObject {
             // delivers while the app has runtime, which the loan itself is about to grant. Refusing
             // on it locked out every healthy setup.
             SportLog.event("loan", "START with no direct BG from \(sensorName) for \(silentMinutes)m — expected between loans (no runtime, no radio); proceeding, but a relay-only loan stops looping if the phone leaves")
-            state.idleNote = NSLocalizedString("No direct BG from your sensor yet. If Sport Mode doesn't pick it up shortly: is Dexcom showing BG on your watch? If yes, use Forget Sensor. If no, toggle Bluetooth.",
-                                               comment: "Glance: Sport Mode started without a recent direct reading")
         }
         session.loanController.requestLoan(watchBuild: build)
         // Log pipeline v4: the Start tap itself ships a snapshot, and a +35s
@@ -543,15 +536,8 @@ final class GlanceViewModel: ObservableObject {
             // did (state=owner, verified), and at 17:45 it did not (state=loaned) — the watch cannot
             // tell the difference from here, and guessing wrong in either direction is worse than not
             // guessing.
-            let draining = snap.handbackStartedAt.map { Date().timeIntervalSince($0) } ?? 0
-            if draining > 90 {
-                s.loopStatusText = snap.phoneReachable
-                    ? NSLocalizedString("iPhone hasn't confirmed", comment: "Glance status when a hand-back drain has run long")
-                    : NSLocalizedString("can't reach iPhone", comment: "Glance status when a hand-back drain has run long and the phone is unreachable")
-                s.idleNote = NSLocalizedString("Nothing is lost — your doses are recorded. Open Loop on iPhone to finish.", comment: "Glance note when a hand-back drain has run long")
-            } else {
-                s.loopStatusText = NSLocalizedString("returning records…", comment: "Glance status while draining records")
-            }
+            // Reconciled to Caitlin's line 2026-09-09: no long-drain variant.
+            s.loopStatusText = NSLocalizedString("returning records…", comment: "Glance status while draining records")
             state = s
         case .active:
             // Main-safe read, exactly as for the loan snapshot above: publish a mirror from
