@@ -1477,3 +1477,37 @@ connection event only for links that come up. Compare 13:16:49 (the successful r
 observable that would CONFIRM a parked floor without a sysdiagnose is a brief scan after a missed
 window, outside the tail (sensor advertising + no link = parked). That is a radio change in the
 direction §7 spent a week removing, so it needs preregistration, not a quiet addition.
+
+## 9. THE WEDGE IS PLATFORM-NATIVE — Dexcom alone, Loop deleted, both devices (port line, 2026-09-09 20:21→21:17)
+
+Written by the next-dev port session at Jeremy's request. This section supersedes the port's
+own 09-08/09 scan conclusion (below) and should be read as the investigation's current bottom line.
+
+**Recipe that wedges on demand (three for three on 09-09, 13–16 min each):** judgment at 1 (or
+the count about to reach 5), a departure — phone Bluetooth off AND watch Wi-Fi off so
+WatchConnectivity has no path (`[tail]` must read `phone away`, not the Wi-Fi-masked
+`reachable`) — and wait. `WCSession.isReachable` is the invalid proxy §3o already named.
+
+### 9a. Facts (watch bluetoothd + phone bluetoothd + nRF sniffer, capture `co-sysdiagnose_2026.09.09_21-07-14`)
+
+- Loop DELETED from phone and watch; last `StockSportMode` line in either daemon log 20:03:19; arm began 20:21:16.
+- Fresh sensor `30E473FE` / `DF:49:5D:22:5F:45` (started 18:31, warmup to 19:06). Baseline 19:57: count 0, judgment 0, every floor −100.
+- Phone power-state register (`ffffffff` on / `0` off): off 20:21:16, on 20:33:15, off 20:35:09, on 20:42:41, off 20:47:33, on 21:03:02. Phone bluetoothd logged zero lines in every off-window. Phone's Dexcom app first touched the sensor 21:07:44.
+- Watch daemon restarts in the window: **0**. Every sensor connect owned by `com.dexcom.g7app.watchkitapp` alone.
+- Scored 762s: 20:21:59, 20:22:05, 20:22:11 (within 12 s of the departure — the re-subscribe churn), 20:26:56, 20:36:59, 20:37:07.
+- **20:36:59 count 5 → judgment 0→1. 20:37:07 → `minRSSI=−70`.** 15 min 51 s after cut-off.
+- On the air (sniffer): 20:36:43 burst 27.7 s with a 30-attempt barrage from +12 s; then 20:41→21:06 fourteen bursts (two of 25 s) with **zero** watch attempts. 20:46:58's five attempts were the phone (BT on 20:42:41–20:47:33).
+- Touch-heal ~21:06:30 → 21:06:56 `−100`, count 6, judgment still 1; watch reconnected 21:07:43. The heal clears the floor only.
+- Throughout the mute the Dexcom WATCH app showed a value with the phone icon while the phone had none.
+
+### 9b. What the port line established on the way here (09-08 → 09-09 01:50, all preregistered)
+
+- "Late" is measured from the daemon's connect REQUEST, not the sensor's close. The −70s of 09-08/09 were the SECOND failure of a retry pair, 10–16 s after the first request (00:52:08, 01:17:14). At state 0 the identical second retry wrote `minRSSI=0` (23:42:13, 23:47:14); at state 1 it wrote −70. Same failure, outcome set by state. This morning's +106 s minute-call failure is the same rule with a bigger gap.
+- Two wedges with the C00A pod-fault idle scan ON (00:43, 01:14), one clean run with it OFF (01:50) — which read as confirmation of the scan hypothesis until §9a. With Loop absent entirely the daemon still scored the second attempt. The scan is NOT necessary; whether it aggravates is unresolved at n=1. The watchOS default-OFF shipped in `69bf20f` is harmless but is not a fix.
+- The count reset 6→0 at 23:21:57 on 09-08 coincided with our watch app relaunching and re-registering for connection events. Untested as a deliberate reset; noted as a lead.
+- Debug-level bluetoothd is 150–200k lines/hour, so a capture's usable window is ~3 h whatever the archive's age. With Loop deleted it was ~6 h. Capture within 3 h of the event or the arming is not in it.
+- `devicectl device sysdiagnose` / `devicectl diagnose` fail with `DiagnoseError 0` on both watch and phone (Xcode 26.6); `log collect/stream` have no device option here. The button-combo capture remains the path.
+
+### 9c. Inference (labelled)
+
+The mechanism is Apple's signal-quality gate fed by Dexcom's own re-subscribe behaviour on departure: the watch app's standing accept-list request, the sensor's long post-departure tails, and a daemon that scores a completed-then-dead link as a signal-quality failure. Our keepalive and idle scan can only add opportunities for the daemon's second attempt to complete; they cannot be the cause, because the cause reproduced with neither present. Section 8's in-app detector remains the useful thing to build; §7's pod hold remains correct as harm reduction.
