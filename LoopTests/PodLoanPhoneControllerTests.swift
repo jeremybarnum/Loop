@@ -2591,10 +2591,10 @@ extension PodLoanPhoneControllerTests {
     /// e59 reported "takeover IN PROGRESS at +145s" twenty-one seconds after its own grant — it was
     /// quoting e58's clock.
     ///
-    /// Not a cosmetic log defect. `handleStatusReport` measures that elapsed against
-    /// `takeoverProgressCeiling`, and past the ceiling it stops extending the dead-man and reclaims
-    /// at once. The anchor drifts further out with every failure, so each abandoned takeover makes
-    /// the next likelier to be abandoned too.
+    /// Not a cosmetic log defect: the anchor drifts further out with every failure, so a stale
+    /// clock misreports every later takeover. It used to be load-bearing — the elapsed was measured
+    /// against `takeoverProgressCeiling` to decide whether to extend the dead-man — but that
+    /// extension was removed 2026-09-09; this test now pins the anchor itself.
     func testANewGrantDoesNotInheritAFailedTakeoversClock() throws {
         clock = Date()
         let controller = makeController(now: { [weak self] in self?.clock ?? Date() })

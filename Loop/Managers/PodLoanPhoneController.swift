@@ -2409,15 +2409,6 @@ final class PodLoanPhoneController {
     /// "yes I have the grant" and nothing happens. Only an explicit "I never got it" acts.
     private static let grantLostProbeDelay: TimeInterval = 20
 
-    /// How much longer a watch that says it is ACTIVELY TAKING OVER buys itself, each time it
-    /// says so. One T1 window, so a working takeover is never cut off mid-ladder.
-    private static let takeoverProgressExtension: TimeInterval = .minutes(5)
-
-    /// Ceiling on those extensions. A takeover that has not landed in fifteen minutes is not
-    /// going to; past this the dead-man reclaims regardless of what the watch claims, because
-    /// "still trying" forever is indistinguishable from a wedged watch holding the pod hostage.
-    private static let takeoverProgressCeiling: TimeInterval = .minutes(15)
-
     /// When the current grant was offered — the anchor the ceiling is measured from.
     private var grantOfferedAt: Date?
 
@@ -2461,15 +2452,14 @@ final class PodLoanPhoneController {
         // the elapsed this feeds kept growing across attempts: field 2026-08-17, e59 reported
         // "takeover IN PROGRESS at +145s" 21 s after its own grant, quoting e58's clock.
         //
-        // That is not just a wrong number in a log line. `handleStatusReport` compares this
-        // elapsed against `takeoverProgressCeiling`, and past the ceiling it stops extending the
-        // dead-man and reclaims at once — so the longer a session ran, the sooner its takeovers
-        // were abandoned.
+        // Historically that was not just a wrong number in a log line: the elapsed was compared
+        // against a ceiling that decided whether to extend the dead-man, so the longer a session
+        // ran, the sooner its takeovers were abandoned. The extension was removed 2026-09-09;
+        // the anchor now feeds the diagnostic line only.
         //
         // NOW A FALLBACK (2026-08-20). The grant path stamps this at the DECISION instead — armT1
         // runs at the end of a deep async chain, and a watch that answers before the chain lands used
-        // to find it nil and report "+0s", which makes `elapsed < takeoverProgressCeiling` trivially
-        // true and stops the ceiling ever firing. Overwriting here would push the anchor forward by
+        // to find it nil and report "+0s". Overwriting here would push the anchor forward by
         // however long the snapshot took and re-open that window, so this only fills a genuine gap:
         // the relaunch re-arm, where the state is restored from disk but this in-memory stamp is not.
         // The per-grant reset that made the write unconditional now happens at the decision point,
@@ -2601,42 +2591,21 @@ final class PodLoanPhoneController {
         // `== false` deliberately, not `!= true`: nil is an older build that could not answer, and
         // must fall through to the 5-minute timer. Only an explicit denial acts.
         // TAKEOVER IN PROGRESS: the watch has the grant and is working on it, but does not hold
-        // the pod yet. This is the third answer the protocol was built to distinguish — see
-        // `knowsGrant` — and until now it fell through to the 5-minute dead-man and got the pod
-        // reclaimed out from under it. Measured takeovers on this branch run 190-265s and one
-        // exceeded the ceiling entirely, which produced a SPLIT BRAIN: the phone reclaimed while
-        // the watch went on to take over successfully, so both believed they owned the pod. The
-        // phone then denied every subsequent loan because its own reclaim could never verify —
-        // the watch really did have the pod. Unrecoverable without ending the loan from the wrist.
+        // the pod yet — the third answer the protocol distinguishes (see `knowsGrant`).
+        // The dead-man EXTENSION this used to grant was REMOVED 2026-09-09 (Jeremy: "the vast
+        // majority of takeovers are fast now, that seems redundant"), matching Caitlin's line,
+        // which arms T1 once. History so the trade-off is not re-litigated blind: it existed
+        // because takeovers on this branch once ran 190-265 s against a 5-minute dead-man, and
+        // one overran it — the phone reclaimed while the watch took over successfully, both
+        // believed they owned the pod, and the phone then denied every later loan because its own
+        // reclaim could never verify. Unrecoverable without ending the loan from the wrist.
+        // Measured takeovers 2026-09-08/09: 8-57 s, so the margin is now wide.
         //
-        // A watch that says it is still working buys another window, bounded by
-        // takeoverProgressCeiling so a wedged watch cannot hold the pod hostage by claiming
-        // progress forever.
+        // The report is still LOGGED — its elapsed is the observable for the grant-anchor
+        // regression test (testANewGrantDoesNotInheritAFailedTakeoversClock).
         if state == .grantOffered, report.knowsGrant == true, !report.holdsPod {
             let elapsed = grantOfferedAt.map { deps.now().timeIntervalSince($0) } ?? 0
-            if elapsed < Self.takeoverProgressCeiling {
-                handbackDiag(report.epoch, String(format: "takeover IN PROGRESS on the watch at +%.0fs — extending the dead-man rather than reclaiming", elapsed))
-                t1WorkItem?.cancel()
-                cancelNotification(id: NotificationID.t1)
-                let grantEpoch = report.epoch
-                scheduleNotification(id: NotificationID.t1, title: "Watch Loan Not Confirmed",
-                                     body: "The watch hasn't confirmed taking the pod. The phone will take it back.",
-                                     delay: Self.takeoverProgressExtension, repeats: false)
-                let work = DispatchWorkItem { [weak self] in
-                    guard let self = self, self.state == .grantOffered, self.epoch == grantEpoch else { return }
-                    self.sendMessage(.statusQuery(StatusQuery(epoch: grantEpoch)))
-                    let confirm = DispatchWorkItem { [weak self] in
-                        guard let self = self, self.state == .grantOffered, self.epoch == grantEpoch else { return }
-                        self.reclaimToOwner(alert: nil, reason: "dead-man expired after the in-progress EXTENSION — takeover never completed")
-                    }
-                    self.t1WorkItem = confirm
-                    self.queue.asyncAfter(deadline: .now() + 15, execute: confirm)
-                }
-                t1WorkItem = work
-                queue.asyncAfter(deadline: .now() + Self.takeoverProgressExtension, execute: work)
-            } else {
-                handbackDiag(report.epoch, String(format: "takeover still unfinished at +%.0fs — past the %.0fs ceiling; reclaiming anyway", elapsed, Self.takeoverProgressCeiling))
-            }
+            handbackDiag(report.epoch, String(format: "takeover IN PROGRESS on the watch at +%.0fs — the 5-minute dead-man runs unchanged", elapsed))
         }
         if state == .grantOffered, report.knowsGrant == false, !report.holdsPod {
             handbackDiag(report.epoch, "grant CONFIRMED LOST by the watch — reclaiming now instead of waiting out the 5-minute timer (#108)")
