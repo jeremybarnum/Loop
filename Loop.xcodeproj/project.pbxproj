@@ -368,6 +368,7 @@
 		9A7CE02D302D82A800A03F53 /* PodLoanTimerSeamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE019302D82A800A03F53 /* PodLoanTimerSeamTests.swift */; };
 		5E12EA02302D82A800A03F53 /* SeizeActivationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E12EA01302D82A800A03F53 /* SeizeActivationTests.swift */; };
 		B8C9D0E1F2A3B4C5D6E7F8A9 /* G7RidePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7B8C9D0E1F2A3B4C5D6E7F8 /* G7RidePolicyTests.swift */; };
+		BDE04F37312A4F6C86EC7872 /* G7TimedConnectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E489814AB551420DA40399A4 /* G7TimedConnectTests.swift */; };
 		F6A7B8C9D0E1F2A3B4C5D6E7 /* PodRadioHoldTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5F6A7B8C9D0E1F2A3B4C5D6 /* PodRadioHoldTests.swift */; };
 		9A7CE02E302D82A800A03F53 /* WatchAppTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE01A302D82A800A03F53 /* WatchAppTests.swift */; };
 		9A7CE02F302D82A800A03F53 /* WatchdogArmingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7CE01B302D82A800A03F53 /* WatchdogArmingTests.swift */; };
@@ -1242,6 +1243,7 @@
 		9A7CE019302D82A800A03F53 /* PodLoanTimerSeamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanTimerSeamTests.swift; sourceTree = "<group>"; };
 		5E12EA01302D82A800A03F53 /* SeizeActivationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeizeActivationTests.swift; sourceTree = "<group>"; };
 		A7B8C9D0E1F2A3B4C5D6E7F8 /* G7RidePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = G7RidePolicyTests.swift; sourceTree = "<group>"; };
+		E489814AB551420DA40399A4 /* G7TimedConnectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = G7TimedConnectTests.swift; sourceTree = "<group>"; };
 		E5F6A7B8C9D0E1F2A3B4C5D6 /* PodRadioHoldTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodRadioHoldTests.swift; sourceTree = "<group>"; };
 		9A7CE01A302D82A800A03F53 /* WatchAppTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAppTests.swift; sourceTree = "<group>"; };
 		9A7CE01B302D82A800A03F53 /* WatchdogArmingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchdogArmingTests.swift; sourceTree = "<group>"; };
@@ -2790,6 +2792,7 @@
 				9A7CE019302D82A800A03F53 /* PodLoanTimerSeamTests.swift */,
 				5E12EA01302D82A800A03F53 /* SeizeActivationTests.swift */,
 				A7B8C9D0E1F2A3B4C5D6E7F8 /* G7RidePolicyTests.swift */,
+				E489814AB551420DA40399A4 /* G7TimedConnectTests.swift */,
 				E5F6A7B8C9D0E1F2A3B4C5D6 /* PodRadioHoldTests.swift */,
 				9A7CE01A302D82A800A03F53 /* WatchAppTests.swift */,
 				9A7CE070302D82A800A03F53 /* RecordingWristAlertScheduler.swift */,
@@ -4226,6 +4229,7 @@
 				9A7CE02D302D82A800A03F53 /* PodLoanTimerSeamTests.swift in Sources */,
 				5E12EA02302D82A800A03F53 /* SeizeActivationTests.swift in Sources */,
 				B8C9D0E1F2A3B4C5D6E7F8A9 /* G7RidePolicyTests.swift in Sources */,
+				BDE04F37312A4F6C86EC7872 /* G7TimedConnectTests.swift in Sources */,
 				F6A7B8C9D0E1F2A3B4C5D6E7 /* PodRadioHoldTests.swift in Sources */,
 				9A7CE02E302D82A800A03F53 /* WatchAppTests.swift in Sources */,
 				9A7CE071302D82A800A03F53 /* RecordingWristAlertScheduler.swift in Sources */,

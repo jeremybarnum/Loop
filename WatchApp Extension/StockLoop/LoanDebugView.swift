@@ -63,6 +63,8 @@ struct LoanDebugView: View {
     /// toggle was removed, because Jeremy's adversarial review reopened the question it answers.
     /// Read at use in OmnipodKit, so flipping it takes effect on the next scan arm — no relaunch.
     @AppStorage("OmnipodKit.lowPowerMonitorEnabled") private var alarmScan = false   // matches the watchOS shipped default in OmnipodKit
+    /// Timed, bounded connect — see G7TimedConnect in G7SensorKit. Default OFF.
+    @AppStorage("G7Lab.timedConnect") private var timedConnect = false
 
     private let refresh = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
@@ -269,6 +271,28 @@ struct LoanDebugView: View {
                 // The warning therefore points the other way — ON is the experimental state.
                 if alarmScan {
                     Text("fault scan ON — this is what wedges the G7; turn OFF unless testing")
+                        .font(.caption2).foregroundColor(.orange)
+                }
+
+                // TIMED, BOUNDED CONNECT (2026-09-11). The experiment behind the direct-auth
+                // decision: can a client of ours avoid the -70 floor by never scanning, never
+                // holding a standing request, connecting 2 s before each 5-min burst and
+                // withdrawing at 5 s (or the instant a connect fails)? Every -70 on record came
+                // from the daemon's own late retry; this tests whether an immediate cancel
+                // pre-empts it. PROTOCOL: sensor adopted first; Dexcom watch app REMOVED (ours
+                // must be the only client); CGM-only test running (keepalive, no pod); this ON;
+                // sniffer on the sensor; several departures; sysdiagnose inside 3 h. Without
+                // auth the sensor hangs up ~10 s after we connect — expected and irrelevant.
+                // Read the [g7-ble] "timed:" lines for what we did and the capture for what the
+                // daemon scored. Turn OFF to return to normal acquisition.
+                Button("Timed connect (bounded 5 s): \(timedConnect ? "ON" : "OFF") → tap to flip") {
+                    timedConnect.toggle()
+                    ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager.setTimedConnectForLab(timedConnect)
+                    SportLog.event("lab", "timed bounded connect = \(timedConnect ? "ON" : "OFF") — \(timedConnect ? "grid-timed connect 2 s before each burst, withdrawn at 5 s; no scan, no standing request" : "normal acquisition resumes")")
+                    lastAction = "timed connect → \(timedConnect ? "ON" : "OFF")"
+                }
+                if timedConnect {
+                    Text("timed connect ON — experiment; no scan, no standing request. Turn OFF when done.")
                         .font(.caption2).foregroundColor(.orange)
                 }
 
