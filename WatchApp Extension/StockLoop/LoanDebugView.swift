@@ -65,6 +65,8 @@ struct LoanDebugView: View {
     @AppStorage("OmnipodKit.lowPowerMonitorEnabled") private var alarmScan = false   // matches the watchOS shipped default in OmnipodKit
     /// Timed, bounded connect — see G7TimedConnect in G7SensorKit. Default OFF.
     @AppStorage("G7Lab.timedConnect") private var timedConnect = false
+    /// Direct auth — our own J-PAKE handshake, no Dexcom app required. See G7DirectAuth. Default OFF.
+    @AppStorage("G7Lab.directAuth") private var directAuth = false
 
     private let refresh = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
@@ -243,6 +245,35 @@ struct LoanDebugView: View {
 
                 Divider().padding(.vertical, 2)
                 Text("RADIO EXPERIMENT").font(.footnote).foregroundColor(.secondary)
+
+                // DIRECT-AUTH crypto self-test (Stage 1). Proves libg7auth + OpenSSL are linked
+                // into the build by initializing the embedded J-PAKE crypto with the pairing code.
+                // No sensor contact. "links OK" = the static crypto is present and initializes.
+                Button("Direct-auth crypto self-test") {
+                    let ok = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager
+                        .directAuthCryptoSelfTest(pin4: [0x39, 0x31, 0x35, 0x31]) ?? false
+                    lastAction = "direct-auth crypto: \(ok ? "links + init OK" : "init FAILED")"
+                    SportLog.event("lab", "direct-auth crypto self-test = \(ok ? "OK" : "FAILED")")
+                }
+
+                // DIRECT AUTH (Stage 3). Our OWN J-PAKE handshake to the G7 on each connect —
+                // reads glucose with NO Dexcom app present. PROTOCOL: sensor adopted; pairing code
+                // set (defaults to the bench sensor 9151); flip ON; on the next connect the watch
+                // runs the full handshake and logs [direct-auth] RESULT auth=/bond=/glucose=. A
+                // system Bluetooth pairing prompt may appear on first encrypted read — tap Pair.
+                // Bench/experimental; leave OFF for normal operation.
+                Button("Direct auth (our J-PAKE): \(directAuth ? "ON" : "OFF") → tap to flip") {
+                    directAuth.toggle()
+                    if UserDefaults.standard.string(forKey: "G7Lab.directAuth.pin") == nil {
+                        UserDefaults.standard.set("9151", forKey: "G7Lab.directAuth.pin")
+                    }
+                    SportLog.event("lab", "direct auth = \(directAuth ? "ON — own J-PAKE handshake on next connect" : "OFF")")
+                    lastAction = "direct auth → \(directAuth ? "ON" : "OFF")"
+                }
+                if directAuth {
+                    Text("direct auth ON — our own J-PAKE on next connect; Dexcom not required. Experimental.")
+                        .font(.caption2).foregroundColor(.orange)
+                }
 
                 // WHY THIS IS BACK. The alarm scan is next-dev-only: Caitlin's branch has no
                 // C00A listener at all, yet wedges just as readily — so it is not necessary for
