@@ -1761,11 +1761,14 @@ final class WatchLoopManager {
                 default: return false
                 }
             }()
+            // Battery rides on this line because it is the one line guaranteed every cycle:
+            // a per-night consumption number becomes derivable from ANY log slice (the
+            // takeover-only `pwr` tag rolled off the mirror before it could be read, 2026-09-12).
             SportLog.event("loop", String(format: "CYCLE VERDICT computed=%@ enact=%@ watchdog=%@ lastCompletedAge=%@",
                                           computeSucceeded ? "ok" : "FAILED",
                                           enactVerdict,
                                           watchdogRefreshed ? "refreshed" : "HELD",
-                                          sinceCompleted.map { "\($0)s" } ?? "never"))
+                                          sinceCompleted.map { "\($0)s" } ?? "never") + " · " + batteryTag())
 
             if let error {
                 self.log.error("Loop ended with error: %{public}@", String(describing: error))
