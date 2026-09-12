@@ -264,15 +264,18 @@ struct LoanDebugView: View {
                 // Bench/experimental; leave OFF for normal operation.
                 Button("Direct auth (our J-PAKE): \(directAuth ? "ON" : "OFF") → tap to flip") {
                     directAuth.toggle()
-                    if UserDefaults.standard.string(forKey: "G7Lab.directAuth.pin") == nil {
-                        UserDefaults.standard.set("9151", forKey: "G7Lab.directAuth.pin")
-                    }
                     SportLog.event("lab", "direct auth = \(directAuth ? "ON — own J-PAKE handshake on next connect" : "OFF")")
                     lastAction = "direct auth → \(directAuth ? "ON" : "OFF")"
                 }
                 if directAuth {
                     Text("direct auth ON — our own J-PAKE on next connect; Dexcom not required. Experimental.")
                         .font(.caption2).foregroundColor(.orange)
+                }
+                if let needs = G7DirectAuth.needsCodeFor {
+                    // The connect reached a sensor we have no pairing code for. The code lives in
+                    // the Dexcom app; it is entered once per sensor in Loop ▸ Dexcom G7 on the phone.
+                    Text("Sensor code needed for \(needs) — enter it in Loop ▸ Dexcom G7 on the phone (shown in the Dexcom app).")
+                        .font(.caption2).foregroundColor(.red)
                 }
 
                 // WHY THIS IS BACK. The alarm scan is next-dev-only: Caitlin's branch has no
