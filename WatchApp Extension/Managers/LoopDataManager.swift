@@ -15,6 +15,7 @@ import os.log
 import LoopAlgorithm
 import UserNotifications
 import WatchKit
+import G7SensorKit   // direct-auth pairing codes arrive inside the phone's cgmManagerState
 
 @MainActor
 @Observable
@@ -154,6 +155,17 @@ extension LoopDataManager {
         // rawValue, so anything arriving from the phone reads false here.
         if !context.isWatchAuthored {
             phoneRelayContext = context
+        }
+
+        // DIRECT AUTH (2026-09-12): the phone's whole G7 state rides in every context as
+        // `cgmManagerState`. Take the per-sensor pairing codes from it, and let the G7 manager
+        // notice a sensor change by identity — the watch never scans to learn a new sensor's
+        // name (ride-only/timed must not), the phone tells it.
+        if !context.isWatchAuthored, let raw = context.cgmManagerState {
+            let pins = raw["directAuthPins"] as? [String: String] ?? [:]
+            let phoneSensor = raw["sensorID"] as? String
+            ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager
+                .receiveDirectAuthPins(pins, phoneSensorID: phoneSensor)
         }
 
         // DURING A LOAN THE PHONE'S CONTEXT MUST NOT BECOME `activeContext`.
