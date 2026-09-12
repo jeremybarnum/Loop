@@ -161,7 +161,12 @@ extension LoopDataManager {
         // `cgmManagerState`. Take the per-sensor pairing codes from it, and let the G7 manager
         // notice a sensor change by identity — the watch never scans to learn a new sensor's
         // name (ride-only/timed must not), the phone tells it.
-        if !context.isWatchAuthored, let raw = context.cgmManagerState {
+        // The phone sends `CGMManager.rawValue`, which WRAPS the state:
+        // ["managerIdentifier": …, "state": G7CGMManagerState.rawValue]. The 2026-09-12 08:45
+        // build read the keys at the top level and silently found nothing, so no code ever
+        // reached the watch. Unwrap "state" (and tolerate an unwrapped dictionary).
+        if !context.isWatchAuthored, let wrapped = context.cgmManagerState {
+            let raw = wrapped["state"] as? [String: Any] ?? wrapped
             let pins = raw["directAuthPins"] as? [String: String] ?? [:]
             let phoneSensor = raw["sensorID"] as? String
             ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager
