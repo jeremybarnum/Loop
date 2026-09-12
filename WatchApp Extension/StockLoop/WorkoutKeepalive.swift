@@ -38,17 +38,24 @@ final class WorkoutKeepalive: NSObject, HKWorkoutSessionDelegate {
     var stateTag: String { tagLock.lock(); defer { tagLock.unlock() }; return _tag }
     private func setTag(_ s: String) { tagLock.lock(); _tag = s; tagLock.unlock() }
 
+    // Whether ANY reason currently wants the keepalive, sampled from any thread. Mirrors
+    // `holders.isEmpty` (MAIN-only) under the same lock as the tag; updated synchronously in
+    // acquire/release BEFORE the main hop so a caller that acquires-then-asks sees true.
+    private var _held = false
+    var isHeld: Bool { tagLock.lock(); defer { tagLock.unlock() }; return _held }
+    private func setHeld(_ v: Bool) { tagLock.lock(); _held = v; tagLock.unlock() }
+
     override init() {
         super.init()
         RuntimeStateLog.keepaliveProbe = { [weak self] in self?.stateTag ?? "keepalive ?" }
     }
 
     /// Want the keepalive for `reason`; starts the session if it wasn't running. Idempotent.
-    func acquire(_ reason: String) { onMain { self.holders.insert(reason); self.startSessionIfNeeded() } }
+    func acquire(_ reason: String) { setHeld(true); onMain { self.holders.insert(reason); self.startSessionIfNeeded() } }
 
     /// Stop wanting the keepalive for `reason`; ends the session only when NO reason remains.
     /// Removing an absent reason is a harmless no-op (safe to call twice from racing teardowns).
-    func release(_ reason: String) { onMain { self.holders.remove(reason); if self.holders.isEmpty { self.endSession() } } }
+    func release(_ reason: String) { onMain { self.holders.remove(reason); if self.holders.isEmpty { self.setHeld(false); self.endSession() } } }
 
     /// Re-assert the session if something still wants it but the OS killed it (HK error 14 after a
     /// background relaunch, or a session failure). Call on every foreground activation.
