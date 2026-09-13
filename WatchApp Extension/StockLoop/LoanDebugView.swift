@@ -63,10 +63,12 @@ struct LoanDebugView: View {
     /// toggle was removed, because Jeremy's adversarial review reopened the question it answers.
     /// Read at use in OmnipodKit, so flipping it takes effect on the next scan arm — no relaunch.
     @AppStorage("OmnipodKit.lowPowerMonitorEnabled") private var alarmScan = false   // matches the watchOS shipped default in OmnipodKit
-    /// Timed, bounded connect — see G7TimedConnect in G7SensorKit. Default OFF.
-    @AppStorage("G7Lab.timedConnect") private var timedConnect = false
-    /// Direct auth — our own J-PAKE handshake, no Dexcom app required. See G7DirectAuth. Default OFF.
-    @AppStorage("G7Lab.directAuth") private var directAuth = false
+    /// Timed, bounded connect — see G7TimedConnect in G7SensorKit. ON by default on the watch
+    /// since 2026-09-13; the toggle is the diagnostic override (must match the kit's default).
+    @AppStorage("G7Lab.timedConnect") private var timedConnect = true
+    /// Direct read — our own J-PAKE handshake, no Dexcom watch app. See G7DirectAuth. ON by
+    /// default on the watch since 2026-09-13; the toggle is the diagnostic override.
+    @AppStorage("G7Lab.directAuth") private var directAuth = true
 
     private let refresh = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
@@ -206,16 +208,10 @@ struct LoanDebugView: View {
                     lastAction = "CGM reconnect started"
                 }
 
-                // RE-ACQUIRE forgets the adopted sensor and rebuilds cold — scan, connect,
-                // discovery, auth subscribe, adoption. Strictly more disruptive than Reconnect,
-                // so it sits below it. Safe: the worst case is a re-adoption delay while the
-                // phone relay covers, exactly like any new-sensor day. No therapy state is
-                // touched. Ladybug-class: REMOVE PRE-PRODUCTION.
-                Button("Re-acquire Sensor (cold)") {
-                    SportLog.event("g7-ble", "*** BENCH RE-ACQUIRE *** forgetting adopted sensor — cold acquisition starts now")
-                    ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager.scanForNewSensor()
-                    lastAction = "G7 re-acquire started"
-                }
+                // "Re-acquire Sensor (cold)" — stock's forget-and-scan — was removed 2026-09-13.
+                // Its one legitimate use, a sensor change, is handled by the phone's pairing-code
+                // flow adopting the new identity; left on the page it threw away adoption and
+                // put a scan on the air in whatever phase the sensor was in.
 
                 // E1 kept by request, but not under that name: "E1" means nothing to a reader
                 // who has not read the investigation. What it DOES is run our G7 client with no
@@ -244,31 +240,30 @@ struct LoanDebugView: View {
                     .font(.caption2).foregroundColor(.secondary)
 
                 Divider().padding(.vertical, 2)
-                Text("RADIO EXPERIMENT").font(.footnote).foregroundColor(.secondary)
+                Text("WATCH DIRECT READ").font(.footnote).foregroundColor(.secondary)
 
-                // DIRECT-AUTH crypto self-test (Stage 1). Proves libg7auth + OpenSSL are linked
-                // into the build by initializing the embedded J-PAKE crypto with the pairing code.
-                // No sensor contact. "links OK" = the static crypto is present and initializes.
-                Button("Direct-auth crypto self-test") {
+                // Crypto self-test: proves libg7auth + OpenSSL are linked into this build by
+                // initializing the embedded J-PAKE crypto. No sensor contact. The first thing to
+                // tap on a fresh install.
+                Button("Crypto self-test (links + init)") {
                     let ok = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager
                         .directAuthCryptoSelfTest(pin4: [0x39, 0x31, 0x35, 0x31]) ?? false
-                    lastAction = "direct-auth crypto: \(ok ? "links + init OK" : "init FAILED")"
+                    lastAction = "crypto: \(ok ? "links + init OK" : "init FAILED")"
                     SportLog.event("lab", "direct-auth crypto self-test = \(ok ? "OK" : "FAILED")")
                 }
 
-                // DIRECT AUTH (Stage 3). Our OWN J-PAKE handshake to the G7 on each connect —
-                // reads glucose with NO Dexcom app present. PROTOCOL: sensor adopted; pairing code
-                // set (defaults to the bench sensor 9151); flip ON; on the next connect the watch
-                // runs the full handshake and logs [direct-auth] RESULT auth=/bond=/glucose=. A
-                // system Bluetooth pairing prompt may appear on first encrypted read — tap Pair.
-                // Bench/experimental; leave OFF for normal operation.
-                Button("Direct auth (our J-PAKE): \(directAuth ? "ON" : "OFF") → tap to flip") {
+                // DIRECT READ — the watch's own J-PAKE handshake to the sensor on every connect;
+                // no Dexcom watch app. Production path since 2026-09-13 (default ON). Needs the
+                // sensor's 4-digit pairing code, entered once per sensor in Loop ▸ Dexcom G7 on
+                // the phone. OFF returns to stock acquisition, which on this watch means waiting
+                // for a Dexcom link that does not exist — diagnostic only.
+                Button("Direct read (own J-PAKE): \(directAuth ? "ON" : "OFF") → tap to flip") {
                     directAuth.toggle()
                     SportLog.event("lab", "direct auth = \(directAuth ? "ON — own J-PAKE handshake on next connect" : "OFF")")
-                    lastAction = "direct auth → \(directAuth ? "ON" : "OFF")"
+                    lastAction = "direct read → \(directAuth ? "ON" : "OFF")"
                 }
-                if directAuth {
-                    Text("direct auth ON — our own J-PAKE on next connect; Dexcom not required. Experimental.")
+                if !directAuth {
+                    Text("direct read OFF — the watch will not read the sensor on its own. Diagnostic only.")
                         .font(.caption2).foregroundColor(.orange)
                 }
                 if let needs = G7DirectAuth.needsCodeFor {
@@ -308,25 +303,20 @@ struct LoanDebugView: View {
                         .font(.caption2).foregroundColor(.orange)
                 }
 
-                // TIMED, BOUNDED CONNECT (2026-09-11). The experiment behind the direct-auth
-                // decision: can a client of ours avoid the -70 floor by never scanning, never
-                // holding a standing request, connecting 2 s before each 5-min burst and
-                // withdrawing at 5 s (or the instant a connect fails)? Every -70 on record came
-                // from the daemon's own late retry; this tests whether an immediate cancel
-                // pre-empts it. PROTOCOL: sensor adopted first; Dexcom watch app REMOVED (ours
-                // must be the only client); CGM-only test running (keepalive, no pod); this ON;
-                // sniffer on the sensor; several departures; sysdiagnose inside 3 h. Without
-                // auth the sensor hangs up ~10 s after we connect — expected and irrelevant.
-                // Read the [g7-ble] "timed:" lines for what we did and the capture for what the
-                // daemon scored. Turn OFF to return to normal acquisition.
-                Button("Timed connect (bounded 5 s): \(timedConnect ? "ON" : "OFF") → tap to flip") {
+                // TIMED, BOUNDED CONNECT — how the watch acquires (default ON since 2026-09-13):
+                // one request per 5-min burst, placed at the burst start on the sensor's own
+                // clock and withdrawn at 5 s; no scan, no standing request, so nothing of ours
+                // can feed bluetoothd's failed-establishment tally (three captures, tally 0).
+                // Arms only while a loan or the CGM-only test holds the keepalive. OFF returns
+                // to stock's standing request — the tally feeder — diagnostic only.
+                Button("Timed connect (at each burst, 5 s bound): \(timedConnect ? "ON" : "OFF") → tap to flip") {
                     timedConnect.toggle()
                     ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager.setTimedConnectForLab(timedConnect)
-                    SportLog.event("lab", "timed bounded connect = \(timedConnect ? "ON" : "OFF") — \(timedConnect ? "grid-timed connect 2 s before each burst, withdrawn at 5 s; no scan, no standing request" : "normal acquisition resumes")")
+                    SportLog.event("lab", "timed bounded connect = \(timedConnect ? "ON" : "OFF") — \(timedConnect ? "one request at each burst start, withdrawn at 5 s; no scan, no standing request" : "stock acquisition resumes (standing request)")")
                     lastAction = "timed connect → \(timedConnect ? "ON" : "OFF")"
                 }
-                if timedConnect {
-                    Text("timed connect ON — experiment; no scan, no standing request. Turn OFF when done.")
+                if !timedConnect {
+                    Text("timed connect OFF — stock standing request; this is what feeds the daemon's tally. Diagnostic only.")
                         .font(.caption2).foregroundColor(.orange)
                 }
 
