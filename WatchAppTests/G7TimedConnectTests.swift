@@ -33,20 +33,22 @@ final class G7TimedConnectTests: XCTestCase {
         XCTAssertEqual(fire.timeIntervalSince(anchor), 48 * G7TimedConnect.period + G7TimedConnect.fireOffset, accuracy: 0.001)
     }
 
-    func testTheRequestWindowStraddlesTheBurstStart() {
-        // The sensor starts advertising ≈ 2 s after the reading timestamp (n=20, 2026-09-12
-        // overnight: connects at +2.0…+3.1 s). The request must be up BEFORE that and still be
-        // up for seconds after it.
-        let burstStart = 2.0
-        XCTAssertLessThan(G7TimedConnect.fireOffset, burstStart)                      // up before the burst
-        XCTAssertGreaterThan(G7TimedConnect.fireOffset + G7TimedConnect.bound,
-                             burstStart + 2)                                          // still up 2 s into it
+    func testTheRequestSitsInsideTheBurst() {
+        // The sensor starts advertising +2.0…+3.2 s after the reading timestamp (61 cycles,
+        // 2026-09-12) and keeps going ≥ 7 s. Being late is free (a mid-burst request completes
+        // in ~0.03 s); being early wastes window. So the request goes up at the burst start and
+        // the whole bound sits inside the shortest burst.
+        let burstStart = 2.0, burstEnd = 9.0
+        XCTAssertGreaterThanOrEqual(G7TimedConnect.fireOffset, burstStart)
+        XCTAssertLessThanOrEqual(G7TimedConnect.fireOffset + G7TimedConnect.bound, burstEnd)
     }
 
-    func testBoundSitsUnderTheDaemonsFastScan() {
-        // The -70 is written by a failure more than 6 s after the connect REQUEST. The bound
-        // must withdraw the request before that, with margin for timer slop.
+    func testEveryAskIsWithdrawnInsideTheDaemonsFastScan() {
+        // The -70 is written by a failure more than 6 s after the connect REQUEST. Every request
+        // of ours — grid ask, second ask, retry — must be withdrawn before that, so a refusal can
+        // add to the daemon's COUNT but can never park the floor.
         XCTAssertLessThan(G7TimedConnect.bound, 6)
-        XCTAssertGreaterThan(G7TimedConnect.fireOffset, 0)
+        XCTAssertGreaterThan(G7TimedConnect.secondAskDelay, 0)
+        XCTAssertLessThan(G7TimedConnect.secondAskDelay, 2)   // the burst must still be on the air
     }
 }
