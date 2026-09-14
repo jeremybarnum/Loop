@@ -28,6 +28,7 @@ import Combine
 import WatchKit
 import HealthKit
 import LoopKit
+import G7SensorKit   // G7DirectAuth.needsCodeNote — "sensor code needed" on the glance
 
 final class GlanceController: WKHostingController<GlanceView> {
 
@@ -453,8 +454,10 @@ final class GlanceViewModel: ObservableObject {
 
         switch snap.phase {
         case .idle:
+            // Direct auth: a sensor we hold no pairing code for is the one thing the user must
+            // act on (on the phone) — shown here whenever nothing more urgent is.
             var idle = Self.idleState(context: ExtensionDelegate.shared().loopManager.activeContext,
-                                      note: snap.lastIdleNote)
+                                      note: snap.lastIdleNote ?? G7DirectAuth.needsCodeNote)
             // R40(b)/(d): the offer's age is the WHOLE staleness contract — shown, never
             // enforced. Formatted coarsely on purpose; "3d" reads, "76:12:04" does not.
             if let issued = snap.seizeOfferIssuedAt {
@@ -503,6 +506,7 @@ final class GlanceViewModel: ObservableObject {
             // and the user's only way out was turning the phone back on.
             var idle = Self.idleState(context: ExtensionDelegate.shared().loopManager.activeContext,
                                       note: snap.lastIdleNote
+                                        ?? G7DirectAuth.needsCodeNote
                                         ?? NSLocalizedString("Records from the last session are waiting for your iPhone. You can still start.",
                                                              comment: "Glance note while resting on a parked drain"))
             if let issued = snap.seizeOfferIssuedAt {

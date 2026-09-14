@@ -12,6 +12,7 @@ import LoopKit
 import LoopCore
 import WatchConnectivity
 import os.log
+import G7SensorKit   // direct-auth pairing codes arrive inside the phone's cgmManagerState
 
 
 class LoopDataManager {
@@ -113,6 +114,24 @@ extension LoopDataManager {
         if !context.isWatchAuthored {
             phoneRelayContext = context
         }
+
+        // DIRECT AUTH (ported from next-dev 2026-09-12/13): the phone's whole G7 state rides in
+        // every context as `cgmManagerState`. Take the per-sensor pairing codes from it, and let
+        // the G7 manager notice a sensor change by identity — the watch never scans to learn a
+        // new sensor's name (ride-only/timed must not), the phone tells it.
+        //
+        // The phone sends `CGMManager.rawValue`, which WRAPS the state:
+        // ["managerIdentifier": …, "state": G7CGMManagerState.rawValue]. The first port build
+        // read the keys at the top level and silently found nothing, so no code ever reached
+        // the watch. Unwrap "state" (and tolerate an unwrapped dictionary).
+        if !context.isWatchAuthored, let wrapped = context.cgmManagerState {
+            let raw = wrapped["state"] as? [String: Any] ?? wrapped
+            let pins = raw["directAuthPins"] as? [String: String] ?? [:]
+            let phoneSensor = raw["sensorID"] as? String
+            ExtensionDelegate.shared().stockLoopSession.stack.cgmManager
+                .receiveDirectAuthPins(pins, phoneSensorID: phoneSensor)
+        }
+
         let onLoan = ExtensionDelegate.shared().stockLoopSession.loanController.isLoanActiveNonBlocking
         if onLoan && !context.isWatchAuthored {
             // Its LOOP STATE is stale during a loan (see above), so it must not become

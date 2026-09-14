@@ -31,6 +31,14 @@ final class StockLoopSession {
 
     private func setKeepalive(_ holding: Bool, reason: String) {
         holding ? keepalive.acquire(reason) : keepalive.release(reason)
+        // Timed connect arms only under a keepalive (G7TimedConnect.runtimeAvailable, installed
+        // in init). Releasing is dispatched to main, so the release side re-evaluates on main
+        // AFTER the holder set has actually changed; acquiring flips isHeld synchronously.
+        if holding {
+            stack.cgmManager.timedRuntimeDidChange()
+        } else {
+            DispatchQueue.main.async { [stack] in stack.cgmManager.timedRuntimeDidChange() }
+        }
     }
 
     /// Re-assert the session if something still wants it. Called on every foreground: the one
@@ -65,6 +73,11 @@ final class StockLoopSession {
         // Build 174: per-window tail exposure (see TailExposure below).
         G7RadioCensus.sensorClosed = { name in TailExposure.noteSensorClosed(name) }
         G7RadioCensus.scanStarted = { TailExposure.noteScanStarted() }
+        // Timed, bounded connect must never fire from a process that is about to be suspended:
+        // a connect request issued seconds before suspension cannot be cancelled at the bound and
+        // sits as a standing request for hours (the 2026-09-12 freeze capture). Only a keepalive
+        // holder (loan, E1) proves the runtime, so the grid timer arms only while one exists.
+        G7TimedConnect.runtimeAvailable = { [keepalive] in keepalive.isHeld }
 
         // The G7 radio census — names which of the three acquisition triggers fires
         // (system-connected piggyback / connection event / ad scan), D2W's rhythm, and connect

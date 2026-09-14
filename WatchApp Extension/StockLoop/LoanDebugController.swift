@@ -65,6 +65,13 @@ struct LoanDebugView: View {
     @State private var snapshot: PodLoanWatchController.DebugSnapshot?
     @State private var cgm: CGMHealth?
     @State private var lastAction: String = "—"
+    /// Timed, bounded connect — see G7TimedConnect in G7SensorKit. ON by default on the watch
+    /// (the kit's default since 2026-09-13); the toggle is the diagnostic override and must
+    /// match the kit's default.
+    @AppStorage("G7Lab.timedConnect") private var timedConnect = true
+    /// Direct read — our own J-PAKE handshake, no Dexcom watch app. See G7DirectAuth. ON by
+    /// default on the watch (the kit's default); the toggle is the diagnostic override.
+    @AppStorage("G7Lab.directAuth") private var directAuth = true
     /// The loop's own IOB (Jeremy 2026-07-19: the dosing math is what matters —
     /// surface it here until the UI pass wires the main screens).
     @State private var iobText: String = "—"
@@ -154,9 +161,10 @@ struct LoanDebugView: View {
                 // is a sensor known, when did it last deliver, and is the link up right now.
                 //
                 // (Replaces the old G7 IDENTITY panel — bonded peripheral / pairing code /
-                // pre-warm state — all of which described the retired J-PAKE reader. There is no
-                // pairing code to show: the sensor authenticates the DEVICE, and the Dexcom watch
-                // app is what vouches for it.)
+                // pre-warm state — all of which described the retired J-PAKE reader. Under
+                // direct read the pairing code lives on the PHONE (Loop ▸ Dexcom G7), synced to
+                // the watch inside the phone's context; the WATCH DIRECT READ section below says
+                // when one is missing.)
                 Text("CGM HEALTH").font(.footnote).foregroundColor(.secondary)
                 row("sensor", cgm?.sensorName ?? "none")
                 row("last reading", cgm?.lastReadingAge.map { String(format: "%.0fs ago", $0) } ?? "never")
@@ -176,14 +184,11 @@ struct LoanDebugView: View {
                 // toggle experiment that settled it: held link = 0 adoptions in ~130 min;
                 // released = adoption within 7-10 min, twice for two.
 
-                // *** RE-ACQUIRE (BENCH) *** Forget the adopted sensor and
-                // run a full COLD acquisition against the CURRENT sensor — scan, connect,
-                // service discovery, auth subscribe, adoption. This is the contested phase of
-                // the held-pod-link finding, and without this button it is testable only once
-                // per 10-day sensor. With it + the g7-ble radio census, held-vs-released link
-                // experiments are on demand. Ladybug-class: REMOVE PRE-PRODUCTION.
-                // Safe: worst case is a re-adoption delay while the relay covers, same as any
-                // new-sensor day; no therapy state is touched.
+                // "Forget Sensor (re-acquire)" — stock's forget-and-scan — was removed with the
+                // direct-auth port (next-dev 2026-09-13). Its one legitimate use, a sensor
+                // change, is handled by the phone's pairing-code flow adopting the new identity;
+                // left on the page it threw away adoption and put a scan on the air in whatever
+                // phase the sensor was in.
                 // Radio Lab probe (bench flag `Bench.radioLab`, default hidden): recycle the G7
                 // connection from scratch — the controlled form of the force-quit that has cured
                 // every mute in the field. Connection state only; no dosing path.
@@ -248,10 +253,57 @@ struct LoanDebugView: View {
                         }
                     }
                 }
-                Button("Forget Sensor (re-acquire)") {
-                    SportLog.event("g7-ble", "*** BENCH RE-ACQUIRE *** forgetting adopted sensor — cold acquisition starts now")
-                    ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.scanForNewSensor()
-                    lastAction = "G7 re-acquire started"
+                Divider().padding(.vertical, 2)
+                Text("WATCH DIRECT READ").font(.footnote).foregroundColor(.secondary)
+
+                // Crypto self-test: proves libg7auth + OpenSSL are linked into this build by
+                // initializing the embedded J-PAKE crypto. No sensor contact. The first thing to
+                // tap on a fresh install.
+                Button("Crypto self-test (links + init)") {
+                    let ok = session.stack.cgmManager.directAuthCryptoSelfTest(pin4: [0x39, 0x31, 0x35, 0x31])
+                    lastAction = "crypto: \(ok ? "links + init OK" : "init FAILED")"
+                    SportLog.event("lab", "direct-auth crypto self-test = \(ok ? "OK" : "FAILED")")
+                }
+
+                // DIRECT READ — the watch's own J-PAKE handshake to the sensor on every connect;
+                // no Dexcom watch app. Needs the sensor's 4-digit pairing code, entered once per
+                // sensor in Loop ▸ Dexcom G7 on the phone. OFF returns to stock acquisition,
+                // which on a watch without the Dexcom app means waiting for a link that does not
+                // exist — diagnostic only.
+                Button("Direct read (own J-PAKE): \(directAuth ? "ON" : "OFF") → tap to flip") {
+                    directAuth.toggle()
+                    SportLog.event("lab", "direct auth = \(directAuth ? "ON — own J-PAKE handshake on next connect" : "OFF")")
+                    lastAction = "direct read → \(directAuth ? "ON" : "OFF")"
+                }
+                if !directAuth {
+                    Text("direct read OFF — the watch will not read the sensor on its own. Diagnostic only.")
+                        .font(.caption2).foregroundColor(.orange)
+                }
+                if let needs = G7DirectAuth.needsCodeFor {
+                    // The connect reached a sensor we have no pairing code for. The code lives in
+                    // the Dexcom app; it is entered once per sensor in Loop ▸ Dexcom G7 on the phone.
+                    Text("Sensor code needed for \(needs) — enter it in Loop ▸ Dexcom G7 on the phone (shown in the Dexcom app).")
+                        .font(.caption2).foregroundColor(.red)
+                }
+
+                // TIMED, BOUNDED CONNECT — how the watch acquires: one request per 5-min burst,
+                // placed at the burst start on the sensor's own clock and withdrawn at 5 s; no
+                // scan, no standing request, so nothing of ours can feed bluetoothd's
+                // failed-establishment tally (next-dev captures, tally 0). Arms only while a loan
+                // or the E1 soak holds the keepalive. OFF returns to stock's standing request —
+                // the tally feeder — diagnostic only.
+                //
+                // (The port's "Pod fault scan (C00A)" toggle has no counterpart here: this line
+                // never had the C00A listener, so there is nothing to switch.)
+                Button("Timed connect (at each burst, 5 s bound): \(timedConnect ? "ON" : "OFF") → tap to flip") {
+                    timedConnect.toggle()
+                    session.stack.cgmManager.setTimedConnectForLab(timedConnect)
+                    SportLog.event("lab", "timed bounded connect = \(timedConnect ? "ON" : "OFF") — \(timedConnect ? "one request at each burst start, withdrawn at 5 s; no scan, no standing request" : "stock acquisition resumes (standing request)")")
+                    lastAction = "timed connect → \(timedConnect ? "ON" : "OFF")"
+                }
+                if !timedConnect {
+                    Text("timed connect OFF — stock standing request; this is what feeds the daemon's tally. Diagnostic only.")
+                        .font(.caption2).foregroundColor(.orange)
                 }
 
                 // RADIO STRESS RETIRED: the question it existed to
