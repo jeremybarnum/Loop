@@ -103,7 +103,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                     "PodLoanPhoneController.lastHandledForeignSessionAt",
                     "PodLoanPhoneController.dormantSeizeToken",
                     "PodLoanPhoneController.watchSupportsSeize",
-                    "PodLoanPhoneController.inferredLoanYieldDisabled"] {
+                    "PodLoanPhoneController.inferredLoanYieldDisabled",
+                    "PodLoanPhoneController.rebidAt",
+                    "PodLoanPhoneController.firstContactSinceRebid"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
         backgroundTaskBegins = 0
@@ -2323,6 +2325,10 @@ extension PodLoanPhoneControllerTests {
 
         controller.reclaimNow()                        // user takes the pod back; dead branch forces
         waitUntil(timeout: 5, "force landed") { controller.state == .owner && !MockPumpManager.testConnectionReleased }
+        // The settle verifies (the mock's round-trip lands at the real clock, ahead of the
+        // frozen one): that round-trip is the first contact since the re-bid, and arms the
+        // detector for everything AFTER it.
+        waitUntil(timeout: 5, "reclaim verified") { controller.state == .owner && !controller.isReclaimSettlingOnlyForUI }
 
         clock = clock.addingTimeInterval(600)          // walk away: past liveness window + launch guard
         controller.considerInferredLoan()
@@ -2333,6 +2339,87 @@ extension PodLoanPhoneControllerTests {
         MockPumpManager.testForeignSessionAt = clock.addingTimeInterval(-30)   // NEW sessions after absolution
         controller.considerInferredLoan()
         waitUntil(timeout: 5, "fresh evidence yields") { controller.yieldingToInferredLoan }
+    }
+
+    /// THE 2026-09-13 LOCKOUT, as a unit test. A dead-watch force reclaim absolves the loan's
+    /// residue at the tap, then the reclaim's OWN first session resyncs the pod's counters —
+    /// a stamp NEWER than the absolution and OLDER than the verified round-trip. Detector A
+    /// read it as a foreign controller 2 s in and yielded the phone to a loan that was the
+    /// phone's own reclaim. Now the veto arms only on the first round-trip since the re-bid
+    /// and counts only sessions after it: the reclaim's fingerprints never convict, a
+    /// genuinely later session still does.
+    func testTheReclaimsOwnResyncNeverYieldsThePhone() throws {
+        _ = seizeCredentialOutstanding()
+        // Real clock plus an offset: the settle must verify against the mock's real-time
+        // round-trip, and the launch/liveness guards must still be skippable.
+        var offset: TimeInterval = 0
+        let controller = makeController(watchReachable: { false }, lastWatchContact: { nil },
+                                        now: { Date().addingTimeInterval(offset) })
+        _ = try establishLoan(controller)
+
+        connectionReady = false                        // the pod is still coming back: the settle stays open
+        controller.reclaimNow()                        // dead branch: forces, absolves, re-bids, settles
+        waitUntil(timeout: 5, "force landed") { controller.state == .owner && !MockPumpManager.testConnectionReleased }
+        XCTAssertTrue(controller.isReclaimSettlingOnlyForUI, "settle open, not yet verified")
+        let absolvedAt = try XCTUnwrap(UserDefaults.standard.object(forKey: "PodLoanPhoneController.lastHandledForeignSessionAt") as? Date,
+                                       "the force absolves the loan's residue at the tap")
+
+        // 16:09:32 — the reclaim's OWN first session resyncs: a stamp newer than the absolution.
+        MockPumpManager.testForeignSessionAt = absolvedAt.addingTimeInterval(0.5)
+        offset = 600                                   // walk away: past liveness window + launch guard
+        controller.considerInferredLoan()              // 16:09:33 — this is where the phone yielded itself
+        usleep(300_000)
+        XCTAssertFalse(controller.yieldingToInferredLoan, "never while this phone is itself reclaiming")
+
+        // The pod comes home and the settle verifies: that round-trip is the first contact
+        // since the re-bid, and the resync it produced stays ours after the settle closes too.
+        connectionReady = true
+        waitUntil(timeout: 8, "reclaim verified") { controller.state == .owner && !controller.isReclaimSettlingOnlyForUI }
+        let firstContact = try XCTUnwrap(UserDefaults.standard.object(forKey: "PodLoanPhoneController.firstContactSinceRebid") as? Date,
+                                         "the verified round-trip arms the detector")
+        XCTAssertGreaterThan(firstContact, MockPumpManager.testForeignSessionAt!, "the resync predates the round-trip that produced it")
+        controller.considerInferredLoan()
+        usleep(300_000)
+        XCTAssertFalse(controller.yieldingToInferredLoan, "the phone's own reclaim session must never read as a foreign controller")
+        XCTAssertFalse(controller.isPodLoanedOutForUI, "tile stays the phone's own")
+        lock.lock(); let noticesSoFar = notices; lock.unlock()
+        XCTAssertFalse(noticesSoFar.contains("Pod Looks Controlled by the Watch"), "no yield, no notice")
+
+        // A session genuinely AFTER the first contact is the veto's one legitimate job. (On the
+        // controller's clock: the verification absolved at now+offset, and the pod's stamp
+        // must be newer than that absolution as well as newer than the first contact.)
+        MockPumpManager.testForeignSessionAt = Date().addingTimeInterval(offset + 60)
+        controller.considerInferredLoan()
+        waitUntil(timeout: 5, "later foreign session yields") { controller.yieldingToInferredLoan }
+    }
+
+    /// The veto's posture can never trap the user (the rule, 2026-09-13: phone Bluetooth on
+    /// and pod reachable ⇒ the phone can always take the pod). The tile routes its tap to
+    /// Reclaim Now from the yield (it used to route on `state != .owner` alone and fall
+    /// through to the stock pod screen), the phone says why it went quiet, and the reclaim
+    /// re-arms the bid — which is what clears the loan interlock the release armed.
+    func testTheTileTapReachesReclaimFromTheVetoPosture() throws {
+        _ = seizeCredentialOutstanding()
+        let controller = makeController()
+        controller.handleIncoming(userInfo: try futureEpochBatch(epoch: 5))
+        waitUntil(timeout: 5, "yield engaged") { controller.yieldingToInferredLoan }
+
+        XCTAssertTrue(controller.isPodLoanedOutForUI, "the tile's tap predicate includes the yield → Reclaim Now")
+        XCTAssertTrue(MockPumpManager.testConnectionReleased, "radio released, interlock armed — as a grant")
+        waitUntil(timeout: 5, "notice posted") {
+            self.lock.lock(); defer { self.lock.unlock() }
+            return self.notices.contains("Pod Looks Controlled by the Watch")
+        }
+
+        controller.reclaimNow()                        // the tile tap
+        waitUntil(timeout: 5, "force landed") {
+            controller.state == .owner && !controller.yieldingToInferredLoan && !MockPumpManager.testConnectionReleased
+        }
+        XCTAssertFalse(controller.isPodLoanedOutForUI, "tile is the phone's own again")
+        waitUntil(timeout: 5, "dosing resumed") {
+            self.lock.lock(); defer { self.lock.unlock() }
+            return self.pauseCalls.last == false
+        }
     }
 
     /// The ghost-drain theft, fixed (field 2026-08-31 12:44): a reboot-era FINAL offer
@@ -2512,6 +2599,11 @@ extension PodLoanPhoneControllerTests {
             return XCTFail("expected the tap's revoke, got \(String(describing: lastSent()))")
         }
         XCTAssertEqual(aimed.epoch, 5, "aimed at the live loan the evidence names, not this phone's stale epoch")
+        // The revoke is sent from INSIDE reclaimNow's queue block, before that block sets
+        // .reclaimPending — and the yield flag is already cleared at its top. Wait for the
+        // state, or the terminal condition below can be sampled inside that gap and the offer
+        // lands at .owner instead of at the door this test exists to prove.
+        waitForState(controller, .reclaimPending)
 
         // The watch drains that loan (FINAL — released nil by the legacy convention), token attached.
         controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(

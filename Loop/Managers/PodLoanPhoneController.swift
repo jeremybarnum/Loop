@@ -458,7 +458,11 @@ final class PodLoanPhoneController {
     /// Captures the fields the tile derives from. MUST be called on `queue`.
     private func uiSnapshot() -> UISnapshot {
         var s = UISnapshot()
-        s.isLoanedOut = state != .owner
+        // The yielded posture counts: the tile's tap handler routes on this, and the phone is
+        // not controlling the pod in a yield any more than in a loan. Before 2026-09-13 this
+        // read `state != .owner` alone while the tile's LABEL said Pod on Watch — the tap fell
+        // through to the stock pod screen and the user had no way back to Reclaim Now.
+        s.isLoanedOut = state != .owner || yieldingToInferredLoan
         s.isTakeoverInProgress = state == .grantOffered
         s.isSettlingOnly = state == .owner && reclaimStartedAt != nil && reclaimVerifiedAt == nil
         if let ladder = reclaimLadder {
@@ -864,6 +868,9 @@ final class PodLoanPhoneController {
                         // would read a routine loan's own residue as a discovered seizure the
                         // moment the watch goes quiet (hand back, pocket the phone, walk away).
                         self.absolveForeignSessions(reason: "reclaim verified — the loan explains its own sessions")
+                        // This round-trip IS the first contact since the re-bid: the resync
+                        // it produced is ours, and only what the pod shows after it can count.
+                        self.recordFirstContactSinceRebid(sync)
                         self.deps.ownershipDidChange()
                         // The pod is provably reachable RIGHT NOW. This is the only moment in the
                         // whole hand-back where that is true, so it is where both jobs that need
@@ -1617,6 +1624,14 @@ final class PodLoanPhoneController {
         /// PHONE MIRROR: the last foreign-session evidence already acted on, so one
         /// resync fires one yield across relaunches instead of re-triggering forever.
         static let lastHandledForeignSessionAt = "PodLoanPhoneController.lastHandledForeignSessionAt"
+        /// PHONE MIRROR arming: when this phone last re-armed its pod bid (any reclaim), and
+        /// the first pod round-trip it completed after that. The phone's own first session
+        /// after a loan ALWAYS resyncs the pod's counters — the watch advanced them — so
+        /// detector A counts only evidence newer than that round-trip. Persisted because a
+        /// reclaim can straddle a relaunch. (2026-09-13 16:09: the detector fired on the
+        /// reclaim's own resync, 2 s into a dead-watch force, and locked the phone out.)
+        static let rebidAt = "PodLoanPhoneController.rebidAt"
+        static let firstContactSinceRebid = "PodLoanPhoneController.firstContactSinceRebid"
     }
 
     private enum NotificationID {
@@ -1920,7 +1935,7 @@ final class PodLoanPhoneController {
         // its normal job while the link re-establishes, and the next retry grants.
         if yieldingToInferredLoan {
             clearInferredLoanYield(reason: "new loan request — a granted loan supersedes the inferred one")
-            lendable.reclaimConnection()
+            reclaimPodConnection()
         }
 
         // Don't hand a still-returning pod to the watch. After a reclaim the phone
@@ -2336,8 +2351,20 @@ final class PodLoanPhoneController {
         // Yield the RADIO too, exactly as a grant does: a yielded phone that keeps its
         // standing connect starves an alive watch's per-cycle reclaims (single-central
         // pod) — authority and radio must travel together. reclaimNow re-arms the bid.
+        // The loan interlock comes with the release, as in a grant, and that is right: the
+        // veto's one legitimate case is a live watch looping the pod behind a dead WC link,
+        // and this phone's five-minute status reads ride the same CGM cadence as the watch's
+        // dosing sessions. What must never happen is the interlock outliving the user's way
+        // back — and the way back is the tile tap, which now reaches reclaimNow from this
+        // posture (uiSnapshot.isLoanedOut) and re-arms the bid, clearing the interlock.
         (deps.pumpManager() as? PumpConnectionLendable)?.releaseConnection()
+        syncUIMirror()          // the tile routes its tap on the mirror — sync BEFORE notifying
         deps.ownershipDidChange()
+        // Say so. The yield otherwise goes quiet — dosing paused, the loop-failure alerts
+        // swept, nothing but the tile — and the only way back is the tile tap.
+        deps.issueNotice(
+            NSLocalizedString("Pod Looks Controlled by the Watch", comment: "Phone notice title when the phone yields to an inferred watch loan"),
+            NSLocalizedString("This phone has paused automatic dosing because the pod appears to be in use by the watch. Tap the pod tile to take it back.", comment: "Phone notice body when the phone yields to an inferred watch loan"))
         PhoneLog.event("mirror", "YIELDING to an inferred loan — \(evidence); pill=Pod on Watch, dosing paused, pod BLE released, exits: pill tap / watch revival / R40(f) prompt (R40(a): on conflict the phone yields) [mirror]")
     }
 
@@ -2350,12 +2377,40 @@ final class PodLoanPhoneController {
         PhoneLog.event("mirror", "foreign-session evidence absolved — \(reason) [mirror]")
     }
 
+    /// Every re-arm of the phone's pod bid goes through here, so detector A knows that a
+    /// post-loan session — which always resyncs — is still ahead of it.
+    private func reclaimPodConnection() {
+        UserDefaults.standard.set(deps.now(), forKey: Keys.rebidAt)
+        UserDefaults.standard.removeObject(forKey: Keys.firstContactSinceRebid)
+        (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
+    }
+
+    /// The first pod round-trip completed since the last re-bid — detector A's arming
+    /// point. nil = not yet armed. Observes the pump's own `lastSync` (advanced only by a
+    /// successful round-trip) and stamps the first one past the re-bid; the verified
+    /// reclaim stamps it directly. Never re-bid at all = legacy behavior (arm on anything).
+    private func firstContactSinceRebid() -> Date? {
+        let defaults = UserDefaults.standard
+        if let first = defaults.object(forKey: Keys.firstContactSinceRebid) as? Date { return first }
+        guard let rebid = defaults.object(forKey: Keys.rebidAt) as? Date else { return .distantPast }
+        guard let sync = deps.pumpManager()?.lastSync, sync > rebid else { return nil }
+        recordFirstContactSinceRebid(sync)
+        return sync
+    }
+
+    private func recordFirstContactSinceRebid(_ sync: Date) {
+        guard UserDefaults.standard.object(forKey: Keys.firstContactSinceRebid) == nil else { return }
+        UserDefaults.standard.set(sync, forKey: Keys.firstContactSinceRebid)
+        PhoneLog.event("mirror", "detector A ARMED — first pod round-trip since the re-bid completed \(ISO8601DateFormatter().string(from: sync)); only later sessions can count [mirror]")
+    }
+
     /// Exit bookkeeping. `resumeDosing` stays false on every current path: reclaimNow's
     /// force unpauses in forceReclaimToOwner, the retro-ack keeps the pause because the
     /// loan it adopts is live, and beginGrant re-pauses for its own loan.
     private func clearInferredLoanYield(reason: String) {
         guard yieldingToInferredLoan else { return }
         yieldingToInferredLoan = false
+        syncUIMirror()
         deps.ownershipDidChange()
         PhoneLog.event("mirror", "inferred-loan yield CLEARED — \(reason) [mirror]")
     }
@@ -2373,14 +2428,21 @@ final class PodLoanPhoneController {
 
     private func queue_considerInferredLoan() {
         guard state == .owner, !yieldingToInferredLoan else { return }
+        // Never while this phone is itself reclaiming: the settle's own round-trip is the one
+        // session guaranteed to resync (2026-09-13 16:09:33 — 2 s into a dead-watch force).
+        guard reclaimStartedAt == nil else { return }
         guard UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) != nil,
               UserDefaults.standard.bool(forKey: Keys.watchSupportsSeize) else { return }
+        // The resync our own post-loan session produces is never foreign: arm only once a
+        // round-trip since the last re-bid has completed, and count only what came after it.
+        guard let firstContact = firstContactSinceRebid() else { return }
         // Watch-absent = the reclaim ladder's own pulse discriminator, same constants.
         let contactAge = deps.lastWatchContactAt().map { deps.now().timeIntervalSince($0) }
         let heardRecently = (contactAge ?? .greatestFiniteMagnitude) < Self.watchContactLivenessWindow
         guard !deps.isWatchReachable(), !heardRecently else { return }
         guard deps.now().timeIntervalSince(processStartedAt) > 120 else { return }
-        guard let foreignAt = (deps.pumpManager() as? PumpConnectionLendable)?.podLoanLastForeignSessionAt else { return }
+        guard let foreignAt = (deps.pumpManager() as? PumpConnectionLendable)?.podLoanLastForeignSessionAt,
+              foreignAt > firstContact else { return }
         let handled = UserDefaults.standard.object(forKey: Keys.lastHandledForeignSessionAt) as? Date
         guard foreignAt > (handled ?? .distantPast) else { return }
         UserDefaults.standard.set(foreignAt, forKey: Keys.lastHandledForeignSessionAt)
@@ -3275,7 +3337,7 @@ final class PodLoanPhoneController {
             engageInferredLoanYield(evidence: "superseding loan e\(liveEpoch) streamed during the e\(epoch) drain")
             return
         }
-        (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
+        reclaimPodConnection()
         pendingRevoke = false
         state = .owner
         deps.setAutomaticDosingPaused(false)
@@ -3378,7 +3440,7 @@ final class PodLoanPhoneController {
                 self.handbackDiag(self.epoch, "reclaim revoke AIMED at e\(revokeEpoch) — fresh evidence of a loan this phone never granted (mirror)")
             }
             self.sendMessage(.revoke(Revoke(epoch: revokeEpoch)))
-            (self.deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
+            self.reclaimPodConnection()
             self.state = .reclaimPending
             self.armPausedReminder()
             // §5.3.3 dead-watch path: audit against the schedule, notice-only.
@@ -3657,7 +3719,7 @@ final class PodLoanPhoneController {
         // expected spans the loan.
         let auditArmed = armForceReclaimAudit()
 
-        (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
+        reclaimPodConnection()
         pendingRevoke = false
         state = .owner
         // Automatic dosing does NOT resume here. The old behavior — resume CLOSED on
@@ -3769,7 +3831,7 @@ final class PodLoanPhoneController {
         // The takeover this anchored is over, however it ended. Leaving it set is what let a
         // failed attempt's clock follow the NEXT grant around.
         grantOfferedAt = nil
-        (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
+        reclaimPodConnection()
         state = .owner
         deps.setAutomaticDosingPaused(false)
         if let alert = alert { deps.issueNotice(alert.title, alert.body) }
