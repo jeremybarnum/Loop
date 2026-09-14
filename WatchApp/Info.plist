@@ -34,6 +34,10 @@
 	<array>
 		<string>com.loopkit.Loop.AddCarbEntryOnWatch</string>
 	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
