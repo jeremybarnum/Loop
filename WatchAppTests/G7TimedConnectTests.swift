@@ -43,6 +43,13 @@ final class G7TimedConnectTests: XCTestCase {
         XCTAssertLessThanOrEqual(G7TimedConnect.fireOffset + G7TimedConnect.bound, burstEnd)
     }
 
+    func testTheSystemHeldArmIsAnExperimentThatStaysOff() {
+        // The start-delay arm opts the watch central into state restoration and lodges requests
+        // the app cannot withdraw while asleep. It is a measurement, not a default.
+        UserDefaults.standard.removeObject(forKey: G7TimedConnect.systemHeldKey)
+        XCTAssertFalse(G7TimedConnect.systemHeld)
+    }
+
     func testEveryAskIsWithdrawnInsideTheDaemonsFastScan() {
         // The -70 is written by a failure more than 6 s after the connect REQUEST. Every request
         // of ours — grid ask, second ask, retry — must be withdrawn before that, so a refusal can

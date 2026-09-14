@@ -195,6 +195,17 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
                 log.default("Processing WKSnapshotRefreshBackgroundTask")
                 task.setTaskCompleted(restoredDefaultState: false, estimatedSnapshotExpiration: Date(timeIntervalSinceNow: TimeInterval(minutes: 5)), userInfo: nil)
                 return  // Don't call the standard setTaskCompleted handler
+            case let task as WKBluetoothAlertRefreshBackgroundTask:
+                // watchOS 9+: "Updates from Bluetooth are available to the application." The
+                // system-held G7 experiment is the only thing that opts the central into this;
+                // hold the task open long enough for the handshake and the read (J-PAKE ≈ 6-8 s).
+                log.default("Processing WKBluetoothAlertRefreshBackgroundTask")
+                SportLog.event("radio", "WOKEN BY BLUETOOTH — WKBluetoothAlertRefreshBackgroundTask (system-held arm); holding 25 s for the handshake")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 25) {
+                    SportLog.event("radio", "Bluetooth background task completed (25 s hold over)")
+                    task.setTaskCompletedWithSnapshot(false)
+                }
+                continue  // completed above, on our own schedule
             case is WKURLSessionRefreshBackgroundTask:
                 break
             case let task as WKWatchConnectivityRefreshBackgroundTask:

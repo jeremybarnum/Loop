@@ -66,6 +66,8 @@ struct LoanDebugView: View {
     /// Timed, bounded connect — see G7TimedConnect in G7SensorKit. ON by default on the watch
     /// since 2026-09-13; the toggle is the diagnostic override (must match the kit's default).
     @AppStorage("G7Lab.timedConnect") private var timedConnect = true
+    /// The start-delay experiment — see G7TimedConnect.systemHeld. OFF by default.
+    @AppStorage("G7Lab.timedConnect.systemHeld") private var systemHeld = false
     /// Direct read — our own J-PAKE handshake, no Dexcom watch app. See G7DirectAuth. ON by
     /// default on the watch since 2026-09-13; the toggle is the diagnostic override.
     @AppStorage("G7Lab.directAuth") private var directAuth = true
@@ -317,6 +319,22 @@ struct LoanDebugView: View {
                 }
                 if !timedConnect {
                     Text("timed connect OFF — stock standing request; this is what feeds the daemon's tally. Diagnostic only.")
+                        .font(.caption2).foregroundColor(.orange)
+                }
+
+                // SYSTEM-HELD CONNECT — the experiment for Pete's suggestion (2026-09-13): the
+                // same grid request, but lodged with the daemon via the connect start-delay
+                // option and started by the system, with the central opted into state
+                // restoration so watchOS may relaunch the app for the link. No keepalive by
+                // design. Measures the wake latency and the cost of an un-withdrawn miss.
+                Button("System-held connect (start-delay arm): \(systemHeld ? "ON" : "OFF") → tap to flip") {
+                    systemHeld.toggle()
+                    SportLog.event("lab", "system-held connect = \(systemHeld ? "ON" : "OFF") — \(systemHeld ? "requests lodged with the daemon via start delay; central opts into restoration on next launch; no keepalive needed" : "back to our own timer under the keepalive")")
+                    ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager.timedRuntimeDidChange()
+                    lastAction = "system-held → \(systemHeld ? "ON" : "OFF") — relaunch the app"
+                }
+                if systemHeld {
+                    Text("EXPERIMENT — relaunch the app after flipping. Run it with NO loan and NO CGM-only test so the app sleeps. A missed burst leaves the request standing into the sensor's tail; that tally exposure is part of what is being measured.")
                         .font(.caption2).foregroundColor(.orange)
                 }
 
