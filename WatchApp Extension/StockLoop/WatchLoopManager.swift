@@ -833,6 +833,34 @@ final class WatchLoopManager {
         }
     }
 
+    /// Idle-time complication feed (2026-09-14, the system-held experiment's monitor). During a
+    /// loan `publishHUDContext` feeds the complication from the watch's own reading after every
+    /// cycle; idle, the phone owns the HUD and the watch's own reads never reach the face. With
+    /// the phone's Bluetooth off the phone has nothing to send, so the watch's own read is the
+    /// only thing that can freshen the complication — and a reload needs this app to be running,
+    /// which is exactly what the experiment asks. Glucose fields only, overlaid on whatever
+    /// context is current so the stock rows keep what the phone last sent; shouldReplace is
+    /// glucoseDate recency, so a fresher phone context wins the face back at once. The
+    /// notification is posted directly: the didSet route defers it while WatchConnectivity has
+    /// content pending, and a phone-away wrist always has queued log transfers pending.
+    private func publishOwnGlucoseContextWhenIdle() {   // dataAccessQueue
+        guard pumpManager == nil, let latest = glucoseStore.latestGlucose else { return }
+        let trend = (latest as? StoredGlucoseSample)?.trend
+        let mgdl = Int(latest.quantity.doubleValue(for: .milligramsPerDeciliter).rounded())
+        DispatchQueue.main.async {
+            let manager = LoopDataManager.shared
+            let ctx = manager.activeContext.flatMap { WatchContext(rawValue: $0.rawValue) } ?? WatchContext()
+            ctx.isWatchAuthored = true
+            ctx.glucoseSyncIdentifier = nil      // display only — never re-written to the store
+            ctx.glucose = latest.quantity
+            ctx.glucoseDate = latest.startDate
+            ctx.glucoseTrend = trend
+            manager.updateContext(ctx)
+            NotificationCenter.default.post(name: LoopDataManager.didUpdateContextNotification, object: manager)
+            SportLog.event("glucose", "complication fed from the watch's own reading (idle, no loan) — \(mgdl) mg/dL")
+        }
+    }
+
     /// Feed the STOCK watch screens (ChartHUDController rows: IOB, COB, net temp
     /// basal; loop-age via loopLastRunDate) during a loan. The phone stops sending
     /// fresh WatchContext while the pod is on the wrist — it cannot know what the
@@ -2963,6 +2991,7 @@ extension WatchLoopManager: CGMManagerDelegate {
                 // glucose it is handed, so the next cycle picks these readings up by reading
                 // the store afresh. The old cached-momentum bug — computed once against an
                 // empty store and then frozen for the loan — is not expressible any more.
+                self.dataAccessQueue.async { self.publishOwnGlucoseContextWhenIdle() }
                 completion()
             }
             }
