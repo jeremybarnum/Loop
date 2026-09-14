@@ -334,7 +334,7 @@ struct LoanDebugView: View {
                     lastAction = "system-held → \(systemHeld ? "ON" : "OFF") — relaunch the app"
                 }
                 if systemHeld {
-                    Text("EXPERIMENT — relaunch the app after flipping. Run it with NO loan and NO CGM-only test so the app sleeps. A missed burst leaves the request standing into the sensor's tail; that tally exposure is part of what is being measured.")
+                    Text("EXPERIMENT — relaunch the app after flipping. Then run the CGM-only test until ONE reading lands (the arm needs an adopted sensor to lodge for) and stop it, so the app sleeps. A missed burst leaves the request standing into the sensor's tail; that exposure is part of what is measured. If the platform refuses the start-delay option, the arm disables itself for the launch and the log says so.")
                         .font(.caption2).foregroundColor(.orange)
                 }
 
