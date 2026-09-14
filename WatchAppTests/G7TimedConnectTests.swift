@@ -9,6 +9,7 @@
 
 import XCTest
 import G7SensorKit
+@testable import WatchApp
 
 final class G7TimedConnectTests: XCTestCase {
     private let anchor = Date(timeIntervalSince1970: 1_000_000)
@@ -57,5 +58,22 @@ final class G7TimedConnectTests: XCTestCase {
         XCTAssertLessThan(G7TimedConnect.bound, 6)
         XCTAssertGreaterThan(G7TimedConnect.secondAskDelay, 0)
         XCTAssertLessThan(G7TimedConnect.secondAskDelay, 2)   // the burst must still be on the air
+    }
+}
+
+final class BluetoothTaskLedgerTests: XCTestCase {
+    // The Bluetooth alert task ledger says where the day stands against the documented
+    // five-per-24 h budget. It must count this delivery, keep the last 24 h, and drop older stamps.
+    func testTheLedgerCountsARolling24Hours() {
+        let suite = "BluetoothTaskLedgerTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let t0 = Date(timeIntervalSince1970: 2_000_000)
+
+        XCTAssertEqual(ExtensionDelegate.recordBluetoothTaskDelivery(at: t0, defaults: defaults), 1)
+        XCTAssertEqual(ExtensionDelegate.recordBluetoothTaskDelivery(at: t0.addingTimeInterval(7 * 60), defaults: defaults), 2)
+        XCTAssertEqual(ExtensionDelegate.recordBluetoothTaskDelivery(at: t0.addingTimeInterval(23 * 3600), defaults: defaults), 3)
+        // 24 h + 1 s after the first: the first stamp falls out, the other two stay.
+        XCTAssertEqual(ExtensionDelegate.recordBluetoothTaskDelivery(at: t0.addingTimeInterval(24 * 3600 + 1), defaults: defaults), 3)
     }
 }

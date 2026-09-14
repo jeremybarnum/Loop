@@ -182,8 +182,22 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
     static let didBecomeActiveNotification = Notification.Name("com.loopkit.Loop.LoopWatch.didBecomeActive")
     static let willResignActiveNotification = Notification.Name("com.loopkit.Loop.LoopWatch.willResignActive")
 
-    // Presumably the main thread?
+    // NOT always the main thread. The Bluetooth alert task is delivered synchronously from
+    // CoreBluetooth's delegate queue: bluetoothd's "peripheral usage" notification (fired the
+    // moment the app subscribes to a characteristic) is posted on that queue, WatchKit observes
+    // it there and calls this delegate on the spot. 2026-09-14: four Bluetooth relaunches in a row
+    // died 0.25 s after subscribing, on the `dispatchPrecondition(.onQueue(.main))` inside
+    // `requestGlucoseBackfillIfNecessary()` (crash reports WatchApp-2026-09-14-16{4956,5640,5641,5645}).
     func handle(_ backgroundTasks: Set<WKRefreshBackgroundTask>) {
+        let kinds = backgroundTasks.map { String(describing: type(of: $0)) }.sorted().joined(separator: ",")
+        guard Thread.isMainThread else {
+            let queue = String(cString: __dispatch_queue_get_label(nil))
+            SportLog.event("lifecycle", "background tasks [\(kinds)] delivered OFF the main thread (queue \(queue)) — hopping to main [bt-task]")
+            DispatchQueue.main.async { self.handle(backgroundTasks) }
+            return
+        }
+        SportLog.event("lifecycle", "background tasks [\(kinds)] on main [bt-task]")
+
         loopManager.requestGlucoseBackfillIfNecessary()
 
         for task in backgroundTasks {
@@ -200,11 +214,23 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
                 // system-held G7 experiment is the only thing that opts the central into this;
                 // hold the task open long enough for the handshake and the read (J-PAKE ≈ 6-8 s).
                 log.default("Processing WKBluetoothAlertRefreshBackgroundTask")
-                SportLog.event("radio", "WOKEN BY BLUETOOTH — WKBluetoothAlertRefreshBackgroundTask (system-held arm); holding 25 s for the handshake")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 25) {
-                    SportLog.event("radio", "Bluetooth background task completed (25 s hold over)")
+                let delivered = Date()
+                let recent = Self.recordBluetoothTaskDelivery(at: delivered)
+                SportLog.event("radio", String(format: "WOKEN BY BLUETOOTH — WKBluetoothAlertRefreshBackgroundTask (system-held arm); holding 25 s for the handshake · delivery %d of the rolling 24 h (docs budget 5) [bt-task]", recent))
+                var completed = false
+                let complete: (String) -> Void = { why in
+                    guard !completed else { return }
+                    completed = true
+                    SportLog.event("radio", String(format: "Bluetooth background task completed after %.1f s (%@) [bt-task]", Date().timeIntervalSince(delivered), why))
                     task.setTaskCompletedWithSnapshot(false)
                 }
+                // The system's own lifetime grant for this task, measured: it calls this before
+                // it terminates the task, and the log stamp says how long it gave us.
+                task.expirationHandler = {
+                    SportLog.event("radio", String(format: "Bluetooth background task EXPIRED by the system after %.1f s — that is the grant [bt-task]", Date().timeIntervalSince(delivered)))
+                    DispatchQueue.main.async { complete("expired") }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 25) { complete("25 s hold over") }
                 continue  // completed above, on our own schedule
             case is WKURLSessionRefreshBackgroundTask:
                 break
@@ -232,6 +258,20 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
     }
 
     private var pendingConnectivityTasks: [WKWatchConnectivityRefreshBackgroundTask] = []
+
+    /// Rolling-24 h ledger of Bluetooth alert task deliveries, so the log can say where the day
+    /// stands against the documented "five timely alerts or background scans" budget — whether
+    /// that budget covers these deliveries is one of the questions the ledger exists to answer.
+    /// Returns the count including this delivery.
+    static let bluetoothTaskLedgerKey = "G7Lab.bluetoothTask.deliveries"
+    @discardableResult
+    static func recordBluetoothTaskDelivery(at date: Date, defaults: UserDefaults = .standard) -> Int {
+        let floor = date.addingTimeInterval(-24 * 60 * 60)
+        var stamps = (defaults.array(forKey: bluetoothTaskLedgerKey) as? [Double] ?? []).filter { $0 > floor.timeIntervalSince1970 }
+        stamps.append(date.timeIntervalSince1970)
+        defaults.set(stamps, forKey: bluetoothTaskLedgerKey)
+        return stamps.count
+    }
 
     private func completePendingConnectivityTasksIfNeeded() {
         if WCSession.default.activationState == .activated && !WCSession.default.hasContentPending {
