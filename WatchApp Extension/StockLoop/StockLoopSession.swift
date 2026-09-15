@@ -90,6 +90,9 @@ final class StockLoopSession {
         // (system-connected piggyback / connection event / ad scan), D2W's rhythm, and connect
         // verdicts. Made the acquisition mechanism observed rather than inferred.
         G7RadioCensus.sink = { line in SportLog.event("g7-ble", line) }
+        // The arm's link-up and lodge lines carry battery level + charge state, so a run's power
+        // regime (docked vs on-wrist, and the level's trend across wakes) is readable afterwards.
+        G7RadioCensus.powerTag = { batteryTag() }
         // Tail exposure + the pod hold's close-relative clock (PodRadioHold.swift): the adopted
         // sensor's link closing starts the window; a scan of ours (never under ride-only) is
         // one of the two things the [tail] line exists to catch.

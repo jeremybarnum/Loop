@@ -161,3 +161,25 @@ final class BurstAlignedLodgeTests: XCTestCase {
         XCTAssertGreaterThan(scanOpens.addingTimeInterval(5.994), fire)
     }
 }
+
+final class RadioCensusPowerTagTests: XCTestCase {
+    // The arm's lines carry the power tag only when the watch app installs one; with none
+    // installed (iOS, tests) they must stay unchanged rather than gain an empty separator.
+    func testThePowerTagIsAppendedOnlyWhenInstalled() {
+        let saved = G7RadioCensus.powerTag
+        defer { G7RadioCensus.powerTag = saved }
+
+        G7RadioCensus.powerTag = nil
+        XCTAssertEqual(G7RadioCensus.power, "")
+
+        G7RadioCensus.powerTag = { "pwr 41%/batt" }
+        XCTAssertEqual(G7RadioCensus.power, " · pwr 41%/batt")
+    }
+
+    // The real tag distinguishes the charge states the overnight question turns on.
+    func testTheWatchTagNamesTheChargeState() {
+        let tag = batteryTag()
+        XCTAssertTrue(tag.hasPrefix("pwr "), tag)
+        XCTAssertTrue(["batt", "chg", "full", "?"].contains { tag.hasSuffix($0) }, tag)
+    }
+}
