@@ -76,6 +76,9 @@ struct LoanDebugView: View {
     /// Under the arm: lodge with a start delay timed to the next burst — see
     /// G7TimedConnect.burstAligned. ON by default.
     @AppStorage("G7Lab.timedConnect.burstAligned") private var burstAligned = true
+    /// Under the arm: hand the tail deferral to the daemon as a ~31 s start delay instead of
+    /// holding the app awake — see G7TimedConnect.tailDelayLodge. OFF by default (a measurement).
+    @AppStorage("G7Lab.timedConnect.tailDelayLodge") private var tailDelayLodge = false
     /// Direct-auth fast path (stored shared key, no J-PAKE/certs after the first handshake) — see
     /// G7DirectAuth.fastPath. ON by default.
     @AppStorage("G7Lab.directAuth.fastPath") private var directAuthFastPath = true
@@ -363,6 +366,13 @@ struct LoanDebugView: View {
                     }
                     Text("bluetoothd hunts an accept-list entry hard for only 6 s after each connect call, then drops to a 4–10% duty scan — that is why catches ranged +0.2 s to +16 min and three bursts in a row were missed. A start delay defers both the accept-list add and those 6 s, so they land on the burst and never on the sensor's tail (the tail attempts parked the −70 floor at 22:54).")
                         .font(.caption2).foregroundColor(.secondary)
+                    Button("Tail delay on the daemon's clock: \(tailDelayLodge ? "ON" : "OFF") → tap to flip") {
+                        tailDelayLodge.toggle()
+                        SportLog.event("lab", "tail-delay lodge = \(tailDelayLodge ? "ON" : "OFF") — \(tailDelayLodge ? "lodge at the disconnect with a ~31 s start delay and let the app suspend; the daemon holds the tail deferral" : "hold the app awake 35 s and then lodge a plain connect")")
+                        lastAction = "tail delay → \(tailDelayLodge ? "ON" : "OFF") — next read"
+                    }
+                    Text("The last untested length of the start-delay mechanism. Every failure so far was a long delay (87 s missed, 291/293 s missed, 54–295 s fired 5–65 min late) and the one on-time firing had the app awake. ~31 s is the only length that might expire before the host sleeps. ON replaces the hold; watch for TAIL-DELAY in the log and whether the next burst lands on time.")
+                        .font(.caption2).foregroundColor(.orange)
                     Button("Lodge late (35 s after link-up): \(lodgeLate ? "ON" : "OFF") → tap to flip") {
                         lodgeLate.toggle()
                         SportLog.event("lab", "lodge late = \(lodgeLate ? "ON" : "OFF") — \(lodgeLate ? "after a read the re-lodge waits out the sensor's tail under an expiring-activity hold" : "re-lodge at the disconnect (reconnect storm + tail attempts count on the tally)")")
