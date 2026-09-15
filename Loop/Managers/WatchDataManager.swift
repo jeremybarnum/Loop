@@ -6,6 +6,7 @@
 //  Copyright © 2016 Nathan Racklyeft. All rights reserved.
 //
 
+import CoreBluetooth
 import HealthKit
 import UIKit
 import WatchConnectivity
@@ -17,6 +18,61 @@ import LoopCore
 enum WatchDataManagerError: Error {
     case decodingError
     case expiredBolusRecommendation
+}
+
+/// The PHONE'S OWN Bluetooth radio state, for the log.
+///
+/// Why this exists (2026-09-15): the periodic `[link]` line carries a `radio=` field, but that
+/// one comes from the pod link census and says nothing about the phone's Bluetooth setting.
+/// Reading it as the phone's radio mislabelled a whole morning of system-held arm tests — the
+/// question "was the phone's Bluetooth on?" was being answered from memory afterwards instead of
+/// from the log. A central created purely to observe state (never scanning, power alert
+/// suppressed) reports it directly, and every ON→OFF transition gets its own line so the moment
+/// is greppable.
+final class PhoneRadioCensus: NSObject, CBCentralManagerDelegate {
+    static let shared = PhoneRadioCensus()
+
+    private let queue = DispatchQueue(label: "com.loopkit.Loop.phoneRadioCensus")
+    private var manager: CBCentralManager?
+    private let lock = NSLock()
+    private var state: CBManagerState = .unknown
+
+    /// "on", "OFF", "unauthorized", … — appended to the link line as `phoneBT=…`.
+    var stateName: String {
+        lock.lock(); defer { lock.unlock() }
+        return Self.name(for: state)
+    }
+
+    private static func name(for s: CBManagerState) -> String {
+        switch s {
+        case .poweredOn:     return "on"
+        case .poweredOff:    return "OFF"
+        case .unauthorized:  return "unauthorized"
+        case .unsupported:   return "unsupported"
+        case .resetting:     return "resetting"
+        case .unknown:       return "?"
+        @unknown default:    return "?"
+        }
+    }
+
+    /// Call once at startup. Idempotent.
+    func start() {
+        guard manager == nil else { return }
+        // Observation only: no scan, no connect, and the system's "Bluetooth is off" alert
+        // suppressed so a deliberate radio-off test never nags the user.
+        manager = CBCentralManager(delegate: self, queue: queue,
+                                   options: [CBCentralManagerOptionShowPowerAlertKey: false])
+    }
+
+    func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        lock.lock()
+        let previous = state
+        state = central.state
+        lock.unlock()
+        guard previous != central.state else { return }
+        PhoneLog.event("radio", "phone Bluetooth \(Self.name(for: central.state))"
+                       + (previous == .unknown ? " (first reading)" : " — was \(Self.name(for: previous))"))
+    }
 }
 
 @MainActor
@@ -1220,6 +1276,7 @@ extension WatchDataManager: WCSessionDelegate {
     nonisolated(unsafe) static var podLinkCensus: (() -> String)?
 
     nonisolated private func startLinkCensus() {
+        PhoneRadioCensus.shared.start()
         let t = DispatchSource.makeTimerSource(queue: Self.linkCensusQueue)
         t.schedule(deadline: .now() + 60, repeating: 60, leeway: .seconds(5))
         t.setEventHandler {
@@ -1227,7 +1284,10 @@ extension WatchDataManager: WCSessionDelegate {
             let s = WCSession.default
             let pod = Self.podLinkCensus.map { " · pod: \($0())" } ?? ""
             Self.loanLadderSweep?()
-            PhoneLog.event("link", "watch reachable=\(s.isReachable) activation=\(s.activationState.rawValue) paired=\(s.isPaired) appInstalled=\(s.isWatchAppInstalled)\(pod)")
+            // phoneBT is the PHONE'S OWN radio. The `radio=` inside `pod:` is the pod link
+            // census and says nothing about the phone's Bluetooth setting — on 2026-09-15
+            // reading it that way mislabelled a whole morning of arm testing.
+            PhoneLog.event("link", "watch reachable=\(s.isReachable) activation=\(s.activationState.rawValue) paired=\(s.isPaired) appInstalled=\(s.isWatchAppInstalled) phoneBT=\(PhoneRadioCensus.shared.stateName)\(pod)")
         }
         t.resume()
         Self.linkCensusTimer = t
