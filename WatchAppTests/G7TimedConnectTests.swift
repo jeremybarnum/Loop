@@ -204,3 +204,26 @@ final class TailDelayLodgeTests: XCTestCase {
         }
     }
 }
+
+final class PetesFormulaTests: XCTestCase {
+    // Pete (2026-09-15 11:56): "delay = 298 - (now - bg_timestamp)". Our lodge computes
+    // (nextFire - now) - fastScanLead, and nextFire is bg_timestamp + period + fireOffset, so the
+    // two are the same expression exactly when the lead makes period + fireOffset - lead == 298.
+    func testTheLodgeReproducesPetesFormulaExactly() {
+        let bgTimestamp = Date(timeIntervalSince1970: 3_000_000)
+        // A lodge happens at the sensor's close, a few seconds after the reading.
+        for sinceReading in [3.0, 4.0, 5.5, 12.0] {
+            let now = bgTimestamp.addingTimeInterval(sinceReading)
+            let fire = G7TimedConnect.nextFire(anchor: bgTimestamp, now: now)
+            let ours = fire.timeIntervalSince(now) - G7TimedConnect.fastScanLead
+            let petes = 298 - now.timeIntervalSince(bgTimestamp)
+            XCTAssertEqual(ours, petes, accuracy: 0.001,
+                           "the lodge must be his formula verbatim, not a variant of it")
+        }
+    }
+
+    func testTheLeadIsTheOneThatMakesItHisFormula() {
+        XCTAssertEqual(G7TimedConnect.period + G7TimedConnect.fireOffset - G7TimedConnect.fastScanLead, 298,
+                       accuracy: 0.001, "period + fireOffset - lead == 298 is what makes this his formula")
+    }
+}
