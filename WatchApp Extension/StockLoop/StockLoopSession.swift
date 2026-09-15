@@ -30,7 +30,23 @@ final class StockLoopSession {
     /// session early.
     private let keepalive = WorkoutKeepalive()
 
+    /// EXPERIMENT (2026-09-14): a loan without the workout keepalive. The "soak" holder — the
+    /// one that spans the whole loan (and the CGM-only test) — is suppressed; "takeover" and
+    /// "handback" keep their runtime, they are user-present ladders at the loan's ends. Between
+    /// bursts the app sleeps and the standing sensor request + fast path have to carry each cycle
+    /// inside the ~12 s wake. Dispatch timers in the loan controller do not run while suspended;
+    /// each logs "fired late" when that happens, and the +90 s deferred release after takeover is
+    /// the one to read for first. OFF by default.
+    static let loanWithoutWorkoutKey = "G7Lab.loan.noWorkout"
+    static var loanWithoutWorkout: Bool { UserDefaults.standard.bool(forKey: loanWithoutWorkoutKey) }
+
     private func setKeepalive(_ holding: Bool, reason: String) {
+        if reason == "soak", Self.loanWithoutWorkout {
+            SportLog.event("keepalive", "soak holder \(holding ? "SUPPRESSED" : "release ignored") — loan without workout experiment; the app sleeps between bursts")
+            keepalive.release(reason)   // never leave a stale soak holder behind if the toggle flipped mid-loan
+            stack.cgmManager.timedRuntimeDidChange()
+            return
+        }
         holding ? keepalive.acquire(reason) : keepalive.release(reason)
         // Timed connect arms only under a keepalive (G7TimedConnect.runtimeAvailable, installed
         // in init). Releasing is dispatched to main, so the release side re-evaluates on main
