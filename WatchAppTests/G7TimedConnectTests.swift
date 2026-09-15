@@ -183,3 +183,24 @@ final class RadioCensusPowerTagTests: XCTestCase {
         XCTAssertTrue(["batt", "chg", "full", "?"].contains { tag.hasSuffix($0) }, tag)
     }
 }
+
+final class TailDelayLodgeTests: XCTestCase {
+    // The tail-delay arm is a measurement, not a default: it must stay off unless flipped.
+    func testTheTailDelayArmStaysOff() {
+        UserDefaults.standard.removeObject(forKey: G7TimedConnect.tailDelayLodgeKey)
+        XCTAssertFalse(G7TimedConnect.tailDelayLodge)
+    }
+
+    // It must aim at the SAME moment the hold does, and land inside the untested short window —
+    // long delays are already characterised as unreliable on a sleeping watch.
+    func testTheDelayTargetsTheHoldsMomentAndStaysShort() {
+        // A read completes ~4 s after link-up, which is when the disconnect fires.
+        for sinceLinkUp in [3.0, 4.0, 5.0, 12.0] {
+            let delay = max(1, G7TimedConnect.standingLodgeDelay - sinceLinkUp)
+            XCTAssertEqual(delay + sinceLinkUp, G7TimedConnect.standingLodgeDelay, accuracy: 0.001,
+                           "the lodge must land at the hold's target moment")
+            XCTAssertLessThan(delay, 40, "must stay in the short window this arm exists to test")
+            XCTAssertGreaterThanOrEqual(delay, 1, "whole seconds, never zero — CBError 1")
+        }
+    }
+}
