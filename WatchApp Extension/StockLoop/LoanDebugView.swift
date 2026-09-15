@@ -68,6 +68,11 @@ struct LoanDebugView: View {
     @AppStorage("G7Lab.timedConnect") private var timedConnect = true
     /// The start-delay experiment — see G7TimedConnect.systemHeld. OFF by default.
     @AppStorage("G7Lab.timedConnect.systemHeld") private var systemHeld = false
+    /// Under the arm: standing request (no start delay) — see G7TimedConnect.standing. ON by default.
+    @AppStorage("G7Lab.timedConnect.standing") private var standingRequest = true
+    /// Direct-auth fast path (stored shared key, no J-PAKE/certs after the first handshake) — see
+    /// G7DirectAuth.fastPath. ON by default.
+    @AppStorage("G7Lab.directAuth.fastPath") private var directAuthFastPath = true
     /// Direct read — our own J-PAKE handshake, no Dexcom watch app. See G7DirectAuth. ON by
     /// default on the watch since 2026-09-13; the toggle is the diagnostic override.
     @AppStorage("G7Lab.directAuth") private var directAuth = true
@@ -336,7 +341,21 @@ struct LoanDebugView: View {
                 if systemHeld {
                     Text("EXPERIMENT — relaunch the app after flipping. Then run the CGM-only test until ONE reading lands (the arm needs an adopted sensor to lodge for) and stop it, so the app sleeps. A missed burst leaves the request standing into the sensor's tail; that exposure is part of what is measured. If the platform refuses the start-delay option, the arm disables itself for the launch and the log says so.")
                         .font(.caption2).foregroundColor(.orange)
+                    Button("Standing request (no start delay): \(standingRequest ? "ON" : "OFF") → tap to flip") {
+                        standingRequest.toggle()
+                        SportLog.event("lab", "standing request = \(standingRequest ? "ON" : "OFF") — \(standingRequest ? "connect lodged at disconnect with no delay; the controller connects at the sensor's next advertisement" : "start-delay form: the daemon's own timer, which the 09-14 event run showed fires 5–20 min late while the app sleeps")")
+                        lastAction = "standing request → \(standingRequest ? "ON" : "OFF") — takes effect at the next lodge"
+                    }
+                    Text("ON: the address sits in the accept list from our disconnect, so the radio connects at the next burst (including the sensor's one-minute bursts when the phone is away) instead of waiting for bluetoothd's late timer. Accepts the tally risk the timed design avoided; the capture measures it.")
+                        .font(.caption2).foregroundColor(.secondary)
                 }
+                Button("Direct-auth fast path (stored key, no J-PAKE/certs): \(directAuthFastPath ? "ON" : "OFF") → tap to flip") {
+                    directAuthFastPath.toggle()
+                    SportLog.event("lab", "direct-auth fast path = \(directAuthFastPath ? "ON" : "OFF")")
+                    lastAction = "fast path → \(directAuthFastPath ? "ON" : "OFF") — next connection"
+                }
+                Text("After one full handshake per sensor the shared key is stored; later connections replay only the AES challenge (~1.2 s instead of 7). A rejected challenge clears the key and the full handshake runs. Log: FAST PATH / STORED / REJECTED.")
+                    .font(.caption2).foregroundColor(.secondary)
 
                 // RADIO STRESS RETIRED: the question it existed to
                 // answer — does a pod command every single cycle disturb the CGM? — came back
