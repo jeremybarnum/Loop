@@ -73,6 +73,8 @@ struct LoanDebugView: View {
     /// Direct-auth fast path (stored shared key, no J-PAKE/certs after the first handshake) — see
     /// G7DirectAuth.fastPath. ON by default.
     @AppStorage("G7Lab.directAuth.fastPath") private var directAuthFastPath = true
+    /// Loan without the workout keepalive — see StockLoopSession.loanWithoutWorkout. OFF by default.
+    @AppStorage("G7Lab.loan.noWorkout") private var loanWithoutWorkout = false
     /// Direct read — our own J-PAKE handshake, no Dexcom watch app. See G7DirectAuth. ON by
     /// default on the watch since 2026-09-13; the toggle is the diagnostic override.
     @AppStorage("G7Lab.directAuth") private var directAuth = true
@@ -356,6 +358,13 @@ struct LoanDebugView: View {
                 }
                 Text("After one full handshake per sensor the shared key is stored; later connections replay only the AES challenge (~1.2 s instead of 7). A rejected challenge clears the key and the full handshake runs. Log: FAST PATH / STORED / REJECTED.")
                     .font(.caption2).foregroundColor(.secondary)
+                Button("Loan WITHOUT workout keepalive: \(loanWithoutWorkout ? "ON" : "OFF") → tap to flip") {
+                    loanWithoutWorkout.toggle()
+                    SportLog.event("lab", "loan without workout = \(loanWithoutWorkout ? "ON" : "OFF") — \(loanWithoutWorkout ? "soak holder suppressed; takeover/handback keep their runtime; each cycle must fit the standing-request wake" : "workout keepalive spans the loan again")")
+                    lastAction = "loan without workout → \(loanWithoutWorkout ? "ON" : "OFF") — next loan"
+                }
+                Text("EXPERIMENT — needs the system-held arm ON with the standing request. The app sleeps between bursts; the cycle (read, compute, pod command, release) runs inside the ~12 s wake. Bench first with the water pod: read the log for timers that 'fired late' — the +90 s deferred release after takeover is the known hazard.")
+                    .font(.caption2).foregroundColor(.orange)
 
                 // RADIO STRESS RETIRED: the question it existed to
                 // answer — does a pod command every single cycle disturb the CGM? — came back

@@ -115,3 +115,11 @@ final class DirectAuthFastPathTests: XCTestCase {
         XCTAssertTrue(G7TimedConnect.standing)
     }
 }
+
+final class LoanWithoutWorkoutTests: XCTestCase {
+    // The no-workout loan is an experiment: OFF unless the diagnostics toggle says otherwise.
+    func testTheLoanWithoutWorkoutExperimentStaysOff() {
+        UserDefaults.standard.removeObject(forKey: StockLoopSession.loanWithoutWorkoutKey)
+        XCTAssertFalse(StockLoopSession.loanWithoutWorkout)
+    }
+}
