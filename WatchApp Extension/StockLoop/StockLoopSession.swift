@@ -90,9 +90,12 @@ final class StockLoopSession {
         // (system-connected piggyback / connection event / ad scan), D2W's rhythm, and connect
         // verdicts. Made the acquisition mechanism observed rather than inferred.
         G7RadioCensus.sink = { line in SportLog.event("g7-ble", line) }
-        // The arm's link-up and lodge lines carry battery level + charge state, so a run's power
-        // regime (docked vs on-wrist, and the level's trend across wakes) is readable afterwards.
-        G7RadioCensus.powerTag = { batteryTag() }
+        // The arm's link-up and lodge lines carry battery level + charge state AND the watch's
+        // network path, so a run's power regime (docked vs on-wrist, from the level's trend) and
+        // whether the watch had a route to the phone are both readable afterwards rather than
+        // recalled. Watch Bluetooth comes from the kit's own central, which it appends itself.
+        WatchNetCensus.shared.start()
+        G7RadioCensus.powerTag = { "\(batteryTag()) · net \(WatchNetCensus.shared.summary)" }
         // Tail exposure + the pod hold's close-relative clock (PodRadioHold.swift): the adopted
         // sensor's link closing starts the window; a scan of ours (never under ride-only) is
         // one of the two things the [tail] line exists to catch.
