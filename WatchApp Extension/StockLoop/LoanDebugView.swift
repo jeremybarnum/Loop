@@ -70,6 +70,9 @@ struct LoanDebugView: View {
     @AppStorage("G7Lab.timedConnect.systemHeld") private var systemHeld = false
     /// Under the arm: standing request (no start delay) — see G7TimedConnect.standing. ON by default.
     @AppStorage("G7Lab.timedConnect.standing") private var standingRequest = true
+    /// Under the standing request: re-lodge 35 s after link-up instead of at the disconnect — see
+    /// G7TimedConnect.lodgeLate. ON by default.
+    @AppStorage("G7Lab.timedConnect.lodgeLate") private var lodgeLate = true
     /// Direct-auth fast path (stored shared key, no J-PAKE/certs after the first handshake) — see
     /// G7DirectAuth.fastPath. ON by default.
     @AppStorage("G7Lab.directAuth.fastPath") private var directAuthFastPath = true
@@ -349,6 +352,13 @@ struct LoanDebugView: View {
                         lastAction = "standing request → \(standingRequest ? "ON" : "OFF") — takes effect at the next lodge"
                     }
                     Text("ON: the address sits in the accept list from our disconnect, so the radio connects at the next burst (including the sensor's one-minute bursts when the phone is away) instead of waiting for bluetoothd's late timer. Accepts the tally risk the timed design avoided; the capture measures it.")
+                        .font(.caption2).foregroundColor(.secondary)
+                    Button("Lodge late (35 s after link-up): \(lodgeLate ? "ON" : "OFF") → tap to flip") {
+                        lodgeLate.toggle()
+                        SportLog.event("lab", "lodge late = \(lodgeLate ? "ON" : "OFF") — \(lodgeLate ? "after a read the re-lodge waits out the sensor's tail under an expiring-activity hold" : "re-lodge at the disconnect (reconnect storm + tail attempts count on the tally)")")
+                        lastAction = "lodge late → \(lodgeLate ? "ON" : "OFF") — next read"
+                    }
+                    Text("The 21:54 capture: re-lodging at the disconnect cost 2 tally counts in 45 min (5 in 5.8 h = the −70 floor). ON defers the re-lodge to +35 s, or to the moment the system ends the hold — the log says which and how long the hold ran.")
                         .font(.caption2).foregroundColor(.secondary)
                 }
                 Button("Direct-auth fast path (stored key, no J-PAKE/certs): \(directAuthFastPath ? "ON" : "OFF") → tap to flip") {
