@@ -73,6 +73,9 @@ struct LoanDebugView: View {
     /// Under the standing request: re-lodge 35 s after link-up instead of at the disconnect — see
     /// G7TimedConnect.lodgeLate. ON by default.
     @AppStorage("G7Lab.timedConnect.lodgeLate") private var lodgeLate = true
+    /// Under the arm: lodge with a start delay timed to the next burst — see
+    /// G7TimedConnect.burstAligned. ON by default.
+    @AppStorage("G7Lab.timedConnect.burstAligned") private var burstAligned = true
     /// Direct-auth fast path (stored shared key, no J-PAKE/certs after the first handshake) — see
     /// G7DirectAuth.fastPath. ON by default.
     @AppStorage("G7Lab.directAuth.fastPath") private var directAuthFastPath = true
@@ -352,6 +355,13 @@ struct LoanDebugView: View {
                         lastAction = "standing request → \(standingRequest ? "ON" : "OFF") — takes effect at the next lodge"
                     }
                     Text("ON: the address sits in the accept list from our disconnect, so the radio connects at the next burst (including the sensor's one-minute bursts when the phone is away) instead of waiting for bluetoothd's late timer. Accepts the tally risk the timed design avoided; the capture measures it.")
+                        .font(.caption2).foregroundColor(.secondary)
+                    Button("Burst-aligned start delay: \(burstAligned ? "ON" : "OFF") → tap to flip") {
+                        burstAligned.toggle()
+                        SportLog.event("lab", "burst-aligned = \(burstAligned ? "ON" : "OFF") — \(burstAligned ? "lodge with a start delay so the daemon's 6-s fast connection scan opens on the burst; nothing on the air until then" : "bare standing request; the 6-s fast scan is spent at the lodge and the burst is caught only by the low-power scan")")
+                        lastAction = "burst-aligned → \(burstAligned ? "ON" : "OFF") — next lodge"
+                    }
+                    Text("bluetoothd hunts an accept-list entry hard for only 6 s after each connect call, then drops to a 4–10% duty scan — that is why catches ranged +0.2 s to +16 min and three bursts in a row were missed. A start delay defers both the accept-list add and those 6 s, so they land on the burst and never on the sensor's tail (the tail attempts parked the −70 floor at 22:54).")
                         .font(.caption2).foregroundColor(.secondary)
                     Button("Lodge late (35 s after link-up): \(lodgeLate ? "ON" : "OFF") → tap to flip") {
                         lodgeLate.toggle()

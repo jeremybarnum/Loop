@@ -133,3 +133,31 @@ final class LodgeLateTests: XCTestCase {
         XCTAssertLessThan(G7TimedConnect.standingLodgeDelay, G7TimedConnect.period - 60, "must be lodged well before the next burst")
     }
 }
+
+final class BurstAlignedLodgeTests: XCTestCase {
+    // The start delay must open the daemon's 6-s fast connection scan just BEFORE the burst, so
+    // the high-power window spans the burst's first seconds instead of expiring into it.
+    func testTheLeadOpensTheFastScanBeforeTheBurst() {
+        UserDefaults.standard.removeObject(forKey: G7TimedConnect.burstAlignedKey)
+        XCTAssertTrue(G7TimedConnect.burstAligned)
+        XCTAssertGreaterThan(G7TimedConnect.fastScanLead, 0, "the scan must open before the burst, not at it")
+        XCTAssertLessThan(G7TimedConnect.fastScanLead, 6, "a lead ≥ the 5.994 s fast-scan window would expire before the burst")
+    }
+
+    // The delay is computed from the grid, in whole seconds (a fractional NSNumber is refused
+    // with CBError 1), and always lands inside the cycle it is aimed at.
+    func testTheDelayLandsJustBeforeTheNextGridPoint() {
+        let anchor = Date(timeIntervalSince1970: 1_000_000)
+        let now = anchor.addingTimeInterval(10)                 // just past a grid point
+        let fire = G7TimedConnect.nextFire(anchor: anchor, now: now)
+        let delay = fire.timeIntervalSince(now) - G7TimedConnect.fastScanLead
+        let whole = Int(delay.rounded())
+        XCTAssertEqual(Double(whole), delay, accuracy: 0.5)
+        XCTAssertGreaterThan(whole, 0)
+        XCTAssertLessThan(Double(whole), G7TimedConnect.period, "never past the burst it is aimed at")
+        // The 6-s window opened by that delay must still be open when the sensor starts advertising.
+        let scanOpens = now.addingTimeInterval(Double(whole))
+        XCTAssertLessThanOrEqual(scanOpens, fire)
+        XCTAssertGreaterThan(scanOpens.addingTimeInterval(5.994), fire)
+    }
+}
