@@ -123,3 +123,13 @@ final class LoanWithoutWorkoutTests: XCTestCase {
         XCTAssertFalse(StockLoopSession.loanWithoutWorkout)
     }
 }
+
+final class LodgeLateTests: XCTestCase {
+    // The late re-lodge is on by default and clears the tail attempts the 21:54 capture counted.
+    func testLodgeLateDefaultsOnAndClearsTheObservedTail() {
+        UserDefaults.standard.removeObject(forKey: G7TimedConnect.lodgeLateKey)
+        XCTAssertTrue(G7TimedConnect.lodgeLate)
+        XCTAssertGreaterThan(G7TimedConnect.standingLodgeDelay, 27, "the capture saw a tail attempt at +27 s after the burst start")
+        XCTAssertLessThan(G7TimedConnect.standingLodgeDelay, G7TimedConnect.period - 60, "must be lodged well before the next burst")
+    }
+}
