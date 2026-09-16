@@ -218,7 +218,6 @@
 		43FCBBC21E51710B00343C1B /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 43776F9A1B8022E90074EA36 /* LaunchScreen.storyboard */; };
 		43FCEEA9221A615B0013DD30 /* StatusChartsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43FCEEA8221A615B0013DD30 /* StatusChartsManager.swift */; };
 		43FCEEAD221A66780013DD30 /* DateFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43FCEEAC221A66780013DD30 /* DateFormatter.swift */; };
-		486CE113B97B462BB93FB253 /* FakeGlucose.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64F1E343CD1F4DBFA5E9CB3B /* FakeGlucose.swift */; };
 		4EBEFA1A38224E7E8CE432A7 /* WatchLoopManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B9D276E492E4C55A6858278 /* WatchLoopManager.swift */; };
 		4F08DE8F1E7BB871006741EA /* CollectionType+Loop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F08DE8E1E7BB871006741EA /* CollectionType+Loop.swift */; };
 		4F11D3C220DD80B3006E072C /* WatchHistoricalGlucose.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F11D3C120DD80B3006E072C /* WatchHistoricalGlucose.swift */; };
@@ -1114,7 +1113,6 @@
 		53F9B5F8846B4124B8986783 /* LoanEventJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LoanEventJournal.swift; path = "WatchApp Extension/StockLoop/LoanEventJournal.swift"; sourceTree = SOURCE_ROOT; };
 		5E12EA01302D82A800A03F53 /* SeizeActivationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeizeActivationTests.swift; sourceTree = "<group>"; };
 		62F7CB5D5DC337E705032AC7 /* dings.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop/Resources/Sounds/dings.caf; sourceTree = SOURCE_ROOT; };
-		64F1E343CD1F4DBFA5E9CB3B /* FakeGlucose.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FakeGlucose.swift; path = "WatchApp Extension/StockLoop/FakeGlucose.swift"; sourceTree = SOURCE_ROOT; };
 		6D5FCC7207E50ACC682E9E6E /* honk.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop/Resources/Sounds/honk.caf; sourceTree = SOURCE_ROOT; };
 		74145BE3C46270883D295A1F /* minimal.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop/Resources/Sounds/minimal.caf; sourceTree = SOURCE_ROOT; };
 		7B9D276E492E4C55A6858278 /* WatchLoopManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WatchLoopManager.swift; path = "WatchApp Extension/StockLoop/WatchLoopManager.swift"; sourceTree = SOURCE_ROOT; };
@@ -2491,7 +2489,6 @@
 				7D49A0BC23884B9DB40301B5 /* TempBasalRecommendation.swift */,
 				A973A0F6CF644FFAA48989FC /* UserDefaults+LoopIntents.swift */,
 				42BE0808089545E7BE6AE359 /* NSBundle.swift */,
-				64F1E343CD1F4DBFA5E9CB3B /* FakeGlucose.swift */,
 				F520419E66CD453A809324D1 /* RuntimeStateLog.swift */,
 				9A7CE060302D82A800A03F53 /* WristAlertScheduler.swift */,
 				C8B06DC011B54C348CC2A48F /* LoopStallWatchdog.swift */,
@@ -3934,7 +3931,6 @@
 				9D327AEC023D4304B936E605 /* TempBasalRecommendation.swift in Sources */,
 				CE6DF9FAD8C24F7ABFAF31FF /* UserDefaults+LoopIntents.swift in Sources */,
 				2F17426EF105437983CDF0BC /* NSBundle.swift in Sources */,
-				486CE113B97B462BB93FB253 /* FakeGlucose.swift in Sources */,
 				9D70FCCAA141489A9E49ADA6 /* RuntimeStateLog.swift in Sources */,
 				9A7CE061302D82A800A03F53 /* WristAlertScheduler.swift in Sources */,
 				0580A71C73134CBC9DE309C5 /* LoopStallWatchdog.swift in Sources */,

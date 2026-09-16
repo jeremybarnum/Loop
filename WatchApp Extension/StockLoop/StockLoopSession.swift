@@ -62,11 +62,6 @@ final class StockLoopSession {
         // cycle, and gate that reclaim on G7 acquisition state while the sensor is un-adopted.
         // Replaced a user toggle whose two arms were each wrong for acquisition — evidence in
         // docs/E4_TIME_SEPARATION.md.
-        //
-        // FakeGlucose and E5 substitute into the LIVE dosing path and their toggles are gone, so
-        // neither may linger enabled in a real session. Both are trivially restored from git.
-        FakeGlucose.setEnabled(false)
-        UserDefaults.standard.set(false, forKey: "g7.e5RandomTemp")
 
         guard let assembled = await StockLoopStack.assemble() else { return nil }
         stack = assembled

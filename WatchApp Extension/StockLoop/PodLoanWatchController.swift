@@ -354,9 +354,6 @@ final class PodLoanWatchController {
     /// forget it (the next Start then pays for discovery once). Replaces the framework's 6 s
     /// known-handle fallback scan.
     private var takeoverCachedHandle: (address: UInt32, handle: String)?
-    /// Manual bounded suspend end; a running bounded suspend survives
-    /// hand-back and reports mode .suspended.
-    private var manualSuspendEnd: Date?
 
     private enum Keys {
         static let phase = "PodLoanWatchController.phase"
@@ -1608,7 +1605,6 @@ final class PodLoanWatchController {
                    liveDoses.count, (liveDoses.map { $0.endDate }.max()!.timeIntervalSince(seedReconciliation)) / 60)
         SportLog.event("loan", String(format: "insulin books rebuilt from grant — %d records (ledger seed, R35: %d finished%@) · grossImpliedΣ=%.2fU",
                                        entries.count + liveDoses.count, entries.count, liveNote, grossImpliedSum))
-        loopManager.invalidateInsulinEffect()
         // SEED-IN IOB anchor — from the LEDGER, the only book. Primes the glance/HUD so
         // IOB shows at takeover instead of blank until the first cycle, and records the anchors
         // for [iob-diff] (phone vs seed vs cycle1).
@@ -1741,9 +1737,6 @@ final class PodLoanWatchController {
                 }
             }
         }
-        // Carb effect is cached; force a recompute so the replaced COB reaches the first
-        // prediction instead of waiting for a CGM-triggered invalidation.
-        loopManager.invalidateCarbEffect()
     }
 
     /// Seed ~3 h of the phone's glucose so the watch's momentum + retrospective correction
@@ -1786,7 +1779,6 @@ final class PodLoanWatchController {
                 // notification values and silently misses backfill batches.
                 SportLog.event("glucose", "INGEST src=grant-seed stored=\(stored.count)/\(samples.count) · loan takeover warm-up")
                 SportLog.event("loan", "seeded \(stored.count) glucose sample\(stored.count == 1 ? "" : "s") from the phone (momentum/RC warm-up)")
-                self.loopManager.invalidateGlucoseDerivedEffects()
             } catch {
                 os_log("Grant glucose ingest failed: %{public}@", log: OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController"), type: .error, String(describing: error))
             }
@@ -1806,22 +1798,6 @@ final class PodLoanWatchController {
             s.iobUnits, now.timeIntervalSince(s.iobDate), s.cobGrams,
             s.impactMomentumMgdl, s.impactInsulinMgdl, s.impactCarbMgdl, s.impactRCMgdl,
             s.momentumPointCount, s.rcDiscrepancyCount, now.timeIntervalSince(s.snapshotAt)))
-    }
-
-    /// Double-seed detector: is the grant's running-temp `boundaryRecord` ALSO present
-    /// inside `doseHistory` (same rate, overlapping window)? If so, the running temp is
-    /// seeded twice at takeover → its insulin is double-counted in watch IOB (~0.3U bump).
-    private static func boundaryDuplicatesHistory(_ grant: LoanGrant) -> Bool {
-        guard let b = grant.boundaryRecord, let bRate = b.unitsPerHour, let bEnd = b.endDate else { return false }
-        return grant.doseHistory.contains { r in
-            switch r.kind {
-            case .tempBasal, .suspend, .boundaryTruncation:
-                guard let rRate = r.unitsPerHour, let rEnd = r.endDate else { return false }
-                return abs(rRate - bRate) < 0.0001 && r.startDate < bEnd && rEnd > b.startDate
-            default:
-                return false
-            }
-        }
     }
 
     /// Titles for seeded pump events (record→DoseEntry lives in the shared
@@ -1979,9 +1955,6 @@ final class PodLoanWatchController {
         }()
         loopManager.pumpManager = nil  // no dosing from here
 
-        // Cancel the leftover LOOP temp — but a running bounded manual
-        // suspend is preserved; the pod auto-resumes at its expiry.
-        let suspendActive = (self.manualSuspendEnd ?? .distantPast) > self.now()
         // NO PROGRAM CROSSES THE BOUNDARY — the automatic
         // controller is standing down, so its automatic temp goes with it and the pod reverts
         // to the user's own schedule. This mirrors stock's own off-cycle idiom exactly:
@@ -2005,7 +1978,7 @@ final class PodLoanWatchController {
         //
         // The ledger truncation stays: it is watch-LOCAL bookkeeping, and if a failed
         // offer resumes this session the ledger must not carry a phantom full-span temp.
-        if runningTemp != nil, !suspendActive {
+        if runningTemp != nil {
             let cancelAt = self.now()
             self.loopManager.ledgerRecordEnact(DoseEntry(
                 type: .tempBasal, startDate: cancelAt, endDate: cancelAt,
@@ -2157,7 +2130,6 @@ final class PodLoanWatchController {
                 self.phase = .idle
                 self.epoch = nil
                 self.deliveredAtTakeover = nil
-                self.manualSuspendEnd = nil
                 self.handbackDeadline = nil
                 self.handbackStartedAt = nil
                 self.finalOfferSentAt = nil
@@ -2238,7 +2210,6 @@ final class PodLoanWatchController {
         phase = .idle
         epoch = nil
         deliveredAtTakeover = nil
-        manualSuspendEnd = nil
         handbackDeadline = nil
         handbackStartedAt = nil
         HandbackStuckAlert.disarm()   // Hand-back completed cleanly
@@ -2366,7 +2337,6 @@ final class PodLoanWatchController {
     }
 
     private func currentMode() -> LoanDosingMode {
-        if (manualSuspendEnd ?? .distantPast) > self.now() { return .suspended }
         // closedPhoneFed/cgmViewer/pausedStale arrive with the picker integration.
         return .closedDirect
     }
@@ -2376,7 +2346,7 @@ final class PodLoanWatchController {
             timestamp: self.now(),
             deliveredUnits: pumpManager?.podLoanInsulinDelivered,
             reservoirLevel: nil,
-            isSuspended: (manualSuspendEnd ?? .distantPast) > self.now(),
+            isSuspended: false,
             faultCode: pumpManager?.podLoanFaultDescription)
     }
 
@@ -2489,7 +2459,7 @@ final class PodLoanWatchController {
                 lastEventSeq: journal.lastEventSeq,
                 unackedCount: journal.unackedEvents().count,
                 pendingUncertain: pendingUncertainEventID != nil,
-                suspendEndsAt: (manualSuspendEnd ?? .distantPast) > self.now() ? manualSuspendEnd : nil,
+                suspendEndsAt: nil,
                 lastIdleNote: lastIdleNote,
                 startedAt: attemptStartedAt,
                 handbackPending: handbackRequested,
