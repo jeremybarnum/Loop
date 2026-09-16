@@ -35,54 +35,11 @@ final class WatchDoseEnactor {
     /// the enact calls themselves are unchanged stock PumpManager methods either way.
     weak var loanRecorder: WatchLoanDoseRecording?
 
-    /// BG wins the single watch radio. When the
-    /// G7 is mid-handshake (the heavy ~8-10s burst), a LOOP enact yields instead of
-    /// colliding ("Empty Value") — the stock-shaped loop retries naturally on the next
-    /// reading, which is exactly the fresh BG landing. Only the automatic path runs
-    /// through this enactor today; a future manual path must NOT defer (user present —
-    /// the crude loudDrop==true analog).
-
-    /// While pod/G7 time-separation is active the pod BLE is
-    /// orphaned for G7's sake. reclaim it just before dosing; release it just after.
-    /// reclaim's completion(true) = pod connected & ready; (false) = couldn't
-    /// reconnect in the bounded window → SKIP this automatic dose (pod keeps running
-    /// its baseline, loop retries next cycle). Both nil / no-op when that separation is off.
-    var reclaimPodForDose: ((@escaping (Bool) -> Void) -> Void)?
-    var releasePodAfterDose: (() -> Void)?
-
-    /// Fired with the (rate, duration) the pod just accepted for a temp basal, so the
-    /// owner can cache what is running without querying the pod — the link is released seconds later.
-    var onTempBasalEnacted: ((_ unitsPerHour: Double, _ duration: TimeInterval) -> Void)?
     /// Shadow ledger: pod-ACCEPTED doses flow to the owner's session timeline.
     var ledgerRecord: ((DoseEntry) -> Void)?
 
     func enact(recommendation: AutomaticDoseRecommendation, with pumpManager: PumpManager, completion: @escaping (PumpManagerError?) -> Void) {
         dosingQueue.async {
-            // BG still wins the radio — but WAIT for the handshake instead of throwing the
-            // dose cycle away on a millisecond-scale collision.
-            //
-            // Reclaim the orphaned pod before dosing (bounded). Safe-fallback on
-            // failure: skip the dose — never block, never dose against a pod that
-            // isn't confirmed connected. Runs on dosingQueue (not the loop's
-            // dataAccessQueue), so the bounded wait can't stall the loop cycle.
-            if let reclaim = self.reclaimPodForDose {
-                let group = DispatchGroup()
-                group.enter()
-                var connected = false
-                reclaim { ok in connected = ok; group.leave() }
-                if group.wait(timeout: .now() + 25) == .timedOut || !connected {
-                    SportLog.event("radio", "E4: pod not reconnected — automatic dose SKIPPED (pod runs baseline; loop retries next cycle)")
-                    self.releasePodAfterDose?()
-                    completion(.communication(nil))   // benign: the loop re-enacts next reading
-                    return
-                }
-            }
-            // Always re-release the pod on the way out, whatever the dose result.
-            let finish: (PumpManagerError?) -> Void = { err in
-                self.releasePodAfterDose?()
-                completion(err)
-            }
-
             let doseDispatchGroup = DispatchGroup()
 
             var tempBasalError: PumpManagerError? = nil
@@ -108,10 +65,6 @@ final class WatchDoseEnactor {
                         SportLog.event("dose", "temp enact FAILED — \(String(describing: error))")
                     } else {
                         SportLog.event("dose", String(format: "temp %.2f U/hr ACCEPTED by pod", basalAdjustment.unitsPerHour))
-                        // Hand the accepted temp to the owner so it can cache what the pod
-                        // is running once the link is released (basalDeliveryState goes nil
-                        // seconds after release).
-                        self.onTempBasalEnacted?(basalAdjustment.unitsPerHour, basalAdjustment.duration)
                         // Shadow ledger: the accepted temp enters the single-owner
                         // timeline (truncating its open predecessor — the journal's rule).
                         let acceptedAt = self.now()
@@ -129,7 +82,7 @@ final class WatchDoseEnactor {
             doseDispatchGroup.wait()
 
             guard tempBasalError == nil else {
-                finish(tempBasalError)
+                completion(tempBasalError)
                 return
             }
 
@@ -155,7 +108,7 @@ final class WatchDoseEnactor {
                 }
             }
             doseDispatchGroup.wait()
-            finish(bolusError)
+            completion(bolusError)
         }
     }
 }

@@ -214,21 +214,6 @@ final class StockLoopSession {
                 : "hand-back runtime hold released")
         }
 
-        // The dose-window stand-down is deliberately NOT wired — it stranded
-        // the radio for 2.9 h overnight (app suspended mid-ladder holding the sensor off, no BLE
-        // event left to wake it). The takeover hold above stays: user-present and bounded.
-
-        // Reclaim the orphaned pod to dose, then re-release it for G7. Unconditional on both
-        // sides: reclaimPodForDose already no-ops when the link is held, so one wiring
-        // covers every case and can never strand a released bid.
-        stack.loopManager.reclaimPodForDose = { [weak self] completion in
-            guard let self = self else { completion(false); return }
-            self.loanController.reclaimPodForDose(completion)
-        }
-        stack.loopManager.releasePodAfterDose = { [weak self] in
-            self?.loanController.releasePodAfterDose()
-        }
-
         loanController.onLoanActiveChanged = { [weak self] active in
             guard let self = self else { return }
             if active {

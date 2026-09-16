@@ -104,26 +104,14 @@ final class PodLoanWatchController {
     /// what poisons the BLE stack — and an armed-epoch that differs from the firing epoch is
     /// the cross-loan-residue signature. Both were previously inferable only from clustered
     /// timestamps; now each firing carries its own evidence.
-    /// `epochScoped` timers refuse to fire into a loan they were not armed for.
-    ///
-    /// Opt-in, not blanket, because two kinds of timer legitimately cross: those armed before
-    /// any grant, which have no epoch at all (the request timeout, whose whole job is to rescue
-    /// a hung request), and those that must outlive their loan by design (the hand-back resend,
-    /// which exists to keep pushing records after the loan ends).
-    private func schedule(after delay: TimeInterval, label: String, epochScoped: Bool = false, execute work: DispatchWorkItem) {
+    private func schedule(after delay: TimeInterval, label: String, execute work: DispatchWorkItem) {
         let armedEpoch = epoch
         let armedAt = now()
-        SportLog.event("timer", "armed \(label) +\(fmtDelay(delay)) e=\(armedEpoch.map(String.init) ?? "-")\(epochScoped ? " scoped" : "")")
+        SportLog.event("timer", "armed \(label) +\(fmtDelay(delay)) e=\(armedEpoch.map(String.init) ?? "-")")
         let wrapper = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             if work.isCancelled {
                 SportLog.event("timer", "skipped \(label) — cancelled before its deadline")
-                return
-            }
-            // Skip loudly: "never armed", "fired and did nothing" and "refused to fire" have to
-            // stay distinguishable in the log, or a delivery bug cannot be diagnosed from it.
-            if epochScoped, let armed = armedEpoch, armed != self.epoch {
-                SportLog.event("timer", "REFUSED \(label) — armed e=\(armed), now e=\(self.epoch.map(String.init) ?? "-") · a different loan owns the pod")
                 return
             }
             let late = self.now().timeIntervalSince(armedAt) - delay
@@ -141,8 +129,8 @@ final class PodLoanWatchController {
         }
     }
 
-    private func schedule(after delay: TimeInterval, label: String, epochScoped: Bool = false, execute body: @escaping () -> Void) {
-        schedule(after: delay, label: label, epochScoped: epochScoped, execute: DispatchWorkItem(block: body))
+    private func schedule(after delay: TimeInterval, label: String, execute body: @escaping () -> Void) {
+        schedule(after: delay, label: label, execute: DispatchWorkItem(block: body))
     }
 
     private func fmtDelay(_ d: TimeInterval) -> String {
@@ -283,9 +271,6 @@ final class PodLoanWatchController {
 
     private var pumpManager: OmniPumpManager?
 
-    /// Read-only pump handle for the Radio Lab's diagnostics line. Diagnostics only — the lab must
-    /// never command the pod through this.
-    var pumpManagerForDiagnostics: AnyObject? { pumpManager }
     /// Odometer at takeover, for the hand-back snapshot pair (§1.4).
     private var deliveredAtTakeover: Double?
     /// When the current Start attempt began (request sent) — drives the glance
@@ -357,9 +342,6 @@ final class PodLoanWatchController {
     /// waiting for the phone's permission, versus iOS actually freeing the pod's BLE slot.
     private var finalOfferSentAt: Date?
     private var requestTimeoutWork: DispatchWorkItem?
-    /// The pending post-dose release, so a second dose in the same cycle re-arms rather than
-    /// stacking a second independent 12 s timer.
-    private var postDoseReleaseWork: DispatchWorkItem?
     /// Surfaced on the glance idle screen after a failed/timed-out start, so the user
     /// sees WHY instead of a silent return to idle.
     private(set) var lastIdleNote: String?
@@ -368,6 +350,10 @@ final class PodLoanWatchController {
     /// it stashes the epoch here and drainRecoveredIfNeeded() (post-wiring) fails the
     /// takeover to the phone, which would otherwise strand in .grantOffered.
     private var pendingInterruptedTakeoverEpoch: Int?
+    /// The cached handle THIS takeover trusted, so a takeover that never connected on it can
+    /// forget it (the next Start then pays for discovery once). Replaces the framework's 6 s
+    /// known-handle fallback scan.
+    private var takeoverCachedHandle: (address: UInt32, handle: String)?
     /// Manual bounded suspend end; a running bounded suspend survives
     /// hand-back and reports mode .suspended.
     private var manualSuspendEnd: Date?
@@ -375,7 +361,6 @@ final class PodLoanWatchController {
     private enum Keys {
         static let phase = "PodLoanWatchController.phase"
         static let epoch = "PodLoanWatchController.epoch"
-        static let pumpRawValue = "PodLoanWatchController.pumpManagerRawValue"
         /// Fix 4a (field 2026-08-31): the highest epoch ANY accepted loan has used —
         /// never cleared, survives CLOSED (which wipes `epoch` and the journal, the
         /// amnesia that let back-to-back seizes reuse a spent epoch: 270→270 five times
@@ -1242,11 +1227,13 @@ final class PodLoanWatchController {
         // grants in a row, because we were talking to it with no session. Leave the phone's
         // value in place instead: it is inert here (retrievePeripherals cannot resolve a foreign
         // UUID) and omnipodDidAdoptLoanPod already replaces it on adopt.
+        takeoverCachedHandle = nil
         var cachedHandle: String?
         if var podRaw = rawState["podState"] as? [String: Any],
            let address = podRaw["address"] as? UInt32 {
             cachedHandle = PodLoanBleIdentifierCache.identifier(forPodAddress: address)
             if let cachedHandle {
+                takeoverCachedHandle = (address, cachedHandle)
                 podRaw["bleIdentifier"] = cachedHandle
                 rawState["podState"] = podRaw
             }
@@ -1265,26 +1252,12 @@ final class PodLoanWatchController {
         manager.pumpManagerDelegate = self
         manager.delegateQueue = queue
         pumpManager = manager
-        persistPumpRawValue()
         ingestGrantHistory(grant)
-        // Cross-device adoption: the phone's bleIdentifier is useless here — scan for
-        // the pod by its address and adopt the peripheral THIS watch discovers.
-        // The grant's LIVE temp record (still-delivering at takeover, omitted from the
-        // seed) gates and parameterizes the re-arm — it corroborates that the PHONE's books
-        // also believe the temp is running (guards the stale-C5-signature corner across
-        // back-to-back loans), and its endDate is the only way to restore a 0 U/hr temp's span.
-        let liveTempRecord = grant.seedDoseEntries(finishedBy: self.now()).live.first { $0.type == .tempBasal }
-        let scanning = manager.podLoanBeginTakeover(liveTempStart: liveTempRecord?.startDate,
-                                                    liveTempEnd: liveTempRecord?.endDate)
-        SportLog.event("loan", "pump rebuilt — \(scanning ? "scanning for the pod by address" : "no pod address!") for takeover")
-        // beginTakeover re-armed the C5-cancelled inherited temp (if any) so THIS watch
-        // tracks its live delivery — IOB climbs with the running temp instead of freezing at
-        // the handover stamp. The seed omits it (live dose); the pod's mutable re-reports own it.
-        if let liveTemp = manager.podLoanLiveTempBasalDescription {
-            SportLog.event("loan", "#72: tracking inherited running temp — \(liveTemp) (mutable, pod-owned; IOB tracks delivery)")
-        } else if liveTempRecord != nil {
-            SportLog.event("loan", "#72: live temp in grant but NOT re-armed (no C5 signature / start mismatch) — record stays closed at handover")
-        }
+        // Cross-device adoption: unless our own cached handle replaced the phone's above, scan for
+        // the pod by its address and adopt the peripheral THIS watch discovers. With a cached
+        // handle nothing is armed — the driver's own connect-on-demand dials on the first read.
+        let scanning = manager.podLoanBeginTakeover()
+        SportLog.event("loan", "pump rebuilt — \(scanning ? "takeover armed" : "no pod address!")")
 
         // First pod status = the takeover proof (§2.3). The pod's BLE session takes
         // SECONDS to establish after construction (scan → connect → EAP-AKA), but a
@@ -1432,40 +1405,24 @@ final class PodLoanWatchController {
                     // (closed-loop mode inherited from the grant, glucose recency, pump-data
                     // freshness, DoseMath limits, the IOB clamp), records a CYCLE VERDICT like any
                     // other cycle, and — the point — MINTS A JOURNAL EVENT, so the loan's first
-                    // program is ours, streamed to the phone, and inside the audit. The pod link is
-                    // already up here, so the enactor's reclaim is a no-op. The new temp supersedes
-                    // the old in the same breath, so there is no gap in delivery.
-                    SportLog.event("loan", "takeover: asserting our own program (R2 overturned — no inherited temp crosses the boundary)")
-                    self.loopManager.loop()
-                    // Time-separate the radios. The takeover is done and the initial status
-                    // is read, so the pod BLE connection isn't needed until the next dose.
-                    // Release it (orphan the pod — it runs its last basal natively;
-                    // keys/state untouched) so G7 acquisition has the watch's radio
-                    // uncontested.
-                    //
-                    // UNCONDITIONAL, deliberately. The gate this replaced read a defaults key
-                    // whose toggle and registered default had been deleted, so it evaluated
-                    // FALSE — "hold the pod link forever" — on any device where the toggle had
-                    // never been switched on. A held link starves G7 acquisition outright
-                    // (zero adoptions across ~130 min of held link in a controlled toggle
-                    // test), so a fresh install would silently lose the sensor while a device
-                    // carrying the old persisted value looked fine. Never re-gate this.
-                    do {
-                        // Releasing AT takeover broke G7
-                        // entirely — a "connects-but-can't-read" loop, the pod cancel
-                        // left it stuck .disconnecting and poisoned the shared BLE
-                        // budget (the same watchOS teardown demon that causes the
-                        // missed windows). DEFER the release: take the free first read
-                        // with the pod connected — the first connection is always the
-                        // good one — then cancel a SETTLED, idle connection ~90s later,
-                        // which should tear down cleaner than a fresh one.
-                        SportLog.event("loan", "pod release DEFERRED +90s (release a settled connection after first reads)")
-                        let scheduledReleaseAt = self.now().addingTimeInterval(90)
-                        self.schedule(after: 90, label: "takeover-budget") { [weak self] in
-                            self?.performDeferredTakeoverRelease(epoch: grant.epoch, manager: manager,
-                                                                scheduledAt: scheduledReleaseAt)
+                    // program is ours, streamed to the phone, and inside the audit. The new temp
+                    // supersedes the old in the same breath, so there is no gap in delivery.
+                    // THE BOUNDARY CANCEL (R2). The phone's C5 record-close makes an inherited
+                    // running temp read FINISHED in this manager's state, so the cycle below cannot
+                    // see it and, whenever the algorithm wants the scheduled rate (or the loan is
+                    // open), would leave it running unbooked. Cancel it explicitly, on the link the
+                    // takeover read just used — stock's own off-cycle idiom (LoopDataManager.
+                    // cancelActiveTempBasal enacts a bare .cancel outside loop()).
+                    let inheritedLiveTemp = grant.seedDoseEntries(finishedBy: self.now()).live.contains { $0.type == .tempBasal }
+                    if inheritedLiveTemp {
+                        SportLog.event("loan", "takeover: cancelling the inherited temp (R2 — no program crosses the boundary)")
+                        manager.enactTempBasal(decisionId: nil, unitsPerHour: 0, for: 0) { error in
+                            SportLog.event("loan", error.map { "takeover: inherited-temp cancel FAILED — \($0); the first cycle supersedes it" }
+                                                   ?? "takeover: inherited temp CANCELLED")
                         }
                     }
+                    SportLog.event("loan", "takeover: asserting our own program (R2 — no inherited temp crosses the boundary)")
+                    self.loopManager.loop()
                 } else if attempt + 1 < maxAttempts {
                     if attempt == 0 {
                         SportLog.event("loan", "connecting to pod… (BLE session establishing; typically ~17s, budget ~40s)")
@@ -1591,23 +1548,17 @@ final class PodLoanWatchController {
                     // the same obligation as the wrist note above: do not blame the pod for a
                     // connection slot we were holding ourselves.
                     self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: stalled ? "watch app suspended mid-takeover" : (wedged ? "watch Bluetooth wedged — toggle needed" : "couldn't establish the pod link"))))
+                    if let trusted = self.takeoverCachedHandle, PodLoanConnectClock.connectCount == 0 {
+                        PodLoanBleIdentifierCache.forget(podAddress: trusted.address)
+                        SportLog.event("loan", "takeover: cached handle \(trusted.handle) never connected — FORGOTTEN; the next Start discovers")
+                    }
                 }
             }
         }
     }
 
-    // MARK: - Reconnect the orphaned pod to dose, then re-release
+    // MARK: - Revoke capture
 
-    /// Wired to WatchLoopManager via StockLoopSession. Called just before a dose while
-    /// the between-dose time-separation has the pod orphaned. completion(true) = pod connected
-    /// & ready; (false) = couldn't reconnect in the bounded window → caller SKIPS the dose (pod
-    /// keeps running its baseline). Uses podLoanReadStatus as the connection probe —
-    /// idempotent and exactly what the takeover ladder uses, so no double-dose risk.
-    /// When the pod link was last confirmed alive (successful reclaim read or release).
-    /// Reclaims have succeeded and then failed within the same session with no visible
-    /// difference; idle duration is one of the few candidate discriminators left, so it is
-    /// measured rather than eyeballed from timestamps.
-    private var lastPodLinkContact: Date?
     /// Highest epoch the phone has ever revoked — survives an unmatched revoke (see handleRevoke).
     /// The odometer captured at revoke, before teardown nils the pump — consumed by the
     /// offer builder as a fallback so revoke hand-backs still carry a reconcile baseline.
@@ -1617,520 +1568,12 @@ final class PodLoanWatchController {
     private var revokeCapturedDeliveredAt: Date?
     private var lastRevokedEpoch: Int?
 
-    /// The reclaim must not start INSIDE the G7's connect+auth burst. Measured across 140
-    /// ladders over five days, the single discriminator is how much live G7 GATT session
-    /// remains when the reclaim starts: >1 s remaining → 0/45 succeed; closing within 1 s →
-    /// 62/69; no link at all → 23/26 (p ≈ 2.7e-27). A G7 SCAN in flight is harmless (4/4) —
-    /// the contended resource is the connection initiator, not the scanner.
-    ///
-    /// The enact path already waits (WatchLoopManager :1822), but the "pump data N min old"
-    /// pre-cycle refresh reclaims BEFORE any arbitration. Gating here covers every caller.
-    ///
-    /// Is the pod's standing auto-connect bid currently RELEASED? Code that assumes the pod
-    /// link is held is wrong once a between-dose release has disarmed the bid, and nothing
-    /// re-arms it. Lock-free read of the manager's own flag; safe from any thread.
-    var podConnectionIsReleased: Bool {
-        return pumpManager?.isConnectionReleased ?? false
-    }
-
-    /// While this is in the future, a pod COMMAND is in flight and the link must not be
-    /// pulled. Opened by every reclaim-to-dose, closed by the matching release. It is a
-    /// deadline rather than a bool so a dose path that dies without releasing cannot strand
-    /// the link held forever — the window simply expires.
-    ///
-    /// Without it, the takeover's +90 s deferred release can fire between a temp-basal
-    /// command's two writes and disconnect the pod mid-command: the write times out and the
-    /// dose is lost. The release closure guards only on phase and epoch — it has no idea a
-    /// command is in flight.
-    /// Touched only on `queue`, which is where all three of reclaim, release and the deferred
-    /// release run.
-    private var doseWindowUntil: Date?
-
-    /// The takeover's deferred pod-link release, extracted so it can re-defer itself.
-    ///
-    /// Unguarded, this fires into a temp-basal enact — between the command's two writes — and
-    /// disconnects the pod mid-command. The
-    /// write times out and the dose is lost. The +90 s mark lands at a uniformly random point
-    /// on the 5-minute reading grid, so roughly one loan in a hundred hits the ~2-3 s overlap,
-    /// and it always costs the FIRST dose.
-    ///
-    /// Re-defers in 10 s steps while a pod command is in flight. Self-limiting: `doseWindowUntil`
-    /// is a deadline, so even a dose path that dies without releasing lets this proceed once the
-    /// window expires — it can never hold the link open indefinitely.
-    private func performDeferredTakeoverRelease(epoch grantEpoch: Int, manager: OmniPumpManager, scheduledAt: Date) {
-        dispatchPrecondition(condition: .onQueue(queue))
-        guard phase == .active, epoch == grantEpoch else { return }
-
-        if let busyUntil = doseWindowUntil, busyUntil > now() {
-            SportLog.event("loan", String(format: "pod release DEFERRED again — dose in flight (retry in 10s, window closes in %.0fs)",
-                                          busyUntil.timeIntervalSince(now())))
-            schedule(after: 10, label: "deferred-release-retry") { [weak self] in
-                self?.performDeferredTakeoverRelease(epoch: grantEpoch, manager: manager, scheduledAt: scheduledAt)
-            }
-            return
-        }
-
-        // Same before/after capture as the post-dose release. This is the one that has fired
-        // minutes LATE with the app suspended, by which point the pod had
-        // self-disconnected — so we cancelled nothing and wedged the peripheral. `before`
-        // says outright whether the link was still alive when we pulled it, and the
-        // scheduled-vs-actual delay says whether runtime was stolen.
-        let before = manager.podLoanConnectionStateDescription
-        let lateBy = now().timeIntervalSince(scheduledAt)
-        // ORPHAN, not release — dropping the BLE link keeps the watch as controller;
-        // the C5 record-close in releaseConnection() is handover accounting and was silently
-        // truncating the running temp at every release (killing live IOB tracking ~90s in).
-        manager.podLoanOrphanConnection()
-        lastPodLinkContact = now()
-        SportLog.event("loan", String(format: "E4: pod BLE released (+90s deferred, %.0fs late) — state was %@ at cancel%@",
-                                      lateBy, before,
-                                      before == "connected" ? "" : " ** cancelled a link that was ALREADY GONE **"))
-        schedule(after: 3, label: "release-verify") { [weak self] in
-            guard let self = self, let manager = self.pumpManager else { return }
-            let after = manager.podLoanConnectionStateDescription
-            SportLog.event("loan", "E4: post-release pod state \(after)\(after.hasPrefix("DISCONNECTING") ? " ** WEDGED — poisoning signature **" : "")")
-        }
-    }
-
-    /// Every reclaim ladder gets an id, and ladders that overlap say so.
-    ///
-    /// `reclaimPodForDose` has TWO independent callers — the automatic enactor
-    /// (WatchDoseEnactor.swift:68) and the manual bolus path (WatchLoopManager.swift:2240) — and
-    /// no reentrancy guard. On 2026-08-18 a carb save (which re-runs loop(), which enacts) landed
-    /// in the same second as a manual bolus, and BOTH ran a full 14-read ladder against one pod,
-    /// interleaved, disagreeing about `released`, for 28 s until both gave up. In the log that
-    /// appeared only as every line being printed twice — which reads as a logging artifact, not
-    /// as two ladders, and cost an evening.
-    ///
-    /// This does NOT serialise them. The guard belongs somewhere deliberate and a wrong one would
-    /// suppress a legitimate retry; the instrument comes first so the next occurrence is one
-    /// greppable line instead of an inference from doubled text.
-    private var reclaimLadderSeq = 0
-    private var liveReclaimLadders: [Int: Date] = [:]
-    /// Callers that arrived while a ladder was already in flight; answered with its result.
-    private var reclaimWaiters: [Int: [(Bool) -> Void]] = [:]
-
-    func reclaimPodForDose(_ completion: @escaping (Bool) -> Void) {
-        queue.async {
-            guard self.phase == .active, let manager = self.pumpManager else { completion(false); return }
-            // COALESCE onto a ladder already in flight rather than starting a second one.
-            //
-            // Measured 2026-08-18 (build 112): two ladders ran 0.1 s apart and again 25.7 s apart,
-            // each driving its own scan and 14-read poll against one pod, and both failed. Two
-            // simultaneous ladders cannot both win — they contend for the same radio — so the
-            // second one buys nothing and costs the first its scan.
-            //
-            // Worse, and this is the reason it is fixed rather than merely logged: releasing the
-            // pod calls `cancelLoanScan()`, which nils `loanTakeoverPodId`
-            // (BlePodComms.swift:118). That marker is what tells connectOnDemand to leave a
-            // running scan alone (BluetoothManager.swift:881). So ladder A finishing can clear
-            // the marker out from under ladder B, and connectOnDemand then stops and replaces
-            // B's discovery scan with its own 4-second one — which is exactly the sequence
-            // observed at 17:50:35, 26 s into a live ladder.
-            //
-            // The joiner takes the in-flight ladder's result rather than retrying immediately.
-            // That is the conservative reading: a second ladder started 0.1 s later is answering
-            // the same question against the same pod in the same radio conditions, and the retry
-            // that matters is the next cycle's, which is unchanged. A manual bolus joined to a
-            // failing automatic ladder still fails loudly, which is what it did before.
-            if let (liveLadder, liveSince) = self.liveReclaimLadders.sorted(by: { $0.key < $1.key }).first {
-                let age = self.now().timeIntervalSince(liveSince)
-                SportLog.event("pod-contend", String(format:
-                    "JOINING L%d (in flight %.1fs) instead of starting a second ladder — %d waiter(s)",
-                    liveLadder, age, self.reclaimWaiters[liveLadder, default: []].count + 1))
-                self.reclaimWaiters[liveLadder, default: []].append(completion)
-                return
-            }
-            self.reclaimLadderSeq += 1
-            let ladder = self.reclaimLadderSeq
-            let startedAt = self.now()
-            self.liveReclaimLadders[ladder] = startedAt
-            // Bounded generously: the reclaim ladder alone budgets ~40 s, plus the command.
-            self.doseWindowUntil = self.now().addingTimeInterval(75)
-            let idle = self.lastPodLinkContact.map { self.now().timeIntervalSince($0) }
-            SportLog.event("loan", String(format: "E4: reclaim starting L%d — pod BLE state %@, released=%@, idle %@ · %@",
-                                          ladder,
-                                          manager.podLoanConnectionStateDescription,
-                                          manager.isConnectionReleased ? "yes" : "no",
-                                          idle.map { String(format: "%.0fs", $0) } ?? "unknown",
-                                          self.g7StateForContention()))
-            // This used to short-circuit on
-            // `isConnectionReleased == false` alone, commented "still connected — nothing to do".
-            // But that flag is the standing-connect BID, not the link. A reclaim already in flight
-            // clears it while the peripheral is still .connecting, so a second concurrent caller
-            // arriving ~100 ms later concludes the link is up, doses immediately, and the enact
-            // fails with podNotConnected — losing that cycle's correction until the next one.
-            // Two loop triggers that close together are routine: a carb save recomputes while
-            // the bolus screen is open.
-            //
-            // Short-circuit only when the LINK is genuinely up; otherwise fall through to the read
-            // ladder, which is the real readiness probe and already handles a connect in progress.
-            if !manager.isConnectionReleased, manager.podLoanConnectionStateDescription == "connected" {
-                self.lastPodLinkContact = self.now()
-                self.finishReclaimLadder(ladder, startedAt: startedAt, reads: 0, ok: true, note: "link already up", manager: manager)
-                completion(true)
-                return
-            }
-            // NO RADIO STAND-DOWN, and nothing left to stand down. Earlier builds stood our own
-            // G7 reader down so it could not occupy the radio during the pod's ladder; that was
-            // retired for stranding the radio when the app suspended mid-ladder, and the reader
-            // itself is gone. The CGM is now stock G7SensorKit riding
-            // the Dexcom watch app's session; this app never drives the sensor radio, so the pod
-            // ladder has no contender to yield to or hold off.
-            SportLog.event("loan", "E4: reclaiming pod to dose (scan-adopt primary, #54)")
-            manager.reclaimConnection()
-            // Scan-adopt is the PRIMARY reclaim, not a mid-ladder fallback.
-            // The bare pending-connect "wins" a reclaim
-            // only ~2% of the time — an orphaned pod self-disconnects ~3 min after last contact,
-            // and the gentle bid is a coin-flip against a self-disconnected pod (it caught one
-            // 578s-idle pod, and missed 518s- and 259s-idle pods entirely). The scan-adopt
-            // escalation carried ~98% of reclaims anyway, just 15s later — and that 15s was the
-            // whole of the 30-40s reclaim the user felt.
-            // Arm the fresh-central address scan up front; recreateCentral's poweredOn handler
-            // re-connects the bare bid too, so both paths race from t=0. The read ladder below is
-            // the success probe; the release path cancels an unfinished scan (cancelLoanScan).
-            //
-            // ...UNLESS we already hold a handle for this pod (2026-08-20). The ~2% figure above
-            // was measured when a "bare pending-connect" was a blind bid — no local CoreBluetooth
-            // handle, so nothing for iOS to reacquire. With a cached handle it is the PHONE's
-            // mechanism, which reconnects in ~1.3 s and needs no discovery at all.
-            //
-            // And escalating is not free on watchOS: podLoanEscalateReclaim -> recreateCentral(),
-            // which installs a NEW CBCentralManager and clears `devices`. Every PeripheralManager
-            // holds its central weakly, so every escalation ORPHANS the command path (central=nil)
-            // and costs 30-100 s to recover — measured tonight on epochs 155/156, on every single
-            // dose cycle, because scan-adopt was primary. That churn was the residual failure.
-            //
-            // So: when the handle resolves, let the driver reconnect and keep the read ladder as
-            // the probe. The ladder still escalates below if the gentle path does not land, so the
-            // scan-adopt recovery is preserved for the case it was actually measured on — a pod we
-            // cannot address locally.
-            if manager.podLoanHasLocalHandle {
-                SportLog.event("loan", "E4: local handle known — driver reconnect, NO escalate (no central recreate)")
-            } else {
-                manager.podLoanEscalateReclaim()
-            }
-            self.attemptReclaimRead(manager: manager, attempt: 0, ladder: ladder, startedAt: startedAt, completion: completion)
-        }
-    }
-
-    /// Budget MATCHES the takeover ladder (14 reads / ~40s), and for the same reason.
-    ///
-    /// This was 8 reads / ~16s on the premise that "a bonded pod reconnect is seconds".
-    /// That premise only holds for a WARM pod: an overnight run reclaiming every
-    /// 5 minutes succeeded 84/84 — but in 2-4 reads, always well inside 16s. It
-    /// silently validated the warm case only.
-    ///
-    /// The cold case is the opposite: with the pod's link
-    /// released and then idle 8+ minutes it self-disconnects (~3 min after last
-    /// contact), and every reclaim failed — 8/8 — while the TAKEOVER of the very same
-    /// pod minutes earlier succeeded in 4 reads on its 40s budget. So the pod was
-    /// reachable throughout; the reclaim was simply giving up first. Each failure left
-    /// pump data unrefreshed, so pumpDataTooOld re-deadlocked the loop with the age
-    /// climbing 15 -> 45 min.
-    ///
-    /// Radio cost is acceptable: the reclaim starts immediately after a reading, and
-    /// the next G7 window is ~5 min out, so even a full 40s leaves ~4 min of margin —
-    /// a pod exchange on every single cycle was already shown to cost 0% catch rate.
     /// The G7's state, for the contention question that has been argued rather than measured.
     ///
     /// Stamped on every pod operation so "was the CGM holding the radio?" is answerable from one
     /// line instead of by correlating two subsystems' timestamps by eye.
     private func g7StateForContention() -> String {
         loopManager.g7ContentionSummary
-    }
-
-    /// One line per ladder when it ends, carrying what the per-read spam used to carry.
-    /// Wall-clock ceiling for one reclaim ladder. Matches what the read-count comment always
-    /// claimed (~40s) and now actually enforces it.
-    static let reclaimLadderBudget: TimeInterval = 25   // lean 2026-08-24: 5× the observed worst case (was 45)
-
-    /// Which ladder has already paid for a scan-adopt escalation, so a ladder cannot
-    /// recreate the central more than once.
-    private var escalatedThisLadder: Int?
-
-    private func finishReclaimLadder(_ ladder: Int, startedAt: Date, reads: Int, ok: Bool, note: String, manager: OmniPumpManager?) {
-        liveReclaimLadders[ladder] = nil
-        // Answer everyone who joined this ladder, before anything can start another one.
-        let waiters = reclaimWaiters.removeValue(forKey: ladder) ?? []
-        if !waiters.isEmpty {
-            SportLog.event("pod-contend", "L\(ladder) answering \(waiters.count) joined caller(s) with \(ok ? "OK" : "FAILED")")
-            waiters.forEach { $0(ok) }
-        }
-        let elapsed = now().timeIntervalSince(startedAt)
-        SportLog.event("pod-contend", String(
-            format: "L%d %@ after %d read(s) in %.1fs — %@ · %@ · still live: %@",
-            ladder, ok ? "OK" : "FAILED", reads, elapsed, note, g7StateForContention(),
-            liveReclaimLadders.isEmpty ? "none"
-                : liveReclaimLadders.keys.sorted().map { "L\($0)" }.joined(separator: ",")))
-    }
-
-    private func attemptReclaimRead(manager: OmniPumpManager, attempt: Int, ladder: Int, startedAt: Date, completion: @escaping (Bool) -> Void) {
-        // THE ELEGANT FORM (ruling 2026-08-25): a reclaim is ONE status round-trip — the
-        // driver dials on demand — plus bounded retry, one escalation, and a liveness ceiling.
-        //
-        // Three reads, down from six, down from fourteen: field truth across four bench days is
-        // that read 1 succeeds (~4 s) or the pod is unreachable by handle, in which case read 2
-        // runs behind the scan-adopt escalation and read 3 is margin. The per-read 6 s watchdog
-        // is GONE: it existed for waits that could never end (the stale-manager race), that
-        // architecture died with the parallel dialer, and by 2026-08-25 its only remaining
-        // effect was killing healthy connects in the 6-10 s tail — all three of the day's
-        // "stalls" were the watchdog manufacturing failures out of slow successes. A genuinely
-        // wedged read is bounded twice over: the driver's own 20 s connect timeout, and ONE
-        // per-ladder liveness timer at budget+2 (below) — the same protection as six per-read
-        // timers, with one timer.
-        let maxAttempts = 3
-        let ladderDeadline = startedAt.addingTimeInterval(Self.reclaimLadderBudget)
-        if attempt == 0 {
-            schedule(after: Self.reclaimLadderBudget + 2, label: "reclaim-ladder-liveness") { [weak self] in
-                guard let self = self, self.liveReclaimLadders[ladder] != nil else { return }
-                SportLog.event("loan", String(format: "E4: LIVENESS CEILING at %.0fs — a read is wedged past the driver's own timeout; failing the ladder so the loop breathes", Self.reclaimLadderBudget + 2))
-                self.finishReclaimLadder(ladder, startedAt: startedAt, reads: attempt + 1, ok: false,
-                                         note: "liveness ceiling", manager: manager)
-                completion(false)
-            }
-        }
-        manager.podLoanReadStatus { [weak self] success in
-            guard let self = self else { completion(false); return }
-            self.queue.async {
-                // The ladder may have been finished under us (liveness ceiling, phase abort).
-                // finishReclaimLadder clears the live entry, so a late completion no-ops here —
-                // the ladder-level once-gate that replaced the per-read once-tokens.
-                guard self.liveReclaimLadders[ladder] != nil else { return }
-                self.handleReclaimReadResult(success, manager: manager, attempt: attempt, ladder: ladder,
-                                             startedAt: startedAt, ladderDeadline: ladderDeadline,
-                                             maxAttempts: maxAttempts, completion: completion)
-            }
-        }
-    }
-
-    /// The reclaim read's single continuation — reached exactly once per read, from either the
-    /// real completion or the 6 s watchdog, never both (the caller's once-token guarantees it).
-    /// Runs on `queue`.
-    private func handleReclaimReadResult(_ success: Bool, manager: OmniPumpManager, attempt: Int,
-                                         ladder: Int, startedAt: Date, ladderDeadline: Date,
-                                         maxAttempts: Int, completion: @escaping (Bool) -> Void) {
-                guard self.phase == .active else {
-                    self.finishReclaimLadder(ladder, startedAt: startedAt, reads: attempt, ok: false, note: "phase left .active", manager: manager)
-                    SportLog.event("loan", "E4: reclaim ABORTED — phase left .active (now \(self.phase.rawValue)). An in-flight dose is CANCELLED BY THE HAND-BACK, not by an unreachable pod — this is the 3x field failure (227 00:07:51, 228 00:18:44), all within ~1s of an End tap.")
-                    completion(false); return
-                }
-                if success {
-                    self.lastPodLinkContact = self.now()
-                    self.finishReclaimLadder(ladder, startedAt: startedAt, reads: attempt + 1, ok: true, note: "reconnected", manager: manager)
-                    SportLog.event("loan", "E4: pod reconnected for dose (after \(attempt + 1) read(s)) — state \(manager.podLoanConnectionStateDescription)")
-                    completion(true)
-                } else if self.now() >= ladderDeadline {
-                    self.finishReclaimLadder(ladder, startedAt: startedAt, reads: attempt + 1, ok: false,
-                                             note: "budget exhausted", manager: manager)
-                    SportLog.event("loan", String(format: "E4: reclaim ABANDONED after %.0fs (budget %.0fs) — a stuck read must not hold the loop; the pod runs baseline and the next cycle retries",
-                                                  self.now().timeIntervalSince(startedAt), Self.reclaimLadderBudget))
-                    completion(false)
-                } else if attempt + 1 < maxAttempts {
-                    // Per-attempt visibility. `podLoanReadStatus` returns a bare Bool, so
-                    // 14 failed reads say only "it didn't work" — three separate theories
-                    // (cold pod, suspension, spurious release) are indistinguishable
-                    // against that silence. Report what the BLE layer
-                    // actually sees each attempt: a peripheral stuck .disconnecting (2),
-                    // one never reaching .connected (0/1), and a connected pod failing its
-                    // status read are three different bugs that looked identical.
-                    // Every read used to print, plus its armed/fired timer pair — 117 timer lines
-                    // and 28 CONFIG lines for a single failed attempt, which buries the two lines
-                    // that carry information. First, every fifth, and the last is enough to see a
-                    // ladder that never moves off `disconnected`.
-                    let noisy = attempt == 0 || (attempt + 1) % 5 == 0
-                    if noisy { SportLog.event("loan", "E4: reclaim read \(attempt + 1)/\(maxAttempts) failed — pod BLE state \(manager.podLoanConnectionStateDescription), released=\(manager.isConnectionReleased)") }
-                    // GENTLE FIRST, THEN ESCALATE (2026-08-20). The scan-adopt escalation is no
-                    // longer armed up front when we hold a usable handle, because on watchOS it
-                    // recreates the central and orphans the command path on every dose cycle. But
-                    // it must still happen when the gentle path does not land, or a pod we cannot
-                    // reach by handle would never get the recovery the ~98% figure was measured on.
-                    // Four reads is ~8 s — several times the measured 1.3 s connect — and leaves
-                    // most of the 14-read budget for the scan.
-                    if attempt + 1 == 2, self.escalatedThisLadder != ladder,
-                       manager.isConnectionReady == false {
-                        self.escalatedThisLadder = ladder
-                        SportLog.event("loan", "E4: gentle reconnect hasn't landed — escalating to scan-adopt for the final read")
-                        manager.podLoanEscalateReclaim()
-                    }
-                    // Scan-adopt is armed UP FRONT in reclaimPodForDose, so the
-                    // whole ladder rides the takeover-grade path from read 0 — no mid-ladder escalation.
-                    // The fresh central's poweredOn handler races the bare bid and the address scan;
-                    // these reads just poll for the winner. (Was: bare-connect first, escalate at read 6,
-                    // which burned ~15s on the ~98% of reclaims the bare bid never won.)
-                    self.schedule(after: 2, label: "reclaim-read") {
-                        guard self.liveReclaimLadders[ladder] != nil else { return }   // finished under us
-                        guard self.phase == .active else {
-                            self.finishReclaimLadder(ladder, startedAt: startedAt, reads: attempt + 1, ok: false, note: "phase left .active mid-ladder", manager: manager)
-                            SportLog.event("loan", "E4: reclaim ABORTED mid-ladder — phase left .active (now \(self.phase.rawValue)); in-flight dose cancelled by the hand-back")
-                            completion(false); return
-                        }
-                        self.attemptReclaimRead(manager: manager, attempt: attempt + 1, ladder: ladder, startedAt: startedAt, completion: completion)
-                    }
-                } else {
-                    self.finishReclaimLadder(ladder, startedAt: startedAt, reads: maxAttempts, ok: false, note: "never reconnected", manager: manager)
-                    SportLog.event("loan", "E4: pod didn't reconnect after \(maxAttempts) reads (~40s) — dose skipped, pod runs baseline")
-                    completion(false)
-                }
-    }
-
-    /// Re-release the pod after a dose — but only after a SETTLE delay: cancelling a
-    /// freshly-established connection poisons the BLE stack, and
-    /// the connection has only been up for the dose (~seconds), so give it a moment to
-    /// settle before releasing (mirrors the +90s deferred release at takeover).
-    func releasePodAfterDose() {
-        // The dose is done — close the in-flight window NOW, not after the 12 s settle,
-        // so a deferred release that has been waiting on us can proceed promptly. Enqueued
-        // rather than set inline because `doseWindowUntil` is queue-confined and this is
-        // called from the enactor's own queue.
-        // Cancel before re-arming, like every other one-shot timer here. A cycle can reclaim
-        // twice — once to refresh stale pump data, then again to dose — and without this each
-        // call stacks its own independent 12 s release. A superseded one whose guards happen to
-        // pass (a new reclaim reconnected inside the window) would drop the BLE link out from
-        // under a live dose. Both timers belong to the same epoch, so `epochScoped` cannot see
-        // this; only cancellation prevents it.
-        //
-        // Armed on the controller's queue, where the work-item handle and `epoch` both live —
-        // this is called from the enactor's queue.
-        queue.async { [weak self] in
-            guard let self = self else { return }
-            self.doseWindowUntil = nil
-            self.postDoseReleaseWork?.cancel()
-            let work = DispatchWorkItem { [weak self] in self?.performPostDoseRelease() }
-            self.postDoseReleaseWork = work
-            // epochScoped: the only timer here that ACTS on the pod link across a window long
-            // enough to outlive its loan. `.active` alone is not enough, because a LATER loan is
-            // also `.active` — a hand-back and re-grant inside 12 s would let this tear down the
-            // link belonging to the loan that now owns the pod.
-            // The Lab.podReleaseDelay knob and its -1 "hold-for-loan" arm are REMOVED
-            // (2026-08-21): the experiment ran and the hold arm lost decisively — the pod hangs
-            // up on an idle held link, the reconnect churn spends G7's BLE slot, and the sensor
-            // goes dark for every app on the wrist (POD_CONNECTION_MODEL.md §2.3). A footgun
-            // whose experiment is finished doesn't earn a place in a release build.
-            //
-            // The fixed 12 s release itself SURVIVES, deliberately, although the driver's 4 s
-            // idle-disconnect already drops the physical link: reading the code for the planned
-            // full removal showed this timer is also the only thing that stamps the loan-level
-            // bookkeeping (`podConnectionReleased = true` via podLoanOrphanConnection), which the
-            // reclaim path, the relaunch-time disarm, and the diagnostics all consume. Removing
-            // the timer without re-homing that stamp changes relaunch semantics mid-loan — that
-            // refactor goes with the reclaim-latency work, not into a knob cleanup.
-            self.schedule(after: 12, label: "post-dose-release", epochScoped: true, execute: work)
-        }
-    }
-
-    /// Runs on `queue`: armed inside a `queue.async` block and fired by the seam, which
-    /// dispatches there. No `dispatchPrecondition` — tests drive timer bodies directly, and
-    /// this body needs to stay reachable from them.
-    private func performPostDoseRelease() {
-        postDoseReleaseWork = nil
-        // Unconditional — see the takeover-release note above for why the defaults-key gate
-        // had to go (absent key = false = hold the link forever on a fresh install, the arm
-        // the toggle experiment disproved).
-        guard self.phase == .active, let manager = self.pumpManager,
-              manager.isConnectionReleased == false else { return }
-        // Capture the peripheral BEFORE and AFTER the cancel. The poisoning
-        // signature is a peripheral left in .disconnecting, which is otherwise only
-        // inferable minutes later from a central recreate. Cancelling a link the pod
-        // has ALREADY dropped is the suspected trigger, so "what state were we in when
-        // we cancelled" is the load-bearing fact — and a state that is not .connected
-        // going in means there was nothing to cancel.
-        let before = manager.podLoanConnectionStateDescription
-        // ORPHAN, not release — same as the deferred takeover release: dropping the link
-        // keeps the watch as controller, so the running temp's record must NOT close here.
-        manager.podLoanOrphanConnection()
-        lastPodLinkContact = now()
-        schedule(after: 3, label: "post-dose-verify") { [weak self] in
-            guard let self = self, let manager = self.pumpManager else { return }
-            let after = manager.podLoanConnectionStateDescription
-            SportLog.event("loan", "E4: pod re-released after dose (+12s settle) — state \(before) -> \(after) (+3s)\(after.hasPrefix("DISCONNECTING") ? " ** WEDGED — this is the poisoning signature **" : "")")
-        }
-    }
-
-    // MARK: - Bench reclaim exerciser (Radio Lab, 2026-08-21)
-    //
-    // The instrument the reclaim work has been missing: in normal operation a reclaim happens
-    // once per ~5-minute cycle, so a latency question ("how does reclaim time vary with how long
-    // the pod sat idle?") takes an evening to answer at n=12. This drives the REAL production
-    // path — the same reclaimPodForDose the enactor and the manual bolus call, ladder coalescing
-    // and all — on a bench cadence: orphan the link, wait a chosen idle, reclaim, log, repeat.
-    //
-    // Read-only by construction: the reclaim's success probe is a status read; no dose is ever
-    // commanded. Runs only while a loan is ACTIVE, every wait is epochScoped so a hand-back or
-    // revoke kills the run with its loan, and the automatic enactor's own reclaims simply join
-    // the bench ladder (or vice versa) exactly as two production callers already do.
-    private var benchIdle: TimeInterval = 0
-    private var benchRepsWanted = 0
-    private var benchRepsDone = 0
-    private var benchProgress: ((String) -> Void)?
-    /// Run identity. Field, first use (12:42): a run was STOPPED mid-idle and a new one started;
-    /// the stopped run's pending idle timer checked only "is a run active?", found the NEW run's
-    /// callback, and fired into it — a ghost rep that double-counted and polluted the timings.
-    /// Every deferred step now captures the generation it belongs to and dies if it isn't current.
-    private var benchRunSeq = 0
-
-    func benchReclaimStart(idle: TimeInterval, reps: Int, progress: @escaping (String) -> Void) {
-        queue.async { [weak self] in
-            guard let self = self else { return }
-            guard self.benchProgress == nil else { progress("already running"); return }
-            guard self.phase == .active else { progress("no active loan"); return }
-            self.benchRunSeq += 1
-            self.benchIdle = idle
-            self.benchRepsWanted = reps
-            self.benchRepsDone = 0
-            self.benchProgress = progress
-            SportLog.event("bench", "exerciser START — \(reps) rep(s), idle \(Int(idle))s between orphan and reclaim")
-            progress("running 0/\(reps)")
-            self.benchStep()
-        }
-    }
-
-    func benchReclaimStop() {
-        queue.async { [weak self] in
-            guard let self = self, self.benchProgress != nil else { return }
-            self.benchRunSeq += 1   // invalidate every pending step of the stopped run
-            SportLog.event("bench", "exerciser STOPPED at \(self.benchRepsDone)/\(self.benchRepsWanted)")
-            self.benchProgress?("stopped at \(self.benchRepsDone)/\(self.benchRepsWanted)")
-            self.benchProgress = nil
-        }
-    }
-
-    /// Runs on `queue`. One rep = orphan → idle → reclaim (timed) → report → next.
-    private func benchStep() {
-        guard benchProgress != nil else { return }                       // stopped
-        guard benchRepsDone < benchRepsWanted else {
-            SportLog.event("bench", "exerciser DONE — \(benchRepsDone)/\(benchRepsWanted) reps")
-            benchProgress?("done \(benchRepsDone)/\(benchRepsWanted)")
-            benchProgress = nil
-            return
-        }
-        guard phase == .active, let manager = pumpManager else {
-            SportLog.event("bench", "exerciser ABORTED — loan no longer active")
-            benchProgress?("aborted (loan ended)")
-            benchProgress = nil
-            return
-        }
-        let rep = benchRepsDone + 1
-        let gen = benchRunSeq
-        // Same primitive the post-dose release uses: drop the link, stay the controller.
-        manager.podLoanOrphanConnection()
-        SportLog.event("bench", String(format: "rep %d/%d — orphaned; idling %.0fs before reclaim", rep, benchRepsWanted, benchIdle))
-        benchProgress?("rep \(rep): idling \(Int(benchIdle))s")
-        schedule(after: max(benchIdle, 0.1), label: "bench-idle", epochScoped: true) { [weak self] in
-            guard let self = self, self.benchRunSeq == gen, self.benchProgress != nil else { return }
-            let t0 = self.now()
-            self.benchProgress?("rep \(rep): reclaiming…")
-            self.reclaimPodForDose { ok in
-                self.queue.async {
-                    guard self.benchRunSeq == gen else { return }   // a stopped run's late ladder answer
-                    let dt = self.now().timeIntervalSince(t0)
-                    SportLog.event("bench", String(format: "rep %d/%d idle=%.0fs -> %@ in %.1fs", rep, self.benchRepsWanted, self.benchIdle, ok ? "OK" : "FAILED", dt))
-                    self.benchProgress?(String(format: "rep %d: %@ %.1fs", rep, ok ? "OK" : "FAIL", dt))
-                    self.benchRepsDone += 1
-                    self.benchStep()
-                }
-            }
-        }
     }
 
     // auditDoseCount + the addPumpEvents seed doc DELETED: the store holds no doses.
@@ -2522,6 +1965,12 @@ final class PodLoanWatchController {
         handbackRequested = false
         phase = .handingBack
         SportLog.event("loan", "drain complete — finalizing hand-back (loop dosing stops now)")
+        // Read the running temp BEFORE the loop manager loses its pump: runningTempBasal() is now
+        // the driver's own basalDeliveryState (persisted podState — E-1), nil once pumpManager is nil.
+        let runningTemp: DoseEntry? = {
+            if case .tempBasal(let dose) = manager.status.basalDeliveryState { return dose }
+            return nil
+        }()
         loopManager.pumpManager = nil  // no dosing from here
 
         // Cancel the leftover LOOP temp — but a running bounded manual
@@ -2537,18 +1986,8 @@ final class PodLoanWatchController {
         // So the phone does NOT need an off-cycle dosing trigger here; its next reading, ≤5 min
         // away, sets the new rate, and until then the pod runs the user's baseline.
         //
-        // NEVER guard this on `if case .tempBasal = manager.status.basalDeliveryState`.
-        // The pod's BLE link is orphaned between doses, so by hand-back that state reads nil
-        // even though the pod is still delivering — the cancel then never fires at all, and
-        // every loan's last temp keeps running after the pod goes home.
-        // Ask the loop manager instead: it falls back to the temp it last enacted, until that
-        // temp's programmed end.
-        let runningTemp = self.loopManager.runningTempBasalForHandback()
-        // The CANCEL IS THE PHONE'S JOB, because the watch cannot do it. Between
-        // dose windows the watch has deliberately released the pod's BLE link, so the command
-        // fails in about a millisecond with podNotConnected — there is no round-trip to fail,
-        // there is no link. The same missing link is why the odometer freshen below also fails
-        // and the audit prints `fresh=N`: one cause, both symptoms.
+        // The CANCEL IS THE PHONE'S JOB — we do not send it: the phone's reclaim round-trip
+        // cancels it (R33).
         //
         // The phone is by definition talking to the pod at this moment, and its reclaim
         // round-trip lands within seconds, so it cancels instead (see
@@ -2818,9 +2257,9 @@ final class PodLoanWatchController {
         // PodLoanPhoneController :662), times out, and forceReclaimToOwner sets state = .owner
         // AND setAutomaticDosingPaused(false). Both sides then believe they own the pod.
         //
-        // The pod is single-central so they cannot drive it at the same instant — but the watch
-        // frees the radio 90 s after takeover and 12 s after every dose, so they would ALTERNATE,
-        // each dosing off its own books with no sight of the other's insulin.
+        // The pod is single-central so they cannot drive it at the same instant — but both
+        // drivers dial on demand and drop the link seconds after each command, so they would
+        // ALTERNATE, each dosing off its own books with no sight of the other's insulin.
         //
         // Remembering the epoch is enough: the phone increments on every grant, so a legitimate
         // later grant is > this and still passes.
@@ -3092,13 +2531,6 @@ final class PodLoanWatchController {
         }
     }
 
-    private func persistPumpRawValue() {
-        guard let manager = pumpManager else { return }
-        // Same {managerIdentifier, state} shape the phone persists (Common/Models/
-        // PumpManager.swift rawValue — that file is phone-target-only, so built here).
-        defaults.set(["managerIdentifier": "Omnipod", "state": manager.rawState], forKey: Keys.pumpRawValue)
-    }
-
     private func teardownPump() {
         // Drop the BLE link EXPLICITLY before dropping the manager. Relying on deallocation to
         // tear down BlePodComms -> BluetoothManager -> CBCentralManager is the weakest release
@@ -3107,14 +2539,13 @@ final class PodLoanWatchController {
         // reference keeps the link, and a pod that stays CONNECTED is not advertising — so the
         // phone's standing connect cannot land however aggressive it is.
         //
-        // podLoanOrphanConnection rather than releaseConnection: it does the disconnect +
-        // cancelLoanScan WITHOUT the C5 record-close, which finalizeHandback has already
-        // performed and which ledgerClear below supersedes anyway.
-        SportLog.event("handback", "teardownPump: releasing BLE explicitly (see PODLOAN orphan log for the identifier)")
-        pumpManager?.podLoanOrphanConnection()
+        // The ONE boundary release: releaseConnection() drops the link, cancels an unfinished
+        // takeover scan and clears the auto-connect bid. Its C5 record-close lands on a manager
+        // copy discarded two lines down, so it books nothing here.
+        SportLog.event("handback", "teardownPump: releasing BLE explicitly (see PODLOAN release log for the identifier)")
+        pumpManager?.releaseConnection()
         pumpManager?.pumpManagerDelegate = nil
         pumpManager = nil
-        defaults.removeObject(forKey: Keys.pumpRawValue)
         // The session ledger ends with the session.
         loopManager.ledgerClear()
         // ...and so does the override. WatchLoopManager lives for the PROCESS, not the loan, and
@@ -3566,10 +2997,7 @@ enum LoanTransportChannel: String {
 extension PodLoanWatchController: PumpManagerDelegate {
 
     func pumpManagerDidUpdateState(_ pumpManager: PumpManager) {
-        // Synchronous persist: stock sets podState.unacknowledgedCommand BEFORE the BLE
-        // write and notifies here — flushing now gives the C10 intent-before-transmission
-        // durability (porting brief §1; UserDefaults synchronous write).
-        persistPumpRawValue()
+        // Nothing is persisted: the relaunch path never resurrects the pod session (init, §3.2).
     }
 
     func pumpManager(_ pumpManager: PumpManager, hasNewPumpEvents events: [NewPumpEvent], lastReconciliation: Date?, replacePendingEvents: Bool, completion: @escaping (Error?) -> Void) {
