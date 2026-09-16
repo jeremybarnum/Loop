@@ -33,7 +33,6 @@ enum PhoneLog {
 
     /// Serial: same reason WatchDataManager's mirror is serial. Interleaved writes corrupt the tail.
     private static let queue = DispatchQueue(label: "com.loopkit.Loop.phoneLog", qos: .utility)
-    private static var buffer: [String] = []
     private static var lastMirror = Date.distantPast
 
     /// Throttle. A phone-side line is cheap; pushing it to iCloud is not.
@@ -50,7 +49,6 @@ enum PhoneLog {
         os_log("%{public}@ %{public}@", log: oslog, type: .default, category, message)
         let line = "\(stamp.string(from: Date())) [\(category)] \(message)"
         queue.async {
-            buffer.append(line)
             appendLocally(line)
             if Date().timeIntervalSince(lastMirror) > mirrorInterval {
                 lastMirror = Date()
@@ -76,16 +74,33 @@ enum PhoneLog {
         return dir.appendingPathComponent("g7phone-latest.log")
     }
 
+    /// Rotate near 2 MB, keeping the most recent 1 MB — the same shape as the watch's LogFile
+    /// (512 KB / 256 KB there), sized for the phone's slower growth (~1.2 MB a week). Without
+    /// this the file grew without bound: the only truncation path was a session start that was
+    /// never called.
+    private static let maxBytes: UInt64 = 2 * 1024 * 1024
+    private static let trimToBytes = 1024 * 1024
+
     private static func appendLocally(_ line: String) {
         guard let url = localURL else { return }
         let data = Data((line + "\n").utf8)
+        var size: UInt64 = 0
         if let handle = try? FileHandle(forWritingTo: url) {
             defer { try? handle.close() }
-            _ = try? handle.seekToEnd()
+            size = (try? handle.seekToEnd()) ?? 0
             try? handle.write(contentsOf: data)
         } else {
             try? data.write(to: url)
         }
+        if size > maxBytes { rotate(url) }
+    }
+
+    /// Keep only the most recent `trimToBytes`, cut at a clean line boundary.
+    private static func rotate(_ url: URL) {
+        guard let all = try? Data(contentsOf: url), all.count > trimToBytes else { return }
+        var slice = all.suffix(trimToBytes)
+        if let nl = slice.firstIndex(of: 0x0a) { slice = slice[slice.index(after: nl)...] }
+        try? Data(slice).write(to: url)
     }
 
     private static func mirrorToICloud() {
@@ -102,56 +117,5 @@ enum PhoneLog {
         if (try? fm.copyItem(at: local, to: tmp)) != nil {
             _ = try? fm.replaceItemAt(cloudLatest, withItemAt: tmp)
         }
-    }
-
-    /// Rotate the outgoing session's g7phone-latest.log to a stamped g7phone-<yyyyMMdd-HHmmss>.log
-    /// before startSession truncates it — without this, everything since the last launch was lost
-    /// twice over (local remove + the forced first mirror overwriting the cloud copy too) and no
-    /// g7phone-*.log snapshot had EVER survived (item B6, field-confirmed 2026-08-13: the container
-    /// held 20 g7watch-*.log archives and zero g7phone-*.log). Same latest+stamped+prune scheme as
-    /// WatchDataManager.mirrorLogToICloud. Runs on `queue`.
-    private static func archivePreviousSession() {
-        let fm = FileManager.default
-        guard let local = localURL, fm.fileExists(atPath: local.path) else { return }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        let name = "g7phone-\(formatter.string(from: Date())).log"
-        let dir = local.deletingLastPathComponent()
-        try? fm.copyItem(at: local, to: dir.appendingPathComponent(name))
-        prune(in: dir)
-        guard let container = fm.url(forUbiquityContainerIdentifier: nil) else { return }   // iCloud off
-        let cloudDir = container.appendingPathComponent("Documents", isDirectory: true)
-        try? fm.createDirectory(at: cloudDir, withIntermediateDirectories: true)
-        // Archive from the LOCAL file, not the cloud latest: local is complete to the last
-        // append, while the cloud latest can be up to `mirrorInterval` (60s) stale.
-        try? fm.copyItem(at: local, to: cloudDir.appendingPathComponent(name))
-        prune(in: cloudDir)
-    }
-
-    /// Keep newest 20 stamped archives in `dir`; g7phone-latest.log is exempt (it's the rolling
-    /// current copy) and the .g7phone-latest.tmp scratch file is excluded by the .log extension
-    /// filter. Stamp format sorts lexicographically, so string sort == time sort. Mirrors the
-    /// prune in WatchDataManager.mirrorLogToICloud — g7watch- prefix there can't collide with
-    /// g7phone- here.
-    private static func prune(in dir: URL) {
-        let fm = FileManager.default
-        guard let entries = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
-        let stamped = entries
-            .filter { $0.pathExtension == "log" && $0.lastPathComponent.hasPrefix("g7phone-") && $0.lastPathComponent != "g7phone-latest.log" }
-            .sorted { $0.lastPathComponent > $1.lastPathComponent }
-        for old in stamped.dropFirst(20) { try? fm.removeItem(at: old) }
-    }
-
-    /// Truncate at launch so the file tracks the current session rather than growing forever —
-    /// but archive the outgoing session first (archivePreviousSession), or its content is
-    /// destroyed here and then again by the forced mirror below, with nothing ever preserved.
-    static func startSession(build: String) {
-        queue.async {
-            archivePreviousSession()   // must precede the remove — last chance to save the prior session
-            if let url = localURL { try? FileManager.default.removeItem(at: url) }
-            buffer.removeAll()
-        }
-        event("session", "=== Loop phone log START — build \(build) ===")
-        flush()
     }
 }
