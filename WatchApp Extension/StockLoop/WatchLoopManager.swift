@@ -238,7 +238,7 @@ final class WatchLoopManager {
     /// silenced — then the haptic is the ONLY confirmation and must stay.
     ///
     /// A closure, not a cast: this file works against the `PumpManager` protocol and does not
-    /// import OmnipodKit. Wired in StockLoopSession alongside reclaimPodForDose.
+    /// import OmnipodKit. Wired in StockLoopSession.
     var podBeepsOnManualBolusProbe: (() -> Bool)?
     var podBeepsOnManualBolus: Bool { podBeepsOnManualBolusProbe?() ?? false }
 
@@ -250,10 +250,6 @@ final class WatchLoopManager {
     }
 
 
-    /// Reclaim the orphaned pod before a dose, release after.
-    /// Forwarded to the enactor (automatic path); enactManualBolus uses them directly.
-    /// Wired by StockLoopSession to the loan controller (which owns the OmniPumpManager);
-    /// no-op / immediate-connected when the pod link is held continuously instead.
     /// Device-log storm dedupe (see logEventForDeviceIdentifier). Any thread may log.
     private let deviceLogThrottle = DeviceLogThrottle()
 
@@ -329,15 +325,6 @@ final class WatchLoopManager {
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: .manualBolusStateDidChange, object: nil)
         }
-    }
-
-    var reclaimPodForDose: ((@escaping (Bool) -> Void) -> Void)? {
-        get { doseEnactor.reclaimPodForDose }
-        set { doseEnactor.reclaimPodForDose = newValue }
-    }
-    var releasePodAfterDose: (() -> Void)? {
-        get { doseEnactor.releasePodAfterDose }
-        set { doseEnactor.releasePodAfterDose = newValue }
     }
 
     /// Per-session watch-local closed-loop opt-in. Each loan
@@ -588,27 +575,11 @@ final class WatchLoopManager {
     }
 
 
-    /// The temp basal the pod is running, as best the watch can know it — the live
-    /// `basalDeliveryState` while the pod is connected, otherwise the temp we last enacted
-    /// until its programmed end. The link is released between doses, so `basalDeliveryState`
-    /// goes nil within seconds even though the pod keeps delivering. Read on `dataAccessQueue`.
-    /// Hand-back half: is a LOOP temp still executing on the pod right now? The loan
-    /// controller needs this at hand-back and cannot ask `basalDeliveryState`, because the
-    /// link is orphaned by then and that state reads nil — which is exactly why the
-    /// DESIGN-5 cancel in finalizeHandback had been silently dead (no pod
-    /// command at all between "drain complete" and the release, at both hand-backs).
-    /// Thread-safe by hopping the data queue; nil when nothing is running.
-    func runningTempBasalForHandback() -> DoseEntry? {
-        return dataAccessQueue.sync { self.runningTempBasal() }
-    }
-
+    /// The temp the pod is running, from the driver's own persisted state (E-1:
+    /// basalDeliveryState derives from podState.unfinalizedTempBasal — no BLE dependency).
+    /// Nil when nothing is running or there is no pump.
     func runningTempBasal() -> DoseEntry? {
-        if case .some(.tempBasal(let dose)) = pumpManager?.status.basalDeliveryState {
-            return dose
-        }
-        if let cached = cachedEnactedTempBasal, cached.endDate > now() {
-            return cached
-        }
+        if case .some(.tempBasal(let dose)) = pumpManager?.status.basalDeliveryState { return dose }
         return nil
     }
 
@@ -975,17 +946,8 @@ final class WatchLoopManager {
         self.settingsProvider = WatchSettingsProvider(settings: settings)
         self.overrideHistory = overrideHistory
         self.settings = settings
-        // Cache each accepted temp so runningTempBasal() can report what the pod is
-        // running while the link is orphaned (basalDeliveryState is nil then). Built here so the
-        // DoseEntry uses this manager's testable clock; the cache is dataAccessQueue-isolated.
         // Shadow ledger: enactor-accepted doses flow into the session timeline.
         doseEnactor.ledgerRecord = { [weak self] dose in self?.ledgerRecordEnact(dose) }
-        doseEnactor.onTempBasalEnacted = { [weak self] unitsPerHour, duration in
-            guard let self = self else { return }
-            let start = self.now()
-            let enacted = DoseEntry(type: .tempBasal, startDate: start, endDate: start.addingTimeInterval(duration), value: unitsPerHour, unit: .unitsPerHour, decisionId: nil)
-            self.dataAccessQueue.async { self.cachedEnactedTempBasal = enacted }
-        }
         #if !targetEnvironment(simulator)
         // Phone-BG fallback. Every phone context update, during a loan, mirror the phone's
         // relayed CGM into the DOSING store (device only; the simulator drives it via the
@@ -1300,11 +1262,6 @@ final class WatchLoopManager {
         if (_lastPumpDataDate ?? .distantPast) < date { _lastPumpDataDate = date }
     }
 
-    /// The temp basal we last successfully enacted, cached so the watch knows what the
-    /// pod is running without querying it. The pod link is orphaned after each dose, so
-    /// `pumpManager.status.basalDeliveryState` reverts to nil within seconds even though the
-    /// pod keeps delivering the accepted temp for its full programmed duration. dataAccessQueue.
-    private var cachedEnactedTempBasal: DoseEntry?
     private var retrospectiveGlucoseEffect: [GlucoseEffect] = []
 
     /// Mirrors LoopDataManager's buffer multiplier for combining retrospective discrepancies.
@@ -1541,27 +1498,10 @@ final class WatchLoopManager {
     // MARK: - Loop cycle (mirrors loop()/loopInternal())
 
     /// One loop cycle: refresh effects, gate, predict, recommend, enact (via the seam).
-    /// Triggered by new CGM data exactly as the phone's DeviceDataManager does; safe to call
-    /// from any queue.
-    /// Mirrors the phone's `DeviceDataManager.checkPumpDataAndLoop()` (:563): assert
-    /// current pump data BEFORE looping, so the cycle's `pumpDataTooOld` gate (:655;
-    /// phone LoopDataManager:1257) sees fresh state. **The port dropped this call
-    /// entirely** — the watch never called `ensureCurrentPumpData`, so nothing kept
-    /// `doseStore.lastAddedPumpData` current. On the phone that call is exactly what
-    /// does: the DRIVER decides staleness (`OmniPumpManager.ensureCurrentPumpData`
-    /// :2468 checks `state.isPumpDataStale`) and fetches pod status only when needed,
-    /// so we inherit stock's threshold rather than inventing one.
-    ///
-    /// Without it every closed-loop cycle dies on `pumpDataTooOld` dated at the last pod
-    /// contact: the pod link is orphaned between doses, so status only refreshes when we
-    /// dose, and the loop won't dose without fresh status — a permanent deadlock after
-    /// 15 minutes.
-    ///
-    /// The one necessary deviation: a status fetch needs the BLE link
-    /// back, so reclaim → assert → loop → release. Skipped while our own view of the
-    /// data is still fresh, because a reclaim costs pod contact that stock
-    /// never pays. When the link is held continuously the reclaim closure returns
-    /// immediately and this collapses to the stock call.
+    /// Mirrors the phone's `DeviceDataManager.checkPumpDataAndLoop()`: assert current pump data
+    /// BEFORE looping. The DRIVER decides staleness (`OmniPumpManager.ensureCurrentPumpData`
+    /// checks `state.isPumpDataStale`, 6 min) and dials on demand for the status read when it is;
+    /// the watch adds nothing — no reclaim, no cadence override, no release.
     /// OBS-8: latched so the no-pod state logs once per transition, not once per reading.
     private var loggedIdleNoPump = false
 
@@ -1587,44 +1527,10 @@ final class WatchLoopManager {
             return
         }
         loggedIdleNoPump = false
-
-        let assertThenLoop: (@escaping () -> Void) -> Void = { done in
-            pumpManager.ensureCurrentPumpData { _ in
-                self.loop()
-                done()
-            }
-        }
-
-        let age = now().timeIntervalSince(lastPumpDataDate ?? .distantPast)   // Owned stamp
-        // WARM CADENCE (157, E5 parity). E5's overnight proof — 84/84 reclaims, 2-4 reads
-        // each — touched the pod EVERY cycle (an enact every reading). This threshold was
-        // inputDataRecencyInterval/2 (7.5 min), so any quiet cycle (NO CHANGE verdict, data
-        // ~5 min old) skipped pod contact entirely and the next reclaim faced a 10-min-cold
-        // pod — the regime where the bare re-connect goes coin-flip (field 2026-07-22:
-        // every reclaim failure followed a contact gap ≥ ~8 min; every ≤5-min-cadence run
-        // was clean). Refresh whenever data is older than ~4 min = one status read per
-        // cycle = exactly the cadence E5 proved all night. Recovery from a genuinely
-        // missed cycle is the scan escalation's job; this keeps the miss from happening.
-        guard age > .minutes(4),
-              let reclaim = reclaimPodForDose else {
-            // The hold sits at the CYCLE level, on both entries: the dose is computed after the
-            // window opens and the enactor then sees an open window and a prompt reclaim. (Her
-            // 173 tangle: gating inside the reclaim closure let the enactor's wait time out —
-            // "automatic dose SKIPPED" every cycle.) Outside the extended phase this is a
-            // synchronous pass-through and the cycle is byte-identical to today.
-            afterPodRadioHold("dose cycle") { assertThenLoop({}) }
-            return
-        }
-
-        SportLog.event("loan", String(format: "pump data %.0f min old — reclaiming pod to refresh status before the cycle", age / 60))
-        // This reclaim fires ~100ms after reading arrival — while un-adopted
-        // that is the exact moment the D2W ride appears, and the pod scan kills the G7
-        // connect. Hold the pod radio until the ride resolves.
-        // Steady state (fresh direct G7) passes straight through.
-        afterPodRadioHold("pump-data refresh") {
-            self.deferPodRadioWhileG7AcquisitionResolves {
-                self.reclaimForRefresh(reclaim, assertThenLoop: assertThenLoop)
-            }
+        // The extended-phase pod hold sits at the CYCLE level (PodRadioHold.swift); outside the
+        // sensor's extended phase this is a synchronous pass-through.
+        afterPodRadioHold("dose cycle") {
+            pumpManager.ensureCurrentPumpData { _ in self.loop() }
         }
     }
 
@@ -1651,65 +1557,6 @@ final class WatchLoopManager {
         }
         SportLog.event("hold", String(format: "%@ released after %.1fs%@", what, elapsed, elapsed >= 100 ? " (ceiling)" : ""))
         block()
-    }
-
-    private func reclaimForRefresh(_ reclaim: (@escaping (Bool) -> Void) -> Void, assertThenLoop: @escaping (@escaping () -> Void) -> Void) {
-        reclaim { ok in
-            if !ok {
-                SportLog.event("loan", "pump-data refresh: pod didn't reconnect — cycle will still gate on stale pump data")
-            }
-            assertThenLoop {
-                // Radio back to the G7. The +12s settle comfortably outlasts a
-                // same-cycle enact, whose own reclaim is a no-op because the link
-                // is already up.
-                self.releasePodAfterDose?()
-            }
-        }
-    }
-
-    /// The fragile phase is G7 CONNECT/AUTH ESTABLISHMENT, ~1.5 s straddling the grid point. An
-    /// ESTABLISHED link coexists with pod traffic perfectly well — backfill and live reads land
-    /// during pod handshakes — and the forensics say the same from the pod's side. So the
-    /// gate keys on live acquisition state, not the clock:
-    ///
-    /// - Direct G7 fresh (< 6.5 min): the read that triggered this cycle already completed —
-    ///   proceed immediately. Steady state pays nothing.
-    /// - Otherwise hold the pod radio until: a direct read LANDS (ride succeeded), or the G7
-    ///   falls idle (no pending connect + no ride signal for 3s — checked only after a 2.5s
-    ///   minimum hold, because the ride can announce up to ~1s AFTER the relay reading that
-    ///   triggered us: ad at :48.197 vs INGEST at :48.050), or 20s timeout.
-    ///
-    /// Worst case: the cycle's pod work starts 20s late and the dose enacts 20s late —
-    /// clinically nil. A lost ride costs the session's entire direct-G7 coverage.
-    private func deferPodRadioWhileG7AcquisitionResolves(_ proceed: @escaping () -> Void) {
-        let directAge = lastGlucoseSourceStamps.direct.map { self.now().timeIntervalSince($0) }
-        if let age = directAge, age < .minutes(6.5) {
-            proceed()
-            return
-        }
-        let start = self.now()
-        SportLog.event("loan", "acquisition gate: direct G7 not fresh (\(directAge.map { "\(Int($0))s ago" } ?? "never")) — holding pod radio for the G7 ride")
-        func poll() {
-            let elapsed = self.now().timeIntervalSince(start)
-            if let d = self.lastGlucoseSourceStamps.direct, d > start {
-                SportLog.event("loan", String(format: "acquisition gate: released after %.1fs — direct read LANDED", elapsed))
-                proceed(); return
-            }
-            let pendingSince = G7RadioCensus.connectPendingSince
-            let rideAge = G7RadioCensus.lastRideSignalAt.map { self.now().timeIntervalSince($0) }
-            if elapsed >= 2.5, pendingSince == nil, (rideAge ?? .infinity) > 3 {
-                SportLog.event("loan", String(format: "acquisition gate: released after %.1fs — G7 idle, no ride in sight", elapsed))
-                proceed(); return
-            }
-            if elapsed >= 20 {
-                SportLog.event("loan", String(format: "acquisition gate: TIMEOUT after %.1fs — proceeding (connectPending=%@ · lastRideSignal %@)",
-                                              elapsed, pendingSince == nil ? "no" : "yes",
-                                              rideAge.map { String(format: "%.1fs ago", $0) } ?? "never"))
-                proceed(); return
-            }
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.5) { poll() }
-        }
-        DispatchQueue.global(qos: .userInitiated).async { poll() }
     }
 
     func loop() {
@@ -2524,13 +2371,12 @@ final class WatchLoopManager {
                 return
             }
             let rounded = pumpManager.roundToSupportedBolusVolume(units: units)
-            // The delivery itself, factored so it can run after a pod reclaim.
+            // The delivery itself, factored so it can run once the pod-radio hold opens.
             let deliverBolus = {
                 SportLog.event("loan", String(format: "MANUAL BOLUS %.2f U — enacting on the watch pump", rounded))
                 let eventID = self.doseEnactor.loanRecorder?.loanWillEnactBolus(units: rounded)
                 pumpManager.enactBolus(decisionId: nil, units: rounded, activationType: activationType) { error in
                     self.doseEnactor.loanRecorder?.loanDidEnact(eventID: eventID, error: error)
-                    self.releasePodAfterDose?()   // Re-release the pod after the bolus
                     if let error = error {
                         SportLog.event("loan", "MANUAL BOLUS FAILED — \(String(describing: error))")
                     } else {
@@ -2559,50 +2405,11 @@ final class WatchLoopManager {
                 }
             }
             self.setManualBolusInFlight(true, units: rounded)
-            // The pod link is orphaned so the G7 can use the radio — reclaim it before the
-            // bolus. User is PRESENT, so a few seconds' reconnect is fine; on failure FAIL
-            // LOUDLY (never a silent no-bolus). No-op immediate when the link is already held.
             // In the sensor's extended phase the bolus waits out the tail hold first (≤40 s,
-            // only in the first ~2 windows after the phone leaves) — a bolus tapped into the
-            // tail is exactly the collision the hold exists for. Synchronous otherwise.
+            // only in the first ~2 windows after the phone leaves); synchronous otherwise. The
+            // enact's own session dials the pod. deliverBolus expects dataAccessQueue.
             self.afterPodRadioHold("manual bolus") {
-            if let reclaim = self.reclaimPodForDose {
-                reclaim { ok in
-                    if ok {
-                        // ROOT CAUSE of a crown-tap deadlock: this completion runs ON the loan
-                        // controller's serial queue (reclaimPodForDose wraps every path in
-                        // queue.async, including the still-connected short-circuit), and
-                        // deliverBolus → loanWillEnactBolus → mintIntent does queue.sync
-                        // onto that SAME queue — a guaranteed libdispatch trap, before
-                        // enactBolus is ever issued (apparent success at the crown, crash
-                        // 0-40s later, NO insulin delivered). The automatic enactor never
-                        // hits this because it re-enters from its own dosingQueue — mirror
-                        // that discipline: hop off the loan queue before delivering.
-                        // (.async is load-bearing: when the pod link is held rather than
-                        // orphaned, the reclaim closure completes SYNCHRONOUSLY on
-                        // dataAccessQueue — a .sync hop would deadlock on itself.)
-                        let hopStart = self.now()
-                        self.dataAccessQueue.async {
-                            // Visibility: a manual bolus queued behind a full automatic
-                            // enact (updateGroup.wait holds this queue ~15-45s) is loud
-                            // in the log, not a silent delay (adversarial review).
-                            let waited = self.now().timeIntervalSince(hopStart)
-                            if waited > 2.0 {
-                                SportLog.event("loan", String(format: "MANUAL BOLUS queued %.0fs behind the dosing queue (automatic cycle in flight)", waited))
-                            }
-                            deliverBolus()
-                        }
-                    } else {
-                        self.releasePodAfterDose?()
-                        SportLog.event("loan", "MANUAL BOLUS FAILED — the pod did not reconnect in time. If Sport Mode was just ended, the hand-back cancelled it (see the E4 reclaim ABORTED line above) — that is NOT a pod fault.")
-                        self.setManualBolusInFlight(false)
-                        DispatchQueue.main.async { completion(WatchLoopError.pumpManagerUnconnected) }
-                    }
-                }
-            } else {
-                // Held path may arrive here off dataAccessQueue; deliverBolus expects it.
                 self.dataAccessQueue.async { deliverBolus() }
-            }
             }
         }
     }
@@ -2780,9 +2587,9 @@ final class WatchLoopManager {
         // the answer came back negative, repeatedly.
         //
         // What survived it, and must NOT be mistaken for this: contention is real during
-        // CONNECT ESTABLISHMENT, which is why `deferPodRadioWhileG7AcquisitionResolves`
-        // exists. An ESTABLISHED G7 link coexists with pod traffic (the 263 census); an
-        // in-flight acquisition does not. Removing the stress tool does not weaken that gate.
+        // CONNECT ESTABLISHMENT — the extended-phase pod hold (PodRadioHold.swift) is what
+        // guards it now. An ESTABLISHED G7 link coexists with pod traffic (the 263 census); an
+        // in-flight acquisition does not. Removing the stress tool does not weaken that hold.
         //
         // In git: the tool, its jitter alternator, and its debug toggle are at 37d7219d.
         doseEnactor.enact(recommendation: recommendedDose.recommendation, with: pumpManager) { error in

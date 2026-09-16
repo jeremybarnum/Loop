@@ -618,7 +618,7 @@ struct LogView: View {
 //   - "Alarm scan (C00A)" was one OmnipodKit key nobody had flipped in weeks, and it stays
 //     at its shipped default (the key is still read at use, so a shell default still works);
 //   - the reclaim exerciser answered the reclaim-cadence question months ago.
-// The PLUMBING is untouched — `loanController.benchReclaimStart/Stop` and
-// `connectionDiagnostics()` are all still there — so a bench drill is one small view away.
+// The `connectionDiagnostics()` plumbing is untouched, so a bench drill is one small view away
+// (the reclaim exerciser itself went with the reclaim ladder).
 // What replaced it: the actions that are actually used, on the main screen, named for a
 // reader who is not us.
