@@ -313,22 +313,8 @@ final class LoopDataManager: ObservableObject {
 
             if !enabled {
                 temporaryPresetsManager.endPreMealOverride()
-                // PODLOAN (ruled 2026-08-29): a LOAN-driven pause must NOT cancel the temp.
-                // R33/R2: no automatic program crosses the loan boundary — the WATCH asserts
-                // its own program at takeover, and the PHONE enforces the boundary at reclaim
-                // (the R33 cancel). This stock cancel raced the pod-BLE release at every
-                // grant, usually failed against the just-released pod, and — because stock's
-                // cancelActiveTempBasal never disarms the crash marker on a thrown enact —
-                // stranded CrashRecoveryManager's in-flight marker for the whole loan: any
-                // relaunch mid-loan (power-off, TestFlight update) then showed a false
-                // "Loop Crashed" dialog. The capture key is written by the pause wiring
-                // BEFORE dosingEnabled mutates, so it is visible when this sink fires.
-                if UserDefaults.standard.object(forKey: WatchDataManager.dosingCaptureKey) != nil {
-                    self?.logger.default("Automation-off temp cancel SKIPPED — pod-loan pause; the temp is the watch's to manage (R33)")
-                } else {
-                    Task {
-                        try? await self?.cancelActiveTempBasal(for: .automaticDosingDisabled)
-                    }
+                Task {
+                    try? await self?.cancelActiveTempBasal(for: .automaticDosingDisabled)
                 }
             }
         }
@@ -829,7 +815,9 @@ final class LoopDataManager: ObservableObject {
 
                 dosingDecision.updateFrom(input: input, output: output)
 
-                if self.settingsProvider.dosingEnabled {
+                // PODLOAN: while the pod is lent to the watch the phone computes but never enacts;
+                // the user's dosingEnabled is untouched, so nothing has to be restored at reclaim.
+                if self.settingsProvider.dosingEnabled, !isPumpConnectionReleased() {
                     if deliveryDelegate.basalDeliveryState == .pumpInoperable {
                         throw LoopError.pumpInoperable
                     }
