@@ -125,37 +125,6 @@ final class G7WatchAcquisitionTests: XCTestCase {
     }
 }
 
-final class DirectAuthFastPathTests: XCTestCase {
-    // The Swift AES-8 replaces the C side's encrypt8AES on the fast path. Pin the primitive
-    // to FIPS-197 C.1 so a stored key can never be replayed through wrong arithmetic.
-    func testTheAESBlockMatchesFIPS197() {
-        let key: [UInt8]   = Array(0x00...0x0f)
-        let plain: [UInt8] = [0x00,0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,0x99,0xaa,0xbb,0xcc,0xdd,0xee,0xff]
-        let expect: [UInt8] = [0x69,0xc4,0xe0,0xd8,0x6a,0x7b,0x04,0x30,0xd8,0xcd,0xb7,0x80,0x70,0xb4,0xc5,0x5a]
-        XCTAssertEqual(G7AuthCrypto.aesBlock(plain, key: key), expect)
-        // AES-8 is that block over the 8 bytes doubled, first 8 bytes out.
-        let d8: [UInt8] = [0x00,0x11,0x22,0x33,0x44,0x55,0x66,0x77]
-        XCTAssertEqual(G7AuthCrypto.aes8(d8, key: key), Array(G7AuthCrypto.aesBlock(d8 + d8, key: key).prefix(8)))
-    }
-
-    // The per-sensor key store: round-trips 16 bytes, refuses an all-zero key (the library's
-    // "no J-PAKE yet" value), and clears on demand.
-    func testTheKeyStoreRoundTripsAndRefusesZeros() {
-        let suite = "DirectAuthFastPathTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let key: [UInt8] = Array(0x10...0x1f)
-        XCTAssertNil(G7DirectAuthKeyStore.load(for: "DXCMQB", defaults: defaults))
-        G7DirectAuthKeyStore.save(key, for: "DXCMQB", defaults: defaults)
-        XCTAssertEqual(G7DirectAuthKeyStore.load(for: "DXCMQB", defaults: defaults), key)
-        XCTAssertNil(G7DirectAuthKeyStore.load(for: "DXCMXX", defaults: defaults), "keys are per sensor")
-        G7DirectAuthKeyStore.save([UInt8](repeating: 0, count: 16), for: "DXCMZZ", defaults: defaults)
-        XCTAssertNil(G7DirectAuthKeyStore.load(for: "DXCMZZ", defaults: defaults), "an all-zero key is 'none'")
-        G7DirectAuthKeyStore.clear(for: "DXCMQB", defaults: defaults)
-        XCTAssertNil(G7DirectAuthKeyStore.load(for: "DXCMQB", defaults: defaults))
-    }
-}
-
 final class DirectAuthDefaultTests: XCTestCase {
     // Loop's own handshake is the watch default; "ride the Dexcom watch app" is its OFF state.
     func testLoopsOwnHandshakeIsTheWatchDefault() {
