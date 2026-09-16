@@ -26,11 +26,11 @@ final class StockLoopSession {
     /// ladders at a loan's ends still do: an HKWorkoutSession is the only self-service API that
     /// keeps the process and its BLE links alive across a wrist drop.
     ///
-    /// Refcounted by reason ("soak", "takeover", "handback") so overlapping holds cannot end the
-    /// session early.
+    /// Refcounted by reason ("loanWorkout", "takeover", "handback") so overlapping holds cannot
+    /// end the session early.
     private let keepalive = WorkoutKeepalive()
 
-    /// Whole-loan workout session (the "soak" holder, which spans the loan and the CGM-only test):
+    /// Whole-loan workout session (the "loanWorkout" holder, which spans the loan):
     /// OFF by default since 2026-09-16 — the 2026-09-15 no-keepalive loan passed, so the app sleeps
     /// between bursts and the daemon-held sensor request carries each cycle inside the wake.
     /// "takeover" and "handback" keep their runtime regardless: they are user-present ladders at
@@ -41,9 +41,9 @@ final class StockLoopSession {
     static var loanWorkout: Bool { UserDefaults.standard.bool(forKey: loanWorkoutKey) }
 
     private func setKeepalive(_ holding: Bool, reason: String) {
-        if reason == "soak", !Self.loanWorkout {
-            SportLog.event("keepalive", "soak holder \(holding ? "not held" : "release ignored") — no workout session during loans (Diagnostics ▸ Pod loan); the app sleeps between bursts")
-            keepalive.release(reason)   // never leave a stale soak holder behind if the toggle flipped mid-loan
+        if reason == "loanWorkout", !Self.loanWorkout {
+            SportLog.event("keepalive", "loan workout holder \(holding ? "not held" : "release ignored") — no workout session during loans (Diagnostics ▸ Pod loan); the app sleeps between bursts")
+            keepalive.release(reason)   // never leave a stale holder behind if the toggle flipped mid-loan
             return
         }
         holding ? keepalive.acquire(reason) : keepalive.release(reason)
@@ -191,7 +191,7 @@ final class StockLoopSession {
                 // The wrist inherits the phone's loop mode from the grant.
                 // Deliberately NOT re-asserted here: this also fires on the
                 // hand-back-timeout resume path, where the user's own choice must survive.
-                self.setKeepalive(true, reason: "soak")
+                self.setKeepalive(true, reason: "loanWorkout")
                 // Loop-Failure ladder (stock parity): every live cycle re-defers all four rungs.
                 LoopStallWatchdog.refresh()
                 SportLog.event("deadman", "ladder ARMED — 20/40m timeSensitive + 1/2h critical rungs [deadman]")
@@ -205,7 +205,7 @@ final class StockLoopSession {
                 RuntimeStateLog.startHeartbeat()
             } else {
                 os_log("Loan ended: stopping G7 transport", log: self.log, type: .default)
-                self.setKeepalive(false, reason: "soak")
+                self.setKeepalive(false, reason: "loanWorkout")
                 LoopStallWatchdog.disarm()   // clean end — the phone's ladder re-arms at reclaim
                 SportLog.event("deadman", "ladder CLEARED — loan ended, coverage transfers to the phone [deadman]")
                 self.stopLogPulse()
@@ -312,30 +312,6 @@ final class StockLoopSession {
         logPulse = nil
     }
 
-    // MARK: Standalone-G7 diagnostic mode
-    // Runs the G7 soak with no pod loan and no dosing, so the G7 is the only BLE connection the
-    // watch holds. Isolates whether holding the pod link starves G7 connects under watchOS's
-    // per-app BLE budget. Bench-only and firewalled: takes no pod, enacts nothing, arms no
-    // dosing dead-mans.
-    private(set) var standaloneG7TestActive = false
-
-    func startStandaloneG7Test() {
-        guard !standaloneG7TestActive, !loanController.isLoanActive else { return }
-        standaloneG7TestActive = true
-        let build = BuildDetails.default.codeIdentity
-        SportLog.event("standalone", "=== STANDALONE G7 TEST START (E1, build \(build)) — no pod loan, no dosing — bench diagnostic ===")
-        setKeepalive(true, reason: "soak")
-        startLogPulse()   // flush every 5 min for an unattended multi-hour run
-    }
-
-    func stopStandaloneG7Test() {
-        guard standaloneG7TestActive else { return }
-        standaloneG7TestActive = false
-        SportLog.event("standalone", "=== STANDALONE G7 TEST STOP ===")
-        setKeepalive(false, reason: "soak")
-        stopLogPulse()
-        sendLogSnapshot("standalone test end")
-    }
 
     /// Route a WC userInfo payload. Returns true when it was a v2 protocol message
     /// (consumed here); false lets the stock dispatch continue.

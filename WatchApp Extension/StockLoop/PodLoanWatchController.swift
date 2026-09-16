@@ -1490,7 +1490,7 @@ final class PodLoanWatchController {
                     // A stalled ladder usually means watchOS suspended the app mid-connect, not
                     // that the pod is unreachable — so the message must not send the user to the
                     // pod. `.takingOver` holds runtime through `onTakeoverRadioHold`
-                    // (StockLoopSession.swift), the same WorkoutKeepalive soak and hand-back use,
+                    // (StockLoopSession.swift), the same WorkoutKeepalive the loan workout and hand-back use,
                     // so this gap should only open if the keepalive itself failed to start or
                     // renew (HK auth denied, session error).
                     //

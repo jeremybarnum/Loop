@@ -125,14 +125,6 @@ final class G7WatchAcquisitionTests: XCTestCase {
     }
 }
 
-final class DirectAuthDefaultTests: XCTestCase {
-    // Loop's own handshake is the watch default; "ride the Dexcom watch app" is its OFF state.
-    func testLoopsOwnHandshakeIsTheWatchDefault() {
-        UserDefaults.standard.removeObject(forKey: G7DirectAuth.key)
-        XCTAssertTrue(G7DirectAuth.enabled)
-    }
-}
-
 final class LoanWorkoutTests: XCTestCase {
     // The whole-loan workout session is opt-in: the 2026-09-15 no-keepalive loan passed.
     func testTheLoanWorkoutSessionStaysOff() {

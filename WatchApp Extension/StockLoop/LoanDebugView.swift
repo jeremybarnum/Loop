@@ -59,9 +59,6 @@ struct LoanDebugView: View {
     @State private var dosing: WatchLoopManager.GlanceData?
     @State private var cobText: String = "—"
 
-    /// Authentication — Loop's own J-PAKE handshake (ON, the watch default since 2026-09-13) or
-    /// riding the Dexcom watch app (OFF). Must match the kit's default (G7DirectAuth.enabled).
-    @AppStorage("G7Lab.directAuth") private var directAuth = true
     /// How the next request reaches the daemon after each reading — see G7WatchAcquisition.relodge.
     /// `holdApp` is the proven arm (33/33); `peteDelay` is Pete's formula (measured 1 in 4).
     @AppStorage("G7Lab.relodge") private var relodge = "holdApp"
@@ -118,7 +115,7 @@ struct LoanDebugView: View {
 
                 Text("POD LOAN").font(.footnote).foregroundColor(.secondary)
 
-                // The whole-loan workout session (the "soak" holder) is OFF by default: the
+                // The whole-loan workout session (the "loanWorkout" holder) is OFF by default: the
                 // 2026-09-15 no-keepalive loan passed — the app sleeps between bursts and the
                 // daemon-held sensor request carries each cycle inside the wake. Takeover and
                 // hand-back keep their own runtime holds either way. Read at the next loan start
@@ -187,31 +184,11 @@ struct LoanDebugView: View {
                 // released = adoption within 7-10 min, twice for two.
 
                 // SENSOR — the two choices that still support a live debate (authentication, and
-                // how the next request reaches the daemon) and the one
-                // action. Everything settled or failed came off this page on 2026-09-16.
+                // how the next request reaches the daemon) and the one action. Everything
+                // settled or failed came off this page on 2026-09-16.
                 Text("SENSOR").font(.footnote).foregroundColor(.secondary)
 
-                // AUTHENTICATION. Loop's own J-PAKE handshake reads the sensor with no Dexcom watch
-                // app (production since 2026-09-13; needs the sensor's pairing code, entered once per
-                // sensor in Loop ▸ Dexcom G7 on the phone). "Ride" is the OFF state: the arm still
-                // lodges a request but starts no handshake, and the stock passive observer reads
-                // whatever the Dexcom watch app authenticates.
-                Picker("Authentication", selection: $directAuth) {
-                    Text("Loop's own handshake").tag(true)
-                    Text("Ride the Dexcom watch app").tag(false)
-                }
-                .pickerStyle(.navigationLink)
-                .font(.caption2)
-                .onChange(of: directAuth) { _, on in
-                    SportLog.event("lab", "authentication = \(on ? "Loop's own handshake (next connect)" : "ride the Dexcom watch app — no handshake of ours")")
-                    lastAction = "authentication → \(on ? "Loop's own" : "ride Dexcom")"
-                    ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager.applyWatchDirectReadSetting()
-                }
-                if !directAuth {
-                    Text("riding the Dexcom watch app — the watch reads only what Dexcom authenticates")
-                        .font(.caption2).foregroundColor(.orange)
-                }
-                if let needs = G7DirectAuth.needsCodeFor {
+                if let needs = G7WatchDirectRead.needsCodeFor {
                     // The connect reached a sensor we have no pairing code for. The code lives in
                     // the Dexcom app; it is entered once per sensor in Loop ▸ Dexcom G7 on the phone.
                     Text("Sensor code needed for \(needs) — enter it in Loop ▸ Dexcom G7 on the phone (shown in the Dexcom app).")
@@ -254,26 +231,6 @@ struct LoanDebugView: View {
                 // flow adopting the new identity; left on the page it threw away adoption and
                 // put a scan on the air in whatever phase the sensor was in.
 
-                // E1 kept by request, but not under that name: "E1" means nothing to a reader
-                // who has not read the investigation. What it DOES is run our G7 client with no
-                // pod loan, no pod central and no dosing — the only way to ask "is this the CGM
-                // or is this Loop?" and get an unambiguous answer. Refuses to start over a live
-                // loan.
-                if let session = session {
-                    Button(session.standaloneG7TestActive
-                           ? "Stop CGM-only test"
-                           : "CGM-only test (no pod, no dosing)") {
-                        if session.standaloneG7TestActive {
-                            session.stopStandaloneG7Test()
-                            lastAction = "CGM-only test stopped"
-                        } else {
-                            session.startStandaloneG7Test()
-                            lastAction = session.standaloneG7TestActive
-                                ? "CGM-only test running (E1)"
-                                : "blocked — end the loan first"
-                        }
-                    }
-                }
 
                 // The pod hold's current mode, so a deferred cycle on this screen is legible
                 // rather than looking like a stall.
