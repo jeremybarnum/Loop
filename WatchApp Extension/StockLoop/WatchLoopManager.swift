@@ -57,12 +57,6 @@ enum WatchLoopError: Error {
     /// every failed enact would produce NO cycle verdict at all — a loop that looks silent
     /// rather than broken.
     case enactFailed(String)
-    /// Glucose data is too old to dose from (`LoopError.glucoseTooOld`).
-    case glucoseTooOld(date: Date)
-    /// Glucose data is in the future (`LoopError.invalidFutureGlucose`).
-    case invalidFutureGlucose(date: Date)
-    /// Pump data is too old to dose from (`LoopError.pumpDataTooOld`).
-    case pumpDataTooOld(date: Date)
     /// The recommendation aged out before enactment (`LoopError.recommendationExpired`).
     case recommendationExpired(date: Date)
     /// Delivery is suspended (`LoopError.pumpSuspended`).
@@ -84,12 +78,6 @@ extension WatchLoopError: LocalizedError {
             // Say what is actually wrong: the loop decided, the POD did not take it. The old
             // wrapping as missingDataError told the user "Missing data: podNotConnected".
             return String(format: NSLocalizedString("The pod did not accept the dose: %@", comment: "Watch loop error (1: pump error)"), why)
-        case .glucoseTooOld:
-            return NSLocalizedString("Glucose is too old to dose from.", comment: "Watch loop error")
-        case .invalidFutureGlucose:
-            return NSLocalizedString("Glucose timestamp is in the future.", comment: "Watch loop error")
-        case .pumpDataTooOld:
-            return NSLocalizedString("Pump data is too old to dose from.", comment: "Watch loop error")
         case .recommendationExpired:
             return NSLocalizedString("The recommendation expired before enacting.", comment: "Watch loop error")
         case .pumpSuspended:
@@ -1203,8 +1191,6 @@ final class WatchLoopManager {
         if (_lastPumpDataDate ?? .distantPast) < date { _lastPumpDataDate = date }
     }
 
-    private var retrospectiveGlucoseEffect: [GlucoseEffect] = []
-
     /// Mirrors LoopDataManager's buffer multiplier for combining retrospective discrepancies.
 
     /// Selected from the loan grant so the watch runs the SAME implementation the phone
@@ -1369,8 +1355,8 @@ final class WatchLoopManager {
     /// insulin action as positive discrepancy, inflating RC.
     ///
     /// MUST be called on `dataAccessQueue`, INLINE with the mutation that dirties the ledger:
-    /// hopping through `invalidateInsulinEffect()` would enqueue a second block on this serial
-    /// queue that could land after the next cycle has already read the stale array.
+    /// a separately enqueued block on this serial queue could land after the next cycle has
+    /// already read the stale array.
     private func clearCachedInsulinEffects() {   // dataAccessQueue
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
         // Nothing to clear: the algorithm holds no effects between cycles, so the next run
@@ -1811,20 +1797,6 @@ final class WatchLoopManager {
             iobCol, cobCol,
             e?.momentum.count ?? 0, snap.momentumPointCount,
             e?.retrospectiveGlucoseDiscrepancies.count ?? 0, snap.rcDiscrepancyCount))
-    }
-
-    private func emitIOBDiff(anchors: (phone: Double?, phoneDate: Date?, seed: Double, at: Date), cycle1: Double?) {
-        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-        let leg1 = anchors.phone.map { String(format: "%+.2f", anchors.seed - $0) } ?? "—"
-        let leg2 = cycle1.map { String(format: "%+.2f", $0 - anchors.seed) } ?? "—"
-        let dt = now().timeIntervalSince(anchors.at)
-        let phoneAge = anchors.phoneDate.map { String(format: "%.0f", now().timeIntervalSince($0)) } ?? "—"
-        let lastPumpAge = lastPumpDataDate.map { String(format: "%.0fs", now().timeIntervalSince($0)) } ?? "nil"   // Owned stamp; lastReconAge dropped with the store book
-        SportLog.event("iob-diff", String(format:
-            "phoneIOB=%@ seedIOB=%.2f cycle1=%@ · Δ(seed−phone)=%@[wire] · Δ(cycle1−seed)=%@[reconcile] · dt(seed→cycle1)=%.0fs · phoneIOBAge=%@s · lastPumpAge=%@",
-            anchors.phone.map { String(format: "%.2f", $0) } ?? "—", anchors.seed,
-            cycle1.map { String(format: "%.2f", $0) } ?? "—",
-            leg1, leg2, dt, phoneAge, lastPumpAge))
     }
 
     /// INSTRUMENTATION ONLY: per-dose IOB decomposition at a labeled instant (SEED-IN vs
@@ -2358,50 +2330,6 @@ final class WatchLoopManager {
     /// Loan-time carb entry: lands in the WATCH's carb store so THIS loop's COB and
     /// dosing see it immediately (stores are isolated, HealthKit off; the phone still
     /// receives the stock relay as the durable record).
-    /// Force the next cycle to recompute carbEffect. Used after seeding the phone's carbs
-    /// at grant: carbEffect is cached and updateCachedEffects only recomputes it when
-    /// nil, so without this the seeded COB would be ignored until the next CGM-triggered
-    /// invalidation. Deliberately does NOT force a loop() — takeover has no glucose yet; the
-    /// first reading-triggered cycle (within ~5 min) recomputes and doses.
-    func invalidateCarbEffect() {
-        // No-op by construction now — carb effects are computed inside each run from the
-        // entries then in the store, so a seeded entry is picked up by the next cycle without
-        // anything being dropped first.
-    }
-
-    /// IOB dedup (2026-07-22): after the grant wipe-then-seed rebuilds the insulin books,
-    /// drop the cached insulin effects so the next cycle recomputes from the clean store
-    /// instead of riding the pre-wipe curve (IOB itself refetches every cycle already).
-    func invalidateInsulinEffect() {
-        // No-op by construction now — see invalidateCarbEffect.
-    }
-
-    /// After the grant seeds ~3 h of glucose, drop the glucose-derived caches so the next cycle
-    /// recomputes momentum AND retrospective correction from the seeded history. Setting
-    /// insulinCounteractionEffects = [] cascades through its didSet (carbEffect = nil) and — via
-    /// the Fix-C carbEffect.didSet — nils retrospectiveGlucoseDiscrepancies too; we also clear
-    /// momentum and discrepancies directly so nothing rides a stale cold-start value. No forced
-    /// loop(): the first live glucose reading drives the first cycle (mirrors invalidateCarbEffect).
-    func invalidateGlucoseDerivedEffects() {
-        // No-op by construction now. This one is worth a note: the cold-start freeze it was
-        // written to break — momentum computed once against an empty store, retrospective
-        // correction stuck at an empty value for a whole loan — cannot happen to a function
-        // that keeps nothing between calls.
-    }
-
-    /// Prime the cached IOB AT takeover, from the seed's own IOB read, so the glance shows the
-    /// correct value immediately instead of stale/blank until the first loop cycle (~1 min later)
-    /// refreshes it. The seed populates the dose store but not this cache. `insulinOnBoard` feeds
-    /// the glance (glanceData), the stock HUD (publishHUDContext), and dosing — priming it fixes
-    /// all three consistently and single-sourced; the glance COB already reads its store live, so
-    /// this brings IOB to parity for glance consistency. The next cycle overwrites it with the
-    /// fully-reconciled value (e.g. after the first pod-status read trims the seeded open temp).
-    func primeInsulinOnBoard(_ value: InsulinValue?) {
-        // Show the seed's own IOB immediately rather than leaving the glance blank until the
-        // first cycle lands; the next run overwrites it with the reconciled value.
-        dataAccessQueue.async { self.activeInsulin = value?.value }
-    }
-
     /// The takeover SEED-IN anchor comes from the LEDGER (the store no longer holds
     /// doses). Completion reports the primed value for the [iob-diff] anchors + SEED-IN log.
     func primeIOBFromLedger(at date: Date, _ completion: @escaping (Double?) -> Void) {
@@ -2548,53 +2476,6 @@ final class WatchLoopManager {
 
         return enactError
     }
-
-    // MARK: - E5 bench concurrency driver
-
-    /// A random temp-basal generator: drives the full reclaim→enact→re-release
-    /// choreography with a genuine pod command on EVERY reading — pure BT-contention
-    /// testing, zero dependence on the prediction pipeline (debugged separately in
-    /// the sim, Track B). Gates: bench flag; loan pump present; loop OPEN — the
-    /// generator REPLACES the enactor path, never runs beside it. Rate: scheduled
-    /// basal + 0.05–0.50 U/hr random (a fresh value each cycle so the pod always
-    /// gets a real program command — identical-temp suppression lives in DoseMath,
-    /// which this bypasses), clamped to the granted max, 30-min duration so a
-    /// stalled session decays back to schedule. Doses journal through the same
-    /// loanRecorder hooks as real ones — they ARE real pod deliveries.
-    func e5FireRandomTempIfEnabled() {
-        guard defaults.bool(forKey: "g7.e5RandomTemp") else { return }
-        // +8s: field 2026-07-21 23:32 (144, first firing) — E5 fired 25ms after the
-        // VALUE, while the G7 link was still up (disconnect lands ~60ms post-value),
-        // so the radio arbiter deferred it EVERY cycle and E5 never dosed. The real
-        // loop's prediction pipeline adds enough latency to miss this race; E5 has
-        // no pipeline, so it must wait out the teardown explicitly. +8s also matches
-        // real-dose geometry (a temp lands seconds after the reading, not ms).
-        dataAccessQueue.asyncAfter(deadline: .now() + 8) {
-            guard !self._closedLoopEnabled else {
-                SportLog.event("e5", "E5 skipped — loop is CLOSED (generator never runs beside the real enactor)")
-                return
-            }
-            guard let pumpManager = self.pumpManager else { return }
-            guard let scheduled = self.settings.basalRateSchedule?.value(at: self.now()) else {
-                SportLog.event("e5", "E5 skipped — no basal schedule in granted settings (no-fabricated-defaults)")
-                return
-            }
-            var rate = scheduled + Double.random(in: 0.05...0.50)
-            if let cap = self.settings.maximumBasalRatePerHour { rate = min(rate, cap) }
-            rate = pumpManager.roundToSupportedBasalRate(unitsPerHour: rate)
-            let clock = DateFormatter(); clock.dateFormat = "HH:mm"
-            self.defaults.set(String(format: "%+.2f @ %@", rate, clock.string(from: self.now())), forKey: "g7.e5LastCmd")
-            SportLog.event("e5", String(format: "E5 random temp %.2f U/hr × 30 min (sched %.2f) — enacting", rate, scheduled))
-            let recommendation = AutomaticDoseRecommendation(basalAdjustment: TempBasalRecommendation(unitsPerHour: rate, duration: .minutes(30)), direction: .neutral)
-            self.doseEnactor.enact(recommendation: recommendation, with: pumpManager) { error in
-                if let error = error {
-                    SportLog.event("e5", "E5 enact FAILED — \(String(describing: error))")
-                } else {
-                    SportLog.event("e5", "E5 temp enacted OK — pod exchange complete")
-                }
-            }
-        }
-    }
 }
 
 // MARK: - Override telemetry helper
@@ -2647,11 +2528,6 @@ extension WatchLoopManager: CGMManagerDelegate {
                 // looping (DeviceDataManager.checkPumpDataAndLoop) — the port called
                 // loop() bare, which is what stranded the cycle on pumpDataTooOld.
                 self.checkPumpDataAndLoop()
-                // E5: same post-catch trigger geometry as a real dose —
-                // the command lands in the gap after this reading and contends with
-                // the NEXT window, exactly like production timing. No-op unless the
-                // bench flag is on.
-                self.e5FireRandomTempIfEnabled()
             }
             // Autonomous-iteration pipeline (Jeremy 2026-07-20): every reading
             // queues the log to the phone (throttled; queued transfers survive
@@ -2687,17 +2563,7 @@ extension WatchLoopManager: CGMManagerDelegate {
     private func processCGMReadingResult(_ manager: CGMManager, readingResult: CGMReadingResult, completion: @escaping () -> Void) {
         switch readingResult {
         case .newData(let rawValues):
-            // BENCH-ONLY: substitute scripted values AFTER a successful real read.
-            // Deliberately here and not upstream — the G7 connect/handshake already happened,
-            // so radio contention and pod-link timing stay genuine and a MISSED window stays
-            // missed. Everything downstream (store, momentum, prediction, DoseMath, the pod
-            // command) is real. No-op unless the bench flag is on.
-            let values: [NewGlucoseSample]
-            if FakeGlucose.isEnabled {
-                values = FakeGlucose.substitute(rawValues)
-            } else {
-                values = rawValues
-            }
+            let values = rawValues
             // The phone relay may already have filed this exact reading under its own name
             // tag. Same sensor stamp = same reading; first writer wins.
             dropAlreadyStored(values) { kept in

@@ -23,15 +23,15 @@ final class WatchAppTargetReachabilityTests: XCTestCase {
     /// Watch-only ERROR type: proves the module is linked and its internal types are visible.
     /// `WatchLoopError` lives in WatchLoopManager.swift, which no previous test could reach.
     func testWatchOnlyTypesAreVisibleToThisTarget() {
-        let toldTooOld = WatchLoopError.glucoseTooOld(date: Date())
-        XCTAssertFalse(toldTooOld.localizedDescription.isEmpty,
+        let expired = WatchLoopError.recommendationExpired(date: Date())
+        XCTAssertFalse(expired.localizedDescription.isEmpty,
                        "watch-only types resolve and carry their localized text")
 
         // Distinct cases must not collapse to the same message — the wrist shows these verbatim.
-        let future = WatchLoopError.invalidFutureGlucose(date: Date())
-        let pump = WatchLoopError.pumpDataTooOld(date: Date())
-        XCTAssertNotEqual(toldTooOld.localizedDescription, future.localizedDescription)
-        XCTAssertNotEqual(toldTooOld.localizedDescription, pump.localizedDescription)
+        let suspended = WatchLoopError.pumpSuspended
+        let unconnected = WatchLoopError.pumpManagerUnconnected
+        XCTAssertNotEqual(expired.localizedDescription, suspended.localizedDescription)
+        XCTAssertNotEqual(expired.localizedDescription, unconnected.localizedDescription)
     }
 
     /// The transport-channel tag. Watch-only, pure, and the thing that will make

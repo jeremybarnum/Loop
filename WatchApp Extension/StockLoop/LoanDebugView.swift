@@ -249,9 +249,7 @@ struct LoanDebugView: View {
                 // Fake BG sweep, random-temp) lived here through the
                 // diagnostics declutter. Releasing the pod link between doses is now the
                 // production default (StockLoopSession.init); the rest are one git revert
-                // away if a bench drill needs them again. Their plumbing (session methods,
-                // FakeGlucose, the flag reads) is intact — only the on-wrist toggles were
-                // removed.
+                // away if a bench drill needs them again.
 
                 NavigationLink("Logs") { LogView() }
                     .font(.caption)
@@ -451,15 +449,3 @@ struct LogView: View {
             .reversed().joined(separator: "\n")
     }
 }
-
-
-// RADIO LAB REMOVED 2026-09-08 (Jeremy: "we don't need the radio lab anymore").
-// Every question it existed to answer has been settled and the answers are hardcoded:
-//   - the G7 doorway toggles went in the 2026-08-25 settlement (now one acquisition arm, G7WatchAcquisition);
-//   - "Alarm scan (C00A)" was one OmnipodKit key nobody had flipped in weeks, and it stays
-//     at its shipped default (the key is still read at use, so a shell default still works);
-//   - the reclaim exerciser answered the reclaim-cadence question months ago.
-// The `connectionDiagnostics()` plumbing is untouched, so a bench drill is one small view away
-// (the reclaim exerciser itself went with the reclaim ladder).
-// What replaced it: the actions that are actually used, on the main screen, named for a
-// reader who is not us.
