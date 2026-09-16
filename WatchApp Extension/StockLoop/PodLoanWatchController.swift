@@ -1240,6 +1240,10 @@ final class PodLoanWatchController {
             SportLog.event("loan", String(format: "handle for pod %08X: %@", address,
                                           cachedHandle.map { "CACHED \($0) — skipping discovery" } ?? "none yet — will discover"))
         }
+        // The snapshot was serialized after the phone released the pod, so it says "released" —
+        // true there, not here. Left set, the driver's init-time disarm drops the handle it just
+        // armed (autoConnectIDs), and the poweredOn recovery then has nothing to recover.
+        rawState["podConnectionReleased"] = false
         guard let manager = OmniPumpManager(rawState: rawState) else {
             teardownPump()
             returnToRestingPhase()
@@ -1255,9 +1259,11 @@ final class PodLoanWatchController {
         ingestGrantHistory(grant)
         // Cross-device adoption: unless our own cached handle replaced the phone's above, scan for
         // the pod by its address and adopt the peripheral THIS watch discovers. With a cached
-        // handle nothing is armed — the driver's own connect-on-demand dials on the first read.
-        let scanning = manager.podLoanBeginTakeover()
-        SportLog.event("loan", "pump rebuilt — \(scanning ? "takeover armed" : "no pod address!")")
+        // handle nothing is armed — the driver's own connect-on-demand dials on the first read,
+        // and a handle that never connects is forgotten at the takeover verdict.
+        let discover = takeoverCachedHandle == nil
+        let armed = manager.podLoanBeginTakeover(discover: discover)
+        SportLog.event("loan", "pump rebuilt — \(armed ? (discover ? "takeover scan armed" : "cached handle — the first read dials") : "no pod address!")")
 
         // First pod status = the takeover proof (§2.3). The pod's BLE session takes
         // SECONDS to establish after construction (scan → connect → EAP-AKA), but a
