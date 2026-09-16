@@ -128,37 +128,4 @@ final class PodRadioHoldTests: XCTestCase {
         XCTAssertNil(PodRadioHold.wedgeHint(directAge: 60, relayAge: nil))
         XCTAssertNil(PodRadioHold.wedgeHint(directAge: nil, relayAge: nil))
     }
-
-    // MARK: The [tail] line
-
-    func testNothingOfOursIsClean() {
-        XCTAssertEqual(TailExposure.summary(events: [], podUpAtClose: false), "CLEAN (nothing of ours on the radio for 40 s)")
-    }
-
-    func testTheDoseCyclePodLinkTouchesTheLateZone() {
-        let s = TailExposure.summary(events: [.init(kind: "pod↑", offset: 1.0), .init(kind: "pod↓", offset: 19.0)], podUpAtClose: false)
-        XCTAssertTrue(s.contains("pod link +1.0→+19.0 s"))
-        XCTAssertTrue(s.hasSuffix("TOUCHED"))
-    }
-
-    func testAPodLinkThatEndsBeforeTheFastScanExpiresIsClear() {
-        let s = TailExposure.summary(events: [.init(kind: "pod↑", offset: 0.5), .init(kind: "pod↓", offset: 5.0)], podUpAtClose: false)
-        XCTAssertTrue(s.hasSuffix("clear"))
-    }
-
-    func testAScanInTheTailTouches() {
-        XCTAssertTrue(TailExposure.summary(events: [.init(kind: "scan", offset: 2.0)], podUpAtClose: false).hasSuffix("TOUCHED"))
-    }
-
-    func testAPodLinkAlreadyUpAtTheCloseCountsFromZero() {
-        let s = TailExposure.summary(events: [.init(kind: "pod↓", offset: 30.0)], podUpAtClose: true)
-        XCTAssertTrue(s.contains("pod link +0.0→+30.0 s"))
-        XCTAssertTrue(s.hasSuffix("TOUCHED"))
-    }
-
-    func testALinkStillUpAtTheWindowEndIsReported() {
-        let s = TailExposure.summary(events: [.init(kind: "pod↑", offset: 35.0)], podUpAtClose: false)
-        XCTAssertTrue(s.contains("still up at +40 s"))
-        XCTAssertTrue(s.hasSuffix("clear"), "a link that came up after the tail ended did not touch the late zone")
-    }
 }

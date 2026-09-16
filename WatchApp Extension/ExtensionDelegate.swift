@@ -214,12 +214,13 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
                 task.setTaskCompleted(restoredDefaultState: false, estimatedSnapshotExpiration: Date(timeIntervalSinceNow: TimeInterval(minutes: 5)), userInfo: nil)
                 return  // Don't call the standard setTaskCompleted handler
             case let task as WKBluetoothAlertRefreshBackgroundTask:
-                // watchOS 9+: "Updates from Bluetooth are available to the application." The
-                // system-held G7 arm is the only thing that opts the central into this. ONE task
-                // is held per wake (25 s, or until the system expires it — the grant, ≈20 s on
-                // 2026-09-14); every further delivery in the same wake is completed on arrival and
-                // counted. The 2026-09-14 event run held every one of ~55 deliveries per wake with
-                // its own timer and ledger write, and the pile stalled main 4 s on the next resume.
+                // watchOS 9+: "Updates from Bluetooth are available to the application." The G7
+                // central opts into state restoration, so a daemon-held sensor connect relaunches
+                // the app and this task is how watchOS hands it the wake. ONE task is held per wake
+                // (25 s, or until the system expires it — the grant, ≈20 s on 2026-09-14); every
+                // further delivery in the same wake is completed on arrival and counted. The
+                // 2026-09-14 event run held every one of ~55 deliveries per wake with its own timer
+                // and ledger write, and the pile stalled main 4 s on the next resume.
                 holdBluetoothTask(task)
                 continue  // completed on our own schedule
             case is WKURLSessionRefreshBackgroundTask:
@@ -272,8 +273,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         let delivered = Date()
         heldBluetoothTask = task
         heldBluetoothTaskSince = delivered
-        let wakes = Self.recordBluetoothWake(at: delivered)
-        SportLog.event("radio", String(format: "WOKEN BY BLUETOOTH — WKBluetoothAlertRefreshBackgroundTask (system-held arm); holding one task 25 s · wake %d of the rolling 24 h (docs budget 5) [bt-task]", wakes))
+        SportLog.event("radio", "WOKEN BY BLUETOOTH — WKBluetoothAlertRefreshBackgroundTask; holding one task 25 s [bt-task]")
         // The system's own lifetime grant for this task, measured: it calls this before it
         // terminates the task, and the log stamp says how long it gave us.
         task.expirationHandler = { [weak self] in
@@ -294,20 +294,6 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         heldBluetoothTask = nil
         heldBluetoothTaskSince = nil
         bluetoothDeliveriesThisWake = 0
-    }
-
-    /// Rolling-24 h ledger of Bluetooth WAKES (one per held task, not per delivery), so the log
-    /// can say where the day stands against the documented "five timely alerts or background
-    /// scans" budget — whether that budget counts these wakes is what the ledger exists to
-    /// answer. Returns the count including this wake.
-    static let bluetoothTaskLedgerKey = "G7Lab.bluetoothTask.wakes"
-    @discardableResult
-    static func recordBluetoothWake(at date: Date, defaults: UserDefaults = .standard) -> Int {
-        let floor = date.addingTimeInterval(-24 * 60 * 60)
-        var stamps = (defaults.array(forKey: bluetoothTaskLedgerKey) as? [Double] ?? []).filter { $0 > floor.timeIntervalSince1970 }
-        stamps.append(date.timeIntervalSince1970)
-        defaults.set(stamps, forKey: bluetoothTaskLedgerKey)
-        return stamps.count
     }
 
     private func completePendingConnectivityTasksIfNeeded() {

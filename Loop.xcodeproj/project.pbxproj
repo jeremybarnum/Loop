@@ -483,7 +483,6 @@
 		B66D1F3B2E6A5D6600471149 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = B66D1F3A2E6A5D6600471149 /* Localizable.xcstrings */; };
 		B66D1F3C2E6A5D6600471149 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = B66D1F3A2E6A5D6600471149 /* Localizable.xcstrings */; };
 		B66D1F3E2E6A5D6600471149 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = B66D1F3D2E6A5D6600471149 /* Localizable.xcstrings */; };
-		B8C9D0E1F2A3B4C5D6E7F8A9 /* G7RidePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7B8C9D0E1F2A3B4C5D6E7F8 /* G7RidePolicyTests.swift */; };
 		BAF043BF0BC70EC99AE79F71 /* HealthAccessView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4854073AAE5C2CB97167F63 /* HealthAccessView.swift */; };
 		BB7CE081302D82A800A03F53 /* InsulinBookTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB7CE080302D82A800A03F53 /* InsulinBookTests.swift */; };
 		BC5C47547CCB49F9BA618108 /* StockLoopSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D15E99F644E4E50A306CA01 /* StockLoopSession.swift */; };
@@ -1253,7 +1252,6 @@
 		A1B2C3D40000000000000001 /* GlucoseAlertManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlucoseAlertManagerTests.swift; sourceTree = "<group>"; };
 		A40BA18B2486452C8083B70A /* DeviceLogThrottle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DeviceLogThrottle.swift; path = "WatchApp Extension/StockLoop/DeviceLogThrottle.swift"; sourceTree = SOURCE_ROOT; };
 		A60E55AC77554C50A4196482 /* OmnipodKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = OmnipodKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
-		A7B8C9D0E1F2A3B4C5D6E7F8 /* G7RidePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = G7RidePolicyTests.swift; sourceTree = "<group>"; };
 		A900531A28D60862000BC15B /* Loop.shortcut */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop.shortcut; sourceTree = "<group>"; };
 		A900531B28D608CA000BC15B /* Cancel Override.shortcut */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Cancel Override.shortcut"; sourceTree = "<group>"; };
 		A900531C28D6090D000BC15B /* Loop Remote Overrides.shortcut */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Loop Remote Overrides.shortcut"; sourceTree = "<group>"; };
@@ -2795,7 +2793,6 @@
 				9A7CE018302D82A800A03F53 /* PodLoanTimerCharacterizationTests.swift */,
 				9A7CE019302D82A800A03F53 /* PodLoanTimerSeamTests.swift */,
 				5E12EA01302D82A800A03F53 /* SeizeActivationTests.swift */,
-				A7B8C9D0E1F2A3B4C5D6E7F8 /* G7RidePolicyTests.swift */,
 				E489814AB551420DA40399A4 /* G7TimedConnectTests.swift */,
 				E5F6A7B8C9D0E1F2A3B4C5D6 /* PodRadioHoldTests.swift */,
 				9A7CE01A302D82A800A03F53 /* WatchAppTests.swift */,
@@ -4234,7 +4231,6 @@
 				9A7CE02C302D82A800A03F53 /* PodLoanTimerCharacterizationTests.swift in Sources */,
 				9A7CE02D302D82A800A03F53 /* PodLoanTimerSeamTests.swift in Sources */,
 				5E12EA02302D82A800A03F53 /* SeizeActivationTests.swift in Sources */,
-				B8C9D0E1F2A3B4C5D6E7F8A9 /* G7RidePolicyTests.swift in Sources */,
 				BDE04F37312A4F6C86EC7872 /* G7TimedConnectTests.swift in Sources */,
 				F6A7B8C9D0E1F2A3B4C5D6E7 /* PodRadioHoldTests.swift in Sources */,
 				9A7CE02E302D82A800A03F53 /* WatchAppTests.swift in Sources */,

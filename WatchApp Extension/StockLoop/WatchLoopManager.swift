@@ -1074,66 +1074,9 @@ final class WatchLoopManager {
         return now.timeIntervalSince(activatedAt) > .hours(10 * 24 + 12)
     }
 
-    /// Evidence that a DIFFERENT sensor is in range while ours delivers nothing.
-    ///
-    /// #104 keeps the persisted identity when stock reports nil, which is right — on a watch that
-    /// signal fires after nearly every loan. But it swallows the one case where the signal is
-    /// real: an actual sensor change. The manager then cannot rescue itself, because it can only
-    /// learn a new sensor's ID by talking to it, and it is busy failing authentication against
-    /// the old one. Age alone does not save it either: the stuck window is the dead sensor's
-    /// REMAINING nominal life, so the earlier a sensor fails, the longer the outage.
-    ///
-    /// Rule: 3 sightings of ONE foreign name spanning >= 10 minutes (the G7's ~5-minute cadence
-    /// makes that two periods, so a single burst cannot fire it) while our own sensor has
-    /// delivered nothing for 45 minutes. Adoption still runs through authentication, which only
-    /// the wearer's enrolled sensor can pass — so a neighbour's G7 can trigger the attempt and
-    /// can never be adopted. Worst case of a wrong fire is the pre-#104 acquisition lottery, run
-    /// at a moment when the persisted sensor was yielding nothing anyway.
-    private var foreignSightings: [String: [Date]] = [:]
-    private static let foreignSightingsNeeded = 3
-    private static let foreignSightingSpan: TimeInterval = .minutes(10)
-    private static let ownSensorSilentFor: TimeInterval = .minutes(45)
-
-    /// Set by StockLoopStack so this rule can clear the identity and ask for a rescan; the
-    /// manager is owned by the stack, not by us (we are only its delegate).
+    /// Set by StockLoopStack; the manager is owned by the stack, not by us (we are only its
+    /// delegate). The start gate reads the sensor's name and age through it.
     weak var g7Manager: G7CGMManager?
-
-    func noteSensorSighted(_ name: String, now: Date = Date()) {
-        deviceQueue.async { [weak self] in
-            guard let self, let manager = self.g7Manager else { return }
-            guard let ourName = manager.sensorName else { return }   // nothing persisted: inert
-            guard name != ourName else {
-                self.foreignSightings.removeAll()   // ours is on the air; no case to build
-                return
-            }
-            // "Ours has delivered nothing" uses the same DIRECT-G7 stamp the pod-contention
-            // diagnostics use: relay readings must not count, or a phone in the room would mask
-            // exactly the failure this rule exists to catch.
-            let lastDirect = self.lastGlucoseSourceStamps.direct
-            let silentFor = lastDirect.map { now.timeIntervalSince($0) } ?? .greatestFiniteMagnitude
-            guard silentFor > Self.ownSensorSilentFor else { return }
-
-            var seen = self.foreignSightings[name] ?? []
-            seen.append(now)
-            seen = seen.filter { now.timeIntervalSince($0) <= .hours(2) }
-            self.foreignSightings[name] = seen
-            // Evidence is per-NAME, never pooled: a two-G7 household must not add up to a case.
-            guard seen.count >= Self.foreignSightingsNeeded,
-                  let first = seen.first, now.timeIntervalSince(first) >= Self.foreignSightingSpan
-            else { return }
-
-            let silentMin = silentFor == .greatestFiniteMagnitude ? "never delivered" : "\(Int(silentFor / 60))m"
-            SportLog.event("cgm", "** STRANDED IDENTITY ** \(ourName) \(silentMin) while \(name) sighted \(seen.count)x over \(Int(now.timeIntervalSince(first) / 60))m — clearing and rescanning (#104 blind spot)")
-            self.foreignSightings.removeAll()
-            // ORDER IS LOAD-BEARING: clear the persisted identity BEFORE the rescan. The rescan
-            // nils the manager state, cgmManagerDidUpdateState fires, and #104's filter keeps
-            // whatever the defaults still hold — clearing after races the callback and
-            // resurrects the corpse.
-            self.defaults.removeObject(forKey: Self.cgmStateDefaultsKey)
-            self.lastPersistedSensorID = nil
-            manager.scanForNewSensor()
-        }
-    }
 
     /// Last sensorID written by cgmManagerDidUpdateState (extension can't hold
     /// storage) — the persist itself runs every state change; this only rate-limits the log line.
@@ -1188,11 +1131,9 @@ final class WatchLoopManager {
     var g7ContentionSummary: String {
         let stamps = lastGlucoseSourceStamps
         func age(_ d: Date?) -> String { d.map { String(format: "%.0fs", now().timeIntervalSince($0)) } ?? "never" }
-        // `g7pending` names the usual suspect for a pod-side CBError#11: a pending G7 connect
-        // holds one of the app's BLE slots, and the pod central's own census cannot see it —
-        // the G7 client is a separate CBCentralManager. "-" means no G7 connect is pending.
-        let pending = G7RadioCensus.connectPendingSince.map { String(format: "%.0fs", now().timeIntervalSince($0)) } ?? "-"
-        return "g7direct=\(age(stamps.direct)) phoneRelay=\(age(stamps.phone)) g7pending=\(pending)"
+        // No `g7pending` any more: the watch's one sensor request is daemon-held (a start delay,
+        // or lodged past the sensor's tail) and holds no BLE slot of the app's until it goes live.
+        return "g7direct=\(age(stamps.direct)) phoneRelay=\(age(stamps.phone))"
     }
 
     private var lastGlucoseSourceStamps: (direct: Date?, phone: Date?) {
@@ -3074,12 +3015,11 @@ extension WatchLoopManager: CGMManagerDelegate {
         // truth, so use it rather than pattern-matching "DXCM" against a peripheral name, which
         // would be another label asserting something it cannot actually verify.
         let source = manager is G7CGMManager ? "cgm" : "pod-ble"
-        // Tail-exposure instrument: the pod link's edges, as OmniPumpManager reports them
-        // ("Pod connected …" / "Pod disconnected …"), feed the per-window [tail] line.
-        if source == "pod-ble" {
-            if message.hasPrefix("Pod connected") { TailExposure.notePodLink(up: true) }
-            else if message.hasPrefix("Pod disconnected") { TailExposure.notePodLink(up: false) }
-        }
+        // The pod hold's close-relative clock (PodRadioHold): the adopted sensor's link closing
+        // reaches this delegate as G7CGMManager's own "Sensor disconnected: …" line — the one
+        // signal the pod side needs from the sensor side, sourced from the stock log line rather
+        // than from a hook into the kit.
+        if source == "cgm", message.hasPrefix("Sensor disconnected") { PodRadioHold.noteSensorClose(self.now()) }
         // DEDUPE THE STORM. A Code=11 connect-retry loop pushed ~2,000
         // IDENTICAL lines/second through here (1051 in 0.52s) — each one a
         // synchronous NSLog plus a file-append — jamming syslogd and the log queue hard enough

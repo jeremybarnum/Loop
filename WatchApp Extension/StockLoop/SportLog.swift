@@ -22,7 +22,6 @@
 import Foundation
 import os.log
 #if os(watchOS)
-import Network
 import WatchKit
 #endif
 
@@ -128,53 +127,5 @@ enum SportLog {
     static func event(_ category: String, _ message: String) {
         os_log("%{public}@ %{public}@", log: oslog, type: .default, category, message)
         log("[\(category)] \(message)")
-    }
-}
-
-/// The WATCH's own network path — Wi-Fi / cellular / nothing — for the log.
-///
-/// Why (2026-09-15): the open question is whether the watch can reach the phone, and the Mac,
-/// with the phone's Bluetooth off. WatchConnectivity's `isReachable` says whether the phone is
-/// currently answering but not over what, and watchOS exposes no Wi-Fi API; `NWPathMonitor` is
-/// the supported way to see the interface the system would actually use. Passive: it observes,
-/// never opens a connection, and touches no Bluetooth state.
-final class WatchNetCensus {
-    static let shared = WatchNetCensus()
-
-    private let monitor = NWPathMonitor()
-    private let queue = DispatchQueue(label: "com.loopkit.Loop.watchNetCensus")
-    private let lock = NSLock()
-    private var summaryValue = "?"
-
-    /// "wifi", "cell", "wifi+cell", "none", "?" — appended to the arm's lines as `net …`.
-    var summary: String {
-        lock.lock(); defer { lock.unlock() }
-        return summaryValue
-    }
-
-    /// Call once at startup. Idempotent.
-    func start() {
-        monitor.pathUpdateHandler = { [weak self] path in
-            guard let self = self else { return }
-            let now = Self.describe(path)
-            self.lock.lock()
-            let previous = self.summaryValue
-            self.summaryValue = now
-            self.lock.unlock()
-            guard previous != now else { return }
-            SportLog.event("net", "watch network \(now)" + (previous == "?" ? " (first reading)" : " — was \(previous)"))
-        }
-        monitor.start(queue: queue)
-    }
-
-    private static func describe(_ path: NWPath) -> String {
-        guard path.status == .satisfied else { return "none" }
-        var parts: [String] = []
-        if path.usesInterfaceType(.wifi) { parts.append("wifi") }
-        if path.usesInterfaceType(.cellular) { parts.append("cell") }
-        if path.usesInterfaceType(.wiredEthernet) { parts.append("wired") }
-        if parts.isEmpty { parts.append("other") }
-        if path.isExpensive { parts.append("expensive") }
-        return parts.joined(separator: "+")
     }
 }
