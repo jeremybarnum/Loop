@@ -1777,9 +1777,6 @@ final class PodLoanWatchController {
             // itself is gone. The CGM is now stock G7SensorKit riding
             // the Dexcom watch app's session; this app never drives the sensor radio, so the pod
             // ladder has no contender to yield to or hold off.
-            // Per-LADDER census, so "adverts=0" on a failure means this ladder heard nothing —
-            // not that the session as a whole was quiet.
-            manager.podLoanResetAdvertCensus()
             SportLog.event("loan", "E4: reclaiming pod to dose (scan-adopt primary, #54)")
             manager.reclaimConnection()
             // Scan-adopt is the PRIMARY reclaim, not a mid-ladder fallback.
@@ -1861,14 +1858,9 @@ final class PodLoanWatchController {
             waiters.forEach { $0(ok) }
         }
         let elapsed = now().timeIntervalSince(startedAt)
-        // What the RADIO heard, not what we tried. A FAILED ladder with adverts>0 means we heard the pod
-        // and still could not connect; adverts=0 means the pod never announced itself and the whole
-        // connect-side story is beside the point. Those are different bugs and the log could not tell
-        // them apart until now (2026-08-19).
-        let census = manager?.podLoanAdvertCensus ?? "adverts=?"
         SportLog.event("pod-contend", String(
-            format: "L%d %@ after %d read(s) in %.1fs — %@ · %@ · %@ · still live: %@",
-            ladder, ok ? "OK" : "FAILED", reads, elapsed, note, g7StateForContention(), census,
+            format: "L%d %@ after %d read(s) in %.1fs — %@ · %@ · still live: %@",
+            ladder, ok ? "OK" : "FAILED", reads, elapsed, note, g7StateForContention(),
             liveReclaimLadders.isEmpty ? "none"
                 : liveReclaimLadders.keys.sorted().map { "L\($0)" }.joined(separator: ",")))
     }

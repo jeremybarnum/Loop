@@ -2799,13 +2799,6 @@ final class PodLoanPhoneController {
                              deps.now().addingTimeInterval(-.hours(6)))
             loanStartedAt = anchor
             UserDefaults.standard.set(anchor, forKey: Keys.loanStartedAt)
-            // The phone never paused for this loan, so the reclaim's restore would find no
-            // capture and fail-safe to OPEN loop — wrong here: the user's setting was
-            // untouched all along. Seed the capture with the CURRENT value so the restore
-            // is truthful (and the Loop-Failure suppression gate arms for the reconcile).
-            if UserDefaults.standard.object(forKey: WatchDataManager.dosingCaptureKey) == nil {
-                UserDefaults.standard.set(deps.settings().dosingEnabled, forKey: WatchDataManager.dosingCaptureKey)
-            }
         }
         // Stale epoch (rows 13/14): the records still drain — they are historical
         // truth, idempotent by ID — but loan STATE is untouched and the ack says

@@ -6,7 +6,6 @@
 //  Copyright © 2016 Nathan Racklyeft. All rights reserved.
 //
 
-import CoreBluetooth
 import HealthKit
 import UIKit
 import WatchConnectivity
@@ -18,61 +17,6 @@ import LoopCore
 enum WatchDataManagerError: Error {
     case decodingError
     case expiredBolusRecommendation
-}
-
-/// The PHONE'S OWN Bluetooth radio state, for the log.
-///
-/// Why this exists (2026-09-15): the periodic `[link]` line carries a `radio=` field, but that
-/// one comes from the pod link census and says nothing about the phone's Bluetooth setting.
-/// Reading it as the phone's radio mislabelled a whole morning of system-held arm tests — the
-/// question "was the phone's Bluetooth on?" was being answered from memory afterwards instead of
-/// from the log. A central created purely to observe state (never scanning, power alert
-/// suppressed) reports it directly, and every ON→OFF transition gets its own line so the moment
-/// is greppable.
-final class PhoneRadioCensus: NSObject, CBCentralManagerDelegate {
-    static let shared = PhoneRadioCensus()
-
-    private let queue = DispatchQueue(label: "com.loopkit.Loop.phoneRadioCensus")
-    private var manager: CBCentralManager?
-    private let lock = NSLock()
-    private var state: CBManagerState = .unknown
-
-    /// "on", "OFF", "unauthorized", … — appended to the link line as `phoneBT=…`.
-    var stateName: String {
-        lock.lock(); defer { lock.unlock() }
-        return Self.name(for: state)
-    }
-
-    private static func name(for s: CBManagerState) -> String {
-        switch s {
-        case .poweredOn:     return "on"
-        case .poweredOff:    return "OFF"
-        case .unauthorized:  return "unauthorized"
-        case .unsupported:   return "unsupported"
-        case .resetting:     return "resetting"
-        case .unknown:       return "?"
-        @unknown default:    return "?"
-        }
-    }
-
-    /// Call once at startup. Idempotent.
-    func start() {
-        guard manager == nil else { return }
-        // Observation only: no scan, no connect, and the system's "Bluetooth is off" alert
-        // suppressed so a deliberate radio-off test never nags the user.
-        manager = CBCentralManager(delegate: self, queue: queue,
-                                   options: [CBCentralManagerOptionShowPowerAlertKey: false])
-    }
-
-    func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        lock.lock()
-        let previous = state
-        state = central.state
-        lock.unlock()
-        guard previous != central.state else { return }
-        PhoneLog.event("radio", "phone Bluetooth \(Self.name(for: central.state))"
-                       + (previous == .unknown ? " (first reading)" : " — was \(Self.name(for: previous))"))
-    }
 }
 
 @MainActor
@@ -127,11 +71,7 @@ final class WatchDataManager: NSObject {
     /// state. Lazy-adjacent to the controller so neither can exist without the other.
     func wireLoopFailureSuppressionGate() {
         deviceManager.alertManager?.loopNotRunningSuppressionGate = { [weak self] in
-            // Loan state OR the pause capture: the capture is written synchronously at grant,
-            // BEFORE the pause-triggered final cycle can complete — closing the systematic
-            // escape at its root. The sweep demotes to true backstop.
-            (self?.podLoanController.isLoanedOutForUI ?? false)
-                || UserDefaults.standard.object(forKey: Self.dosingCaptureKey) != nil
+            self?.podLoanController.isLoanedOutForUI ?? false
         }
         Self.loanLadderSweep = { [weak self] in
             self?.deviceManager.alertManager?.sweepLoopNotRunningNotificationsDuringLoan()
@@ -143,34 +83,13 @@ final class WatchDataManager: NSObject {
     /// the closure hops back through Task-per-call inside the sweep itself.
     nonisolated(unsafe) private static var loanLadderSweep: (() -> Void)?
 
-    /// Set at pause (before the pause-triggered final phone cycle can complete), cleared at
-    /// unpause — so it brackets the loan INCLUDING the pre-state-flip window the loan-state
-    /// gate cannot see. That window is why the Loop-Failure ladder escaped the grant clear on
-    /// EVERY loan (3/3 on 2026-08-25, each caught by the sweep): the clear ran, the final
-    /// cycle completed while state still read .owner, and its completion re-armed the ladder.
-    static let dosingCaptureKey = "PodLoanPhoneController.dosingEnabledBeforeLoan"
-
     private(set) lazy var podLoanController: PodLoanPhoneController = {
-        let dosingKey = Self.dosingCaptureKey
         return PodLoanPhoneController(dependencies: .init(
             pumpManager: { [weak self] in self?.deviceManager.pumpManager },
             settings: { [weak self] in self?.settingsManager.loopSettings ?? LoopSettings() },
             setAutomaticDosingPaused: { [weak self] paused in
                 guard let self = self else { return }
                 if paused {
-                    // Captured once and persisted, so a relaunch mid-loan still restores the right value at
-                    // reconcile.
-                    if UserDefaults.standard.object(forKey: dosingKey) == nil {
-                        UserDefaults.standard.set(self.settingsManager.loopSettings.dosingEnabled, forKey: dosingKey)
-                    }
-                    // MAIN-hopped (2026-08-25): this closure runs on the loan controller's
-                    // queue, and a therapy-settings write from off-main is how the settings
-                    // screen, the automation-status object, and the loop dialog ended up
-                    // reading three different snapshots after e221's reclaim. One writer,
-                    // one thread, every observer sees the same ordered truth.
-                    DispatchQueue.main.async {
-                        self.settingsManager.mutateLoopSettings { $0.dosingEnabled = false }
-                    }
                     // A loan just started: cancel the "Loop Failure" batch the last pre-loan loop queued.
                     // Gating future re-arms is not enough — the already-queued 20/40/60/120-minute rungs
                     // would still fire mid-loan. Also covers relaunching into an active loan, since this runs
@@ -185,14 +104,6 @@ final class WatchDataManager: NSObject {
                         self?.deviceManager.alertManager?.armWatchSilenceNotifications()
                     }
                 } else {
-                    // Restore defaults to OPEN loop when the capture is missing —
-                    // never invent closed-loop-on (R7's override is the settings UI).
-                    let prior = UserDefaults.standard.object(forKey: dosingKey) as? Bool ?? false
-                    UserDefaults.standard.removeObject(forKey: dosingKey)
-                    // Same main-hop as the pause side, same reason.
-                    DispatchQueue.main.async {
-                        self.settingsManager.mutateLoopSettings { $0.dosingEnabled = prior }
-                    }
                     // This closure runs on the loan controller's serial queue, and the
                     // reschedule below reads a gate that dispatches sync onto that same queue —
                     // calling it inline deadlocks. Hopping to main is safe: state is already
@@ -346,13 +257,12 @@ final class WatchDataManager: NSObject {
                 // mutateSettings is lock-based and safe from any queue.
                 self?.temporaryPresetsManager.scheduleOverride = override
             },
-            // Overwrite the captured pre-loan loop mode with the wrist's final one, so the
-            // restore at loan end picks it up untouched — the phone inherits the watch's mode
-            // rather than reverting to its own. Writing the same key keeps the persistence that
-            // already survives a relaunch mid-loan and leaves the "missing capture defaults to
-            // open loop" fail-safe intact.
-            noteWatchClosedLoop: { closed in
-                UserDefaults.standard.set(closed, forKey: dosingKey)
+            // The wrist's final loop mode is the phone's mode after the loan: applied directly,
+            // on main, like every other therapy-settings write. Nothing is captured or restored.
+            noteWatchClosedLoop: { [weak self] closed in
+                DispatchQueue.main.async {
+                    self?.settingsManager.mutateLoopSettings { $0.dosingEnabled = closed }
+                }
             },
             lastLoopCompleted: { [weak self] in
                 // Reading a @MainActor-published Date? off-actor is a benign snapshot: the
@@ -453,12 +363,6 @@ final class WatchDataManager: NSObject {
             },
             openLoopForUncertainReconciliation: { [weak self] in
                 guard let self = self else { return }
-                // ORDER MATTERS: clear the pre-loan capture before opening the loop. The end of the next
-                // loan restores dosingEnabled from that key, so leaving it set would silently re-close the
-                // loop this just opened — one loud warning followed by the machine quietly resuming, which
-                // is worse than not warning at all. Cleared, the next loan captures false and restores
-                // false, and only the user's own settings change can re-close it.
-                UserDefaults.standard.removeObject(forKey: dosingKey)
                 // MAIN-hopped (2026-08-26): third instance of the off-main therapy-write
                 // desync. The R32 open at the end of the 9-hour overnight loan applied
                 // dosingEnabled=false from the controller queue; the settings screen kept
@@ -1276,7 +1180,6 @@ extension WatchDataManager: WCSessionDelegate {
     nonisolated(unsafe) static var podLinkCensus: (() -> String)?
 
     nonisolated private func startLinkCensus() {
-        PhoneRadioCensus.shared.start()
         let t = DispatchSource.makeTimerSource(queue: Self.linkCensusQueue)
         t.schedule(deadline: .now() + 60, repeating: 60, leeway: .seconds(5))
         t.setEventHandler {
@@ -1284,10 +1187,7 @@ extension WatchDataManager: WCSessionDelegate {
             let s = WCSession.default
             let pod = Self.podLinkCensus.map { " · pod: \($0())" } ?? ""
             Self.loanLadderSweep?()
-            // phoneBT is the PHONE'S OWN radio. The `radio=` inside `pod:` is the pod link
-            // census and says nothing about the phone's Bluetooth setting — on 2026-09-15
-            // reading it that way mislabelled a whole morning of arm testing.
-            PhoneLog.event("link", "watch reachable=\(s.isReachable) activation=\(s.activationState.rawValue) paired=\(s.isPaired) appInstalled=\(s.isWatchAppInstalled) phoneBT=\(PhoneRadioCensus.shared.stateName)\(pod)")
+            PhoneLog.event("link", "watch reachable=\(s.isReachable) activation=\(s.activationState.rawValue) paired=\(s.isPaired) appInstalled=\(s.isWatchAppInstalled)\(pod)")
         }
         t.resume()
         Self.linkCensusTimer = t
