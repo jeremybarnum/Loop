@@ -2,79 +2,126 @@
 //  G7TimedConnectTests.swift
 //  WatchAppTests
 //
-//  Pins the grid arithmetic behind the timed, bounded connect (G7TimedConnect). The anchor is a
-//  READING's own sensor timestamp; the request goes up `fireOffset` seconds after each
-//  `period`-spaced grid point, which is ~1 s before the sensor starts advertising.
+//  Pins the pure half of the watch's G7 acquisition arm (G7WatchAcquisition) and the direct-auth
+//  fast path's primitives. The file keeps its timed-connect-era name only because Loop.xcodeproj
+//  lists it by name; the timed, bounded connect itself is gone (lean-out step 7, 2026-09-16).
 //
 
 import XCTest
 @testable import G7SensorKit
 @testable import WatchApp
 
-final class G7TimedConnectTests: XCTestCase {
+final class G7WatchAcquisitionTests: XCTestCase {
     private let anchor = Date(timeIntervalSince1970: 1_000_000)
 
-    func testFiresJustAfterTheNextGridPoint() {
-        let fire = G7TimedConnect.nextFire(anchor: anchor, now: anchor.addingTimeInterval(100))
-        XCTAssertEqual(fire.timeIntervalSince(anchor), G7TimedConnect.period + G7TimedConnect.fireOffset, accuracy: 0.001)
+    // MARK: the re-lodge toggle (Diagnostics ▸ Sensor ▸ Re-lodge)
+
+    func testTheProvenArmIsTheDefault() {
+        UserDefaults.standard.removeObject(forKey: G7WatchAcquisition.relodgeKey)
+        XCTAssertEqual(G7WatchAcquisition.relodge, .holdApp, "33 in 33; Pete's formula measured 1 in 4")
+        XCTAssertEqual(G7WatchAcquisition.Relodge(rawValue: "peteDelay"), .peteDelay)
+        XCTAssertEqual(G7WatchAcquisition.Relodge(rawValue: "holdApp"), .holdApp)
+        XCTAssertNil(G7WatchAcquisition.Relodge(rawValue: "tailDelay"), "the 31-s arm is gone")
     }
 
-    func testSkipsAGridPointThatIsInsideTheMargin() {
-        // 0.5 s before the fire time, with a 1-s margin: too close, take the next one.
-        let now = anchor.addingTimeInterval(G7TimedConnect.period + G7TimedConnect.fireOffset - 0.5)
-        let fire = G7TimedConnect.nextFire(anchor: anchor, now: now)
-        XCTAssertEqual(fire.timeIntervalSince(anchor), 2 * G7TimedConnect.period + G7TimedConnect.fireOffset, accuracy: 0.001)
+    // MARK: Pete's start delay — the grid arithmetic
+
+    func testPetesDelayIsHisFormulaOnTheReadingsGrid() {
+        // Pete (2026-09-15 11:56): "delay = 298 - (now - bg_timestamp)". A lodge happens at the
+        // sensor's close, a few seconds after the reading's own timestamp.
+        for sinceReading in [3.5, 4.0, 5.5, 12.0, 60.0] {
+            let now = anchor.addingTimeInterval(sinceReading)
+            XCTAssertEqual(Double(G7WatchAcquisition.peteDelay(anchor: anchor, now: now)), 298 - sinceReading, accuracy: 0.5,
+                           "whole seconds of his formula, not a variant of it")
+        }
+        XCTAssertEqual(G7WatchAcquisition.period + G7WatchAcquisition.fireOffset - G7WatchAcquisition.lead, 298, accuracy: 0.001,
+                       "period + fireOffset - lead == 298 is what makes it his formula")
     }
 
-    func testStaysGridAlignedManyCyclesLater() {
-        // A stale anchor is no longer fatal: it is the sensor's own clock, so an anchor hours old
-        // still names the grid (crystal drift ≈ 4 s/day against a 5-s bound).
-        let now = anchor.addingTimeInterval(47 * G7TimedConnect.period + 12)
-        let fire = G7TimedConnect.nextFire(anchor: anchor, now: now)
-        XCTAssertEqual(fire.timeIntervalSince(anchor), 48 * G7TimedConnect.period + G7TimedConnect.fireOffset, accuracy: 0.001)
+    func testPetesDelayIsWholeSecondsNeverBelowOneAndInsideTheCycle() {
+        let d = G7WatchAcquisition.peteDelay(anchor: anchor, now: anchor.addingTimeInterval(10))
+        XCTAssertGreaterThan(d, 0)
+        XCTAssertLessThan(Double(d), G7WatchAcquisition.period, "never past the burst it is aimed at")
+        // The burst is already here: a delay would land after it — the shortest legal delay instead
+        // (a zero or fractional NSNumber is refused with CBError 1).
+        XCTAssertEqual(G7WatchAcquisition.peteDelay(anchor: anchor, now: anchor.addingTimeInterval(299)), 1)
+        // Hours later the anchor still names the grid: it is the sensor's own clock.
+        XCTAssertEqual(Double(G7WatchAcquisition.peteDelay(anchor: anchor, now: anchor.addingTimeInterval(47 * 300 + 12))),
+                       298 - 12, accuracy: 0.5)
     }
 
-    func testTheRequestSitsInsideTheBurst() {
-        // The sensor starts advertising +2.0…+3.2 s after the reading timestamp (61 cycles,
-        // 2026-09-12) and keeps going ≥ 7 s. Being late is free (a mid-burst request completes
-        // in ~0.03 s); being early wastes window. So the request goes up at the burst start and
-        // the whole bound sits inside the shortest burst.
-        let burstStart = 2.0, burstEnd = 9.0
-        XCTAssertGreaterThanOrEqual(G7TimedConnect.fireOffset, burstStart)
-        XCTAssertLessThanOrEqual(G7TimedConnect.fireOffset + G7TimedConnect.bound, burstEnd)
+    func testTheNextFireStaysGridAligned() {
+        let fire = G7WatchAcquisition.nextFire(anchor: anchor, now: anchor.addingTimeInterval(100))
+        XCTAssertEqual(fire.timeIntervalSince(anchor), G7WatchAcquisition.period + G7WatchAcquisition.fireOffset, accuracy: 0.001)
+        let close = anchor.addingTimeInterval(G7WatchAcquisition.period + G7WatchAcquisition.fireOffset - 0.5)
+        XCTAssertEqual(G7WatchAcquisition.nextFire(anchor: anchor, now: close).timeIntervalSince(anchor),
+                       2 * G7WatchAcquisition.period + G7WatchAcquisition.fireOffset, accuracy: 0.001, "inside the margin: take the next one")
     }
 
-    func testTheSystemHeldArmIsAnExperimentThatStaysOff() {
-        // The start-delay arm opts the watch central into state restoration and lodges requests
-        // the app cannot withdraw while asleep. It is a measurement, not a default.
-        UserDefaults.standard.removeObject(forKey: G7TimedConnect.systemHeldKey)
-        XCTAssertFalse(G7TimedConnect.systemHeld)
+    // MARK: the hold
+
+    func testTheHoldWaitsOutTheTailFromLinkUp() {
+        XCTAssertEqual(G7WatchAcquisition.holdWait(sinceLinkUp: 0), 35, accuracy: 0.001)
+        XCTAssertEqual(G7WatchAcquisition.holdWait(sinceLinkUp: 3.5), 31.5, accuracy: 0.001)
+        XCTAssertEqual(G7WatchAcquisition.holdWait(sinceLinkUp: 34.8), 0.5, accuracy: 0.001, "never below half a second")
+        XCTAssertEqual(G7WatchAcquisition.holdWait(sinceLinkUp: 40), 0.5, accuracy: 0.001)
     }
 
-    func testEveryAskIsWithdrawnInsideTheDaemonsFastScan() {
-        // The -70 is written by a failure more than 6 s after the connect REQUEST. Every request
-        // of ours — grid ask, second ask, retry — must be withdrawn before that, so a refusal can
-        // add to the daemon's COUNT but can never park the floor.
-        XCTAssertLessThan(G7TimedConnect.bound, 6)
-        XCTAssertGreaterThan(G7TimedConnect.secondAskDelay, 0)
-        XCTAssertLessThan(G7TimedConnect.secondAskDelay, 2)   // the burst must still be on the air
+    func testTheClearanceOutlastsTheMeasuredTail() {
+        XCTAssertGreaterThan(G7WatchAcquisition.tailClearanceSeconds, 3.5 + 24, "read + the 20–24 s advertising tail")
+        XCTAssertLessThan(G7WatchAcquisition.tailClearanceSeconds, G7WatchAcquisition.period - 60)
     }
-}
 
-final class BluetoothTaskLedgerTests: XCTestCase {
-    // The Bluetooth alert task ledger says where the day stands against the documented
-    // five-per-24 h budget. It must count this delivery, keep the last 24 h, and drop older stamps.
-    func testTheLedgerCountsARolling24Hours() {
-        let suite = "BluetoothTaskLedgerTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let t0 = Date(timeIntervalSince1970: 2_000_000)
+    // MARK: the plan the toggle selects
 
-        XCTAssertEqual(ExtensionDelegate.recordBluetoothWake(at: t0, defaults: defaults), 1)
-        XCTAssertEqual(ExtensionDelegate.recordBluetoothWake(at: t0.addingTimeInterval(7 * 60), defaults: defaults), 2)
-        XCTAssertEqual(ExtensionDelegate.recordBluetoothWake(at: t0.addingTimeInterval(23 * 3600), defaults: defaults), 3)
-        // 24 h + 1 s after the first: the first stamp falls out, the other two stay.
-        XCTAssertEqual(ExtensionDelegate.recordBluetoothWake(at: t0.addingTimeInterval(24 * 3600 + 1), defaults: defaults), 3)
+    func testTheToggleSelectsThePlan() {
+        let now = anchor.addingTimeInterval(3.5)
+        XCTAssertEqual(G7WatchAcquisition.relodgePlan(.peteDelay, sinceLinkUp: 3.5, anchor: anchor, now: now), .startDelay(seconds: 295))
+        XCTAssertEqual(G7WatchAcquisition.relodgePlan(.holdApp, sinceLinkUp: 3.5, anchor: anchor, now: now), .holdThenConnect(wait: 31.5))
+    }
+
+    func testPastTheClearanceTheHoldHasNothingToWaitFor() {
+        XCTAssertNil(G7WatchAcquisition.relodgePlan(.holdApp, sinceLinkUp: 120, anchor: anchor), "a wake mid-cycle: a plain request now")
+        XCTAssertEqual(G7WatchAcquisition.relodgePlan(.holdApp, sinceLinkUp: 0, anchor: nil), .holdThenConnect(wait: 35),
+                       "a late connect failure counts from now: hold the full clearance")
+    }
+
+    func testPetesDelayWithNoReadingOnRecordClearsTheTailLikeTheHold() {
+        // No grid to aim at, but never a plain connect straight after a close: on 2026-09-16 a
+        // same-burst failure storm (58 of 77 handshakes) began with exactly that.
+        XCTAssertEqual(G7WatchAcquisition.relodgePlan(.peteDelay, sinceLinkUp: 3.5, anchor: nil), .holdThenConnect(wait: 31.5))
+        XCTAssertNil(G7WatchAcquisition.relodgePlan(.peteDelay, sinceLinkUp: 120, anchor: nil))
+    }
+
+    // MARK: refusals — Pete's back-off, stop after two
+
+    func testASynchronousRefusalBacksOffAndTwoStandDown() {
+        let first = G7WatchAcquisition.onConnectFailure(refusals: 0, sinceLodge: 0.4)
+        XCTAssertEqual(first.0, .backOff(G7WatchAcquisition.refusalBackoffSeconds)); XCTAssertEqual(first.refusals, 1)
+        let second = G7WatchAcquisition.onConnectFailure(refusals: 1, sinceLodge: 0.3)
+        XCTAssertEqual(second.0, .standDown); XCTAssertEqual(second.refusals, 2)
+    }
+
+    func testALateFailureRelodgesThroughTheArmAndClearsTheCount() {
+        let r = G7WatchAcquisition.onConnectFailure(refusals: 1, sinceLodge: 120)
+        XCTAssertEqual(r.0, .relodge); XCTAssertEqual(r.refusals, 0)
+    }
+
+    // MARK: the 3-miss test
+
+    func testThreeSilentBurstsOnTheLodgedRequestMeanABootstrapPass() {
+        XCTAssertEqual(G7WatchAcquisition.missedBursts(since: anchor, now: anchor.addingTimeInterval(8)), 0)
+        XCTAssertEqual(G7WatchAcquisition.missedBursts(since: anchor, now: anchor.addingTimeInterval(2 * 300 + 8)), 2)
+        XCTAssertGreaterThanOrEqual(G7WatchAcquisition.missedBursts(since: anchor, now: anchor.addingTimeInterval(3 * 300 + 8)),
+                                    G7WatchAcquisition.missedBurstsBeforeBootstrap)
+        XCTAssertEqual(G7WatchAcquisition.missedBursts(since: nil, now: anchor), 0, "nothing on record: nothing missed")
+    }
+
+    func testTheKeysSurviveTheTimedConnectEra() {
+        // Kept verbatim so the first build after the collapse re-adopts the remembered peripheral
+        // and keeps its last reading's grid without a scan.
+        XCTAssertEqual(G7WatchAcquisition.adoptedPeripheralKey, "G7Lab.timedConnect.adoptedPeripheral")
+        XCTAssertEqual(G7WatchAcquisition.lastReadingKey, "G7Lab.timedConnect.anchor")
     }
 }
 
@@ -107,123 +154,20 @@ final class DirectAuthFastPathTests: XCTestCase {
         G7DirectAuthKeyStore.clear(for: "DXCMQB", defaults: defaults)
         XCTAssertNil(G7DirectAuthKeyStore.load(for: "DXCMQB", defaults: defaults))
     }
+}
 
-    func testTheFastPathAndStandingRequestDefaultOn() {
-        UserDefaults.standard.removeObject(forKey: G7DirectAuth.fastPathKey)
-        UserDefaults.standard.removeObject(forKey: G7TimedConnect.standingKey)
-        XCTAssertTrue(G7DirectAuth.fastPath)
-        XCTAssertTrue(G7TimedConnect.standing)
+final class DirectAuthDefaultTests: XCTestCase {
+    // Loop's own handshake is the watch default; "ride the Dexcom watch app" is its OFF state.
+    func testLoopsOwnHandshakeIsTheWatchDefault() {
+        UserDefaults.standard.removeObject(forKey: G7DirectAuth.key)
+        XCTAssertTrue(G7DirectAuth.enabled)
     }
 }
 
-final class LoanWithoutWorkoutTests: XCTestCase {
-    // The no-workout loan is an experiment: OFF unless the diagnostics toggle says otherwise.
-    func testTheLoanWithoutWorkoutExperimentStaysOff() {
-        UserDefaults.standard.removeObject(forKey: StockLoopSession.loanWithoutWorkoutKey)
-        XCTAssertFalse(StockLoopSession.loanWithoutWorkout)
-    }
-}
-
-final class LodgeLateTests: XCTestCase {
-    // The late re-lodge is on by default and clears the tail attempts the 21:54 capture counted.
-    func testLodgeLateDefaultsOnAndClearsTheObservedTail() {
-        UserDefaults.standard.removeObject(forKey: G7TimedConnect.lodgeLateKey)
-        XCTAssertTrue(G7TimedConnect.lodgeLate)
-        XCTAssertGreaterThan(G7TimedConnect.standingLodgeDelay, 27, "the capture saw a tail attempt at +27 s after the burst start")
-        XCTAssertLessThan(G7TimedConnect.standingLodgeDelay, G7TimedConnect.period - 60, "must be lodged well before the next burst")
-    }
-}
-
-final class BurstAlignedLodgeTests: XCTestCase {
-    // The start delay must open the daemon's 6-s fast connection scan just BEFORE the burst, so
-    // the high-power window spans the burst's first seconds instead of expiring into it.
-    func testTheLeadOpensTheFastScanBeforeTheBurst() {
-        UserDefaults.standard.removeObject(forKey: G7TimedConnect.burstAlignedKey)
-        XCTAssertTrue(G7TimedConnect.burstAligned)
-        XCTAssertGreaterThan(G7TimedConnect.fastScanLead, 0, "the scan must open before the burst, not at it")
-        XCTAssertLessThan(G7TimedConnect.fastScanLead, 6, "a lead ≥ the 5.994 s fast-scan window would expire before the burst")
-    }
-
-    // The delay is computed from the grid, in whole seconds (a fractional NSNumber is refused
-    // with CBError 1), and always lands inside the cycle it is aimed at.
-    func testTheDelayLandsJustBeforeTheNextGridPoint() {
-        let anchor = Date(timeIntervalSince1970: 1_000_000)
-        let now = anchor.addingTimeInterval(10)                 // just past a grid point
-        let fire = G7TimedConnect.nextFire(anchor: anchor, now: now)
-        let delay = fire.timeIntervalSince(now) - G7TimedConnect.fastScanLead
-        let whole = Int(delay.rounded())
-        XCTAssertEqual(Double(whole), delay, accuracy: 0.5)
-        XCTAssertGreaterThan(whole, 0)
-        XCTAssertLessThan(Double(whole), G7TimedConnect.period, "never past the burst it is aimed at")
-        // The 6-s window opened by that delay must still be open when the sensor starts advertising.
-        let scanOpens = now.addingTimeInterval(Double(whole))
-        XCTAssertLessThanOrEqual(scanOpens, fire)
-        XCTAssertGreaterThan(scanOpens.addingTimeInterval(5.994), fire)
-    }
-}
-
-final class RadioCensusPowerTagTests: XCTestCase {
-    // The arm's lines carry the power tag only when the watch app installs one; with none
-    // installed (iOS, tests) they must stay unchanged rather than gain an empty separator.
-    func testThePowerTagIsAppendedOnlyWhenInstalled() {
-        let saved = G7RadioCensus.powerTag
-        defer { G7RadioCensus.powerTag = saved }
-
-        G7RadioCensus.powerTag = nil
-        XCTAssertEqual(G7RadioCensus.power, "")
-
-        G7RadioCensus.powerTag = { "pwr 41%/batt" }
-        XCTAssertEqual(G7RadioCensus.power, " · pwr 41%/batt")
-    }
-
-    // The real tag distinguishes the charge states the overnight question turns on.
-    func testTheWatchTagNamesTheChargeState() {
-        let tag = batteryTag()
-        XCTAssertTrue(tag.hasPrefix("pwr "), tag)
-        XCTAssertTrue(["batt", "chg", "full", "?"].contains { tag.hasSuffix($0) }, tag)
-    }
-}
-
-final class TailDelayLodgeTests: XCTestCase {
-    // The tail-delay arm is a measurement, not a default: it must stay off unless flipped.
-    func testTheTailDelayArmStaysOff() {
-        UserDefaults.standard.removeObject(forKey: G7TimedConnect.tailDelayLodgeKey)
-        XCTAssertFalse(G7TimedConnect.tailDelayLodge)
-    }
-
-    // It must aim at the SAME moment the hold does, and land inside the untested short window —
-    // long delays are already characterised as unreliable on a sleeping watch.
-    func testTheDelayTargetsTheHoldsMomentAndStaysShort() {
-        // A read completes ~4 s after link-up, which is when the disconnect fires.
-        for sinceLinkUp in [3.0, 4.0, 5.0, 12.0] {
-            let delay = max(1, G7TimedConnect.standingLodgeDelay - sinceLinkUp)
-            XCTAssertEqual(delay + sinceLinkUp, G7TimedConnect.standingLodgeDelay, accuracy: 0.001,
-                           "the lodge must land at the hold's target moment")
-            XCTAssertLessThan(delay, 40, "must stay in the short window this arm exists to test")
-            XCTAssertGreaterThanOrEqual(delay, 1, "whole seconds, never zero — CBError 1")
-        }
-    }
-}
-
-final class PetesFormulaTests: XCTestCase {
-    // Pete (2026-09-15 11:56): "delay = 298 - (now - bg_timestamp)". Our lodge computes
-    // (nextFire - now) - fastScanLead, and nextFire is bg_timestamp + period + fireOffset, so the
-    // two are the same expression exactly when the lead makes period + fireOffset - lead == 298.
-    func testTheLodgeReproducesPetesFormulaExactly() {
-        let bgTimestamp = Date(timeIntervalSince1970: 3_000_000)
-        // A lodge happens at the sensor's close, a few seconds after the reading.
-        for sinceReading in [3.0, 4.0, 5.5, 12.0] {
-            let now = bgTimestamp.addingTimeInterval(sinceReading)
-            let fire = G7TimedConnect.nextFire(anchor: bgTimestamp, now: now)
-            let ours = fire.timeIntervalSince(now) - G7TimedConnect.fastScanLead
-            let petes = 298 - now.timeIntervalSince(bgTimestamp)
-            XCTAssertEqual(ours, petes, accuracy: 0.001,
-                           "the lodge must be his formula verbatim, not a variant of it")
-        }
-    }
-
-    func testTheLeadIsTheOneThatMakesItHisFormula() {
-        XCTAssertEqual(G7TimedConnect.period + G7TimedConnect.fireOffset - G7TimedConnect.fastScanLead, 298,
-                       accuracy: 0.001, "period + fireOffset - lead == 298 is what makes this his formula")
+final class LoanWorkoutTests: XCTestCase {
+    // The whole-loan workout session is opt-in: the 2026-09-15 no-keepalive loan passed.
+    func testTheLoanWorkoutSessionStaysOff() {
+        UserDefaults.standard.removeObject(forKey: StockLoopSession.loanWorkoutKey)
+        XCTAssertFalse(StockLoopSession.loanWorkout)
     }
 }

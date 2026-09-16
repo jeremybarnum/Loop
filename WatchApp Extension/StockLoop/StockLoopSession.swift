@@ -20,42 +20,33 @@ final class StockLoopSession {
 
     /// Background runtime for the whole session.
     ///
-    /// watchOS suspends a third-party app seconds after the wrist drops, and there is NO
-    /// CoreBluetooth state restoration on watchOS — a suspended app cannot be woken by a BLE
-    /// event. An HKWorkoutSession is the only self-service API that keeps the process and its BLE
-    /// links alive. Riding the Dexcom watch app's session buys DATA, not RUNTIME: entitlements are
-    /// not inheritable by a co-resident app.
+    /// watchOS suspends a third-party app seconds after the wrist drops. The sensor side no longer
+    /// needs the process awake between bursts — its one request is daemon-held and CoreBluetooth
+    /// state restoration relaunches the app for the link (G7WatchAcquisition) — but the pod
+    /// ladders at a loan's ends still do: an HKWorkoutSession is the only self-service API that
+    /// keeps the process and its BLE links alive across a wrist drop.
     ///
     /// Refcounted by reason ("soak", "takeover", "handback") so overlapping holds cannot end the
     /// session early.
     private let keepalive = WorkoutKeepalive()
 
-    /// EXPERIMENT (2026-09-14): a loan without the workout keepalive. The "soak" holder — the
-    /// one that spans the whole loan (and the CGM-only test) — is suppressed; "takeover" and
-    /// "handback" keep their runtime, they are user-present ladders at the loan's ends. Between
-    /// bursts the app sleeps and the standing sensor request + fast path have to carry each cycle
-    /// inside the ~12 s wake. Dispatch timers in the loan controller do not run while suspended;
-    /// each logs "fired late" when that happens, and the +90 s deferred release after takeover is
-    /// the one to read for first. OFF by default.
-    static let loanWithoutWorkoutKey = "G7Lab.loan.noWorkout"
-    static var loanWithoutWorkout: Bool { UserDefaults.standard.bool(forKey: loanWithoutWorkoutKey) }
+    /// Whole-loan workout session (the "soak" holder, which spans the loan and the CGM-only test):
+    /// OFF by default since 2026-09-16 — the 2026-09-15 no-keepalive loan passed, so the app sleeps
+    /// between bursts and the daemon-held sensor request carries each cycle inside the wake.
+    /// "takeover" and "handback" keep their runtime regardless: they are user-present ladders at
+    /// the loan's ends. Dispatch timers in the loan controller do not run while suspended; each
+    /// logs "fired late" when that happens, and the +90 s deferred release after takeover is the
+    /// one to read for first. Diagnostics ▸ Pod loan flips it; read at the next loan start.
+    static let loanWorkoutKey = "G7Lab.loan.workout"
+    static var loanWorkout: Bool { UserDefaults.standard.bool(forKey: loanWorkoutKey) }
 
     private func setKeepalive(_ holding: Bool, reason: String) {
-        if reason == "soak", Self.loanWithoutWorkout {
-            SportLog.event("keepalive", "soak holder \(holding ? "SUPPRESSED" : "release ignored") — loan without workout experiment; the app sleeps between bursts")
+        if reason == "soak", !Self.loanWorkout {
+            SportLog.event("keepalive", "soak holder \(holding ? "not held" : "release ignored") — no workout session during loans (Diagnostics ▸ Pod loan); the app sleeps between bursts")
             keepalive.release(reason)   // never leave a stale soak holder behind if the toggle flipped mid-loan
-            stack.cgmManager.timedRuntimeDidChange()
             return
         }
         holding ? keepalive.acquire(reason) : keepalive.release(reason)
-        // Timed connect arms only under a keepalive (G7TimedConnect.runtimeAvailable, installed
-        // in init). Releasing is dispatched to main, so the release side re-evaluates on main
-        // AFTER the holder set has actually changed; acquiring flips isHeld synchronously.
-        if holding {
-            stack.cgmManager.timedRuntimeDidChange()
-        } else {
-            DispatchQueue.main.async { [stack] in stack.cgmManager.timedRuntimeDidChange() }
-        }
     }
 
     /// Re-assert the session if something still wants it. Called on every foreground: the one
@@ -85,27 +76,6 @@ final class StockLoopSession {
         // which never reaches the file the field analysis reads. Watch only — the phone leaves the
         // sink nil and keeps os_log.
         PodLoanConnectClock.podLoanLogSink = { line in SportLog.event("pod-ble", line) }
-
-        // The G7 radio census — names which of the three acquisition triggers fires
-        // (system-connected piggyback / connection event / ad scan), D2W's rhythm, and connect
-        // verdicts. Made the acquisition mechanism observed rather than inferred.
-        G7RadioCensus.sink = { line in SportLog.event("g7-ble", line) }
-        // The arm's link-up and lodge lines carry battery level + charge state AND the watch's
-        // network path, so a run's power regime (docked vs on-wrist, from the level's trend) and
-        // whether the watch had a route to the phone are both readable afterwards rather than
-        // recalled. Watch Bluetooth comes from the kit's own central, which it appends itself.
-        WatchNetCensus.shared.start()
-        G7RadioCensus.powerTag = { "\(batteryTag()) · net \(WatchNetCensus.shared.summary)" }
-        // Tail exposure + the pod hold's close-relative clock (PodRadioHold.swift): the adopted
-        // sensor's link closing starts the window; a scan of ours (never under ride-only) is
-        // one of the two things the [tail] line exists to catch.
-        G7RadioCensus.sensorClosed = { name in TailExposure.noteSensorClosed(name) }
-        G7RadioCensus.scanStarted = { TailExposure.noteScanStarted() }
-        // Timed, bounded connect must never fire from a process that is about to be suspended:
-        // a connect request issued seconds before suspension cannot be cancelled at the bound and
-        // sits as a standing request for hours (the 2026-09-12 freeze capture). Only a keepalive
-        // holder (loan, E1) proves the runtime, so the grid timer arms only while one exists.
-        G7TimedConnect.runtimeAvailable = { [keepalive] in keepalive.isHeld }
 
         // Main-thread stall detector. Runs from LAUNCH and never stops, unlike the loan-scoped
         // heartbeat below: a wedged main thread is exactly the condition under which nothing else

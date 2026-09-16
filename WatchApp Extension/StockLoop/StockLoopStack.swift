@@ -101,10 +101,9 @@ enum StockLoopStack {
         SportLog.event("session", "stack: cgm wired")
         cgmManager.delegateQueue = loopManager.deviceQueue
         cgmManager.cgmManagerDelegate = loopManager
-        // The stranded-identity rule needs to clear state and ask for a rescan; the manager is
-        // owned here, and WatchLoopManager is only its delegate.
+        // The start gate reads the sensor's name and age through the manager; it is owned here,
+        // and WatchLoopManager is only its delegate.
         loopManager.g7Manager = cgmManager
-        G7RadioCensus.sensorSighted = { [weak loopManager] name in loopManager?.noteSensorSighted(name) }
 
         return Stack(cgmManager: cgmManager, loopManager: loopManager)
     }

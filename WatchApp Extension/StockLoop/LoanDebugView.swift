@@ -63,30 +63,14 @@ struct LoanDebugView: View {
     /// toggle was removed, because Jeremy's adversarial review reopened the question it answers.
     /// Read at use in OmnipodKit, so flipping it takes effect on the next scan arm — no relaunch.
     @AppStorage("OmnipodKit.lowPowerMonitorEnabled") private var alarmScan = false   // matches the watchOS shipped default in OmnipodKit
-    /// Timed, bounded connect — see G7TimedConnect in G7SensorKit. ON by default on the watch
-    /// since 2026-09-13; the toggle is the diagnostic override (must match the kit's default).
-    @AppStorage("G7Lab.timedConnect") private var timedConnect = true
-    /// The start-delay experiment — see G7TimedConnect.systemHeld. OFF by default.
-    @AppStorage("G7Lab.timedConnect.systemHeld") private var systemHeld = false
-    /// Under the arm: standing request (no start delay) — see G7TimedConnect.standing. ON by default.
-    @AppStorage("G7Lab.timedConnect.standing") private var standingRequest = true
-    /// Under the standing request: re-lodge 35 s after link-up instead of at the disconnect — see
-    /// G7TimedConnect.lodgeLate. ON by default.
-    @AppStorage("G7Lab.timedConnect.lodgeLate") private var lodgeLate = true
-    /// Under the arm: lodge with a start delay timed to the next burst — see
-    /// G7TimedConnect.burstAligned. ON by default.
-    @AppStorage("G7Lab.timedConnect.burstAligned") private var burstAligned = true
-    /// Under the arm: hand the tail deferral to the daemon as a ~31 s start delay instead of
-    /// holding the app awake — see G7TimedConnect.tailDelayLodge. OFF by default (a measurement).
-    @AppStorage("G7Lab.timedConnect.tailDelayLodge") private var tailDelayLodge = false
-    /// Direct-auth fast path (stored shared key, no J-PAKE/certs after the first handshake) — see
-    /// G7DirectAuth.fastPath. ON by default.
-    @AppStorage("G7Lab.directAuth.fastPath") private var directAuthFastPath = true
-    /// Loan without the workout keepalive — see StockLoopSession.loanWithoutWorkout. OFF by default.
-    @AppStorage("G7Lab.loan.noWorkout") private var loanWithoutWorkout = false
-    /// Direct read — our own J-PAKE handshake, no Dexcom watch app. See G7DirectAuth. ON by
-    /// default on the watch since 2026-09-13; the toggle is the diagnostic override.
+    /// Authentication — Loop's own J-PAKE handshake (ON, the watch default since 2026-09-13) or
+    /// riding the Dexcom watch app (OFF). Must match the kit's default (G7DirectAuth.enabled).
     @AppStorage("G7Lab.directAuth") private var directAuth = true
+    /// How the next request reaches the daemon after each reading — see G7WatchAcquisition.relodge.
+    /// `holdApp` is the proven arm (33/33); `peteDelay` is Pete's formula (measured 1 in 4).
+    @AppStorage("G7Lab.relodge") private var relodge = "holdApp"
+    /// Whole-loan workout session — see StockLoopSession.loanWorkout. OFF by default.
+    @AppStorage("G7Lab.loan.workout") private var loanWorkout = false
 
     private let refresh = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
@@ -135,6 +119,19 @@ struct LoanDebugView: View {
                 row("last act", lastAction)
 
                 Divider().padding(.vertical, 2)
+
+                Text("POD LOAN").font(.footnote).foregroundColor(.secondary)
+
+                // The whole-loan workout session (the "soak" holder) is OFF by default: the
+                // 2026-09-15 no-keepalive loan passed — the app sleeps between bursts and the
+                // daemon-held sensor request carries each cycle inside the wake. Takeover and
+                // hand-back keep their own runtime holds either way. Read at the next loan start
+                // (StockLoopSession.loanWorkout).
+                Button("Keep a workout session running during loans: \(loanWorkout ? "ON" : "OFF") → tap to flip") {
+                    loanWorkout.toggle()
+                    SportLog.event("lab", "loan workout session = \(loanWorkout ? "ON — the soak holder spans the next loan" : "OFF — the app sleeps between bursts; takeover/hand-back keep their runtime")")
+                    lastAction = "loan workout → \(loanWorkout ? "ON" : "OFF") — next loan"
+                }
 
                 // Request Loan / Hand Back removed 2026-07-24 — both are redundant with
                 // the glance's "Start Sport Mode" and hand-back flow (requestLoan /
@@ -193,37 +190,95 @@ struct LoanDebugView: View {
                 // toggle experiment that settled it: held link = 0 adoptions in ~130 min;
                 // released = adoption within 7-10 min, twice for two.
 
-                // *** RE-ACQUIRE (BENCH) *** Forget the adopted sensor and
-                // run a full COLD acquisition against the CURRENT sensor — scan, connect,
-                // service discovery, auth subscribe, adoption. This is the contested phase of
-                // the held-pod-link finding, and without this button it is testable only once
-                // per 10-day sensor. With it + the g7-ble radio census, held-vs-released link
-                // experiments are on demand. Ladybug-class: REMOVE PRE-PRODUCTION.
-                // Safe: worst case is a re-adoption delay while the relay covers, same as any
-                // new-sensor day; no therapy state is touched.
-                Text("CGM ACTIONS").font(.footnote).foregroundColor(.secondary)
+                // SENSOR — the two choices that still support a live debate (authentication, and
+                // how the next request reaches the daemon), Pete's idle pod-fault scan, and the one
+                // action. Everything settled or failed came off this page on 2026-09-16.
+                Text("SENSOR").font(.footnote).foregroundColor(.secondary)
 
-                // Ordered CHEAPEST FIRST, because the screen is read while something is wrong
-                // and the top button should be the one to try first.
+                // AUTHENTICATION. Loop's own J-PAKE handshake reads the sensor with no Dexcom watch
+                // app (production since 2026-09-13; needs the sensor's pairing code, entered once per
+                // sensor in Loop ▸ Dexcom G7 on the phone). "Ride" is the OFF state: the arm still
+                // lodges a request but starts no handshake, and the stock passive observer reads
+                // whatever the Dexcom watch app authenticates.
+                Picker("Authentication", selection: $directAuth) {
+                    Text("Loop's own handshake").tag(true)
+                    Text("Ride the Dexcom watch app").tag(false)
+                }
+                .pickerStyle(.navigationLink)
+                .font(.caption2)
+                .onChange(of: directAuth) { _, on in
+                    SportLog.event("lab", "authentication = \(on ? "Loop's own handshake (next connect)" : "ride the Dexcom watch app — no handshake of ours")")
+                    lastAction = "authentication → \(on ? "Loop's own" : "ride Dexcom")"
+                }
+                if !directAuth {
+                    Text("riding the Dexcom watch app — the watch reads only what Dexcom authenticates")
+                        .font(.caption2).foregroundColor(.orange)
+                }
+                if let needs = G7DirectAuth.needsCodeFor {
+                    // The connect reached a sensor we have no pairing code for. The code lives in
+                    // the Dexcom app; it is entered once per sensor in Loop ▸ Dexcom G7 on the phone.
+                    Text("Sensor code needed for \(needs) — enter it in Loop ▸ Dexcom G7 on the phone (shown in the Dexcom app).")
+                        .font(.caption2).foregroundColor(.red)
+                }
+
+                // RE-LODGE. After each reading the sensor closes the link and advertises a 20–24 s
+                // tail; how the next request reaches the daemon without touching that tail is the
+                // open question with Pete. Read by the kit at each close (G7WatchAcquisition.relodge).
+                Picker("Re-lodge", selection: $relodge) {
+                    Text("Pete's start delay").tag("peteDelay")
+                    Text("Hold the app 35 s").tag("holdApp")
+                }
+                .pickerStyle(.navigationLink)
+                .font(.caption2)
+                .onChange(of: relodge) { _, arm in
+                    SportLog.event("lab", "re-lodge = \(arm) — takes effect at the next close")
+                    lastAction = "re-lodge → \(arm) — next close"
+                }
+                Text(relodge == "peteDelay"
+                     ? "Pete's start delay, aimed at the next reading (≈298 s) — measured 1 in 4"
+                     : "Hold the app 35 s after link-up, then a plain connect — measured 33 in 33; 35 s of runtime per cycle")
+                    .font(.caption2).foregroundColor(.secondary)
+
+                // WHY THIS IS BACK. The alarm scan is next-dev-only: Caitlin's branch has no
+                // C00A listener at all, yet wedges just as readily — so it is not necessary for
+                // the mute. But the 09-08 capture shows our pod scan escalating to its top level
+                // ~115 s after the pod orphans, which is ~110 s after the SENSOR closes, because
+                // both hang off the same 5-minute cycle. Today's failed sensor connections landed
+                // at close +109…+110 s: on two of four, our escalation and the failure share a
+                // second. So we put a scan on the radio at almost exactly the moment the daemon
+                // retries the sensor, every cycle, by construction.
                 //
-                // RECONNECT keeps the sensor's identity — it drops our link and re-acquires the
-                // SAME sensor. This is the first move for a client that has stopped delivering.
-                // It deliberately forces one acquisition pass THROUGH ride-only (Jeremy,
-                // 2026-09-08: "we can violate ride only when it's a button that I push"): the
-                // policy exists to keep our radio out of the sensor's tail automatically, and a
-                // tap is not the automatic case. Without the bypass this button would only
-                // re-register for connection events and then wait up to a full 5-minute window
-                // for Dexcom's next link, which is not what someone pressing a button wants.
-                // The override is consumed by that one pass; the next re-arm is ride-only again.
+                // Not sufficient either: the same collision recurs six times in the clean window
+                // after 11:00 with 27/27 connections succeeding. So this is a candidate
+                // AGGRAVATOR, and the only way to price it is to turn it off and repeat a
+                // phone-away arm.
                 //
-                // It does NOT clear a parked -70 floor. Nothing in our process can: that lives
-                // in bluetoothd's accept list and only a Bluetooth toggle, a strong burst or a
-                // reboot clears it. If reconnect changes nothing and the sensor is silent, the
-                // watch's own Bluetooth is the next thing to try, not this.
-                Button("Reconnect CGM") {
+                // COST OF OFF: no connectionless pod-fault detection while the pod is orphaned —
+                // a fault is then found at the next cycle's connect instead of within ~1 min.
+                // Alerts are unaffected (they never changed the advertised UUID; the heartbeat
+                // probe surfaces those). Fine on a bench pod, a real consideration on a live one.
+                Button("Pod fault scan (C00A): \(alarmScan ? "ON" : "OFF") → tap to flip") {
+                    alarmScan.toggle()
+                    SportLog.event("lab", "C00A pod fault scan = \(alarmScan ? "ON" : "OFF") — takes effect at the next scan arm")
+                    lastAction = "C00A fault scan → \(alarmScan ? "ON" : "OFF")"
+                }
+                // OFF is now the shipped default (2026-09-09: it is what parks the -70 floor).
+                // The warning therefore points the other way — ON is the experimental state.
+                if alarmScan {
+                    Text("fault scan ON — this is what wedges the G7; turn OFF unless testing")
+                        .font(.caption2).foregroundColor(.orange)
+                }
+
+                // RECONNECT keeps the sensor's identity: it drops our link or the lodged request
+                // and runs ONE bootstrap scan pass for the SAME sensor — the first move for a
+                // client that has stopped delivering. It does NOT clear a parked -70 floor. Nothing
+                // in our process can: that lives in bluetoothd's accept list and only a Bluetooth
+                // toggle, a strong burst or a reboot clears it. If reconnect changes nothing and
+                // the sensor is silent, the watch's own Bluetooth is the next thing to try, not this.
+                Button("Reconnect sensor") {
                     SportLog.event("g7-ble", "*** USER RECONNECT *** dropping the G7 link and re-acquiring the same sensor")
-                    ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager.recycleG7ConnectForLab()
-                    lastAction = "CGM reconnect started"
+                    ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager.reconnectG7()
+                    lastAction = "sensor reconnect started"
                 }
 
                 // "Re-acquire Sensor (cold)" — stock's forget-and-scan — was removed 2026-09-13.
@@ -256,145 +311,6 @@ struct LoanDebugView: View {
                 // rather than looking like a stall.
                 Text("pod hold: \(PodRadioHold.modeText)")
                     .font(.caption2).foregroundColor(.secondary)
-
-                Divider().padding(.vertical, 2)
-                Text("WATCH DIRECT READ").font(.footnote).foregroundColor(.secondary)
-
-                // Crypto self-test: proves libg7auth + OpenSSL are linked into this build by
-                // initializing the embedded J-PAKE crypto. No sensor contact. The first thing to
-                // tap on a fresh install.
-                Button("Crypto self-test (links + init)") {
-                    let ok = ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager
-                        .directAuthCryptoSelfTest(pin4: [0x39, 0x31, 0x35, 0x31]) ?? false
-                    lastAction = "crypto: \(ok ? "links + init OK" : "init FAILED")"
-                    SportLog.event("lab", "direct-auth crypto self-test = \(ok ? "OK" : "FAILED")")
-                }
-
-                // DIRECT READ — the watch's own J-PAKE handshake to the sensor on every connect;
-                // no Dexcom watch app. Production path since 2026-09-13 (default ON). Needs the
-                // sensor's 4-digit pairing code, entered once per sensor in Loop ▸ Dexcom G7 on
-                // the phone. OFF returns to stock acquisition, which on this watch means waiting
-                // for a Dexcom link that does not exist — diagnostic only.
-                Button("Direct read (own J-PAKE): \(directAuth ? "ON" : "OFF") → tap to flip") {
-                    directAuth.toggle()
-                    SportLog.event("lab", "direct auth = \(directAuth ? "ON — own J-PAKE handshake on next connect" : "OFF")")
-                    lastAction = "direct read → \(directAuth ? "ON" : "OFF")"
-                }
-                if !directAuth {
-                    Text("direct read OFF — the watch will not read the sensor on its own. Diagnostic only.")
-                        .font(.caption2).foregroundColor(.orange)
-                }
-                if let needs = G7DirectAuth.needsCodeFor {
-                    // The connect reached a sensor we have no pairing code for. The code lives in
-                    // the Dexcom app; it is entered once per sensor in Loop ▸ Dexcom G7 on the phone.
-                    Text("Sensor code needed for \(needs) — enter it in Loop ▸ Dexcom G7 on the phone (shown in the Dexcom app).")
-                        .font(.caption2).foregroundColor(.red)
-                }
-
-                // WHY THIS IS BACK. The alarm scan is next-dev-only: Caitlin's branch has no
-                // C00A listener at all, yet wedges just as readily — so it is not necessary for
-                // the mute. But the 09-08 capture shows our pod scan escalating to its top level
-                // ~115 s after the pod orphans, which is ~110 s after the SENSOR closes, because
-                // both hang off the same 5-minute cycle. Today's failed sensor connections landed
-                // at close +109…+110 s: on two of four, our escalation and the failure share a
-                // second. So we put a scan on the radio at almost exactly the moment the daemon
-                // retries the sensor, every cycle, by construction.
-                //
-                // Not sufficient either: the same collision recurs six times in the clean window
-                // after 11:00 with 27/27 connections succeeding. So this is a candidate
-                // AGGRAVATOR, and the only way to price it is to turn it off and repeat a
-                // phone-away arm.
-                //
-                // COST OF OFF: no connectionless pod-fault detection while the pod is orphaned —
-                // a fault is then found at the next cycle's connect instead of within ~1 min.
-                // Alerts are unaffected (they never changed the advertised UUID; the heartbeat
-                // probe surfaces those). Fine on a bench pod, a real consideration on a live one.
-                Button("Pod fault scan (C00A): \(alarmScan ? "ON" : "OFF") → tap to flip") {
-                    alarmScan.toggle()
-                    SportLog.event("lab", "C00A pod fault scan = \(alarmScan ? "ON" : "OFF") — takes effect at the next scan arm")
-                    lastAction = "C00A fault scan → \(alarmScan ? "ON" : "OFF")"
-                }
-                // OFF is now the shipped default (2026-09-09: it is what parks the -70 floor).
-                // The warning therefore points the other way — ON is the experimental state.
-                if alarmScan {
-                    Text("fault scan ON — this is what wedges the G7; turn OFF unless testing")
-                        .font(.caption2).foregroundColor(.orange)
-                }
-
-                // TIMED, BOUNDED CONNECT — how the watch acquires (default ON since 2026-09-13):
-                // one request per 5-min burst, placed at the burst start on the sensor's own
-                // clock and withdrawn at 5 s; no scan, no standing request, so nothing of ours
-                // can feed bluetoothd's failed-establishment tally (three captures, tally 0).
-                // Arms only while a loan or the CGM-only test holds the keepalive. OFF returns
-                // to stock's standing request — the tally feeder — diagnostic only.
-                Button("Timed connect (at each burst, 5 s bound): \(timedConnect ? "ON" : "OFF") → tap to flip") {
-                    timedConnect.toggle()
-                    ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager.setTimedConnectForLab(timedConnect)
-                    SportLog.event("lab", "timed bounded connect = \(timedConnect ? "ON" : "OFF") — \(timedConnect ? "one request at each burst start, withdrawn at 5 s; no scan, no standing request" : "stock acquisition resumes (standing request)")")
-                    lastAction = "timed connect → \(timedConnect ? "ON" : "OFF")"
-                }
-                if !timedConnect {
-                    Text("timed connect OFF — stock standing request; this is what feeds the daemon's tally. Diagnostic only.")
-                        .font(.caption2).foregroundColor(.orange)
-                }
-
-                // SYSTEM-HELD CONNECT — the experiment for Pete's suggestion (2026-09-13): the
-                // same grid request, but lodged with the daemon via the connect start-delay
-                // option and started by the system, with the central opted into state
-                // restoration so watchOS may relaunch the app for the link. No keepalive by
-                // design. Measures the wake latency and the cost of an un-withdrawn miss.
-                Button("System-held connect (start-delay arm): \(systemHeld ? "ON" : "OFF") → tap to flip") {
-                    systemHeld.toggle()
-                    SportLog.event("lab", "system-held connect = \(systemHeld ? "ON" : "OFF") — \(systemHeld ? "requests lodged with the daemon via start delay; central opts into restoration on next launch; no keepalive needed" : "back to our own timer under the keepalive")")
-                    ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager.timedRuntimeDidChange()
-                    lastAction = "system-held → \(systemHeld ? "ON" : "OFF") — relaunch the app"
-                }
-                if systemHeld {
-                    Text("EXPERIMENT — relaunch the app after flipping. Then run the CGM-only test until ONE reading lands (the arm needs an adopted sensor to lodge for) and stop it, so the app sleeps. A missed burst leaves the request standing into the sensor's tail; that exposure is part of what is measured. If the platform refuses the start-delay option, the arm disables itself for the launch and the log says so.")
-                        .font(.caption2).foregroundColor(.orange)
-                    Button("Standing request (no start delay): \(standingRequest ? "ON" : "OFF") → tap to flip") {
-                        standingRequest.toggle()
-                        SportLog.event("lab", "standing request = \(standingRequest ? "ON" : "OFF") — \(standingRequest ? "connect lodged at disconnect with no delay; the controller connects at the sensor's next advertisement" : "start-delay form: the daemon's own timer, which the 09-14 event run showed fires 5–20 min late while the app sleeps")")
-                        lastAction = "standing request → \(standingRequest ? "ON" : "OFF") — takes effect at the next lodge"
-                    }
-                    Text("ON: the address sits in the accept list from our disconnect, so the radio connects at the next burst (including the sensor's one-minute bursts when the phone is away) instead of waiting for bluetoothd's late timer. Accepts the tally risk the timed design avoided; the capture measures it.")
-                        .font(.caption2).foregroundColor(.secondary)
-                    Button("Burst-aligned start delay: \(burstAligned ? "ON" : "OFF") → tap to flip") {
-                        burstAligned.toggle()
-                        SportLog.event("lab", "burst-aligned = \(burstAligned ? "ON" : "OFF") — \(burstAligned ? "lodge with a start delay so the daemon's 6-s fast connection scan opens on the burst; nothing on the air until then" : "bare standing request; the 6-s fast scan is spent at the lodge and the burst is caught only by the low-power scan")")
-                        lastAction = "burst-aligned → \(burstAligned ? "ON" : "OFF") — next lodge"
-                    }
-                    Text("bluetoothd hunts an accept-list entry hard for only 6 s after each connect call, then drops to a 4–10% duty scan — that is why catches ranged +0.2 s to +16 min and three bursts in a row were missed. A start delay defers both the accept-list add and those 6 s, so they land on the burst and never on the sensor's tail (the tail attempts parked the −70 floor at 22:54).")
-                        .font(.caption2).foregroundColor(.secondary)
-                    Button("Tail delay on the daemon's clock: \(tailDelayLodge ? "ON" : "OFF") → tap to flip") {
-                        tailDelayLodge.toggle()
-                        SportLog.event("lab", "tail-delay lodge = \(tailDelayLodge ? "ON" : "OFF") — \(tailDelayLodge ? "lodge at the disconnect with a ~31 s start delay and let the app suspend; the daemon holds the tail deferral" : "hold the app awake 35 s and then lodge a plain connect")")
-                        lastAction = "tail delay → \(tailDelayLodge ? "ON" : "OFF") — next read"
-                    }
-                    Text("The last untested length of the start-delay mechanism. Every failure so far was a long delay (87 s missed, 291/293 s missed, 54–295 s fired 5–65 min late) and the one on-time firing had the app awake. ~31 s is the only length that might expire before the host sleeps. ON replaces the hold; watch for TAIL-DELAY in the log and whether the next burst lands on time.")
-                        .font(.caption2).foregroundColor(.orange)
-                    Button("Lodge late (35 s after link-up): \(lodgeLate ? "ON" : "OFF") → tap to flip") {
-                        lodgeLate.toggle()
-                        SportLog.event("lab", "lodge late = \(lodgeLate ? "ON" : "OFF") — \(lodgeLate ? "after a read the re-lodge waits out the sensor's tail under an expiring-activity hold" : "re-lodge at the disconnect (reconnect storm + tail attempts count on the tally)")")
-                        lastAction = "lodge late → \(lodgeLate ? "ON" : "OFF") — next read"
-                    }
-                    Text("The 21:54 capture: re-lodging at the disconnect cost 2 tally counts in 45 min (5 in 5.8 h = the −70 floor). ON defers the re-lodge to +35 s, or to the moment the system ends the hold — the log says which and how long the hold ran.")
-                        .font(.caption2).foregroundColor(.secondary)
-                }
-                Button("Direct-auth fast path (stored key, no J-PAKE/certs): \(directAuthFastPath ? "ON" : "OFF") → tap to flip") {
-                    directAuthFastPath.toggle()
-                    SportLog.event("lab", "direct-auth fast path = \(directAuthFastPath ? "ON" : "OFF")")
-                    lastAction = "fast path → \(directAuthFastPath ? "ON" : "OFF") — next connection"
-                }
-                Text("After one full handshake per sensor the shared key is stored; later connections replay only the AES challenge (~1.2 s instead of 7). A rejected challenge clears the key and the full handshake runs. Log: FAST PATH / STORED / REJECTED.")
-                    .font(.caption2).foregroundColor(.secondary)
-                Button("Loan WITHOUT workout keepalive: \(loanWithoutWorkout ? "ON" : "OFF") → tap to flip") {
-                    loanWithoutWorkout.toggle()
-                    SportLog.event("lab", "loan without workout = \(loanWithoutWorkout ? "ON" : "OFF") — \(loanWithoutWorkout ? "soak holder suppressed; takeover/handback keep their runtime; each cycle must fit the standing-request wake" : "workout keepalive spans the loan again")")
-                    lastAction = "loan without workout → \(loanWithoutWorkout ? "ON" : "OFF") — next loan"
-                }
-                Text("EXPERIMENT — needs the system-held arm ON with the standing request. The app sleeps between bursts; the cycle (read, compute, pod command, release) runs inside the ~12 s wake. Bench first with the water pod: read the log for timers that 'fired late' — the +90 s deferred release after takeover is the known hazard.")
-                    .font(.caption2).foregroundColor(.orange)
 
                 // RADIO STRESS RETIRED: the question it existed to
                 // answer — does a pod command every single cycle disturb the CGM? — came back
@@ -614,7 +530,7 @@ struct LogView: View {
 
 // RADIO LAB REMOVED 2026-09-08 (Jeremy: "we don't need the radio lab anymore").
 // Every question it existed to answer has been settled and the answers are hardcoded:
-//   - the G7 doorway toggles went in the 2026-08-25 settlement (now one G7RidePolicy);
+//   - the G7 doorway toggles went in the 2026-08-25 settlement (now one acquisition arm, G7WatchAcquisition);
 //   - "Alarm scan (C00A)" was one OmnipodKit key nobody had flipped in weeks, and it stays
 //     at its shipped default (the key is still read at use, so a shell default still works);
 //   - the reclaim exerciser answered the reclaim-cadence question months ago.
