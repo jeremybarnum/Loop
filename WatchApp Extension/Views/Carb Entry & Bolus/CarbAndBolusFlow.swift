@@ -223,20 +223,33 @@ extension CarbAndBolusFlow {
         .transition(.fadeIn(after: 0.175))
     }
 
+    /// Non-blocking read (a view must never sync onto the loan controller's queue).
+    private var loanIsActive: Bool {
+        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.isLoanActiveNonBlocking ?? false
+    }
+
     private var saveCarbsAndBolusButton: some View {
         ActionButton(
             title: saveButtonText,
             color: bolusAmount > 0 || configuration == .manualBolus ? .insulin : .blue
         ) {
-            // CARBS GET THE CEREMONY TOO. Stock commits a carbs-only entry on a single tap,
-            // reasoning that carbs are not insulin. Under a loan they are insulin on a delay —
-            // the wrist doses against COB, so a mistaken or doubled entry becomes insulin a few
-            // minutes later with nobody in the loop. The gesture that guards a bolus should guard
-            // the thing that causes one. Deliberate deviation (Jeremy, 2026-08-18); pure made the
-            // same call and this matches its shape rather than inventing a second one.
-            if self.bolusAmount <= 0, case .manualBolus = self.configuration { return }
-            withAnimation {
-                self.flowState = .bolusConfirmation
+            // Under a LOAN carbs get the bolus ceremony too: the wrist doses against COB, so a
+            // mistaken or doubled entry becomes insulin a few minutes later with nobody in the
+            // loop (deliberate, 2026-08-18). Off-loan this is stock: a carbs-only entry commits
+            // on a single tap and goes to the phone.
+            if self.bolusAmount > 0 || loanIsActive {
+                withAnimation {
+                    self.flowState = .bolusConfirmation
+                }
+            } else if case .carbEntry = self.configuration {
+                Task {
+                    do {
+                        try await self.viewModel.addCarbsWithoutBolusing()
+                        dismiss()
+                    } catch {
+                        viewModel.error = .bolusMessageSendFailure
+                    }
+                }
             }
         }
         .offset(y: actionButtonOffsetY)
