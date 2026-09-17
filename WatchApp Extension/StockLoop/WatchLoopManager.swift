@@ -20,7 +20,7 @@
 //    updatePredictedGlucoseAndRecommendedDose(with:) -> same name
 //    recommendBolusValidatingDataRecency / recommendManualBolus -> same names
 //    enactRecommendedAutomaticDose()       -> same name (enact seam, M4: unconnected)
-//    DoseEnactor.enact(recommendation:with:) (Loop/Managers/DoseEnactor.swift) -> WatchDoseEnactor
+//    DoseEnactor.enact(recommendation:with:) (Loop/Managers/DoseEnactor.swift) -> the enactor
 //    DeviceDataManager.cgmManager(_:hasNew:) + processCGMReadingResult
 //        (Loop/Managers/DeviceDataManager.swift:580/:1001) -> CGMManagerDelegate extension
 //
@@ -230,12 +230,6 @@ final class WatchLoopManager {
     var podBeepsOnManualBolusProbe: (() -> Bool)?
     var podBeepsOnManualBolus: Bool { podBeepsOnManualBolusProbe?() ?? false }
 
-    /// The loan controller's dose-recording hooks (spec §1.2); set alongside
-    /// `pumpManager` by PodLoanWatchController, cleared with it.
-    weak var loanDoseRecorder: WatchLoanDoseRecording? {
-        get { doseEnactor.loanRecorder }
-        set { doseEnactor.loanRecorder = newValue }
-    }
 
 
     /// Device-log storm dedupe (see logEventForDeviceIdentifier). Any thread may log.
@@ -913,13 +907,7 @@ final class WatchLoopManager {
 
     /// Test seam, same shape as the phone's `now()`.
     ///
-    /// Item 2 (2026-08-11): propagates to the dose enactor, which keeps its own clock
-    /// (separate type, can't reach this one). Without the didSet, a test that set this
-    /// would still get wall-clock timestamps on every dose the enactor records into the
-    /// ledger — the exact values such a test is usually asserting on.
-    var now: () -> Date = { Date() } {
-        didSet { doseEnactor.now = now }
-    }
+    var now: () -> Date = { Date() }
 
     /// Item 2 companion seam: bench flags and persisted CGM state read/write through this,
     /// so a test can hand in a scratch suite instead of the host app's real defaults.
@@ -1358,6 +1346,7 @@ final class WatchLoopManager {
         }
     }
 
+    /// A labeled copy of stock's DoseEnactor (see WatchDoseEnactor.swift): temp first, then bolus.
     private let doseEnactor = WatchDoseEnactor()
 
     // MARK: - Loop cycle (mirrors loop()/loopInternal())
@@ -2152,9 +2141,7 @@ final class WatchLoopManager {
             // The delivery itself, factored so it can run once the pod-radio hold opens.
             let deliverBolus = {
                 SportLog.event("loan", String(format: "MANUAL BOLUS %.2f U — enacting on the watch pump", rounded))
-                let eventID = self.doseEnactor.loanRecorder?.loanWillEnactBolus(units: rounded)
                 pumpManager.enactBolus(decisionId: nil, units: rounded, activationType: activationType) { error in
-                    self.doseEnactor.loanRecorder?.loanDidEnact(eventID: eventID, error: error)
                     if let error = error {
                         SportLog.event("loan", "MANUAL BOLUS FAILED — \(String(describing: error))")
                     } else {
@@ -2286,8 +2273,13 @@ final class WatchLoopManager {
             return .pumpSuspended
         }
 
-        let updateGroup = DispatchGroup()
-        updateGroup.enter()
+        // Stock's refusal (DeviceDataManager.enactDose): no command while the pod's last one is
+        // unacknowledged. OmnipodKit recovers it on its next session, and the book then gets the
+        // resolved truth rather than a guess.
+        guard !pumpManager.status.deliveryIsUncertain else {
+            SportLog.event("dose", "enact refused — the pod's last command is unacknowledged (delivery uncertain); the pump manager resolves it on its next session")
+            return .enactFailed("delivery uncertain")
+        }
         var enactError: WatchLoopError?
 
         // RADIO STRESS REMOVED — it established that there is no radio contention when
@@ -2301,14 +2293,25 @@ final class WatchLoopManager {
         // 2026-09-16 once the daemon-held connect arm removed the tail reconnects it existed for.
         //
         // In git: the tool, its jitter alternator, and its debug toggle are at 37d7219d.
-        doseEnactor.enact(recommendation: recommendedDose.recommendation, with: pumpManager) { error in
-            if let error = error {
-                // .enactFailed, NOT .missingDataError — see the case's own note.
-                enactError = .enactFailed(String(describing: error))
-            }
-            updateGroup.leave()
+        let recommendation = recommendedDose.recommendation
+        // What the pod is ACTUALLY being told, and whether it took it — the field log's only
+        // evidence that a command went out at all.
+        let temp = recommendation.basalAdjustment   // a recommendation always carries a basal on this branch
+        SportLog.event("dose", String(format: "enacting temp %.2f U/hr × %.0f min", temp.unitsPerHour, temp.duration / 60))
+        if let bolus = recommendation.bolusUnits, bolus > 0 {
+            SportLog.event("dose", String(format: "enacting bolus %.2f U", bolus))
         }
-        updateGroup.wait()
+        do {
+            try runBlocking {
+                try await self.doseEnactor.enact(decisionId: nil, bolus: recommendation.bolusUnits,
+                                                 tempBasal: recommendation.basalAdjustment, with: pumpManager)
+            }
+            SportLog.event("dose", String(format: "temp %.2f U/hr ACCEPTED by pod", temp.unitsPerHour))
+        } catch {
+            // .enactFailed, NOT .missingDataError — see the case's own note.
+            SportLog.event("dose", "enact FAILED — \(String(describing: error))")
+            enactError = .enactFailed(String(describing: error))
+        }
 
         if enactError == nil {
             self.recommendedAutomaticDose = nil

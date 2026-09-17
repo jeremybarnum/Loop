@@ -162,6 +162,13 @@ final class LoanEventJournal {
     // MARK: - Streaming / hand-back (§2.4, §2.5)
 
     /// Events the phone has not committed yet — same IDs on every call (retry-stable).
+    /// Whether any event of the active loan — acked or not — already carries this store
+    /// identity. The pump manager re-reports a running dose on every session; it is journaled once.
+    func contains(syncIdentifier: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return state?.events.contains { $0.record.syncIdentifier == syncIdentifier } ?? false
+    }
+
     func unackedEvents() -> [LoanEvent] {
         lock.lock(); defer { lock.unlock() }
         guard let s = state else { return [] }

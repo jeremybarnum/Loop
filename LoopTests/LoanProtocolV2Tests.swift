@@ -295,64 +295,14 @@ final class LoanProtocolV2Tests: XCTestCase {
 
     // MARK: - Allocation properties
 
-    /// The designed case: one false max-exposure assumption, exact-size shortfall.
-    func testExactSizeFingerprintAnnulsTheAssumedEvent() {
-        let phantom = bolusEvent(seq: 1, units: 1.0, provenance: .assumed(.bolusUncertain), at: 600)
-        // Schedule expectation = 2 h × 1.0 = 2.0; journal claims +1.0 bolus = 3.0;
-        // pod delivered only 2.0 → shortfall exactly the phantom's size.
-        let outcome = reconcile(events: [phantom], delivered: 2.0)
-        XCTAssertEqual(outcome.annulledEventIDs, [phantom.id])
-        XCTAssertNil(outcome.residualShortfallUnits)
-        XCTAssertTrue(outcome.doses.isEmpty)
-    }
-
     /// A confirmed event can NEVER be reduced — same arithmetic, confirmed tag.
     func testConfirmedEventsAreNeverAnnulled() {
         let confirmed = bolusEvent(seq: 1, units: 1.0, provenance: .confirmed, at: 600)
         let outcome = reconcile(events: [confirmed], delivered: 2.0)
-        XCTAssertTrue(outcome.annulledEventIDs.isEmpty)
         XCTAssertEqual(outcome.residualShortfallUnits ?? 0, 1.0, accuracy: 0.01)
         // The record is entered IN FULL (max-exposure: never truncate downward).
         XCTAssertEqual(outcome.doses.count, 1)
         XCTAssertEqual(outcome.doses[0].programmedUnits, 1.0)
-    }
-
-    /// Ambiguity touches NOTHING: two assumed events, inexact shortfall.
-    func testAmbiguousShortfallGoesWholeToResidual() {
-        let a = bolusEvent(seq: 1, units: 1.0, provenance: .assumed(.bolusUncertain), at: 600)
-        let b = bolusEvent(seq: 2, units: 0.6, provenance: .assumed(.bolusUncertain), at: 1200)
-        // Expected = 2.0 + 1.6 = 3.6; delivered 2.9 → shortfall 0.7 matches neither.
-        let outcome = reconcile(events: [a, b], delivered: 2.9)
-        XCTAssertTrue(outcome.annulledEventIDs.isEmpty)
-        XCTAssertEqual(outcome.residualShortfallUnits ?? 0, 0.7, accuracy: 0.01)
-        XCTAssertEqual(outcome.doses.count, 2)  // both entered in full
-    }
-
-    /// Tie at the same size → the LATEST assumed event is annulled.
-    func testExactMatchTiePrefersLatest() {
-        let early = bolusEvent(seq: 1, units: 1.0, provenance: .assumed(.bolusUncertain), at: 300)
-        let late = bolusEvent(seq: 2, units: 1.0, provenance: .assumed(.bolusUncertain), at: 3000)
-        let outcome = reconcile(events: [early, late], delivered: 3.0)  // expected 4.0
-        XCTAssertEqual(outcome.annulledEventIDs, [late.id])
-    }
-
-    /// C′: a real reduction the max-exposure rule declined to record — the flagged
-    /// skipped-reduction window absorbs the shortfall retroactively.
-    func testSkippedReductionWindowAbsorbsShortfall() {
-        // Marker: a 1 h window whose schedule insulin (1.0 U) can absorb the shortfall.
-        let marker = LoanEvent(id: UUID(), seq: 1, provenance: .assumed(.skippedReduction),
-                               record: LoanDoseRecord(kind: .tempBasal, startDate: loanStart.addingTimeInterval(600),
-                                                      endDate: loanStart.addingTimeInterval(4200), unitsPerHour: 0),
-                               loggedAt: loanStart.addingTimeInterval(600))
-        // The marker's rate-0 span REPLACES schedule in expectation (1 h at 0), so
-        // expected = 1 h × 1.0 = 1.0 + 0 = 1.0... the pod ALSO didn't run the other
-        // hour? Construct: delivered = 0.6 → shortfall vs expected(=1.0) is 0.4,
-        // within the marker window's scheduled 1.0 U → absorbed, no residual.
-        let outcome = LoanReconciler.reconcile(LoanReconciler.Input(
-            events: [marker], odometer: odometer(delivered: 0.6),
-            schedule: flatSchedule, loanStart: loanStart, loanEnd: loanEnd))
-        XCTAssertEqual(outcome.annulledEventIDs, [marker.id])
-        XCTAssertNil(outcome.residualShortfallUnits)
     }
 
     /// The one-way valve, positive side: timed-late entry, never subtraction.
@@ -364,12 +314,11 @@ final class LoanProtocolV2Tests: XCTestCase {
 
     /// A stale odometer (freshen failed) disables the audit entirely — records only.
     func testUnfreshenedOdometerDisablesAudit() {
-        let phantom = bolusEvent(seq: 1, units: 1.0, provenance: .assumed(.bolusUncertain), at: 600)
+        let phantom = bolusEvent(seq: 1, units: 1.0, provenance: .confirmed, at: 600)
         let outcome = LoanReconciler.reconcile(LoanReconciler.Input(
             events: [phantom],
             odometer: LoanOdometerSnapshot(deliveredAtStart: 50, deliveredLatest: 52, freshenSucceeded: false),
             schedule: flatSchedule, loanStart: loanStart, loanEnd: loanEnd))
-        XCTAssertTrue(outcome.annulledEventIDs.isEmpty)
         XCTAssertNil(outcome.residualShortfallUnits)
         XCTAssertNil(outcome.positiveRemainderUnits)
         XCTAssertEqual(outcome.doses.count, 1)

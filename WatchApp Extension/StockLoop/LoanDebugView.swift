@@ -108,7 +108,6 @@ struct LoanDebugView: View {
                 row("fault", snapshot?.podFault ?? "none")
                 row("last seq", snapshot.map { String($0.lastEventSeq) } ?? "—")
                 row("unacked", snapshot.map { String($0.unackedCount) } ?? "—")
-                row("uncertain", (snapshot?.pendingUncertain ?? false) ? "CHASING" : "no")
                 row("last act", lastAction)
 
                 Divider().padding(.vertical, 2)
