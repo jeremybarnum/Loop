@@ -170,7 +170,7 @@ extension LoanGrant {
         LoanGrant(epoch: newEpoch, expiresAt: leaseUntil, pumpManagerRawState: pumpManagerRawState,
                   podAddress: podAddress, therapySettingsRaw: therapySettingsRaw,
                   settingsTimeZoneID: settingsTimeZoneID, doseHistory: doseHistory,
-                  boundaryRecord: boundaryRecord, supportsInterimHandback: supportsInterimHandback,
+                  supportsInterimHandback: supportsInterimHandback,
                   supportsOverrideRecords: supportsOverrideRecords,
                   integralRetrospectiveCorrectionEnabled: integralRetrospectiveCorrectionEnabled,
                   phoneClosedLoopEnabled: phoneClosedLoopEnabled, carbHistory: carbHistory,

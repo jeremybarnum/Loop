@@ -183,7 +183,7 @@ private final class LoanBooksDriver {
         let grant = LoanGrant(epoch: epoch, expiresAt: instant.addingTimeInterval(.minutes(5)),
                               pumpManagerRawState: Data(), podAddress: 0,
                               therapySettingsRaw: Data(), settingsTimeZoneID: TimeZone.current.identifier,
-                              doseHistory: records, boundaryRecord: nil)
+                              doseHistory: records)
         let split = grant.seedDoseEntries(finishedBy: instant)
 
         let events = split.seed.map { dose in
@@ -1443,7 +1443,6 @@ final class LoanOverrideTests: XCTestCase {
             therapySettingsRaw: Data(),
             settingsTimeZoneID: TimeZone.current.identifier,
             doseHistory: [],
-            boundaryRecord: nil,
             activeOverrideRaw: raw)
 
         guard let carried = grant.activeOverrideRaw,
@@ -1470,8 +1469,7 @@ final class LoanOverrideTests: XCTestCase {
             podAddress: 0,
             therapySettingsRaw: Data(),
             settingsTimeZoneID: TimeZone.current.identifier,
-            doseHistory: [],
-            boundaryRecord: nil)
+            doseHistory: [])
         XCTAssertNil(grant.activeOverrideRaw,
                      "an absent field and 'no override active' are the same thing on the wire")
     }
