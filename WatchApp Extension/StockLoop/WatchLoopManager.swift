@@ -2767,17 +2767,6 @@ extension WatchLoopManager: CGMManagerDelegate {
     }
 }
 
-// MARK: - (mirrors the private TemporaryScheduleOverride extension in LoopDataManager.swift:2362)
-
-private extension TemporaryScheduleOverride {
-    func isBasalRateScheduleOverriden(at date: Date) -> Bool {
-        guard isActive(at: date), let basalRateMultiplier = settings.basalRateMultiplier else {
-            return false
-        }
-        return abs(basalRateMultiplier - 1.0) >= .ulpOfOne
-    }
-}
-
 // MARK: - DoseStoreDelegate (stock: DeviceDataManager)
 
 extension WatchLoopManager: DoseStoreDelegate {
