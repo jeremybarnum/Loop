@@ -271,9 +271,12 @@ final class PodLoanPhoneController {
     private func newPumpEvents(from doses: [DoseEntry]) -> [NewPumpEvent] {
         doses.compactMap { dose in
             guard let syncID = dose.syncIdentifier else { return nil }
+            // The wire identity is the pod-native raw as hex (the watch's pump manager minted it);
+            // decoding it lands the row under the SAME bytes this phone's own pump manager uses
+            // for the same dose, so a re-report after reclaim is the same row, not a twin.
             return NewPumpEvent(date: dose.startDate,
                                 dose: dose,
-                                raw: Data(syncID.utf8),
+                                raw: LoanSeedIdentity.raw(forSyncIdentifier: syncID),
                                 title: Self.pumpEventTitle(for: dose.type))
         }
     }
@@ -354,7 +357,7 @@ final class PodLoanPhoneController {
                              decisionId: dose.decisionId,
                              deliveredUnits: dose.deliveredUnits ?? Self.resolvedDeliveredUnits(for: dose),
                              description: dose.description,
-                             syncIdentifier: Data(syncID.utf8).hexadecimalString,
+                             syncIdentifier: LoanSeedIdentity.raw(forSyncIdentifier: syncID).hexadecimalString,
                              scheduledBasalRate: dose.scheduledBasalRate,
                              insulinType: dose.insulinType,
                              automatic: dose.automatic,

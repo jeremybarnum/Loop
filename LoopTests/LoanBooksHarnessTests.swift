@@ -1319,7 +1319,6 @@ final class LoanOverrideTests: XCTestCase {
                      "honest books must audit clean — pre-fix the discarded cancel left the 2.50 bracket " +
                      "standing 14.5 phantom minutes (12 pulses = 0.60 U) and booked a false shortfall")
         XCTAssertNil(outcome.positiveRemainderUnits, "and nothing in the other direction either")
-        XCTAssertTrue(outcome.annulledEventIDs.isEmpty, "confirmed records; annulment must not be the thing absorbing this")
     }
 
     override func tearDown() {

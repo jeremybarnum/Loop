@@ -4,11 +4,10 @@
 //
 //  The watch half of loan protocol v2 (docs/DESIGN_LOAN_PROTOCOL_V2.md §3.2, §10).
 //  State machine, grant intake -> stock OmniPumpManager construction, the pump-host
-//  delegate duties, the layer-1 verdict chase (the piece stock deliberately lacks:
-//  stock resolves an unacknowledged command only on the NEXT natural pod contact;
-//  during sport that can be minutes away, so the controller chases at 5s/20s/60s),
-//  journal provenance consequences, hand-back with resend-until-ack, revoke, and the
-//  relaunch drain (data-first: a dead session is never resurrected).
+//  delegate duties (the pump manager's report writes the book AND the journal — one
+//  identity per dose, the pod-native raw), hand-back with resend-until-ack, revoke, and
+//  the relaunch drain (data-first: a dead session is never resurrected). Uncertainty is
+//  the pump manager's own: an unacknowledged command is resolved on its next session.
 //
 //  Transport is injected (`send`) so the controller is testable without WCSession;
 //  the app-lifecycle integration wires WCSession.transferUserInfo/didReceiveUserInfo
@@ -311,18 +310,6 @@ final class PodLoanWatchController {
     /// must NOT close the loan (the final offer hasn't been sent — the phone would
     /// strand in .loaned forever). The close path requires this flag in .handingBack.
     private var finalOfferSent = false
-    /// A pod COMMAND's journal event exists from MINT time, but its
-    /// delivery classification (confirmed / uncertain / annulled) only lands at the
-    /// enact COMPLETION seconds later — a resend or stream in that window would carry
-    /// it to the phone, whose interim commit has no unwind for a later annul.
-    /// Events in this set are withheld from streams and interim offers until their
-    /// loanDidEnact classifies them. (Carb records mint CONFIRMED — never in-flight.)
-    private var inFlightEventIDs: Set<UUID> = []
-    /// The single in-flight uncertainty being chased (mirrors the crude
-    /// UncertainCommandRecord — one at a time; a NEW programming command destroys the
-    /// verdict evidence and the conservative record stands, per d27a40c7 semantics).
-    private var pendingUncertainEventID: UUID?
-    private var chaseWorkItem: DispatchWorkItem?
     private var resendWorkItem: DispatchWorkItem?
     /// When the LIVE hand-back gives up waiting for the phone's ack and resumes on the
     /// watch. Set at the End tap (beginHandback), cleared on ack/cancel/timeout. Nil for a
@@ -1082,9 +1069,6 @@ final class PodLoanWatchController {
         defaults.set(max(defaults.integer(forKey: Keys.highWaterEpoch), grant.epoch), forKey: Keys.highWaterEpoch)
         phoneSupportsInterimHandback = grant.supportsInterimHandback ?? false   // interim-handback capability gate
         phoneSupportsOverrideRecords = grant.supportsOverrideRecords ?? false    // override-record skew gate
-        chaseWorkItem?.cancel()         // liveness: fresh loan, no chase residue
-        pendingUncertainEventID = nil
-        inFlightEventIDs = []
         handbackRequested = false
         finalOfferSent = false
         // Progress-bar anchor: ALWAYS re-anchor at grant. The grant round-trip is WCSession
@@ -1396,7 +1380,6 @@ final class PodLoanWatchController {
                         SportLog.event("seize", "seized loan ACTIVE — reunion token …\(String(token.uuidString.suffix(8))) persisted for the offer echo [seize]")
                     }
                     self.loopManager.pumpManager = manager
-                    self.loopManager.loanDoseRecorder = self
                     self.onLoanActiveChanged?(true)
                     let takeoverSecs = self.attemptStartedAt.map { self.now().timeIntervalSince($0) } ?? -1
                     SportLog.event("loan", String(format: "ACTIVE — epoch %d, pod taken after %d read(s) in %.1fs [takeover-timing], odometer %.2f U, final read driver=%@ · %@",
@@ -1901,7 +1884,6 @@ final class PodLoanWatchController {
             // re-point the loop and re-loop, no re-takeover needed.
             phase = .active
             loopManager.pumpManager = manager
-            loopManager.loanDoseRecorder = self
             onLoanActiveChanged?(true)
             SportLog.event("loan", "HAND-BACK timed out (final, \(Int(HandbackStuckAlert.interval))s) — iPhone never acked; resumed Sport Mode on the watch (still holding the pod)\(wedgeSuffix)")
             loopManager.checkPumpDataAndLoop()   // re-establish a temp this cycle
@@ -2037,18 +2019,7 @@ final class PodLoanWatchController {
             odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest, freshenSucceeded: freshened,
                                             asOf: pumpManager?.podLoanInsulinDeliveredAt ?? revokeCapturedDeliveredAt)
         }
-        // Verify rounds 1-3: IN-FLIGHT (mint→classification) and chase-pending events
-        // stay OUT of interim offers — once the phone commits one, a later annul or
-        // REFUTED verdict can't unwind the store write (tombstones only filter staged
-        // events). They ride a later offer once classified; the final offer carries
-        // everything (chases resolve or stand conservative before finalize).
-        var offerEvents = journal.unackedEvents()
-        if phase == .active {
-            offerEvents.removeAll { inFlightEventIDs.contains($0.id) }
-            if let pending = pendingUncertainEventID {
-                offerEvents.removeAll { $0.id == pending }
-            }
-        }
+        let offerEvents = journal.unackedEvents()
         let offer = HandbackOffer(
             epoch: epoch,
             handedBackAt: self.now(),
@@ -2163,26 +2134,13 @@ final class PodLoanWatchController {
             SportLog.event("loan", "ack IGNORED ev=\(ack.epoch) — ours ev=\(epoch.map(String.init) ?? "nil") journal ev=\(journal.activeEpoch.map(String.init) ?? "nil"); stale redelivery or epoch mismatch")
             return
         }
-        // The phone acks MAX-seq, but withholding (in-flight /
-        // chase-pending events) creates seq GAPS a max-seq cursor can't represent —
-        // an ack covering a later carb would skip a withheld command forever. The cap
-        // itself lives in the journal (see `applyAck(committedCursor:withholding:)`);
-        // this side just says WHICH
-        // events are withheld, which is the only part the controller actually knows.
-        var withheld = inFlightEventIDs
-        if let pending = pendingUncertainEventID { withheld.insert(pending) }
-        journal.applyAck(committedCursor: ack.committedCursor, withholding: withheld)
+        journal.applyAck(committedCursor: ack.committedCursor)
         guard journal.unackedEvents().isEmpty else { return }
 
         // The drain completed while STILL DOSING — now stop the loop's pod,
         // close records, and send the final (released) offer. The close below runs
-        // on that final offer's ack. Never finalize while a verdict
-        // chase is live (its withheld event also keeps unackedEvents non-empty —
-        // this is the explicit belt to that suspender).
+        // on that final offer's ack.
         if phase == .active && handbackRequested {
-            // Belt: no finalize while ANY command is unclassified (in-flight
-            // OR chase-pending) — the withheld-seq cursor cap above is the suspender.
-            guard pendingUncertainEventID == nil, inFlightEventIDs.isEmpty else { return }
             finalizeHandback()
             return
         }
@@ -2194,12 +2152,6 @@ final class PodLoanWatchController {
 
         // Fully drained: release the pod ONLY now (kept from v1).
         resendWorkItem?.cancel()
-        chaseWorkItem?.cancel()
-        // Liveness: chase/in-flight residue must not cross loan
-        // boundaries — the finalize gate reads pendingUncertainEventID, and a stale
-        // flag from THIS loan would block the NEXT loan's drain indefinitely.
-        pendingUncertainEventID = nil
-        inFlightEventIDs = []
         // Splits "Reclaiming…" into its two candidate components: how long the watch waited
         // for PERMISSION to release (the phone's ack), versus how long the release itself took.
         // The ack only rides WCSession's immediate channel while the watch is reachable, so a
@@ -2275,9 +2227,6 @@ final class PodLoanWatchController {
         revokeCapturedDelivered = pumpManager?.podLoanInsulinDelivered
         revokeCapturedDeliveredAt = pumpManager?.podLoanInsulinDeliveredAt
         loopManager.pumpManager = nil
-        chaseWorkItem?.cancel()
-        pendingUncertainEventID = nil   // liveness: no cross-loan chase residue
-        inFlightEventIDs = []           // (the conservative .assumed records ride the drain)
         teardownPump()
         phase = .revoked
         onLoanActiveChanged?(false)
@@ -2367,7 +2316,6 @@ final class PodLoanWatchController {
         let podFault: String?
         let lastEventSeq: Int
         let unackedCount: Int
-        let pendingUncertain: Bool
         let suspendEndsAt: Date?
         let lastIdleNote: String?
         /// When the current Start attempt began (progress bar); only meaningful
@@ -2464,7 +2412,6 @@ final class PodLoanWatchController {
                 podFault: pumpManager?.podLoanFaultDescription,
                 lastEventSeq: journal.lastEventSeq,
                 unackedCount: journal.unackedEvents().count,
-                pendingUncertain: pendingUncertainEventID != nil,
                 suspendEndsAt: nil,
                 lastIdleNote: lastIdleNote,
                 startedAt: attemptStartedAt,
@@ -2539,103 +2486,6 @@ final class PodLoanWatchController {
         loopManager.applyWristOverride(nil)
     }
 
-    // MARK: - Uncertainty chase (the genuinely-additive layer-1 piece, d27a40c7 port)
-
-    private func scheduleChase(attempt: Int = 0) {
-        let delays: [TimeInterval] = [5, 20, 60]
-        guard attempt < delays.count else {
-            // Chase exhausted: the conservative .assumed record STANDS (the hand-back
-            // audit settles it) — resolve the pending flag so the record can
-            // stream/commit and an interim drain isn't blocked behind a dead chase.
-            SportLog.event("verdict", "chase exhausted — assumed record stands (hand-back audit settles it)")
-            pendingUncertainEventID = nil
-            streamRecords()
-            return
-        }
-        chaseWorkItem?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self = self, self.phase == .active,
-                  let manager = self.pumpManager,
-                  let eventID = self.pendingUncertainEventID else { return }
-            manager.podLoanResolveUncertainty { verdict in
-                self.queue.async {
-                    guard self.pendingUncertainEventID == eventID else { return }
-                    switch verdict {
-                    case .noPendingCommand:
-                        // Stock resolved it on an earlier contact; the dose truth is in
-                        // hasNewPumpEvents. The journal entry stays .assumed and the
-                        // hand-back reconciliation settles it — never guess here.
-                        self.pendingUncertainEventID = nil
-                        self.streamRecords()   // the withheld .assumed record may flow now
-                    case .delivered:
-                        self.journal.confirm(id: eventID)
-                        self.pendingUncertainEventID = nil
-                        self.streamRecords()
-                        SportLog.event("verdict", "DELIVERED — pod confirmed the uncertain command")
-                    case .refuted(let kind):
-                        // The book is the pump manager's, and it resolves its own unacknowledged
-                        // command from the pod's status — nothing to reverse here. Capture the
-                        // amount while the event is still present, so the alert can name what did
-                        // NOT go in. Nil for anything without a dose to name; the title then omits
-                        // the number rather than lying.
-                        var refutedUnits: Double?
-                        if let event = self.journal.unackedEvents().first(where: { $0.id == eventID }),
-                           case .assumed(let kind) = event.provenance, kind != .skippedReduction,
-                           let dose = event.record.podLoanLedgerDoseEntry(insulinType: nil),
-                           dose.type == .bolus {
-                            refutedUnits = dose.programmedUnits
-                        }
-                        self.journal.annul(id: eventID)
-                        self.pendingUncertainEventID = nil
-                        self.streamRecords()
-                        SportLog.event("verdict", "REFUTED \(kind) — command never reached the pod, record annulled")
-                        self.alertRefuted(kind: kind, units: refutedUnits)
-                    case .unreachable:
-                        self.scheduleChase(attempt: attempt + 1)
-                    }
-                }
-            }
-        }
-        chaseWorkItem = work
-        schedule(after: delays[attempt], label: "verdict-chase-\(attempt + 1)", execute: work)
-    }
-
-    /// This is the ONE path entitled to assert non-delivery: the pod's own state proved the
-    /// command never arrived. The old copy then said "Bolus again if you still need it" — an
-    /// insulin instruction, which stock never puts in notification text. Removing it costs
-    /// nothing, because the sentence that replaces it does the same work better: the record was
-    /// just annulled, so active insulin no longer counts the dose, and the bolus calculator
-    /// will now recommend accordingly. Attribution ("the pod reports") rather than assertion,
-    /// per stock's voice.
-    private func alertRefuted(kind: OmniPumpManager.PodLoanPendingKind, units: Double? = nil) {
-        switch kind {
-        case .bolus:
-            WKInterfaceDevice.current().play(.failure)
-            let title = units.map {
-                String(format: NSLocalizedString("Bolus Not Delivered: %@ U", comment: "Watch alert title when the pod proved a bolus never arrived (1: units)"),
-                       NumberFormatter.localizedString(from: NSNumber(value: $0), number: .decimal))
-            } ?? NSLocalizedString("Bolus Not Delivered", comment: "Watch alert title when the pod proved a bolus never arrived")
-            let body = NSLocalizedString("The pod reports no delivery. Active insulin no longer includes it.", comment: "Watch alert body when the pod proved a bolus never arrived")
-            Task { @MainActor in
-                loopManager.issueAlert(Alert(
-                    identifier: Alert.Identifier(managerIdentifier: "PodLoan", alertIdentifier: "refutedBolus"),
-                    foregroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
-                    backgroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
-                    trigger: .immediate))
-            }
-        case .resume:
-            // Dead three ways over, so it is logged rather than surfaced. The watch never
-            // programs a basal schedule, so `.resume` cannot arise here at all; the watch's
-            // `issueAlert` is a log-only stub, so nothing would reach the wrist even if it did;
-            // and "Resume again" named a control the watch does not have. Kept as a case so a
-            // future watch-side resume path lands somewhere visible instead of falling silently
-            // into `default`.
-            SportLog.event("verdict", "REFUTED resume — unreachable on this build; logged only")
-        default:
-            break
-        }
-    }
-
     /// Best-effort streaming (§2.4): the phone accumulates the record even if the
     /// watch later dies. Loss is harmless — the cursor and IDs absorb redelivery.
     private func streamRecords() {
@@ -2645,11 +2495,7 @@ final class PodLoanWatchController {
         // is drawn from its staged map, so streaming either would let an interim
         // commit write a dose before an annul/refuted verdict can unwind it
         // (tombstones only filter staged events). They flow on classification.
-        var events = journal.unackedEvents()
-        events.removeAll { inFlightEventIDs.contains($0.id) }
-        if let pending = pendingUncertainEventID {
-            events.removeAll { $0.id == pending }
-        }
+        let events = journal.unackedEvents()
         let tombstones = journal.pendingTombstones()
         guard !events.isEmpty || !tombstones.isEmpty else { return }
         // What the watch streams to the phone. (Removed the old "implied Σ" — a sum of temp
@@ -2668,8 +2514,7 @@ final class PodLoanWatchController {
         // insulin the odometer may already meter but this batch does not carry — its
         // checkpoint would breach by construction. Skip; the next clean batch checkpoints.
         var odometer: LoanOdometerSnapshot?
-        if inFlightEventIDs.isEmpty, pendingUncertainEventID == nil,
-           let start = deliveredAtTakeover, let latest = pumpManager?.podLoanInsulinDelivered,
+        if let start = deliveredAtTakeover, let latest = pumpManager?.podLoanInsulinDelivered,
            let asOf = pumpManager?.podLoanInsulinDeliveredAt {
             odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest,
                                             freshenSucceeded: false, asOf: asOf)
@@ -2680,28 +2525,54 @@ final class PodLoanWatchController {
     }
 }
 
-// MARK: - Dose recording hooks (WatchDoseEnactor calls these around stock enacts)
+// MARK: - The journal's writers: the pump manager's report (doses), the wrist UI (carbs, overrides)
 
-protocol WatchLoanDoseRecording: AnyObject {
-    func loanWillEnactTempBasal(unitsPerHour: Double, duration: TimeInterval) -> UUID?
-    func loanWillEnactBolus(units: Double) -> UUID?
-    func loanDidEnact(eventID: UUID?, error: PumpManagerError?)
-}
+extension PodLoanWatchController {
 
-extension PodLoanWatchController: WatchLoanDoseRecording {
-
-    func loanWillEnactTempBasal(unitsPerHour: Double, duration: TimeInterval) -> UUID? {
-        return mintIntent(record: LoanDoseRecord(
-            kind: unitsPerHour == 0 && duration > 0 ? .suspend : .tempBasal,
-            startDate: self.now(),
-            endDate: self.now().addingTimeInterval(duration),
-            unitsPerHour: unitsPerHour),
-            uncertainKind: .tempUncertain)
+    /// THE JOURNAL IS FED BY THE PUMP MANAGER'S REPORT — the same report that writes the book.
+    /// One identity per dose: the pod-native raw the pump manager minted, carried on the wire as
+    /// hex so the phone's row lands under the SAME bytes its own pump manager would use for the
+    /// same dose (`LoanSeedIdentity` decodes it). A dose is journaled once, at its first report;
+    /// the running temp's re-reports (same raw, mutable) are recognized and not re-minted, and the
+    /// phone finalizes it from the returned pod state on reclaim, exactly as it does its own.
+    /// Uncertainty is the pump manager's: a command the pod never acknowledged is not reported
+    /// until OmnipodKit resolves it from the next status, or books it "in the direction of
+    /// positive net delivery" when it gives up — so nothing here is ever assumed.
+    func journalPumpEvents(_ events: [NewPumpEvent]) {
+        guard phase == .active else { return }
+        var minted = 0
+        for event in events {
+            guard let dose = event.dose, let record = Self.loanRecord(for: dose, raw: event.raw),
+                  let identity = record.syncIdentifier, !journal.contains(syncIdentifier: identity) else { continue }
+            guard let journaled = try? journal.mintEvent(record: record, provenance: .confirmed) else {
+                SportLog.event("loan", "** JOURNAL MINT FAILED for \(record.kind) — the dose is in the book but will NOT follow the pod home **")
+                continue
+            }
+            minted += 1
+            let amount = record.kind == .bolus ? String(format: "%.2f U", record.amount ?? 0)
+                                               : String(format: "%.2f U/hr", record.unitsPerHour ?? 0)
+            SportLog.event("loan", "\(record.kind) JOURNALED from the pump manager's report — \(amount)\(dose.isMutable ? " (running)" : ""), seq \(journaled.seq)")
+        }
+        if minted > 0 { streamRecords() }
     }
 
-    func loanWillEnactBolus(units: Double) -> UUID? {
-        return mintIntent(record: LoanDoseRecord(kind: .bolus, startDate: self.now(), amount: units),
-                          uncertainKind: .bolusUncertain)
+    /// A pump-manager dose as a wire record. Temps and boluses are what the wrist doses with; a
+    /// suspend or resume never originates on the wrist, so anything else is logged and skipped.
+    private static func loanRecord(for dose: DoseEntry, raw: Data) -> LoanDoseRecord? {
+        let identity = raw.map { String(format: "%02x", $0) }.joined()   // LoopKit's hex helper is module-internal
+        switch dose.type {
+        case .bolus:
+            return LoanDoseRecord(kind: .bolus, startDate: dose.startDate, endDate: dose.endDate,
+                                  amount: dose.programmedUnits, syncIdentifier: identity,
+                                  insulinType: dose.insulinType, deliveredUnits: dose.deliveredUnits)
+        case .tempBasal:
+            return LoanDoseRecord(kind: .tempBasal, startDate: dose.startDate, endDate: dose.endDate,
+                                  unitsPerHour: dose.unitsPerHour, syncIdentifier: identity,
+                                  insulinType: dose.insulinType, deliveredUnits: dose.deliveredUnits)
+        default:
+            SportLog.event("loan", "pump report carried a \(dose.type) dose — not a wrist command; not journaled")
+            return nil
+        }
     }
 
     /// Watch-entered carbs follow the pod home.
@@ -2785,10 +2656,7 @@ extension PodLoanWatchController: WatchLoanDoseRecording {
     /// WC message would be dropped on the floor the moment the phone is out of range, and Sport
     /// Mode's whole premise is that it is.
     ///
-    /// Minted `.confirmed`, NOT through `mintIntent`: this is not a pod command. There is no
-    /// transmission to be uncertain about and no verdict to chase, so it must never enter
-    /// `inFlightEventIDs` (which would withhold it from streams and — worse — block an interim
-    /// hand-back drain waiting for a classification that can never arrive).
+    /// Minted `.confirmed` directly: this is not a pod command, so there is no report to wait for.
     ///
     /// Called from the wrist UI on main; `queue.async` (never `sync`) keeps the queue-order
     /// invariant intact.
@@ -2859,99 +2727,6 @@ extension PodLoanWatchController: WatchLoanDoseRecording {
         }
     }
 
-    private func mintIntent(record: LoanDoseRecord, uncertainKind: EventProvenance.UncertainKind) -> UUID? {
-        // QUEUE-ORDER INVARIANT (load-bearing both directions): callers sync INTO
-        // this serial queue from dataAccessQueue/main — so no block running ON this queue
-        // may ever dispatch sync onto WatchLoopManager.dataAccessQueue (ABBA deadlock),
-        // and mintIntent must never be reached from this queue itself (libdispatch trap —
-        // a pod-reclaim completion that ran deliverBolus here directly crashed exactly so).
-        var minted: UUID?
-        queue.sync {
-            // A new programming command destroys pending verdict evidence: the
-            // conservative .assumed record stands, chase stops (d27a40c7 semantics).
-            if pendingUncertainEventID != nil {
-                os_log("New command while a verdict was pending — evidence destroyed, conservative record stands", log: log, type: .default)
-                chaseWorkItem?.cancel()
-                pendingUncertainEventID = nil
-            }
-            minted = try? journal.mintEvent(record: record, provenance: .assumed(uncertainKind)).id
-            if let minted = minted {
-                inFlightEventIDs.insert(minted)   // withheld until loanDidEnact classifies
-            }
-            // The evidence-destruction branch above cleared a pending
-            // chase WITHOUT streaming its standing .assumed record — the only
-            // withheld-exit that didn't. A stale max-seq ack landing after this mint
-            // could then ack the never-transmitted record past recovery. Stream NOW
-            // (same serial-queue block, before any later ack can apply); the freshly
-            // minted event is in the in-flight set and stays excluded.
-            streamRecords()
-        }
-        return minted
-    }
-
-    func loanDidEnact(eventID: UUID?, error: PumpManagerError?) {
-        guard let eventID = eventID else { return }
-        queue.async {
-            self.inFlightEventIDs.remove(eventID)   // classified from here — may flow
-            if error == nil {
-                // Certain success: the response carried the incremented odometer.
-                self.journal.confirm(id: eventID)
-                self.streamRecords()
-                return
-            }
-
-            // A CERTAIN local refusal is not uncertainty. PodCommsError
-            // .unfinalizedBolus is decided from this device's own state BEFORE any byte reaches
-            // the pod (OmniPumpManager guards on podState.unfinalizedBolus?.isFinished()), so
-            // the command provably never went out. Booking it as an assumed max-exposure dose
-            // invents insulin: a bolus refused because an earlier one is still delivering
-            // (DASH runs ~1.5 U/min, so a refusal within a minute of a prior bolus is routine)
-            // would land in the ledger as if delivered. The chase then finds
-            // noPendingCommand — which the booking rules treat as "leave standing" — so the
-            // phantom never clears, drives automaticDosingIOBLimit headroom negative, and
-            // zero-temps every cycle after it. The IOB clamp works correctly on
-            // corrupt input; this is where the corruption enters.
-            let certainLocalRefusal = String(describing: error).contains("unfinalizedBolus")
-            let uncertain: Bool
-            if certainLocalRefusal { uncertain = false }
-            else if case .uncertainDelivery = error { uncertain = true }
-            else { uncertain = self.pumpManager?.podLoanPendingCommandKind != nil }
-            if certainLocalRefusal {
-                SportLog.event("ledger", "CERTAIN refusal (pod never received it) — annulling, NOT booking: \(error.map { String(describing: $0) } ?? "?")")
-            }
-
-            if !uncertain {
-                // Certain failure: stock cleared its pending command; nothing delivered.
-                self.journal.annul(id: eventID)
-                self.streamRecords()
-                return
-            }
-
-            // Uncertain. Direction-aware journaling: keep the
-            // .assumed record only when "applied" models MORE insulin. An uncertain
-            // BELOW-schedule temp is re-tagged as a skipped-reduction marker instead —
-            // the C-prime fingerprint if it turns out real and unresolved.
-            var retaggedSkippedReduction = false
-            if let events = self.journal.unackedEvents().first(where: { $0.id == eventID }),
-               events.record.kind == .tempBasal || events.record.kind == .suspend,
-               let rate = events.record.unitsPerHour,
-               let scheduled = self.loopManager.settings.basalRateSchedule?.value(at: events.record.startDate),
-               rate < scheduled {
-                self.journal.amend(id: eventID, record: events.record, provenance: .assumed(.skippedReduction))
-                retaggedSkippedReduction = true
-            }
-
-            // The book needs no mirror of the journal's assumption: OmnipodKit carries the
-            // unacknowledged command in its pod state, resolves it from the next status
-            // response, and only when it gives up books it "in the direction of positive net
-            // delivery" (PodState.resolveAnyPendingCommandWithUncertainty) — the same
-            // direction-aware rule, owned by the writer.
-
-            self.pendingUncertainEventID = eventID
-            self.streamRecords()
-            self.scheduleChase()
-        }
-    }
 }
 
 /// Which WCSession channel a message arrived on. `sendMessage` wakes the counterpart
@@ -2984,6 +2759,7 @@ extension PodLoanWatchController: PumpManagerDelegate {
             do {
                 try await loopManager.recordPumpEvents(events, lastReconciliation: lastReconciliation, replacePendingEvents: replacePendingEvents)
                 completion(nil)
+                self.queue.async { self.journalPumpEvents(events) }   // the same report feeds the journal
             } catch {
                 SportLog.event("book", "** pump events NOT stored — \(String(describing: error)) — \(events.count) event(s) held back by the pod for the next report **")
                 completion(error)

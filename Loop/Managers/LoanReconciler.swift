@@ -88,7 +88,6 @@ enum LoanReconciler {
         /// the phone's store, and they are the phone-originated ones by construction.
         var deletedCarbs: [DeletedCarb] = []
         /// Event IDs annulled by the exact-size fingerprint.
-        var annulledEventIDs: [UUID] = []
         /// A positive odometer remainder no record explains — extra delivery the pod made
         /// beyond the books. Computed and captured here; the consumer deliberately does NOT
         /// inject it as IOB (that valve is disabled — see its call site in
@@ -140,37 +139,10 @@ enum LoanReconciler {
                 // hand-back with zero decay elapsed (deliberately conservative).
                 outcome.positiveRemainderUnits = remainder
             } else if remainder < -pulseTolerance {
-                let shortfall = -remainder
-                // Fingerprints only: a shortfall may annul an ASSUMED record that
-                // exactly explains it — never a confirmed one, never below zero — and
-                // an ambiguous remainder touches nothing. Partial or newest-first
-                // reduction is prohibited: a wrong reduction understates IOB in
-                // exactly the least-understood scenarios.
-                // 1. Exact-size annulment: one .assumed event whose units equal the
-                //    shortfall within a pulse. Tie → the one closest to the failure
-                //    (latest); identical arithmetic, only decay timing differs.
-                if let match = events
-                    .filter({ $0.isAssumed && abs(($0.record.insulinUnits(schedule: input.schedule) ?? -1) - shortfall) <= pulseTolerance })
-                    .max(by: { $0.seq < $1.seq }) {
-                    outcome.annulledEventIDs.append(match.id)
-                    events.removeAll { $0.id == match.id }
-                }
-                // 2. Skipped-reduction window: an .assumed(.skippedReduction) marker
-                //    whose window's scheduled insulin can absorb the shortfall — the
-                //    C′ case: the reduction was real, record it retroactively by NOT
-                //    writing the schedule-assumed insulin for that window. Modeled as
-                //    annulling the marker's assumed-schedule contribution.
-                else if let marker = events.first(where: { $0.provenance == .assumed(.skippedReduction) }),
-                        let windowUnits = marker.record.scheduledInsulin(schedule: input.schedule),
-                        shortfall <= windowUnits + pulseTolerance {
-                    outcome.annulledEventIDs.append(marker.id)
-                    events.removeAll { $0.id == marker.id }
-                }
-                // 3. Everything else touches NO record: the whole shortfall surfaces
-                //    (IOB stays overstated — the safe direction).
-                else {
-                    outcome.residualShortfallUnits = shortfall
-                }
+                // Negative: the records claim more than the pod delivered. Nothing is reduced —
+                // every record is the pump manager's own report — so the whole shortfall
+                // surfaces (IOB stays overstated, the safe direction).
+                outcome.residualShortfallUnits = -remainder
             }
         }
 
@@ -279,8 +251,10 @@ enum LoanReconciler {
         return outcome
     }
 
+    /// The record's own store identity when the watch carried one (its pump manager's raw, as
+    /// hex); the journal's event id otherwise.
     static func syncIdentifier(for event: LoanEvent) -> String {
-        return "loanv2-\(event.id.uuidString)"
+        return event.record.syncIdentifier ?? "loanv2-\(event.id.uuidString)"
     }
 
     /// Journal-aware expected insulin over the loan window: journaled temps/suspends
@@ -424,13 +398,6 @@ enum LoanReconciler {
 }
 
 // MARK: - Event helpers
-
-private extension LoanEvent {
-    var isAssumed: Bool {
-        if case .assumed = provenance { return true }
-        return false
-    }
-}
 
 private extension LoanDoseRecord {
     /// The insulin this record claims, for exact-size matching (fingerprint 1 in
