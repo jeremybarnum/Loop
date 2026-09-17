@@ -1276,12 +1276,7 @@ final class PodLoanWatchController {
         SportLog.event("loan", String(format: "takeover ladder start — lease %+.0fs, epoch %d%@",
                                       grant.expiresAt.timeIntervalSince(now()), grant.epoch,
                                       seizeMarkerActive ? " [seize]" : ""))
-        // The ladder is a scan-adopt plus a link on the chip — in the sensor's extended phase
-        // (a seize minutes after the phone left) that is the tail collision the pod hold
-        // exists for. Held ≤40 s against a 5-min lease; synchronous when nothing is held.
-        loopManager.afterPodRadioHold("takeover ladder") { [weak self] in
-            self?.queue.async { self?.attemptTakeoverRead(manager: manager, grant: grant, attempt: 0) }
-        }
+        queue.async { [weak self] in self?.attemptTakeoverRead(manager: manager, grant: grant, attempt: 0) }
     }
 
     /// Up to 14 reads while the pod's BLE session establishes — fast when the session-established
@@ -1372,10 +1367,6 @@ final class PodLoanWatchController {
                     self.revokeCapturedDeliveredAt = nil
                     self.deliveredAtTakeover = delivered
                     self.phase = .active
-                    // Pod hold clock (PodRadioHold): the loan start itself starts the clock — the
-                    // phone was collecting up to the grant (or, for a seize, may just have left),
-                    // so the first ~12 min of tails are held whether or not a relay ever lands.
-                    PodRadioHold.noteLoanStarted(self.now())
                     // R40 reunion identity: the seize is PROVEN only now — persist its token
                     // so the loan's offers echo it and the phone can retro-acknowledge. Every
                     // failed activation leaves this un-promoted, so nothing stale can match.
