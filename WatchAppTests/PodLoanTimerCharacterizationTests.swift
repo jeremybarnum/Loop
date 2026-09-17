@@ -7,7 +7,7 @@
 //  after a refactor is doing its job — it means behavior moved, and the diff has to say why.
 //
 //  What makes this possible is the scheduling seam carrying its LABEL. Asserting "a request
-//  arms exactly [request-timeout @25s]" is a claim about behavior; asserting "a request arms
+//  arms exactly [request-timeout @60s]" is a claim about behavior; asserting "a request arms
 //  one timer" is a claim about arithmetic, and arithmetic survives refactors that break
 //  behavior.
 //
@@ -162,7 +162,8 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
 
     // MARK: - The real request path
 
-    /// A bare request arms exactly one timer, and it is the 25 s no-grant timeout.
+    /// A bare request arms exactly one timer, and it is the 60 s no-grant timeout (the phone is
+    /// reachable in this fixture; the grant now includes the phone's cancel-before-release round-trip).
     func testRequestArmsOnlyTheRequestTimeout() async {
         let controller = await makeController()
         let rec = TimerRecorder()
@@ -172,7 +173,7 @@ final class PodLoanTimerCharacterizationTests: XCTestCase {
         controller.requestLoan(watchBuild: "characterization")
         waitForArmed(rec, atLeast: 1)
 
-        XCTAssertEqual(rec.armed, [.init(label: "request-timeout", delay: 25)])
+        XCTAssertEqual(rec.armed, [.init(label: "request-timeout", delay: 60)])
     }
 
     /// A double-tap must not arm a second timeout — the pending request absorbs it. This is
