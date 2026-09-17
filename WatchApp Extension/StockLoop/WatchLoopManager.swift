@@ -1251,10 +1251,6 @@ final class WatchLoopManager {
     /// INSTRUMENTATION ONLY: the three IOB values that should agree at takeover — phone-at-grant,
     /// watch SEED-IN anchor, watch first-cycle computed — captured so `[iob-diff]` can localize the
     /// ~0.3U leak. Set at SEED-IN, consumed (and cleared) at the first post-takeover cycle.
-    private var takeoverIOBAnchors: (phone: Double?, phoneDate: Date?, seed: Double, at: Date)?
-    func recordTakeoverIOBAnchors(phone: Double?, phoneDate: Date?, seed: Double, at: Date) {
-        dataAccessQueue.async { self.takeoverIOBAnchors = (phone, phoneDate, seed, at) }
-    }
 
     /// What the LAST cycle decided, retained after `recommendedAutomaticDose` is cleared by
     /// a successful enact — so display surfaces can show the decision instead of a blank.

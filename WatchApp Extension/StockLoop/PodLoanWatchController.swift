@@ -799,7 +799,11 @@ final class PodLoanWatchController {
             // field seize (2026-08-30) spent 25 s twice against a powered-off phone. A
             // reachable-LOOKING dead phone still gets the full window.
             let reachable = self.isPhoneReachable()
-            let timeout: TimeInterval = reachable ? 25 : 8
+            // 60 s with the phone reachable: the grant now includes the phone's cancel-before-release
+            // pod round-trip (~13 s on 2026-09-17 11:03, on top of ~10 s of request delivery), and the
+            // 25 s this used to allow was missed by 150 ms that morning. A timeout here with the pod
+            // already released offers the seize against a phone that has let go — the worst shape.
+            let timeout: TimeInterval = reachable ? 60 : 8
             SportLog.event("loan", "REQUEST sent (build \(watchBuild)) — awaiting grant\(reachable ? "" : " (phone unreachable — short \(Int(timeout))s timeout)")")
             self.sendMessage(.request(LoanRequest(watchBuild: watchBuild, supportsSeize: true, sentAt: self.now())))
 
@@ -1580,62 +1584,46 @@ final class PodLoanWatchController {
     /// carries it and the pump manager reports it as a mutable dose on the first status read —
     /// stock ownership, exactly how the phone books its own running temp.
     ///
-    /// The book is per loan. A new epoch resets it first (a previous loan's rows and their
-    /// re-seeded twins from the phone carry different identities until the wire moves onto pump
-    /// events); the same epoch arriving again (a relaunch mid-loan re-running intake) leaves the
-    /// book alone — its rows are this loan's own and nothing would re-report them.
+    /// The book is per loan: reset before every seed (a previous loan's rows and their re-seeded
+    /// twins from the phone carry different identities until the wire moves onto pump events).
     ///
     /// Returns false when the book could not be built: the takeover is refused. A wrist without
     /// the phone's history must not dose — that is R35's operative half, kept.
-    private static let insulinBookEpochKey = "podLoan.insulinBookEpoch"
-
     private func ingestGrantHistory(_ grant: LoanGrant) -> Bool {
         let seedReconciliation = self.now()
         let (entries, liveDoses) = grant.seedDoseEntries(finishedBy: seedReconciliation)
         let epoch = grant.epoch
-        let bookEpoch = UserDefaults.standard.object(forKey: Self.insulinBookEpochKey) as? Int
         let grossImpliedSum = entries.reduce(0.0) { $0 + $1.programmedUnits }
         let liveNote = liveDoses.isEmpty ? "" :
             String(format: "; %d live — delivery tracked from pod state (#72), latest ends +%.0fm",
                    liveDoses.count, (liveDoses.map { $0.endDate }.max()!.timeIntervalSince(seedReconciliation)) / 60)
-        if bookEpoch == epoch {
-            SportLog.event("loan", "insulin book KEPT — epoch \(epoch) re-ingested (relaunch mid-loan); the store already holds this loan's rows")
-        } else {
-            // Blocking on purpose: the takeover must not proceed on a book that is not built. A
-            // Core Data upsert of ~100 rows takes milliseconds; this serial queue waits for it the
-            // way it waits for a pod read.
-            let gate = DispatchSemaphore(value: 0)
-            var seedError: Error?
-            let loopManager = self.loopManager
-            Task {
-                await loopManager.resetInsulinBook(reason: "new grant (epoch \(epoch); the book held \(bookEpoch.map(String.init) ?? "no epoch"))")
-                do { try await loopManager.seedInsulinHistory(entries) } catch { seedError = error }
-                gate.signal()
-            }
-            gate.wait()
-            if let seedError {
-                SportLog.event("loan", "** INSULIN BOOK SEED FAILED — \(String(describing: seedError)) — refusing the takeover: a wrist without the phone's history must not dose **")
-                return false
-            }
-            UserDefaults.standard.set(epoch, forKey: Self.insulinBookEpochKey)
-            SportLog.event("loan", String(format: "insulin book seeded from grant — %d finished record(s) under the phone's identities%@ · grossImpliedΣ=%.2fU",
-                                           entries.count, liveNote, grossImpliedSum))
+        // Blocking on purpose: the takeover must not proceed on a book that is not built. A Core
+        // Data upsert of ~100 rows takes milliseconds; this serial queue waits for it the way it
+        // waits for a pod read.
+        let gate = DispatchSemaphore(value: 0)
+        var seedError: Error?
+        let loopManager = self.loopManager
+        Task {
+            await loopManager.resetInsulinBook(reason: "new grant (epoch \(epoch))")
+            do { try await loopManager.seedInsulinHistory(entries) } catch { seedError = error }
+            gate.signal()
         }
-        // SEED-IN IOB anchor — off the book. Primes the glance/HUD so IOB shows at takeover
-        // instead of blank until the first cycle, and records the anchors for [iob-diff]
-        // (phone vs seed vs cycle1).
+        gate.wait()
+        if let seedError {
+            SportLog.event("loan", "** INSULIN BOOK SEED FAILED — \(String(describing: seedError)) — refusing the takeover: a wrist without the phone's history must not dose **")
+            return false
+        }
+        SportLog.event("loan", String(format: "insulin book seeded from grant — %d finished record(s) under the phone's identities%@ · grossImpliedΣ=%.2fU",
+                                       entries.count, liveNote, grossImpliedSum))
+        // SEED-IN IOB off the book: primes the glance/HUD so IOB shows at takeover instead of
+        // blank until the first cycle, then the row-by-row decomposition for the boundary diff.
         loopManager.primeIOBFromStore(at: seedReconciliation) { iob in
             guard let iob = iob else {
-                SportLog.event("loan", "SEED-IN IOB unavailable (no schedule yet) — [iob-diff] anchors skipped this loan")
+                SportLog.event("loan", "SEED-IN IOB unavailable (no schedule yet)")
                 return
             }
             SportLog.event("loan", String(format: "SEED-IN IOB=%.2fU @ takeover (%d seeded doses: %d finished%@)",
                                           iob, entries.count + liveDoses.count, entries.count, liveNote))
-            self.loopManager.recordTakeoverIOBAnchors(
-                phone: grant.predictionSnapshot?.iobUnits,
-                phoneDate: grant.predictionSnapshot?.iobDate,
-                seed: iob,
-                at: seedReconciliation)
             self.loopManager.dumpIOBDecomp("SEED-IN", at: seedReconciliation)
         }
         ingestGrantCarbs(grant)
@@ -1963,6 +1951,10 @@ final class PodLoanWatchController {
         }
         handbackRequested = false
         phase = .handingBack
+        // The book at the boundary, row by row, so the next grant's SEED-IN decomposition can be
+        // diffed against it: on 2026-09-17 the seed read 0.4 U above the watch's own book for the
+        // same rows, and this is the instrumentation that names which row moved.
+        loopManager.dumpIOBDecomp("HAND-BACK", at: self.now())
         SportLog.event("loan", "drain complete — finalizing hand-back (loop dosing stops now)")
         // Read the running temp BEFORE the loop manager loses its pump: runningTempBasal() is now
         // the driver's own basalDeliveryState (persisted podState — E-1), nil once pumpManager is nil.
@@ -2537,7 +2529,6 @@ final class PodLoanWatchController {
         pumpManager?.pumpManagerDelegate = nil
         pumpManager = nil
         // The loan's insulin book ends with the loan: the phone owns the truth again.
-        UserDefaults.standard.removeObject(forKey: Self.insulinBookEpochKey)
         let loopManager = self.loopManager
         Task { await loopManager.resetInsulinBook(reason: "teardown") }
         // ...and so does the override. WatchLoopManager lives for the PROCESS, not the loan, and
