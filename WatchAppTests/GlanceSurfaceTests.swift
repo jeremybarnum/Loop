@@ -95,14 +95,12 @@ final class GlanceSurfaceTests: XCTestCase {
         _ = try? await manager.glucoseStore.addGlucoseSamples(samples)
     }
 
-    /// A ledger, because the algorithm now refuses to run without one.
-    ///
-    /// That refusal is the fix for the 2026-08-18 defect: the algorithm read the DoseStore, which
-    /// on the watch is never written, so it dosed off an empty insulin book. These three tests
-    /// began failing the moment the guard went in — correctly, since they drive the prediction
-    /// path and never had a book. Seeding one is what a real loan does at takeover.
-    private func seedLedger(_ manager: WatchLoopManager, doses: [DoseEntry] = []) {
-        manager.ledgerSeed(finished: doses, live: [])
+    /// A pump report in the book, because the algorithm refuses to run without one: stock's
+    /// pump-data recency gate (the one-book form of the 2026-08-18 fix — the algorithm must never
+    /// dose off a book the pod has not written to). An empty report is exactly what the
+    /// takeover's first status read looks like.
+    private func seedBook(_ manager: WatchLoopManager) async {
+        try? await manager.recordPumpEvents([], lastReconciliation: Date(), replacePendingEvents: true)
     }
 
     private func settle(_ seconds: TimeInterval = 2.0) {
@@ -116,7 +114,7 @@ final class GlanceSurfaceTests: XCTestCase {
     func testGlanceCarriesAnEventualAfterAPredictionRefresh() async {
         let manager = await makeManager()
         await seedGlucose(manager)
-        seedLedger(manager)
+        await seedBook(manager)
 
         manager.refreshPredictionForGlance()
         settle()
@@ -131,7 +129,7 @@ final class GlanceSurfaceTests: XCTestCase {
     func testDiagnosticsCarriesAPredictionBreakdown() async {
         let manager = await makeManager()
         await seedGlucose(manager)
-        seedLedger(manager)
+        await seedBook(manager)
 
         manager.refreshPredictionForGlance()
         settle()
@@ -146,7 +144,7 @@ final class GlanceSurfaceTests: XCTestCase {
     func testTheBreakdownAndTheGlanceAgreeOnTheSameCycle() async {
         let manager = await makeManager()
         await seedGlucose(manager)
-        seedLedger(manager)
+        await seedBook(manager)
 
         manager.refreshPredictionForGlance()
         settle()

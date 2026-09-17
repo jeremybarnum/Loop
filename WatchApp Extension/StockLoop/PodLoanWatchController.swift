@@ -1253,7 +1253,14 @@ final class PodLoanWatchController {
         manager.pumpManagerDelegate = self
         manager.delegateQueue = queue
         pumpManager = manager
-        ingestGrantHistory(grant)
+        guard ingestGrantHistory(grant) else {
+            teardownPump()
+            returnToRestingPhase()
+            lastIdleNote = NSLocalizedString("Couldn't build the insulin book from the phone's history. Try again.", comment: "Glance: insulin book seed failed")
+            SportLog.event("loan", "grant FAILED — the insulin book could not be seeded from the phone's history")
+            sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "insulin book seed failed")))
+            return
+        }
         // Cross-device adoption: unless our own cached handle replaced the phone's above, scan for
         // the pod by its address and adopt the peripheral THIS watch discovers. With a cached
         // handle nothing is armed — the driver's own connect-on-demand dials on the first read,
@@ -1557,36 +1564,58 @@ final class PodLoanWatchController {
         loopManager.g7ContentionSummary
     }
 
-    // auditDoseCount + the addPumpEvents seed doc DELETED: the store holds no doses.
-    // Seed mechanics live in SessionInsulinLedger; DESIGN_LOAN_ADDPUMPEVENTS.md is historical.
-    private func ingestGrantHistory(_ grant: LoanGrant) {
-        // The watch DoseStore is CONFIG ONLY. It holds no dose data, and nothing here
-        // maintains a second book — the watch store is `isReadOnly`, so its saves silently no-op
-        // and any dose written to it is invisible. The LEDGER is the book: born per epoch, so a
-        // new ledger IS the wipe and there is nothing to leak, seeded from the grant split.
-        //
-        // FINISHED history seeds as fixed records; a dose still DELIVERING at takeover seeds
-        // LIVE instead — `ledgerSeed(finished:live:)` takes both. The live one carries no settled
-        // delivered amount (it logs `del=nil`) because the grant's podState blob owns it and the
-        // pump manager reports it as a mutable dose, so IOB tracks delivery in real time. It is
-        // seeded, not omitted.
+    /// The insulin book at takeover (R35 reversed, 2026-09-17). The watch's DoseStore is the book
+    /// and the watch's pump manager is its writer; the grant seeds it ONCE per epoch with the
+    /// phone's FINISHED history through stock's remote-store door, under the phone's own
+    /// identities. A dose still DELIVERING at takeover is NOT seeded: the grant's podState blob
+    /// carries it and the pump manager reports it as a mutable dose on the first status read —
+    /// stock ownership, exactly how the phone books its own running temp.
+    ///
+    /// The book is per loan. A new epoch resets it first (a previous loan's rows and their
+    /// re-seeded twins from the phone carry different identities until the wire moves onto pump
+    /// events); the same epoch arriving again (a relaunch mid-loan re-running intake) leaves the
+    /// book alone — its rows are this loan's own and nothing would re-report them.
+    ///
+    /// Returns false when the book could not be built: the takeover is refused. A wrist without
+    /// the phone's history must not dose — that is R35's operative half, kept.
+    private static let insulinBookEpochKey = "podLoan.insulinBookEpoch"
+
+    private func ingestGrantHistory(_ grant: LoanGrant) -> Bool {
         let seedReconciliation = self.now()
         let (entries, liveDoses) = grant.seedDoseEntries(finishedBy: seedReconciliation)
-        loopManager.ledgerSeed(finished: entries, live: liveDoses)
-        // The pump-recency clock is owned by the manager now (it used to advance as a side
-        // effect of seeding the store). Stamp the takeover instant so pumpDataTooOld cannot
-        // deadlock the first cycle; the takeover's own status read re-stamps it seconds later.
-        loopManager.notePumpDataReceived(at: seedReconciliation)
+        let epoch = grant.epoch
+        let bookEpoch = UserDefaults.standard.object(forKey: Self.insulinBookEpochKey) as? Int
         let grossImpliedSum = entries.reduce(0.0) { $0 + $1.programmedUnits }
         let liveNote = liveDoses.isEmpty ? "" :
             String(format: "; %d live — delivery tracked from pod state (#72), latest ends +%.0fm",
                    liveDoses.count, (liveDoses.map { $0.endDate }.max()!.timeIntervalSince(seedReconciliation)) / 60)
-        SportLog.event("loan", String(format: "insulin books rebuilt from grant — %d records (ledger seed, R35: %d finished%@) · grossImpliedΣ=%.2fU",
-                                       entries.count + liveDoses.count, entries.count, liveNote, grossImpliedSum))
-        // SEED-IN IOB anchor — from the LEDGER, the only book. Primes the glance/HUD so
-        // IOB shows at takeover instead of blank until the first cycle, and records the anchors
-        // for [iob-diff] (phone vs seed vs cycle1).
-        loopManager.primeIOBFromLedger(at: seedReconciliation) { iob in
+        if bookEpoch == epoch {
+            SportLog.event("loan", "insulin book KEPT — epoch \(epoch) re-ingested (relaunch mid-loan); the store already holds this loan's rows")
+        } else {
+            // Blocking on purpose: the takeover must not proceed on a book that is not built. A
+            // Core Data upsert of ~100 rows takes milliseconds; this serial queue waits for it the
+            // way it waits for a pod read.
+            let gate = DispatchSemaphore(value: 0)
+            var seedError: Error?
+            let loopManager = self.loopManager
+            Task {
+                await loopManager.resetInsulinBook(reason: "new grant (epoch \(epoch); the book held \(bookEpoch.map(String.init) ?? "no epoch"))")
+                do { try await loopManager.seedInsulinHistory(entries) } catch { seedError = error }
+                gate.signal()
+            }
+            gate.wait()
+            if let seedError {
+                SportLog.event("loan", "** INSULIN BOOK SEED FAILED — \(String(describing: seedError)) — refusing the takeover: a wrist without the phone's history must not dose **")
+                return false
+            }
+            UserDefaults.standard.set(epoch, forKey: Self.insulinBookEpochKey)
+            SportLog.event("loan", String(format: "insulin book seeded from grant — %d finished record(s) under the phone's identities%@ · grossImpliedΣ=%.2fU",
+                                           entries.count, liveNote, grossImpliedSum))
+        }
+        // SEED-IN IOB anchor — off the book. Primes the glance/HUD so IOB shows at takeover
+        // instead of blank until the first cycle, and records the anchors for [iob-diff]
+        // (phone vs seed vs cycle1).
+        loopManager.primeIOBFromStore(at: seedReconciliation) { iob in
             guard let iob = iob else {
                 SportLog.event("loan", "SEED-IN IOB unavailable (no schedule yet) — [iob-diff] anchors skipped this loan")
                 return
@@ -1602,6 +1631,7 @@ final class PodLoanWatchController {
         }
         ingestGrantCarbs(grant)
         ingestGrantGlucose(grant)
+        return true
     }
 
     /// Make the watch carb store an authoritative MIRROR of the phone's at takeover:
@@ -1954,13 +1984,10 @@ final class PodLoanWatchController {
         // program outlives the controller that set it — only the device that enforces it moved
         // to the one that can.
         //
-        // The ledger truncation stays: it is watch-LOCAL bookkeeping, and if a failed
-        // offer resumes this session the ledger must not carry a phantom full-span temp.
+        // The book is the pump manager's: the running temp stays a mutable row until the phone
+        // cancels it on reclaim, and a failed offer that resumes this session resumes with the
+        // truth — the pod IS still running it.
         if runningTemp != nil {
-            let cancelAt = self.now()
-            self.loopManager.ledgerRecordEnact(DoseEntry(
-                type: .tempBasal, startDate: cancelAt, endDate: cancelAt,
-                value: 0, unit: .unitsPerHour, decisionId: nil))
             SportLog.event("loan", String(format: "hand-back: our temp (%.2f U/hr until %@) stays live until the phone cancels it on reclaim (R33, phone-enforced)",
                                           runningTemp?.unitsPerHour ?? 0,
                                           runningTemp.map { ISO8601DateFormatter().string(from: $0.endDate) } ?? "—"))
@@ -2500,8 +2527,10 @@ final class PodLoanWatchController {
         pumpManager?.releaseConnection()
         pumpManager?.pumpManagerDelegate = nil
         pumpManager = nil
-        // The session ledger ends with the session.
-        loopManager.ledgerClear()
+        // The loan's insulin book ends with the loan: the phone owns the truth again.
+        UserDefaults.standard.removeObject(forKey: Self.insulinBookEpochKey)
+        let loopManager = self.loopManager
+        Task { await loopManager.resetInsulinBook(reason: "teardown") }
         // ...and so does the override. WatchLoopManager lives for the PROCESS, not the loan, and
         // the grant intake writes the override with `if let` and no else-branch — so without
         // this an indefinite override from one loan kept rescaling ISF, basal and carb ratio
@@ -2544,20 +2573,17 @@ final class PodLoanWatchController {
                         self.streamRecords()
                         SportLog.event("verdict", "DELIVERED — pod confirmed the uncertain command")
                     case .refuted(let kind):
-                        // Reverse the ledger's assumed booking BEFORE annulling
-                        // (the record lookup needs the event still present). A
-                        // skipped-reduction was never booked → removeDose no-ops.
+                        // The book is the pump manager's, and it resolves its own unacknowledged
+                        // command from the pod's status — nothing to reverse here. Capture the
+                        // amount while the event is still present, so the alert can name what did
+                        // NOT go in. Nil for anything without a dose to name; the title then omits
+                        // the number rather than lying.
                         var refutedUnits: Double?
                         if let event = self.journal.unackedEvents().first(where: { $0.id == eventID }),
                            case .assumed(let kind) = event.provenance, kind != .skippedReduction,
-                           let dose = event.record.podLoanLedgerDoseEntry(insulinType: nil) {
-                            // skippedReduction was never booked — removing would rely on
-                            // "no ±2s neighbor" luck (adversarial review); guard explicitly.
-                            self.loopManager.ledgerRemoveDose(type: dose.type, startingAt: dose.startDate)
-                            // Captured here, while the event is still present, so the alert can
-                            // name the amount that did NOT go in. Nil for anything without a
-                            // dose to name; the title then omits the number rather than lying.
-                            if dose.type == .bolus { refutedUnits = dose.programmedUnits }
+                           let dose = event.record.podLoanLedgerDoseEntry(insulinType: nil),
+                           dose.type == .bolus {
+                            refutedUnits = dose.programmedUnits
                         }
                         self.journal.annul(id: eventID)
                         self.pendingUncertainEventID = nil
@@ -2915,20 +2941,11 @@ extension PodLoanWatchController: WatchLoanDoseRecording {
                 retaggedSkippedReduction = true
             }
 
-            // Mirror the journal's
-            // direction-aware .assumed convention into the ledger. Book the assumed dose
-            // ONLY when it models MORE insulin than schedule (bolus always; above-schedule
-            // temps) — a skipped-reduction stays unbooked, so predecessors keep running in
-            // the ledger (conservative, high-IOB direction, same as the journal). A later
-            // REFUTED verdict reverses the booking; DELIVERED/exhausted/noPendingCommand
-            // leave it standing, exactly like the journal record. Without this, every
-            // uncertain enact leaves a persistent ledger<store gap.
-            if !retaggedSkippedReduction,
-               let record = self.journal.unackedEvents().first(where: { $0.id == eventID })?.record,
-               let dose = record.podLoanLedgerDoseEntry(insulinType: self.pumpManager?.status.insulinType) {
-                self.loopManager.ledgerRecordEnact(dose)
-                SportLog.event("ledger", "assumed dose BOOKED (uncertain enact, chase pending) — \(record.kind)")
-            }
+            // The book needs no mirror of the journal's assumption: OmnipodKit carries the
+            // unacknowledged command in its pod state, resolves it from the next status
+            // response, and only when it gives up books it "in the direction of positive net
+            // delivery" (PodState.resolveAnyPendingCommandWithUncertainty) — the same
+            // direction-aware rule, owned by the writer.
 
             self.pendingUncertainEventID = eventID
             self.streamRecords()
@@ -2955,20 +2972,30 @@ extension PodLoanWatchController: PumpManagerDelegate {
     }
 
     func pumpManager(_ pumpManager: PumpManager, hasNewPumpEvents events: [NewPumpEvent], lastReconciliation: Date?, replacePendingEvents: Bool, completion: @escaping (Error?) -> Void) {
-        // Dose rows are NOT stored — the ledger (fed at enact time) is the only book, and
-        // these writes never persisted anyway. What this callback still carries is
-        // the PUMP-RECENCY signal: a successful status read reporting events is proof of a pod
-        // round-trip, and that stamp gates dosing (pumpDataTooOld) and the warm cadence.
-        // The stock storage path BLOCKS its session queue on this completion — always call it.
-        loopManager.notePumpDataReceived(at: lastReconciliation ?? self.now())
-        completion(nil)
+        // THE ONE WRITER of the watch's insulin book (R35 reversed, 2026-09-17): the pump
+        // manager's report goes into the DoseStore through the same door, with the same flags,
+        // as DeviceDataManager.pumpManager(_:hasNewPumpEvents:...) on the phone. The clock that
+        // gates dosing (pumpDataTooOld) is the store's own `lastAddedPumpData`, advanced by this
+        // write — an EMPTY report advances it too, which is what a status read with nothing new
+        // means. The stock storage path BLOCKS its session queue on this completion (10 s) —
+        // always call it, promptly; on an error the pod retains the doses for the next report.
+        let loopManager = self.loopManager
+        Task {
+            do {
+                try await loopManager.recordPumpEvents(events, lastReconciliation: lastReconciliation, replacePendingEvents: replacePendingEvents)
+                completion(nil)
+            } catch {
+                SportLog.event("book", "** pump events NOT stored — \(String(describing: error)) — \(events.count) event(s) held back by the pod for the next report **")
+                completion(error)
+            }
+        }
     }
 
     func pumpManager(_ pumpManager: PumpManager, didReadReservoirValue units: Double, at date: Date, completion: @escaping (Swift.Result<(newValue: ReservoirValue, lastValue: ReservoirValue?, areStoredValuesContinuous: Bool), Error>) -> Void) {
-        // Reservoir readings are not stored (and are unreadable above 50 U on this pod
-        // anyway — the odometer is the audit instrument). Stamp recency; report the value back
-        // as a fresh, non-continuous reading so the manager's bookkeeping proceeds.
-        loopManager.notePumpDataReceived(at: date)
+        // Reservoir readings are not stored (unreadable above 50 U on this pod anyway — the
+        // odometer is the audit instrument, and the pump-event report is the recency clock).
+        // Report the value back as a fresh, non-continuous reading so the manager's
+        // bookkeeping proceeds.
         struct SimpleReservoirValue: ReservoirValue {
             let startDate: Date
             let unitVolume: Double
@@ -2978,9 +3005,8 @@ extension PodLoanWatchController: PumpManagerDelegate {
     }
 
     func startDateToFilterNewPumpEvents(for manager: PumpManager) -> Date {
-        // Was doseStore.pumpEventQueryAfterDate. The events are dropped now, so the filter
-        // only bounds how much the manager re-reports; the owned stamp keeps it small.
-        return loopManager.lastPumpDataDate ?? self.now().addingTimeInterval(-.hours(4))
+        // Stock (DeviceDataManager): the store says where its pump-event history ends.
+        return loopManager.doseStore.pumpEventQueryAfterDate
     }
 
     func pumpManagerBLEHeartbeatDidFire(_ pumpManager: PumpManager) {

@@ -131,9 +131,12 @@ enum StockLoopStack {
             SportLog.event("session", "STACK UNAVAILABLE — no documents directory")
             return nil
         }
-        // Same isReadOnly determination as LoopCore's controllerInLocalDirectory()
-        // (its Bundle.isAppExtension helper is module-internal).
-        let isAppExtension = Bundle.main.bundleURL.pathExtension == "appex"
+        // WRITABLE (R35 reversed, 2026-09-17). LoopCore's controllerInLocalDirectory() opens a
+        // store read-only inside an app extension because on the PHONE an extension is a sidecar
+        // of the app that owns the store. This extension IS the owner — the only process that
+        // ever opens this directory — and the copied heuristic made every save a silent no-op
+        // (#110/#111: dose rows that never reached SQLite, purges that could not clear). The
+        // watch's DoseStore is the insulin book now, written by the watch's pump manager.
         // The directory name carries the LoopKit MODEL VERSION, and must keep doing so.
         //
         // This branch and the SportMode fork ship under the SAME bundle identifier, so installing
@@ -150,7 +153,7 @@ enum StockLoopStack {
         // loan state that must survive — the event journal — is a separate JSON file in
         // Application Support (PodLoanJournalV2.json) and is untouched by this.
         let storeName = "com.loopkit.LoopKit.StockLoop.Modelv6"
-        let cacheStore = PersistenceController(directoryURL: documents.appendingPathComponent(storeName), isReadOnly: isAppExtension)
+        let cacheStore = PersistenceController(directoryURL: documents.appendingPathComponent(storeName), isReadOnly: false)
         SportLog.event("session", "stack: store \(storeName)")
         let provenanceIdentifier = HKSource.default().bundleIdentifier
 

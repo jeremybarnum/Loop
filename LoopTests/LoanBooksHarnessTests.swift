@@ -10,20 +10,16 @@
 //  LoanBooksHarnessTests.swift
 //  LoopTests
 //
-//  A scripted "session replay" harness for the watch loan insulin books, built from the
-//  field incidents. The loan session keeps TWO books: the real Core Data
-//  DoseStore (multi-writer, mutable-dose lifecycle, raw-identity dedup) and the
-//  SessionInsulinLedger (single-owner [DoseEntry] timeline, SHADOW MODE). Every
-//  field incident so far has been a coherence failure BETWEEN writers or ACROSS the
-//  handover seam — never in InsulinMath itself. So the harness replays one scripted
-//  session against BOTH books at once and pins the seams:
+//  A scripted "session replay" harness for the loan insulin books, built from the field
+//  incidents, against the real Core Data DoseStore (mutable-dose lifecycle, raw-identity dedup).
+//  Every field incident so far has been a coherence failure BETWEEN writers or ACROSS the
+//  handover seam — never in InsulinMath itself. (Until 2026-09-17 the session also kept a second
+//  book, the SessionInsulinLedger; it is gone — the watch's DoseStore is the one book, written by
+//  the watch's pump manager — and the store-vs-ledger parity tests went with it.) The harness
+//  replays one scripted session and pins the seams:
 //
-//   1. testInheritedTempSpanBooksOnBothSides — the inherited running temp, healthy shape
-//      (full-span in both books → parity) AND the dead-re-arm bug shape (store frozen at
-//      the C5-truncated seed record → divergence grows at exactly the schedule rate).
 //   2. testDuplicateBolusTwinDetection — the zero-length journal bolus + pod-native twin
-//      pair double-booking ~0.95 U of phantom IOB, in the store AND (documented, not
-//      blessed) in the ledger.
+//      pair double-booking ~0.95 U of phantom IOB in the store.
 //   3. testHandbackSeamCloses — the hand-back seam must be fully explained
 //      by decay + the zero-temp's withheld basal; when the rows match, nothing leaks.
 //   4. testReGrantRoundTripPreservesBooks — seed → enact chain → hand-back fold →
@@ -31,9 +27,8 @@
 //   5. testBolusDeliveryQueueShapeDoesNotTrap — the bolus-crash queue invariant: the
 //      FIXED dispatch topology (reclaim completion on the loan queue → async hop to the
 //      dosing queue → journal mint queue.sync back onto the loan queue) must complete.
-//   6. testBolusBooksLandInBothBooksAfterQueueHop — the books-level pin: a bolus delivered
-//      through the hopped topology lands in BOTH books with IOB parity (field
-//      signature: store = ledger = 2.33).
+//   6. testBolusLandsInTheBookAfterQueueHop — the book-level pin: a bolus delivered
+//      through the hopped topology lands in the store (field signature: 2.33).
 //   7. testCarbRoundTripDynamicAbsorptionParity — the carb fold seam: a watch loan carb
 //      folded to the phone in LoanReconciler's shape, fed the SAME stock-computed ICE
 //      velocities, must produce the same dynamic COB and carb-effect curve.
@@ -141,14 +136,10 @@ final class LoanBooksDoseStoreDelegate: DoseStoreDelegate {
 /// finalized on supersede/hand-back as the SAME raw with the truncated span, immutable.
 /// Grant seeds run the REAL split (`LoanGrant.seedDoseEntries(finishedBy:)`) and land via
 /// `addPumpEvents(lastReconciliation:replacePendingEvents: false)` under hex-decoded raws.
-///
-/// Ledger side: `seed(finished:live:)` at takeover, `recordEnact` at each pod accept —
-/// the same two hooks WatchLoopManager's shadow mode calls.
 private final class LoanBooksDriver {
 
     let store: DoseStore
     let schedule: BasalRateSchedule
-    private(set) var ledger: SessionInsulinLedger
 
     private unowned let host: XCTestCase
 
@@ -169,9 +160,7 @@ private final class LoanBooksDriver {
 
     /// The store is built by `makeDriver`, which owns the `await`: `DoseStore.init` is async now,
     /// and the store no longer carries a basal profile, sensitivity schedule or override history
-    /// at all. Schedules are applied at READ time by whoever is doing the math — which is the same
-    /// move the ledger already made, so both books in this harness now take the schedule per call
-    /// and the "two books, one schedule" comparison is a fairer one than it used to be.
+    /// at all. Schedules are applied at READ time by whoever is doing the math.
     /// Retained here because `DoseStore.delegate` is weak — without an owner the delegate
     /// deallocates immediately and `addPumpEvents` is back to throwing configurationError.
     private let storeDelegate: LoanBooksDoseStoreDelegate
@@ -182,18 +171,13 @@ private final class LoanBooksDriver {
         // Fixture construction (force-unwraps allowed here, per file convention).
         self.schedule = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: basalRate)])!
         self.store = store
-        // The ledger no longer owns a schedule — reads take it per call, as production does.
-        self.ledger = SessionInsulinLedger(
-            insulinModel: { _ in ExponentialInsulinModelPreset.rapidActingAdult },
-            longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration)
     }
 
     // MARK: Script steps
 
     /// seed(grant records): runs the REAL grant split. Finished history lands in the
     /// store under hex-decoded pod-native raws; a live dose is NOT seeded —
-    /// the driver plays the pod and reports it MUTABLE full-span. The ledger takes the
-    /// identical split through `seed(finished:live:)`.
+    /// the driver plays the pod and reports it MUTABLE full-span.
     func seed(_ records: [LoanDoseRecord], at instant: Date, epoch: Int = 1) {
         seedRecords = records
         let grant = LoanGrant(epoch: epoch, expiresAt: instant.addingTimeInterval(.minutes(5)),
@@ -218,13 +202,10 @@ private final class LoanBooksDriver {
             runningTemp = temp
             addToStore([mutableEvent(for: temp)], lastReconciliation: instant, replacePendingEvents: true)
         }
-
-        ledger.seed(finished: split.seed, live: split.live)
     }
 
     /// A pod-ACCEPTED temp: the report batch carries the superseded predecessor finalized
     /// (same raw, truncated at this accept, immutable) plus the new temp mutable full-span.
-    /// The ledger takes the enact full-span and applies its own supersede truncation.
     func enactTemp(rate: Double, at instant: Date, duration: TimeInterval) {
         var batch: [NewPumpEvent] = []
         if let final = finalizeRunningTemp(at: instant) {
@@ -236,10 +217,6 @@ private final class LoanBooksDriver {
         runningTemp = temp
         batch.append(mutableEvent(for: temp))
         addToStore(batch, lastReconciliation: instant, replacePendingEvents: true)
-
-        ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: instant,
-                                     endDate: instant.addingTimeInterval(duration),
-                                     value: rate, unit: .unitsPerHour, decisionId: nil))
     }
 
     /// A pod-ACCEPTED bolus, booked finalized on the next report (typical small bolus:
@@ -263,21 +240,18 @@ private final class LoanBooksDriver {
         foldedSession.append(LoanDoseRecord(kind: .bolus, startDate: instant,
                                             endDate: instant.addingTimeInterval(span),
                                             amount: units, syncIdentifier: hexString(raw)))
-        ledger.recordEnact(dose)
     }
 
-    /// Sample both books. A pure read — replay order matters: tick BEFORE a later enact
+    /// Sample the book. A pure read — replay order matters: tick BEFORE a later enact
     /// lands if the script wants the pre-enact view (the store is one Core Data table;
     /// once a row is in, every evaluation sees it).
-    func tick(at instant: Date) -> (store: Double, ledger: Double) {
-        return (storeIOB(at: instant), ledger.insulinOnBoard(at: instant, basalSchedule: schedule))
+    func tick(at instant: Date) -> Double {
+        storeIOB(at: instant)
     }
 
     /// Hand-back: cancel/finalize the running temp at `instant` (same raw, truncated
     /// span, immutable — the pod's own finalization shape) and emit the next grant's
     /// doseHistory: the original seed records plus every session dose in hand-back shape.
-    /// The ledger is deliberately NOT truncated here — shadow mode has no hand-back hook;
-    /// scripts that compare ledger1 post-fold arrange the last temp to expire naturally.
     func handbackFold(at instant: Date) -> [LoanDoseRecord] {
         if let final = finalizeRunningTemp(at: instant) {
             addToStore([final], lastReconciliation: instant, replacePendingEvents: true)
@@ -292,10 +266,6 @@ private final class LoanBooksDriver {
     func storeFinished(_ dose: DoseEntry, raw: Data, lastReconciliation: Date) {
         addToStore([NewPumpEvent(date: dose.startDate, dose: dose, raw: raw, title: "Temp Basal")],
                    lastReconciliation: lastReconciliation, replacePendingEvents: false)
-    }
-
-    func ledgerSeed(finished: [DoseEntry], live: [DoseEntry]) {
-        ledger.seed(finished: finished, live: live)
     }
 
     /// e44: a raw batch straight into the store. The force-reclaim seam is not the pod's report
@@ -341,7 +311,7 @@ private final class LoanBooksDriver {
     ///
     /// `DoseStore.insulinOnBoard(at:)` no longer exists: the store holds rows, and the insulin
     /// math is applied by the caller against a schedule the store never sees. So this is now the
-    /// store's ROWS run through the same public InsulinMath pipeline the ledger uses — annotate
+    /// store's ROWS run through the public InsulinMath pipeline — annotate
     /// against the basal schedule, take the on-board timeline, sample it stock's way (of the two
     /// 5-min-grid values adjacent to `date`, the larger).
     ///
@@ -497,91 +467,6 @@ final class LoanBooksHarnessTests: XCTestCase {
 
     // MARK: - 1. The inherited running temp — both spans, both books
 
-    /// FIELD (2026-07-29, dead-re-arm incident): at takeover the watch inherited the
-    /// phone's RUNNING 0.00 U/hr temp — started 7 min before the seed, 30 min programmed,
-    /// schedule 0.70 U/hr. The C5-truncated record (ends at the handover stamp) landed in
-    /// the store, but the re-arm was dead: the pod never re-reported the still-running
-    /// temp, so the store's books froze at the seed instant while the pod kept WITHHOLDING
-    /// 0.70 U/hr of basal. Store IOB drifted high versus reality at exactly the schedule
-    /// rate — the signature this test pins as a regression canary.
-    ///
-    /// (a) is the healthy shape: full-span in BOTH books (store mutable via the pod's
-    /// re-report, ledger live via the grant split) — stock eval-time bounding makes both
-    /// track the temp's delivery identically, so they must agree.
-    /// (b) is the bug shape: store gets the truncated-finalized twin, ledger keeps the
-    /// full-span truth → the divergence must GROW at ≈ 0.70 U/hr × Δt. The store side is
-    /// the KNOWN-WRONG book here; the assertion pins the failure signature, not health.
-    func testInheritedTempSpanBooksOnBothSides() {
-        // PINNED TO A 5-MINUTE BOUNDARY. The IOB integrals sample on an absolute grid, so an
-        // unaligned `now` makes this test's d5 phase-dependent: 0.0077, 0.0212 and 0.0277 were
-        // measured on consecutive runs of identical code, which is why its threshold had been
-        // tuned twice and failed anyway. Every instant below is relative to `now`, so aligning
-        // it fixes the phase without altering the scenario — including the deliberately
-        // off-grid `tempStart` at −7 min, whose OFFSET is the field geometry, not its phase.
-        let now = Date(timeIntervalSinceReferenceDate:
-            (Date().timeIntervalSinceReferenceDate / TimeInterval.minutes(5)).rounded(.down) * TimeInterval.minutes(5))
-        let t0 = now.addingTimeInterval(-.minutes(20))                    // seed instant
-        let tempStart = t0.addingTimeInterval(-.minutes(7))               // field geometry
-        let tempEnd = tempStart.addingTimeInterval(.minutes(30))
-        let raw = podRaw(type: "tempBasal", value: 0.0, start: tempStart)
-
-        // (a) HEALTHY: the grant split classifies the temp live (endDate > seed instant);
-        // the driver plays the pod's mutable full-span re-report; the ledger seeds live.
-        let healthy = makeDriver()
-        healthy.seed([LoanDoseRecord(kind: .tempBasal, startDate: tempStart, endDate: tempEnd,
-                                     unitsPerHour: 0.0, syncIdentifier: hexString(raw))],
-                     at: t0)
-        for offset in [0.0, 5.0, 15.0] {
-            let sample = healthy.tick(at: t0.addingTimeInterval(.minutes(offset)))
-            XCTAssertEqual(sample.store, sample.ledger, accuracy: 0.05,
-                           "full-span in both books must agree at +\(Int(offset)) min — same rows, same stock math")
-        }
-
-        // (b) THE BUG SHAPE: store gets the truncated twin ONLY (dead re-arm — no pod
-        // re-report ever arrives); ledger gets the full-span truth.
-        let broken = makeDriver()
-        broken.storeFinished(DoseEntry(type: .tempBasal, startDate: tempStart, endDate: t0,
-                                       value: 0.0, unit: .unitsPerHour, decisionId: nil),
-                             raw: raw, lastReconciliation: t0)
-        broken.ledgerSeed(finished: [],
-                          live: [DoseEntry(type: .tempBasal, startDate: tempStart, endDate: tempEnd,
-                                           value: 0.0, unit: .unitsPerHour, decisionId: nil)])
-
-        let at5 = broken.tick(at: t0.addingTimeInterval(.minutes(5)))
-        let at15 = broken.tick(at: t0.addingTimeInterval(.minutes(15)))
-        let d5 = at5.store - at5.ledger     // store (frozen) minus ledger (tracking) — positive
-        let d15 = at15.store - at15.ledger
-
-        // Threshold recalibrated 2026-08-18. The 0.05 it used to carry was measured against
-        // LoopKit's OLD IOB integral, whose upper bound was quantized to the delta grid
-        // (`floor((time + delay) / delta) * delta`) — the same bound the comment below still
-        // describes. Upstream LoopAlgorithm aeffea8 ("Fix delta-scale IOB ripple for basal
-        // segments longer than delta") replaced it with `min(time, doseDuration)` plus a
-        // midpoint Riemann sum, which removed both the forward walk and the phase ripple. The
-        // divergence this test measures is real and still grows, but it is now roughly 0.02 U at
-        // +5 min rather than the 0.058-0.116 the old bound produced, so the old constant fails
-        // on correct code.
-        //
-        // The SHAPE assertions below are the ones carrying the meaning — the frozen store
-        // overstates, and the overstatement grows while the dead temp withholds basal. The
-        // magnitude floor exists only to keep that from passing on float noise, so it is set
-        // just above noise rather than at a number transcribed from a deleted implementation.
-        XCTAssertGreaterThan(d5, 0.01,
-                             "the frozen store must already overstate IOB 5 min after the seed")
-        XCTAssertGreaterThan(d15, d5,
-                             "the divergence must GROW while the dead temp keeps withholding basal")
-        // Grid-phase-dependent growth (measured 0.058 AND 0.116 on consecutive runs): the
-        // model-delay bound floor((time+delay)/delta)*delta quantizes on the 5-min grid
-        // relative to WALL CLOCK, so the +5→+15 divergence growth is one OR two grid
-        // steps of withheld basal depending on where `now` fell — 0.70 × (5..10)/60.
-        // Both are the field signature (linear phase Δ+0.16→+0.22, then the +0.22→+0.27
-        // plateau, 2026-07-29). Pin the RANGE, not a point.
-        XCTAssertGreaterThan(d15 - d5, fieldBasalRate * (5.0 / 60.0) - 0.03,
-                             "dead-re-arm signature: at least one grid step of withheld basal must accrue")
-        XCTAssertLessThan(d15 - d5, fieldBasalRate * (10.0 / 60.0) + 0.03,
-                          "growth must cap at the linear rate — more means a book defect beyond the canary")
-    }
-
     // MARK: - 2. The bolus twin pair
 
     /// FIELD (2026-07-29): the grant carried the same physical 0.95 U bolus TWICE — once
@@ -611,14 +496,8 @@ final class LoanBooksHarnessTests: XCTestCase {
         XCTAssertEqual(driver.storeBolusCount(start: now.addingTimeInterval(-.hours(6)), end: now), 2,
                        "distinct identities blind every store dedup layer — both twins land as rows")
         let sample = driver.tick(at: now)
-        XCTAssertEqual(sample.store, 1.90, accuracy: 0.1,
+        XCTAssertEqual(sample, 1.90, accuracy: 0.1,
                        "the store books BOTH twins: ~2 × 0.95 U of IOB for one physical bolus (+0.95 U phantom, field 2026-07-29)")
-
-        // LEDGER: the seed's bolus-twin guard collapses
-        // same-units (±0.01U) same-instant (±2s) bolus twins, keeping the longer span
-        // (pod-actual timing) — one physical bolus books ONCE.
-        XCTAssertEqual(sample.ledger, 0.95, accuracy: 0.1,
-                       "the ledger's seed twin-guard must collapse the pair to one 0.95 U bolus")
     }
 
     // MARK: - 3. The hand-back seam
@@ -651,8 +530,8 @@ final class LoanBooksHarnessTests: XCTestCase {
         // PRE-ENACT samples — replay order is load-bearing: both are pure reads taken
         // BEFORE the 21:16 enact lands, so preT is the watch's true pre-enact IOB and
         // preT45 is pure decay of the same books (no zero-temp term in either).
-        let preT = watch.tick(at: t).store
-        let preT45 = watch.tick(at: phoneEval).store
+        let preT = watch.tick(at: t)
+        let preT45 = watch.tick(at: phoneEval)
 
         // 21:16: enact 0.00 × 30 min. 21:20:18: hand back — the pod finalizes the temp
         // truncated [t, t+4.3], same raw, immutable.
@@ -663,8 +542,8 @@ final class LoanBooksHarnessTests: XCTestCase {
         // grant split again — hex syncIds decode back to the very same pod raws).
         let phone = makeDriver()
         phone.seed(finalRecords, at: phoneEval, epoch: 2)
-        let phoneT45 = phone.tick(at: phoneEval).store
-        let watchT45 = watch.tick(at: phoneEval).store
+        let phoneT45 = phone.tick(at: phoneEval)
+        let watchT45 = watch.tick(at: phoneEval)
 
         // The explainable seam: decay + the zero temp's actually-withheld basal.
         let decay = preT - preT45
@@ -683,17 +562,15 @@ final class LoanBooksHarnessTests: XCTestCase {
 
     /// The cross-epoch fidelity pin (the 2026-07-29 session cycled multiple epochs): a
     /// full session — seed → three temp enacts (supersede chain) + a bolus → hand-back
-    /// fold (temps truncated at supersede, same raws) → RE-SEED a fresh store + ledger
+    /// fold (temps truncated at supersede, same raws) → RE-SEED a fresh store
     /// from the folded records — must conserve IOB. Every takeover re-derives the books
     /// from records, so any per-cycle leak compounds across epochs (the class of bug
     /// behind the 7.40 U takeover inflation of 2026-07-22, re-pinned here through the
     /// current fold + split path).
     ///
     /// Geometry note: the last temp's programmed span ends exactly at the hand-back
-    /// instant (a loop-cycle hand-back at temp expiry — a real session shape). That keeps
-    /// ledger1's full-span row identical to the folded record, so the three-way
-    /// comparison at H carries no forward-delay asymmetry (shadow mode has no ledger
-    /// hand-back truncation hook — see handbackFold).
+    /// instant (a loop-cycle hand-back at temp expiry — a real session shape), so the fold
+    /// changes no row's span and the comparison at H carries no forward-delay asymmetry.
     func testReGrantRoundTripPreservesBooks() {
         let now = Date()
         let s = now.addingTimeInterval(-.minutes(100))    // epoch-1 takeover
@@ -719,20 +596,16 @@ final class LoanBooksHarnessTests: XCTestCase {
         epoch1.enactTemp(rate: 1.05, at: s.addingTimeInterval(.minutes(20)), duration: .minutes(30)) // runs to natural expiry at h
 
         let nextGrantRecords = epoch1.handbackFold(at: h)
-        let ledger1 = epoch1.ledger.insulinOnBoard(at: h, basalSchedule: epoch1.schedule)
+        let store1 = epoch1.tick(at: h)
 
-        // Epoch 2: fresh store + fresh ledger, seeded from the folded records — the real
-        // split runs again, hex syncIds decode back to the same pod-native raws.
+        // Epoch 2: a fresh store, seeded from the folded records — the real split runs again,
+        // hex syncIds decode back to the same pod-native raws.
         let epoch2 = makeDriver()
         epoch2.seed(nextGrantRecords, at: h, epoch: 2)
         let sample2 = epoch2.tick(at: h)
 
-        XCTAssertGreaterThan(ledger1, 0.3, "sanity: the session books carry insulin at hand-back")
-        XCTAssertEqual(sample2.store, sample2.ledger, accuracy: 0.05,
-                       "epoch-2 store and ledger read the same folded records — same rows, same math")
-        XCTAssertEqual(sample2.ledger, ledger1, accuracy: 0.05,
-                       "the ledger's live timeline and its folded-and-reseeded twin must agree — the fold loses nothing")
-        XCTAssertEqual(sample2.store, ledger1, accuracy: 0.05,
+        XCTAssertGreaterThan(store1, 0.3, "sanity: the session book carries insulin at hand-back")
+        XCTAssertEqual(sample2, store1, accuracy: 0.05,
                        "cross-epoch fidelity: IOB is conserved through fold → re-grant → reseed")
     }
 
@@ -798,10 +671,9 @@ final class LoanBooksHarnessTests: XCTestCase {
     /// The books-level pin: the crash fired BEFORE the pod command, so the field signature of
     /// the FIX is a bolus that (a) survives the queue topology and (b) lands in BOTH books
     /// coherently. This replays the fixed shape, then books the delivered bolus the way the
-    /// session does — store via the pod-style report batch, ledger via recordEnact — and
-    /// pins IOB parity (field DOSING panel: store = ledger = 2.33 after the first
-    /// post-fix manual bolus).
-    func testBolusBooksLandInBothBooksAfterQueueHop() {
+    /// session does — the pod-style report batch — and pins the IOB (field DOSING panel:
+    /// 2.33 after the first post-fix manual bolus).
+    func testBolusLandsInTheBookAfterQueueHop() {
         let now = Date()
         let bolusStart = now.addingTimeInterval(-.minutes(5))  // enacted 5 min ago — inside
                                                                // the 10-min model delay, so
@@ -824,17 +696,13 @@ final class LoanBooksHarnessTests: XCTestCase {
         wait(for: [delivered], timeout: 5)
         XCTAssertTrue(mintedBeforeCommand, "no delivery without a completed mint")
 
-        // The books: pod-accepted bolus, both writers, exactly as the session records it.
+        // The book: a pod-accepted bolus, exactly as the session records it.
         let driver = makeDriver()
         driver.enactBolus(units: 2.33, at: bolusStart)
 
         let sample = driver.tick(at: now)
-        XCTAssertEqual(sample.store, 2.33, accuracy: 0.1,
+        XCTAssertEqual(sample, 2.33, accuracy: 0.1,
                        "the store must carry the full delivered bolus (field 20:45: 2.33)")
-        XCTAssertEqual(sample.ledger, 2.33, accuracy: 0.1,
-                       "the ledger must carry the same bolus via recordEnact")
-        XCTAssertEqual(sample.store, sample.ledger, accuracy: 0.1,
-                       "both books, one bolus, one number — the post-fix field signature")
     }
 
     // MARK: - Carb-side helpers (tests 7-8)
@@ -1361,96 +1229,6 @@ final class LoanWireQuantizationTests: XCTestCase {
                              "the pre-fix path must over-count — one-signed, never under")
         XCTAssertEqual(roundedTotal - flooredTotal, 0.025 * 33, accuracy: 0.025 * 33 * 0.6,
                        "drift scales with slice count at ~0.025 U each (field: 33 slices → +0.30)")
-    }
-}
-
-// MARK: - Refuted uncertain command must restore what it truncated
-
-/// The last documented ledger corner, closed in the SIM rather than waiting for a rare
-/// field event.
-///
-/// Sequence: a high temp is running; an uncertain enact books an assumed dose (the watch assumes
-/// only above-schedule commands, so this is the case that matters) which truncates the
-/// running temp; the chase then comes back REFUTED — the pod never received it. Reality:
-/// the original temp kept running to its programmed end. Pre-fix the ledger removed the
-/// assumed dose but left the predecessor short, so the interval fell back to schedule and
-/// IOB UNDER-counted — anti-conservative, since the pod was still delivering above it.
-final class LedgerRefuteRestoreTests: XCTestCase {
-
-    private func scheduleOf(_ rate: Double) -> BasalRateSchedule {
-        BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: rate)])!
-    }
-    private func makeLedger(basalRate: Double = 0.70) -> SessionInsulinLedger {
-        SessionInsulinLedger(
-            insulinModel: { _ in ExponentialInsulinModelPreset.rapidActingAdult },
-            longestEffectDuration: ExponentialInsulinModelPreset.rapidActingAdult.effectDuration)
-    }
-
-    func testRefutedAssumedDoseRestoresTruncatedPredecessor() {
-        var ledger = makeLedger()
-        let now = Date()
-        let runningStart = now.addingTimeInterval(-.minutes(10))
-        let runningEnd = runningStart.addingTimeInterval(.minutes(30))   // programmed end, +20 min from now
-
-        // A 3.00 U/hr temp is running (well above the 0.70 schedule).
-        ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: runningStart, endDate: runningEnd,
-                                     value: 3.00, unit: .unitsPerHour, decisionId: nil, syncIdentifier: "running"))
-        let iobWithRunningTempIntact = ledger.insulinOnBoard(at: now.addingTimeInterval(.minutes(15)), basalSchedule: scheduleOf(0.70))
-
-        // An uncertain enact books an assumed 4.00 U/hr dose, truncating the running temp.
-        let assumedStart = now
-        ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: assumedStart,
-                                     endDate: assumedStart.addingTimeInterval(.minutes(30)),
-                                     value: 4.00, unit: .unitsPerHour, decisionId: nil, syncIdentifier: "assumed"))
-        XCTAssertEqual(ledger.doses.count, 2)
-        XCTAssertEqual(ledger.doses[0].endDate.timeIntervalSince1970,
-                       assumedStart.timeIntervalSince1970, accuracy: 0.01,
-                       "booking the assumed dose truncates the running temp at its start")
-
-        // The chase refutes it: the pod never got the command.
-        XCTAssertTrue(ledger.removeDose(type: .tempBasal, startingAt: assumedStart))
-        XCTAssertEqual(ledger.doses.count, 1)
-        XCTAssertEqual(ledger.doses[0].endDate.timeIntervalSince1970,
-                       runningEnd.timeIntervalSince1970, accuracy: 0.01,
-                       "the refuted command never ran, so the predecessor's programmed tail must return")
-
-        // And the IOB must match the never-interrupted world, not a schedule-filled gap.
-        XCTAssertEqual(ledger.insulinOnBoard(at: now.addingTimeInterval(.minutes(15)), basalSchedule: scheduleOf(0.70)),
-                       iobWithRunningTempIntact, accuracy: 0.001,
-                       "post-refute IOB must equal the world where the uncertain command never happened")
-    }
-
-    /// The restore must NOT fire when a later accepted command has since taken over the
-    /// edge — that one legitimately owns the truncation.
-    func testRestoreSkipsWhenALaterCommandOwnsTheEdge() {
-        var ledger = makeLedger()
-        let now = Date()
-        let runningStart = now.addingTimeInterval(-.minutes(10))
-
-        ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: runningStart,
-                                     endDate: runningStart.addingTimeInterval(.minutes(30)),
-                                     value: 3.00, unit: .unitsPerHour, decisionId: nil, syncIdentifier: "running"))
-        let assumedStart = now
-        ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: assumedStart,
-                                     endDate: assumedStart.addingTimeInterval(.minutes(30)),
-                                     value: 4.00, unit: .unitsPerHour, decisionId: nil, syncIdentifier: "assumed"))
-        // A later ACCEPTED command supersedes the assumed one.
-        let acceptedStart = now.addingTimeInterval(.minutes(2))
-        ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: acceptedStart,
-                                     endDate: acceptedStart.addingTimeInterval(.minutes(30)),
-                                     value: 1.50, unit: .unitsPerHour, decisionId: nil, syncIdentifier: "accepted"))
-
-        XCTAssertTrue(ledger.removeDose(type: .tempBasal, startingAt: assumedStart))
-        // The running temp still ends where the ASSUMED dose cut it; extending it now would
-        // overlap the accepted command, which is the one actually running.
-        // (Match by start time, not syncIdentifier: LoopKit's trimmed(to:) NULLS the
-        // identifier — the same behavior behind this morning's reservoir-branch finding.)
-        guard let running = ledger.doses.first(where: {
-            abs($0.startDate.timeIntervalSince(runningStart)) < 0.001
-        }) else { return XCTFail("the running temp must still be in the timeline") }
-        XCTAssertLessThanOrEqual(running.endDate, acceptedStart,
-                                 "no restore across a later accepted command — it owns the edge")
-        XCTAssertFalse(ledger.doses.contains { abs($0.startDate.timeIntervalSince(assumedStart)) < 0.001 })
     }
 }
 

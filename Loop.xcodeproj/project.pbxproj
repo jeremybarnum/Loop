@@ -257,7 +257,6 @@
 		7D23667D21250C7E0028B67D /* LocalizedString.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D23667C21250C7E0028B67D /* LocalizedString.swift */; };
 		7DF84FAADBC24ABEA2C0829E /* LoopUpdateContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0291A8F31C4B68ACE34BFC /* LoopUpdateContext.swift */; };
 		7E69CFFC2A16A77E00203CBD /* ResetLoopManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E69CFFB2A16A77E00203CBD /* ResetLoopManager.swift */; };
-		821B7E25A6E84544A686F3E5 /* SessionInsulinLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 073A1B6450914563A4EF2176 /* SessionInsulinLedger.swift */; };
 		824A01CBE97A4F7A9D32F7D6 /* clear_chimes.caf in Resources */ = {isa = PBXBuildFile; fileRef = 4A645E0E2DDA534A635C9201 /* clear_chimes.caf */; };
 		841306BB2F7F0D9C00AF0320 /* ReferencesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 841306BA2F7F0D9C00AF0320 /* ReferencesView.swift */; };
 		84213C752D932F0F00642E78 /* InsulinDeliveryLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84213C742D932F0F00642E78 /* InsulinDeliveryLog.swift */; };
@@ -354,7 +353,6 @@
 		89F9119424358E4500ECCAF3 /* CarbAbsorptionTime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89F9119324358E4500ECCAF3 /* CarbAbsorptionTime.swift */; };
 		89F9119624358E6900ECCAF3 /* BolusPickerValues.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89F9119524358E6900ECCAF3 /* BolusPickerValues.swift */; };
 		89FE21AD24AC57E30033F501 /* Collection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89FE21AC24AC57E30033F501 /* Collection.swift */; };
-		8B4D0D47875C40BDAC30D045 /* SessionInsulinLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81900B7D27224A3C9DAB24F0 /* SessionInsulinLedger.swift */; };
 		8B5CF0144D79477AACBE4A82 /* LoopKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4344628320A7A3BE00C4BE6F /* LoopKit.framework */; };
 		8C844DFDB7274EB6A6B0A09E /* LoanEventJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53F9B5F8846B4124B8986783 /* LoanEventJournal.swift */; };
 		921B7FAE002E40EFAB3F50C6 /* G7SensorKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F8760AF31E3C43F6AFBA1BE7 /* G7SensorKit.framework */; };
@@ -866,7 +864,6 @@
 /* Begin PBXFileReference section */
 		00A28F30399B460CABF4EDD2 /* SettingsProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SettingsProvider.swift; path = Loop/Managers/SettingsProvider.swift; sourceTree = SOURCE_ROOT; };
 		036B897A66F14CAA9CD5CAD0 /* PodLoanWatchController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PodLoanWatchController.swift; path = "WatchApp Extension/StockLoop/PodLoanWatchController.swift"; sourceTree = SOURCE_ROOT; };
-		073A1B6450914563A4EF2176 /* SessionInsulinLedger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SessionInsulinLedger.swift; path = "WatchApp Extension/StockLoop/SessionInsulinLedger.swift"; sourceTree = SOURCE_ROOT; };
 		0CB27CFCF9F0424FBB930CFF /* SettingsProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SettingsProvider.swift; path = Loop/Managers/SettingsProvider.swift; sourceTree = SOURCE_ROOT; };
 		0FC34B523FE5A50C920506D5 /* alarm.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop/Resources/Sounds/alarm.caf; sourceTree = SOURCE_ROOT; };
 		142CB7582A60BF2E0075748A /* EditMode.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = EditMode.swift; sourceTree = "<group>"; };
@@ -1127,7 +1124,6 @@
 		7D9BEF812335EC8B005DCFD6 /* fi */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = fi; path = fi.lproj/Intents.strings; sourceTree = "<group>"; };
 		7D9BF13A23370E8B005DCFD6 /* ro */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ro; path = ro.lproj/Intents.strings; sourceTree = "<group>"; };
 		7E69CFFB2A16A77E00203CBD /* ResetLoopManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResetLoopManager.swift; sourceTree = "<group>"; };
-		81900B7D27224A3C9DAB24F0 /* SessionInsulinLedger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SessionInsulinLedger.swift; path = "WatchApp Extension/StockLoop/SessionInsulinLedger.swift"; sourceTree = SOURCE_ROOT; };
 		83081FFB0497A4596F597830 /* synth.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop/Resources/Sounds/synth.caf; sourceTree = SOURCE_ROOT; };
 		840A2F0D2C0F978E003D5E90 /* LoopKitUI.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = LoopKitUI.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		841306BA2F7F0D9C00AF0320 /* ReferencesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferencesView.swift; sourceTree = "<group>"; };
@@ -2470,7 +2466,6 @@
 				21F13EB666EBFDD03F99CB7E /* trill.caf */,
 				C9EA3F48338B49BD9C6BD0F9 /* urgent_low.caf */,
 				FD211055E6EA48C7A7F6B8E0 /* LoanEventJournal.swift */,
-				073A1B6450914563A4EF2176 /* SessionInsulinLedger.swift */,
 				7C9DDCE80C384964BDDF1C8B /* PhoneLog.swift */,
 				EDBF9B08E9314F23AB94CF5A /* LoanReconciler.swift */,
 				BE577A60A96B49F3A608001B /* PodLoanPhoneController.swift */,
@@ -2481,7 +2476,6 @@
 				F8760AF31E3C43F6AFBA1BE7 /* G7SensorKit.framework */,
 				A60E55AC77554C50A4196482 /* OmnipodKit.framework */,
 				53F9B5F8846B4124B8986783 /* LoanEventJournal.swift */,
-				81900B7D27224A3C9DAB24F0 /* SessionInsulinLedger.swift */,
 				C3D4E5F6A7B8C9D0E1F2A3B4 /* G7WedgeHint.swift */,
 				E7B75623E2144089A0471809 /* LoanDebugView.swift */,
 				F0ABB040AC55431083B36492 /* GlanceView.swift */,
@@ -3651,7 +3645,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				77195EF1E7C946ED9659F39B /* LoanEventJournal.swift in Sources */,
-				821B7E25A6E84544A686F3E5 /* SessionInsulinLedger.swift in Sources */,
 				95C7AE061FC149ADB8D1928D /* PhoneLog.swift in Sources */,
 				9F0BBEE28E9F45FC8DB3D8C9 /* LoanReconciler.swift in Sources */,
 				D6201CDD83934B508AC33A24 /* PodLoanPhoneController.swift in Sources */,
@@ -3923,7 +3916,6 @@
 			files = (
 				DDBD0001000000000000BD01 /* BuildDetails.swift in Sources */,
 				8C844DFDB7274EB6A6B0A09E /* LoanEventJournal.swift in Sources */,
-				8B4D0D47875C40BDAC30D045 /* SessionInsulinLedger.swift in Sources */,
 				D4E5F6A7B8C9D0E1F2A3B4C5 /* G7WedgeHint.swift in Sources */,
 				29E7925FADC442E78B1BFA79 /* LoanDebugView.swift in Sources */,
 				2EE15DB9853743D7B999AF37 /* GlanceView.swift in Sources */,

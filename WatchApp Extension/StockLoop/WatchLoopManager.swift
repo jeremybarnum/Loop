@@ -666,8 +666,8 @@ final class WatchLoopManager {
             // gate it: stock's HUD blanks stale insulin (ChartHUDController:165) because its
             // value arrives in a context it cannot recompute; the watch owns the timeline and
             // can. Same on-demand shape as glanceCarbsOnBoard — which is exactly why COB kept
-            // decaying through that same outage while IOB sat still. Pre-cutover, or before the
-            // ledger is seeded, the cached value remains the only source.
+            // decaying through that same outage while IOB sat still. If the book cannot be read,
+            // the cached value remains the only source.
             let liveIOB: Double? = liveInsulinOnBoard
             return GlanceData(
                 glucose: latest?.quantity,
@@ -934,8 +934,9 @@ final class WatchLoopManager {
         self.settingsProvider = WatchSettingsProvider(settings: settings)
         self.overrideHistory = overrideHistory
         self.settings = settings
-        // Shadow ledger: enactor-accepted doses flow into the session timeline.
-        doseEnactor.ledgerRecord = { [weak self] dose in self?.ledgerRecordEnact(dose) }
+        // The store overlays scheduled basal between pump events when it copies them into the
+        // delivery store; it asks its delegate for that history (stock: DeviceDataManager).
+        doseStore.delegate = self
         #if !targetEnvironment(simulator)
         // Phone-BG fallback. Every phone context update, during a loan, mirror the phone's
         // relayed CGM into the DOSING store (device only; the simulator drives it via the
@@ -1169,26 +1170,6 @@ final class WatchLoopManager {
 
     /// Refuse loudly, once per distinct reason — not once per glance tick, and never by
     /// silently switching the dosing source; that silent switch is banned outright.
-    private func logLedgerRefusal(_ what: String) {
-        let reason = "\(what): ledger=\(sessionLedger != nil ? "ok" : "NIL") isf=\(insulinSensitivityScheduleApplyingOverrideHistory != nil ? "ok" : "NIL") basal=\(basalRateScheduleApplyingOverrideHistory != nil ? "ok" : "NIL")"
-        guard reason != lastLedgerRefusalLogged else { return }
-        lastLedgerRefusalLogged = reason
-        SportLog.event("ledger", "REFUSED \(reason) — R35: no store fallback; the cycle fails loudly")
-    }
-
-    /// The pump-data recency clock, owned directly. It must never be `doseStore.lastAddedPumpData`,
-    /// which advanced as a side effect of writing dose rows into a store that never persists
-    /// them. Same lock idiom as the glucose source stamps.
-    private let pumpDataLock = NSLock()
-    private var _lastPumpDataDate: Date?
-    var lastPumpDataDate: Date? {
-        pumpDataLock.lock(); defer { pumpDataLock.unlock() }
-        return _lastPumpDataDate
-    }
-    func notePumpDataReceived(at date: Date) {
-        pumpDataLock.lock(); defer { pumpDataLock.unlock() }
-        if (_lastPumpDataDate ?? .distantPast) < date { _lastPumpDataDate = date }
-    }
 
     /// Mirrors LoopDataManager's buffer multiplier for combining retrospective discrepancies.
 
@@ -1234,12 +1215,10 @@ final class WatchLoopManager {
     /// held a flat 1.13 U for 28 minutes across a G7 outage before falling 0.53 in one step when
     /// readings resumed — which reads as an insulin EVENT rather than as arithmetic catching up.
     /// IOB is a pure function of the dose timeline and the clock, so the honest fix is to
-    /// evaluate it. Falls back to the cycle value before the ledger is seeded.
+    /// evaluate it. Falls back to the cycle value when the book cannot be read.
     private var liveInsulinOnBoard: Double? {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-        return basalRateScheduleApplyingOverrideHistory.flatMap { sched in
-            sessionLedger?.insulinOnBoard(at: now(), basalSchedule: sched)
-        } ?? activeInsulin
+        return insulinOnBoardFromStore(at: now()) ?? activeInsulin
     }
 
     /// Which retrospective correction the GRANTING phone runs, frozen at grant. The algorithm
@@ -1300,122 +1279,86 @@ final class WatchLoopManager {
     /// Storm latch: last phone-fallback syncId attempted (serial deviceQueue only).
     var lastPhoneFallbackSyncId: String?
 
-    // MARK: - SessionInsulinLedger
+    // MARK: - The insulin book (the watch's DoseStore; ONE writer: the watch's pump manager)
 
-    /// The single-owner session dose timeline (see SessionInsulinLedger.swift for the full
-    /// rationale). dataAccessQueue-confined, and the ONLY insulin book: the watch's DoseStore
-    /// is never written, so both dosing and display read from here.
+    /// R35 REVERSED (2026-09-17). The watch's DoseStore is the insulin book, written by exactly
+    /// one party — the watch's own pump manager, through the same `hasNewPumpEvents` callback the
+    /// phone's DeviceDataManager routes into its store. The grant seed is the only other write:
+    /// an upsert of the phone's FINISHED history under the phone's own identities through stock's
+    /// remote-store door (`syncDoseEntries`), immutable rows only, no clock side effect.
     ///
-    /// The header used to end "dosing and display still read the DoseStore", a leftover from
-    /// shadow mode that contradicted its own preceding sentence. It was accurate about the
-    /// algorithm and that was the bug — `fetchAlgorithmInput` really did read the store, and
-    /// the store really was empty. Fixed 2026-08-18; the sentence goes with it.
-    private var sessionLedger: SessionInsulinLedger?
+    /// The store is writable now (StockLoopStack: the appex heuristic misclassified this
+    /// extension, which OWNS the store — R35's own finding), so the read-only / wipe-leak /
+    /// pending-object class of defect that justified a second book has no mechanism left. There
+    /// is no fallback between books because there is one book; the refusal is stock's pump-data
+    /// recency gate (`pumpDataTooOld`), enforced in fetchAlgorithmInput.
+    ///
+    /// The book is PER LOAN: reset at loan end (teardown) and before the seed of a new epoch.
+    /// Identity across the wire is still the journal's (the next step moves the wire onto pump
+    /// events); a persisted previous-loan row and its re-seeded twin from the phone would carry
+    /// DIFFERENT identities, and the reset is what keeps one dose one row.
 
-    /// Takeover: build a fresh ledger from the grant split. Uses the SAME config the store
-    /// path nets/decays with (frozen grant basalProfile, same model provider) so the shadow
-    /// diff isolates STORAGE behavior, not math.
-    func ledgerSeed(finished: [DoseEntry], live: [DoseEntry]) {
-        dataAccessQueue.async {
-            // The ledger does not freeze a schedule at seed — both schedules are
-            // resolved override-applied at READ time, so a "no basal profile yet →
-            // seed SKIPPED" failure (which would silently leave the STORE driving dosing)
-            // cannot arise. A missing schedule surfaces at read as a loud refusal instead.
-            var ledger = SessionInsulinLedger(
-                insulinModel: { [weak self] type in
-                    self?.insulinModel(for: type) ?? ExponentialInsulinModelPreset.rapidActingAdult
-                },
-                longestEffectDuration: self.doseStore.longestEffectDuration)
-            ledger.seed(finished: finished, live: live)
-            self.sessionLedger = ledger
-            SportLog.event("ledger", "seeded — \(ledger.summary) (\(finished.count) finished + \(live.count) live)")
-        }
+    /// Seed: the phone's finished history, by its own sync identifiers.
+    func seedInsulinHistory(_ entries: [DoseEntry]) async throws {
+        try await doseStore.syncDoseEntries(entries)
     }
 
-    // g7.ledgerCutover DELETED. The flag was the one-line revert to the
-    // store dosing path — and that path was never trustworthy on the watch
-    // (isReadOnly store: saves silently no-op, purges can't clear). There is no fallback at
-    // all: a missing ledger input refuses the cycle loudly, and the rollback is the previous
-    // TestFlight build, not a hidden second book.
+    /// The pump manager's report — the ONE writer of dose rows. Same door, same flags as
+    /// DeviceDataManager.pumpManager(_:hasNewPumpEvents:lastReconciliation:replacePendingEvents:).
+    func recordPumpEvents(_ events: [NewPumpEvent], lastReconciliation: Date?, replacePendingEvents: Bool) async throws {
+        try await doseStore.addPumpEvents(events, lastReconciliation: lastReconciliation, replacePendingEvents: replacePendingEvents)
+    }
 
-    /// One refusal log per distinct reason, not one per 2s glance tick.
-    private var lastLedgerRefusalLogged: String?
+    /// Loan end / new epoch: the phone owns the truth again and the watch's book empties. Stock's
+    /// own pump-removal path (`resetPumpData`) plus the delivery-store purge — real deletes on a
+    /// real store.
+    func resetInsulinBook(reason: String) async {
+        do {
+            try await doseStore.resetPumpData()
+        } catch {
+            SportLog.event("book", "reset FAILED (pump events) — \(reason): \(String(describing: error))")
+        }
+        await doseStore.insulinDeliveryStore.purgeCachedInsulinDeliveryObjects()
+        SportLog.event("book", "insulin book reset — \(reason)")
+    }
 
-    /// The ledger's counterpart to the phone's `clearCachedInsulinEffects()`
-    /// (LoopDataManager.swift:472). Stock reaches it through a DoseStore notification observer
-    /// (LoopDataManager.swift:206-219) that fires on EVERY dosing change; under the ledger
-    /// cutover our doses never touch DoseStore, so that observer never fires and the cached
-    /// insulin effects went stale for the whole epoch — the prediction kept the array built at
-    /// takeover and every subsequent temp basal was invisible to it (measured: the
-    /// predicted-minimum horizon pinned to one absolute wall-clock time for 11 consecutive
-    /// cycles, and the insulin term reading −4 mg/dL against IOB 1.33 U at ISF 70, where the
-    /// invariant demands −ISF × IOB ≈ −93). The loop then stacked insulin onto a prediction that
-    /// contained none, and the counteraction pass — fed the same frozen array — booked real
-    /// insulin action as positive discrepancy, inflating RC.
-    ///
-    /// MUST be called on `dataAccessQueue`, INLINE with the mutation that dirties the ledger:
-    /// a separately enqueued block on this serial queue could land after the next cycle has
-    /// already read the stale array.
-    private func clearCachedInsulinEffects() {   // dataAccessQueue
+    /// IOB evaluated NOW off the book: the store's normalized doses through the same public
+    /// InsulinMath pipeline the algorithm uses — annotated against the override-applied basal,
+    /// on-board timeline, sampled stock's way (the larger of the two grid values around `date`).
+    /// nil when the schedule is missing or the store cannot be read; callers fall back to the
+    /// cycle value.
+    func insulinOnBoardFromStore(at date: Date) -> Double? {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
-        // Nothing to clear: the algorithm holds no effects between cycles, so the next run
-        // reads the rebuilt books directly. Kept as a call site so the ledger mutations that
-        // used to depend on it still read as deliberate.
-        // NOT predictedGlucose — the watch deliberately diverges from the phone here, and the
-        // first cut of this method broke it. Stock's clearCachedInsulinEffects() also nils
-        // predictedGlucose; on the watch that value is DISPLAY-ONLY (the glance/diagnostic
-        // "eventually N" row — DoseMath uses the locally-computed prediction), and the glance keeps
-        // the last eventual visible with a freshness grade rather than blanking on a failed
-        // cycle. See the identical note at the carbEffect didSet (~:552). Because this method now
-        // runs on EVERY ledger write, nil-ing it here blanked the eventual after every enact —
-        // observed on the wrist, with the reconciliation row still rendering 106
-        // because it is cached separately at predict time. The stale array was the bug;
-        // predictedGlucose was never part of it and is recomputed each cycle regardless.
+        guard let basal = basalRateScheduleApplyingOverrideHistory else { return nil }
+        let longest = doseStore.longestEffectDuration
+        guard let doses = try? runBlocking({
+            try await self.doseStore.getNormalizedDoseEntries(start: date.addingTimeInterval(-longest), end: nil)
+        }) else { return nil }
+        if doses.isEmpty { return 0 }
+        let window = (start: doses.map(\.startDate).min() ?? date,
+                      end: (doses.map(\.endDate).max() ?? date).addingTimeInterval(longest))
+        let basalTimeline = BasalRateSchedule.generateTimeline(
+            schedules: [(date: .distantPast, schedule: basal)],
+            startDate: window.start,
+            endDate: window.end)
+        let timeline = doses
+            .map { $0.simpleDose(with: insulinModel(for: $0.insulinType)) }
+            .annotated(with: basalTimeline)
+            .insulinOnBoardTimeline(longestEffectDuration: longest,
+                                    from: date.addingTimeInterval(-.minutes(5)),
+                                    to: date.addingTimeInterval(.minutes(5)))
+        let before = timeline.last(where: { $0.startDate <= date })?.value
+        let after = timeline.first(where: { $0.startDate >= date })?.value
+        return max(before ?? 0, after ?? 0)
     }
 
-    /// A pod-ACCEPTED watch enact enters the timeline (truncating the open predecessor).
-    func ledgerRecordEnact(_ dose: DoseEntry) {
+    /// The takeover SEED-IN anchor, off the book. Completion reports the primed value for the
+    /// [iob-diff] anchors + SEED-IN log.
+    func primeIOBFromStore(at date: Date, _ completion: @escaping (Double?) -> Void) {
         dataAccessQueue.async {
-            self.sessionLedger?.recordEnact(dose)
-            self.clearCachedInsulinEffects()   // The dose must reach the next prediction
-            // ...and the DISPLAY curve must reach the wrist now, not next cycle. This is the
-            // half of stock's dosing-change observer that had no analogue here: stock clears
-            // the same two caches and then posts `notify(forChange: .insulin)`, and the status
-            // screen's recompute off that notification is why the phone's "Eventually" credits
-            // a temp within seconds of enacting it. The watch stamps its curves once per cycle,
-            // BEFORE the enactor runs, so without this the wrist showed a figure computed
-            // before the dose it had just delivered — the disagreement Jeremy measured at ~100
-            // mg/dL against the phone, side by side.
-            //
-            // Effects first, curve second, and in that order: predictGlucose READS the caches
-            // that were just nil-ed and does not rebuild them, so predicting here without the
-            // refresh would produce a curve with no insulin in it at all.
-            //
-            // Only the pending-inclusive array is re-stamped. Nothing dosing reads it — DoseMath
-            // consumes the locally-computed curve — so this cannot reach delivery, and no
-            // recommendation is produced off-cycle.
-            // No explicit glance poke: the glance's own tick rebuilds its mirror, and leaving a
-            // failed predict on the previous value is the same choice made for the eventual
-            // everywhere else on the wrist — a stale figure carrying a freshness grade beats a
-            // blank one, which is why clearCachedInsulinEffects deliberately does not nil the
-            // display curve the way stock's does.
-        }
-    }
-
-    /// A chase verdict REFUTED a previously booked assumed dose — reverse it.
-    func ledgerRemoveDose(type: DoseType, startingAt: Date) {
-        dataAccessQueue.async {
-            if self.sessionLedger?.removeDose(type: type, startingAt: startingAt) == true {
-                self.clearCachedInsulinEffects()   // A reversal changes the curve too
-                SportLog.event("ledger", "assumed dose REMOVED (chase refuted) — \(type) @ \(startingAt)")
-            }
-        }
-    }
-
-    /// Session over — the ledger simply ends (no wipe machinery to fight).
-    func ledgerClear() {
-        dataAccessQueue.async {
-            self.sessionLedger = nil
+            let iob = self.insulinOnBoardFromStore(at: date)
+            if let iob { self.activeInsulin = iob }
+            completion(iob)
         }
     }
 
@@ -1778,21 +1721,24 @@ final class WatchLoopManager {
     /// net between labels is the scheduled-basal-netting signature (H2); a re-timed/added row is H1.
     func dumpIOBDecomp(_ label: String, at t: Date) {
         dataAccessQueue.async {
-            // The decomp reads the LEDGER — the only book that holds doses now. Annotated
-            // with the override-applied schedule, so the rows show the same netting dosing uses.
-            guard let ledger = self.sessionLedger,
-                  let basal = self.basalRateScheduleApplyingOverrideHistory else {
-                SportLog.event("iob-decomp", "@\(label) — no ledger/schedule (R35: store holds no doses)")
+            // The decomp reads the BOOK (the store), annotated with the override-applied
+            // schedule, so the rows show the same netting dosing uses.
+            guard let basal = self.basalRateScheduleApplyingOverrideHistory else {
+                SportLog.event("iob-decomp", "@\(label) — no schedule yet")
                 return
             }
+            let longest = self.doseStore.longestEffectDuration
+            let bookDoses = (try? self.runBlocking {
+                try await self.doseStore.getNormalizedDoseEntries(start: t.addingTimeInterval(-longest), end: nil)
+            }) ?? []
             do {
-                let window = (start: ledger.doses.map(\.startDate).min() ?? t,
-                              end: (ledger.doses.map(\.endDate).max() ?? t).addingTimeInterval(InsulinMath.defaultInsulinActivityDuration))
+                let window = (start: bookDoses.map(\.startDate).min() ?? t,
+                              end: (bookDoses.map(\.endDate).max() ?? t).addingTimeInterval(InsulinMath.defaultInsulinActivityDuration))
                 let basalTimeline = BasalRateSchedule.generateTimeline(
                     schedules: [(date: .distantPast, schedule: basal)],
                     startDate: window.start,
                     endDate: window.end)
-                let doses = ledger.doses
+                let doses = bookDoses
                     .map { $0.simpleDose(with: self.insulinModel(for: $0.insulinType)) }
                     .annotated(with: basalTimeline)
                 let uhr = LoopUnit.internationalUnit.unitDivided(by: .hour)
@@ -1883,73 +1829,24 @@ final class WatchLoopManager {
         let dosesInputHistory = CarbMath.maximumAbsorptionTimeInterval + InsulinMath.defaultInsulinActivityDuration
         var dosesStart = baseTime.addingTimeInterval(-dosesInputHistory)
 
-        // THE INSULIN BOOK IS THE LEDGER, NOT THE STORE.
+        // THE INSULIN BOOK IS THE STORE, written by the watch's pump manager (R35 reversed,
+        // 2026-09-17): the phone's own read (LoopDataManager :384), trimmed to now as the phone
+        // trims (:757) — no forward credit for insulin the pod has not delivered, and
+        // LoopAlgorithm refuses a future basal on the automated path.
         //
-        // This read used to be `doseStore.getNormalizedDoseEntries(...)`, which is what the
-        // phone does — and on the phone it is right, because the phone's DoseStore is written
-        // by the pump-event delegate. The watch's is not: `pumpManager(_:hasNewPumpEvents:)`
-        // discards every row on purpose ("Dose rows are NOT stored — the ledger is the only
-        // book"), and there is no other writer anywhere in the extension. So the algorithm was
-        // being handed an EMPTY dose history on every cycle.
-        //
-        // What that looked like in the field (2026-08-18, 09:24-09:30): three manual boluses
-        // totalling 3.40 U inside six minutes, `IOB 0.00` and `insulin +0` in every prediction
-        // across the whole session, and `REC bolus 1.66 U` republished unchanged after each one.
-        // A recommendation that cannot see the insulin already given cannot decrement, so the
-        // wrist kept asking for the same dose again — the overbolus path, reached by arithmetic
-        // rather than by a radio fault.
-        //
-        // Unannotated on purpose: LoopAlgorithm does `doses.annotated(with: basal)` itself
-        // (LoopAlgorithm :203) using the override-applied basal built below, so netting here
-        // would apply it twice.
-        //
-        // Refuses rather than substituting an empty book. R35 bans a store fallback outright,
-        // and the reason is this bug: dosing off an empty history looks exactly like dosing
-        // with no insulin on board, which is the most dangerous number the watch can believe.
-        guard let ledger = sessionLedger else {
-            logLedgerRefusal("algorithm input")
-            throw WatchLoopError.configurationError("no insulin ledger — refusing to dose off an empty book")
+        // Stock's pump-data recency gate, in the phone's words (LoopDataManager :778): a book
+        // that has not heard from the pump within the recency interval is refused. That is the
+        // one-book form of "ledger or refuse" — an empty history and "no insulin on board" are
+        // the same number, and a book the pod has not written to must not license a dose.
+        let pumpDataAge = baseTime.timeIntervalSince(doseStore.lastAddedPumpData)
+        guard pumpDataAge <= LoopAlgorithm.inputDataRecencyInterval else {
+            throw WatchLoopError.missingDataError(String(format: "pumpDataTooOld (%.0f s since the last pump report)", pumpDataAge))
         }
-        // Safe without a hop: both callers reach this through `runBlocking` from
-        // `dataAccessQueue`, which blocks that queue for the duration, and every ledger
-        // mutation is a `dataAccessQueue.async`. The ledger is a struct, so this is a copy.
-        let doses = ledger.doses
-            .filter { $0.startDate <= baseTime && $0.endDate >= dosesStart }
-            .compactMap { dose -> DoseEntry? in
-                // TEMPS ARE TRIMMED TO NOW; BOLUSES ARE NOT. The two need opposite treatment and
-                // a blanket rule breaks one of them.
-                //
-                // Temps: WatchDoseEnactor books an accepted temp FULL-SPAN
-                // (endDate = acceptedAt + 30 min, WatchDoseEnactor.swift:118-120), so inside a
-                // running temp the untrimmed dose ends in the FUTURE. Two things go wrong at once.
-                // LoopAlgorithm hard-refuses it on the automated path — `guard
-                // !input.recommendationType.automated || basalEnd <= input.predictionStart else
-                // { throw AlgorithmError.futureBasalNotAllowed }` (LoopAlgorithm.swift:700-703),
-                // and `.tempBasal.automated` is true — so EVERY automatic cycle would throw for
-                // as long as a temp was running. And it would be wrong even if it were allowed:
-                // forward credit for insulin the pod has not yet delivered is banned outright in
-                // this codebase. Trimming preserves the RATE and shrinks only the window, because
-                // a temp carries `.unitsPerHour` and DoseEntry.trimmed only pro-rates `.units`.
-                //
-                // Boluses: the same enactor books a bolus with a real delivery window
-                // (endDate = acceptedAt + units / 1.5 * 60, :149). Trimming THAT to now would
-                // pro-rate a just-accepted bolus to approximately zero units — which is exactly
-                // the defect this whole path was rewritten to fix, arrived at from the other
-                // direction. A commanded bolus is committed insulin; counting it whole is also
-                // the conservative direction, where under-counting invites a second dose.
-                //
-                // The phone trims everything (LoopDataManager.swift:719) and is right to: its
-                // DoseStore rows come from pod history with real delivered amounts, not from a
-                // forward-looking booking made at the moment of acceptance.
-                guard dose.type != .bolus else { return dose }
-                return dose.trimmed(to: baseTime)
-            }
-        // A live ledger with nothing in the dosing window is the exact shape of the bug above,
-        // and it said nothing for a whole session. Once per distinct reason, so a genuinely
-        // empty book (fresh pod, no history) reports once rather than every cycle.
-        if doses.isEmpty {
-            logLedgerRefusal("empty dosing window (ledger holds \(ledger.doses.count) dose(s))")
-        }
+        // Per-dose trim, as DoseEntry does it: a temp keeps its rate and loses only the window,
+        // a bolus in flight is pro-rated to what has gone in — stock's reading of a pump-manager
+        // row, which carries the pod's own timing rather than a forward-looking booking.
+        let doses: [DoseEntry] = try await doseStore.getNormalizedDoseEntries(start: dosesStart, end: baseTime)
+            .compactMap { $0.trimmed(to: baseTime) }
         dosesStart = min(dosesStart, doses.map { $0.startDate }.min() ?? dosesStart)
         let dosesEnd = max(baseTime, doses.map { $0.endDate }.max() ?? baseTime)
 
@@ -2274,15 +2171,9 @@ final class WatchLoopManager {
                         // stock's phone does. Estimate only — same contract as
                         // PodDoseProgressEstimator, no pod query, no radio.
                         self.setManualBolusDelivering(units: rounded, from: acceptedAt, to: deliveryEndsAt)
-                        self.ledgerRecordEnact(DoseEntry(
-                            type: .bolus, startDate: acceptedAt,
-                            endDate: deliveryEndsAt,
-                            value: rounded, unit: .units,
-                            decisionId: nil,
-                            insulinType: pumpManager.status.insulinType))
-                        // Fold the bolus into IOB / prediction / HUD now rather than at the next
-                        // reading. Nothing to invalidate any more — the cycle recomputes from the
-                        // stores, so running one is both necessary and sufficient.
+                        // The pump manager has already reported the bolus into the book (every pod
+                        // session ends with dosesForStorage), so a cycle now folds it into IOB /
+                        // prediction / HUD rather than waiting for the next reading.
                         self.loop()
                     }
                     self.setManualBolusInFlight(false)
@@ -2298,20 +2189,6 @@ final class WatchLoopManager {
     /// Loan-time carb entry: lands in the WATCH's carb store so THIS loop's COB and
     /// dosing see it immediately (stores are isolated, HealthKit off; the phone still
     /// receives the stock relay as the durable record).
-    /// The takeover SEED-IN anchor comes from the LEDGER (the store no longer holds
-    /// doses). Completion reports the primed value for the [iob-diff] anchors + SEED-IN log.
-    func primeIOBFromLedger(at date: Date, _ completion: @escaping (Double?) -> Void) {
-        dataAccessQueue.async {
-            guard let ledger = self.sessionLedger,
-                  let basal = self.basalRateScheduleApplyingOverrideHistory else {
-                completion(nil); return
-            }
-            let iob = ledger.insulinOnBoard(at: date, basalSchedule: basal)
-            self.activeInsulin = iob
-            completion(iob)
-        }
-    }
-
     func addLoanCarbEntry(_ entry: NewCarbEntry) {
         carbStore.addCarbEntry(entry) { result in
             switch result {
@@ -2899,5 +2776,20 @@ private extension TemporaryScheduleOverride {
             return false
         }
         return abs(basalRateMultiplier - 1.0) >= .ulpOfOne
+    }
+}
+
+// MARK: - DoseStoreDelegate (stock: DeviceDataManager)
+
+extension WatchLoopManager: DoseStoreDelegate {
+    /// The store overlays scheduled basal into the gaps between pump events when it copies them
+    /// into the delivery store — the same raw basal history the algorithm input is built from
+    /// (overrides are applied at read, as on the phone).
+    func scheduledBasalHistory(from start: Date, to end: Date) async throws -> [AbsoluteScheduleValue<Double>] {
+        try await settingsProvider.getBasalHistory(startDate: start, endDate: end)
+    }
+
+    func doseStoreHasUpdatedPumpEventData(_ doseStore: DoseStore) {
+        // Nothing to upload from the wrist; the hand-back journal is the record that travels.
     }
 }
