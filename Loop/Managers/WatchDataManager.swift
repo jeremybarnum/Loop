@@ -349,6 +349,18 @@ final class WatchDataManager: NSObject {
                 // "Reclaiming…" tile persists (and the bolus gate refuses honestly) until then.
                 (self?.deviceManager.pumpManager as? PumpConnectionLendable)?.isConnectionReady ?? true
             },
+            cancelTempBasalForGrant: { [weak self] completion in
+                // PUMPLOAN: before the pod is lent, the phone cancels its own running temp and waits.
+                guard let self = self else { return completion(nil) }
+                Task {
+                    do {
+                        try await self.loopDataManager.cancelTempBasalForPodLoan(reason: .podLoanGrant)
+                        completion(nil)
+                    } catch {
+                        completion(error)
+                    }
+                }
+            },
             cancelTempBasalAfterPodReturn: { [weak self] completion in
                 // The pod is home and reachable: drop the temp the watch set.
                 guard let self = self else { return completion(nil) }

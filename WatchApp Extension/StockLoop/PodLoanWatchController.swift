@@ -1401,21 +1401,8 @@ final class PodLoanWatchController {
                     // other cycle, and — the point — MINTS A JOURNAL EVENT, so the loan's first
                     // program is ours, streamed to the phone, and inside the audit. The new temp
                     // supersedes the old in the same breath, so there is no gap in delivery.
-                    // THE BOUNDARY CANCEL (R2). The phone's C5 record-close makes an inherited
-                    // running temp read FINISHED in this manager's state, so the cycle below cannot
-                    // see it and, whenever the algorithm wants the scheduled rate (or the loan is
-                    // open), would leave it running unbooked. Cancel it explicitly, on the link the
-                    // takeover read just used — stock's own off-cycle idiom (LoopDataManager.
-                    // cancelActiveTempBasal enacts a bare .cancel outside loop()).
-                    let inheritedLiveTemp = grant.seedDoseEntries(finishedBy: self.now()).live.contains { $0.type == .tempBasal }
-                    if inheritedLiveTemp {
-                        SportLog.event("loan", "takeover: cancelling the inherited temp (R2 — no program crosses the boundary)")
-                        manager.enactTempBasal(decisionId: nil, unitsPerHour: 0, for: 0) { error in
-                            SportLog.event("loan", error.map { "takeover: inherited-temp cancel FAILED — \($0); the first cycle supersedes it" }
-                                                   ?? "takeover: inherited temp CANCELLED")
-                        }
-                    }
-                    SportLog.event("loan", "takeover: asserting our own program (R2 — no inherited temp crosses the boundary)")
+                    // The phone cancelled its running temp before releasing the pod (R2: no program
+                    // crosses the boundary), so the pod is on the schedule; the first cycle programs ours.
                     self.loopManager.loop()
                 } else if attempt + 1 < maxAttempts {
                     if attempt == 0 {

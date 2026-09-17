@@ -179,6 +179,10 @@ final class PodLoanPhoneController {
         /// LoopDataManager.cancelTempBasalAfterPodReturn. Default no-op keeps the state-machine
         /// tests constructing unchanged.
         var cancelTempBasalAfterPodReturn: (@escaping (Error?) -> Void) -> Void = { $0(nil) }
+        /// Cancel the phone's running temp basal before the pod is released at grant — stock's
+        /// automation-off behaviour, awaited (LoopDataManager.cancelTempBasalForPodLoan). Default
+        /// no-op keeps the state-machine tests on their fake pump.
+        var cancelTempBasalForGrant: (@escaping (Error?) -> Void) -> Void = { $0(nil) }
         /// The pod's odometer disagrees with our books by more than noise —
         /// stop automatic dosing and LEAVE it stopped until the user decides otherwise.
         ///
@@ -1488,6 +1492,8 @@ final class PodLoanPhoneController {
     /// A force-reclaim requested mid-write. It used to run immediately, read the
     /// not-yet-updated `committedIDs`, and re-commit the same staged records — insulin
     /// survives (raw dedup at the store) but CARBS HAVE NO IDENTITY and double.
+    /// A grant is between its awaited temp cancel and its release; a second request waits.
+    private var grantInFlight = false
     private var pendingForceReclaimReason: String?
     private var committedIDs: Set<UUID>
     /// Staged (received, not-yet-committed) events for the current epoch — persisted
@@ -1873,6 +1879,10 @@ final class PodLoanPhoneController {
             sendMessage(.nack(ProtocolNack(seenVersion: request.supportedVersions.max())))
             return
         }
+        guard !grantInFlight else {
+            deny("A grant is already in progress.")
+            return
+        }
         guard state == .owner else {
             // A NEW request means the watch is NOT in a loan — so a lingering
             // non-owner state is stale. Recover instead of refusing forever (bug E).
@@ -1995,10 +2005,36 @@ final class PodLoanPhoneController {
             return
         }
 
+        // STOCK'S OWN AUTOMATION-OFF BEHAVIOUR, AWAITED: pause dosing, cancel the running temp
+        // and wait for the pod to acknowledge it, THEN release the link and grant. No program
+        // crosses the boundary (R2), the phone's store holds a real, finished temp record written
+        // by the pump manager, and the pod runs the schedule for the seconds until the watch's
+        // first program. Before this the watch cancelled the temp seconds after takeover while
+        // the phone truncated its own record at the handover — the slice between was booked by
+        // neither side. A pod that does not answer the cancel cannot be lent: deny instead.
+        grantInFlight = true
+        deps.setAutomaticDosingPaused(true)
+        deps.cancelTempBasalForGrant { [weak self] error in
+            guard let self = self else { return }
+            self.queue.async {
+                self.grantInFlight = false
+                if let error = error {
+                    self.deps.setAutomaticDosingPaused(false)
+                    self.deny("The pod didn't take the temp cancel (\(error.localizedDescription)). The phone kept the pod.")
+                    return
+                }
+                self.continueGrant(settings: settings, loanSettings: loanSettings, pump: pump, lendable: lendable)
+            }
+        }
+    }
+
+    /// The grant after the awaited temp cancel: capture the handover, release the link, and
+    /// assemble and send the grant.
+    private func continueGrant(settings: LoopSettings, loanSettings: LoopSettings,
+                               pump: PumpManager, lendable: PumpConnectionLendable) {
         // Fix 1 (field-confirmed boundaryDup=YES): DO NOT emit a boundaryRecord.
-        // The running temp is (near-always) already in `doseHistory` — getNormalizedDoseEntries
-        // returns the open mutable temp, fetched below AFTER releaseConnection (which only
-        // truncates the in-memory pod state via cancel(at:), never the dose store). A separate
+        // Since 2026-09-16 the phone cancels its running temp BEFORE the release, so the history
+        // fetched below holds a real, finished temp record and no live temp at all. A separate
         // same-start, same-rate boundaryRecord is therefore a duplicate of that temp, and seeding
         // both double-counts the [start→handover] slice (the ~0.3 U IOB bump at takeover). The
         // watch's stock reconciled() truncates the seeded open temp when it enacts its first
@@ -2031,8 +2067,8 @@ final class PodLoanPhoneController {
         UserDefaults.standard.set(false, forKey: Keys.watchAuditRan)
         UserDefaults.standard.removeObject(forKey: Keys.expectedUnits)
 
-        // Pause dosing, then stop bidding for the pod (C5 truncation happens inside).
-        deps.setAutomaticDosingPaused(true)
+        // Dosing is already paused and the temp already cancelled (see handleRequest): the pod
+        // is on the schedule. Now stop bidding for its link.
         // If the phone doesn't actually drop the pod BLE here, the watch's
         // takeover reads "pod unreachable" (a pod is a single-central peripheral). Relay the
         // release state to the watch's iCloud log — before, and a +3s confirm (release is async).
@@ -2089,7 +2125,6 @@ final class PodLoanPhoneController {
             self.sendMessage(.grant(grant))
             self.armT1(for: grantEpoch)
         }
-    }
 
     /// R40: one grant assembly for BOTH the live path and the dormant refresher — the
     /// fetch chain (16 h doses, carbs, 3 h glucose, prediction snapshot) plus the
