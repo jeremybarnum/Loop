@@ -35,15 +35,14 @@ final class LoanProtocolV2Tests: XCTestCase {
         // sub-millisecond fractions deliberately do not survive (determinism > ULPs).
         let now = Date(timeIntervalSince1970: 1_784_338_000.125)
         let status = LoanPodStatus(timestamp: now, deliveredUnits: 12.3, reservoirLevel: nil, isSuspended: false, faultCode: nil)
-        let event = LoanEvent(id: UUID(), seq: 3, provenance: .assumed(.bolusUncertain),
+        let event = LoanEvent(id: UUID(), seq: 3, provenance: .confirmed,
                               record: LoanDoseRecord(kind: .bolus, startDate: now, amount: 1.0), loggedAt: now)
         let messages: [LoanMessage] = [
             .request(LoanRequest(watchBuild: "77")),
             .grant(LoanGrant(epoch: 5, expiresAt: now.addingTimeInterval(300),
                              pumpManagerRawState: Data([1, 2, 3]), podAddress: 0x1F0A2B3C,
                              therapySettingsRaw: Data([4, 5]), settingsTimeZoneID: "America/New_York",
-                             doseHistory: [LoanDoseRecord(kind: .tempBasal, startDate: now, endDate: now.addingTimeInterval(1800), unitsPerHour: 0.8)],
-                             boundaryRecord: LoanDoseRecord(kind: .boundaryTruncation, startDate: now, endDate: now, unitsPerHour: 0))),
+                             doseHistory: [LoanDoseRecord(kind: .tempBasal, startDate: now, endDate: now.addingTimeInterval(1800), unitsPerHour: 0.8)])),
             .takeoverComplete(TakeoverComplete(epoch: 5, firstPodStatus: status)),
             .takeoverFailed(TakeoverFailed(epoch: 5, reason: "test")),
             .doseRecordBatch(DoseRecordBatch(epoch: 5, events: [event], tombstones: [UUID()])),
@@ -71,7 +70,7 @@ final class LoanProtocolV2Tests: XCTestCase {
         let grant = LoanGrant(epoch: 7, expiresAt: now.addingTimeInterval(300),
                               pumpManagerRawState: Data([1]), podAddress: 0,
                               therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
-                              doseHistory: [], boundaryRecord: nil, carbHistory: [carb])
+                              doseHistory: [], carbHistory: [carb])
         guard case .grant(let g) = try roundTrip(.grant(grant)) else { return XCTFail("not a grant") }
         XCTAssertEqual(g.carbHistory, [carb], "carb history must survive the wire")
 
@@ -79,7 +78,7 @@ final class LoanProtocolV2Tests: XCTestCase {
         let old = LoanGrant(epoch: 7, expiresAt: now.addingTimeInterval(300),
                             pumpManagerRawState: Data([1]), podAddress: 0,
                             therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
-                            doseHistory: [], boundaryRecord: nil)
+                            doseHistory: [])
         guard case .grant(let g2) = try roundTrip(.grant(old)) else { return XCTFail("not a grant") }
         XCTAssertNil(g2.carbHistory)
     }
@@ -91,7 +90,7 @@ final class LoanProtocolV2Tests: XCTestCase {
         let grant = LoanGrant(epoch: 8, expiresAt: now.addingTimeInterval(300),
                               pumpManagerRawState: Data([1]), podAddress: 0,
                               therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
-                              doseHistory: [], boundaryRecord: nil, glucoseHistory: [sample])
+                              doseHistory: [], glucoseHistory: [sample])
         guard case .grant(let g) = try roundTrip(.grant(grant)) else { return XCTFail("not a grant") }
         XCTAssertEqual(g.glucoseHistory, [sample], "glucose history must survive the wire")
 
@@ -99,7 +98,7 @@ final class LoanProtocolV2Tests: XCTestCase {
         let old = LoanGrant(epoch: 8, expiresAt: now.addingTimeInterval(300),
                             pumpManagerRawState: Data([1]), podAddress: 0,
                             therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
-                            doseHistory: [], boundaryRecord: nil)
+                            doseHistory: [])
         guard case .grant(let g2) = try roundTrip(.grant(old)) else { return XCTFail("not a grant") }
         XCTAssertNil(g2.glucoseHistory)
     }
@@ -115,7 +114,7 @@ final class LoanProtocolV2Tests: XCTestCase {
         let grant = LoanGrant(epoch: 9, expiresAt: now.addingTimeInterval(300),
                               pumpManagerRawState: Data([1]), podAddress: 0,
                               therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
-                              doseHistory: [], boundaryRecord: nil, predictionSnapshot: snap)
+                              doseHistory: [], predictionSnapshot: snap)
         guard case .grant(let g) = try roundTrip(.grant(grant)) else { return XCTFail("not a grant") }
         XCTAssertEqual(g.predictionSnapshot, snap, "prediction snapshot must survive the wire (incl. sub-second dates)")
 
@@ -123,7 +122,7 @@ final class LoanProtocolV2Tests: XCTestCase {
         let old = LoanGrant(epoch: 9, expiresAt: now.addingTimeInterval(300),
                             pumpManagerRawState: Data([1]), podAddress: 0,
                             therapySettingsRaw: Data([2]), settingsTimeZoneID: "UTC",
-                            doseHistory: [], boundaryRecord: nil)
+                            doseHistory: [])
         guard case .grant(let g2) = try roundTrip(.grant(old)) else { return XCTFail("not a grant") }
         XCTAssertNil(g2.predictionSnapshot)
     }
@@ -451,7 +450,7 @@ final class LoanProtocolV2Tests: XCTestCase {
                                          endDate: now.addingTimeInterval(1200), unitsPerHour: 2.0)
         let grant = LoanGrant(epoch: 9, expiresAt: now.addingTimeInterval(60), pumpManagerRawState: Data(),
                               podAddress: 0x1F0F, therapySettingsRaw: Data(), settingsTimeZoneID: "UTC",
-                              doseHistory: [finishedBolus, finishedTemp, runningTemp], boundaryRecord: nil)
+                              doseHistory: [finishedBolus, finishedTemp, runningTemp])
 
         let (seed, live) = grant.seedDoseEntries(finishedBy: now)
         XCTAssertEqual(seed.count, 2, "finished bolus + finished temp are seedable history")

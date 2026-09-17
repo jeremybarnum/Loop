@@ -216,18 +216,7 @@ extension PodLoanPhoneController {
     /// assemble and send the grant.
     private func continueGrant(settings: LoopSettings, loanSettings: LoopSettings,
                                pump: PumpManager, lendable: PumpConnectionLendable) {
-        // Fix 1 (field-confirmed boundaryDup=YES): DO NOT emit a boundaryRecord.
-        // Since 2026-09-16 the phone cancels its running temp BEFORE the release, so the history
-        // fetched below holds a real, finished temp record and no live temp at all. A separate
-        // same-start, same-rate boundaryRecord is therefore a duplicate of that temp, and seeding
-        // both double-counts the [start→handover] slice (the ~0.3 U IOB bump at takeover). The
-        // watch's stock reconciled() truncates the seeded open temp when it enacts its first
-        // command. (Narrow caveat: if a just-set temp has not yet reached the dose store, the seed
-        // could miss it for a few seconds — acceptably rarer than the double-seed it replaces.)
-        // The .boundaryTruncation Kind + LoanReconciler's handling of it are LEFT in place as
-        // defensive/back-compat tolerance ONLY: the watch hand-back journal never mints that kind,
-        // so those arms are now vestigial in production (an older phone may still send one).
-        let handedOverAt = deps.now()
+                let handedOverAt = deps.now()
 
         // §5.3.3: capture the odometer NOW (the phone was polling until this moment)
         // so the post-reclaim re-audit has a loan-start baseline even if the watch
@@ -404,7 +393,6 @@ extension PodLoanPhoneController {
                             therapySettingsRaw: settingsData,
                             settingsTimeZoneID: settings.basalRateSchedule?.timeZone.identifier ?? TimeZone.current.identifier,
                             doseHistory: history.compactMap(Self.loanRecord(from:)),
-                            boundaryRecord: nil,   // Fix 1: running temp already lives in doseHistory (see above)
                             supportsInterimHandback: true,   // two-phase hand-back capability gate (REAL-3)
                             supportsOverrideRecords: true,   // this phone decodes .overrideChange
                             // Same source LoopDataManager:458 reads. Without this the watch runs

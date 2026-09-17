@@ -157,7 +157,7 @@ enum LoanReconciler {
         let openEventID: UUID? = input.isFinalHandback ? nil : events
             .filter { e in
                 switch e.record.kind {
-                case .tempBasal, .suspend, .boundaryTruncation:
+                case .tempBasal, .suspend:
                     return (e.record.endDate ?? e.record.startDate) > input.loanEnd
                 default:
                     return false
@@ -185,7 +185,7 @@ enum LoanReconciler {
                         decisionId: nil,
                         syncIdentifier: syncIdentifier(for: event)))
                 }
-            case .tempBasal, .suspend, .boundaryTruncation:
+            case .tempBasal, .suspend:
                 // Skip the interim open temp — it re-drains and is written on the final drain.
                 if event.id == openEventID { continue }
                 if let rate = event.record.unitsPerHour, let end = event.record.endDate {
@@ -243,7 +243,6 @@ enum LoanReconciler {
                 }
                 // An undecodable payload falls through deliberately: leave the phone's
                 // override exactly as it is rather than guess (see overrideChangeIsClear).
-            case .resume, .plumbingCancel, .modeChange:
                 break  // bookkeeping; the temp/suspend records carry the insulin truth
             }
         }
@@ -295,7 +294,7 @@ enum LoanReconciler {
         var segments: [Segment] = []
         for event in events {
             switch event.record.kind {
-            case .tempBasal, .suspend, .boundaryTruncation:
+            case .tempBasal, .suspend:
                 guard let rate = event.record.unitsPerHour,
                       let segEnd = event.record.endDate else { continue }
                 let s = max(event.record.startDate, start)
@@ -398,31 +397,3 @@ enum LoanReconciler {
 }
 
 // MARK: - Event helpers
-
-private extension LoanDoseRecord {
-    /// The insulin this record claims, for exact-size matching (fingerprint 1 in
-    /// `reconcile`).
-    func insulinUnits(schedule: BasalRateSchedule?) -> Double? {
-        switch kind {
-        case .bolus:
-            return amount
-        case .tempBasal, .suspend:
-            guard let rate = unitsPerHour, let end = endDate else { return nil }
-            return rate * end.timeIntervalSince(startDate) / 3600.0
-        default:
-            return nil
-        }
-    }
-
-    /// The schedule insulin over this record's window (fingerprint 2 in `reconcile` — how much a
-    /// real-but-unrecorded reduction could explain).
-    func scheduledInsulin(schedule: BasalRateSchedule?) -> Double? {
-        guard let schedule = schedule, let end = endDate else { return nil }
-        return schedule.between(start: startDate, end: end).reduce(0) { partial, item in
-            let s = max(item.startDate, startDate)
-            let e = min(item.endDate, end)
-            guard e > s else { return partial }
-            return partial + item.value * e.timeIntervalSince(s) / 3600.0
-        }
-    }
-}

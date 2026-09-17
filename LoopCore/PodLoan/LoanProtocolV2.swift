@@ -57,41 +57,30 @@ public enum LoanProtocolError: Error {
 
 // MARK: - Support types
 
-/// Provenance rides every event (§1.3 — the wire-format change that forces v2).
-/// Only `.assumed` events are ever negative-remainder allocation candidates.
+/// Provenance rides every event (§1.3).
+///
+/// ONE CASE since the wire moved onto the pump manager's own reports (2026-09-17): every record
+/// is a dose the pod acknowledged, so there is nothing to assume. The uncertain case and its
+/// kinds are gone with the verdict chase that produced them — OmnipodKit resolves an
+/// unacknowledged command on its next session and reports the outcome like any other dose.
+/// The field and its tag encoding stay so a build on either side of an upgrade still decodes;
+/// the field itself can go at the next wire version change.
 public enum EventProvenance: Codable, Equatable {
     case confirmed
-    case assumed(UncertainKind)
 
-    public enum UncertainKind: String, Codable {
-        case bolusUncertain
-        case tempUncertain
-        case resumeUncertain
-        /// A real reduction the max-exposure rule declined to record (the C′ case);
-        /// EXPLAINS remainder at hand-back rather than being reduced.
-        case skippedReduction
-    }
-
-    private enum CodingKeys: String, CodingKey { case tag, kind }
-    private enum Tag: String, Codable { case confirmed, assumed }
+    private enum CodingKeys: String, CodingKey { case tag }
+    private enum Tag: String, Codable { case confirmed }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(Tag.self, forKey: .tag) {
         case .confirmed: self = .confirmed
-        case .assumed: self = .assumed(try c.decode(UncertainKind.self, forKey: .kind))
         }
     }
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        switch self {
-        case .confirmed:
-            try c.encode(Tag.confirmed, forKey: .tag)
-        case .assumed(let kind):
-            try c.encode(Tag.assumed, forKey: .tag)
-            try c.encode(kind, forKey: .kind)
-        }
+        try c.encode(Tag.confirmed, forKey: .tag)
     }
 }
 
@@ -105,7 +94,6 @@ public struct LoanDoseRecord: Codable, Equatable {
         /// Suspend IS a bounded rate-0 temp; kept as its own kind so suspend
         /// windows stay first-class through hand-back/reclaim (spec §3, 46f16d01).
         case suspend
-        case resume
         case carb
         /// The wrist DELETED a carb entry during the loan. `syncIdentifier` names the
         /// victim; every other payload field is nil. Not a dose — it carries no insulin and
@@ -118,12 +106,6 @@ public struct LoanDoseRecord: Codable, Equatable {
         /// never heard about is RESURRECTED at the next grant — the user deletes it, watches it
         /// vanish, and it comes back still driving dosing.
         case carbDeleted
-        /// A temp-change that died after its committed safe-cancel (C1/C2/C10 port).
-        case plumbingCancel
-        /// The phone's record-close of its running temp at the handover stamp.
-        case boundaryTruncation
-        /// The picker changed the dosing mode — mode transitions are events.
-        case modeChange
         /// The WRIST enacted (or cleared) a temporary schedule override during
         /// the loan. Not a dose — it carries no insulin and contributes nothing to the
         /// odometer audit — but it IS journal-worthy: while the watch holds the pod it owns
@@ -157,7 +139,7 @@ public struct LoanDoseRecord: Codable, Equatable {
     public let amount: Double?
     /// Carb absorption seconds; nil elsewhere.
     public let absorptionTime: TimeInterval?
-    /// Free-form: mode names for .modeChange, cancellation context, etc.
+    /// Free-form context for the log; nil on every kind the wire mints today.
     public let note: String?
     /// Stable syncId: the phone's OWN dose syncIdentifier. Carried so the watch seeds with a
     /// STABLE identity — a re-seed across epochs then upsert-dedups (same identity → one row)
@@ -275,7 +257,7 @@ extension LoanDoseRecord {
             guard let units = amount else { return nil }
             return DoseEntry(type: .bolus, startDate: startDate, endDate: endDate ?? startDate,
                              value: units, unit: .units, decisionId: nil, syncIdentifier: syncIdentifier, insulinType: insulinType)
-        case .tempBasal, .boundaryTruncation:
+        case .tempBasal:
             guard let rate = unitsPerHour, let end = endDate else { return nil }
             // Carry the pod's floored actual delivery so the watch nets on the SAME quantum
             // the phone did (nil → LoopKit's round(programmedUnits) fallback, the pre-fix behavior).
@@ -288,7 +270,7 @@ extension LoanDoseRecord {
                              value: 0, unit: .unitsPerHour, decisionId: nil, deliveredUnits: deliveredUnits,
                              syncIdentifier: syncIdentifier, insulinType: insulinType)
         // .overrideChange carries no insulin — it never seeds a dose.
-        case .resume, .carb, .carbDeleted, .plumbingCancel, .modeChange, .overrideChange:
+        case .carb, .carbDeleted, .overrideChange:
             return nil
         }
     }
@@ -348,15 +330,8 @@ extension LoanGrant {
     /// The seeded insulin history as DoseEntries with deterministic, epoch-keyed sync
     /// identifiers ("loanv2-grant-<epoch>-<index>") — idempotent under grant redelivery.
     ///
-    /// The `boundaryRecord`, when present, is appended (kept for backward-compat with older
-    /// phones); current phones send it nil because it is a same-start duplicate of the running
-    /// temp already in `doseHistory` (the #1 double-seed). Routing the seed through
-    /// `addPumpEvents` runs stock `reconciled()`, which collapses any residual same-start
-    /// overlap to a single dose regardless.
     public func seedDoseEntries() -> [DoseEntry] {
-        var records = doseHistory
-        if let boundary = boundaryRecord { records.append(boundary) }
-        return records.enumerated().compactMap { index, record in
+        return doseHistory.enumerated().compactMap { index, record in
             // Stable syncId: prefer the phone's OWN dose syncIdentifier so a re-seed across
             // epochs upsert-dedups (same identity → one row) instead of accumulating under fresh
             // epoch-keyed ids. Epoch-keyed fallback keeps older phones (no syncIdentifier) working
@@ -528,8 +503,8 @@ public struct DormantGrant: Codable, Equatable {
 /// `OmniPumpManager(rawState:)` exactly as the phone does on relaunch — including
 /// `unfinalizedDoses` and any `unacknowledgedCommand`. Completeness is enforced
 /// phone-side before send (deny-on-missing, never defaulted) and watch-side by init
-/// failure → TakeoverFailed. The phone does NOT cancel its running temp; its
-/// RECORD closes at the handover stamp (`boundaryRecord`, kind .boundaryTruncation).
+/// failure → TakeoverFailed. The phone cancels its running temp before releasing the pod
+/// (cancel-before-release, 2026-09-16), so no boundary record travels.
 public struct LoanGrant: Codable, Equatable {
     public let epoch: Int
     /// A late-arriving grant self-rejects on the watch (§2.4 row 2).
@@ -544,7 +519,6 @@ public struct LoanGrant: Codable, Equatable {
     public let settingsTimeZoneID: String
     /// 16 h context for the watch's stores (v1 `dh`, kept).
     public let doseHistory: [LoanDoseRecord]
-    public let boundaryRecord: LoanDoseRecord?
     /// Capability gate (verify finding REAL-3, deployment skew): the watch sends
     /// INTERIM (released=false) hand-back offers only when the granting phone
     /// understands them — an old phone's decoder drops the unknown `released` key and
@@ -644,7 +618,7 @@ public struct LoanGrant: Codable, Equatable {
 
     public init(epoch: Int, expiresAt: Date, pumpManagerRawState: Data, podAddress: UInt32,
                 therapySettingsRaw: Data, settingsTimeZoneID: String,
-                doseHistory: [LoanDoseRecord], boundaryRecord: LoanDoseRecord?,
+                doseHistory: [LoanDoseRecord],
                 supportsInterimHandback: Bool? = nil,
                 supportsOverrideRecords: Bool? = nil,
                 integralRetrospectiveCorrectionEnabled: Bool? = nil,
@@ -662,7 +636,6 @@ public struct LoanGrant: Codable, Equatable {
         self.therapySettingsRaw = therapySettingsRaw
         self.settingsTimeZoneID = settingsTimeZoneID
         self.doseHistory = doseHistory
-        self.boundaryRecord = boundaryRecord
         self.supportsInterimHandback = supportsInterimHandback
         self.supportsOverrideRecords = supportsOverrideRecords
         self.integralRetrospectiveCorrectionEnabled = integralRetrospectiveCorrectionEnabled
@@ -1210,37 +1183,6 @@ extension LoanMessage {
             throw error
         } catch {
             throw LoanProtocolError.undecodable(seenVersion: nil)
-        }
-    }
-}
-
-// MARK: - Ledger cutover: assumed-dose conversion
-
-extension LoanDoseRecord {
-    /// The DoseEntry a chase-pending ASSUMED record models, for the session ledger's
-    /// mirror of the journal's direction-aware convention (book only when it means MORE
-    /// insulin than schedule; the caller applies that gate). Bolus end falls back to the
-    /// DASH delivery ramp (1.5 U/min); temp/suspend end falls back to the stock 30-min
-    /// program length. Non-dose kinds return nil.
-    public func podLoanLedgerDoseEntry(insulinType: InsulinType?) -> DoseEntry? {
-        switch kind {
-        case .bolus:
-            guard let units = amount else { return nil }
-            return DoseEntry(type: .bolus, startDate: startDate,
-                             endDate: endDate ?? startDate.addingTimeInterval(units / 1.5 * 60),
-                             value: units, unit: .units, decisionId: nil,
-                             insulinType: insulinType ?? self.insulinType)
-        case .tempBasal, .suspend:
-            guard let rate = unitsPerHour else { return nil }
-            return DoseEntry(type: .tempBasal, startDate: startDate,
-                             endDate: endDate ?? startDate.addingTimeInterval(.minutes(30)),
-                             value: rate, unit: .unitsPerHour, decisionId: nil,
-                             insulinType: insulinType ?? self.insulinType)
-        // .overrideChange is a therapy-settings event, not a dose — the shadow
-        // ledger never books it (it changes the SCHEDULE the ledger nets against, which the
-        // override history already handles for both books).
-        case .resume, .carb, .carbDeleted, .plumbingCancel, .boundaryTruncation, .modeChange, .overrideChange:
-            return nil
         }
     }
 }

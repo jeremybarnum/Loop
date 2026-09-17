@@ -90,7 +90,7 @@ final class SeizeActivationTests: XCTestCase {
                               pumpManagerRawState: Data([1, 2, 3]), podAddress: 0x1F0A2B3C,
                               therapySettingsRaw: completeSettings ? Self.completeTherapySettingsRaw() : Data([4, 5]),
                               settingsTimeZoneID: "GMT",
-                              doseHistory: [], boundaryRecord: nil,
+                              doseHistory: [],
                               // THIS LINE'S delta from her fixture: LoopSettings.rawValue drops
                               // the three schedules on next-dev, so a complete grant must carry
                               // the settings SUPPLEMENT — exactly as the phone's assembly does.
