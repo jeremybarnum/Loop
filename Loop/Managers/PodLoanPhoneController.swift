@@ -2125,6 +2125,7 @@ final class PodLoanPhoneController {
             self.sendMessage(.grant(grant))
             self.armT1(for: grantEpoch)
         }
+    }
 
     /// R40: one grant assembly for BOTH the live path and the dormant refresher — the
     /// fetch chain (16 h doses, carbs, 3 h glucose, prediction snapshot) plus the
