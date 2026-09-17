@@ -649,11 +649,18 @@ final class LoopDataManager: ObservableObject {
     /// about a millisecond with podNotConnected. The phone is holding a verified round-trip at
     /// the moment this is called.
     func cancelTempBasalAfterPodReturn() async throws {
-        logger.default("PODLOAN: cancelling inherited temp after pod return (cached basalDeliveryState was %{public}@)",
-                       String(describing: deliveryDelegate?.basalDeliveryState))
+        try await cancelTempBasalForPodLoan(reason: .podReturnedFromWatch)
+    }
+
+    /// PUMPLOAN: a bare temp cancel outside loop(), at a loan boundary — before the pod is lent
+    /// (`.podLoanGrant`) and after it returns (`.podReturnedFromWatch`). Stock's own off-cycle
+    /// cancel idiom (see cancelActiveTempBasal), with the loan's reason on the dosing decision.
+    func cancelTempBasalForPodLoan(reason: CancelActiveTempBasalReason) async throws {
+        logger.default("PODLOAN: cancelling temp at the loan boundary (%{public}@; cached basalDeliveryState was %{public}@)",
+                       reason.rawValue, String(describing: deliveryDelegate?.basalDeliveryState))
 
         let recommendation = AutomaticDoseRecommendation(basalAdjustment: .cancel, direction: .decrease)
-        var dosingDecision = StoredDosingDecision(reason: CancelActiveTempBasalReason.podReturnedFromWatch.rawValue)
+        var dosingDecision = StoredDosingDecision(reason: reason.rawValue)
         dosingDecision.settings = StoredDosingDecision.Settings(settingsProvider.settings)
         dosingDecision.automaticDoseRecommendation = recommendation
 
@@ -1725,6 +1732,7 @@ enum CancelActiveTempBasalReason: String {
     case unreliableCGMData
     case maximumBasalRateChanged
     case podReturnedFromWatch
+    case podLoanGrant
 }
 
 extension LoopDataManager : AlgorithmDisplayStateProvider {
