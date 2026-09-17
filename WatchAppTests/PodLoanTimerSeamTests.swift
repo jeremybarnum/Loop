@@ -73,9 +73,9 @@ final class PodLoanTimerSeamTests: XCTestCase {
                                       defaults: defaults)
     }
 
-    /// A request schedules its 25 s no-grant timeout through the seam — the delay crosses as
+    /// A request schedules its 60 s no-grant timeout (phone reachable) through the seam — the delay crosses as
     /// data a test can see, instead of vanishing into `asyncAfter`.
-    func testRequestTimeoutCrossesTheSeamAt25Seconds() async {
+    func testRequestTimeoutCrossesTheSeamAt60Seconds() async {
         let controller = await makeController()
 
         var sent = 0
@@ -91,13 +91,13 @@ final class PodLoanTimerSeamTests: XCTestCase {
         wait(for: [timerArmed], timeout: 5)
 
         XCTAssertEqual(sent, 1)
-        XCTAssertEqual(captured.map(\.0), [25], "the request timeout is the only timer a bare request arms")
+        XCTAssertEqual(captured.map(\.0), [60], "the request timeout is the only timer a bare request arms")
         XCTAssertEqual(captured.map(\.1), ["request-timeout"], "and it is the one we think it is")
     }
 
     /// Virtual time: fire the timeout inline (we are on the controller's queue at schedule
     /// time) and the controller must return to idle and accept a NEW request — the recovery
-    /// the timeout exists to provide. Without the seam this test would take 25 real seconds.
+    /// the timeout exists to provide. Without the seam this test would take 60 real seconds.
     func testFiredTimeoutReturnsToIdleAndANewRequestIsAccepted() async {
         let controller = await makeController()
 
