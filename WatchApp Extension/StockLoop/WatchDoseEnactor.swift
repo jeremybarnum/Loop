@@ -35,9 +35,6 @@ final class WatchDoseEnactor {
     /// the enact calls themselves are unchanged stock PumpManager methods either way.
     weak var loanRecorder: WatchLoanDoseRecording?
 
-    /// Shadow ledger: pod-ACCEPTED doses flow to the owner's session timeline.
-    var ledgerRecord: ((DoseEntry) -> Void)?
-
     func enact(recommendation: AutomaticDoseRecommendation, with pumpManager: PumpManager, completion: @escaping (PumpManagerError?) -> Void) {
         dosingQueue.async {
             let doseDispatchGroup = DispatchGroup()
@@ -65,15 +62,8 @@ final class WatchDoseEnactor {
                         SportLog.event("dose", "temp enact FAILED — \(String(describing: error))")
                     } else {
                         SportLog.event("dose", String(format: "temp %.2f U/hr ACCEPTED by pod", basalAdjustment.unitsPerHour))
-                        // Shadow ledger: the accepted temp enters the single-owner
-                        // timeline (truncating its open predecessor — the journal's rule).
-                        let acceptedAt = self.now()
-                        self.ledgerRecord?(DoseEntry(
-                            type: .tempBasal, startDate: acceptedAt,
-                            endDate: acceptedAt.addingTimeInterval(basalAdjustment.duration),
-                            value: basalAdjustment.unitsPerHour, unit: .unitsPerHour,
-                            decisionId: nil,
-                            insulinType: pumpManager.status.insulinType))
+                        // The pump manager books it: the session that carried this command ends
+                        // with dosesForStorage → the watch's DoseStore, the one insulin book.
                     }
                     doseDispatchGroup.leave()
                 }
@@ -94,15 +84,6 @@ final class WatchDoseEnactor {
                     self.loanRecorder?.loanDidEnact(eventID: eventID, error: error)
                     if let error = error {
                         bolusError = error
-                    } else {
-                        // Shadow ledger: point-ish event; DASH delivers ~1.5 U/min.
-                        let acceptedAt = self.now()
-                        self.ledgerRecord?(DoseEntry(
-                            type: .bolus, startDate: acceptedAt,
-                            endDate: acceptedAt.addingTimeInterval(bolusUnits / 1.5 * 60),
-                            value: bolusUnits, unit: .units,
-                            decisionId: nil,
-                            insulinType: pumpManager.status.insulinType))
                     }
                     doseDispatchGroup.leave()
                 }

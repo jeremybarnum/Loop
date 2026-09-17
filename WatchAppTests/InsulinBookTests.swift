@@ -9,11 +9,12 @@
 //  `REC bolus 1.66 U` unchanged each time. A recommendation that cannot see the insulin already
 //  given cannot decrement, so the wrist kept asking for the same dose again.
 //
-//  The cause was a seam, not arithmetic. Two books exist: the ledger, fed at enact time, and the
-//  DoseStore. The watch's DoseStore is never written — `pumpManager(_:hasNewPumpEvents:)`
-//  discards every row on purpose and no other writer exists in the extension — yet
-//  `fetchAlgorithmInput` built LoopAlgorithm's input from it. Nothing failed, threw, or logged;
-//  the book was simply empty, which is indistinguishable from "no insulin on board".
+//  The cause was a seam, not arithmetic: two books, and the algorithm read the empty one. Since
+//  2026-09-17 there is ONE book (R35 reversed): the watch's DoseStore, written by the watch's
+//  pump manager through `hasNewPumpEvents` exactly as on the phone, seeded at the grant with the
+//  phone's finished history through stock's remote-store door, and gated by stock's pump-data
+//  recency rule. These tests drive that book through the two seams the session uses — the seed
+//  and the pump manager's report — and ask whether delivered insulin reaches the input.
 //
 //  These tests pin the seam rather than the math. They ask the one question no existing test
 //  asked: does insulin that was DELIVERED reach the input the algorithm reasons from? That is
@@ -100,7 +101,24 @@ final class InsulinBookTests: XCTestCase {
         return DoseEntry(type: .bolus, startDate: start, endDate: start,
                          value: units, unit: .units,
                          decisionId: nil,
+                         syncIdentifier: UUID().uuidString,
                          insulinType: .novolog)
+    }
+
+    /// The grant seed: the phone's finished history, through stock's remote-store door.
+    private func seed(_ manager: WatchLoopManager, _ doses: [DoseEntry]) async {
+        do { try await manager.seedInsulinHistory(doses) } catch { XCTFail("seed failed: \(error)") }
+    }
+
+    /// The pump manager's report — the ONE writer of the book. An empty report is what a status
+    /// read with nothing new looks like, and it is what advances the recency clock the algorithm
+    /// is gated on.
+    private func report(_ manager: WatchLoopManager, _ doses: [DoseEntry] = []) async {
+        let events = doses.map {
+            NewPumpEvent(date: $0.startDate, dose: $0, raw: Data(UUID().uuidString.utf8), title: "\($0.type)")
+        }
+        do { try await manager.recordPumpEvents(events, lastReconciliation: Date(), replacePendingEvents: true) }
+        catch { XCTFail("report failed: \(error)") }
     }
 
     private func settle(_ seconds: TimeInterval = 2.0) {
@@ -111,9 +129,9 @@ final class InsulinBookTests: XCTestCase {
 
     /// The IOB **the algorithm dosed with** — not the one on the glance.
     ///
-    /// These are two different numbers from two different books, which is the trap that made
-    /// the original defect so hard to see. `glanceData().iob` prefers the LEDGER
-    /// (`sessionLedger?.insulinOnBoard`) and so was right all along; the field log shows it
+    /// These were two different numbers from two different books, which is the trap that made
+    /// the original defect so hard to see. `glanceData().iob` is evaluated live off the book and
+    /// so was right all along; the field log shows it
     /// tracking every bolus (0.20 -> 1.85 -> 3.21) during the very session in which dosing
     /// reported `IOB 0.00`. Asserting on the glance therefore proves nothing about dosing —
     /// verified, not assumed: the first draft of these tests did exactly that and stayed GREEN
@@ -137,24 +155,25 @@ final class InsulinBookTests: XCTestCase {
     func testASeededBolusBecomesInsulinOnBoard() async {
         let manager = await makeManager()
         await seedGlucose(manager)
-        manager.ledgerSeed(finished: [bolus(2.0, minutesAgo: 2)], live: [])
+        await seed(manager, [bolus(2.0, minutesAgo: 2)])
+        await report(manager)   // the takeover's first status read
 
         guard let onBoard = dosingIOB(manager) else {
-            return XCTFail("a live ledger must produce an IOB figure, not nil")
+            return XCTFail("a seeded book with a pump report must produce an IOB figure, not nil")
         }
         XCTAssertGreaterThan(onBoard, 1.5,
                              "2.0 U given two minutes ago is almost entirely unabsorbed — an IOB near zero means the algorithm is not reading the book that holds it")
     }
 
-    /// The enact path, not just the seed. `ledgerRecordEnact` is what a delivered bolus calls.
+    /// The enact path, not just the seed: the pump manager's report is what a delivered bolus
+    /// becomes.
     func testAnEnactedBolusReachesTheAlgorithm() async {
         let manager = await makeManager()
         await seedGlucose(manager)
-        manager.ledgerSeed(finished: [], live: [])
+        await report(manager)
 
         let before = dosingIOB(manager) ?? 0
-        manager.ledgerRecordEnact(bolus(1.5, minutesAgo: 0))
-        settle()
+        await report(manager, [bolus(1.5, minutesAgo: 0)])
         let after = dosingIOB(manager) ?? 0
 
         XCTAssertGreaterThan(after - before, 1.0,
@@ -169,7 +188,7 @@ final class InsulinBookTests: XCTestCase {
     func testARecommendationDecrementsAfterInsulinIsGiven() async {
         let manager = await makeManager()
         await seedGlucose(manager)
-        manager.ledgerSeed(finished: [], live: [])
+        await report(manager)
 
         let empty = expectation(description: "first recommendation")
         var first: Double?
@@ -180,8 +199,7 @@ final class InsulinBookTests: XCTestCase {
             return XCTFail("a flat 250 mg/dL against a 100-115 target must recommend a correction; got \(String(describing: first))")
         }
 
-        manager.ledgerRecordEnact(bolus(firstAmount, minutesAgo: 0))
-        settle()
+        await report(manager, [bolus(firstAmount, minutesAgo: 0)])
 
         let second = expectation(description: "second recommendation")
         var next: Double?
@@ -205,7 +223,8 @@ final class InsulinBookTests: XCTestCase {
     func testTheDisplayedIOBAndTheDosingIOBAreTheSameNumber() async {
         let manager = await makeManager()
         await seedGlucose(manager)
-        manager.ledgerSeed(finished: [bolus(2.0, minutesAgo: 3)], live: [])
+        await seed(manager, [bolus(2.0, minutesAgo: 3)])
+        await report(manager)
 
         manager.refreshPredictionForGlance()
         settle()
@@ -220,13 +239,13 @@ final class InsulinBookTests: XCTestCase {
 
     /// A RUNNING TEMP MUST NOT BREAK THE AUTOMATIC CYCLE.
     ///
-    /// WatchDoseEnactor books an accepted temp full-span (endDate = acceptedAt + 30 min), so for
-    /// the whole life of a temp the ledger holds a basal dose ending in the FUTURE. LoopAlgorithm
+    /// The pump manager reports a running temp as a MUTABLE full-span row (endDate = programmed
+    /// end), so for the whole life of a temp the book holds a basal dose ending in the FUTURE. LoopAlgorithm
     /// refuses that outright on the automated path — `guard !input.recommendationType.automated ||
     /// basalEnd <= input.predictionStart else { throw AlgorithmError.futureBasalNotAllowed }`
     /// (LoopAlgorithm.swift:700-703) — and `.tempBasal.automated` is true.
     ///
-    /// So an untrimmed ledger read makes EVERY automatic cycle decline for as long as a temp is
+    /// So an untrimmed book read makes EVERY automatic cycle decline for as long as a temp is
     /// running: the watch stops adjusting basal entirely while believing it is looping. This case
     /// was invisible to the first version of these tests because they all drove the .manualBolus
     /// path, where `automated` is false and the guard never fires.
@@ -241,8 +260,10 @@ final class InsulinBookTests: XCTestCase {
                                  endDate: start.addingTimeInterval(30 * 60),
                                  value: 2.0, unit: .unitsPerHour,
                                  decisionId: nil,
-                                 insulinType: .novolog)
-        manager.ledgerSeed(finished: [], live: [liveTemp])
+                                 syncIdentifier: UUID().uuidString,
+                                 insulinType: .novolog,
+                                 isMutable: true)
+        await report(manager, [liveTemp])
 
         manager.loop()
         settle(4.0)
@@ -268,7 +289,7 @@ final class InsulinBookTests: XCTestCase {
     func testAnOverrideChangesWhatDosingRecommends() async {
         let manager = await makeManager()
         await seedGlucose(manager)
-        manager.ledgerSeed(finished: [], live: [])
+        await report(manager)
 
         let unscaled = expectation(description: "no override")
         var before: Double?
@@ -307,14 +328,17 @@ final class InsulinBookTests: XCTestCase {
                           "halving insulin needs doubles ISF, so the correction must fall well below \(baseline) U; got \(overridden) U — an unchanged figure means the override reached the display and not the dosing")
     }
 
-    /// No book means NO DOSING — never a silent empty one.
+    /// No pump report means NO DOSING — never a silent empty book.
     ///
-    /// R35 bans a store fallback precisely because the fallback is invisible: an empty history
-    /// and "no insulin on board" are the same number, and the second one licenses a full dose.
-    func testWithoutALedgerTheAlgorithmRefusesRatherThanAssumingZero() async {
+    /// Stock's pump-data recency gate is the one-book form of R35's rule: an empty history and
+    /// "no insulin on board" are the same number, and the second one licenses a full dose. A
+    /// book the pod has not written to — however much history it was seeded with — cannot
+    /// license a dose.
+    func testWithoutAPumpReportTheAlgorithmRefusesRatherThanAssumingZero() async {
         let manager = await makeManager()
         await seedGlucose(manager)
-        // Deliberately no ledgerSeed — this is the un-granted state.
+        await seed(manager, [bolus(2.0, minutesAgo: 2)])
+        // Deliberately no report — the pod has never spoken to this book.
 
         let done = expectation(description: "recommendation attempted")
         var failed = false
@@ -322,6 +346,21 @@ final class InsulinBookTests: XCTestCase {
         wait(for: [done], timeout: 20)
 
         XCTAssertTrue(failed,
-                      "with no insulin book the watch must refuse; returning a recommendation here would be a full dose computed against an assumed-zero IOB")
+                      "with no pump report the watch must refuse; returning a recommendation here would be a dose computed against a book the pod never wrote")
+    }
+
+    /// The book is per loan: a reset empties it, and the next report starts a clean one.
+    func testResettingTheBookEmptiesIt() async {
+        let manager = await makeManager()
+        await seedGlucose(manager)
+        await seed(manager, [bolus(2.0, minutesAgo: 2)])
+        await report(manager)
+        XCTAssertGreaterThan(dosingIOB(manager) ?? 0, 1.5, "sanity: the seeded bolus is on board")
+
+        await manager.resetInsulinBook(reason: "test")
+        await report(manager)
+
+        XCTAssertLessThan(dosingIOB(manager) ?? 0, 0.1,
+                          "after a reset the book must be empty — a leftover row is the wipe leak this store used to have")
     }
 }
