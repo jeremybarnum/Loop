@@ -153,13 +153,25 @@ final class WatchDataManager: NSObject {
                     session.transferUserInfo(dictionary)
                     return
                 }
+                // PODLOAN: THE GRANT RIDES BOTH CHANNELS. sendMessage is best-effort and its
+                // reachability is advisory: on 2026-09-17 07:59 a grant went urgent 2 s after the
+                // wrist went down, the framework reported no error, the fallback never ran, and
+                // the watch never received it — the phone reclaimed 2.5 min later. The queued
+                // copy is the guarantee; the urgent copy is the speed. The watch rejects the
+                // duplicate by epoch (an accepted epoch is never accepted twice).
+                let grantRidesBothChannels = (kind == "grant")
                 self?.log.default("Loan send kind=%{public}@ path=urgent bytes=%{public}d", kind ?? "?", size)
-                PhoneLog.event("wc", "send \(kind ?? "?") path=urgent bytes=\(size)")
+                PhoneLog.event("wc", "send \(kind ?? "?") path=urgent\(grantRidesBothChannels ? "+queued" : "") bytes=\(size)")
                 session.sendMessage(dictionary, replyHandler: nil, errorHandler: { [weak self] error in
+                    guard !grantRidesBothChannels else {
+                        PhoneLog.event("wc", "urgent send FAILED grant — \(error.localizedDescription) — the queued copy carries it")
+                        return
+                    }
                     self?.log.error("Loan urgent send FAILED kind=%{public}@ — %{public}@ — falling back to queued", kind ?? "?", String(describing: error))
                     PhoneLog.event("wc", "urgent send FAILED \(kind ?? "?") bytes=\(size) — \(error.localizedDescription) — falling back to queued")
                     session.transferUserInfo(dictionary)
                 })
+                if grantRidesBothChannels { session.transferUserInfo(dictionary) }
             },
             addPumpEvents: { [weak self] events, lastReconciliation, completion in
                 guard let self = self else { completion(nil); return }

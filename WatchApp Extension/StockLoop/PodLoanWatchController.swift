@@ -982,6 +982,15 @@ final class PodLoanWatchController {
                         notifyPhone: true)
             return
         }
+        // The grant now rides BOTH channels (phone, 2026-09-17), and the queued copy can drain
+        // minutes late — after a short loan on the urgent copy has already ended and cleared
+        // `epoch`. The high-water mark never clears: an epoch this watch has accepted once is
+        // never accepted again. Silent, because the phone owns the pod and owes nothing.
+        if !seizeActivationInFlight, grant.epoch <= defaults.integer(forKey: Keys.highWaterEpoch) {
+            rejectGrant("epoch \(grant.epoch) already accepted once (high-water \(defaults.integer(forKey: Keys.highWaterEpoch))) — a late duplicate",
+                        notifyPhone: false)
+            return
+        }
 
         // Therapy settings snapshot: the ONLY dosing limits; frozen for the
         // loan (spec §8). Validate COMPLETENESS at the loan
