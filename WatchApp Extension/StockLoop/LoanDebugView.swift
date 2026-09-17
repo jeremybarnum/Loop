@@ -232,11 +232,6 @@ struct LoanDebugView: View {
                 // put a scan on the air in whatever phase the sensor was in.
 
 
-                // The pod hold's current mode, so a deferred cycle on this screen is legible
-                // rather than looking like a stall.
-                Text("pod hold: \(PodRadioHold.modeText)")
-                    .font(.caption2).foregroundColor(.secondary)
-
                 // RADIO STRESS RETIRED: the question it existed to
                 // answer — does a pod command every single cycle disturb the CGM? — came back
                 // negative, repeatedly. Contention lives in CONNECT ESTABLISHMENT, not in
