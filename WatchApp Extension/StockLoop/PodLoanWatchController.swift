@@ -348,6 +348,11 @@ final class PodLoanWatchController {
         /// holds the pod: `teardownPump` clears it, so a relaunch that finds it knows the loan
         /// was ACTIVE when the process died and resumes it (R40(e)).
         static let pumpState = "PodLoanWatchController.pumpState"
+        /// The grant's therapy-settings payload (raw snapshot + supplement), so a resume can run
+        /// `decodeTherapySettings` exactly as the grant did. Written with the pump state, cleared
+        /// with it. Stock has no watch-side therapy settings at all — on the wrist, the grant IS
+        /// the settings, so its payload is the honest thing to keep.
+        static let grantedTherapySettings = "PodLoanWatchController.grantedTherapySettings"
         /// Fix 4a (field 2026-08-31): the highest epoch ANY accepted loan has used —
         /// never cleared, survives CLOSED (which wipes `epoch` and the journal, the
         /// amnesia that let back-to-back seizes reuse a spent epoch: 270→270 five times
@@ -425,17 +430,30 @@ final class PodLoanWatchController {
     /// BlePodComms auto-connects from it at init with no discovery. The journal is untouched:
     /// an active loan's undrained records are the normal checkpoint backlog, not a drain.
     private func resumeSavedLoanOnQueue(_ savedState: PumpManager.RawStateValue) {
-        guard let manager = OmniPumpManager(rawState: savedState) else {
-            // Unreadable state: fall back to what a relaunch did before — return the pod.
+        // Settings first: the loop manager starts every launch empty, and a pump without a basal
+        // schedule cannot dose — the grant refuses exactly that ("therapy settings incomplete").
+        // Bench 2026-09-18: before this, a resumed loan had a pump, no schedule, and a blank IOB.
+        guard let payload = defaults.dictionary(forKey: Keys.grantedTherapySettings),
+              let raw = payload["raw"] as? Data,
+              let settings = Self.decodeTherapySettings(raw: raw, supplement: payload["supplement"] as? Data),
+              settings.basalRateSchedule != nil,
+              let manager = OmniPumpManager(rawState: savedState) else {
+            // Unreadable: fall back to what a relaunch did before — return the pod.
             defaults.removeObject(forKey: Keys.pumpState)
+            defaults.removeObject(forKey: Keys.grantedTherapySettings)
             phase = .recoveredDrain
             issueSessionEndedAlert()
-            SportLog.event("loan", "RESUME failed — saved pod state unreadable; falling back to a recovered drain")
+            SportLog.event("loan", "RESUME failed — saved pod state or therapy settings unreadable; falling back to a recovered drain")
             return
         }
+        loopManager.settings = settings
         manager.pumpManagerDelegate = self
         manager.delegateQueue = queue
         pumpManager = manager
+        // Re-assert the phase THROUGH its didSet. Init loaded `.active` without firing it, so
+        // the main-safe mirror the stock pages, the carb flow and the IOB gate read was still
+        // false — bench 2026-09-18: a resumed loan showed "complete onboarding" and a blank IOB.
+        phase = .active
         loopManager.pumpManager = manager
         onLoanActiveChanged?(true)
         SportLog.event("loan", "RESUMED — epoch \(epoch ?? -1) rebuilt from saved pod state after a relaunch (R40(e): stock relaunch) · \(RuntimeStateLog.snapshot())")
@@ -561,6 +579,7 @@ final class PodLoanWatchController {
         pumpManager?.pumpManagerDelegate = nil
         pumpManager = nil
         defaults.removeObject(forKey: Keys.pumpState)   // R40(e): no pod held, nothing to resume
+        defaults.removeObject(forKey: Keys.grantedTherapySettings)
         // The loan's insulin book ends with the loan: the phone owns the truth again.
         let loopManager = self.loopManager
         Task { await loopManager.resetInsulinBook(reason: "teardown") }

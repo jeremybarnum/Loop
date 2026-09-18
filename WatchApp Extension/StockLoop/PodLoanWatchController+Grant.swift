@@ -359,6 +359,40 @@ extension PodLoanWatchController {
 
     // MARK: - Grant intake and the takeover ladder (§2.2-2.3)
 
+    /// The therapy settings a grant carries: the stock `LoopSettings` snapshot, whose raw form
+    /// drops the schedules, plus the supplement that carries basal, ISF, CR and the insulin model.
+    /// One decoder for the grant and for a resume (R40(e)), so a resumed loan runs on exactly the
+    /// settings the grant was accepted with.
+    static func decodeTherapySettings(raw: Data, supplement: Data?) -> LoopSettings? {
+        var decodedSettings: LoopSettings?
+        if let raw = (try? PropertyListSerialization.propertyList(from: raw, options: [], format: nil)) as? LoopSettings.RawValue {
+            decodedSettings = LoopSettings(rawValue: raw)
+        }
+        // Put back what LoopSettings.rawValue dropped. On this branch that serialization does not
+        // carry the three schedules or the insulin model, so `decodedSettings` above is complete
+        // only in the fields upstream still bothers to encode — and the schedules are the ONLY
+        // dosing limits the wrist has. Applied BEFORE the completeness check below, which is what
+        // was refusing the loan with "basal schedule didn't arrive from the phone".
+        if var s = decodedSettings, let data = supplement,
+           let supplement = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any] {
+            if let raw = supplement["basalRateSchedule"] as? BasalRateSchedule.RawValue {
+                s.basalRateSchedule = BasalRateSchedule(rawValue: raw)
+            }
+            if let raw = supplement["insulinSensitivitySchedule"] as? InsulinSensitivitySchedule.RawValue {
+                s.insulinSensitivitySchedule = InsulinSensitivitySchedule(rawValue: raw)
+            }
+            if let raw = supplement["carbRatioSchedule"] as? CarbRatioSchedule.RawValue {
+                s.carbRatioSchedule = CarbRatioSchedule(rawValue: raw)
+            }
+            if let raw = supplement["defaultRapidActingModel"] as? ExponentialInsulinModelPreset.RawValue {
+                s.defaultRapidActingModel = ExponentialInsulinModelPreset(rawValue: raw)
+            }
+            decodedSettings = s
+            SportLog.event("loan", "grant settings supplement applied — basal \(s.basalRateSchedule == nil ? "MISSING" : "ok"), ISF \(s.insulinSensitivitySchedule == nil ? "MISSING" : "ok"), CR \(s.carbRatioSchedule == nil ? "MISSING" : "ok"), model \(s.defaultRapidActingModel.map { String(describing: $0) } ?? "default")")
+        }
+        return decodedSettings
+    }
+
     func handleGrant(_ grant: LoanGrant) {
         SportLog.event("loan", "GRANT received — epoch \(grant.epoch), \(grant.pumpManagerRawState.count)B pod state")
 
@@ -438,32 +472,7 @@ extension PodLoanWatchController {
         // in serialization otherwise dies silently on every cycle of the whole
         // session). Validated BEFORE journal.begin so a
         // refusal leaves no journal/epoch residue.
-        var decodedSettings: LoopSettings?
-        if let raw = (try? PropertyListSerialization.propertyList(from: grant.therapySettingsRaw, options: [], format: nil)) as? LoopSettings.RawValue {
-            decodedSettings = LoopSettings(rawValue: raw)
-        }
-        // Put back what LoopSettings.rawValue dropped. On this branch that serialization does not
-        // carry the three schedules or the insulin model, so `decodedSettings` above is complete
-        // only in the fields upstream still bothers to encode — and the schedules are the ONLY
-        // dosing limits the wrist has. Applied BEFORE the completeness check below, which is what
-        // was refusing the loan with "basal schedule didn't arrive from the phone".
-        if var s = decodedSettings, let data = grant.therapySettingsSupplementRaw,
-           let supplement = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any] {
-            if let raw = supplement["basalRateSchedule"] as? BasalRateSchedule.RawValue {
-                s.basalRateSchedule = BasalRateSchedule(rawValue: raw)
-            }
-            if let raw = supplement["insulinSensitivitySchedule"] as? InsulinSensitivitySchedule.RawValue {
-                s.insulinSensitivitySchedule = InsulinSensitivitySchedule(rawValue: raw)
-            }
-            if let raw = supplement["carbRatioSchedule"] as? CarbRatioSchedule.RawValue {
-                s.carbRatioSchedule = CarbRatioSchedule(rawValue: raw)
-            }
-            if let raw = supplement["defaultRapidActingModel"] as? ExponentialInsulinModelPreset.RawValue {
-                s.defaultRapidActingModel = ExponentialInsulinModelPreset(rawValue: raw)
-            }
-            decodedSettings = s
-            SportLog.event("loan", "grant settings supplement applied — basal \(s.basalRateSchedule == nil ? "MISSING" : "ok"), ISF \(s.insulinSensitivitySchedule == nil ? "MISSING" : "ok"), CR \(s.carbRatioSchedule == nil ? "MISSING" : "ok"), model \(s.defaultRapidActingModel.map { String(describing: $0) } ?? "default")")
-        }
+        let decodedSettings = Self.decodeTherapySettings(raw: grant.therapySettingsRaw, supplement: grant.therapySettingsSupplementRaw)
         let missing: String? = {
             guard let s = decodedSettings else { return "settings snapshot" }
             if s.basalRateSchedule == nil { return "basal schedule" }
@@ -535,6 +544,12 @@ extension PodLoanWatchController {
         RuntimeStateLog.probeTimerDeferral("takeover-start")
         phase = .takingOver
         loopManager.settings = decodedSettings!
+        // R40(e): the loop manager starts every launch with EMPTY settings, so a resume must be
+        // able to decode these again (bench 2026-09-18: a resumed loan had a pump, no schedule,
+        // blank IOB). Persisted as the grant delivered them, decoded by the same function.
+        var payload: [String: Any] = ["raw": grant.therapySettingsRaw]
+        if let supplement = grant.therapySettingsSupplementRaw { payload["supplement"] = supplement }
+        defaults.set(payload, forKey: Keys.grantedTherapySettings)
         // Adopt the override the phone had running. Assigning it (rather than calling
         // applyWristOverride) is deliberate: the didSet records it into the override history —
         // which is the only thing that actually rescales basal, ISF and carb ratio — while
