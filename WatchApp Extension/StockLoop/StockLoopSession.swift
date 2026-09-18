@@ -223,6 +223,9 @@ final class StockLoopSession {
                 NotificationCenter.default.post(name: .podLoanPhaseDidChange, object: nil)
             }
         }
+        // R40(e): a relaunch mid-loan resumes it — now, with every hook above wired, and
+        // before the transport-dependent drain (`drainRecoveredIfNeeded`, on WC activation).
+        loanController.resumeIfNeeded()
 
         let build = BuildDetails.default.codeIdentity
         SportLog.event("session", "Sport Mode ready — build \(build); tap Start to request a loan\(Self.launchForensics())")

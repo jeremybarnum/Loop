@@ -44,15 +44,27 @@ references inside it (R22, WS1, #108, #120, e44, §5.3.3) resolve on that line.
   dormant grant is the same freeze with a longer tail, and settings-change is itself
   a refresh trigger.
 
-  R40(e) — AUTO-RESUME CAP (ruled 2026-08-30, against the gates-suffice
-  recommendation — Jeremy's rationale, recorded verbatim in intent: wake-resume is
-  EXCEPTIONAL functionality and must not become the routine mechanism for super-long
-  phoneless loans; the cap enforces that posture): a CLEAN wake fingerprint (own SQN, odometer fully explained by the
-  watch's own program) auto-resumes with a notification only within a threshold
-  (initially 6 h — the insulin horizon — tunable); beyond it, even clean fingerprints
-  degrade to offer-to-resume behind a deliberate confirm. Ambiguous fingerprints
-  (SQN-jump-only, truncated journal tail, pod near expiry) always offer rather than
-  auto-resume; force-reclaim fingerprints stand down to viewer and alert.
+  R40(e) — WAKE-RESUME = STOCK RELAUNCH (re-ruled 2026-09-18, replacing the 2026-08-30
+  AUTO-RESUME CAP; Jeremy's frame: once the watch holds the pod it behaves like the phone
+  unless it cannot, and the first draft is the stock-shaped minimum). The watch saves the
+  pump manager state exactly as the phone does. On relaunch, a loan that was ACTIVE is
+  rebuilt from that state and resumes silently, whether or not the phone is reachable:
+  no fingerprint check, no age cap, no confirm, no notification. Loans caught
+  mid-transition (requested, taking over, handing back, revoked) keep their existing
+  handling. The 6 h cap, the ambiguity offers and the pod-expiry rule are WITHDRAWN from
+  the first draft; they may return later as additions.
+
+  DEFERRED RISKS (documented, deliberately not built — see the 2026-09-18 lean-first
+  paradigm: nothing ships before Pete reviews, safety layers come after the design):
+    1. Phone force-reclaimed while the watch was off, then the watch resumes. Phone
+       unreachable: the PHONE MIRROR below already yields (R40(a)). Phone reachable: the
+       resumed watch reports a loan the phone has closed; the revoke path is believed to
+       cover it, untraced.
+    2. Silent watch mid-loan: the phone waits forever (field 2026-09-08, 4 h 06 m).
+    3. Wrist-alert re-arm after a resume: untraced.
+    4. Sensor wake after a watch REBOOT: unknown whether Bluetooth restoration is armed
+       before the app's first launch. If not, a rebooted watch idles until a wrist tap.
+    5. The withdrawn R40(e) nuances: age cap, ambiguous-fingerprint offers, pod expiry.
 
   PHONE MIRROR: after any pod blackout beyond M minutes with a dormant grant
   outstanding, the phone's first pod contact is a STATUS READ ONLY, and ownership must

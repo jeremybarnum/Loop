@@ -20,7 +20,9 @@ import os.log
 extension PodLoanWatchController: PumpManagerDelegate {
 
     func pumpManagerDidUpdateState(_ pumpManager: PumpManager) {
-        // Nothing is persisted: the relaunch path never resurrects the pod session (init, §3.2).
+        // The phone's `rawPumpManager = pumpManager.rawValue`, on the wrist: every state change
+        // lands on disk, so a relaunch mid-loan resumes from the pod's latest known state (R40(e)).
+        defaults.set(pumpManager.rawState, forKey: Keys.pumpState)
     }
 
     func pumpManager(_ pumpManager: PumpManager, hasNewPumpEvents events: [NewPumpEvent], lastReconciliation: Date?, replacePendingEvents: Bool, completion: @escaping (Error?) -> Void) {
