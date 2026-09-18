@@ -86,6 +86,13 @@ class LoopDataManager {
 
     private(set) var activeContext: WatchContext? {
         didSet {
+            // Bench 2026-09-18: "Please complete onboarding" kept appearing and neither log
+            // recorded WHY. The gate is `loanIsLive || isOnboardingCompleted`; this is the second
+            // input, as the phone sent it. Logged on change only.
+            let flag = activeContext?.isOnboardingCompleted
+            if flag != oldValue?.isOnboardingCompleted || (oldValue == nil) != (activeContext == nil) {
+                SportLog.event("gate", "phone context: onboardingCompleted=\(flag.map { String($0) } ?? "nil") (context \(activeContext == nil ? "NIL" : "present"), watchAuthored=\(activeContext?.isWatchAuthored == true)) [onboarding-gate]")
+            }
             rawWatchContext = activeContext?.rawValue
             needsDidUpdateContextNotification = true
             sendDidUpdateContextNotificationIfNecessary()

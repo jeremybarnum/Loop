@@ -41,9 +41,18 @@ struct ContentView: View {
     /// is authoritative then, with its own stores and its own CGM, so the phone's readiness is not
     /// the question being asked.
     private var isOnboarded: Bool {
-        if loanIsLive { return true }
-        return loopManager.activeContext?.isOnboardingCompleted == true
+        let phoneSaysOnboarded = loopManager.activeContext?.isOnboardingCompleted == true
+        let gate = loanIsLive || phoneSaysOnboarded
+        // Bench 2026-09-18: log the DECISION with both inputs, on change only (SwiftUI evaluates
+        // this on every render). Pairs with the "[onboarding-gate]" line in LoopDataManager.
+        let key = "\(gate)|\(loanIsLive)|\(phoneSaysOnboarded)"
+        if key != Self.lastGateKey {
+            Self.lastGateKey = key
+            SportLog.event("gate", "stock pages \(gate ? "SHOWN" : "BEHIND onboarding") — loanIsLive=\(loanIsLive) phoneSaysOnboarded=\(phoneSaysOnboarded) [onboarding-gate]")
+        }
+        return gate
     }
+    private static var lastGateKey = ""
 
     var body: some View {
         VStack {

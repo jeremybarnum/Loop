@@ -21,6 +21,8 @@ enum WatchDataManagerError: Error {
 
 @MainActor
 final class WatchDataManager: NSObject {
+    private static var lastOnboardingKey = ""   // [onboarding-gate] dedupe
+
 
     unowned let deviceManager: DeviceDataManager   // PODLOAN: read by the wiring extension
     unowned let settingsManager: SettingsManager   // PODLOAN: read by the wiring extension
@@ -373,6 +375,14 @@ final class WatchDataManager: NSObject {
 
         context.isClosedLoop = settings.dosingEnabled
         context.isOnboardingCompleted = deviceManager.cgmManager?.isOnboarded == true && deviceManager.pumpManager?.isOnboarded == true
+        // Bench 2026-09-18: the watch kept showing "Please complete onboarding" and neither log
+        // said what this phone had told it. Logged on change only; pairs with the watch's
+        // "[onboarding-gate]" lines.
+        let onboardingKey = "\(context.isOnboardingCompleted == true)|\(deviceManager.cgmManager != nil)|\(deviceManager.pumpManager?.isOnboarded == true)"
+        if onboardingKey != Self.lastOnboardingKey {
+            Self.lastOnboardingKey = onboardingKey
+            PhoneLog.event("link", "context to watch: onboardingCompleted=\(context.isOnboardingCompleted == true) — cgmManager \(deviceManager.cgmManager == nil ? "NIL" : "present"), pump onboarded=\(deviceManager.pumpManager?.isOnboarded == true) [onboarding-gate]")
+        }
         context.deviceIssue = deviceManager.cgmManager == nil || deviceManager.cgmManager?.isInoperable == true || deviceManager.cgmManager?.inSignalLoss == true || deviceManager.pumpManager == nil || deviceManager.pumpManager?.isInoperable == true || deviceManager.pumpManager?.inSignalLoss == true || deviceManager.hasBluetoothIssue
 
         context.potentialCarbEntry = potentialCarbEntry
