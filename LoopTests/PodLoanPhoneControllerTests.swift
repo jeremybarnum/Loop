@@ -92,7 +92,13 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                     "PodLoanPhoneController.committedIDs", "PodLoanPhoneController.loanStartedAt",
                     "PodLoanPhoneController.deliveredAtTakeover", "PodLoanPhoneController.gapBooking",
                     "PodLoanPhoneController.pendingForceAudit", "PodLoanPhoneController.deliveredAtGrant",
-                    "PodLoanPhoneController.auditBase", "PodLoanPhoneController.windowResidualWorst"] {
+                    "PodLoanPhoneController.auditBase", "PodLoanPhoneController.windowResidualWorst",
+                    // The force-reclaim audit reads both of these, and only a GRANT clears them —
+                    // so a test that reaches the audit without granting inherited the previous
+                    // test's expected-units and audit-ran flag, and judged the reclaim against
+                    // them. That is the whole of this class's order-dependence: the residual came
+                    // out wrong by a different amount depending on what ran before.
+                    "PodLoanPhoneController.expectedUnits", "PodLoanPhoneController.watchAuditRan"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
         MockPumpManager.testForcedReadCount = 0
@@ -859,6 +865,11 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         let grantSent = expectSend()
         controller.handleIncoming(userInfo: try! LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
         wait(for: [grantSent], timeout: 5)
+        // BARRIER. The send fires before the controller has finished the grant on its own serial
+        // queue, and `grantOfferedAt` — the anchor this class exists to pin — is stamped there.
+        // Returning first let a caller advance the test clock BEFORE the stamp, so the anchor was
+        // taken at the later time and the elapsed came out +0s instead of +10s.
+        controller.queue.sync { }
         guard case .grant(let grant)? = lastSent() else {
             XCTFail("expected a grant, got \(String(describing: lastSent()))")
             fatalError()
@@ -1127,12 +1138,24 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
     /// A mid-loan record batch carrying a checkpoint snapshot, the way a live watch streams
     /// one after a dose window. `asOf: nil` models an older watch (no checkpoint possible).
+    /// Hand the controller a checkpoint AND WAIT for it to be applied.
+    ///
+    /// `handleIncoming` hops onto the controller's serial queue, and the checkpoint — including
+    /// the audit-base advance — is applied there. Returning without waiting let the next step
+    /// read the OLD base, which is how `testForceReclaimJudgesOnlyTheTailSinceTheLastSync` judged
+    /// a 0.15 U tail as a 1.30 U whole-loan residual and opened the loop. It passed alone, where
+    /// an idle machine let the checkpoint win the race, and failed inside the full class — the
+    /// whole of this class's order-dependence, and about two hours of gate retries on 2026-09-17.
+    ///
+    /// A sync hop on that same serial queue returns only once the checkpoint has been applied,
+    /// whichever way it went (accepted, carried or rejected).
     private func sendCheckpoint(_ controller: PodLoanPhoneController, epoch: Int,
                                 events: [LoanEvent] = [], latest: Double, asOf: Date?) throws {
         let snap = LoanOdometerSnapshot(deliveredAtStart: 10.0, deliveredLatest: latest,
                                         freshenSucceeded: false, asOf: asOf)
         controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
             DoseRecordBatch(epoch: epoch, events: events, tombstones: [], odometer: snap)).transportDictionary())
+        controller.queue.sync { }
     }
 
     /// Closes the loan with a final offer whose end odometer the phone then verifies first-hand.
@@ -2700,8 +2723,13 @@ extension PodLoanPhoneControllerTests {
         ).transportDictionary())
         waitForState(controller, .owner)
 
-        // Two minutes pass, then a second loan is granted.
-        clock = clock.addingTimeInterval(120)
+        // SIX minutes, not two: the reclaim's settle window (`reclaimSettleTimeout`, 5 min) denies
+        // a new grant until the phone's own pod round-trip has verified the pod is home, and that
+        // verification is ASYNCHRONOUS. At two minutes this test was racing it — green on an idle
+        // machine, denied ("The pod is still returning from the last session") under load. Stepping
+        // past the window settles it on the test's own clock, which is the right dependency: this
+        // test is about the grant ANCHOR, not about settle timing.
+        clock = clock.addingTimeInterval(360)
         lock.lock(); diags.removeAll(); lock.unlock()
         let g2 = offerGrant(controller)
         XCTAssertNotEqual(g1.epoch, g2.epoch)
@@ -2724,7 +2752,7 @@ extension PodLoanPhoneControllerTests {
         // Measured from THIS grant (10 s), not from the abandoned one (130 s).
         XCTAssertTrue(line.contains("+10s"),
                       "elapsed must be measured from the second grant; got: \(line)")
-        XCTAssertFalse(line.contains("+130s"),
+        XCTAssertFalse(line.contains("+370s"),
                        "the abandoned takeover's clock leaked into the new grant: \(line)")
     }
 
