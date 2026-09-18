@@ -343,6 +343,11 @@ final class PodLoanWatchController {
     enum Keys {
         static let phase = "PodLoanWatchController.phase"
         static let epoch = "PodLoanWatchController.epoch"
+        /// The pump manager's raw state, written on every state update and at the grant — the
+        /// phone's own `PumpManagerState` persistence, on the wrist. Present only while a loan
+        /// holds the pod: `teardownPump` clears it, so a relaunch that finds it knows the loan
+        /// was ACTIVE when the process died and resumes it (R40(e)).
+        static let pumpState = "PodLoanWatchController.pumpState"
         /// Fix 4a (field 2026-08-31): the highest epoch ANY accepted loan has used —
         /// never cleared, survives CLOSED (which wipes `epoch` and the journal, the
         /// amnesia that let back-to-back seizes reuse a spent epoch: 270→270 five times
@@ -361,10 +366,17 @@ final class PodLoanWatchController {
         self.phase = Phase(rawValue: defaults.string(forKey: Keys.phase) ?? "") ?? .idle
         self.epoch = defaults.object(forKey: Keys.epoch) as? Int
 
-        // RELAUNCH (spec §3.2): never resurrect the pod session. Undrained records go
-        // out as a recovered hand-back; persisted pump state is retained ONLY as data
-        // (stock recovery semantics live phone-side after reclaim, spec §5.3.3).
-        if journal.hasUndrainedEvents {
+        // RELAUNCH. An ACTIVE loan with saved pod state resumes exactly as the phone resumes
+        // after a relaunch (R40(e), re-ruled 2026-09-18: a stock relaunch — no fingerprint, no
+        // age cap, no confirm, no notification). Everything else keeps the data-first drain
+        // (spec §3.2): undrained records go out as a recovered hand-back and the pod session
+        // is never resurrected. Construction is deferred to `resumeIfNeeded()`, which the
+        // session calls once the hooks are wired: the resume fires `onLoanActiveChanged`, which
+        // arms the dead-man ladder, and a hook fired before it is wired is a hook lost.
+        let savedPumpState = phase == .active ? defaults.dictionary(forKey: Keys.pumpState) : nil
+        if let savedPumpState {
+            pendingResumeState = savedPumpState
+        } else if journal.hasUndrainedEvents {
             phase = .recoveredDrain
             issueSessionEndedAlert()
         } else {
@@ -391,6 +403,42 @@ final class PodLoanWatchController {
                 issueSessionEndedAlert()
             }
         }
+    }
+
+    /// Saved pod state found at init for an ACTIVE loan, waiting for `resumeIfNeeded()`.
+    private var pendingResumeState: PumpManager.RawStateValue?
+
+    /// R40(e): resume the loan a relaunch interrupted. Called by the session after every hook is
+    /// wired (the sibling of `drainRecoveredIfNeeded`, minus the transport dependency: the pod
+    /// needs no phone). No-op unless init found an active loan with saved state.
+    func resumeIfNeeded() {
+        queue.async {
+            guard let saved = self.pendingResumeState else { return }
+            self.pendingResumeState = nil
+            self.resumeSavedLoanOnQueue(saved)
+        }
+    }
+
+    /// R40(e): rebuild the pump manager from the state saved while the loan was ACTIVE and carry
+    /// on — the phone's `instantiateDeviceManagers`, on the wrist. The saved state already holds
+    /// this watch's own BLE handle (patched in at the grant, then persisted by the manager), so
+    /// BlePodComms auto-connects from it at init with no discovery. The journal is untouched:
+    /// an active loan's undrained records are the normal checkpoint backlog, not a drain.
+    private func resumeSavedLoanOnQueue(_ savedState: PumpManager.RawStateValue) {
+        guard let manager = OmniPumpManager(rawState: savedState) else {
+            // Unreadable state: fall back to what a relaunch did before — return the pod.
+            defaults.removeObject(forKey: Keys.pumpState)
+            phase = .recoveredDrain
+            issueSessionEndedAlert()
+            SportLog.event("loan", "RESUME failed — saved pod state unreadable; falling back to a recovered drain")
+            return
+        }
+        manager.pumpManagerDelegate = self
+        manager.delegateQueue = queue
+        pumpManager = manager
+        loopManager.pumpManager = manager
+        onLoanActiveChanged?(true)
+        SportLog.event("loan", "RESUMED — epoch \(epoch ?? -1) rebuilt from saved pod state after a relaunch (R40(e): stock relaunch) · \(RuntimeStateLog.snapshot())")
     }
 
     /// Fires from `init` on a relaunch that found undrained records — so the session did not
@@ -512,6 +560,7 @@ final class PodLoanWatchController {
         pumpManager?.releaseConnection()
         pumpManager?.pumpManagerDelegate = nil
         pumpManager = nil
+        defaults.removeObject(forKey: Keys.pumpState)   // R40(e): no pod held, nothing to resume
         // The loan's insulin book ends with the loan: the phone owns the truth again.
         let loopManager = self.loopManager
         Task { await loopManager.resetInsulinBook(reason: "teardown") }

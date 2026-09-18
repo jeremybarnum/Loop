@@ -249,6 +249,7 @@
 		4FF4D0F81E1725B000846527 /* NibLoadable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 434F54561D287FDB002A9274 /* NibLoadable.swift */; };
 		54CB774C12C6459DB3AFF5C2 /* DeviceLogThrottle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A40BA18B2486452C8083B70A /* DeviceLogThrottle.swift */; };
 		5E12EA02302D82A800A03F53 /* SeizeActivationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E12EA01302D82A800A03F53 /* SeizeActivationTests.swift */; };
+		5E12EA72302D82A800A03F53 /* WakeResumeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E12EA71302D82A800A03F53 /* WakeResumeTests.swift */; };
 		5E16C423E6FB4551BA3BCAD2 /* RileyLinkKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = ACC381BA270149C9B0DDCB01 /* RileyLinkKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		70E4E9FE2ABE49DDBDF4B0A9 /* StoredDataAlgorithmInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37485C37C7ED4485A1EDFB19 /* StoredDataAlgorithmInput.swift */; };
 		77195EF1E7C946ED9659F39B /* LoanEventJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD211055E6EA48C7A7F6B8E0 /* LoanEventJournal.swift */; };
@@ -1130,6 +1131,7 @@
 		5181B60CBF3CB2DA537F0475 /* simple.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop/Resources/Sounds/simple.caf; sourceTree = SOURCE_ROOT; };
 		53F9B5F8846B4124B8986783 /* LoanEventJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LoanEventJournal.swift; path = "WatchApp Extension/StockLoop/LoanEventJournal.swift"; sourceTree = SOURCE_ROOT; };
 		5E12EA01302D82A800A03F53 /* SeizeActivationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeizeActivationTests.swift; sourceTree = "<group>"; };
+		5E12EA71302D82A800A03F53 /* WakeResumeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WakeResumeTests.swift; sourceTree = "<group>"; };
 		62F7CB5D5DC337E705032AC7 /* dings.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop/Resources/Sounds/dings.caf; sourceTree = SOURCE_ROOT; };
 		6D5FCC7207E50ACC682E9E6E /* honk.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop/Resources/Sounds/honk.caf; sourceTree = SOURCE_ROOT; };
 		74145BE3C46270883D295A1F /* minimal.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop/Resources/Sounds/minimal.caf; sourceTree = SOURCE_ROOT; };
@@ -2829,6 +2831,7 @@
 				9A7CE018302D82A800A03F53 /* PodLoanTimerCharacterizationTests.swift */,
 				9A7CE019302D82A800A03F53 /* PodLoanTimerSeamTests.swift */,
 				5E12EA01302D82A800A03F53 /* SeizeActivationTests.swift */,
+				5E12EA71302D82A800A03F53 /* WakeResumeTests.swift */,
 				E489814AB551420DA40399A4 /* G7TimedConnectTests.swift */,
 				E5F6A7B8C9D0E1F2A3B4C5D6 /* G7WedgeHintTests.swift */,
 				9A7CE01A302D82A800A03F53 /* WatchAppTests.swift */,
@@ -4279,6 +4282,7 @@
 				9A7CE02C302D82A800A03F53 /* PodLoanTimerCharacterizationTests.swift in Sources */,
 				9A7CE02D302D82A800A03F53 /* PodLoanTimerSeamTests.swift in Sources */,
 				5E12EA02302D82A800A03F53 /* SeizeActivationTests.swift in Sources */,
+				5E12EA72302D82A800A03F53 /* WakeResumeTests.swift in Sources */,
 				BDE04F37312A4F6C86EC7872 /* G7TimedConnectTests.swift in Sources */,
 				F6A7B8C9D0E1F2A3B4C5D6E7 /* G7WedgeHintTests.swift in Sources */,
 				9A7CE02E302D82A800A03F53 /* WatchAppTests.swift in Sources */,

@@ -698,6 +698,7 @@ extension PodLoanWatchController {
         manager.pumpManagerDelegate = self
         manager.delegateQueue = queue
         pumpManager = manager
+        defaults.set(manager.rawState, forKey: Keys.pumpState)   // R40(e): on disk from the first moment we hold it
         guard ingestGrantHistory(grant) else {
             teardownPump()
             returnToRestingPhase()
