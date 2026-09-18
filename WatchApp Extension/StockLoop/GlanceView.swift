@@ -123,6 +123,16 @@ final class GlanceViewModel: ObservableObject {
 
     /// True while a loan is live or coming up, i.e. while this page is the one worth looking at.
     /// The host reads it to decide whether a phase change should pull the user here.
+    /// The loan controller's own live flag, for the onboarding gate. `wantsFocus` reads this
+    /// model's RENDERED phase, which lags a resume: the phase notification fires from the loan
+    /// queue within 0.2 s of launch, before the first refresh has built a state, so the gate
+    /// read "no loan" and put the stock pages behind "complete onboarding" even with the phone
+    /// reachable (bench 2026-09-18, build 13:12). A grant never hit this because it posts on
+    /// every phase step and the glance ticks in between.
+    var loanIsLive: Bool {
+        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.isLoanActiveNonBlocking ?? false
+    }
+
     var wantsFocus: Bool {
         switch state.phase {
         case .starting, .active, .handingBack, .draining: return true

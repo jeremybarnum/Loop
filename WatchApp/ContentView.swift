@@ -108,7 +108,7 @@ struct ContentView: View {
         // `.receive(on:)` is load-bearing, not tidiness: the phase notification is posted from
         // the loan's own queue, and both statements below mutate view state.
         .onReceive(NotificationCenter.default.publisher(for: .podLoanPhaseDidChange).receive(on: RunLoop.main)) { _ in
-            let live = glanceModel.wantsFocus
+            let live = glanceModel.wantsFocus || glanceModel.loanIsLive   // the controller's flag covers a resume
             loanIsLive = live
             if live { selectedPage = Self.sportPage }
         }
@@ -130,7 +130,7 @@ struct ContentView: View {
             // The gate also has to be right on a COLD LAUNCH into a live loan — relaunching
             // mid-session posts no phase change, and that is exactly when the watch is holding
             // the pod and needs these pages.
-            loanIsLive = glanceModel.wantsFocus
+            loanIsLive = glanceModel.wantsFocus || glanceModel.loanIsLive
         }
     }
 }
