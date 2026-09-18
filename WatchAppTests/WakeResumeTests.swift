@@ -30,6 +30,16 @@ final class WakeResumeTests: XCTestCase {
         defaults = UserDefaults(suiteName: "WakeResumeTests-\(UUID().uuidString)")!
     }
 
+    /// What a grant leaves on disk: its therapy-settings payload — the stock snapshot (whose raw
+    /// form drops the schedules) plus the supplement carrying the basal schedule, the one thing
+    /// a resume cannot dose without.
+    private func persistGrantedSettings() {
+        let basal = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: 1.0)])!
+        let raw = try! PropertyListSerialization.data(fromPropertyList: LoopSettings().rawValue, format: .binary, options: 0)
+        let supplement = try! PropertyListSerialization.data(fromPropertyList: ["basalRateSchedule": basal.rawValue], format: .binary, options: 0)
+        defaults.set(["raw": raw, "supplement": supplement], forKey: PodLoanWatchController.Keys.grantedTherapySettings)
+    }
+
     override func tearDown() {
         cacheStore = nil
         cacheDir = nil
@@ -59,7 +69,9 @@ final class WakeResumeTests: XCTestCase {
          "controllerId": UInt32(0x1234_5678), "podId": UInt32(0x1234_5679)]
     }
 
-    private func relaunch(phase: PodLoanWatchController.Phase, epoch: Int = 7, savedState: [String: Any]?) async -> PodLoanWatchController {
+    private func relaunch(phase: PodLoanWatchController.Phase, epoch: Int = 7, savedState: [String: Any]?,
+                          granted: Bool = true) async -> PodLoanWatchController {
+        if granted { persistGrantedSettings() }
         defaults.set(phase.rawValue, forKey: PodLoanWatchController.Keys.phase)
         defaults.set(epoch, forKey: PodLoanWatchController.Keys.epoch)
         if let savedState { defaults.set(savedState, forKey: PodLoanWatchController.Keys.pumpState) }
@@ -75,8 +87,20 @@ final class WakeResumeTests: XCTestCase {
         XCTAssertEqual(c.epoch, 7, "the loan's epoch carries over unchanged")
         XCTAssertNotNil(c.pumpManager, "the pump manager is rebuilt from the saved state")
         XCTAssertNotNil(c.loopManager.pumpManager, "and handed to the loop, so dosing can resume")
+        XCTAssertTrue(c.isLoanActiveNonBlocking,
+                      "the main-safe mirror is set — init loads the phase without its didSet (bench 2026-09-18: onboarding screen + blank IOB)")
+        XCTAssertNotNil(c.loopManager.settings.basalRateSchedule,
+                        "the granted therapy settings came back from disk (bench 2026-09-18: blank IOB, no schedule)")
         XCTAssertNotNil(defaults.dictionary(forKey: PodLoanWatchController.Keys.pumpState),
                         "the saved state stays on disk — the next relaunch resumes the same way")
+    }
+
+    func testResumeWithoutTherapySettingsDrains() async {
+        // Saved pod state but no granted settings on disk: a pump that cannot dose is not resumed.
+        let c = await relaunch(phase: .active, savedState: readablePumpState, granted: false)
+        XCTAssertEqual(c.phase, .recoveredDrain)
+        XCTAssertNil(c.pumpManager)
+        XCTAssertNil(defaults.dictionary(forKey: PodLoanWatchController.Keys.pumpState))
     }
 
     func testActiveLoanWithoutSavedStateStillDrains() async {
