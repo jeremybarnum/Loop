@@ -565,8 +565,11 @@ final class PodLoanWatchController {
 
     // MARK: - Internals
 
-    func sendMessage(_ message: LoanMessage) {
-        guard let dictionary = try? message.transportDictionary() else { return }
+    /// `urgentOnly`: never queue this message — a LIVE hand-back offer (2026-09-19). The
+    /// marker rides beside the envelope; the phone reads only the envelope.
+    func sendMessage(_ message: LoanMessage, urgentOnly: Bool = false) {
+        guard var dictionary = try? message.transportDictionary() else { return }
+        if urgentOnly { dictionary["urgentOnly"] = true }
         send?(dictionary)
     }
 
