@@ -283,6 +283,7 @@ extension PodLoanWatchController {
             guard !self.handbackRequested else { return }
             self.reunionPromptActive = false   // a manual End answers the R40(f) prompt too
             self.handbackRequested = true
+            self.handbackFailure = nil
             self.handbackResendCount = 0
             self.handbackSawUnreachable = false
             self.handbackSawUrgentSendError = false
@@ -327,7 +328,15 @@ extension PodLoanWatchController {
     /// later hand-back (the phone dedups by event ID); the odometer reconciles the totals then.
     /// The pre-scheduled HandbackStuckAlert delivers the wrist notification (even from a suspended
     /// app, in which case this state restore runs on the next wake).
-    func handbackTimedOut() {
+    /// `unreachable`: the phone could not be reached at all, so no offer was sent (R41) —
+    /// as opposed to an offer that went unanswered for the deadline.
+    func handbackTimedOut(unreachable: Bool = false) {
+        let why = unreachable
+            ? "not possible — iPhone not reachable, no offer sent"
+            : "timed out (\(Int(HandbackStuckAlert.interval))s) — iPhone never acked"
+        handbackFailure = (now(), unreachable
+            ? NSLocalizedString("iPhone not reachable — still running", comment: "Glance transient: End failed, phone unreachable")
+            : NSLocalizedString("iPhone didn't respond — still running", comment: "Glance transient: End failed, no ack"))
         resendWorkItem?.cancel()
         handbackDeadline = nil
         handbackStartedAt = nil
@@ -353,11 +362,11 @@ extension PodLoanWatchController {
             phase = .active
             loopManager.pumpManager = manager
             onLoanActiveChanged?(true)
-            SportLog.event("loan", "HAND-BACK timed out (final, \(Int(HandbackStuckAlert.interval))s) — iPhone never acked; resumed Sport Mode on the watch (still holding the pod)\(wedgeSuffix)")
+            SportLog.event("loan", "HAND-BACK \(why) (final); resumed Sport Mode on the watch (still holding the pod)\(wedgeSuffix)")
             loopManager.checkPumpDataAndLoop()   // re-establish a temp this cycle
         } else {
             // Interim hang: never stopped dosing; phase already .active. Just abort the drain.
-            SportLog.event("loan", "HAND-BACK timed out (interim, \(Int(HandbackStuckAlert.interval))s) — iPhone never acked; Sport Mode continues on the watch\(wedgeSuffix)")
+            SportLog.event("loan", "HAND-BACK \(why) (interim); Sport Mode continues on the watch\(wedgeSuffix)")
         }
         switch wedge {
         case .sessionReestablishing:
@@ -376,9 +385,11 @@ extension PodLoanWatchController {
         case .none:
             break
         }
-        // HandbackStuckAlert is intentionally NOT disarmed here — its pre-scheduled notification
-        // is the user's signal that End didn't complete. It self-expires; a later successful
-        // hand-back re-arms a fresh one.
+        // The glance now carries the message (`handbackFailure`), so the pre-scheduled
+        // notification is withdrawn: this handler running means the app is awake to show it.
+        // The notification remains the fallback for the one case this code cannot cover — the
+        // app suspended before the deadline, where this line never runs and it fires by itself.
+        HandbackStuckAlert.disarm()
     }
 
     /// The drain is fully acked while still active — NOW stop dosing, close the
@@ -540,8 +551,7 @@ extension PodLoanWatchController {
             // for three hours). So a live offer is never queued: fail now, keep the loan, and let
             // the user try again near the phone. Ruled 2026-09-19. Drains from a dead loan still
             // queue — there is no live loan to conflict with and the records must land.
-            SportLog.event("loan", "HAND-BACK not possible — iPhone not reachable; Sport Mode continues (tap End again near the phone)")
-            handbackTimedOut()
+            handbackTimedOut(unreachable: true)
             return
         }
         if lastHandbackReachable != reachableNow {

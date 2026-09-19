@@ -581,6 +581,11 @@ final class GlanceViewModel: ObservableObject {
                 if !snap.phoneReachable {
                     s.idleNote = NSLocalizedString("Can't reach iPhone — still looping. Move it closer or check its Bluetooth.", comment: "Glance note when an interim hand-back is blocked by an unreachable phone")
                 }
+            } else if let at = snap.handbackFailedAt, let text = snap.handbackFailureText,
+                      Date().timeIntervalSince(at) < 20 {
+                // End did not complete. Said here, on the line the user is looking at, for
+                // twenty seconds — long enough to read, short enough not to outlive its moment.
+                s.transientText = text
             }
             s.reunionPrompt = snap.reunionPromptVisible
             // A manual bolus spends most of its wall-clock waiting on the radio arbiter, with
