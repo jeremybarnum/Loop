@@ -165,6 +165,20 @@ extension PodLoanPhoneController {
         // now stages + commits unseen events; only the STATE transitions are gated.
         let isFinal = offer.released ?? true
         let canTransition = state == .loaned || state == .reclaimPending || state == .grantOffered
+        if !isStale, isFinal, canTransition, deps.isBluetoothPoweredOff() {
+            // A final offer hands this phone the pod, and the ack below is what lets the watch
+            // release it. With Bluetooth off the phone cannot reclaim: it would own a pod it
+            // cannot reach while a watch that was looping fine stands down. WatchConnectivity
+            // runs over WiFi, so the watch cannot see this — only this phone can (bench
+            // 2026-09-19 13:19: Bluetooth off for three minutes, hand-back ACKed in a second,
+            // then the settle ran to its 300 s ceiling with no pod round-trip and the watch's
+            // last temp still running). The ack is already the gate, so the refusal is simply
+            // no ack: the watch's deadline keeps the loan and its glance says End did not
+            // complete. No new message. Records in this offer stay unacked on the watch and
+            // ride the next one.
+            handbackDiag(offer.epoch, "final offer NOT accepted — this phone's Bluetooth is off, so it could not reclaim the pod; no ack, the watch keeps the loan")
+            return
+        }
         if !isStale, isFinal, canTransition {
             state = .reconciling
             // Record the wrist's loop mode BEFORE the unpause runs, so the restore path reads

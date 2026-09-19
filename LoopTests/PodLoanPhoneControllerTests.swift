@@ -161,6 +161,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// describing a controller this one is not. Defaults reproduce a phone that has heard nothing
     /// from the watch this launch, which is the dead branch.
     func makeController(watchReachable: @escaping () -> Bool = { false },
+                        bluetoothPoweredOff: @escaping () -> Bool = { false },
                         lastWatchContact: @escaping () -> Date? = { nil },
                         now: @escaping () -> Date = { Date() },
                         whenProtectedDataAvailable: @escaping (@escaping () -> Void) -> Void = { $0() }) -> PodLoanPhoneController {
@@ -246,6 +247,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 self.lock.lock(); self.backgroundTaskEnds += 1; self.lock.unlock()
             },
             isWatchReachable: watchReachable,
+            isBluetoothPoweredOff: bluetoothPoweredOff,
             lastWatchContactAt: lastWatchContact,
             now: now
         ))
@@ -1409,6 +1411,32 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         waitUntil(timeout: 5, "dosing resumed") { self.lock.lock(); defer { self.lock.unlock() }; return self.pauseCalls.contains(false) }
         XCTAssertEqual(pauseCalls, [true, false], "the loan still closes and dosing resumes")
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed on the empty close")
+    }
+
+    /// Bench 2026-09-19: WatchConnectivity carries a hand-back over WiFi, so with this phone's
+    /// Bluetooth off the watch still saw it reachable, the final offer was ACKed, and the phone
+    /// owned a pod it could not reach. The ack is the gate; a phone that cannot reclaim withholds it.
+    func testFinalOfferIsNotAcceptedWhileThisPhonesBluetoothIsOff() throws {
+        var off = true
+        let controller = makeController(bluetoothPoweredOff: { [unowned self] in
+            self.lock.lock(); defer { self.lock.unlock() }; return off
+        })
+        let grant = establishLoan(controller)
+        let offer = try LoanMessage.handbackOffer(HandbackOffer(
+            epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+            events: [], tombstones: [], recovered: false, released: true)).transportDictionary()
+
+        controller.handleIncoming(userInfo: offer)
+        controller.queue.sync { }
+        XCTAssertEqual(controller.state, .loaned, "the phone does not take a pod it cannot reach")
+        if case .handbackAck? = lastSent() { XCTFail("no ack — the ack is what lets the watch release the pod") }
+        XCTAssertTrue(MockPumpManager.testConnectionReleased, "the pod stays lent; the watch keeps the loan")
+
+        // Bluetooth back on: the very same offer is accepted.
+        lock.lock(); off = false; lock.unlock()
+        controller.handleIncoming(userInfo: offer)
+        waitUntil(timeout: 5, "ack once Bluetooth is on") { if case .handbackAck? = self.lastSent() { return true }; return false }
+        waitForState(controller, .owner)
     }
 
     // MARK: - Field incident: stale offer clamps a LATER epoch's doses

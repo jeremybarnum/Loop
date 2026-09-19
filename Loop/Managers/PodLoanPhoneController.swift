@@ -240,6 +240,10 @@ final class PodLoanPhoneController {
         var beginReclaimBackgroundTask: () -> Void = {}
         var endReclaimBackgroundTask: () -> Void = {}
         var isWatchReachable: () -> Bool = { false }
+        /// Is this phone's Bluetooth definitely OFF (stock's `BluetoothProvider`, `.poweredOff`)?
+        /// A phone in that state cannot reclaim a pod, so it must not accept one. Transient
+        /// states (unknown, resetting) are NOT "off". Default false keeps tests unchanged.
+        var isBluetoothPoweredOff: () -> Bool = { false }
         /// When the phone last heard ANYTHING from the watch — any inbound WatchConnectivity
         /// funnel. This, not reachability, is what separates a live watch from a dead one at
         /// reclaim time: a watch holding the pod transfers its log every 300 s, metronomically
