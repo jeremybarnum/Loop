@@ -8,8 +8,42 @@
 //
 
 import XCTest
+import CoreBluetooth
 @testable import G7SensorKit
 @testable import WatchApp
+
+/// CBCentralManager with the restoration option raises in a test bundle (same seam the kit's own
+/// tests use).
+private class TestBluetoothManager: G7BluetoothManager {
+    override func makeCentralManager(queue: DispatchQueue) -> CBCentralManager {
+        return CBCentralManager(delegate: self, queue: queue)
+    }
+}
+
+/// The watch adopts a sensor by identity from the phone, so discovery — where stock latches the
+/// activation time — never runs. 2026-09-19: with it unknown, every reading was named "invalid",
+/// the store kept the first and dropped the rest as duplicates, and the loop ran on a frozen 128.
+final class G7AdoptedSensorActivationTests: XCTestCase {
+    private func message(_ hex: String) -> G7GlucoseMessage { G7GlucoseMessage(data: Data(hexadecimalString: hex)!)! }
+
+    func testAnAdoptedSensorLatchesItsActivationOnTheFirstReading() {
+        var state = G7CGMManagerState()
+        state.sensorID = "DXCMQj"            // adopted: identity known, activation not
+        let sensor = G7Sensor(mode: .direct, credentials: state.sensorCredentials, bluetoothManager: TestBluetoothManager())
+        let manager = G7CGMManager(state: state, sensor: sensor)
+        XCTAssertNil(manager.state.activatedAt)
+
+        let first = Date(timeIntervalSince1970: 1_789_000_000)
+        sensor.activationDate = first
+        manager.sensor(sensor, didRead: message("4e00c35501002601000106008a00060187000f"))
+        XCTAssertEqual(manager.state.activatedAt, first, "the reading's name is built from this")
+
+        // Each message re-estimates it by a fraction of a second; the name must not move with it.
+        sensor.activationDate = first.addingTimeInterval(0.4)
+        manager.sensor(sensor, didRead: message("4e00c35501002601000106008b00060187000f"))
+        XCTAssertEqual(manager.state.activatedAt, first, "latched, as stock latches it at discovery")
+    }
+}
 
 final class G7WatchAcquisitionTests: XCTestCase {
     private let anchor = Date(timeIntervalSince1970: 1_000_000)
