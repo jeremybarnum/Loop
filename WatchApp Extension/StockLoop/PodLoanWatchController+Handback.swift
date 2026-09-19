@@ -345,6 +345,9 @@ extension PodLoanWatchController {
         case .none:
             wedgeSuffix = ""
         }
+        // The hand-back is abandoned: nothing queued may speak for it later (field 2026-09-18:
+        // eight queued offers landed 65 min after a timeout and the phone reclaimed a live loan).
+        cancelQueuedHandbackOffers?()
         handbackRequested = false
         finalOfferSent = false
         if wasFinal, let manager = pumpManager {

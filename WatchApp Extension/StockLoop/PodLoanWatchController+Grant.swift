@@ -547,7 +547,8 @@ extension PodLoanWatchController {
         // R40(e): the loop manager starts every launch with EMPTY settings, so a resume must be
         // able to decode these again (bench 2026-09-18: a resumed loan had a pump, no schedule,
         // blank IOB). Persisted as the grant delivered them, decoded by the same function.
-        var payload: [String: Any] = ["raw": grant.therapySettingsRaw]
+        var payload: [String: Any] = ["raw": grant.therapySettingsRaw,
+                                      "interim": grant.supportsInterimHandback ?? false]   // the phone's capability, or a resume hands back single-phase
         if let supplement = grant.therapySettingsSupplementRaw { payload["supplement"] = supplement }
         defaults.set(payload, forKey: Keys.grantedTherapySettings)
         // Adopt the override the phone had running. Assigning it (rather than calling
