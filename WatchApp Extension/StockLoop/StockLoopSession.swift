@@ -138,7 +138,7 @@ final class StockLoopSession {
             let urgentOnly = dictionary["urgentOnly"] as? Bool == true   // a live hand-back offer is never queued (2026-09-19)
             guard urgent else {
                 if urgentOnly {
-                    SportLog.event("wc", "live hand-back offer NOT queued — urgent path unavailable (reachable \(session.isReachable), wedged \(wedged)); the 5 s deadline decides")
+                    SportLog.event("wc", "live hand-back offer NOT queued — urgent path unavailable (reachable \(session.isReachable), wedged \(wedged)); the resend loop retries")
                     return
                 }
                 enqueueSuperseding(dictionary)
@@ -147,7 +147,7 @@ final class StockLoopSession {
             session.sendMessage(dictionary, replyHandler: nil, errorHandler: { error in
                 loanController?.noteUrgentSendFailed()   // an erroring send means the link is re-establishing, not one-way wedged
                 if urgentOnly {
-                    SportLog.event("wc", "urgent send FAILED (\(error.localizedDescription)) — live hand-back offer NOT queued; the 5 s deadline decides")
+                    SportLog.event("wc", "urgent send FAILED (\(error.localizedDescription)) — live hand-back offer NOT queued; the resend loop retries")
                     return
                 }
                 SportLog.event("wc", "urgent send FAILED (\(error.localizedDescription)) — falling back to the queued path")

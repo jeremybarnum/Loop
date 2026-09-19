@@ -615,7 +615,7 @@ extension PodLoanWatchController {
             }
         }
         resendWorkItem = work
-        schedule(after: live ? 2 : 15, label: "handback-resend", execute: work)   // live: one more urgent try inside the 5 s deadline
+        schedule(after: 15, label: "handback-resend", execute: work)
     }
 
     func handleAck(_ ack: HandbackAck) {

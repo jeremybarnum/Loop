@@ -84,12 +84,18 @@ enum LoopStallWatchdog {
 enum HandbackStuckAlert {
 
     /// How long to wait for the phone's ack before giving up and resuming on the watch.
-    /// FIVE SECONDS (ruled 2026-09-19, Jeremy: "the phone is either there or it's not"). The
-    /// measured round trip for both hand-back phases is a third of a second; a live offer is
-    /// urgent-only and never queued (a queued offer landed 65 min late on 2026-09-18 and the
-    /// phone reclaimed a live loan), so there is nothing to wait for beyond a phone app slow to
-    /// wake. A false failure costs one more tap. Dead-loan drains keep their own resend budget.
-    static let interval: TimeInterval = 5
+    ///
+    /// TWO MINUTES, restored 2026-09-19 after five seconds was tried for half a day and was
+    /// wrong. "Is the phone there?" needs no timeout at all — reachability is checked at the
+    /// tap and End fails at once (R41). THIS budget times something else: the wait for a commit
+    /// acknowledgement AFTER the phone has been asked to take the pod, across two offers and a
+    /// pod read. Measured tap-to-closed: 2.4–6.0 s, one at 20.6 s; one ack arrived 12.7 s after
+    /// its final offer. At 5 s the watch gave up 2.4 s after SENDING the final offer; the phone
+    /// received it 0.6 s later, committed and acked, and both sides held the pod (bench
+    /// 2026-09-19 15:31). A short budget here manufactures the split it was meant to prevent.
+    /// The deeper flaw — resuming on ANY timer after a final offer is sent — is open; see
+    /// docs/OWNERSHIP.md.
+    static let interval: TimeInterval = 2 * 60
 
     private static let identifier = "sportmode.handbackStuck"
 
