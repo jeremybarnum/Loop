@@ -219,6 +219,10 @@ final class PodLoanWatchController {
     /// return path never got one. This is that hook. It changes NO safety property — the
     /// release stays gated on the ack — it just stops the ack from being starved.
     var onHandbackRuntimeHold: ((Bool) -> Void)?
+    /// The last End that did not complete, for the glance's transient line. The user has just
+    /// tapped End and is looking at the wrist, so the screen says it — not a notification
+    /// (Jeremy, 2026-09-19). In memory only; a new End clears it and the glance ages it out.
+    var handbackFailure: (at: Date, text: String)?
     var phase: Phase {
         didSet {
             defaults.set(phase.rawValue, forKey: Keys.phase)

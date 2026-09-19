@@ -42,6 +42,9 @@ extension PodLoanWatchController {
         /// Bluetooth off, or is powered down; all three are "can't reach it" and all three
         /// have the same remedy. Drives the hand-back wrist note.
         let phoneReachable: Bool
+        /// The last End that did not complete — the glance shows its text briefly.
+        let handbackFailedAt: Date?
+        let handbackFailureText: String?
         /// R40(b): a seize offer is pending (normal request timed out with a stored
         /// credential); the glance renders the deliberate confirm with this age.
         let seizeOfferIssuedAt: Date?
@@ -109,6 +112,8 @@ extension PodLoanWatchController {
                 handbackPending: handbackRequested,
                 handbackStartedAt: handbackStartedAt,
                 phoneReachable: isPhoneReachable(),
+                handbackFailedAt: handbackFailure?.at,
+                handbackFailureText: handbackFailure?.text,
                 seizeOfferIssuedAt: seizeOffer?.issuedAt,
                 reunionPromptVisible: reunionPromptActive)
     }

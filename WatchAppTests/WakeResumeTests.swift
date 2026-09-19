@@ -157,6 +157,7 @@ final class WakeResumeTests: XCTestCase {
         XCTAssertEqual(c.phase, .active, "the loan continues")
         XCTAssertNotNil(c.pumpManager, "the watch still holds the pod")
         XCTAssertTrue(sent.isEmpty, "no offer left the watch — nothing queued to land later")
+        XCTAssertNotNil(c.debugSnapshot().handbackFailureText, "and the glance has the reason to show, on screen rather than as a notification")
     }
 
     func testTeardownClearsSavedState() async {
