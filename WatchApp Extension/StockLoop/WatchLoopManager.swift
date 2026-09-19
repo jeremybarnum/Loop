@@ -922,6 +922,7 @@ final class WatchLoopManager {
         self.settingsProvider = WatchSettingsProvider(settings: settings)
         self.overrideHistory = overrideHistory
         self.settings = settings
+        self.lastLoopCompleted = UserDefaults.standard.object(forKey: Self.lastLoopCompletedKey) as? Date
         // The store overlays scheduled basal between pump events when it copies them into the
         // delivery store; it asks its delegate for that history (stock: DeviceDataManager).
         doseStore.delegate = self
@@ -1244,7 +1245,14 @@ final class WatchLoopManager {
     /// a successful enact — so display surfaces can show the decision instead of a blank.
     private var lastRecommendation: AutomaticDoseRecommendation?
 
-    private(set) var lastLoopCompleted: Date?
+    /// Persisted across relaunches, as the phone's is (stock reads `lastLoopCompleted` back
+    /// from the status context it wrote for the widget). Bench 2026-09-18: after a resume
+    /// (R40(e)) this was nil until the first cycle, so the ring opened gray for one cycle —
+    /// not what the phone does after a relaunch. Display only, like the value itself.
+    private static let lastLoopCompletedKey = "WatchLoopManager.lastLoopCompleted"
+    private(set) var lastLoopCompleted: Date? {
+        didSet { UserDefaults.standard.set(lastLoopCompleted, forKey: Self.lastLoopCompletedKey) }
+    }
 
     /// Forward-only seed of the loop-recency clock from the OTHER device (ring ruling
     /// 2026-08-23: recency is a property of the system; the boundary inherits). Display only —
