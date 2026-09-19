@@ -352,6 +352,10 @@ final class PodLoanWatchController {
         /// holds the pod: `teardownPump` clears it, so a relaunch that finds it knows the loan
         /// was ACTIVE when the process died and resumes it (R40(e)).
         static let pumpState = "PodLoanWatchController.pumpState"
+        /// The pod's delivered total when this watch took it — the baseline the hand-back's
+        /// reconciliation audits against. In memory only until 2026-09-19, so a resumed loan
+        /// handed back with "delivered=n/a" and the phone's audit was blind.
+        static let deliveredAtTakeover = "PodLoanWatchController.deliveredAtTakeover"
         /// What a resume needs from the grant beyond the pod state: the therapy-settings payload
         /// (raw snapshot + supplement), so it can run `decodeTherapySettings` exactly as the grant
         /// did, and the phone's hand-back capability flag. Written with the pump state, cleared
@@ -465,6 +469,8 @@ final class PodLoanWatchController {
         SportLog.event("loan", "RESUME: pump manager built")
         loopManager.settings = settings
         phoneSupportsInterimHandback = payload["interim"] as? Bool ?? false   // bench 2026-09-18: a resumed loan handed back "legacy single-phase"
+        phoneSupportsOverrideRecords = payload["overrideRecords"] as? Bool ?? false
+        deliveredAtTakeover = defaults.object(forKey: Keys.deliveredAtTakeover) as? Double
         manager.pumpManagerDelegate = self
         manager.delegateQueue = queue
         pumpManager = manager
@@ -474,6 +480,16 @@ final class PodLoanWatchController {
         phase = .active
         loopManager.pumpManager = manager
         onLoanActiveChanged?(true)
+        // The rest of stock's launch, in stock's order (DeviceDataManager.instantiateDeviceManagers,
+        // then LoopAppManager's `updateDisplayState`): tell the dose store when the restored pump
+        // last synced — without it the first cycle after every resume read "pump data too old" —
+        // then run the display update. Stock does not dose at launch and neither does this: the
+        // loop runs at the next reading.
+        let lastSync = manager.lastSync
+        Task { [loopManager] in
+            if let lastSync { try? await loopManager.recordPumpEvents([], lastReconciliation: lastSync, replacePendingEvents: false) }
+            loopManager.updateDisplayState()
+        }
         SportLog.event("loan", "RESUMED — epoch \(epoch ?? -1) rebuilt from saved pod state after a relaunch (R40(e): stock relaunch) · \(RuntimeStateLog.snapshot())")
     }
 
@@ -606,6 +622,7 @@ final class PodLoanWatchController {
         pumpManager?.pumpManagerDelegate = nil
         pumpManager = nil
         defaults.removeObject(forKey: Keys.pumpState)   // R40(e): no pod held, nothing to resume
+        defaults.removeObject(forKey: Keys.deliveredAtTakeover)
         defaults.removeObject(forKey: Keys.grantedTherapySettings)
         // The loan's insulin book ends with the loan: the phone owns the truth again.
         let loopManager = self.loopManager

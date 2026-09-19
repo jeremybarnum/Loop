@@ -120,6 +120,11 @@ struct GlanceUIState {
 @MainActor
 final class GlanceViewModel: ObservableObject {
     @Published var state = GlanceUIState()
+    /// False until the first controller snapshot arrives. The state above STARTS as idle, which
+    /// drew "Start Sport Mode" for a second or two at every launch — during a live loan that
+    /// reads as "the loan is gone" (bench 2026-09-19). Nothing actionable is drawn from a state
+    /// the glance has not yet asked about.
+    @Published var hasControllerState = false
 
     /// True while a loan is live or coming up, i.e. while this page is the one worth looking at.
     /// The host reads it to decide whether a phase change should pull the user here.
@@ -471,6 +476,7 @@ final class GlanceViewModel: ObservableObject {
         session.loanController.refreshDebugSnapshot()
         RuntimeStateLog.mark("glance.refresh.mirrorRead")
         guard let snap = session.loanController.mirroredDebugSnapshot else { return }
+        if !hasControllerState { hasControllerState = true }
         RuntimeStateLog.mark("glance.refresh.phase(\(snap.phase.rawValue))")
         defer { armFreshnessBoundaryRepaint() }
 
@@ -1125,7 +1131,7 @@ struct GlanceView: View {
     @ViewBuilder
     private var centerBlock: some View {
         switch model.state.phase {
-        case .idle:     idleCenter
+        case .idle:     if model.hasControllerState { idleCenter } else { Color.clear.frame(height: 1) }
         case .starting: startingCenter
         default:        standardCenter
         }

@@ -31,6 +31,8 @@ final class WakeResumeTests: XCTestCase {
         // The loop manager persists its last-loop time in the STANDARD defaults, process-wide,
         // and seeds forward-only: an earlier test's cycle would otherwise outrank this test's seed.
         UserDefaults.standard.removeObject(forKey: "WatchLoopManager.lastLoopCompleted")
+        UserDefaults.standard.removeObject(forKey: WatchLoopManager.closedLoopDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: WatchLoopManager.integralRCDefaultsKey)
     }
 
     /// What a grant leaves on disk: its therapy-settings payload — the stock snapshot (whose raw
@@ -40,7 +42,8 @@ final class WakeResumeTests: XCTestCase {
         let basal = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: 1.0)])!
         let raw = try! PropertyListSerialization.data(fromPropertyList: LoopSettings().rawValue, format: .binary, options: 0)
         let supplement = try! PropertyListSerialization.data(fromPropertyList: ["basalRateSchedule": basal.rawValue], format: .binary, options: 0)
-        defaults.set(["raw": raw, "supplement": supplement, "interim": true], forKey: PodLoanWatchController.Keys.grantedTherapySettings)
+        defaults.set(["raw": raw, "supplement": supplement, "interim": true, "overrideRecords": true],
+                     forKey: PodLoanWatchController.Keys.grantedTherapySettings)
     }
 
     override func tearDown() {
@@ -177,6 +180,33 @@ final class WakeResumeTests: XCTestCase {
         XCTAssertNotNil(c.pumpManager, "the watch still holds the pod")
         XCTAssertEqual(c.debugSnapshot().handbackFailureText, reason, "the glance shows the phone's own reason")
         XCTAssertFalse(c.debugSnapshot().handbackPending, "End is over — tap again once Bluetooth is back")
+    }
+
+    func testResumeRestoresEverythingALoanHadInstalled() async {
+        // ONE list, so the next field a grant installs cannot be forgotten silently. Found one at
+        // a time on the bench (settings, hand-back capability, last-loop time, then on 2026-09-19
+        // closed-loop mode and the delivery baseline) — each was loan state living in memory.
+        let live = await makeController()
+        live.loopManager.setClosedLoopEnabled(true, reason: "test")
+        live.loopManager.setIntegralRetrospectiveCorrection(true)
+        defaults.set(12.5, forKey: PodLoanWatchController.Keys.deliveredAtTakeover)
+
+        let c = await relaunch(phase: .active, savedState: readablePumpState)
+        XCTAssertNotNil(c.loopManager.settings.basalRateSchedule, "therapy settings")
+        XCTAssertTrue(c.loopManager.closedLoopEnabledNonBlocking, "closed-loop mode — bench: a resumed loan came back OPEN")
+        XCTAssertTrue(c.loopManager.isIntegralRetrospectiveCorrectionEnabled, "retrospective-correction mode")
+        XCTAssertTrue(c.phoneSupportsInterimHandback, "the phone's interim hand-back capability")
+        XCTAssertTrue(c.phoneSupportsOverrideRecords, "the phone's override-records capability")
+        XCTAssertEqual(c.deliveredAtTakeover, 12.5, "the delivery baseline — bench: the hand-back audit read delivered=n/a")
+        XCTAssertTrue(c.isLoanActiveNonBlocking, "the live-loan mirror")
+    }
+
+    func testClosedLoopDoesNotOutliveItsLoan() async {
+        let live = await makeController()
+        live.loopManager.setClosedLoopEnabled(true, reason: "test")
+        live.loopManager.resetClosedLoopForSessionEnd()
+        let next = await makeController()
+        XCTAssertFalse(next.loopManager.closedLoopEnabledNonBlocking, "loop mode is per loan: the next launch starts open")
     }
 
     func testTeardownClearsSavedState() async {

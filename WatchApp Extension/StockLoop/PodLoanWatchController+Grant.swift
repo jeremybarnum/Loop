@@ -548,7 +548,8 @@ extension PodLoanWatchController {
         // able to decode these again (bench 2026-09-18: a resumed loan had a pump, no schedule,
         // blank IOB). Persisted as the grant delivered them, decoded by the same function.
         var payload: [String: Any] = ["raw": grant.therapySettingsRaw,
-                                      "interim": grant.supportsInterimHandback ?? false]   // the phone's capability, or a resume hands back single-phase
+                                      "interim": grant.supportsInterimHandback ?? false,   // the phone's capabilities, or a resume loses them
+                                      "overrideRecords": grant.supportsOverrideRecords ?? false]
         if let supplement = grant.therapySettingsSupplementRaw { payload["supplement"] = supplement }
         defaults.set(payload, forKey: Keys.grantedTherapySettings)
         // Adopt the override the phone had running. Assigning it (rather than calling
@@ -835,6 +836,7 @@ extension PodLoanWatchController {
                     self.revokeCapturedDelivered = nil   // new loan, new baseline — never a stale capture
                     self.revokeCapturedDeliveredAt = nil
                     self.deliveredAtTakeover = delivered
+                    self.defaults.set(delivered, forKey: Keys.deliveredAtTakeover)
                     self.phase = .active
                     // R40 reunion identity: the seize is PROVEN only now — persist its token
                     // so the loan's offers echo it and the phone can retro-acknowledge. Every
