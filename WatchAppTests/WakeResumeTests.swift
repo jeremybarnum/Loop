@@ -40,7 +40,7 @@ final class WakeResumeTests: XCTestCase {
         let basal = BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: 1.0)])!
         let raw = try! PropertyListSerialization.data(fromPropertyList: LoopSettings().rawValue, format: .binary, options: 0)
         let supplement = try! PropertyListSerialization.data(fromPropertyList: ["basalRateSchedule": basal.rawValue], format: .binary, options: 0)
-        defaults.set(["raw": raw, "supplement": supplement], forKey: PodLoanWatchController.Keys.grantedTherapySettings)
+        defaults.set(["raw": raw, "supplement": supplement, "interim": true], forKey: PodLoanWatchController.Keys.grantedTherapySettings)
     }
 
     override func tearDown() {
@@ -94,6 +94,8 @@ final class WakeResumeTests: XCTestCase {
                       "the main-safe mirror is set — init loads the phase without its didSet (bench 2026-09-18: onboarding screen + blank IOB)")
         XCTAssertNotNil(c.loopManager.settings.basalRateSchedule,
                         "the granted therapy settings came back from disk (bench 2026-09-18: blank IOB, no schedule)")
+        XCTAssertTrue(c.phoneSupportsInterimHandback,
+                      "the phone's hand-back capability comes back with the grant payload (bench 2026-09-18: resumed loan handed back single-phase)")
         XCTAssertNotNil(defaults.dictionary(forKey: PodLoanWatchController.Keys.pumpState),
                         "the saved state stays on disk — the next relaunch resumes the same way")
     }

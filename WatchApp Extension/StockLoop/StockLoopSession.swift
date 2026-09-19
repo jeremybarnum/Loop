@@ -179,6 +179,13 @@ final class StockLoopSession {
                 : "hand-back runtime hold released")
         }
 
+        loanController.cancelQueuedHandbackOffers = {
+            let stale = WCSession.default.outstandingUserInfoTransfers.filter {
+                LoanMessage.peekKind(transport: $0.userInfo) == "handbackOffer"
+            }
+            stale.forEach { $0.cancel() }
+            SportLog.event("wc", "cancelled \(stale.count) queued hand-back offer(s) — the hand-back was abandoned, the loan continues")
+        }
         loanController.onLoanActiveChanged = { [weak self] active in
             guard let self = self else { return }
             if active {

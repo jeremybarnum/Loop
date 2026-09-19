@@ -465,6 +465,7 @@ final class PodLoanWatchController {
         }
         SportLog.event("loan", "RESUME: pump manager built")
         loopManager.settings = settings
+        phoneSupportsInterimHandback = payload["interim"] as? Bool ?? false   // bench 2026-09-18: a resumed loan handed back "legacy single-phase"
         manager.pumpManagerDelegate = self
         manager.delegateQueue = queue
         pumpManager = manager
