@@ -28,6 +28,9 @@ final class WakeResumeTests: XCTestCase {
         journalDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(at: journalDir, withIntermediateDirectories: true)
         defaults = UserDefaults(suiteName: "WakeResumeTests-\(UUID().uuidString)")!
+        // The loop manager persists its last-loop time in the STANDARD defaults, process-wide,
+        // and seeds forward-only: an earlier test's cycle would otherwise outrank this test's seed.
+        UserDefaults.standard.removeObject(forKey: "WatchLoopManager.lastLoopCompleted")
     }
 
     /// What a grant leaves on disk: its therapy-settings payload — the stock snapshot (whose raw
@@ -125,6 +128,18 @@ final class WakeResumeTests: XCTestCase {
             XCTAssertEqual(c.phase, .recoveredDrain, "\(phase) at relaunch drains")
             XCTAssertNil(c.pumpManager, "\(phase) never rebuilds the pump")
         }
+    }
+
+    func testLastLoopTimeSurvivesRelaunch() async {
+        // Display only, but it is what the ring reads: after a resume the ring must show the
+        // real age of the last cycle, as the phone's does after a relaunch, not "never".
+        let first = await makeController()
+        let completed = Date(timeIntervalSinceNow: -180)
+        first.loopManager.seedLastLoopCompleted(completed, source: "test")
+        let relaunched = await makeController()
+        XCTAssertEqual(relaunched.loopManager.lastLoopCompleted?.timeIntervalSince1970 ?? 0,
+                       completed.timeIntervalSince1970, accuracy: 0.001,
+                       "the last-loop time comes back from disk (bench 2026-09-18: gray ring for one cycle)")
     }
 
     func testTeardownClearsSavedState() async {
