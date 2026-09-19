@@ -219,6 +219,12 @@ final class PodLoanWatchController {
     /// return path never got one. This is that hook. It changes NO safety property — the
     /// release stays gated on the ack — it just stops the ack from being starved.
     var onHandbackRuntimeHold: ((Bool) -> Void)?
+    /// Cancel every hand-back offer still sitting in the queued transport. Wired by the session.
+    /// Field 2026-09-18: a hand-back tapped with the phone out of reach queued eight offers,
+    /// timed out after 120 s and the loan RESUMED — but the queued offers were never withdrawn.
+    /// They landed 65 min later when the link returned; the phone accepted a final hand-back
+    /// for a loan that was alive, went .owner, and both devices dosed the pod for three hours.
+    var cancelQueuedHandbackOffers: (() -> Void)?
     var phase: Phase {
         didSet {
             defaults.set(phase.rawValue, forKey: Keys.phase)
@@ -436,16 +442,28 @@ final class PodLoanWatchController {
         guard let payload = defaults.dictionary(forKey: Keys.grantedTherapySettings),
               let raw = payload["raw"] as? Data,
               let settings = Self.decodeTherapySettings(raw: raw, supplement: payload["supplement"] as? Data),
-              settings.basalRateSchedule != nil,
-              let manager = OmniPumpManager(rawState: savedState) else {
+              settings.basalRateSchedule != nil else {
+            defaults.removeObject(forKey: Keys.pumpState)
+            defaults.removeObject(forKey: Keys.grantedTherapySettings)
+            phase = .recoveredDrain
+            issueSessionEndedAlert()
+            SportLog.event("loan", "RESUME failed — therapy settings unreadable; falling back to a recovered drain")
+            return
+        }
+        // Bench 2026-09-18 21:00: on a launch the system made for Bluetooth, the resume logged the
+        // settings line and then NOTHING — no RESUMED, no failure, no pod line — while the glance
+        // kept rendering. Construction did not return. Bracket it so the next time says so.
+        SportLog.event("loan", "RESUME: building the pump manager from saved state")
+        guard let manager = OmniPumpManager(rawState: savedState) else {
             // Unreadable: fall back to what a relaunch did before — return the pod.
             defaults.removeObject(forKey: Keys.pumpState)
             defaults.removeObject(forKey: Keys.grantedTherapySettings)
             phase = .recoveredDrain
             issueSessionEndedAlert()
-            SportLog.event("loan", "RESUME failed — saved pod state or therapy settings unreadable; falling back to a recovered drain")
+            SportLog.event("loan", "RESUME failed — saved pod state unreadable; falling back to a recovered drain")
             return
         }
+        SportLog.event("loan", "RESUME: pump manager built")
         loopManager.settings = settings
         manager.pumpManagerDelegate = self
         manager.delegateQueue = queue
