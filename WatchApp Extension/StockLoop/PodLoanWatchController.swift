@@ -219,12 +219,6 @@ final class PodLoanWatchController {
     /// return path never got one. This is that hook. It changes NO safety property — the
     /// release stays gated on the ack — it just stops the ack from being starved.
     var onHandbackRuntimeHold: ((Bool) -> Void)?
-    /// Cancel every hand-back offer still sitting in the queued transport. Wired by the session.
-    /// Field 2026-09-18: a hand-back tapped with the phone out of reach queued eight offers,
-    /// timed out after 120 s and the loan RESUMED — but the queued offers were never withdrawn.
-    /// They landed 65 min later when the link returned; the phone accepted a final hand-back
-    /// for a loan that was alive, went .owner, and both devices dosed the pod for three hours.
-    var cancelQueuedHandbackOffers: (() -> Void)?
     var phase: Phase {
         didSet {
             defaults.set(phase.rawValue, forKey: Keys.phase)
@@ -354,8 +348,9 @@ final class PodLoanWatchController {
         /// holds the pod: `teardownPump` clears it, so a relaunch that finds it knows the loan
         /// was ACTIVE when the process died and resumes it (R40(e)).
         static let pumpState = "PodLoanWatchController.pumpState"
-        /// The grant's therapy-settings payload (raw snapshot + supplement), so a resume can run
-        /// `decodeTherapySettings` exactly as the grant did. Written with the pump state, cleared
+        /// What a resume needs from the grant beyond the pod state: the therapy-settings payload
+        /// (raw snapshot + supplement), so it can run `decodeTherapySettings` exactly as the grant
+        /// did, and the phone's hand-back capability flag. Written with the pump state, cleared
         /// with it. Stock has no watch-side therapy settings at all — on the wrist, the grant IS
         /// the settings, so its payload is the honest thing to keep.
         static let grantedTherapySettings = "PodLoanWatchController.grantedTherapySettings"
