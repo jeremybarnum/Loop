@@ -83,11 +83,13 @@ enum LoopStallWatchdog {
 
 enum HandbackStuckAlert {
 
-    /// How long to wait for the phone's ack before giving up and resuming on the watch. ~8
-    /// resends at 15 s — long enough to ride a briefly-asleep / out-of-range phone, short
-    /// enough not to strand the user. The un-dosed window in the final-hang case is just
-    /// open-loop scheduled basal (bounded, the validated E4 posture). Tune freely.
-    static let interval: TimeInterval = 2 * 60
+    /// How long to wait for the phone's ack before giving up and resuming on the watch.
+    /// FIVE SECONDS (ruled 2026-09-19, Jeremy: "the phone is either there or it's not"). The
+    /// measured round trip for both hand-back phases is a third of a second; a live offer is
+    /// urgent-only and never queued (a queued offer landed 65 min late on 2026-09-18 and the
+    /// phone reclaimed a live loan), so there is nothing to wait for beyond a phone app slow to
+    /// wake. A false failure costs one more tap. Dead-loan drains keep their own resend budget.
+    static let interval: TimeInterval = 5
 
     private static let identifier = "sportmode.handbackStuck"
 

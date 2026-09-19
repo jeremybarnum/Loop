@@ -144,6 +144,21 @@ final class WakeResumeTests: XCTestCase {
                        "the last-loop time comes back from disk (bench 2026-09-18: gray ring for one cycle)")
     }
 
+    func testLiveHandbackWithPhoneUnreachableFailsFastAndKeepsTheLoan() async {
+        // Ruled 2026-09-19: a live hand-back is never queued. Out of reach, End fails at once
+        // and the loan continues — no offer is sent, nothing can land later and take the pod.
+        let c = await relaunch(phase: .active, savedState: readablePumpState)
+        XCTAssertNotNil(c.pumpManager)
+        c.isPhoneReachable = { false }
+        var sent: [[String: Any]] = []
+        c.send = { sent.append($0) }
+        c.beginHandback()
+        c.queue.sync { }
+        XCTAssertEqual(c.phase, .active, "the loan continues")
+        XCTAssertNotNil(c.pumpManager, "the watch still holds the pod")
+        XCTAssertTrue(sent.isEmpty, "no offer left the watch — nothing queued to land later")
+    }
+
     func testTeardownClearsSavedState() async {
         let c = await relaunch(phase: .active, savedState: readablePumpState)
         XCTAssertNotNil(c.pumpManager)

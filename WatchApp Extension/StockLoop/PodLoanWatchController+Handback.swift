@@ -531,15 +531,29 @@ extension PodLoanWatchController {
         // driven off DebugSnapshot.phoneReachable. NOTE we do NOT abort on unreachable —
         // reachability flaps, and the queued offer lands the moment the phone returns (acking
         // within tens of milliseconds once reachable). Fast feedback, slow abort.
+        let live = !recovered && phase != .revoked && phase != .recoveredDrain
         let reachableNow = isPhoneReachable()
         if !reachableNow { handbackSawUnreachable = true }
+        if live, !reachableNow {
+            // A live hand-back needs the phone PRESENT, not reachable later: after it accepts,
+            // the phone must reclaim the pod over Bluetooth. A queued offer is accepted whenever
+            // the link returns — with the phone possibly nowhere near the pod, and possibly hours
+            // after this loan moved on (field 2026-09-18: eight queued offers landed 65 min after
+            // the hand-back had timed out; the phone reclaimed a live loan and both devices dosed
+            // for three hours). So a live offer is never queued: fail now, keep the loan, and let
+            // the user try again near the phone. Ruled 2026-09-19. Drains from a dead loan still
+            // queue — there is no live loan to conflict with and the records must land.
+            SportLog.event("loan", "HAND-BACK not possible — iPhone not reachable; Sport Mode continues (tap End again near the phone)")
+            handbackTimedOut()
+            return
+        }
         if lastHandbackReachable != reachableNow {
             SportLog.event("loan", reachableNow
                 ? "hand-back: iPhone reachable — offer should ack shortly"
-                : "hand-back: iPhone UNREACHABLE — offer queued, will land when it returns (still looping)")
+                : "drain: iPhone UNREACHABLE — offer queued, will land when it returns")
             lastHandbackReachable = reachableNow
         }
-        sendMessage(.handbackOffer(offer))
+        sendMessage(.handbackOffer(offer), urgentOnly: live)
 
         // Resend until ack (rows 9/10): same event IDs every retry by construction.
         resendWorkItem?.cancel()
@@ -594,7 +608,7 @@ extension PodLoanWatchController {
             }
         }
         resendWorkItem = work
-        schedule(after: 15, label: "handback-resend", execute: work)
+        schedule(after: live ? 2 : 15, label: "handback-resend", execute: work)   // live: one more urgent try inside the 5 s deadline
     }
 
     func handleAck(_ ack: HandbackAck) {
