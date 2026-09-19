@@ -58,11 +58,11 @@ final class WatchdogArmingTests: XCTestCase {
         XCTAssertEqual(intervals, expected, "the phone's exact ladder (ruling 2026-08-24)")
     }
 
-    func testHandbackStuckArmsAtFiveSeconds() {
+    func testHandbackStuckArmsAtTwoMinutes() {
         HandbackStuckAlert.arm()
         let reqs = pending()
         XCTAssertEqual(reqs.count, 1)
-        XCTAssertEqual(interval(of: reqs[0]), 5, "ruled 2026-09-19: a live hand-back is urgent-only; the phone is there or it is not")
+        XCTAssertEqual(interval(of: reqs[0]), 2 * 60, "this times a COMMIT acknowledgement, not presence — 5 s split the pod on 2026-09-19")
     }
 
     // MARK: - Replacement, which is the whole mechanism
