@@ -545,6 +545,12 @@ final class PodLoanWatchController {
             // unactionable on the wrist.
             SportLog.event("loan", "phone NACKed our payload — build mismatch; the loan will not start")
         case .denied(let denied):
+            // The phone refused a HAND-BACK (its Bluetooth is off): stop now, keep the loan, and
+            // put its reason on the glance. No timer involved — the phone has answered.
+            if (phase == .active && handbackRequested) || phase == .handingBack {
+                handbackTimedOut(refusal: denied.reason)
+                return
+            }
             // The phone refused — show why instead of hanging on "requesting…".
             requestTimeoutWork?.cancel()
             if phase == .requested || phase == .idle || phase == .recoveredDrain {

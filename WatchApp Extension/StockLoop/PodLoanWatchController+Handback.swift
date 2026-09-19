@@ -330,13 +330,15 @@ extension PodLoanWatchController {
     /// app, in which case this state restore runs on the next wake).
     /// `unreachable`: the phone could not be reached at all, so no offer was sent (R41) —
     /// as opposed to an offer that went unanswered for the deadline.
-    func handbackTimedOut(unreachable: Bool = false) {
-        let why = unreachable
-            ? "not possible — iPhone not reachable, no offer sent"
-            : "timed out (\(Int(HandbackStuckAlert.interval))s) — iPhone never acked"
-        handbackFailure = (now(), unreachable
+    /// `refusal`: the phone answered and said no (its reason is shown as-is).
+    func handbackTimedOut(unreachable: Bool = false, refusal: String? = nil) {
+        let why: String
+        if let refusal { why = "REFUSED by the phone — \(refusal)" }
+        else if unreachable { why = "not possible — iPhone not reachable, no offer sent" }
+        else { why = "timed out (\(Int(HandbackStuckAlert.interval))s) — iPhone never acked" }
+        handbackFailure = (now(), refusal ?? (unreachable
             ? NSLocalizedString("iPhone not reachable — still running", comment: "Glance transient: End failed, phone unreachable")
-            : NSLocalizedString("iPhone didn't respond — still running", comment: "Glance transient: End failed, no ack"))
+            : NSLocalizedString("iPhone didn't respond — still running", comment: "Glance transient: End failed, no ack")))
         resendWorkItem?.cancel()
         handbackDeadline = nil
         handbackStartedAt = nil

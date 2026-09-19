@@ -1427,10 +1427,20 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             events: [], tombstones: [], recovered: false, released: true)).transportDictionary()
 
         controller.handleIncoming(userInfo: offer)
-        controller.queue.sync { }
+        waitUntil(timeout: 5, "refusal sent") { if case .denied? = self.lastSent() { return true }; return false }
+        guard case .denied(let refusal)? = lastSent() else { return XCTFail("expected a refusal") }
+        XCTAssertTrue(refusal.reason.contains("Bluetooth"), "the watch shows this reason as-is, so it must say why")
         XCTAssertEqual(controller.state, .loaned, "the phone does not take a pod it cannot reach")
-        if case .handbackAck? = lastSent() { XCTFail("no ack — the ack is what lets the watch release the pod") }
         XCTAssertTrue(MockPumpManager.testConnectionReleased, "the pod stays lent; the watch keeps the loan")
+
+        // The INTERIM offer that opens End is refused too — that is what makes it quick.
+        let interim = try LoanMessage.handbackOffer(HandbackOffer(
+            epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+            events: [], tombstones: [], recovered: false, released: false)).transportDictionary()
+        controller.handleIncoming(userInfo: interim)
+        controller.queue.sync { }
+        if case .handbackAck? = lastSent() { XCTFail("an interim offer is not acked either while Bluetooth is off") }
+        XCTAssertEqual(controller.state, .loaned)
 
         // Bluetooth back on: the very same offer is accepted.
         lock.lock(); off = false; lock.unlock()

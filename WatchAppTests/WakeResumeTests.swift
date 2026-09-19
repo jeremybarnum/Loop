@@ -160,6 +160,25 @@ final class WakeResumeTests: XCTestCase {
         XCTAssertNotNil(c.debugSnapshot().handbackFailureText, "and the glance has the reason to show, on screen rather than as a notification")
     }
 
+    func testPhoneRefusalEndsTheHandbackAtOnceAndKeepsTheLoan() async throws {
+        // Goal (a), 2026-09-19: with the phone's Bluetooth off, End is refused and the watch
+        // knows at once — no budget to wait out. The phone says so; the watch shows its reason.
+        let c = await relaunch(phase: .active, savedState: readablePumpState)
+        c.isPhoneReachable = { true }
+        var sent = 0
+        c.send = { _ in sent += 1 }
+        c.beginHandback()
+        c.queue.sync { }
+        XCTAssertEqual(sent, 1, "the interim offer went out")
+        let reason = "iPhone Bluetooth is off — still running"
+        c.handleIncoming(userInfo: try LoanMessage.denied(LoanDenied(reason: reason)).transportDictionary(), channel: .urgent)
+        c.queue.sync { }
+        XCTAssertEqual(c.phase, .active, "the loan continues")
+        XCTAssertNotNil(c.pumpManager, "the watch still holds the pod")
+        XCTAssertEqual(c.debugSnapshot().handbackFailureText, reason, "the glance shows the phone's own reason")
+        XCTAssertFalse(c.debugSnapshot().handbackPending, "End is over — tap again once Bluetooth is back")
+    }
+
     func testTeardownClearsSavedState() async {
         let c = await relaunch(phase: .active, savedState: readablePumpState)
         XCTAssertNotNil(c.pumpManager)
