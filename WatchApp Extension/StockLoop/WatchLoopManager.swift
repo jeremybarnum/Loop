@@ -340,7 +340,15 @@ final class WatchLoopManager {
     /// intake, aimed at a pod mid-takeover. (Today that shot goes wide — the pump is not wired
     /// yet at the inheritance call — but a race that merely misses is still a race.) No cancel
     /// here by construction: the session is over, there is no pod on the wrist to command.
+    /// Loan state this manager owns is persisted where it changes and reloaded at init, as the
+    /// phone persists `dosingEnabled` in its settings. Bench 2026-09-19: both lived in memory,
+    /// so a relaunched loan came back OPEN loop — and the phone then inherited OPEN at hand-back.
+    static let closedLoopDefaultsKey = "WatchLoopManager.closedLoopEnabled"
+    static let integralRCDefaultsKey = "WatchLoopManager.integralRetrospectiveCorrection"
+    var isIntegralRetrospectiveCorrectionEnabled: Bool { dataAccessQueue.sync { integralRetrospectiveCorrectionEnabled } }
+
     func resetClosedLoopForSessionEnd() {
+        UserDefaults.standard.set(false, forKey: Self.closedLoopDefaultsKey)
         closedLoopMirrorLock.lock()
         _closedLoopMirror = false
         closedLoopMirrorLock.unlock()
@@ -352,6 +360,7 @@ final class WatchLoopManager {
     /// `reason` exists so the log distinguishes a wrist tap from the grant-inherited mode —
     /// otherwise every field log claims the user did it.
     func setClosedLoopEnabled(_ enabled: Bool, reason: String = "by user") {
+        UserDefaults.standard.set(enabled, forKey: Self.closedLoopDefaultsKey)   // before the queue hop: a kill right after the tap keeps it
         // Mirror synchronously so a hand-back offer built immediately after a wrist tap
         // carries the value the user just chose, not the one before it.
         closedLoopMirrorLock.lock()
@@ -923,6 +932,10 @@ final class WatchLoopManager {
         self.overrideHistory = overrideHistory
         self.settings = settings
         self.lastLoopCompleted = UserDefaults.standard.object(forKey: Self.lastLoopCompletedKey) as? Date
+        let closed = UserDefaults.standard.bool(forKey: Self.closedLoopDefaultsKey)
+        self._closedLoopEnabled = closed
+        self._closedLoopMirror = closed
+        self.integralRetrospectiveCorrectionEnabled = UserDefaults.standard.bool(forKey: Self.integralRCDefaultsKey)
         // The store overlays scheduled basal between pump events when it copies them into the
         // delivery store; it asks its delegate for that history (stock: DeviceDataManager).
         doseStore.delegate = self
@@ -1187,6 +1200,7 @@ final class WatchLoopManager {
     /// status). FIFO on the serial queue therefore guarantees the RC type is set before the
     /// first prediction reads it. See docs/PREDICTION_FIDELITY.md.
     func setIntegralRetrospectiveCorrection(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: Self.integralRCDefaultsKey)
         dataAccessQueue.async {
             self.integralRetrospectiveCorrectionEnabled = enabled
             SportLog.event("loan", "retrospective correction: \(enabled ? "INTEGRAL" : "standard") (from grant)")
@@ -2045,6 +2059,19 @@ final class WatchLoopManager {
     ///   the entry joins the prediction, and the target range switches to the pre-meal range
     ///   (`presumingMealEntry:`), which is exactly why passing it matters rather than just
     ///   adding a carb effect.
+    /// Stock's `LoopDataManager.updateDisplayState()`, which `LoopAppManager` runs once at launch:
+    /// the algorithm over STORED data, nothing enacted. IOB, COB and the forecast are right the
+    /// moment the app is back, instead of blank until the next reading drives a dosing cycle
+    /// (bench 2026-09-19: COB read "—" for 3.5 min after a relaunch with glucose 401 s old).
+    /// `publishHUDContext` already is that run — it computes the `.manualBolus` recommendation,
+    /// which is exactly what stock's display update asks the algorithm — so this only schedules it.
+    func updateDisplayState() {
+        dataAccessQueue.async {
+            self.publishHUDContext()
+            self.refreshGlanceData()
+        }
+    }
+
     func recommendManualBolus(potentialCarbEntry: NewCarbEntry? = nil,
                               completion: @escaping (Swift.Result<ManualBolusRecommendation, Error>) -> Void) {
         dataAccessQueue.async {
@@ -2444,13 +2471,21 @@ extension WatchLoopManager: CGMManagerDelegate {
             // covers for a dead direct link would otherwise look healthy. (It once also had to name
             // WHICH of two BLE stacks produced the sample; there is only one now.)
             SportLog.event("glucose",
-                "INGEST src=direct-G7 stored=\(kept.count)/\(deliveredCount) · latest \(latestDesc)\(batchTag)")
+                "INGEST src=direct-G7 kept=\(kept.count)/\(deliveredCount) · latest \(latestDesc)\(batchTag)")   // "kept" by the duplicate check; the WRITE is logged only if it fails
             guard !kept.isEmpty else { completion(); return }
             Task {
                 do {
                     _ = try await self.glucoseStore.addGlucoseSamples(kept)
+                    // The store's latest must now be at least as new as what was just written.
+                    // Bench 2026-09-19: it stayed frozen at an older sample for two readings
+                    // while this path logged success, and the loop dosed on the old value.
+                    if let newest = kept.map(\.date).max(),
+                       (self.glucoseStore.latestGlucose?.startDate ?? .distantPast) < newest.addingTimeInterval(-1) {
+                        SportLog.event("glucose", "STORE LATEST IS STALE after a write — wrote up to \(newest), store says \(self.glucoseStore.latestGlucose.map { String(describing: $0.startDate) } ?? "nil") [glucose-store]")
+                    }
                 } catch {
                     self.log.error("Failure adding glucose samples: %{public}@", String(describing: error))
+                    SportLog.event("glucose", "STORE WRITE FAILED — \(kept.count) reading(s) NOT written: \(error) [glucose-store]")
                 }
                 // Nothing to invalidate: momentum is derived inside the algorithm from the
                 // glucose it is handed, so the next cycle picks these readings up by reading
