@@ -138,6 +138,11 @@ final class GlanceViewModel: ObservableObject {
         ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.isLoanActiveNonBlocking ?? false
     }
 
+    /// A saved session is being rebuilt after a relaunch (seconds normally; forty after a power-up).
+    var isResuming: Bool {
+        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.isResumingNonBlocking ?? false
+    }
+
     var wantsFocus: Bool {
         switch state.phase {
         case .starting, .active, .handingBack, .draining: return true
@@ -592,6 +597,9 @@ final class GlanceViewModel: ObservableObject {
                 // End did not complete. Said here, on the line the user is looking at, for
                 // twenty seconds — long enough to read, short enough not to outlive its moment.
                 s.transientText = text
+            } else if let at = snap.startNoteAt, let text = snap.startNoteText,
+                      Date().timeIntervalSince(at) < 90 {
+                s.transientText = text   // e.g. insulin booked at Start; long enough to be seen after the tap
             }
             s.reunionPrompt = snap.reunionPromptVisible
             // A manual bolus spends most of its wall-clock waiting on the radio arbiter, with
@@ -1131,7 +1139,12 @@ struct GlanceView: View {
     @ViewBuilder
     private var centerBlock: some View {
         switch model.state.phase {
-        case .idle:     if model.hasControllerState { idleCenter } else { Color.clear.frame(height: 1) }
+        case .idle:
+            if model.hasControllerState { idleCenter }
+            else if model.isResuming {
+                Text(NSLocalizedString("Resuming session…", comment: "Glance: a saved Sport Mode session is being rebuilt after a relaunch"))
+                    .font(.footnote).foregroundColor(.secondary)
+            } else { Color.clear.frame(height: 1) }
         case .starting: startingCenter
         default:        standardCenter
         }

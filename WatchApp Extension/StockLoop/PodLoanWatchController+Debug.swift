@@ -45,6 +45,8 @@ extension PodLoanWatchController {
         /// The last End that did not complete — the glance shows its text briefly.
         let handbackFailedAt: Date?
         let handbackFailureText: String?
+        let startNoteAt: Date?
+        let startNoteText: String?
         /// R40(b): a seize offer is pending (normal request timed out with a stored
         /// credential); the glance renders the deliberate confirm with this age.
         let seizeOfferIssuedAt: Date?
@@ -69,6 +71,14 @@ extension PodLoanWatchController {
         loanActiveMirrorLock.lock()
         defer { loanActiveMirrorLock.unlock() }
         return _loanActiveMirror
+    }
+
+    /// A saved session is being rebuilt. The rebuild runs on `queue`, so no snapshot can be
+    /// published while it lasts; this is what the glance has to go on.
+    var isResumingNonBlocking: Bool {
+        loanActiveMirrorLock.lock()
+        defer { loanActiveMirrorLock.unlock() }
+        return _resumingMirror
     }
 
 
@@ -114,6 +124,8 @@ extension PodLoanWatchController {
                 phoneReachable: isPhoneReachable(),
                 handbackFailedAt: handbackFailure?.at,
                 handbackFailureText: handbackFailure?.text,
+                startNoteAt: startNote?.at,
+                startNoteText: startNote?.text,
                 seizeOfferIssuedAt: seizeOffer?.issuedAt,
                 reunionPromptVisible: reunionPromptActive)
     }

@@ -223,6 +223,11 @@ final class PodLoanWatchController {
     /// tapped End and is looking at the wrist, so the screen says it — not a notification
     /// (Jeremy, 2026-09-19). In memory only; a new End clears it and the glance ages it out.
     var handbackFailure: (at: Date, text: String)?
+    /// What a Start wants the wrist to say once it is dosing — today, insulin it had to book.
+    var startNote: (at: Date, text: String)?
+    /// The pod total the grant's copy carried, and the records it came with; consumed at ACTIVE.
+    var takeoverCopyTotal: (units: Double, asOf: Date)?
+    var takeoverCopyRecords: [LoanDoseRecord] = []
     var phase: Phase {
         didSet {
             defaults.set(phase.rawValue, forKey: Keys.phase)
@@ -390,6 +395,14 @@ final class PodLoanWatchController {
         let savedPumpState = phase == .active ? defaults.dictionary(forKey: Keys.pumpState) : nil
         if let savedPumpState {
             pendingResumeState = savedPumpState
+            // The session IS live from this moment; only its pump manager is not built yet, and
+            // after a power-up that has taken forty seconds. Everything that asks "is a session
+            // live?" without touching the queue gets the true answer now, not when the rebuild ends.
+            loanActiveMirrorLock.lock()
+            _loanActiveMirror = true
+            _resumingMirror = true
+            loanActiveMirrorLock.unlock()
+            loopManager.beginAwaitingPumpManager()
         } else if journal.hasUndrainedEvents {
             phase = .recoveredDrain
             issueSessionEndedAlert()
@@ -438,7 +451,16 @@ final class PodLoanWatchController {
     /// this watch's own BLE handle (patched in at the grant, then persisted by the manager), so
     /// BlePodComms auto-connects from it at init with no discovery. The journal is untouched:
     /// an active loan's undrained records are the normal checkpoint backlog, not a drain.
+    private func endResuming() {
+        loanActiveMirrorLock.lock()
+        _resumingMirror = false
+        loanActiveMirrorLock.unlock()
+        _ = loopManager.endAwaitingPumpManager()   // every exit, including the failures
+        notifyUI()
+    }
+
     private func resumeSavedLoanOnQueue(_ savedState: PumpManager.RawStateValue) {
+        defer { endResuming() }
         // Settings first: the loop manager starts every launch empty, and a pump without a basal
         // schedule cannot dose — the grant refuses exactly that ("therapy settings incomplete").
         // Bench 2026-09-18: before this, a resumed loan had a pump, no schedule, and a blank IOB.
@@ -486,9 +508,14 @@ final class PodLoanWatchController {
         // then run the display update. Stock does not dose at launch and neither does this: the
         // loop runs at the next reading.
         let lastSync = manager.lastSync
+        let readingWaited = loopManager.endAwaitingPumpManager()
         Task { [loopManager] in
             if let lastSync { try? await loopManager.recordPumpEvents([], lastReconciliation: lastSync, replacePendingEvents: false) }
             loopManager.updateDisplayState()
+            if readingWaited {
+                SportLog.event("loan", "RESUME: a reading arrived while the pump manager was being built — running its cycle now")
+                loopManager.checkPumpDataAndLoop()
+            }
         }
         SportLog.event("loan", "RESUMED — epoch \(epoch ?? -1) rebuilt from saved pod state after a relaunch (R40(e): stock relaunch) · \(RuntimeStateLog.snapshot())")
     }
@@ -748,6 +775,8 @@ final class PodLoanWatchController {
     /// delegateQueue and must never be sync'd from the UI (see the snapshot mirror below).
     let loanActiveMirrorLock = NSLock()
     var _loanActiveMirror = false
+    /// True from launch until a saved session's pump manager has been rebuilt. Main-safe.
+    var _resumingMirror = false
 
     /// Lock-guarded mirror of the last snapshot, refreshed asynchronously on `queue`.
     ///
