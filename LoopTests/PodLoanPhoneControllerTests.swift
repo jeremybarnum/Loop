@@ -2798,6 +2798,10 @@ extension PodLoanPhoneControllerTests {
         tick(controller)
         waitForState(controller, .owner)
         XCTAssertNil(controller.holdLapseNoticedAt)
+        // A lapse is an automatic pill tap: a watch that is alive but unheard is TOLD, so it
+        // drains its records and stops instead of dosing on beside the phone.
+        lock.lock(); let told = sent.contains { if case .revoke = $0 { return true }; return false }; lock.unlock()
+        XCTAssertTrue(told, "the revoke goes out — true whenever it lands, harmless if it never does")
     }
 
     /// Coming back into range, the phone notices an hour of silence at once — while the watch,
