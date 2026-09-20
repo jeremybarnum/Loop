@@ -130,60 +130,72 @@ Switches that routinely take tens of seconds and cost sensor reads: entry stays 
 
 ## As built on this branch (SportMode-podDecides)
 
-Built by subtraction from the loan, one step per commit, each with both test suites green.
+*Revised 2026-09-20 after the objectives were ranked: (1) hypoglycemia risk, defined as paths
+that can actually happen against this code; (2) low-hassle experience; (3) dosing accuracy;
+(4) lean and stock-shaped — plus transparency and control for the user, weighed against safety.
+Automatic ownership ("pod decides" as a policy) was dropped: Start and End stay taps. What is
+here is the explicit loan, hardened and leaner. One step per commit, both suites green.*
 
-**Step 1 — the hold expires by itself.** The watch's hold on the pod is its last message
-being recent. Every watch cycle that computes and lands sends the ordinary record batch,
-empty or not, stamped with its send time; an empty one is never queued. The phone renews
-the hold from each message's *send* time, never its arrival. Fifteen minutes of silence is
-a lapse; the phone then waits one cycle of last call (a phone walking back into range
-notices an hour of silence at once, while the watch is one cycle from speaking) and takes
-the pod back down the same road as the user's pill tap — so a watch that is alive but
-unheard is told, drains its records and stops. No message has to arrive for the phone to
-resume. The lapse only runs while the phone is near the body, judged by its own sensor reading
-being fresh: a phone left at home hears nothing for the same reason it cannot reach the pod, and
-must not claim a pod it cannot see. On the watch, released means released: after the final hand-back offer it never
-resumes by timer; it lets the pod go and keeps offering its records.
+**The watch reports every cycle; the phone warns when it stops.** Every watch cycle that
+computes and lands sends the ordinary record batch, empty or not, stamped with its send time.
+The phone judges it by that stamp, never by its arrival. If the reports stop while the phone
+is beside the body — its own sensor reading fresh — the phone WARNS at about 20, 40 and 60
+minutes and does nothing else: a watch that is alive but unheard is still dosing, and taking
+the pod behind its back would put a second controller beside one that knows nothing of the
+phone's insulin. Taking the pod back is the user's tap. A phone left at home says nothing.
 
-**Step 2 — the phone stands aside on the watch's word only.** The phone no longer infers
-a loan from the pod's own evidence (foreign sessions plus a quiet watch). It still stands
-aside when the watch says it holds the pod, and that announced loan expires like any other
-hold and audits from this phone's own last pod read. An audit consumes its anchors, so no
-later reclaim can audit a loan that had already closed. The +90 s diagnostic re-audit is
-gone.
+**Released means released.** After its final hand-back offer the watch never resumes by timer
+(2026-09-19: it did, 0.6 s before the phone committed — two controllers for 7.6 minutes). It
+lets the pod go, keeps offering its records, and says so.
 
-**Already in the driver (OmnipodKit a893b8c):** a pod that comes back from another
-controller is read before it is written to.
+**The phone stands aside on the watch's word only.** It no longer infers a loan from the pod's
+own evidence. A loan the watch announces (a seized pod) is anchored at the phone's own last
+pod read and warned about like any other when the watch goes quiet.
 
-**Policy is unchanged:** Start is a tap; End is a tap; the phone is preferred.
+**A finished session erases its stored starting total**, so no later take-back can check
+itself against a session that had already closed (2026-09-19: 3.45 U booked twice).
+
+**At every Start the watch checks the pod's total against its copy** and books what the copy
+cannot explain as a bolus delivered now — the phone's rule at reclaim, mirrored. This is the
+forgotten-phone case: a bolus given on the phone after the copy was made is otherwise in
+nobody's book on the wrist. Same arithmetic as the phone (LoanReconciler, now in both
+targets), plus the share of a bolus still delivering when the copy was read. It does not open
+the loop.
+
+**Power-up.** The context the watch writes during a session says onboarding is complete, so
+the stock pages appear at once after a restart, as in stock. A saved session counts as live
+from launch, not from the end of its rebuild; the Sport Mode page says "Resuming session…"
+meanwhile. A reading that arrives during the rebuild runs its cycle when the rebuild ends.
+Timing marks bracket the pump manager's construction, which has taken 4, 18 and 40 s after a
+power-up.
+
+**Already in the driver (OmnipodKit a893b8c):** a pod that comes back from another controller
+is read before it is written to.
 
 **Documented, not built:**
 
-- The watch yielding on the *pod's* evidence of the phone (a total it cannot explain). Today
-  it yields on the phone's word only — the revoke.
-- An announced loan's audit does not count the phone's own temp still running at its last
-  pod read.
-- A bolus sent over a bolus the other device is still delivering.
-- A command whose outcome is unknown when the other device steps in must be settled from the
-  pod's total, not from the pod's count of commands received.
-- Automatic entry (the watch starting by itself when the phone stops dosing), and the
-  two-way carb merge it would need.
-- Still present and now redundant, to be removed once the bench has run: the takeover
-  confirmation and its five-minute timer, the status query, the ghost-grant and superseding-
-  loan special cases.
+- Refreshing the watch's copy every phone cycle and on every bolus or carb entry (today: every
+  30 minutes or on a settings change). The next build; it is the only thing that can carry carbs.
+- The phone's answers riding the watch's own message as its reply (2026-09-19: an End took 38 s,
+  35 of them an acknowledgement in the slow queue).
+- The phone not refreshing the standby copy when no pod is paired — needs a "has a device to
+  lend" question on the pump protocol, which does not exist yet.
+- A bolus sent over a bolus the other device is still delivering; a command whose outcome is
+  unknown when the other device steps in.
+- An announced loan's audit does not count the phone's own temp still running at its last read.
+- Redundant once the above has bench time: the takeover confirmation and its timer, the status
+  query, the ghost-grant and superseding-loan special cases.
 
 **Bench checks for this build:**
 
-1. *A silent watch.* Start, let it run two cycles, power the watch off. Phone log: `hold
-   LAPSED` at about 15 minutes, then `reclaim — hold lapsed` about 6 minutes later, a verified
-   reclaim and an audit verdict. Nobody has to touch anything.
-2. *Coming home.* Start, leave the phone behind for 20 minutes or more, walk back. Phone
-   log: `hold LAPSED` on return, then `hold RENEWED during last call`. The watch keeps the
-   pod.
-3. *An ordinary End.* Unchanged, and the first pod command the phone sends afterwards is a
-   status read or a cancel — never a temp basal.
-4. *End with the phone's acknowledgement lost* (hard to stage): the watch shows End Not
-   Confirmed, stops dosing, and the phone resumes on the queued offer or at the lapse.
+1. Power the watch off mid-session with the phone beside you: `watch SILENT` in the phone log at
+   about 15 minutes, a warning at about 20, nothing taken. Tap the pod tile to take it back.
+2. Leave the phone behind for 30 minutes and come back: no warning.
+3. Power the watch off and on: the normal pages at once, "Resuming session…", then the session;
+   three `[init]` lines in the watch log bracket the slow step.
+4. Tap End within seconds of a phone sensor reading (the race the pod-fault fix covers).
+5. Bolus on the phone, turn its Bluetooth off, Start without it: the watch log says how much it
+   booked, and the wrist says so for ninety seconds.
 
 ## The invariant
 
