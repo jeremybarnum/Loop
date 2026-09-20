@@ -79,6 +79,7 @@ final class StockLoopSession {
 
         // The one question the hand-back UI needs answered.
         loanController.isPhoneReachable = { WCSession.default.isReachable }
+        stack.loopManager.onCycleLanded = { [weak loanController] in loanController?.renewHold() }
 
         // The offer superseder's request-kind twin (#120 idiom): a request still queued for a
         // dark phone after the watch stops wanting it is a delayed detonator — delivered at

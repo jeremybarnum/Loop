@@ -44,6 +44,7 @@ extension PodLoanPhoneController {
             }
             return
         }
+        noteHoldRenewal(sentAt: batch.sentAt)
         stage(events: batch.events, tombstones: batch.tombstones)
         // Records synced + odometer observed = a checkpoint candidate: the audit base can
         // advance past a window that reconciles, so a later forced reclaim judges only the
@@ -106,6 +107,8 @@ extension PodLoanPhoneController {
             clearInferredLoanYield(reason: "retro-ack — the inferred loan is now the adopted loan e\(offer.epoch)")
             epoch = offer.epoch
             state = .loaned
+            holdRenewedAt = offer.handedBackAt
+            holdLapseNoticedAt = nil
             // The seized loan's audit anchors at ITS OWN seize-time odometer read
             // (offer.odometer.deliveredAtStart); anchors from before the blackout must not
             // widen the window or misattribute the phone's own pre-blackout delivery.
@@ -164,6 +167,7 @@ extension PodLoanPhoneController {
         // watch could never drain it and held the pod forever. Every non-stale offer
         // now stages + commits unseen events; only the STATE transitions are gated.
         let isFinal = offer.released ?? true
+        if !isStale, !isFinal { noteHoldRenewal(sentAt: offer.handedBackAt) }   // still dosing, and saying so
         let canTransition = state == .loaned || state == .reclaimPending || state == .grantOffered
         if !isStale, canTransition, deps.isBluetoothPoweredOff() {
             // Any hand-back offer — the interim one that opens End, or the final one — asks this

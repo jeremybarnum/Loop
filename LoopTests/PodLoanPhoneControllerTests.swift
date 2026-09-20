@@ -140,6 +140,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         MockPumpManager.testConnectionReleased = false
         MockPumpManager.testOdometer = nil
         UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.deliveredAuthoritative")
+        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.holdRenewedAt")
+        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.holdLapseNoticedAt")
         UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.residualHistory")
         // The residual-bank purge is one-shot per install, so its flag has to be cleared per test
         // or whichever test happens to construct the first controller consumes it for the rest.
@@ -2895,4 +2897,82 @@ final class ReclaimLadderRecorder {
         return work?.isCancelled ?? false
     }
 
+}
+
+// MARK: - The watch's hold expires by itself
+
+extension PodLoanPhoneControllerTests {
+
+    private func tick(_ controller: PodLoanPhoneController) {
+        controller.considerHoldLapse()
+        controller.queue.sync { }
+    }
+
+    /// 2026-09-08: a watch went silent mid-loan and the phone waited four hours for a person.
+    /// The hold is only as good as its last renewal: three missed cycles, one cycle of last call,
+    /// and the phone takes the pod back without any message having to arrive.
+    func testASilentWatchLosesItsHoldAndThePhoneTakesThePodBack() throws {
+        let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
+        _ = establishLoan(controller)
+
+        clock = clock.addingTimeInterval(.minutes(14))
+        tick(controller)
+        XCTAssertEqual(controller.state, .loaned, "inside the hold: nothing happens")
+        XCTAssertNil(controller.holdLapseNoticedAt)
+
+        clock = clock.addingTimeInterval(.minutes(2))     // 16 min of silence
+        tick(controller)
+        XCTAssertEqual(controller.state, .loaned, "a lapse is noticed first, not acted on: last call")
+        XCTAssertNotNil(controller.holdLapseNoticedAt)
+
+        clock = clock.addingTimeInterval(.minutes(5))     // last call still running
+        tick(controller)
+        XCTAssertEqual(controller.state, .loaned)
+
+        clock = clock.addingTimeInterval(.minutes(2))     // last call over, still silent
+        tick(controller)
+        waitForState(controller, .owner)
+        XCTAssertNil(controller.holdLapseNoticedAt)
+    }
+
+    /// Coming back into range, the phone notices an hour of silence at once — while the watch,
+    /// alive and dosing all along, is one cycle from renewing. Last call is what keeps the phone
+    /// from taking a live pod on every return home.
+    func testARenewalDuringLastCallKeepsThePhoneOut() throws {
+        let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
+        let grant = establishLoan(controller)
+
+        clock = clock.addingTimeInterval(.minutes(90))
+        tick(controller)
+        XCTAssertNotNil(controller.holdLapseNoticedAt, "silence noticed; last call running")
+
+        clock = clock.addingTimeInterval(.minutes(3))
+        controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
+            DoseRecordBatch(epoch: grant.epoch, events: [], tombstones: [], sentAt: clock)).transportDictionary())
+        controller.queue.sync { }
+        XCTAssertNil(controller.holdLapseNoticedAt, "the watch spoke: last call is off")
+
+        clock = clock.addingTimeInterval(.minutes(10))    // well past where last call would have ended
+        tick(controller)
+        XCTAssertEqual(controller.state, .loaned, "the hold is fresh again; the phone stays out")
+    }
+
+    /// 2026-09-18: a queued message landed 65 minutes late and was believed. A renewal counts by
+    /// when the watch SENT it, never by when it arrived.
+    func testABatchThatSatInAQueueRenewsNothing() throws {
+        let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
+        let grant = establishLoan(controller)
+        let sentEarly = clock.addingTimeInterval(.minutes(1))
+
+        clock = clock.addingTimeInterval(.minutes(20))
+        controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
+            DoseRecordBatch(epoch: grant.epoch, events: [], tombstones: [], sentAt: sentEarly)).transportDictionary())
+        controller.queue.sync { }
+        tick(controller)
+        XCTAssertNotNil(controller.holdLapseNoticedAt, "19 minutes old on arrival: it renews nothing")
+
+        clock = clock.addingTimeInterval(.minutes(7))
+        tick(controller)
+        waitForState(controller, .owner)
+    }
 }

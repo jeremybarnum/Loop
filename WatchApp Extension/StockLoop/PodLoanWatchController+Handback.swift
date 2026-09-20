@@ -358,14 +358,23 @@ extension PodLoanWatchController {
         }
         handbackRequested = false
         finalOfferSent = false
-        if wasFinal, let manager = pumpManager {
-            // finalize nilled loopManager.pumpManager but self.pumpManager still HOLDS the pod —
-            // re-point the loop and re-loop, no re-takeover needed.
-            phase = .active
-            loopManager.pumpManager = manager
-            onLoanActiveChanged?(true)
-            SportLog.event("loan", "HAND-BACK \(why) (final); resumed Sport Mode on the watch (still holding the pod)\(wedgeSuffix)")
-            loopManager.checkPumpDataAndLoop()   // re-establish a temp this cycle
+        if wasFinal {
+            // RELEASED MEANS RELEASED. The watch stopped dosing when it sent the final offer, and
+            // from there it cannot know whether the phone took the pod: on 2026-09-19 it resumed
+            // by timer 0.6 s before the phone committed — two controllers for 7.6 minutes. It
+            // stays stopped, lets go of the pod so the phone can reach it, and keeps offering its
+            // records. The phone resumes on the offer, or by itself once the hold lapses.
+            SportLog.event("loan", "HAND-BACK \(why) (final); staying RELEASED — the pod is let go, records keep offering, and the phone resumes on receipt or when the hold lapses\(wedgeSuffix)")
+            teardownPump()
+            finalOfferSentAt = nil
+            deliveredAtTakeover = nil
+            onLoanActiveChanged?(false)
+            // Drain-only from here, even with no records left: the offer itself is the news
+            // ("released"), and it may now be queued — late, it is still true.
+            phase = .recoveredDrain
+            sendHandbackOffer(freshened: false, recovered: true)
+            issueProtocolAlert(title: NSLocalizedString("End Not Confirmed", comment: "Watch alert title: the phone has not confirmed a hand-back"),
+                               body: NSLocalizedString("The watch has stopped dosing. Your iPhone takes over when it hears from the watch, or by itself within about 20 minutes. Open Loop on the iPhone to hurry it.", comment: "Watch alert body: released but unconfirmed hand-back"))
         } else {
             // Interim hang: never stopped dosing; phase already .active. Just abort the drain.
             SportLog.event("loan", "HAND-BACK \(why) (interim); Sport Mode continues on the watch\(wedgeSuffix)")
@@ -382,8 +391,11 @@ extension PodLoanWatchController {
             // believed to be watch-side only, and 2026-08-15 produced a PHONE-side instance
             // where restarting the watch app did nothing and only reinstalling the phone app
             // cleared it. The classifier cannot tell the two apart, so the copy must not either.
-            issueProtocolAlert(title: "End Not Confirmed",
-                               body: "Your iPhone is reachable but hasn't confirmed. Reopening Loop on both devices usually clears this.")
+            // The released case has already said its piece above; one alert, not two.
+            if !wasFinal {
+                issueProtocolAlert(title: "End Not Confirmed",
+                                   body: "Your iPhone is reachable but hasn't confirmed. Reopening Loop on both devices usually clears this.")
+            }
         case .none:
             break
         }

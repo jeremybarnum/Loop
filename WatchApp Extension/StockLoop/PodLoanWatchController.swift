@@ -637,7 +637,12 @@ final class PodLoanWatchController {
 
     /// Best-effort streaming (§2.4): the phone accumulates the record even if the
     /// watch later dies. Loss is harmless — the cursor and IDs absorb redelivery.
-    func streamRecords() {
+    ///
+    /// It is also the watch's HOLD on the pod, which is nothing more than this message being
+    /// recent. `renewal` is the once-per-landed-cycle call: it goes out even with nothing new to
+    /// report, because its arrival — judged by its send stamp — is what keeps the phone out.
+    /// The phone takes the pod back by itself when the renewals stop.
+    func streamRecords(renewal: Bool = false) {
         guard phase == .active, let epoch = epoch else { return }
         // Events that are IN-FLIGHT (mint→classification) or
         // whose verdict chase is LIVE stay out of the stream — the phone's commit set
@@ -646,7 +651,8 @@ final class PodLoanWatchController {
         // (tombstones only filter staged events). They flow on classification.
         let events = journal.unackedEvents()
         let tombstones = journal.pendingTombstones()
-        guard !events.isEmpty || !tombstones.isEmpty else { return }
+        let empty = events.isEmpty && tombstones.isEmpty
+        guard renewal || !empty else { return }
         // What the watch streams to the phone. (Removed the old "implied Σ" — a sum of temp
         // rate×FULL-window with overlaps untruncated. It was a diagnostic-only over-count that fed
         // no logic and consistently mislead: it exceeds physically-possible delivery, so it is NOT a
@@ -668,9 +674,21 @@ final class PodLoanWatchController {
             odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest,
                                             freshenSucceeded: false, asOf: asOf)
         }
-        SportLog.event("handback", String(format: "stream: %d event(s), %d tombstone(s)%@", events.count, tombstones.count,
-                                          odometer.map { String(format: " · odo %.2f U @ %@ [checkpoint]", $0.deliveredLatest, DateFormatter.localizedString(from: $0.asOf ?? .distantPast, dateStyle: .none, timeStyle: .medium)) } ?? ""))
-        sendMessage(.doseRecordBatch(DoseRecordBatch(epoch: epoch, events: events, tombstones: tombstones, odometer: odometer)))
+        if !empty {
+            SportLog.event("handback", String(format: "stream: %d event(s), %d tombstone(s)%@", events.count, tombstones.count,
+                                              odometer.map { String(format: " · odo %.2f U @ %@ [checkpoint]", $0.deliveredLatest, DateFormatter.localizedString(from: $0.asOf ?? .distantPast, dateStyle: .none, timeStyle: .medium)) } ?? ""))
+        }
+        // A renewal with no records is never queued: late, it would renew nothing, and the next
+        // cycle sends a fresh one. Records still queue — they have to arrive eventually.
+        sendMessage(.doseRecordBatch(DoseRecordBatch(epoch: epoch, events: events, tombstones: tombstones,
+                                                     odometer: odometer, sentAt: self.now())),
+                    urgentOnly: empty)
+    }
+
+    /// The end of a loop cycle that computed and landed — the same condition that refreshes the
+    /// watch's own dead-man.
+    func renewHold() {
+        queue.async { self.streamRecords(renewal: true) }
     }
 
     // MARK: - State owned by the extensions (stored properties cannot live in an extension)

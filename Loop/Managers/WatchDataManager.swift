@@ -209,6 +209,8 @@ final class WatchDataManager: NSObject {
         // state, watch capability, settings fingerprint, 30-min floor) lives inside it,
         // so this is one enqueued no-op almost always.
         podLoanController.considerDormantRefresh()
+        // The watch's hold on the pod lapses by itself when its renewals stop — same pulse.
+        podLoanController.considerHoldLapse()
         // PHONE MIRROR detector A rides the same pulse — all gating lives inside it.
         podLoanController.considerInferredLoan()
 

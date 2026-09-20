@@ -253,6 +253,7 @@ extension PodLoanPhoneController {
 
     func handleTakeoverComplete(_ complete: TakeoverComplete) {
         guard complete.epoch == epoch, state == .grantOffered else { return }
+        noteHoldRenewal(sentAt: complete.firstPodStatus.timestamp)
         grantOfferedAt = nil
         t1WorkItem?.cancel()
         cancelNotification(id: NotificationID.t1)

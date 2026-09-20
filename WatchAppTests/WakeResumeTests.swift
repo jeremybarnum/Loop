@@ -209,6 +209,66 @@ final class WakeResumeTests: XCTestCase {
         XCTAssertFalse(next.loopManager.closedLoopEnabledNonBlocking, "loop mode is per loan: the next launch starts open")
     }
 
+    // MARK: the hold
+
+    func testEveryLandedCycleRenewsTheHoldEvenWithNothingToReport() async throws {
+        // The watch's hold on the pod is this message being recent — so it goes out on every
+        // landed cycle, stamped, and an empty one is never queued (late, it would renew nothing).
+        let c = await relaunch(phase: .active, savedState: readablePumpState)
+        var sent: [[String: Any]] = []
+        c.send = { sent.append($0) }
+        let before = Date()
+        c.renewHold()
+        c.queue.sync { }
+        XCTAssertEqual(sent.count, 1, "one renewal")
+        let dictionary = try XCTUnwrap(sent.first)
+        XCTAssertEqual(dictionary["urgentOnly"] as? Bool, true, "an empty renewal is never queued")
+        guard case .doseRecordBatch(let batch)? = try LoanMessage.decode(fromTransport: dictionary) else {
+            return XCTFail("the renewal is the ordinary record batch")
+        }
+        XCTAssertEqual(batch.epoch, 7)
+        XCTAssertTrue(batch.events.isEmpty)
+        XCTAssertEqual(try XCTUnwrap(batch.sentAt).timeIntervalSince(before), 0, accuracy: 2,
+                       "stamped with its send time — the phone judges freshness by this")
+    }
+
+    func testAnIdleWatchRenewsNothing() async {
+        let c = await makeController()
+        var sent = 0
+        c.send = { _ in sent += 1 }
+        c.renewHold()
+        c.queue.sync { }
+        XCTAssertEqual(sent, 0, "no loan, no hold")
+    }
+
+    func testAReleasedWatchNeverResumesByTimer() async throws {
+        // 2026-09-19: the watch gave up 2.4 s after its final offer and resumed dosing; the phone
+        // committed 0.6 s later — two controllers for 7.6 minutes. Once the watch has released,
+        // no timer brings it back: it lets go of the pod and keeps offering its records.
+        let c = await relaunch(phase: .active, savedState: readablePumpState)
+        c.isPhoneReachable = { true }
+        var sent: [[String: Any]] = []
+        c.send = { sent.append($0) }
+        c.beginHandback()
+        c.queue.sync { }
+        c.handleIncoming(userInfo: try LoanMessage.handbackAck(HandbackAck(epoch: 7, committedCursor: 0)).transportDictionary(), channel: .urgent)
+        c.queue.sync { }; c.queue.sync { }   // the ack finalizes; finalize sends the final offer on the queue
+        XCTAssertEqual(c.phase, .handingBack, "released: the final offer is out")
+        XCTAssertNil(c.loopManager.pumpManager, "and dosing has stopped")
+
+        c.queue.sync { c.handbackTimedOut() }
+
+        XCTAssertNotEqual(c.phase, .active, "released means released")
+        XCTAssertEqual(c.phase, .recoveredDrain, "drain-only: the offer itself is the news")
+        XCTAssertNil(c.pumpManager, "the pod is let go, so the phone can reach it")
+        XCTAssertNil(c.loopManager.pumpManager, "no dosing")
+        guard case .handbackOffer(let offer)? = try LoanMessage.decode(fromTransport: try XCTUnwrap(sent.last)) else {
+            return XCTFail("it keeps offering")
+        }
+        XCTAssertEqual(offer.released, true)
+        XCTAssertTrue(offer.recovered, "as a drain: it may be queued now — late, it is still true")
+    }
+
     func testTeardownClearsSavedState() async {
         let c = await relaunch(phase: .active, savedState: readablePumpState)
         XCTAssertNotNil(c.pumpManager)
