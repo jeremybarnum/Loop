@@ -252,6 +252,9 @@ final class PodLoanPhoneController {
         /// heard, which the reclaim ladder treats as dead. Default nil keeps the state-machine
         /// tests constructing unchanged.
         var lastWatchContactAt: () -> Date? = { nil }
+        /// When this phone last read the sensor ITSELF. The sensor is on the body, like the pod:
+        /// a phone with a fresh reading is near both, a phone without one can reach neither.
+        var latestGlucoseDate: () -> Date? = { nil }
         var now: () -> Date = { Date() }
     }
 

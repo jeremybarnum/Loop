@@ -19,6 +19,13 @@ extension PodLoanPhoneController {
     /// How long the hold outlives its last renewal. Three missed cycles.
     static let holdLapse: TimeInterval = .minutes(15)
 
+    /// The lapse only runs while THIS PHONE is near the body — judged by its own sensor reading
+    /// being fresh, since the sensor sits on the body like the pod. A phone left at home hears
+    /// nothing from the watch for the same reason it cannot reach the pod: it is somewhere else.
+    /// Taking the pod "back" from there would be an assertion it cannot act on, ending in a
+    /// five-minute settle that finds no pod and opens the loop on a session that was fine.
+    static let nearTheBodyWindow: TimeInterval = .minutes(11)
+
     /// Last call. A phone walking back into range notices an hour of silence at once, while the
     /// watch — alive, and dosing the whole time — is one cycle from renewing. So the phone takes
     /// the pod only after it has been awake to the lapse for a cycle and still heard nothing.
@@ -85,6 +92,12 @@ extension PodLoanPhoneController {
         let now = deps.now()
         let silence = now.timeIntervalSince(renewed)
         guard silence > Self.holdLapse else {
+            if holdLapseNoticedAt != nil { holdLapseNoticedAt = nil }
+            return
+        }
+        guard let reading = deps.latestGlucoseDate(), now.timeIntervalSince(reading) <= Self.nearTheBodyWindow else {
+            // Away from the body: silence is expected, and there is no pod here to take. Last call
+            // starts over when the phone is back beside it.
             if holdLapseNoticedAt != nil { holdLapseNoticedAt = nil }
             return
         }
