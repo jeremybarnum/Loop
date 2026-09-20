@@ -2862,6 +2862,63 @@ extension PodLoanPhoneControllerTests {
         XCTAssertNil(controller.loanStartedAt)
     }
 
+    /// Bench 2026-09-20: the phone took the pod back while the watch was powered off, the queued
+    /// revoke arrived 31 minutes late, and the watch resumed the session — both ran the pod for 68
+    /// minutes while the phone dropped every batch in silence. Records from a closed session are
+    /// the watch saying "I still hold the pod"; the answer is the revoke, again.
+    func testRecordsFromAClosedSessionAreAnsweredWithTheRevoke() throws {
+        let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
+        let grant = establishLoan(controller)
+        MockPumpManager.testOdometer = 10.0
+        controller.forceReclaimToOwner(reason: "test: pod tile, watch powered off")
+        waitForState(controller, .owner)
+        controller.queue.sync { }
+        func revokes() -> Int {
+            lock.lock(); defer { lock.unlock() }
+            return sent.filter { if case .revoke(let r) = $0 { return r.epoch == grant.epoch }; return false }.count
+        }
+        let before = revokes()
+
+        let batch = try LoanMessage.doseRecordBatch(
+            DoseRecordBatch(epoch: grant.epoch, events: [], tombstones: [])).transportDictionary()
+        controller.handleIncoming(userInfo: batch)
+        controller.handleIncoming(userInfo: batch)   // the watch sends two per cycle
+        controller.queue.sync { }
+        XCTAssertEqual(revokes(), before + 1, "one revoke per cycle's worth of records, not one per batch")
+
+        clock = clock.addingTimeInterval(.minutes(5))
+        controller.handleIncoming(userInfo: batch)
+        controller.queue.sync { }
+        XCTAssertEqual(revokes(), before + 2, "and again at the next cycle, for as long as the watch keeps reporting")
+        XCTAssertEqual(controller.state, .owner, "the phone keeps the pod throughout")
+    }
+
+    /// The watch's standing copy follows the book: a bolus or a carb entry refreshes it without
+    /// waiting for the 30-minute floor, a burst collapses to one, and a change inside the short
+    /// floor is not lost.
+    func testTheStandingCopyFollowsTheBook() {
+        UserDefaults.standard.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
+        defer { UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.watchSupportsSeize") }
+        let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
+        func copies() -> Int {
+            lock.lock(); defer { lock.unlock() }
+            return sent.filter { if case .dormantGrant = $0 { return true }; return false }.count
+        }
+        controller.considerDormantRefresh()
+        waitUntil(timeout: 5, "first copy") { copies() == 1 }
+
+        clock = clock.addingTimeInterval(.minutes(2))          // far inside the 30-minute floor
+        controller.considerDormantRefresh()
+        controller.queue.sync { }
+        usleep(300_000)
+        XCTAssertEqual(copies(), 1, "nothing changed — the periodic floor still holds")
+
+        for _ in 0..<5 { controller.considerDormantRefresh(bookChanged: true) }   // carbs, then the bolus, in a burst
+        waitUntil(timeout: 5, "the book changed") { copies() == 2 }
+        usleep(400_000)
+        XCTAssertEqual(copies(), 2, "one burst, one copy")
+    }
+
     /// A loan the watch ANNOUNCED (a seized pod) is anchored at this phone's own last pod read —
     /// never at an earlier loan's — and a silent one is warned about like any other.
     func testALoanTheWatchAnnouncedIsAnchoredHereAndWarnedAboutWhenSilent() throws {

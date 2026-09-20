@@ -42,6 +42,17 @@ extension PodLoanPhoneController {
                UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) != nil {
                 engageInferredLoanYield(evidence: "future-epoch batch e\(batch.epoch) at .owner (live seized loan streaming)")
             }
+            // Records for a session this phone has already closed are live proof the watch still
+            // believes it holds the pod — a revoke it never received (bench 2026-09-20: queued
+            // while the watch was powered off, 31 min late; both devices ran the pod for 68 min).
+            // Say so again. A revoke carries only the epoch and the watch guards on it, so a watch
+            // that did hand back records it and nothing else happens.
+            if state == .owner, batch.epoch <= epoch,
+               lastClosedSessionRevokeAt.map({ deps.now().timeIntervalSince($0) >= 20 }) ?? true {
+                lastClosedSessionRevokeAt = deps.now()
+                handbackDiag(batch.epoch, "records from a CLOSED session — the watch still thinks it holds the pod; revoke e\(batch.epoch) sent again")
+                sendMessage(.revoke(Revoke(epoch: batch.epoch)))
+            }
             return
         }
         noteHoldRenewal(sentAt: batch.sentAt)

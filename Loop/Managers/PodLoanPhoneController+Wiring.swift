@@ -81,6 +81,16 @@ extension WatchDataManager {
                 // history it seeds. A grant that outgrows the urgent channel fails HERE, and
                 // without the number there is nothing to correlate against.
                 let size = (dictionary[LoanProtocol.userInfoKey] as? Data)?.count ?? 0
+                // The standing copy is whole-book, latest-only: a newer one replaces any still
+                // waiting in the queue (stock does the same for its settings transfer), so an
+                // unreachable watch is owed one copy, not one per cycle.
+                if kind == "dormantGrant" {
+                    for transfer in session.outstandingUserInfoTransfers
+                    where (transfer.userInfo[LoanProtocol.userInfoKey] as? Data)
+                        .flatMap({ try? JSONDecoder().decode(LoanKindPeek.self, from: $0) })?.kind == "dormantGrant" {
+                        transfer.cancel()
+                    }
+                }
                 guard LoanMessage.isInteractiveHandshake(transport: dictionary),
                       session.isReachable else {
                     self?.log.default("Loan send kind=%{public}@ path=queued (interactive=%{public}@ reachable=%{public}@ bytes=%{public}d)",

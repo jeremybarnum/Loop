@@ -595,6 +595,10 @@ final class PodLoanPhoneController {
     // MARK: - State for PodLoanPhoneController+Grant.swift
 
     var lastDormantRefreshAt: Date?
+    /// A refresh the book asked for inside the floor; one runs when the floor expires.
+    var trailingDormantRefreshPending = false
+    /// Throttle for the revoke that answers records from a closed session (two batches per cycle).
+    var lastClosedSessionRevokeAt: Date?
     var lastDormantSettingsFingerprint: String?
 
     // MARK: - State for PodLoanPhoneController+Mirror.swift
