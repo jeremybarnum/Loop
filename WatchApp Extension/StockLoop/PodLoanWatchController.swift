@@ -463,6 +463,13 @@ final class PodLoanWatchController {
             // unactionable on the wrist.
             SportLog.event("loan", "phone NACKed our payload — build mismatch; the loan will not start")
         case .denied(let denied):
+            // A refusal of a HAND-BACK (the phone's Bluetooth is off — it could not reclaim the
+            // pod): stop the hand-back now and keep the loan. Before the request-refusal
+            // handling below, which is about Start.
+            if (phase == .active && handbackRequested) || phase == .handingBack {
+                handbackTimedOut(refusal: denied.reason)
+                return
+            }
             // The phone refused — show why instead of hanging on "requesting…".
             requestTimeoutWork?.cancel()
             if phase == .requested || phase == .idle || phase == .recoveredDrain {
@@ -2035,7 +2042,17 @@ final class PodLoanWatchController {
     /// later hand-back (the phone dedups by event ID); the odometer reconciles the totals then.
     /// The pre-scheduled HandbackStuckAlert delivers the wrist notification (even from a suspended
     /// app, in which case this state restore runs on the next wake).
-    private func handbackTimedOut() {
+    ///
+    /// 2026-09-20 (ported from next-dev): two more ways in, and one way out removed.
+    /// `unreachable` — End tapped (or a resend due) with the phone out of reach: fail at once,
+    /// nothing was sent. `refusal` — the phone said no out loud (its Bluetooth is off).
+    /// And RELEASED MEANS RELEASED: once the FINAL offer is out this watch cannot know whether
+    /// the phone took the pod, so no timer may bring the loan back (see the branch below).
+    private func handbackTimedOut(unreachable: Bool = false, refusal: String? = nil) {
+        let why: String
+        if let refusal { why = "REFUSED by the phone — \(refusal)" }
+        else if unreachable { why = "not possible — iPhone not reachable, no offer sent" }
+        else { why = "timed out (\(Int(HandbackStuckAlert.interval))s) — iPhone never acked" }
         resendWorkItem?.cancel()
         handbackDeadline = nil
         handbackStartedAt = nil
@@ -2055,18 +2072,35 @@ final class PodLoanWatchController {
         }
         handbackRequested = false
         finalOfferSent = false
-        if wasFinal, let manager = pumpManager {
-            // finalize nilled loopManager.pumpManager but self.pumpManager still HOLDS the pod —
-            // re-point the loop and re-loop, no re-takeover needed.
-            phase = .active
-            loopManager.pumpManager = manager
-            loopManager.loanDoseRecorder = self
-            onLoanActiveChanged?(true)
-            SportLog.event("loan", "HAND-BACK timed out (final, \(Int(HandbackStuckAlert.interval))s) — iPhone never acked; resumed Sport Mode on the watch (still holding the pod)\(wedgeSuffix)")
-            loopManager.checkPumpDataAndLoop()   // re-establish a temp this cycle
+        if wasFinal {
+            // RELEASED MEANS RELEASED. This watch stopped dosing when it sent the final offer,
+            // and from there it cannot know whether the phone took the pod. It used to resume
+            // here ("still holding the pod"); on the next-dev line, 2026-09-19 15:31, that resume
+            // fired 0.6 s before the phone committed the same offer — two controllers for 7.6
+            // minutes. So: stay stopped, let go of the pod so the phone can reach it, and keep
+            // offering the records as a drain. A final offer for an epoch this watch never
+            // resumes is true whenever it lands, which is why THIS one may be queued.
+            SportLog.event("loan", "HAND-BACK \(why) (final); staying RELEASED — the pod is let go and the records keep offering; the phone resumes when the offer lands\(wedgeSuffix)")
+            teardownPump()                 // let go of the pod so the phone can reach it
+            finalOfferSentAt = nil
+            deliveredAtTakeover = nil
+            onLoanActiveChanged?(false)
+            phase = .recoveredDrain        // drain-only, even with no records left: the offer itself is the news
+            sendHandbackOffer(freshened: false, recovered: true)
+            // The pre-scheduled "still running on your watch" notification would now be false.
+            HandbackStuckAlert.disarm()
+            issueProtocolAlert(title: "End Not Confirmed",
+                               body: "The watch has stopped dosing and keeps sending its records. If your iPhone hasn't taken over in a minute or two, open Loop on the iPhone and tap the pod tile.")
         } else {
-            // Interim hang: never stopped dosing; phase already .active. Just abort the drain.
-            SportLog.event("loan", "HAND-BACK timed out (interim, \(Int(HandbackStuckAlert.interval))s) — iPhone never acked; Sport Mode continues on the watch\(wedgeSuffix)")
+            // Interim: never stopped dosing; phase already .active. Just abort the drain.
+            SportLog.event("loan", "HAND-BACK \(why) (interim); Sport Mode continues on the watch\(wedgeSuffix)")
+            if unreachable || refusal != nil {
+                // Known at once, so say it at once: the pre-scheduled notification is two
+                // minutes away and her signal must not be two minutes late.
+                HandbackStuckAlert.disarm()
+                issueProtocolAlert(title: "Couldn't End Sport Mode",
+                                   body: refusal ?? "Your iPhone isn't reachable, so Sport Mode is still running on your watch. Tap End again when the iPhone is nearby.")
+            }
         }
         switch wedge {
         case .sessionReestablishing:
@@ -2080,8 +2114,11 @@ final class PodLoanWatchController {
             // believed to be watch-side only, and 2026-08-15 produced a PHONE-side instance
             // where restarting the watch app did nothing and only reinstalling the phone app
             // cleared it. The classifier cannot tell the two apart, so the copy must not either.
-            issueProtocolAlert(title: "End Not Confirmed",
-                               body: "Your iPhone is reachable but hasn't confirmed. Reopening Loop on both devices usually clears this.")
+            // The released case has already said its piece above; one alert, not two.
+            if !wasFinal {
+                issueProtocolAlert(title: "End Not Confirmed",
+                                   body: "Your iPhone is reachable but hasn't confirmed. Reopening Loop on both devices usually clears this.")
+            }
         case .none:
             break
         }
@@ -2247,18 +2284,29 @@ final class PodLoanWatchController {
         // nothing but "ending…" for minutes, even though `reachable false` is on every send
         // line in the log the whole time: the
         // signal exists, it was just never surfaced. Log transitions here; the glance note is
-        // driven off DebugSnapshot.phoneReachable. NOTE we do NOT abort on unreachable —
-        // reachability flaps, and the queued offer lands the moment the phone returns (acking
-        // within tens of milliseconds once reachable). Fast feedback, slow abort.
+        // driven off DebugSnapshot.phoneReachable.
+        //
+        // A LIVE offer (this watch still holds a loan it could resume) is NEVER queued, and End
+        // fails at once when the phone is unreachable (ported from next-dev, 2026-09-20). The
+        // old rule here — "do NOT abort on unreachable, the queued offer lands the moment the
+        // phone returns" — is exactly what produced two controllers on 2026-09-18: the hand-back
+        // timed out, the loan resumed, and the queued offers landed an hour later. Drains
+        // (revoked / recovered) keep the queued path: nothing live to conflict with, and their
+        // records must land.
+        let live = !recovered && phase != .revoked && phase != .recoveredDrain
         let reachableNow = isPhoneReachable()
         if !reachableNow { handbackSawUnreachable = true }
+        if live, !reachableNow {
+            handbackTimedOut(unreachable: true)   // no offer leaves the watch
+            return
+        }
         if lastHandbackReachable != reachableNow {
             SportLog.event("loan", reachableNow
                 ? "hand-back: iPhone reachable — offer should ack shortly"
-                : "hand-back: iPhone UNREACHABLE — offer queued, will land when it returns (still looping)")
+                : "drain: iPhone UNREACHABLE — offer queued, will land when it returns")
             lastHandbackReachable = reachableNow
         }
-        sendMessage(.handbackOffer(offer))
+        sendMessage(.handbackOffer(offer), urgentOnly: live)
 
         // Resend until ack (rows 9/10): same event IDs every retry by construction.
         resendWorkItem?.cancel()
@@ -2624,8 +2672,34 @@ final class PodLoanWatchController {
 
     // MARK: - Internals
 
-    private func sendMessage(_ message: LoanMessage) {
-        guard let dictionary = try? message.transportDictionary() else { return }
+    /// `urgentOnly`: the transport must never QUEUE this message. A live hand-back offer that
+    /// lands late is a transfer of ownership for a loan that has since resumed — the 2026-09-18
+    /// dual-control incident on the next-dev line (eight queued offers landed 65 minutes after
+    /// the hand-back had timed out; both devices dosed the pod for three hours). The flag rides
+    /// beside the envelope; the phone reads only the envelope key.
+    #if DEBUG
+    /// TEST SEAM (WatchAppTests only). This line has no way to reach a live loan in a test —
+    /// the sim fake-flow holds no pump manager and its hand-back bypasses the real path — so
+    /// the hand-back tests stand one up directly: a pump manager built from raw state (no pod,
+    /// no radio), the epoch begun in the journal, phase `.active`, two-phase hand-back on.
+    func installLiveLoanForTesting(pumpRawState: [String: Any], epoch newEpoch: Int = 7) {
+        queue.sync {
+            try? journal.begin(epoch: newEpoch)
+            epoch = newEpoch
+            pumpManager = OmniPumpManager(rawState: pumpRawState)
+            phoneSupportsInterimHandback = true
+            phase = .active
+        }
+    }
+    /// TEST SEAM: fire the hand-back budget's expiry without waiting two minutes.
+    func expireHandbackForTesting() { queue.sync { handbackTimedOut() } }
+    /// TEST SEAM: the final (released) stage, as finalizeHandback leaves it.
+    func enterFinalStageForTesting() { queue.sync { handbackRequested = false; phase = .handingBack; finalOfferSent = true } }
+    #endif
+
+    private func sendMessage(_ message: LoanMessage, urgentOnly: Bool = false) {
+        guard var dictionary = try? message.transportDictionary() else { return }
+        if urgentOnly { dictionary["urgentOnly"] = true }
         send?(dictionary)
     }
 

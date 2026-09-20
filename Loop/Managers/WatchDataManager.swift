@@ -474,6 +474,7 @@ final class WatchDataManager: NSObject {
             beginReclaimBackgroundTask: { [weak self] in self?.beginReclaimBackgroundTask() },
             endReclaimBackgroundTask: { [weak self] in self?.endReclaimBackgroundTask() },
             isWatchReachable: { [weak self] in self?.watchSession?.isReachable ?? false },
+            isBluetoothPoweredOff: { [weak self] in self?.deviceManager.bluetoothProvider.bluetoothState == .poweredOff },
             lastWatchContactAt: { [weak self] in self?.lockedLastWatchContact.value ?? nil }
         ))
         // The predicted-low snooze rides in the grant so takeover does not reset the phone's clock

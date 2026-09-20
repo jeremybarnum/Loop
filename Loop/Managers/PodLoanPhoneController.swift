@@ -224,6 +224,13 @@ final class PodLoanPhoneController {
         var beginReclaimBackgroundTask: () -> Void = {}
         var endReclaimBackgroundTask: () -> Void = {}
         var isWatchReachable: () -> Bool = { false }
+        /// This phone's own Bluetooth is DEFINITELY off (`.poweredOff` only — unknown and
+        /// resetting are not off). WatchConnectivity runs over Wi-Fi too, so a phone can be
+        /// "reachable" and still unable to reach the pod: on the next-dev bench (2026-09-19
+        /// 13:19) such a phone acked a final offer in a second and then owned a pod it could
+        /// not touch — the settle hit its 300 s ceiling with the watch's last temp still
+        /// running. Only the phone can know. Default false keeps tests and harnesses unchanged.
+        var isBluetoothPoweredOff: () -> Bool = { false }
         /// When the phone last heard ANYTHING from the watch — any inbound WatchConnectivity
         /// funnel. This, not reachability, is what separates a live watch from a dead one at
         /// reclaim time: a watch holding the pod transfers its log every 300 s, metronomically
@@ -2502,6 +2509,16 @@ final class PodLoanPhoneController {
         // now stages + commits unseen events; only the STATE transitions are gated.
         let isFinal = offer.released ?? true
         let canTransition = state == .loaned || state == .reclaimPending || state == .grantOffered
+        // A phone whose Bluetooth is off could not reclaim the pod, so it refuses the hand-back
+        // OUT LOUD — interim offers too, which is what makes End fail within a second instead
+        // of after the watch's two-minute budget. Nothing is committed and no state changes;
+        // the offer's records stay unacked on the watch and ride a later hand-back. Not
+        // covered, by design: Bluetooth on but the phone out of the pod's range.
+        if !isStale, canTransition, deps.isBluetoothPoweredOff() {
+            handbackDiag(offer.epoch, "hand-back REFUSED — this phone's Bluetooth is off, so it could not reclaim the pod; the watch keeps the loan")
+            sendMessage(.denied(LoanDenied(reason: NSLocalizedString("iPhone Bluetooth is off — still running", comment: "Hand-back refused: shown on the watch"))))
+            return
+        }
         if !isStale, isFinal, canTransition {
             state = .reconciling
             // Record the wrist's loop mode BEFORE the unpause runs, so the restore path reads

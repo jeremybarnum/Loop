@@ -168,13 +168,25 @@ final class StockLoopSession {
                 SportLog.event("wc", "superseded \(cancelled.count) queued offer(s) with the fresh one (#120)")
             }
 
+            // A LIVE hand-back offer is urgent-only (PodLoanWatchController.sendMessage): queued,
+            // it can land after the hand-back timed out and the loan resumed — a transfer of
+            // ownership for a live loan (next-dev line, 2026-09-18). The resend loop retries.
+            let urgentOnly = dictionary["urgentOnly"] as? Bool == true
             guard urgent else {
+                if urgentOnly {
+                    SportLog.event("wc", "live hand-back offer NOT queued — urgent path unavailable; the resend loop retries")
+                    return
+                }
                 enqueueSuperseding(dictionary)
                 return
             }
             session.sendMessage(dictionary, replyHandler: nil, errorHandler: { error in
-                SportLog.event("wc", "urgent send FAILED (\(error.localizedDescription)) — falling back to the queued path")
                 loanController?.noteUrgentSendFailed()   // an erroring send means the link is re-establishing, not one-way wedged
+                if urgentOnly {
+                    SportLog.event("wc", "urgent send FAILED (\(error.localizedDescription)) — live hand-back offer NOT queued; the resend loop retries")
+                    return
+                }
+                SportLog.event("wc", "urgent send FAILED (\(error.localizedDescription)) — falling back to the queued path")
                 enqueueSuperseding(dictionary)
             })
         }
