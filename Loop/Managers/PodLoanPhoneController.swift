@@ -771,6 +771,7 @@ final class PodLoanPhoneController {
     /// reclaim never verifies, the settle ceiling drops it. A loan that ends with the pod
     /// unreachable simply keeps the provisional line — which is what we had before.
     private func finishPendingHandbackAudit(elapsed: TimeInterval) {
+        defer { clearAuditAnchors() }   // the pod is home: whatever this loan's audit was, it is spent
         guard let pending = pendingHandbackAudit else { return }
         pendingHandbackAudit = nil
 
@@ -2116,6 +2117,17 @@ final class PodLoanPhoneController {
             return
         }
         yieldingToInferredLoan = true
+        // If this loan has to be taken back unheard, its audit runs from THIS phone's own last
+        // pod read — never from an earlier loan's anchors (those are cleared when a loan ends).
+        // (Known gap, documented not built: the phone's own temp still running at that read is
+        // not counted as expected.)
+        if let units = (deps.pumpManager() as? PumpConnectionLendable)?.lentDeviceInsulinDelivered {
+            let asOf = deps.pumpManager()?.lastSync ?? deps.now()
+            checkpointsThisLoan = 0
+            auditBase = AuditBase(units: units, asOf: asOf)
+            loanStartedAt = asOf
+            UserDefaults.standard.set(asOf, forKey: Keys.loanStartedAt)
+        }
         deps.setAutomaticDosingPaused(true)
         // Yield the RADIO too, exactly as a grant does: a yielded phone that keeps its
         // standing connect starves an alive watch's per-cycle reclaims (single-central
@@ -2123,6 +2135,22 @@ final class PodLoanPhoneController {
         (deps.pumpManager() as? PumpConnectionLendable)?.releaseConnection()
         deps.ownershipDidChange()
         PhoneLog.event("mirror", "YIELDING to an inferred loan — \(evidence); pill=Pod on Watch, dosing paused, pod BLE released, exits: pill tap / watch revival / R40(f) prompt (R40(a): on conflict the phone yields) [mirror]")
+    }
+
+    /// An audit consumes its anchors. They describe ONE loan; left in place they let a later
+    /// reclaim — one with no loan of its own — audit a loan that had already closed, from that
+    /// loan's start. Next-dev line, 2026-09-19: a loan ended cleanly at 15:31; at 17:28 a pill
+    /// tap out of the yield posture ran the force-reclaim audit from the 15:10 anchor, called
+    /// 3.45 U of already-recorded insulin unexplained, booked it a SECOND time and opened the
+    /// loop. Here the anchors were cleared only at a new grant and at a retro-ack. Called
+    /// wherever a loan is over.
+    private func clearAuditAnchors() {
+        checkpointsThisLoan = 0
+        auditBase = nil
+        loanStartedAt = nil
+        UserDefaults.standard.removeObject(forKey: Keys.loanStartedAt)
+        UserDefaults.standard.removeObject(forKey: Keys.deliveredAtTakeover)
+        UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
     }
 
     /// Absolution: stamp the foreign-session evidence as HANDLED because a reconciled or
@@ -3013,6 +3041,7 @@ final class PodLoanPhoneController {
             persistStaged()
             pendingHandbackAudit = nil
             UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
+            clearAuditAnchors()   // the drained loan's anchors are spent; the yield below re-anchors for the live one
             PhoneLog.event("mirror", "drain e\(epoch) closed UNDER live e\(liveEpoch) — books committed, audit moot, custody NOT resumed [mirror]")
             engageInferredLoanYield(evidence: "superseding loan e\(liveEpoch) streamed during the e\(epoch) drain")
             return
@@ -3543,6 +3572,7 @@ final class PodLoanPhoneController {
         // this path never opens a settle window, so neither end-site below it would fire.
         cancelReclaimLadder()
         deps.endReclaimBackgroundTask()
+        clearAuditAnchors()   // the loan this anchored is over, however it ended
         (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
         state = .owner
         deps.setAutomaticDosingPaused(false)

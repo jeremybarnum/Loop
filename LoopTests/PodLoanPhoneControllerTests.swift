@@ -1456,6 +1456,27 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed")
     }
 
+    /// An audit consumes its anchors (next-dev line, 2026-09-19: a later take-back audited a
+    /// loan that had already closed and booked 3.45 U of recorded insulin a second time).
+    func testAnAuditConsumesItsAnchors() throws {
+        let controller = makeController()
+        _ = try establishLoan(controller)
+        XCTAssertNotNil(UserDefaults.standard.object(forKey: "PodLoanPhoneController.loanStartedAt"),
+                        "precondition: a live loan has its anchor")
+
+        MockPumpManager.testOdometer = 10.0
+        controller.forceReclaimToOwner(reason: "test: the loan is over")
+        waitForState(controller, .owner)
+        waitUntil(timeout: 8, "verdict") { self.diagMatching("reconcile[FORCE-RECLAIM]") != nil }
+        // The anchors are cleared in the verdict function's defer, a hair after its diag line.
+        waitUntil(timeout: 5, "anchors spent") { UserDefaults.standard.object(forKey: "PodLoanPhoneController.loanStartedAt") == nil }
+
+        XCTAssertNil(UserDefaults.standard.object(forKey: "PodLoanPhoneController.auditBase"),
+                     "spent with its loan — nothing later can audit from here")
+        XCTAssertNil(UserDefaults.standard.object(forKey: "PodLoanPhoneController.loanStartedAt"))
+        XCTAssertNil(UserDefaults.standard.object(forKey: "PodLoanPhoneController.deliveredAtTakeover"))
+    }
+
     // MARK: - Field incident: stale offer clamps a LATER epoch's doses
 
     /// FIELD: WCSession redelivered two already-acked epoch-1 final
