@@ -803,13 +803,18 @@ public struct DoseRecordBatch: Codable, Equatable {
     /// instead of the whole loan. nil (older watch, or no reading yet) = no checkpoint; the
     /// phone behaves exactly as before.
     public let odometer: LoanOdometerSnapshot?
+    /// When the watch sent this. The batch doubles as the watch's HOLD on the pod: the phone
+    /// stays out while the newest one is recent, judged by this stamp and never by the time it
+    /// arrived — a batch that sat in a queue for an hour renews nothing. nil = older watch.
+    public let sentAt: Date?
 
     public init(epoch: Int, events: [LoanEvent], tombstones: [UUID],
-                odometer: LoanOdometerSnapshot? = nil) {
+                odometer: LoanOdometerSnapshot? = nil, sentAt: Date? = nil) {
         self.epoch = epoch
         self.events = events
         self.tombstones = tombstones
         self.odometer = odometer
+        self.sentAt = sentAt
     }
 }
 

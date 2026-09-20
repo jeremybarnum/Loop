@@ -281,6 +281,8 @@ extension PodLoanPhoneController {
         persistStaged()
         loanStartedAt = handedOverAt
         UserDefaults.standard.set(handedOverAt, forKey: Keys.loanStartedAt)
+        holdRenewedAt = handedOverAt   // the grant is the hold's first renewal; the watch's messages are the rest
+        holdLapseNoticedAt = nil
 
         let grantEpoch = epoch
         // R40: assembly extracted so the dormant refresher issues EXACTLY what a live grant

@@ -662,6 +662,7 @@
 		B4AB64D1F99592A1DCEA95C7 /* PodLoanPhoneController+Mirror.swift in Sources */ = {isa = PBXBuildFile; fileRef = B88AF199D1DE958D1FAA9A72 /* PodLoanPhoneController+Mirror.swift */; };
 		5F448E42359E9920D869F85D /* PodLoanPhoneController+Records.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32989AB666983848B534F128 /* PodLoanPhoneController+Records.swift */; };
 		3AA2F2EB3EA44C712FCEF51E /* PodLoanPhoneController+Notifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = B74D589BFE7B5D4BD6BED3D3 /* PodLoanPhoneController+Notifications.swift */; };
+		5E12EA750000000000000050 /* PodLoanPhoneController+Hold.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E12EA760000000000000050 /* PodLoanPhoneController+Hold.swift */; };
 		B6B80446C9117B34FEA7329E /* PodLoanPhoneController+Staging.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FF82B359AC5A6738CEBD729 /* PodLoanPhoneController+Staging.swift */; };
 		D6A12EF6F5AD4B4CAABDD49B /* RileyLinkKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = ACC381BA270149C9B0DDCB01 /* RileyLinkKit.framework */; };
 		D6E28676C2C7751C77C7F2FB /* spring.caf in Resources */ = {isa = PBXBuildFile; fileRef = 9471E156FC10D6D0FF219C77 /* spring.caf */; };
@@ -1390,6 +1391,7 @@
 		B88AF199D1DE958D1FAA9A72 /* PodLoanPhoneController+Mirror.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "PodLoanPhoneController+Mirror.swift"; path = "Loop/Managers/PodLoanPhoneController+Mirror.swift"; sourceTree = SOURCE_ROOT; };
 		32989AB666983848B534F128 /* PodLoanPhoneController+Records.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "PodLoanPhoneController+Records.swift"; path = "Loop/Managers/PodLoanPhoneController+Records.swift"; sourceTree = SOURCE_ROOT; };
 		B74D589BFE7B5D4BD6BED3D3 /* PodLoanPhoneController+Notifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "PodLoanPhoneController+Notifications.swift"; path = "Loop/Managers/PodLoanPhoneController+Notifications.swift"; sourceTree = SOURCE_ROOT; };
+		5E12EA760000000000000050 /* PodLoanPhoneController+Hold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "PodLoanPhoneController+Hold.swift"; path = "Loop/Managers/PodLoanPhoneController+Hold.swift"; sourceTree = SOURCE_ROOT; };
 		1FF82B359AC5A6738CEBD729 /* PodLoanPhoneController+Staging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "PodLoanPhoneController+Staging.swift"; path = "Loop/Managers/PodLoanPhoneController+Staging.swift"; sourceTree = SOURCE_ROOT; };
 		BEC0BA802BE613F144AC3A70 /* mood_synth.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop/Resources/Sounds/mood_synth.caf; sourceTree = SOURCE_ROOT; };
 		C03823C4CE664226A1EDAF41 /* RileyLinkBLEKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = RileyLinkBLEKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -2511,6 +2513,7 @@
 				B88AF199D1DE958D1FAA9A72 /* PodLoanPhoneController+Mirror.swift */,
 				32989AB666983848B534F128 /* PodLoanPhoneController+Records.swift */,
 				B74D589BFE7B5D4BD6BED3D3 /* PodLoanPhoneController+Notifications.swift */,
+				5E12EA760000000000000050 /* PodLoanPhoneController+Hold.swift */,
 				1FF82B359AC5A6738CEBD729 /* PodLoanPhoneController+Staging.swift */,
 				DD0291A8F31C4B68ACE34BFC /* LoopUpdateContext.swift */,
 				0CB27CFCF9F0424FBB930CFF /* SettingsProvider.swift */,
@@ -3707,6 +3710,7 @@
 				B4AB64D1F99592A1DCEA95C7 /* PodLoanPhoneController+Mirror.swift in Sources */,
 				5F448E42359E9920D869F85D /* PodLoanPhoneController+Records.swift in Sources */,
 				3AA2F2EB3EA44C712FCEF51E /* PodLoanPhoneController+Notifications.swift in Sources */,
+				5E12EA750000000000000050 /* PodLoanPhoneController+Hold.swift in Sources */,
 				B6B80446C9117B34FEA7329E /* PodLoanPhoneController+Staging.swift in Sources */,
 				7DF84FAADBC24ABEA2C0829E /* LoopUpdateContext.swift in Sources */,
 				0514DEEA3C0A404FBA775CD7 /* SettingsProvider.swift in Sources */,
