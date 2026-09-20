@@ -6,8 +6,8 @@
 //
 //  The phone stays out while the watch keeps saying it is dosing: every landed cycle on the wrist
 //  sends a record batch, empty or not, stamped with its send time. When those stop, the phone takes
-//  the pod back by itself — no message has to arrive for that to happen, so no lost, late or
-//  stale message can leave the pod without a controller. Before this, a silent watch was never
+//  the pod back by itself, down the same road as the user's pill tap — no message has to ARRIVE
+//  for that to happen, so no lost, late or stale message can leave the pod without a controller. Before this, a silent watch was never
 //  reclaimed on a timer (2026-09-08: four hours unattended).
 //
 
@@ -96,7 +96,8 @@ extension PodLoanPhoneController {
         }
         guard now.timeIntervalSince(noticed) >= Self.holdLastCall else { return }
         holdLapseNoticedAt = nil
-        if told { clearInferredLoanYield(reason: "the told loan lapsed — watch silent, last call unanswered") }
-        forceReclaimToOwner(reason: String(format: "hold lapsed — watch silent %.0f min, last call unanswered", silence / 60))
+        // A lapse is an automatic pill tap: the watch is told (if it is alive but unheard it
+        // drains and stops), and a watch that cannot answer is not waited for.
+        reclaimNow(trigger: String(format: "hold lapsed: watch silent %.0f min, last call unanswered", silence / 60))
     }
 }

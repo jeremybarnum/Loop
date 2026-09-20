@@ -128,6 +128,61 @@ The mechanism is five rules:
 tests: keep the explicit loan and add only the expiries and a watch-silence watchdog.
 Switches that routinely take tens of seconds and cost sensor reads: entry stays manual.
 
+## As built on this branch (SportMode-podDecides)
+
+Built by subtraction from the loan, one step per commit, each with both test suites green.
+
+**Step 1 — the hold expires by itself.** The watch's hold on the pod is its last message
+being recent. Every watch cycle that computes and lands sends the ordinary record batch,
+empty or not, stamped with its send time; an empty one is never queued. The phone renews
+the hold from each message's *send* time, never its arrival. Fifteen minutes of silence is
+a lapse; the phone then waits one cycle of last call (a phone walking back into range
+notices an hour of silence at once, while the watch is one cycle from speaking) and takes
+the pod back down the same road as the user's pill tap — so a watch that is alive but
+unheard is told, drains its records and stops. No message has to arrive for the phone to
+resume. On the watch, released means released: after the final hand-back offer it never
+resumes by timer; it lets the pod go and keeps offering its records.
+
+**Step 2 — the phone stands aside on the watch's word only.** The phone no longer infers
+a loan from the pod's own evidence (foreign sessions plus a quiet watch). It still stands
+aside when the watch says it holds the pod, and that announced loan expires like any other
+hold and audits from this phone's own last pod read. An audit consumes its anchors, so no
+later reclaim can audit a loan that had already closed. The +90 s diagnostic re-audit is
+gone.
+
+**Already in the driver (OmnipodKit a893b8c):** a pod that comes back from another
+controller is read before it is written to.
+
+**Policy is unchanged:** Start is a tap; End is a tap; the phone is preferred.
+
+**Documented, not built:**
+
+- The watch yielding on the *pod's* evidence of the phone (a total it cannot explain). Today
+  it yields on the phone's word only — the revoke.
+- An announced loan's audit does not count the phone's own temp still running at its last
+  pod read.
+- A bolus sent over a bolus the other device is still delivering.
+- A command whose outcome is unknown when the other device steps in must be settled from the
+  pod's total, not from the pod's count of commands received.
+- Automatic entry (the watch starting by itself when the phone stops dosing), and the
+  two-way carb merge it would need.
+- Still present and now redundant, to be removed once the bench has run: the takeover
+  confirmation and its five-minute timer, the status query, the ghost-grant and superseding-
+  loan special cases.
+
+**Bench checks for this build:**
+
+1. *A silent watch.* Start, let it run two cycles, power the watch off. Phone log: `hold
+   LAPSED` at about 15 minutes, then `reclaim — hold lapsed` about 6 minutes later, a verified
+   reclaim and an audit verdict. Nobody has to touch anything.
+2. *Coming home.* Start, leave the phone behind for 20 minutes or more, walk back. Phone
+   log: `hold LAPSED` on return, then `hold RENEWED during last call`. The watch keeps the
+   pod.
+3. *An ordinary End.* Unchanged, and the first pod command the phone sends afterwards is a
+   status read or a cancel — never a temp basal.
+4. *End with the phone's acknowledgement lost* (hard to stage): the watch shows End Not
+   Confirmed, stops dosing, and the phone resumes on the queued offer or at the lapse.
+
 ## The invariant
 
 **The pod has exactly one controller at a time.** Stock enforces it for free: there is one
