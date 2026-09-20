@@ -252,6 +252,86 @@ extension PodLoanWatchController {
 
     /// Where a failed or abandoned start attempt comes to rest. Plain .idle — unless
     /// undrained records are parked, in which case the resting phase is .recoveredDrain and
+    // MARK: - Insulin the copy cannot explain
+
+    /// Same band as the phone's verdict at reclaim.
+    static let unexplainedInsulinBand = 0.20
+
+    /// The pod is the only shared truth about insulin. The copy this watch starts from is
+    /// seconds old on an ordinary Start and can be half an hour old — or more — on a phoneless
+    /// one, and anything the phone delivered after it was made (a meal bolus above all) is in
+    /// nobody's book here: the watch would see glucose rising, no insulin on board, and dose on
+    /// top of it. The pod's total says how much; nothing says when.
+    ///
+    /// Expected delivery between the copy's pod reading and now is what the copy's own records
+    /// explain — the phone's arithmetic (LoanReconciler) for temps, suspends and the schedule, and
+    /// for each bolus the share of its delivery that falls inside the window (a bolus still
+    /// delivering when the copy was made has part of itself on each side of that reading).
+    /// Returns the surplus beyond the band, or 0.
+    static func insulinTheCopyCannotExplain(copyTotal: Double, copyAt: Date, podTotal: Double, now: Date,
+                                            records: [LoanDoseRecord], schedule: BasalRateSchedule?) -> Double {
+        guard now > copyAt, podTotal >= copyTotal else { return 0 }
+        let rateEvents = records.filter { $0.kind != .bolus }.enumerated().map {
+            LoanEvent(id: UUID(), seq: $0.offset + 1, provenance: .confirmed, record: $0.element, loggedAt: now)
+        }
+        var expected = LoanReconciler.expectedInsulin(events: rateEvents, schedule: schedule, from: copyAt, to: now)
+        for bolus in records where bolus.kind == .bolus {
+            guard let amount = bolus.amount, amount > 0 else { continue }
+            let end = bolus.endDate ?? bolus.startDate
+            if end > bolus.startDate {
+                let overlap = min(end, now).timeIntervalSince(max(bolus.startDate, copyAt))
+                if overlap > 0 { expected += amount * overlap / end.timeIntervalSince(bolus.startDate) }
+            } else if bolus.startDate >= copyAt, bolus.startDate <= now {
+                expected += amount
+            }
+        }
+        let unexplained = ((podTotal - copyTotal - expected) * 1000).rounded() / 1000
+        return unexplained > unexplainedInsulinBand ? unexplained : 0
+    }
+
+    /// Booked as a bolus delivered NOW — the latest it could have been, which overstates insulin
+    /// on board and under-doses: the phone's rule at reclaim, mirrored. Unlike the phone it does
+    /// not open the loop: the user has just asked this watch to dose, and a book that errs
+    /// cautious is what makes that safe. Blocking, like the seed: the first cycle must not run on
+    /// a book that is about to change. Seeded, not journaled — on the phone this insulin is
+    /// already recorded, and a copy handed back would count it twice there.
+    func bookInsulinTheCopyCannotExplain(podTotal: Double, epoch: Int) {
+        defer { takeoverCopyTotal = nil; takeoverCopyRecords = [] }
+        guard let copy = takeoverCopyTotal else {
+            SportLog.event("loan", "takeover book check SKIPPED — the copy carried no pod total to compare against")
+            return
+        }
+        let at = self.now()
+        let unexplained = Self.insulinTheCopyCannotExplain(copyTotal: copy.units, copyAt: copy.asOf, podTotal: podTotal, now: at,
+                                                           records: takeoverCopyRecords,
+                                                           schedule: loopManager.settings.basalRateSchedule)
+        let age = at.timeIntervalSince(copy.asOf) / 60
+        guard unexplained > 0 else {
+            SportLog.event("loan", String(format: "takeover book check CLEAN — pod total %.2f → %.2f U over %.1f min is explained by the copy's records and the schedule",
+                                          copy.units, podTotal, age))
+            return
+        }
+        let entry = DoseEntry(type: .bolus, startDate: at, endDate: at, value: unexplained, unit: .units,
+                              decisionId: nil, deliveredUnits: unexplained,
+                              syncIdentifier: "PODLOAN-WATCHGAP-e\(epoch)",
+                              insulinType: pumpManager?.status.insulinType)
+        let gate = DispatchSemaphore(value: 0)
+        var failure: Error?
+        let loopManager = self.loopManager
+        Task {
+            do { try await loopManager.seedInsulinHistory([entry]) } catch { failure = error }
+            gate.signal()
+        }
+        gate.wait()
+        if let failure {
+            SportLog.event("loan", String(format: "** takeover book check: %.2f U UNEXPLAINED and the booking FAILED — %@ **", unexplained, String(describing: failure)))
+            return
+        }
+        SportLog.event("loan", String(format: "** takeover book check: pod total %.2f → %.2f U over %.1f min; %.2f U the copy cannot explain — BOOKED as a bolus now (insulin on board errs high, dosing errs low) **",
+                                      copy.units, podTotal, age, unexplained))
+        startNote = (at, String(format: NSLocalizedString("%.2f U the watch had no record of — counted as insulin on board", comment: "Glance: unexplained insulin booked at takeover (1: units)"), unexplained))
+    }
+
     /// the drain's resend chain is restarted (the 15 s re-arm guard deliberately lets the
     /// chain die whenever phase leaves the drain family, so every return must re-kick it).
     /// This is what makes the drain a STATE the watch passes through rather than a wall:
@@ -716,6 +796,14 @@ extension PodLoanWatchController {
         manager.delegateQueue = queue
         pumpManager = manager
         defaults.set(manager.rawState, forKey: Keys.pumpState)   // R40(e): on disk from the first moment we hold it
+        // What the COPY knew of the pod's total, before this watch has read anything — the
+        // baseline for "did the pod deliver insulin this book cannot explain?" at takeover.
+        if let units = manager.podLoanInsulinDelivered, let asOf = manager.podLoanInsulinDeliveredAt {
+            takeoverCopyTotal = (units, asOf)
+        } else {
+            takeoverCopyTotal = nil
+        }
+        takeoverCopyRecords = grant.doseHistory
         guard ingestGrantHistory(grant) else {
             teardownPump()
             returnToRestingPhase()
@@ -873,6 +961,7 @@ extension PodLoanWatchController {
                     // supersedes the old in the same breath, so there is no gap in delivery.
                     // The phone cancelled its running temp before releasing the pod (R2: no program
                     // crosses the boundary), so the pod is on the schedule; the first cycle programs ours.
+                    self.bookInsulinTheCopyCannotExplain(podTotal: delivered, epoch: grant.epoch)
                     self.loopManager.loop()
                 } else if attempt + 1 < maxAttempts {
                     if attempt == 0 {

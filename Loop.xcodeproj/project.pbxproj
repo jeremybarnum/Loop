@@ -376,6 +376,7 @@
 		9D327AEC023D4304B936E605 /* TempBasalRecommendation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D49A0BC23884B9DB40301B5 /* TempBasalRecommendation.swift */; };
 		9D70FCCAA141489A9E49ADA6 /* RuntimeStateLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F520419E66CD453A809324D1 /* RuntimeStateLog.swift */; };
 		9F0BBEE28E9F45FC8DB3D8C9 /* LoanReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDBF9B08E9314F23AB94CF5A /* LoanReconciler.swift */; };
+		5E12EA770000000000000051 /* LoanReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDBF9B08E9314F23AB94CF5A /* LoanReconciler.swift */; };
 		A1B2C3D40000000000000002 /* GlucoseAlertManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000001 /* GlucoseAlertManagerTests.swift */; };
 		A2439AB6D2CE4F36A2C75F11 /* LoopUpdateContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3F641189FC64AA2B92246C7 /* LoopUpdateContext.swift */; };
 		A2779286E117BD3627DA0618 /* simple.caf in Resources */ = {isa = PBXBuildFile; fileRef = 5181B60CBF3CB2DA537F0475 /* simple.caf */; };
@@ -4000,6 +4001,7 @@
 				DBA92856969B47C19B2BD581 /* WorkoutKeepalive.swift in Sources */,
 				1A353D3E971442118DD6956C /* WatchDoseEnactor.swift in Sources */,
 				C5A82FBEC2AE43769A416B01 /* PodLoanWatchController.swift in Sources */,
+				5E12EA770000000000000051 /* LoanReconciler.swift in Sources */,
 				447D9AEE9B70527210F55CBD /* PodLoanWatchController+Delegates.swift in Sources */,
 				FC2EED54FE92C3105650505F /* PodLoanWatchController+Journal.swift in Sources */,
 				79AE5F40BF36EA15F26E6CEF /* PodLoanWatchController+Grant.swift in Sources */,

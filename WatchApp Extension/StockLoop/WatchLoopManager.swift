@@ -230,6 +230,29 @@ final class WatchLoopManager {
     var podBeepsOnManualBolusProbe: (() -> Bool)?
     /// A cycle computed and, if it owed the pod a command, landed it.
     var onCycleLanded: (() -> Void)?
+
+    // A saved session is being rebuilt: the pump manager is coming. Stock cannot lose this race —
+    // it restores the pump and then the CGM in one synchronous function — but here the sensor is
+    // wired first and the pump manager follows, and a launch the system made FOR the sensor has a
+    // reading seconds away. A reading that finds no pump in that window is remembered, and the
+    // rebuild's last act runs the cycle it would have run (2026-09-19 15:27: cycle skipped, next
+    // chance five minutes later).
+    private let awaitedPumpLock = NSLock()
+    private var awaitingPumpManager = false
+    private var readingArrivedWithoutPump = false
+
+    func beginAwaitingPumpManager() {
+        awaitedPumpLock.lock(); awaitingPumpManager = true; readingArrivedWithoutPump = false; awaitedPumpLock.unlock()
+    }
+
+    /// Returns true if a reading arrived while the pump manager was awaited.
+    func endAwaitingPumpManager() -> Bool {
+        awaitedPumpLock.lock(); defer { awaitedPumpLock.unlock() }
+        let waited = readingArrivedWithoutPump
+        awaitingPumpManager = false
+        readingArrivedWithoutPump = false
+        return waited
+    }
     var podBeepsOnManualBolus: Bool { podBeepsOnManualBolusProbe?() ?? false }
 
 
@@ -840,6 +863,11 @@ final class WatchLoopManager {
         guard pumpManager != nil else { return }   // loan active only — otherwise the phone owns the HUD
         let ctx = WatchContext()
         ctx.isWatchAuthored = true   // Outranks the phone's relay of the same reading
+        // A live session implies the phone finished onboarding — it granted the pod. This context
+        // is the one the stock app persists, and after a watch power-up mid-session it is the
+        // one restored: left nil, the stock pages sat behind "Please complete onboarding" until
+        // the session had been rebuilt (2026-09-20: forty seconds).
+        ctx.isOnboardingCompleted = true
         // The stock chart's prediction line reads context.predictedGlucose and was never
         // populated here, so it sat empty for the whole loan.
         ctx.predictedGlucose = predictedGlucose.flatMap { WatchPredictedGlucose(values: $0) }
@@ -1385,6 +1413,9 @@ final class WatchLoopManager {
 
     func checkPumpDataAndLoop() {
         guard let pumpManager = pumpManager else {
+            awaitedPumpLock.lock()
+            if awaitingPumpManager { readingArrivedWithoutPump = true }
+            awaitedPumpLock.unlock()
             // OBS-8 (2026-08-13): AFTER a hand-back there is no pod and never will be until the
             // next grant, so running the full cycle is pure waste — the G7 keeps delivering, and
             // every reading drove updateCachedEffects + the whole prediction to conclude "no pod",

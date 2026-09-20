@@ -209,6 +209,116 @@ final class WakeResumeTests: XCTestCase {
         XCTAssertFalse(next.loopManager.closedLoopEnabledNonBlocking, "loop mode is per loan: the next launch starts open")
     }
 
+    // MARK: insulin the copy cannot explain
+
+    private let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+    private var flatSchedule: BasalRateSchedule { BasalRateSchedule(dailyItems: [RepeatingScheduleValue(startTime: 0, value: 1.2)])! }
+    private func unexplained(podTotal: Double, after minutes: Double, records: [LoanDoseRecord] = []) -> Double {
+        PodLoanWatchController.insulinTheCopyCannotExplain(copyTotal: 10.0, copyAt: t0, podTotal: podTotal,
+                                                           now: t0.addingTimeInterval(.minutes(minutes)),
+                                                           records: records, schedule: flatSchedule)
+    }
+
+    func testAnOrdinaryStartHasNothingToBook() {
+        // Ten minutes at 1.2 U/h is 0.2 U of scheduled basal, and that is all the pod delivered.
+        XCTAssertEqual(unexplained(podTotal: 10.2, after: 10), 0)
+        XCTAssertEqual(unexplained(podTotal: 10.35, after: 10), 0, "0.15 U over is inside the 0.20 U band — the phone's band at reclaim")
+    }
+
+    func testAPhoneBolusGivenAfterTheCopyIsBooked() {
+        // The forgotten phone: lunch bolus on the phone, out of the door without it, Start on a copy
+        // that predates the bolus. Without this the watch sees rising glucose, no insulin on
+        // board, and doses on top of six units it has never heard of.
+        XCTAssertEqual(unexplained(podTotal: 16.2, after: 10), 6.0, accuracy: 0.001)
+    }
+
+    func testABolusTheCopyAlreadyKnowsIsNotBookedTwice() {
+        // Still delivering when the copy's pod reading was taken: half of it is in that reading,
+        // the other half arrives after it — and the copy's own record explains that half.
+        let bolus = LoanDoseRecord(kind: .bolus, startDate: t0.addingTimeInterval(-.minutes(2)),
+                                   endDate: t0.addingTimeInterval(.minutes(2)), amount: 6.0)
+        XCTAssertEqual(unexplained(podTotal: 10.0 + 3.0 + 0.2, after: 10, records: [bolus]), 0)
+        // …and a bolus wholly after the reading is explained in full.
+        let later = LoanDoseRecord(kind: .bolus, startDate: t0.addingTimeInterval(.minutes(1)),
+                                   endDate: t0.addingTimeInterval(.minutes(3)), amount: 2.0)
+        XCTAssertEqual(unexplained(podTotal: 10.0 + 2.0 + 0.2, after: 10, records: [later]), 0)
+    }
+
+    func testATempInTheCopyExplainsItsOwnDelivery() {
+        let temp = LoanDoseRecord(kind: .tempBasal, startDate: t0.addingTimeInterval(-.minutes(5)),
+                                  endDate: t0.addingTimeInterval(.minutes(25)), unitsPerHour: 3.0)
+        XCTAssertEqual(unexplained(podTotal: 10.5, after: 10, records: [temp]), 0, "ten minutes at 3.0 U/h is 0.5 U")
+        XCTAssertEqual(unexplained(podTotal: 12.5, after: 10, records: [temp]), 2.0, accuracy: 0.001, "anything beyond it is not")
+    }
+
+    func testBookedInsulinIsInTheBookTheLoopDosesFrom() async {
+        // The rule is only worth anything if the loop SEES the booking: through the same door the
+        // phone's history is seeded by, into the same store insulin on board is computed from.
+        let c = await makeController()
+        var settings = LoopSettings()
+        settings.basalRateSchedule = flatSchedule
+        c.loopManager.settings = settings
+        let copyAt = Date().addingTimeInterval(-.minutes(10))
+        c.queue.sync {
+            c.takeoverCopyTotal = (10.0, copyAt)
+            c.takeoverCopyRecords = []
+            c.bookInsulinTheCopyCannotExplain(podTotal: 16.2, epoch: 7)   // 0.2 U of basal, 6.0 U nobody recorded
+        }
+        let iob: Double? = await withCheckedContinuation { done in
+            c.loopManager.primeIOBFromStore(at: Date().addingTimeInterval(.minutes(1))) { done.resume(returning: $0) }
+        }
+        XCTAssertEqual(iob ?? 0, 6.0, accuracy: 0.5, "six units, a minute old, are all still on board")
+        XCTAssertNotNil(c.debugSnapshot().startNoteText, "and the wrist says so")
+        XCTAssertNil(c.takeoverCopyTotal, "consumed: one check per Start")
+    }
+
+    // MARK: the rebuild after a relaunch
+
+    func testASavedSessionIsLiveFromLaunchNotFromTheEndOfItsRebuild() async {
+        // 2026-09-20: after a power-up the pump manager took forty seconds to rebuild, and until
+        // it finished nothing on the wrist knew a session was live — the stock pages sat behind
+        // "complete onboarding" and the Sport Mode page was blank.
+        persistGrantedSettings()
+        defaults.set(PodLoanWatchController.Phase.active.rawValue, forKey: PodLoanWatchController.Keys.phase)
+        defaults.set(7, forKey: PodLoanWatchController.Keys.epoch)
+        defaults.set(readablePumpState, forKey: PodLoanWatchController.Keys.pumpState)
+        let c = await makeController()
+        XCTAssertTrue(c.isLoanActiveNonBlocking, "live from the moment the saved session is found")
+        XCTAssertTrue(c.isResumingNonBlocking, "and known to be rebuilding — what the glance shows instead of nothing")
+
+        c.resumeIfNeeded()
+        c.queue.sync { }
+        XCTAssertFalse(c.isResumingNonBlocking, "rebuilt")
+        XCTAssertTrue(c.isLoanActiveNonBlocking)
+        XCTAssertNotNil(c.pumpManager)
+    }
+
+    func testAFailedRebuildIsNeitherLiveNorResuming() async {
+        defaults.set(PodLoanWatchController.Phase.active.rawValue, forKey: PodLoanWatchController.Keys.phase)
+        defaults.set(7, forKey: PodLoanWatchController.Keys.epoch)
+        defaults.set(readablePumpState, forKey: PodLoanWatchController.Keys.pumpState)
+        let c = await makeController()          // no granted settings on disk: the rebuild must fail
+        c.resumeIfNeeded()
+        c.queue.sync { }
+        XCTAssertFalse(c.isResumingNonBlocking)
+        XCTAssertFalse(c.isLoanActiveNonBlocking, "a session that could not be rebuilt is not live")
+        XCTAssertFalse(c.loopManager.endAwaitingPumpManager(), "and nothing is left waiting for a pump")
+    }
+
+    func testAReadingThatArrivesDuringTheRebuildIsRemembered() async {
+        // Stock restores the pump before the CGM, so a reading can never find no pump. Here the
+        // sensor is wired first; the reading that arrives in between must not cost a cycle.
+        let c = await makeController()
+        let loop = c.loopManager
+        loop.checkPumpDataAndLoop()
+        XCTAssertFalse(loop.endAwaitingPumpManager(), "no rebuild pending: an idle reading is just an idle reading")
+
+        loop.beginAwaitingPumpManager()
+        loop.checkPumpDataAndLoop()             // the reading arrives; no pump yet
+        XCTAssertTrue(loop.endAwaitingPumpManager(), "remembered — the rebuild's last act runs its cycle")
+        XCTAssertFalse(loop.endAwaitingPumpManager(), "once")
+    }
+
     // MARK: the hold
 
     func testEveryLandedCycleRenewsTheHoldEvenWithNothingToReport() async throws {
