@@ -211,8 +211,6 @@ final class WatchDataManager: NSObject {
         podLoanController.considerDormantRefresh()
         // The watch's hold on the pod lapses by itself when its renewals stop — same pulse.
         podLoanController.considerHoldLapse()
-        // PHONE MIRROR detector A rides the same pulse — all gating lives inside it.
-        podLoanController.considerInferredLoan()
 
         // Any update context should trigger a watch update
         sendWatchContextIfNeeded()

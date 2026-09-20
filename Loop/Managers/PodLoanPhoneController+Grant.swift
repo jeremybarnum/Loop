@@ -237,8 +237,6 @@ extension PodLoanPhoneController {
         // fresh grant capture above — a stale takeover value would put the whole previous loan's
         // delivery inside the "unexplained" window and book a wildly wrong bolus.
         UserDefaults.standard.removeObject(forKey: Keys.deliveredAtTakeover)
-        UserDefaults.standard.set(false, forKey: Keys.watchAuditRan)
-        UserDefaults.standard.removeObject(forKey: Keys.expectedUnits)
 
         // Dosing is already paused and the temp already cancelled (see handleRequest): the pod
         // is on the schedule. Now stop bidding for its link.

@@ -328,6 +328,7 @@ final class PodLoanPhoneController {
         // The takeover this anchored is over, however it ended. Leaving it set is what let a
         // failed attempt's clock follow the NEXT grant around.
         grantOfferedAt = nil
+        clearAuditAnchors()
         reclaimPodConnection()
         state = .owner
         deps.setAutomaticDosingPaused(false)
@@ -611,11 +612,6 @@ final class PodLoanPhoneController {
     var grantOfferedAt: Date?
 
     // MARK: - State for PodLoanPhoneController+Records.swift
-
-    /// §5.3.3: the phone asks the pod the same forensic questions after reclaim,
-    /// shrinking the dead-watch blind window. Override for tests; the default runs
-    /// the real audit 90 s after reclaim (BLE session re-establishment time).
-    var postReclaimReAudit: (() -> Void)?
 
     // MARK: - State with observers (moved out of the extension files)
 

@@ -40,6 +40,19 @@ extension PodLoanPhoneController {
         set { UserDefaults.standard.set(newValue, forKey: HoldKeys.lapseNoticedAt) }
     }
 
+    /// An audit consumes its anchors. They describe ONE loan; left in place they let a later
+    /// reclaim — one with no loan of its own — audit a loan that had already closed, from that
+    /// loan's start (2026-09-19: 3.45 U of already-recorded insulin booked a second time, and the
+    /// loop opened). Called wherever a loan is over.
+    func clearAuditAnchors() {
+        checkpointsThisLoan = 0
+        auditBase = nil
+        loanStartedAt = nil
+        UserDefaults.standard.removeObject(forKey: Keys.loanStartedAt)
+        UserDefaults.standard.removeObject(forKey: Keys.deliveredAtTakeover)
+        UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
+    }
+
     /// A message from the watch for the current loan renews the hold — by its SEND time, never
     /// by its arrival: a batch that sat in a queue for an hour renews nothing.
     func noteHoldRenewal(sentAt: Date?) {
@@ -59,7 +72,13 @@ extension PodLoanPhoneController {
     }
 
     func queue_considerHoldLapse() {
-        guard state == .loaned || state == .grantOffered, let renewed = holdRenewedAt else {
+        // Two ways the phone can be standing aside: a loan it granted or adopted, and a loan the
+        // watch TOLD it about that it never granted (a seized pod). The second is renewed by the
+        // watch's word for it — every batch or status report from that loan — and lapses the same
+        // way. Nothing the phone believes about the watch outlives the watch's silence.
+        let told = state == .owner && yieldingToInferredLoan
+        let renewedAt = told ? [holdRenewedAt, newestForeignLoanEvidence?.at].compactMap { $0 }.max() : holdRenewedAt
+        guard state == .loaned || state == .grantOffered || told, let renewed = renewedAt else {
             if holdLapseNoticedAt != nil { holdLapseNoticedAt = nil }
             return
         }
@@ -77,6 +96,7 @@ extension PodLoanPhoneController {
         }
         guard now.timeIntervalSince(noticed) >= Self.holdLastCall else { return }
         holdLapseNoticedAt = nil
+        if told { clearInferredLoanYield(reason: "the told loan lapsed — watch silent, last call unanswered") }
         forceReclaimToOwner(reason: String(format: "hold lapsed — watch silent %.0f min, last call unanswered", silence / 60))
     }
 }
