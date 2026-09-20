@@ -447,7 +447,8 @@ extension WatchDataManager {
             endReclaimBackgroundTask: { [weak self] in self?.endReclaimBackgroundTask() },
             isWatchReachable: { [weak self] in self?.watchSession?.isReachable ?? false },
             isBluetoothPoweredOff: { [weak self] in self?.deviceManager.bluetoothProvider.bluetoothState == .poweredOff },
-            lastWatchContactAt: { [weak self] in self?.lockedLastWatchContact.value ?? nil }
+            lastWatchContactAt: { [weak self] in self?.lockedLastWatchContact.value ?? nil },
+            latestGlucoseDate: { [weak self] in self?.deviceManager.glucoseStore.latestGlucose?.startDate }
         ))
     }
 }

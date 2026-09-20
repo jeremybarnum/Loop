@@ -165,6 +165,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     func makeController(watchReachable: @escaping () -> Bool = { false },
                         bluetoothPoweredOff: @escaping () -> Bool = { false },
                         lastWatchContact: @escaping () -> Date? = { nil },
+                        latestGlucose: (() -> Date?)? = nil,
                         now: @escaping () -> Date = { Date() },
                         whenProtectedDataAvailable: @escaping (@escaping () -> Void) -> Void = { $0() }) -> PodLoanPhoneController {
         return PodLoanPhoneController(dependencies: .init(
@@ -251,6 +252,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             isWatchReachable: watchReachable,
             isBluetoothPoweredOff: bluetoothPoweredOff,
             lastWatchContactAt: lastWatchContact,
+            latestGlucoseDate: latestGlucose ?? { now() },   // by default the phone is beside the body: a reading just now
             now: now
         ))
     }
@@ -2869,6 +2871,30 @@ extension PodLoanPhoneControllerTests {
         // 23 minutes at 1.0 U/h since the phone's own last read, floored to whole pulses — not
         // some earlier loan's window.
         XCTAssertNotNil(diagMatching("R37 audit armed — expected 0.350 U"), "\(diags)")
+    }
+
+    /// The core use: the phone is left at home. It hears nothing from the watch for the same
+    /// reason it cannot reach the pod — it is somewhere else. It must not take the pod "back"
+    /// from there (that ends in a settle that finds no pod and opens the loop on a session that
+    /// was fine). The lapse runs only while the phone's OWN sensor reading is fresh.
+    func testAPhoneAwayFromTheBodyDoesNotTakeThePodBack() throws {
+        var lastReading = Date()
+        let controller = makeController(latestGlucose: { lastReading },
+                                        now: { [weak self] in self?.clock ?? Date() })
+        _ = establishLoan(controller)
+        lastReading = clock                                   // the last reading before leaving
+
+        clock = clock.addingTimeInterval(.minutes(40))        // out for a run; the app happens to wake
+        tick(controller)
+        clock = clock.addingTimeInterval(.minutes(10))
+        tick(controller)
+        XCTAssertEqual(controller.state, .loaned, "fifty minutes of silence, and nothing happens: no sensor, no pod, no claim")
+        XCTAssertNil(controller.holdLapseNoticedAt)
+
+        lastReading = clock                                   // home again: the phone reads the sensor
+        tick(controller)
+        XCTAssertNotNil(controller.holdLapseNoticedAt, "now the silence counts — last call begins")
+        XCTAssertEqual(controller.state, .loaned)
     }
 
     /// 2026-09-18: a queued message landed 65 minutes late and was believed. A renewal counts by

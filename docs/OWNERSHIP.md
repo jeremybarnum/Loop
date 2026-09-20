@@ -140,7 +140,9 @@ a lapse; the phone then waits one cycle of last call (a phone walking back into 
 notices an hour of silence at once, while the watch is one cycle from speaking) and takes
 the pod back down the same road as the user's pill tap — so a watch that is alive but
 unheard is told, drains its records and stops. No message has to arrive for the phone to
-resume. On the watch, released means released: after the final hand-back offer it never
+resume. The lapse only runs while the phone is near the body, judged by its own sensor reading
+being fresh: a phone left at home hears nothing for the same reason it cannot reach the pod, and
+must not claim a pod it cannot see. On the watch, released means released: after the final hand-back offer it never
 resumes by timer; it lets the pod go and keeps offering its records.
 
 **Step 2 — the phone stands aside on the watch's word only.** The phone no longer infers
