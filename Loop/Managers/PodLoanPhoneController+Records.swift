@@ -270,8 +270,6 @@ extension PodLoanPhoneController {
         if auditThisOffer {
             let expected = LoanReconciler.expectedInsulin(events: allStagedEvents, schedule: deps.settings().basalRateSchedule,
                                                           from: loanStart, to: offer.handedBackAt)
-            UserDefaults.standard.set(expected, forKey: Keys.expectedUnits)
-            UserDefaults.standard.set(offer.odometer?.freshenSucceeded == true, forKey: Keys.watchAuditRan)
 
             // THE AUDIT: does the pod's own odometer agree with the
             // delivery history the watch claims to have executed?
@@ -666,7 +664,7 @@ extension PodLoanPhoneController {
             stagedTombstones = []
             persistStaged()
             pendingHandbackAudit = nil
-            UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
+            clearAuditAnchors()
             PhoneLog.event("mirror", "drain e\(epoch) closed UNDER live e\(liveEpoch) — books committed, audit moot, custody NOT resumed [mirror]")
             engageInferredLoanYield(evidence: "superseding loan e\(liveEpoch) streamed during the e\(epoch) drain")
             return
@@ -690,57 +688,5 @@ extension PodLoanPhoneController {
         UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
     }
 
-    func schedulePostReclaimReAudit(recordsCommitted: Bool) {
-        queue.asyncAfter(deadline: .now() + 90) { [weak self] in
-            guard let self = self else { return }
-            if let override = self.postReclaimReAudit {
-                override()
-            } else {
-                self.performReAudit(recordsCommitted: recordsCommitted)
-            }
-        }
-    }
-
-    /// The post-reclaim re-audit. DIAGNOSTIC-ONLY: it re-reads
-    /// the pod's odometer ~90 s after reclaim and os_log's delivered-vs-expected, but takes
-    /// NO user-facing action — the IOB valve and the over/under notices are both disabled
-    /// (deferred until a proper warning threshold is chosen). The dose-integrity commit path
-    /// and the [phone] reconcile capture at the drain audit are the trustworthy signals; this
-    /// is a rough breadcrumb only (its `expected` is the biased continuous estimate and its
-    /// late window can fold in post-loan phone delivery).
-    private func performReAudit(recordsCommitted: Bool) {
-        guard let lendable = deps.pumpManager() as? PumpConnectionLendable,
-              let atGrant = UserDefaults.standard.object(forKey: Keys.deliveredAtGrant) as? Double else { return }
-        let watchAuditRan = UserDefaults.standard.bool(forKey: Keys.watchAuditRan)
-
-        lendable.refreshLentDeviceStatus { [weak self] success in
-            guard let self = self, success else { return }
-            self.queue.async {
-                guard let now = (self.deps.pumpManager() as? PumpConnectionLendable)?.lentDeviceInsulinDelivered else { return }
-                let delivered = now - atGrant
-
-                let expected: Double
-                if recordsCommitted, let e = UserDefaults.standard.object(forKey: Keys.expectedUnits) as? Double {
-                    expected = e
-                } else if let schedule = self.deps.settings().basalRateSchedule, let start = self.loanStartedAt {
-                    expected = LoanReconciler.expectedInsulin(events: [], schedule: schedule, from: start, to: self.deps.now())
-                } else {
-                    return
-                }
-
-                let remainder = delivered - expected
-                // Re-audit is diagnostic-only (Jeremy 2026-07-27): log the number, take NO user-facing
-                // action — no IOB injection ("not adding insulin at hand-back") and no over/under
-                // warning (deferred). NOTE this `expected` is the biased continuous estimate and this
-                // 90 s-late window can fold in post-loan phone delivery, so it is a rough breadcrumb
-                // only — the trustworthy capture is the [phone] reconcile line at the drain audit.
-                os_log("Post-reclaim re-audit (diagnostic-only): delivered %.2f, expected %.2f, remainder %.2f (recordsCommitted %d, watchAuditRan %d)",
-                       log: self.log, type: .default, delivered, expected, remainder, recordsCommitted ? 1 : 0, watchAuditRan ? 1 : 0)
-                if recordsCommitted {
-                    UserDefaults.standard.removeObject(forKey: Keys.deliveredAtGrant)
-                }
-            }
-        }
-    }
 
 }

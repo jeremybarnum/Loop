@@ -14,18 +14,19 @@ import os.log
 
 extension PodLoanPhoneController {
 
-    // MARK: - PHONE MIRROR (R40(a), operational spec 2026-08-31: the minimum-deviation paradigm)
+    // MARK: - A loan the watch announced (a seized pod)
     //
-    // A discovered seizure is the granted-loan-with-dead-watch scenario minus one bit of
-    // knowledge, and the pod supplies that bit. On detection the phone enters the posture it
-    // would already be in had it granted the loan: pill reads Pod on Watch (folded into
-    // podIsOnLoan/isPodLoanedOut), automatic dosing paused, the loop-not-running sweep
-    // engaged — and EVERY exit is the existing one (pill tap -> reclaimNow ladder + gap
-    // booking; watch revival -> retro-ack; WC healing -> the R40(f) wrist prompt). The state
-    // machine never fakes .loaned: the flag rides .owner, because the retro-ack door
-    // deliberately requires .owner and the watch's real epoch is unknown.
-
-
+    // The watch can take the pod from its standing copy while the phone is out of reach. When
+    // the watch then SAYS so — a status report, or records from a loan this phone never granted —
+    // the phone stands aside exactly as if it had granted it: pill reads Pod on Watch, dosing
+    // paused, pod link released. The flag rides .owner because the watch's real epoch is only
+    // adopted when its hand-back offer arrives with the seize token (the retro-ack).
+    //
+    // The phone stands aside on the watch's WORD only. It used to infer a loan from the pod's
+    // own evidence too (foreign sessions plus a quiet watch); that inference is gone — on
+    // 2026-09-13 it locked the phone out for two hours, and on 2026-09-19 it yielded to a loan
+    // that had ended hours earlier and then booked 3.45 U of already-recorded insulin. Like any
+    // hold, this one lapses by itself when the watch goes quiet (+Hold.swift).
 
     /// Fresh evidence that a loan NEWER than `epochN` is live right now.
     func supersededByLiveLoan(_ epochN: Int) -> Bool {
@@ -45,6 +46,18 @@ extension PodLoanPhoneController {
             return
         }
         yieldingToInferredLoan = true
+        holdRenewedAt = deps.now()
+        holdLapseNoticedAt = nil
+        // If this loan has to be taken back unheard, its audit runs from THIS phone's own last
+        // pod read — never from an earlier loan's anchors. (Known gap, documented not built: the
+        // phone's own temp still running at that read is not counted as expected.)
+        if let units = (deps.pumpManager() as? PumpConnectionLendable)?.lentDeviceInsulinDelivered {
+            let asOf = deps.pumpManager()?.lastSync ?? deps.now()
+            checkpointsThisLoan = 0
+            auditBase = AuditBase(units: units, asOf: asOf)
+            loanStartedAt = asOf
+            UserDefaults.standard.set(asOf, forKey: Keys.loanStartedAt)
+        }
         deps.setAutomaticDosingPaused(true)
         // Yield the RADIO too, exactly as a grant does: a yielded phone that keeps its
         // standing connect starves an alive watch's per-cycle reclaims (single-central
@@ -66,40 +79,9 @@ extension PodLoanPhoneController {
         PhoneLog.event("mirror", "YIELDING to an inferred loan — \(evidence); pill=Pod on Watch, dosing paused, pod BLE released, exits: pill tap / watch revival / R40(f) prompt (R40(a): on conflict the phone yields) [mirror]")
     }
 
-    /// Absolution: stamp the foreign-session evidence as HANDLED because a reconciled or
-    /// forced loan-end explains it. Without this, detector A reads a routine loan's own
-    /// SQN residue as a discovered seizure the moment the watch goes quiet afterward —
-    /// the false positive that would put a normal day's phone into a needless yield.
-    func absolveForeignSessions(reason: String) {
-        UserDefaults.standard.set(deps.now(), forKey: Keys.lastHandledForeignSessionAt)
-        PhoneLog.event("mirror", "foreign-session evidence absolved — \(reason) [mirror]")
-    }
-
-    /// Every re-arm of the phone's pod bid goes through here, so detector A knows that a
-    /// post-loan session — which always resyncs — is still ahead of it.
+    /// Every re-arm of the phone's pod bid goes through here.
     func reclaimPodConnection() {
-        UserDefaults.standard.set(deps.now(), forKey: Keys.rebidAt)
-        UserDefaults.standard.removeObject(forKey: Keys.firstContactSinceRebid)
         (deps.pumpManager() as? PumpConnectionLendable)?.reclaimConnection()
-    }
-
-    /// The first pod round-trip completed since the last re-bid — detector A's arming
-    /// point. nil = not yet armed. Observes the pump's own `lastSync` (advanced only by a
-    /// successful round-trip) and stamps the first one past the re-bid; the verified
-    /// reclaim stamps it directly. Never re-bid at all = legacy behavior (arm on anything).
-    func firstContactSinceRebid() -> Date? {
-        let defaults = UserDefaults.standard
-        if let first = defaults.object(forKey: Keys.firstContactSinceRebid) as? Date { return first }
-        guard let rebid = defaults.object(forKey: Keys.rebidAt) as? Date else { return .distantPast }
-        guard let sync = deps.pumpManager()?.lastSync, sync > rebid else { return nil }
-        recordFirstContactSinceRebid(sync)
-        return sync
-    }
-
-    func recordFirstContactSinceRebid(_ sync: Date) {
-        guard UserDefaults.standard.object(forKey: Keys.firstContactSinceRebid) == nil else { return }
-        UserDefaults.standard.set(sync, forKey: Keys.firstContactSinceRebid)
-        PhoneLog.event("mirror", "detector A ARMED — first pod round-trip since the re-bid completed \(ISO8601DateFormatter().string(from: sync)); only later sessions can count [mirror]")
     }
 
     /// Exit bookkeeping. `resumeDosing` stays false on every current path: reclaimNow's
@@ -111,42 +93,6 @@ extension PodLoanPhoneController {
         syncUIMirror()
         deps.ownershipDidChange()
         PhoneLog.event("mirror", "inferred-loan yield CLEARED — \(reason) [mirror]")
-    }
-
-    /// Detector A (rows 7/8 — watch absent): foreign pod sessions discovered at .owner.
-    /// The pod's EAP/SQN counters advance for ANY controller, so a resync observed while
-    /// we believe we are the only controller is definitive books-dirty evidence. SQN is
-    /// not subject to the lost-ack settling that motivated M — M stays reserved for the
-    /// future odometer tripwire; the launch guard covers the one self-inflicted resync
-    /// (our own restored state racing our own sessions).
-    /// Pinged from the same loop-update moment as the dormant refresher; all gating here.
-    func considerInferredLoan() {
-        queue.async { [weak self] in self?.queue_considerInferredLoan() }
-    }
-
-    private func queue_considerInferredLoan() {
-        guard state == .owner, !yieldingToInferredLoan else { return }
-        // Never while this phone is itself reclaiming: the settle's own round-trip is the one
-        // session guaranteed to resync (2026-09-13 16:09:33 — 2 s into a dead-watch force).
-        guard reclaimStartedAt == nil else { return }
-        guard UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) != nil,
-              UserDefaults.standard.bool(forKey: Keys.watchSupportsSeize) else { return }
-        // The resync our own post-loan session produces is never foreign: arm only once a
-        // round-trip since the last re-bid has completed, and count only what came after it.
-        guard let firstContact = firstContactSinceRebid() else { return }
-        // Watch-absent = the reclaim ladder's own pulse discriminator, same constants.
-        let contactAge = deps.lastWatchContactAt().map { deps.now().timeIntervalSince($0) }
-        let heardRecently = (contactAge ?? .greatestFiniteMagnitude) < Self.watchContactLivenessWindow
-        guard !deps.isWatchReachable(), !heardRecently else { return }
-        guard deps.now().timeIntervalSince(processStartedAt) > 120 else { return }
-        guard let foreignAt = (deps.pumpManager() as? PumpConnectionLendable)?.podLoanLastForeignSessionAt,
-              foreignAt > firstContact else { return }
-        let handled = UserDefaults.standard.object(forKey: Keys.lastHandledForeignSessionAt) as? Date
-        guard foreignAt > (handled ?? .distantPast) else { return }
-        UserDefaults.standard.set(foreignAt, forKey: Keys.lastHandledForeignSessionAt)
-        engageInferredLoanYield(evidence: String(format: "foreign pod sessions at %@ (SQN resync), watch silent %@",
-                                                 ISO8601DateFormatter().string(from: foreignAt),
-                                                 contactAge.map { String(format: "%.0fs", $0) } ?? "always"))
     }
 
     func abortGrant(reason: String) {

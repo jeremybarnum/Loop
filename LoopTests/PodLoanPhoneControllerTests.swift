@@ -2348,114 +2348,6 @@ extension PodLoanPhoneControllerTests {
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "the pod bid re-armed")
     }
 
-    /// Detector A (rows 7/8): foreign pod sessions (the SQN-resync stamp) discovered at
-    /// .owner while the watch is absent by the ladder's own pulse discriminator. One stamp
-    /// fires one yield (the handled-stamp survives), and a reachable watch holds it off
-    /// entirely — with WC up, row 6's batch evidence and the R40(f) prompt own the case.
-    func testForeignSessionsWhileWatchAbsentYieldOnce() {
-        _ = seizeCredentialOutstanding()
-        let controller = makeController(watchReachable: { false }, lastWatchContact: { nil }, now: { self.clock })
-        clock = clock.addingTimeInterval(300)                     // past the launch-restore guard
-        MockPumpManager.testForeignSessionAt = clock.addingTimeInterval(-60)
-
-        controller.considerInferredLoan()
-        waitUntil(timeout: 5, "yield engaged") { controller.yieldingToInferredLoan }
-        XCTAssertTrue(controller.isPodLoanedOut)
-
-        // Same stamp again after a pill-tap recovery: handled, no re-fire. (Terminal-
-        // condition wait — a bare waitForState(.owner) can sample the pre-transition
-        // .owner before reclaimNow's block runs.)
-        controller.reclaimNow()
-        waitUntil(timeout: 5, "force landed") {
-            controller.state == .owner && !controller.yieldingToInferredLoan && !MockPumpManager.testConnectionReleased
-        }
-        controller.considerInferredLoan()
-        usleep(300_000)
-        XCTAssertFalse(controller.yieldingToInferredLoan, "a handled stamp must not re-trigger the posture")
-    }
-
-    /// The false positive the pre-ship verification pass caught: every NORMAL loan leaves
-    /// the same SQN residue detector A reads — the watch drove the pod, and the phone's
-    /// own reclaim observes the foreign sessions, at .owner. Hand back, pocket the phone,
-    /// leave the watch behind, and 330 s later the un-absolved detector would yield the
-    /// phone to a loan that ended properly. Absolution at reconciliation (verified or
-    /// forced) consumes the evidence; genuinely NEW sessions afterward still convict.
-    func testNormalLoanResidueIsAbsolvedNotRediscovered() throws {
-        _ = seizeCredentialOutstanding()
-        let controller = makeController(watchReachable: { false }, lastWatchContact: { nil }, now: { self.clock })
-        _ = try establishLoan(controller)
-        MockPumpManager.testForeignSessionAt = clock   // the loan's own sessions, as the reclaim sees them
-
-        controller.reclaimNow()                        // user takes the pod back; dead branch forces
-        waitUntil(timeout: 5, "force landed") { controller.state == .owner && !MockPumpManager.testConnectionReleased }
-        // The settle verifies (the mock's round-trip lands at the real clock, ahead of the
-        // frozen one): that round-trip is the first contact since the re-bid, and arms the
-        // detector for everything AFTER it.
-        waitUntil(timeout: 5, "reclaim verified") { controller.state == .owner && !controller.isReclaimSettlingOnlyForUI }
-
-        clock = clock.addingTimeInterval(600)          // walk away: past liveness window + launch guard
-        controller.considerInferredLoan()
-        usleep(300_000)
-        XCTAssertFalse(controller.yieldingToInferredLoan,
-                       "the loan's own residue is absolved at the force — a routine day must never yield")
-
-        MockPumpManager.testForeignSessionAt = clock.addingTimeInterval(-30)   // NEW sessions after absolution
-        controller.considerInferredLoan()
-        waitUntil(timeout: 5, "fresh evidence yields") { controller.yieldingToInferredLoan }
-    }
-
-    /// THE 2026-09-13 LOCKOUT, as a unit test. A dead-watch force reclaim absolves the loan's
-    /// residue at the tap, then the reclaim's OWN first session resyncs the pod's counters —
-    /// a stamp NEWER than the absolution and OLDER than the verified round-trip. Detector A
-    /// read it as a foreign controller 2 s in and yielded the phone to a loan that was the
-    /// phone's own reclaim. Now the veto arms only on the first round-trip since the re-bid
-    /// and counts only sessions after it: the reclaim's fingerprints never convict, a
-    /// genuinely later session still does.
-    func testTheReclaimsOwnResyncNeverYieldsThePhone() throws {
-        _ = seizeCredentialOutstanding()
-        // Real clock plus an offset: the settle must verify against the mock's real-time
-        // round-trip, and the launch/liveness guards must still be skippable.
-        var offset: TimeInterval = 0
-        let controller = makeController(watchReachable: { false }, lastWatchContact: { nil },
-                                        now: { Date().addingTimeInterval(offset) })
-        _ = try establishLoan(controller)
-
-        connectionReady = false                        // the pod is still coming back: the settle stays open
-        controller.reclaimNow()                        // dead branch: forces, absolves, re-bids, settles
-        waitUntil(timeout: 5, "force landed") { controller.state == .owner && !MockPumpManager.testConnectionReleased }
-        XCTAssertTrue(controller.isReclaimSettlingOnlyForUI, "settle open, not yet verified")
-        let absolvedAt = try XCTUnwrap(UserDefaults.standard.object(forKey: "PodLoanPhoneController.lastHandledForeignSessionAt") as? Date,
-                                       "the force absolves the loan's residue at the tap")
-
-        // 16:09:32 — the reclaim's OWN first session resyncs: a stamp newer than the absolution.
-        MockPumpManager.testForeignSessionAt = absolvedAt.addingTimeInterval(0.5)
-        offset = 600                                   // walk away: past liveness window + launch guard
-        controller.considerInferredLoan()              // 16:09:33 — this is where the phone yielded itself
-        usleep(300_000)
-        XCTAssertFalse(controller.yieldingToInferredLoan, "never while this phone is itself reclaiming")
-
-        // The pod comes home and the settle verifies: that round-trip is the first contact
-        // since the re-bid, and the resync it produced stays ours after the settle closes too.
-        connectionReady = true
-        waitUntil(timeout: 8, "reclaim verified") { controller.state == .owner && !controller.isReclaimSettlingOnlyForUI }
-        let firstContact = try XCTUnwrap(UserDefaults.standard.object(forKey: "PodLoanPhoneController.firstContactSinceRebid") as? Date,
-                                         "the verified round-trip arms the detector")
-        XCTAssertGreaterThan(firstContact, MockPumpManager.testForeignSessionAt!, "the resync predates the round-trip that produced it")
-        controller.considerInferredLoan()
-        usleep(300_000)
-        XCTAssertFalse(controller.yieldingToInferredLoan, "the phone's own reclaim session must never read as a foreign controller")
-        XCTAssertFalse(controller.isPodLoanedOutForUI, "tile stays the phone's own")
-        lock.lock(); let noticesSoFar = notices; lock.unlock()
-        XCTAssertFalse(noticesSoFar.contains("Pod Looks Controlled by the Watch"), "no yield, no notice")
-
-        // A session genuinely AFTER the first contact is the veto's one legitimate job. (On the
-        // controller's clock: the verification absolved at now+offset, and the pod's stamp
-        // must be newer than that absolution as well as newer than the first contact.)
-        MockPumpManager.testForeignSessionAt = Date().addingTimeInterval(offset + 60)
-        controller.considerInferredLoan()
-        waitUntil(timeout: 5, "later foreign session yields") { controller.yieldingToInferredLoan }
-    }
-
     /// The veto's posture can never trap the user (the rule, 2026-09-13: phone Bluetooth on
     /// and pod reachable ⇒ the phone can always take the pod). The tile routes its tap to
     /// Reclaim Now from the yield (it used to route on `state != .owner` alone and fall
@@ -2710,33 +2602,6 @@ extension PodLoanPhoneControllerTests {
         waitUntil(timeout: 5, "re-aim diag") { self.diagMatching("RE-AIMED") != nil }
     }
 
-    /// The gates, each alone sufficient to hold the mirror off: no credential (watchless
-    /// and never-loaned users stay bit-for-bit stock), the kill switch, and — for
-    /// detector A — a reachable watch.
-    func testInferredLoanGatesHold() throws {
-        // No credential: the future-epoch batch drops exactly as before, nothing engages.
-        let controller = makeController()
-        controller.handleIncoming(userInfo: try futureEpochBatch(epoch: 5))
-        usleep(300_000)
-        XCTAssertFalse(controller.yieldingToInferredLoan, "no credential, no mirror — structurally stock")
-
-        // Credential but kill switch: evidence logged, posture refused.
-        _ = seizeCredentialOutstanding()
-        UserDefaults.standard.set(true, forKey: "PodLoanPhoneController.inferredLoanYieldDisabled")
-        controller.handleIncoming(userInfo: try futureEpochBatch(epoch: 6))
-        usleep(300_000)
-        XCTAssertFalse(controller.yieldingToInferredLoan, "kill switch holds")
-        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.inferredLoanYieldDisabled")
-
-        // Detector A with a REACHABLE watch: no yield — that is row 6's territory.
-        let reachable = makeController(watchReachable: { true }, lastWatchContact: { self.clock }, now: { self.clock })
-        clock = clock.addingTimeInterval(300)
-        MockPumpManager.testForeignSessionAt = clock.addingTimeInterval(-60)
-        reachable.considerInferredLoan()
-        usleep(300_000)
-        XCTAssertFalse(reachable.yieldingToInferredLoan, "a reachable watch means WC evidence and the prompt own the case")
-    }
-
     // MARK: - Grant anchor (2026-08-17)
 
     /// A FAILED TAKEOVER MUST NOT LEAK ITS CLOCK INTO THE NEXT GRANT.
@@ -2955,6 +2820,51 @@ extension PodLoanPhoneControllerTests {
         clock = clock.addingTimeInterval(.minutes(10))    // well past where last call would have ended
         tick(controller)
         XCTAssertEqual(controller.state, .loaned, "the hold is fresh again; the phone stays out")
+    }
+
+    /// 2026-09-19: a loan ended cleanly; hours later a reclaim with no loan of its own audited
+    /// from that loan's start and booked 3.45 U of already-recorded insulin. An audit consumes
+    /// its anchors.
+    func testAnAuditConsumesItsAnchors() throws {
+        let controller = makeController()
+        _ = establishLoan(controller)
+        XCTAssertNotNil(controller.auditBase, "a live loan has its anchor")
+
+        MockPumpManager.testOdometer = 10.0
+        controller.forceReclaimToOwner(reason: "test: the loan is over")
+        waitForState(controller, .owner)
+        waitUntil(timeout: 8, "verdict") { self.diagMatching("reconcile[FORCE-RECLAIM]") != nil }
+        controller.queue.sync { }
+
+        XCTAssertNil(controller.auditBase, "spent with its loan — nothing later can audit from here")
+        XCTAssertNil(controller.loanStartedAt)
+    }
+
+    /// A loan the watch ANNOUNCED (a seized pod) is a hold like any other: anchored at this
+    /// phone's own last pod read, and gone by itself when the watch goes quiet. Before this the
+    /// posture had no expiry (2026-09-13: two hours) and its exit audited an older loan's window.
+    func testALoanTheWatchAnnouncedLapsesLikeAnyOtherHold() throws {
+        _ = seizeCredentialOutstanding()
+        let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
+        MockPumpManager.testOdometer = 20.0
+        controller.handleIncoming(userInfo: try LoanMessage.statusReport(StatusReport(
+            epoch: 5, mode: .closedDirect, lastDirectGlucoseAge: 60, lastEventSeq: 2,
+            podFault: nil, holdsPod: true)).transportDictionary())
+        waitUntil(timeout: 5, "standing aside on the watch's word") { controller.yieldingToInferredLoan }
+        controller.queue.sync { }
+        XCTAssertEqual(controller.auditBase?.units, 20.0, "anchored at this phone's own last pod read")
+
+        clock = clock.addingTimeInterval(.minutes(16))
+        tick(controller)
+        XCTAssertTrue(controller.yieldingToInferredLoan, "noticed, not acted on: last call")
+
+        clock = clock.addingTimeInterval(.minutes(7))
+        tick(controller)
+        waitUntil(timeout: 5, "the phone takes the pod back by itself") { !controller.yieldingToInferredLoan }
+        controller.queue.sync { }
+        // 23 minutes at 1.0 U/h since the phone's own last read, floored to whole pulses — not
+        // some earlier loan's window.
+        XCTAssertNotNil(diagMatching("R37 audit armed — expected 0.350 U"), "\(diags)")
     }
 
     /// 2026-09-18: a queued message landed 65 minutes late and was believed. A renewal counts by

@@ -1776,8 +1776,6 @@ private final class PhoneOverrideHarness {
             },
             doseHistory: { _, completion in completion([]) },
             issueNotice: { _, _ in }))
-        // The 90 s post-reclaim re-audit needs a pump; stub it out so nothing fires late.
-        controller.postReclaimReAudit = {}
     }
 
     /// Deliver a FINAL (released) hand-back offer and run the commit path to completion.

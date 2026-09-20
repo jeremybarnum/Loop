@@ -228,14 +228,6 @@ extension PodLoanPhoneController {
                         self.handbackDiag(self.epoch,
                             String(format: "reclaim VERIFIED — pod round-trip complete +%.0fs (link +%.1fs, stale reads %d, read +%.1fs)",
                                    elapsed, linkWait, self.reclaimStaleReads, readWait))
-                        // PHONE MIRROR absolution: the loan that just reconciled EXPLAINS every
-                        // foreign session up to now — without this, the mirror's SQN detector
-                        // would read a routine loan's own residue as a discovered seizure the
-                        // moment the watch goes quiet (hand back, pocket the phone, walk away).
-                        self.absolveForeignSessions(reason: "reclaim verified — the loan explains its own sessions")
-                        // This round-trip IS the first contact since the re-bid: the resync
-                        // it produced is ours, and only what the pod shows after it can count.
-                        self.recordFirstContactSinceRebid(sync)
                         self.deps.ownershipDidChange()
                         // The pod is provably reachable RIGHT NOW. This is the only moment in the
                         // whole hand-back where that is true, so it is where both jobs that need
@@ -285,6 +277,7 @@ extension PodLoanPhoneController {
     /// reclaim never verifies, the settle ceiling drops it. A loan that ends with the pod
     /// unreachable simply keeps the provisional line — which is what we had before.
     func finishPendingHandbackAudit(elapsed: TimeInterval) {
+        defer { clearAuditAnchors() }   // the pod is home: whatever this loan's audit was, it is spent
         guard let pending = pendingHandbackAudit else { return }
         pendingHandbackAudit = nil
 
@@ -457,8 +450,6 @@ extension PodLoanPhoneController {
         static let loanStartedAt = "PodLoanPhoneController.loanStartedAt"
         // §5.3.3 post-reclaim re-audit state
         static let deliveredAtGrant = "PodLoanPhoneController.deliveredAtGrant"
-        static let expectedUnits = "PodLoanPhoneController.expectedUnits"
-        static let watchAuditRan = "PodLoanPhoneController.watchAuditRan"
         /// The watch's post-takeover odometer, sent in takeoverComplete while the watch is
         /// still alive — which is what makes the end-of-loan audit possible after it dies.
         static let deliveredAtTakeover = "PodLoanPhoneController.deliveredAtTakeover"
@@ -489,17 +480,6 @@ extension PodLoanPhoneController {
         /// PHONE MIRROR: the yielded posture survives relaunch (the blackout it answers
         /// can include phone reboots).
         static let yieldingToInferredLoan = "PodLoanPhoneController.yieldingToInferredLoan"
-        /// PHONE MIRROR: the last foreign-session evidence already acted on, so one
-        /// resync fires one yield across relaunches instead of re-triggering forever.
-        static let lastHandledForeignSessionAt = "PodLoanPhoneController.lastHandledForeignSessionAt"
-        /// PHONE MIRROR arming: when this phone last re-armed its pod bid (any reclaim), and
-        /// the first pod round-trip it completed after that. The phone's own first session
-        /// after a loan ALWAYS resyncs the pod's counters — the watch advanced them — so
-        /// detector A counts only evidence newer than that round-trip. Persisted because a
-        /// reclaim can straddle a relaunch. (2026-09-13 16:09: the detector fired on the
-        /// reclaim's own resync, 2 s into a dead-watch force, and locked the phone out.)
-        static let rebidAt = "PodLoanPhoneController.rebidAt"
-        static let firstContactSinceRebid = "PodLoanPhoneController.firstContactSinceRebid"
     }
 
     enum NotificationID {
@@ -576,8 +556,6 @@ extension PodLoanPhoneController {
             self.reclaimPodConnection()
             self.state = .reclaimPending
             self.armPausedReminder()
-            // §5.3.3 dead-watch path: audit against the schedule, notice-only.
-            self.schedulePostReclaimReAudit(recordsCommitted: false)
             self.armReclaimLadder()
         }
     }
@@ -731,7 +709,6 @@ extension PodLoanPhoneController {
         // every foreign session up to this moment is either the loan being forced closed
         // or the seizure the user just chose to take over from. The mirror must not
         // rediscover it minutes later.
-        absolveForeignSessions(reason: "force reclaim (\(reason))")
         cancelReclaimLadder()
         cancelNotification(id: NotificationID.paused)
         cancelNotification(id: NotificationID.duration)
