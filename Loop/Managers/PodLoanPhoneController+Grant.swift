@@ -204,7 +204,9 @@ extension PodLoanPhoneController {
                 self.grantInFlight = false
                 if let error = error {
                     self.deps.setAutomaticDosingPaused(false)
-                    self.deny("The pod didn't take the temp cancel (\(error.localizedDescription)). The phone kept the pod.")
+                    // Says what the user can act on. The old wording ("the pod didn't take the temp
+                    // cancel") named an internal step, and with no pod paired it was simply wrong.
+                    self.deny("The iPhone couldn't reach its pod (\(error.localizedDescription)). The phone kept the pod.")
                     return
                 }
                 self.continueGrant(settings: settings, loanSettings: loanSettings, pump: pump, lendable: lendable)
