@@ -865,8 +865,12 @@ final class LoanBooksHarnessTests: XCTestCase {
         return status.dynamicGlucoseEffects(
             from: start,
             to: spanEnd,
-            carbRatios: fieldCarbRatio.between(start: start, end: spanEnd),
-            insulinSensitivities: fieldISF.quantitiesBetween(start: start, end: spanEnd),
+            // The schedules must cover the ENTRIES, not just the effect window: a timeline asked
+            // from `start` begins at that day's schedule boundary, so a meal dated before
+            // midnight had no ratio or sensitivity and tripped LoopKit's precondition — this
+            // suite crashed its host between 00:00 and 01:30 (2026-09-20).
+            carbRatios: fieldCarbRatio.between(start: entriesStart, end: spanEnd),
+            insulinSensitivities: fieldISF.quantitiesBetween(start: entriesStart, end: spanEnd),
             absorptionModel: PiecewiseLinearAbsorption())
     }
 
