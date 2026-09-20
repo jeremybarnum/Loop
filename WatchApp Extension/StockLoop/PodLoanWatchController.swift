@@ -438,11 +438,21 @@ final class PodLoanWatchController {
     /// R40(e): resume the loan a relaunch interrupted. Called by the session after every hook is
     /// wired (the sibling of `drainRecoveredIfNeeded`, minus the transport dependency: the pod
     /// needs no phone). No-op unless init found an active loan with saved state.
+    ///
+    /// The user is looking at "Resuming session…", so the rebuild runs at their priority, and the
+    /// process is held until it finishes. Bench 2026-09-19/20: on a watch just powered up the
+    /// rebuild made no progress for 9–15 s on this utility queue while the main thread drew
+    /// normally, then the screen dropped and the process was suspended mid-rebuild until the next
+    /// Bluetooth wake (18, 40 and 15 s in all; 0.1–0.4 s after a force-quit).
     func resumeIfNeeded() {
-        queue.async {
+        let rebuild = DispatchWorkItem(qos: .userInitiated, flags: .enforceQoS) {
             guard let saved = self.pendingResumeState else { return }
             self.pendingResumeState = nil
             self.resumeSavedLoanOnQueue(saved)
+        }
+        queue.async(execute: rebuild)
+        ProcessInfo.processInfo.performExpiringActivity(withReason: "Sport Mode resume") { expired in
+            if !expired { rebuild.wait() }
         }
     }
 

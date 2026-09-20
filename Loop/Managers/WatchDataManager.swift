@@ -208,7 +208,7 @@ final class WatchDataManager: NSObject {
         // R40: every loop update pings the dormant-grant refresher — all gating (owner
         // state, watch capability, settings fingerprint, 30-min floor) lives inside it,
         // so this is one enqueued no-op almost always.
-        podLoanController.considerDormantRefresh()
+        podLoanController.considerDormantRefresh(bookChanged: updateContext == .insulin || updateContext == .carbs)
         // The watch's hold on the pod lapses by itself when its renewals stop — same pulse.
         podLoanController.considerHoldLapse()
 
