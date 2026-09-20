@@ -528,17 +528,13 @@ extension PodLoanPhoneController {
 
     // MARK: - Escape hatch (§3.1 RECLAIM_PENDING)
 
-    /// The phone takes the pod back: the user's pill tap, or — with `trigger` naming it — the
-    /// watch's hold lapsing by itself. Same road either way: tell the watch (a live one drains
-    /// its records politely; the message is true whenever it lands), then take the pod.
-    func reclaimNow(trigger: String = "pill tap") {
+    func reclaimNow() {
         queue.async {
             guard self.podIsOnLoan else { return }
-            if trigger != "pill tap" { self.handbackDiag(self.epoch, "reclaim — \(trigger)") }
             // PHONE MIRROR exit: the pill tap on an inferred loan takes the SAME road a
             // granted dead-watch loan takes — revoke (stale epoch, harmless), ladder,
             // force, schedule audit, gap booking. forceReclaimToOwner unpauses dosing.
-            self.clearInferredLoanYield(reason: "\(trigger) — reclaimNow (the inherited exit)")
+            self.clearInferredLoanYield(reason: "pill tap — reclaimNow (the inherited exit)")
             self.reclaimDisplayAnchor = self.deps.now()   // the user's wait starts at the tap
             // Hold background execution from the tap: without it, tap-and-pocket freezes the
             // ladder and orphans the pod until the user next looks at the phone.

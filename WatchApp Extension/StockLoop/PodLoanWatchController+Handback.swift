@@ -363,8 +363,9 @@ extension PodLoanWatchController {
             // from there it cannot know whether the phone took the pod: on 2026-09-19 it resumed
             // by timer 0.6 s before the phone committed — two controllers for 7.6 minutes. It
             // stays stopped, lets go of the pod so the phone can reach it, and keeps offering its
-            // records. The phone resumes on the offer, or by itself once the hold lapses.
-            SportLog.event("loan", "HAND-BACK \(why) (final); staying RELEASED — the pod is let go, records keep offering, and the phone resumes on receipt or when the hold lapses\(wedgeSuffix)")
+            // records. The phone resumes when the offer lands; failing that it warns that the
+            // watch has gone quiet, and the user brings the pod back with the pod tile.
+            SportLog.event("loan", "HAND-BACK \(why) (final); staying RELEASED — the pod is let go and the records keep offering; the phone resumes when the offer lands\(wedgeSuffix)")
             teardownPump()
             finalOfferSentAt = nil
             deliveredAtTakeover = nil
@@ -374,7 +375,7 @@ extension PodLoanWatchController {
             phase = .recoveredDrain
             sendHandbackOffer(freshened: false, recovered: true)
             issueProtocolAlert(title: NSLocalizedString("End Not Confirmed", comment: "Watch alert title: the phone has not confirmed a hand-back"),
-                               body: NSLocalizedString("The watch has stopped dosing. Your iPhone takes over when it hears from the watch, or by itself within about 20 minutes. Open Loop on the iPhone to hurry it.", comment: "Watch alert body: released but unconfirmed hand-back"))
+                               body: NSLocalizedString("The watch has stopped dosing and keeps sending its records. If your iPhone hasn't taken over in a minute or two, open Loop on the iPhone and tap the pod tile.", comment: "Watch alert body: released but unconfirmed hand-back"))
         } else {
             // Interim hang: never stopped dosing; phase already .active. Just abort the drain.
             SportLog.event("loan", "HAND-BACK \(why) (interim); Sport Mode continues on the watch\(wedgeSuffix)")
