@@ -199,7 +199,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                         lastWatchContact: @escaping () -> Date? = { nil },
                         now: @escaping () -> Date = { Date() },
                         listenForPodAdverts: @escaping (Int) -> Void = { _ in },
-                        stopListeningForPodAdverts: @escaping (Int, String) -> Void = { _, _ in }) -> PodLoanPhoneController {
+                        stopListeningForPodAdverts: @escaping (Int, String) -> Void = { _, _ in },
+                        bluetoothPoweredOff: @escaping () -> Bool = { false }) -> PodLoanPhoneController {
         return PodLoanPhoneController(dependencies: .init(
             pumpManager: { [weak self] in self?.pump },
             settings: { [weak self] in self?.settings ?? LoopSettings() },
@@ -281,6 +282,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 self.lock.lock(); self.backgroundTaskEnds += 1; self.lock.unlock()
             },
             isWatchReachable: watchReachable,
+            isBluetoothPoweredOff: bluetoothPoweredOff,
             lastWatchContactAt: lastWatchContact,
             now: now,
             listenForPodAdverts: listenForPodAdverts,
@@ -1422,6 +1424,40 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         waitUntil(timeout: 5, "dosing resumed") { self.lock.lock(); defer { self.lock.unlock() }; return self.pauseCalls.contains(false) }
         XCTAssertEqual(pauseCalls, [true, false], "the loan still closes and dosing resumes")
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed on the empty close")
+    }
+
+    /// A phone whose own Bluetooth is off could not reclaim the pod, so it refuses the
+    /// hand-back OUT LOUD — interim and final alike — commits nothing and changes no state.
+    /// (Next-dev bench 2026-09-19 13:19: WatchConnectivity runs over Wi-Fi, so such a phone
+    /// was "reachable", acked a final offer in a second, and then owned a pod it could not
+    /// reach.) Bluetooth back on, the SAME final offer is accepted.
+    func testHandbackIsRefusedOutLoudWhileThisPhonesBluetoothIsOff() throws {
+        var bluetoothOff = true
+        let controller = makeController(bluetoothPoweredOff: { bluetoothOff })
+        let grant = try establishLoan(controller)
+        func offer(released: Bool) throws -> [String: Any] {
+            try LoanMessage.handbackOffer(HandbackOffer(
+                epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                events: [], tombstones: [], recovered: false, released: released)).transportDictionary()
+        }
+
+        for released in [false, true] {
+            let refused = expectSend()
+            controller.handleIncoming(userInfo: try offer(released: released))
+            wait(for: [refused], timeout: 5)
+            guard case .denied(let denied)? = lastSent() else { return XCTFail("expected a refusal, not \(String(describing: lastSent()))") }
+            XCTAssertTrue(denied.reason.contains("Bluetooth"), "the watch shows the phone's own reason")
+            XCTAssertEqual(controller.state, .loaned, "nothing transitions (released=\(released))")
+            XCTAssertTrue(MockPumpManager.testConnectionReleased, "the pod stays with the watch")
+        }
+
+        bluetoothOff = false
+        let ackSent = expectSend()
+        controller.handleIncoming(userInfo: try offer(released: true))
+        wait(for: [ackSent], timeout: 5)
+        guard case .handbackAck? = lastSent() else { return XCTFail("expected ack once Bluetooth is back") }
+        waitForState(controller, .owner)
+        XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed")
     }
 
     // MARK: - Field incident: stale offer clamps a LATER epoch's doses
