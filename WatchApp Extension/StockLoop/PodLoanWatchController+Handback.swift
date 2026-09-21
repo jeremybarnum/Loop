@@ -314,6 +314,18 @@ extension PodLoanWatchController {
                 self.finalOfferSentAt = nil
                 self.handbackRequested = false
                 self.finalOfferSent = false
+                // Everything this session accumulated goes with it. The resend count and the two
+                // wedge flags are per-session: carried into the next one they start it already
+                // spent, so the NEXT drain gives up after a single offer and its wedge verdict
+                // describes a session that is over. Only `beginHandback` used to clear them,
+                // which a drain never runs through.
+                self.handbackResendCount = 0
+                self.handbackSawUnreachable = false
+                self.handbackSawUrgentSendError = false
+                self.urgentSendWedged = false
+                // Same reason the ordinary close clears it: left set, the next ordinary loan is
+                // mistaken for one grown from the standing copy.
+                self.defaults.removeObject(forKey: DormantKeys.activeToken)
                 HandbackStuckAlert.disarm()
                 self.onLoanActiveChanged?(false)
                 SportLog.event("loan", "CLOSED — drain abandoned, pod already the phone's")
