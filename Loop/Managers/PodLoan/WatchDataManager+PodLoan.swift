@@ -14,9 +14,8 @@
 //  The reclaim ladder runs on wall-clock rungs; hold the app awake across them so a
 //  backgrounded phone still finishes taking the pod back.
 //
-//  lockedLastWatchContact / appInstalledGlitchWork / appInstalledGlitchNotified —
-//  When the watch was last heard from — the loan's liveness signal.
-//  appInstalled=false glitch detector state (see trackAppInstalledGlitch).
+//  `lockedLastWatchContact` stays in the stock file because an extension cannot hold a stored
+//  property: it is when the watch was last heard from, which is the loan's liveness signal.
 //
 
 import HealthKit
@@ -48,6 +47,13 @@ extension WatchDataManager {
 
     /// Brought up with WatchDataManager, after the session is activated.
     func podLoanStartup() {
+        // Which build this is, in the same words the watch uses: a commit and a build time.
+        // The two apps install separately, so a phone and a watch running different code is
+        // routine — and the App Store build number names the upload, not the source, so two
+        // lines of development can both be "255". Without a commit here, telling a real problem
+        // from a version skew means inferring it from behaviour, which has cost hours.
+        PhoneLog.event("session", "Loop phone ready — build \(BuildDetails.default.codeIdentity)")
+
         // Constructed eagerly so a relaunch mid-loan restores the persisted state machine —
         // dosing stays paused, reminders re-arm — before any message arrives.
         _ = podLoanController
@@ -300,37 +306,5 @@ extension WatchDataManager {
             + "appInstalled=\(session.isWatchAppInstalled) reachable=\(session.isReachable) "
             + "activation=\(session.activationState.rawValue) "
             + "complication=\(session.isComplicationEnabled)")
-        let paired = session.isPaired
-        let installed = session.isWatchAppInstalled
-        Task { @MainActor in self.trackAppInstalledGlitch(paired: paired, installed: installed) }
-    }
-
-    /// The `appInstalled=false` GLITCH detector. WCSession sometimes reports the watch app "not
-    /// installed" while it is sitting right there installed — a watch-side transport wedge, not
-    /// an install state. Field remedy, three-for-three (2026-08-2x): toggling the WATCH's
-    /// Bluetooth. Every occurrence cost real diagnosis time until someone remembered the
-    /// folklore, so the phone now says the remedy itself. 75 s of persistence before speaking:
-    /// a genuine install/replacement transits through false for up to ~7 min, but flips are
-    /// also momentary during ordinary churn — the delay keeps this quiet through normal
-    /// installs while still catching a wedge the same minute it starts. One notice per
-    /// occurrence; re-arms when the flag recovers.
-    @MainActor private func trackAppInstalledGlitch(paired: Bool, installed: Bool) {
-        if installed || !paired {
-            appInstalledGlitchWork?.cancel()
-            appInstalledGlitchWork = nil
-            appInstalledGlitchNotified = false
-            return
-        }
-        guard appInstalledGlitchWork == nil, !appInstalledGlitchNotified else { return }
-        let work = DispatchWorkItem { [weak self] in
-            guard let self = self else { return }
-            self.appInstalledGlitchWork = nil
-            self.appInstalledGlitchNotified = true
-            // Reconciled to the dev line: the 75-s persistence is still detected and
-            // logged (it was the signature of both of 09-08's silences); it no longer posts.
-            PhoneLog.event("link", "appInstalled=false has PERSISTED 75s [appinstalled-glitch]")
-        }
-        appInstalledGlitchWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 75, execute: work)
     }
 }

@@ -34,8 +34,6 @@ final class WatchDataManager: NSObject {
     // MARK: - Pod loan (stored state only — the behaviour is in WatchDataManager+PodLoan.swift)
 
     var reclaimBackgroundTask: UIBackgroundTaskIdentifier = .invalid   // PODLOAN: held across the reclaim ladder's wall-clock rungs
-    var appInstalledGlitchWork: DispatchWorkItem?   // PODLOAN: appInstalled=false glitch detector state
-    var appInstalledGlitchNotified = false   // PODLOAN: appInstalled=false glitch detector state
     let lockedLastWatchContact = Locked<Date?>(nil)   // PODLOAN: when the watch was last heard from — the loan's liveness signal
     private(set) lazy var podLoanController: PodLoanPhoneController = makePodLoanController()   // PODLOAN: dependency wiring in PodLoanPhoneController+Wiring.swift
 
