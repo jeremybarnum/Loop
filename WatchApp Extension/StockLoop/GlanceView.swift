@@ -630,6 +630,91 @@ private func previewState(_ build: (inout GlanceUIState) -> Void) -> GlanceUISta
 
 #if GLANCE_DEMO
 
+/// A gallery for stepping the live page through its states on a real wrist — the only way to
+/// judge legibility outdoors, in motion, at a glance.
+///
+/// Reachable ONLY through the diagnostics page's `GLANCE_DEMO`-gated link, not through DEBUG.
+/// Every number in here is invented, and a Debug build is something people who have no way to
+/// know that will run: a screenful of fictional pod and insulin state must not be one tap from
+/// the page they trust.
+struct GlanceDemoView: View {
+    @StateObject private var model = GlanceViewModel(preview: GlanceDemoView.states[0].state)
+
+    static let states: [(name: String, state: GlanceUIState)] = [
+        ("Active · in range · CLOSED", previewState { s in
+            s.phase = .active; s.bgText = "142"; s.trendSymbol = "↗"; s.bgColor = .inRange
+            s.eventualText = "128"; s.iobText = "1.8"; s.cobText = "24"; s.tempText = "+0.75"
+            s.loopFreshness = .fresh; s.loopClosed = true }),
+        ("Active · OPEN (advisory)", previewState { s in
+            s.phase = .active; s.bgText = "142"; s.trendSymbol = "↗"; s.bgColor = .inRange
+            s.eventualText = "128"; s.iobText = "1.8"; s.cobText = "24"; s.tempText = "—"
+            s.loopFreshness = .fresh; s.loopClosed = false }),
+        ("Active · high", previewState { s in
+            s.phase = .active; s.bgText = "214"; s.trendSymbol = "→"; s.bgColor = .high
+            s.eventualText = "176"; s.iobText = "2.6"; s.cobText = "31"; s.tempText = "+1.20"
+            s.loopFreshness = .fresh; s.loopClosed = true }),
+        ("Active · low", previewState { s in
+            s.phase = .active; s.bgText = "64"; s.trendSymbol = "↘"; s.bgColor = .low
+            s.eventualText = "58"; s.iobText = "0.4"; s.cobText = "0"; s.tempText = "0.00"
+            s.loopFreshness = .fresh; s.loopClosed = true }),
+
+        ("Active · aging BG · CLOSED", previewState { s in
+            s.phase = .active; s.bgText = "142"; s.trendSymbol = "→"; s.bgColor = .inRange
+            s.eventualText = "158"; s.iobText = "1.6"; s.cobText = "18"; s.tempText = "+0.90"
+            s.loopFreshness = .aging; s.loopClosed = true }),
+        ("Active · aging BG · OPEN", previewState { s in
+            s.phase = .active; s.bgText = "142"; s.trendSymbol = "→"; s.bgColor = .inRange
+            s.eventualText = "158"; s.iobText = "1.6"; s.cobText = "18"; s.tempText = "—"
+            s.loopFreshness = .aging; s.loopClosed = false }),
+        ("Stale glucose · CLOSED", previewState { s in
+            s.phase = .active; s.bgText = "148"; s.bgColor = .dim
+            s.staleAgeText = "16 min ago — no direct G7"; s.iobText = "1.8"; s.cobText = "24"
+            s.loopFreshness = .stale; s.loopClosed = true }),
+        ("Idle · activation", previewState { s in
+            s.phase = .idle; s.bgText = "138"; s.trendSymbol = "→"; s.bgColor = .dim
+            s.viaPhone = true; s.loopStatusText = "phone loop active" }),
+        ("Starting · reaching iPhone", previewState { s in
+            s.phase = .starting; s.bgText = "138"; s.trendSymbol = "→"; s.bgColor = .dim
+            s.viaPhone = true; s.loopStatusText = "starting…"
+            s.startingStageText = "reaching iPhone…"
+            s.g7EtaText = "G7 in ~3:10" }),
+        ("Starting · pod takeover (R24)", previewState { s in
+            s.phase = .starting; s.bgText = "138"; s.trendSymbol = "→"; s.bgColor = .dim
+            s.viaPhone = true; s.loopStatusText = "starting…"
+            s.startingStageText = "taking over pod…"
+            s.startedAt = Date().addingTimeInterval(-3)
+            s.g7EtaText = "G7 in ~2:40" }),
+        ("Starting · overrun", previewState { s in
+            s.phase = .starting; s.bgText = "138"; s.bgColor = .dim
+            s.viaPhone = true; s.loopStatusText = "starting…"
+            s.startingStageText = "taking over pod…"
+            s.startedAt = Date().addingTimeInterval(-20)
+            s.g7EtaText = "G7 in ~1:10" }),
+        ("Active · awaiting first G7", previewState { s in
+            s.phase = .active; s.bgText = "148"; s.bgColor = .dim
+            s.staleAgeText = "no direct G7 reading yet"; s.g7EtaText = "G7 in ~1:20"
+            s.iobText = "1.8"; s.cobText = "24"
+            s.loopStatusText = "PAUSED" }),
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 8) {
+                GlanceView(model: model)
+                    .frame(height: 200)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.gray.opacity(0.3)))
+                ForEach(Self.states.indices, id: \.self) { i in
+                    Button(Self.states[i].name) { model.state = Self.states[i].state }
+                        .font(.system(size: 12))
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+        .navigationTitle("Glance demo")
+    }
+}
+
 #endif
 
 #Preview("Active · in range") {
@@ -729,88 +814,3 @@ private func previewState(_ build: (inout GlanceUIState) -> Void) -> GlanceUISta
     }))
 }
 #endif
-
-/// A gallery for stepping the live page through its states on a real wrist — the only way to
-/// judge legibility outdoors, in motion, at a glance.
-///
-/// Reachable ONLY through the diagnostics page's `GLANCE_DEMO`-gated link, not through DEBUG.
-/// Every number in here is invented, and a Debug build is something people who have no way to
-/// know that will run: a screenful of fictional pod and insulin state must not be one tap from
-/// the page they trust.
-struct GlanceDemoView: View {
-    @StateObject private var model = GlanceViewModel(preview: GlanceDemoView.states[0].state)
-
-    static let states: [(name: String, state: GlanceUIState)] = [
-        ("Active · in range · CLOSED", previewState { s in
-            s.phase = .active; s.bgText = "142"; s.trendSymbol = "↗"; s.bgColor = .inRange
-            s.eventualText = "128"; s.iobText = "1.8"; s.cobText = "24"; s.tempText = "+0.75"
-            s.loopFreshness = .fresh; s.loopClosed = true }),
-        ("Active · OPEN (advisory)", previewState { s in
-            s.phase = .active; s.bgText = "142"; s.trendSymbol = "↗"; s.bgColor = .inRange
-            s.eventualText = "128"; s.iobText = "1.8"; s.cobText = "24"; s.tempText = "—"
-            s.loopFreshness = .fresh; s.loopClosed = false }),
-        ("Active · high", previewState { s in
-            s.phase = .active; s.bgText = "214"; s.trendSymbol = "→"; s.bgColor = .high
-            s.eventualText = "176"; s.iobText = "2.6"; s.cobText = "31"; s.tempText = "+1.20"
-            s.loopFreshness = .fresh; s.loopClosed = true }),
-        ("Active · low", previewState { s in
-            s.phase = .active; s.bgText = "64"; s.trendSymbol = "↘"; s.bgColor = .low
-            s.eventualText = "58"; s.iobText = "0.4"; s.cobText = "0"; s.tempText = "0.00"
-            s.loopFreshness = .fresh; s.loopClosed = true }),
-
-        ("Active · aging BG · CLOSED", previewState { s in
-            s.phase = .active; s.bgText = "142"; s.trendSymbol = "→"; s.bgColor = .inRange
-            s.eventualText = "158"; s.iobText = "1.6"; s.cobText = "18"; s.tempText = "+0.90"
-            s.loopFreshness = .aging; s.loopClosed = true }),
-        ("Active · aging BG · OPEN", previewState { s in
-            s.phase = .active; s.bgText = "142"; s.trendSymbol = "→"; s.bgColor = .inRange
-            s.eventualText = "158"; s.iobText = "1.6"; s.cobText = "18"; s.tempText = "—"
-            s.loopFreshness = .aging; s.loopClosed = false }),
-        ("Stale glucose · CLOSED", previewState { s in
-            s.phase = .active; s.bgText = "148"; s.bgColor = .dim
-            s.staleAgeText = "16 min ago — no direct G7"; s.iobText = "1.8"; s.cobText = "24"
-            s.loopFreshness = .stale; s.loopClosed = true }),
-        ("Idle · activation", previewState { s in
-            s.phase = .idle; s.bgText = "138"; s.trendSymbol = "→"; s.bgColor = .dim
-            s.viaPhone = true; s.loopStatusText = "phone loop active" }),
-        ("Starting · reaching iPhone", previewState { s in
-            s.phase = .starting; s.bgText = "138"; s.trendSymbol = "→"; s.bgColor = .dim
-            s.viaPhone = true; s.loopStatusText = "starting…"
-            s.startingStageText = "reaching iPhone…"
-            s.g7EtaText = "G7 in ~3:10" }),
-        ("Starting · pod takeover (R24)", previewState { s in
-            s.phase = .starting; s.bgText = "138"; s.trendSymbol = "→"; s.bgColor = .dim
-            s.viaPhone = true; s.loopStatusText = "starting…"
-            s.startingStageText = "taking over pod…"
-            s.startedAt = Date().addingTimeInterval(-3)
-            s.g7EtaText = "G7 in ~2:40" }),
-        ("Starting · overrun", previewState { s in
-            s.phase = .starting; s.bgText = "138"; s.bgColor = .dim
-            s.viaPhone = true; s.loopStatusText = "starting…"
-            s.startingStageText = "taking over pod…"
-            s.startedAt = Date().addingTimeInterval(-20)
-            s.g7EtaText = "G7 in ~1:10" }),
-        ("Active · awaiting first G7", previewState { s in
-            s.phase = .active; s.bgText = "148"; s.bgColor = .dim
-            s.staleAgeText = "no direct G7 reading yet"; s.g7EtaText = "G7 in ~1:20"
-            s.iobText = "1.8"; s.cobText = "24"
-            s.loopStatusText = "PAUSED" }),
-    ]
-
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 8) {
-                GlanceView(model: model)
-                    .frame(height: 200)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.gray.opacity(0.3)))
-                ForEach(Self.states.indices, id: \.self) { i in
-                    Button(Self.states[i].name) { model.state = Self.states[i].state }
-                        .font(.system(size: 12))
-                }
-            }
-            .padding(.horizontal, 2)
-        }
-        .navigationTitle("Glance demo")
-    }
-}
