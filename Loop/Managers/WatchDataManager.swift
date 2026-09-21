@@ -85,13 +85,6 @@ final class WatchDataManager: NSObject {
     // PODLOAN: the controller's dependency wiring lives in PodLoanPhoneController+Wiring.swift.
     private(set) lazy var podLoanController: PodLoanPhoneController = makePodLoanController()
 
-    /// Where inbound pod-loan messages go. Installed by the loan controller when Sport Mode is
-    /// wired up, and nil in a stock build — which is what keeps this feature's traffic from
-    /// being a hard dependency of the WatchConnectivity plumbing. Nil with a message arriving
-    /// is a real fault (the watch believes a loan exists and the phone has no owner for it),
-    /// so it logs rather than being silently tolerated.
-    var podLoanMessageReceiver: ((LoanMessage) -> Void)?
-
     init(
         deviceManager: DeviceDataManager,
         settingsManager: SettingsManager,
@@ -688,11 +681,7 @@ extension WatchDataManager: WCSessionDelegate {
             do {
                 if let message = try LoanMessage.decode(fromTransport: userInfo) {
                     lockedLastWatchContact.value = Date()
-                    if let receiver = podLoanMessageReceiver {
-                        receiver(message)
-                    } else {
-                        podLoanController.handleIncoming(userInfo: userInfo)
-                    }
+                    podLoanController.handleIncoming(userInfo: userInfo)
                     return
                 }
                 log.default("Unexpected userInfo from the watch: %{public}@", String(describing: Array(userInfo.keys)))

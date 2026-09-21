@@ -462,12 +462,6 @@ extension PodLoanPhoneController {
         return queue.sync { state != .owner || yieldingToInferredLoan }
     }
 
-    /// True while the pod is actively coming home (hand-back reconcile / reclaim in
-    /// flight) — the pump tile shows "Reclaiming…" instead of "Pod on Watch".
-    var isReclaimInProgress: Bool {
-        return queue.sync { state == .reconciling || state == .reclaimPending }
-    }
-
     /// True after state flips to .owner until the pod is truly back on the link
     /// (deps.isConnectionReady) or the settle ceiling elapses — bridging the ~2 min BLE
     /// re-establishment window after reclaimConnection() (which only re-arms the bid). Keeps

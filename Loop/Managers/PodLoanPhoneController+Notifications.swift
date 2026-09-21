@@ -62,12 +62,6 @@ extension PodLoanPhoneController {
         "Loop couldn't verify the watch's insulin delivery. Automatic dosing is off until you turn it back on.",
         comment: "Phone notice when a watch session's insulin could not be verified after reclaim")
 
-    /// RETIRED (ruled 2026-08-15). It repeated hourly, forever, to say that automatic dosing was
-    /// paused — a state the user can see, and often one they chose. Worse, it was armed from four
-    /// sites where the thing actually worth standing over (a booked placeholder) did not exist.
-    /// Its two cancel sites survive as no-ops so an upgrade retires anything already scheduled.
-    func armPausedReminder() {}
-
 
     // MARK: - Standing reminders (ruled 2026-08-15)
     //

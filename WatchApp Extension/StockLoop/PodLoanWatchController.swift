@@ -801,8 +801,6 @@ final class PodLoanWatchController {
     /// blocking. Dosing paths that genuinely need current state still call `debugSnapshot()`.
     let snapshotMirrorLock = NSLock()
 
-    /// Throttle for the [glance-stale] instrument — one line per burst, not one per tick.
-    private var lastMirrorDelayLogAt: Date?
     var _snapshotMirror: DebugSnapshot?
 }
 

@@ -27,7 +27,6 @@ extension PodLoanWatchController {
         let podFault: String?
         let lastEventSeq: Int
         let unackedCount: Int
-        let suspendEndsAt: Date?
         let lastIdleNote: String?
         /// When the current Start attempt began (progress bar); only meaningful
         /// while phase is requested/takingOver.
@@ -116,7 +115,6 @@ extension PodLoanWatchController {
                 podFault: pumpManager?.podLoanFaultDescription,
                 lastEventSeq: journal.lastEventSeq,
                 unackedCount: journal.unackedEvents().count,
-                suspendEndsAt: nil,
                 lastIdleNote: lastIdleNote,
                 startedAt: attemptStartedAt,
                 handbackPending: handbackRequested,

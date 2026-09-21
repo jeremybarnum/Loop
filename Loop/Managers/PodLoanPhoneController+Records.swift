@@ -404,9 +404,7 @@ extension PodLoanPhoneController {
                     // every 15 s and the retry is automatic — and `issueNotice` mints a fresh
                     // UUID per post, so it could never be retracted: the EXPECTED recovery left
                     // a banner standing that still claimed "Dosing stays paused" long after
-                    // dosing had resumed. The .fault logs below carry the diagnosis, and
-                    // armPausedReminder still carries the user-visible consequence.
-                    self.armPausedReminder()
+                    // dosing had resumed. The .fault logs below carry the diagnosis.
                     // No coalesced replay on failure — the watch's 15 s resend is the
                     // retry, and a hot local replay of the same failing write would spin. A
                     // deferred force-reclaim DOES run: it is the loan's only way out, and its
@@ -441,7 +439,6 @@ extension PodLoanPhoneController {
                             self.handbackDiag(offer.epoch, "backfill FAILED: \(String(describing: backfillError))")
                             os_log("Loan dose backfill failed: %{public}@", log: self.log, type: .fault, String(describing: backfillError))
                             // Same as the write-failure path above: logged, not posted.
-                            self.armPausedReminder()
                             if let reason = self.pendingForceReclaimReason {
                                 self.pendingForceReclaimReason = nil
                                 self.forceReclaimToOwner(reason: reason)

@@ -384,7 +384,6 @@ final class PodLoanPhoneController {
         // PHONE MIRROR: restored BEFORE the podIsOnLoan re-pause below, so a relaunch
         // mid-yield re-enters the posture (flag folds into podIsOnLoan) automatically.
         self.yieldingToInferredLoan = UserDefaults.standard.bool(forKey: Keys.yieldingToInferredLoan)
-        self.processStartedAt = dependencies.now()
         self.committedCursor = UserDefaults.standard.object(forKey: Keys.cursor) as? Int ?? 0
         self.pendingRevoke = UserDefaults.standard.bool(forKey: Keys.pendingRevoke)
         self.loanStartedAt = UserDefaults.standard.object(forKey: Keys.loanStartedAt) as? Date
@@ -468,7 +467,6 @@ final class PodLoanPhoneController {
             // healed — a relaunch during a real multi-hour loan is normal; its
             // recovery is a new request or the escape hatch, never a timer.
             if state == .reconciling || state == .reclaimPending {
-                armPausedReminder()
                 let stranded = state
                 queue.asyncAfter(deadline: .now() + 120) { [weak self] in
                     guard let self = self, self.state == stranded else { return }
@@ -602,10 +600,6 @@ final class PodLoanPhoneController {
     var lastDormantSettingsFingerprint: String?
 
     // MARK: - State for PodLoanPhoneController+Mirror.swift
-
-    /// Guards the SQN detector against our own relaunch-restore noise (a restored older
-    /// pod state can resync against our own sessions in the first moments of a launch).
-    let processStartedAt: Date
 
     /// The newest loan traffic seen for an epoch AHEAD of ours, in ANY state — batches
     /// dropped mid-drain, holdsPod status reports. Fix for the 2026-08-31 ghost-drain
