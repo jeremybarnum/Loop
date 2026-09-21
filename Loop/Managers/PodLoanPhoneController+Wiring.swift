@@ -15,10 +15,6 @@ import LoopAlgorithm
 import LoopKit
 import LoopCore
 
-    /// Peek at a queued payload's kind without fully decoding it, to decide whether it must
-    /// ride the interactive channel.
-private struct LoanKindPeek: Decodable { let kind: String }
-
 extension WatchDataManager {
     func makePodLoanController() -> PodLoanPhoneController {
         return PodLoanPhoneController(dependencies: .init(
@@ -57,8 +53,7 @@ extension WatchDataManager {
                 // it, so this is never less reliable than sending everything queued. The send
                 // outcome is logged because an urgent send that failed into the fallback is
                 // otherwise indistinguishable from one that worked.
-                let kind: String? = (dictionary[LoanProtocol.userInfoKey] as? Data)
-                    .flatMap { try? JSONDecoder().decode(LoanKindPeek.self, from: $0) }?.kind
+                let kind: String? = LoanMessage.peekKind(transport: dictionary)
                 // SIZE IS LOGGED ON BOTH PATHS, and to the FILE, not just os_log.
                 //
                 // These lines previously went only to os_log, so the phone's log file recorded a
@@ -77,8 +72,7 @@ extension WatchDataManager {
                 // unreachable watch is owed one copy, not one per cycle.
                 if kind == "dormantGrant" {
                     for transfer in session.outstandingUserInfoTransfers
-                    where (transfer.userInfo[LoanProtocol.userInfoKey] as? Data)
-                        .flatMap({ try? JSONDecoder().decode(LoanKindPeek.self, from: $0) })?.kind == "dormantGrant" {
+                    where LoanMessage.peekKind(transport: transfer.userInfo) == "dormantGrant" {
                         transfer.cancel()
                     }
                 }
@@ -266,14 +260,6 @@ extension WatchDataManager {
                                           wasUserEntered: s.wasUserEntered)
                     })
                 }
-            },
-            predictionSnapshot: { [weak self] completion in
-                // Instrumentation only: the phone's last-computed prediction, decomposed, for the grant.
-                // A pure cached read — no recompute, no dosing.
-                guard let self = self else { completion(nil); return }
-                // Instrumentation only — the phone's forecast is no longer captured through a
-                // stateful loop, and the watch runs its own. Nothing dosing reads this.
-                completion(nil)
             },
             issueNotice: { [weak self] title, body in
                 self?.log.error("PodLoan notice: %{public}@ - %{public}@", title, body)

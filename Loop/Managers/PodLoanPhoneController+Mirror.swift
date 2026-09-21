@@ -34,17 +34,10 @@ extension PodLoanPhoneController {
         return deps.now().timeIntervalSince(evidence.at) < 600
     }
 
-    /// Kill switch (absent = enabled), the standing insurance pattern.
-    static let inferredLoanYieldDisabledKey = "PodLoanPhoneController.inferredLoanYieldDisabled"
-
     /// Both detectors funnel here. Yield is deliberately cheap to enter: it doses nothing,
     /// claims nothing, and every exit is user-driven or evidence-driven.
     func engageInferredLoanYield(evidence: String) {
         guard state == .owner, !yieldingToInferredLoan else { return }
-        guard !UserDefaults.standard.bool(forKey: Self.inferredLoanYieldDisabledKey) else {
-            PhoneLog.event("mirror", "inferred-loan evidence (\(evidence)) but yield DISABLED by kill switch [mirror]")
-            return
-        }
         yieldingToInferredLoan = true
         holdRenewedAt = deps.now()
         holdLapseNoticedAt = nil

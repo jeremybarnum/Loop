@@ -318,8 +318,7 @@ final class PodLoanWatchController {
     /// strand in .loaned forever). The close path requires this flag in .handingBack.
     var finalOfferSent = false
     var resendWorkItem: DispatchWorkItem?
-    /// When the LIVE hand-back gives up waiting for the phone's ack and resumes on the
-    /// watch. Set at the End tap (beginHandback), cleared on ack/cancel/timeout. Nil for a
+    /// Set at the End tap (beginHandback), cleared on ack/cancel/timeout. Nil for a
     /// recovered/revoke drain (no local loan to resume — those keep resending).
     /// How many unacked drain offers before the watch stops waiting. 20 x 15 s = ~5 minutes,
     /// comfortably past any normal ack latency and far short of the 97-minute silent limbo the
@@ -681,11 +680,6 @@ final class PodLoanWatchController {
     /// The phone takes the pod back by itself when the renewals stop.
     func streamRecords(renewal: Bool = false) {
         guard phase == .active, let epoch = epoch else { return }
-        // Events that are IN-FLIGHT (mint→classification) or
-        // whose verdict chase is LIVE stay out of the stream — the phone's commit set
-        // is drawn from its staged map, so streaming either would let an interim
-        // commit write a dose before an annul/refuted verdict can unwind it
-        // (tombstones only filter staged events). They flow on classification.
         let events = journal.unackedEvents()
         let tombstones = journal.pendingTombstones()
         let empty = events.isEmpty && tombstones.isEmpty
@@ -701,10 +695,6 @@ final class PodLoanWatchController {
         // sync. The reading is whatever the last dose window already fetched (no extra radio);
         // its asOf is the status response's own validTime, so the phone integrates expected
         // insulin to exactly the reading's moment, not the send's.
-        // Coherence guard: a checkpoint pairs a COMPLETE record set with the reading. A
-        // withheld event (in-flight mint→classification, or a live uncertainty chase) is
-        // insulin the odometer may already meter but this batch does not carry — its
-        // checkpoint would breach by construction. Skip; the next clean batch checkpoints.
         var odometer: LoanOdometerSnapshot?
         if let start = deliveredAtTakeover, let latest = pumpManager?.podLoanInsulinDelivered,
            let asOf = pumpManager?.podLoanInsulinDeliveredAt {
@@ -804,6 +794,9 @@ final class PodLoanWatchController {
     var _snapshotMirror: DebugSnapshot?
 }
 
+/// Which WCSession channel a message arrived on. `sendMessage` wakes the counterpart
+/// immediately; `transferUserInfo` is queued but guaranteed and relaunch-surviving. They fail
+/// independently, which is the whole reason this is recorded.
 enum LoanTransportChannel: String {
     case urgent    // WCSession.sendMessage -> session(_:didReceiveMessage:)
     case queued    // WCSession.transferUserInfo -> session(_:didReceiveUserInfo:)

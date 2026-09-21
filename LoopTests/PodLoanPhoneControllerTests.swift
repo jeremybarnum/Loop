@@ -109,7 +109,6 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                     "PodLoanPhoneController.lastHandledForeignSessionAt",
                     "PodLoanPhoneController.dormantSeizeToken",
                     "PodLoanPhoneController.watchSupportsSeize",
-                    "PodLoanPhoneController.inferredLoanYieldDisabled",
                     "PodLoanPhoneController.rebidAt",
                     "PodLoanPhoneController.firstContactSinceRebid"] {
             UserDefaults.standard.removeObject(forKey: key)

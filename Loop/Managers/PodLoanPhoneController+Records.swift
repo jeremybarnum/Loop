@@ -266,8 +266,6 @@ extension PodLoanPhoneController {
         let loanStart = loanStartedAt ?? offer.handedBackAt.addingTimeInterval(-.hours(2))
         let input = LoanReconciler.Input(
             events: events,
-            odometer: auditThisOffer ? offer.odometer : nil,
-            auditEvents: allStagedEvents,
             schedule: deps.settings().basalRateSchedule,
             loanStart: loanStart,
             loanEnd: offer.handedBackAt,
@@ -354,11 +352,6 @@ extension PodLoanPhoneController {
             }
         }
 
-        // No additional insulin is added at hand-back: the positive-remainder
-        // IOB valve is disabled for now. IOB comes purely from the streamed reconciled records — stock-
-        // like trust; stock never injects odometer-derived IOB. outcome.positiveRemainderUnits is still
-        // computed (and captured above) but no longer consumed. Re-enable if/when the reconciliation
-        // warning is redesigned with a proper threshold.
         let doses = outcome.doses
 
         // The still-open temp (outcome.openEventID) is skipped by the reconciler and
@@ -480,11 +473,6 @@ extension PodLoanPhoneController {
                             self.applyWatchOverride(change, epoch: offer.epoch, isFinal: isFinal)
                         }
 
-                        // Over/under delivery warning removed for now (Jeremy 2026-07-27): the hand-back is
-                        // silent — records committed, delta captured in the [phone] reconcile line above, no
-                        // user notice. outcome.residualShortfallUnits is still computed but no longer surfaced;
-                        // the warning returns once a threshold is chosen from the captured field data.
-
                         let newCursor = events.map(\.seq).max() ?? self.committedCursor
                         if !isStale {
                             self.committedCursor = max(self.committedCursor, newCursor)
@@ -546,7 +534,6 @@ extension PodLoanPhoneController {
                 // defect that wrote temps ending before they started.
                 let backfillOutcome = LoanReconciler.reconcile(LoanReconciler.Input(
                     events: allStagedEvents,
-                    odometer: nil,
                     schedule: self.deps.settings().basalRateSchedule,
                     loanStart: loanStart,
                     loanEnd: offer.handedBackAt,

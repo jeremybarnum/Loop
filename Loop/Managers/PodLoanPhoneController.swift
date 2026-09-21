@@ -160,11 +160,6 @@ final class PodLoanPhoneController {
         /// ~3 h of recent glucose for the grant — seeded so the watch's momentum + retrospective
         /// correction warm from the first post-takeover cycle instead of a cold empty store.
         var glucoseHistory: (_ start: Date, _ completion: @escaping ([LoanGlucoseRecord]) -> Void) -> Void = { _, done in done([]) }
-        /// INSTRUMENTATION ONLY: the phone's last-computed prediction, decomposed, carried in
-        /// the grant so the watch can diff its first post-takeover prediction against the phone.
-        /// Reads already-cached effect arrays only (no recompute, no dosing). Default nil keeps the
-        /// state machine + existing tests green with no live LoopDataManager.
-        var predictionSnapshot: (_ completion: @escaping (LoanPredictionSnapshot?) -> Void) -> Void = { done in done(nil) }
         /// Loud surfacing (banner + Event History line at integration).
         var issueNotice: (_ title: String, _ body: String) -> Void
         /// PODLOAN instant-tile port (crude f3784d49/674e1b13): fired when pod
@@ -611,8 +606,6 @@ final class PodLoanPhoneController {
 
     /// When the current grant was offered — the anchor the ceiling is measured from.
     var grantOfferedAt: Date?
-
-    // MARK: - State for PodLoanPhoneController+Records.swift
 
     // MARK: - State with observers (moved out of the extension files)
 

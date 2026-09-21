@@ -171,7 +171,7 @@ extension PodLoanPhoneController {
         // dialing at re-arm (2026-08-23) every measured settle verifies on the FIRST read
         // after link-up, so the spacing machinery guarded radio time no settle spends anymore.
         // The `reclaimVerifyInFlight` latch is the remaining (sufficient) throttle.
-        attemptReclaimVerificationNow(started: started, forced: true)
+        attemptReclaimVerificationNow(started: started)
         queue.asyncAfter(deadline: .now() + 2) { [weak self] in
             self?.chaseReclaimVerification(started: started, attempt: attempt + 1)
         }
@@ -181,15 +181,12 @@ extension PodLoanPhoneController {
     /// path: a premature Start is the strongest possible signal the user wants the pod back,
     /// so their tap accelerates the very check their retry is waiting on — and forces a real
     /// read, for the same reason their tap on the pod status screen ends a stalled settle.
-    ///
-    /// `forced` routes through `refreshLentDeviceStatus`, which bypasses the freshness
-    /// optimization; the cheap path is left for the ticks in between.
-    func attemptReclaimVerificationNow(started: Date, forced: Bool = true) {
+    func attemptReclaimVerificationNow(started: Date) {
         guard reclaimStartedAt == started, reclaimVerifiedAt == nil else { return }
         if deps.isConnectionReady(), !reclaimVerifyInFlight, let pump = deps.pumpManager() {
             reclaimVerifyInFlight = true
             let read: (@escaping (Date?) -> Void) -> Void
-            if forced, let lendable = pump as? PumpConnectionLendable {
+            if let lendable = pump as? PumpConnectionLendable {
                 // Force the round-trip, then ask the ordinary way for the answer. The forced
                 // read updates the manager's report date, so the follow-up takes the cheap
                 // no-radio path and hands back the NOW-ADVANCED lastSync — one round-trip, and
@@ -377,8 +374,6 @@ extension PodLoanPhoneController {
         enum Branch: String { case live = "LIVE", dead = "DEAD" }
         var branch: Branch
         let startedAt: Date
-        /// The rung that resends the revoke — the second and last attempt.
-        var resendAt: Date
         /// The rung that gives up on the watch and takes the pod back.
         var forceAt: Date
         /// Revokes sent for this reclaim, counting the one the tap itself sent. Capped at two:
@@ -610,7 +605,6 @@ extension PodLoanPhoneController {
         let started = deps.now()
         reclaimLadder = ReclaimLadder(branch: branch,
                                       startedAt: started,
-                                      resendAt: started.addingTimeInterval(resendDelay ?? 0),
                                       forceAt: started.addingTimeInterval(forceDelay),
                                       attempts: 1,          // the tap's own revoke
                                       forced: false)
@@ -704,10 +698,6 @@ extension PodLoanPhoneController {
             pendingForceReclaimReason = reason
             return
         }
-        // PHONE MIRROR absolution: the force is a deliberate reassertion of ownership —
-        // every foreign session up to this moment is either the loan being forced closed
-        // or the seizure the user just chose to take over from. The mirror must not
-        // rediscover it minutes later.
         cancelReclaimLadder()
         cancelNotification(id: NotificationID.paused)
         cancelNotification(id: NotificationID.duration)
@@ -719,7 +709,7 @@ extension PodLoanPhoneController {
             .sorted { $0.seq < $1.seq }
         if !events.isEmpty {
             let input = LoanReconciler.Input(
-                events: events, odometer: nil, schedule: deps.settings().basalRateSchedule,
+                events: events, schedule: deps.settings().basalRateSchedule,
                 loanStart: loanStartedAt ?? deps.now().addingTimeInterval(-.hours(2)),
                 loanEnd: deps.now())
             let outcome = LoanReconciler.reconcile(input)  // isFinalHandback defaults true → all finalized

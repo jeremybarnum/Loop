@@ -16,9 +16,6 @@ import os.log
 
 extension PodLoanWatchController {
 
-    // MARK: - Revoke capture
-
-
     /// The G7's state, for the contention question that has been argued rather than measured.
     ///
     /// Stamped on every pod operation so "was the CGM holding the radio?" is answerable from one
@@ -277,8 +274,7 @@ extension PodLoanWatchController {
             self.handbackSawUrgentSendError = false
             self.urgentSendWedged = false   // a fresh hand-back re-tests the fast path once
             // Bound the wait for the phone's ack. Pre-scheduled alert fires from a suspended
-            // app; the resend loop resumes Sport Mode on the watch at the same deadline. Covers
-            // both the interim-drain path below and the legacy single-phase finalize.
+            // app. Covers both the interim-drain path below and the legacy single-phase finalize.
             self.handbackDeadline = self.now().addingTimeInterval(HandbackStuckAlert.interval)
             self.handbackStartedAt = self.now()
             HandbackStuckAlert.arm()
@@ -309,10 +305,7 @@ extension PodLoanWatchController {
     }
 
     /// The phone never acked the hand-back within the budget (unreachable, or silently
-    /// dropping offers). We stayed the pod's SOLE OWNER throughout — interim: still dosing;
-    /// final: dosing stopped but the pod is STILL HELD (release only on the final ack) — so
-    /// recovery is clean: resume Sport Mode on the watch in the SAME loop mode (never auto-open
-    /// or auto-close). Unacked records stay in the journal and re-offer on a
+    /// dropping offers). Unacked records stay in the journal and re-offer on a
     /// later hand-back (the phone dedups by event ID); the odometer reconciles the totals then.
     /// The pre-scheduled HandbackStuckAlert delivers the wrist notification (even from a suspended
     /// app, in which case this state restore runs on the next wake).
@@ -450,8 +443,7 @@ extension PodLoanWatchController {
         // to the one that can.
         //
         // The book is the pump manager's: the running temp stays a mutable row until the phone
-        // cancels it on reclaim, and a failed offer that resumes this session resumes with the
-        // truth — the pod IS still running it.
+        // cancels it on reclaim.
         if runningTemp != nil {
             SportLog.event("loan", String(format: "hand-back: our temp (%.2f U/hr until %@) stays live until the phone cancels it on reclaim (R33, phone-enforced)",
                                           runningTemp?.unitsPerHour ?? 0,
@@ -569,8 +561,7 @@ extension PodLoanWatchController {
         resendWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
-            // Give up after the budget and resume Sport Mode on the watch (we stayed the
-            // pod's sole owner throughout). Only the LIVE hand-back (deadline set) — a
+            // Only the LIVE hand-back (deadline set) — a
             // recovered/revoke drain has no local loan to resume, so it keeps resending.
             if let deadline = self.handbackDeadline, self.now() >= deadline,
                self.phase == .handingBack || (self.phase == .active && self.handbackRequested) {

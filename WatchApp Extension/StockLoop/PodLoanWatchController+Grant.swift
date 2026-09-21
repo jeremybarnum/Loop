@@ -23,8 +23,6 @@ extension PodLoanWatchController {
     /// wiring, exactly like the loan journal's persisted state.
     enum DormantKeys {
         static let envelope = "PodLoanWatchController.dormantGrant"
-        static let issuedAt = "PodLoanWatchController.dormantGrantIssuedAt"
-        static let token = "PodLoanWatchController.dormantGrantToken"
         /// R40: set the moment a seize activates; rides every hand-back offer of the seized
         /// loan so the phone can retro-acknowledge; cleared when the loan CLOSES. Persisted —
         /// a relaunch mid-seized-loan must keep sending it.
@@ -232,8 +230,6 @@ extension PodLoanWatchController {
             return
         }
         defaults.set(data, forKey: DormantKeys.envelope)
-        defaults.set(dormant.issuedAt, forKey: DormantKeys.issuedAt)
-        defaults.set(dormant.seizeToken.uuidString, forKey: DormantKeys.token)
         SportLog.event("seize", String(format: "dormant grant refreshed — issued %@, %d dose record(s), token …%@ [seize]",
                                        DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .none, timeStyle: .medium),
                                        dormant.grant.doseHistory.count,
