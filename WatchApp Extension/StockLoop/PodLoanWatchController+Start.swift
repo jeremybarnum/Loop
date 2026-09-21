@@ -1,8 +1,6 @@
 //
-//  PodLoanWatchController+Grant.swift
-//  StockLoop
-//
-//  Part of PodLoanWatchController (see PodLoanWatchController.swift). Split by concern; stored properties live in the core class.
+//  PodLoanWatchController+Start.swift
+//  WatchApp Extension
 //
 
 import Foundation
@@ -15,215 +13,164 @@ import WatchKit
 import os.log
 
 extension PodLoanWatchController {
-    enum DormantKeys {
-        static let envelope = "PodLoanWatchController.dormantGrant"
 
-        static let activeToken = "PodLoanWatchController.activeSeizeToken"
+    func g7StateForContention() -> String {
+        loopManager.g7ContentionSummary
     }
 
-    var seizeMarkerActive: Bool {
-        pendingSeizeToken != nil || defaults.string(forKey: DormantKeys.activeToken) != nil
-    }
+    func ingestGrantHistory(_ grant: LoanGrant) -> Bool {
+        let seedReconciliation = self.now()
+        let (entries, liveDoses) = grant.seedDoseEntries(finishedBy: seedReconciliation)
+        let epoch = grant.epoch
+        let grossImpliedSum = entries.reduce(0.0) { $0 + $1.programmedUnits }
+        let liveNote = liveDoses.isEmpty ? "" :
+            String(format: "; %d live — delivery tracked from pod state (#72), latest ends +%.0fm",
+                   liveDoses.count, (liveDoses.map { $0.endDate }.max()!.timeIntervalSince(seedReconciliation)) / 60)
 
-    static let seizeActivationLease: TimeInterval = 5 * 60
-
-    func confirmSeize() {
-        queue.async {
-            guard self.phase == .idle || self.phase == .recoveredDrain, let offer = self.seizeOffer,
-                  let dormant = self.storedDormantGrant(), dormant.seizeToken == offer.token else {
-                SportLog.event("seize", "confirm arrived with no live offer — ignored [seize]")
-                return
-            }
-            self.seizeOffer = nil
-
-            let newEpoch = max(dormant.grant.epoch,
-                               (self.epoch ?? 0) + 1,
-                               (self.journal.activeEpoch ?? 0) + 1,
-                               self.defaults.integer(forKey: Keys.highWaterEpoch) + 1,
-                               (self.lastRevokedEpoch ?? 0) + 1)
-
-            let leaseUntil = self.now().addingTimeInterval(Self.seizeActivationLease)
-            self.pendingSeizeToken = dormant.seizeToken
-
-            self.cancelStaleQueuedRequests(context: "seize confirmed")
-            SportLog.event("seize", String(format: "SEIZE confirmed — activating dormant grant (issued %@, epoch %d→%d, lease +%.0fs, token …%@) [seize]",
-                                           DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .short, timeStyle: .short),
-                                           dormant.grant.epoch, newEpoch, Self.seizeActivationLease,
-                                           String(dormant.seizeToken.uuidString.suffix(8))))
-            self.phase = .requested
-            self.attemptStartedAt = self.now()
-            self.seizeActivationInFlight = true
-            self.handleGrant(dormant.grant.withEpoch(newEpoch, leaseUntil: leaseUntil))
-            self.seizeActivationInFlight = false
-        }
-    }
-
-    func dismissSeize() {
-        queue.async {
-            guard self.seizeOffer != nil else { return }
-            self.seizeOffer = nil
-            self.lastIdleNote = NSLocalizedString("Offline start cancelled.", comment: "Glance note after dismissing a seize offer")
-            SportLog.event("seize", "seize offer DISMISSED [seize]")
-            self.notifyUI()
-        }
-    }
-
-    static let seizeAutoHandbackDisabledKey = "PodLoanWatchController.seizeAutoHandbackDisabled"
-
-    func noteReachabilityChanged(_ reachable: Bool) {
-        queue.async {
-            guard reachable else { return }
-            guard self.phase == .active,
-                  self.defaults.string(forKey: DormantKeys.activeToken) != nil,
-                  !self.handbackRequested, !self.reunionPromptActive else { return }
-            guard !self.defaults.bool(forKey: Self.seizeAutoHandbackDisabledKey) else {
-                SportLog.event("seize", "phone returned during a seized loan — reunion prompt DISABLED by kill switch [seize]")
-                return
-            }
-            guard !self.seizeReunionDebounceArmed else { return }
-            self.seizeReunionDebounceArmed = true
-            SportLog.event("seize", "phone REACHABLE during a seized loan — reunion prompt in 30s unless it flickers away [seize]")
-            self.schedule(after: 30, label: "seize-reunion-debounce") { [weak self] in
-                guard let self = self else { return }
-                self.seizeReunionDebounceArmed = false
-                guard self.phase == .active,
-                      self.defaults.string(forKey: DormantKeys.activeToken) != nil,
-                      !self.handbackRequested, !self.reunionPromptActive else { return }
-                guard self.isPhoneReachable() else {
-                    SportLog.event("seize", "phone flickered away before the reunion debounce — seized loan continues [seize]")
-                    return
-                }
-                self.reunionPromptActive = true
-                SportLog.event("seize", "phone is back — REUNION PROMPT raised (R40(f): the hand-back stays the user's deliberate act) [seize]")
-                self.notifyUI()
-                self.issueReunionPromptAlert()
-
-                self.sendHoldsPodStatusReport(reason: "reunion prompt raised")
-            }
-        }
-    }
-
-    func sendHoldsPodStatusReport(reason: String) {
-        guard phase == .active, let current = epoch else { return }
-        sendMessage(.statusReport(StatusReport(
-            epoch: current,
-            mode: currentMode(),
-            lastDirectGlucoseAge: loopManager.latestGlucoseAge,
-            lastEventSeq: journal.lastEventSeq,
-            podFault: pumpManager?.podLoanFaultDescription,
-            holdsPod: true,
-            knowsGrant: true)))
-        SportLog.event("seize", "statusReport sent — holdsPod e\(current) (\(reason)) [seize]")
-    }
-
-    func confirmReunionHandback() {
-        queue.async {
-            guard self.reunionPromptActive, self.phase == .active else { return }
-            self.reunionPromptActive = false
-            SportLog.event("seize", "reunion prompt: HAND BACK chosen — normal hand-back begins [seize]")
-            self.notifyUI()
-            self.beginHandback()
-        }
-    }
-
-    func dismissReunionPrompt() {
-        queue.async {
-            guard self.reunionPromptActive else { return }
-            self.reunionPromptActive = false
-            SportLog.event("seize", "reunion prompt: KEEP chosen — seized loan continues [seize]")
-            self.notifyUI()
-
-            self.sendHoldsPodStatusReport(reason: "Keep chosen")
-        }
-    }
-
-    private func issueReunionPromptAlert() {
-        let title = NSLocalizedString("iPhone Is Back", comment: "Watch alert title when the phone returns during a seized loan")
-        let body = NSLocalizedString("Sport Mode is still running without it. Open the app to hand the pod back, or keep going.", comment: "Watch alert body when the phone returns during a seized loan")
-        Task { @MainActor in
-            loopManager.issueAlert(Alert(
-                identifier: Alert.Identifier(managerIdentifier: "PodLoan", alertIdentifier: "seizeReunionPrompt"),
-                foregroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
-                backgroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
-                trigger: .immediate))
-        }
-    }
-
-    func handleDormantGrant(_ dormant: DormantGrant) {
-        guard let data = try? LoanProtocol.encoder.encode(dormant) else {
-            SportLog.event("seize", "dormant grant arrived but failed to re-encode — NOT stored [seize]")
-            return
-        }
-        defaults.set(data, forKey: DormantKeys.envelope)
-        SportLog.event("seize", String(format: "dormant grant refreshed — issued %@, %d dose record(s), token …%@ [seize]",
-                                       DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .none, timeStyle: .medium),
-                                       dormant.grant.doseHistory.count,
-                                       String(dormant.seizeToken.uuidString.suffix(8))))
-    }
-
-    func storedDormantGrant() -> DormantGrant? {
-        guard let data = defaults.data(forKey: DormantKeys.envelope) else { return nil }
-        return try? LoanProtocol.decoder.decode(DormantGrant.self, from: data)
-    }
-
-    static let unexplainedInsulinBand = 0.20
-
-    static func insulinTheCopyCannotExplain(copyTotal: Double, copyAt: Date, podTotal: Double, now: Date,
-                                            records: [LoanDoseRecord], schedule: BasalRateSchedule?) -> Double {
-        guard now > copyAt, podTotal >= copyTotal else { return 0 }
-        let rateEvents = records.filter { $0.kind != .bolus }.enumerated().map {
-            LoanEvent(id: UUID(), seq: $0.offset + 1, provenance: .confirmed, record: $0.element, loggedAt: now)
-        }
-        var expected = LoanReconciler.expectedInsulin(events: rateEvents, schedule: schedule, from: copyAt, to: now)
-        for bolus in records where bolus.kind == .bolus {
-            guard let amount = bolus.amount, amount > 0 else { continue }
-            let end = bolus.endDate ?? bolus.startDate
-            if end > bolus.startDate {
-                let overlap = min(end, now).timeIntervalSince(max(bolus.startDate, copyAt))
-                if overlap > 0 { expected += amount * overlap / end.timeIntervalSince(bolus.startDate) }
-            } else if bolus.startDate >= copyAt, bolus.startDate <= now {
-                expected += amount
-            }
-        }
-        let unexplained = ((podTotal - copyTotal - expected) * 1000).rounded() / 1000
-        return unexplained > unexplainedInsulinBand ? unexplained : 0
-    }
-
-    func bookInsulinTheCopyCannotExplain(podTotal: Double, epoch: Int) {
-        defer { takeoverCopyTotal = nil; takeoverCopyRecords = [] }
-        guard let copy = takeoverCopyTotal else {
-            SportLog.event("loan", "takeover book check SKIPPED — the copy carried no pod total to compare against")
-            return
-        }
-        let at = self.now()
-        let unexplained = Self.insulinTheCopyCannotExplain(copyTotal: copy.units, copyAt: copy.asOf, podTotal: podTotal, now: at,
-                                                           records: takeoverCopyRecords,
-                                                           schedule: loopManager.settings.basalRateSchedule)
-        let age = at.timeIntervalSince(copy.asOf) / 60
-        guard unexplained > 0 else {
-            SportLog.event("loan", String(format: "takeover book check CLEAN — pod total %.2f → %.2f U over %.1f min is explained by the copy's records and the schedule",
-                                          copy.units, podTotal, age))
-            return
-        }
-        let entry = DoseEntry(type: .bolus, startDate: at, endDate: at, value: unexplained, unit: .units,
-                              decisionId: nil, deliveredUnits: unexplained,
-                              syncIdentifier: "PODLOAN-WATCHGAP-e\(epoch)",
-                              insulinType: pumpManager?.status.insulinType)
         let gate = DispatchSemaphore(value: 0)
-        var failure: Error?
+        var seedError: Error?
         let loopManager = self.loopManager
         Task {
-            do { try await loopManager.seedInsulinHistory([entry]) } catch { failure = error }
+            await loopManager.resetInsulinBook(reason: "new grant (epoch \(epoch))")
+            do { try await loopManager.seedInsulinHistory(entries) } catch { seedError = error }
             gate.signal()
         }
         gate.wait()
-        if let failure {
-            SportLog.event("loan", String(format: "** takeover book check: %.2f U UNEXPLAINED and the booking FAILED — %@ **", unexplained, String(describing: failure)))
-            return
+        if let seedError {
+            SportLog.event("loan", "** INSULIN BOOK SEED FAILED — \(String(describing: seedError)) — refusing the takeover: a wrist without the phone's history must not dose **")
+            return false
         }
-        SportLog.event("loan", String(format: "** takeover book check: pod total %.2f → %.2f U over %.1f min; %.2f U the copy cannot explain — BOOKED as a bolus now (insulin on board errs high, dosing errs low) **",
-                                      copy.units, podTotal, age, unexplained))
-        startNote = (at, String(format: NSLocalizedString("%.2f U the watch had no record of — counted as insulin on board", comment: "Glance: unexplained insulin booked at takeover (1: units)"), unexplained))
+        SportLog.event("loan", String(format: "insulin book seeded from grant — %d finished record(s) under the phone's identities%@ · grossImpliedΣ=%.2fU",
+                                       entries.count, liveNote, grossImpliedSum))
+
+        loopManager.primeIOBFromStore(at: seedReconciliation) { iob in
+            guard let iob = iob else {
+                SportLog.event("loan", "SEED-IN IOB unavailable (no schedule yet)")
+                return
+            }
+            SportLog.event("loan", String(format: "SEED-IN IOB=%.2fU @ takeover (%d seeded doses: %d finished%@)",
+                                          iob, entries.count + liveDoses.count, entries.count, liveNote))
+            self.loopManager.dumpIOBDecomp("SEED-IN", at: seedReconciliation)
+        }
+        ingestGrantCarbs(grant)
+        ingestGrantGlucose(grant)
+        return true
+    }
+
+    func ingestGrantCarbs(_ grant: LoanGrant) {
+        let phoneCOB = grant.predictionSnapshot?.cobGrams
+        let phoneCOBStr = phoneCOB.map { String(format: "%.1f", $0) } ?? "n/a"
+
+        let snapshotAge = grant.predictionSnapshot.map { self.now().timeIntervalSince($0.snapshotAt) }
+        let carbs = grant.carbHistory ?? []
+        let objects: [SyncCarbObject] = carbs.map { c in
+            SyncCarbObject(
+                absorptionTime: c.absorptionTime,
+                createdByCurrentApp: false,
+                foodType: c.foodType,
+                grams: c.grams,
+                startDate: c.startDate,
+                uuid: nil,
+                provenanceIdentifier: c.provenanceIdentifier,
+                syncIdentifier: c.syncIdentifier,
+                syncVersion: c.syncVersion,
+                userCreatedDate: c.userCreatedDate,
+                userUpdatedDate: c.userUpdatedDate,
+                userDeletedDate: nil,
+                operation: .create,
+                addedDate: nil,
+                supercededDate: nil)
+        }
+        let seededGrams = carbs.reduce(0.0) { $0 + $1.grams }
+        let source = (grant.carbHistory == nil) ? "absent(old phone)"
+                   : (carbs.isEmpty ? "empty(deleted on phone)→wipe" : "\(objects.count) entr\(objects.count == 1 ? "y" : "ies")")
+        let tf = DateFormatter()
+        tf.dateFormat = "HH:mm"
+        let manifest = carbs.isEmpty ? "—" : carbs.map { c in
+            String(format: "%.1fg@%@ sync=%@ prov=%@", c.grams, tf.string(from: c.startDate),
+                   c.syncIdentifier ?? "nil", String(c.provenanceIdentifier.prefix(12)))
+        }.joined(separator: " | ")
+
+        loopManager.carbStore.setSyncCarbObjects(objects) { [weak self] error in
+            if let error = error {
+                os_log("Grant carb replace failed: %{public}@", log: OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController"), type: .error, String(describing: error))
+                return
+            }
+
+            guard let self = self else { return }
+            let expectedIDs = Set(carbs.compactMap { $0.syncIdentifier })
+            let readFrom = (carbs.map(\.startDate).min() ?? self.now()).addingTimeInterval(-3600)
+            self.loopManager.carbStore.getCarbEntries(start: readFrom) { result in
+                var verdict: String
+                switch result {
+                case .failure(let e):
+
+                    verdict = " ⚠ wipe UNVERIFIED (read-back failed: \(e))"
+                case .success(let stored):
+                    let storedIDs = Set(stored.compactMap { $0.syncIdentifier })
+                    let residual = storedIDs.subtracting(expectedIDs)
+                    let missing = expectedIDs.subtracting(storedIDs)
+                    let dupes = stored.count - storedIDs.count
+                    if residual.isEmpty && missing.isEmpty && dupes == 0 {
+                        verdict = " · wipe verified \(stored.count)/\(expectedIDs.count)"
+                    } else {
+                        verdict = String(format: " ⚠ WIPE FAILED — %d residual, %d missing, %d duplicate",
+                                         residual.count, missing.count, dupes)
+                    }
+                }
+                self.loopManager.glanceCarbsOnBoard { cob in
+                    let postV = cob ?? 0
+                    let vsPhone = phoneCOB.map { postV - $0 }
+
+                    let ageStr = snapshotAge.map { "\(Int($0.rounded()))s" } ?? "n/a"
+                    SportLog.event("cob-diff", String(format: "REPLACE %@ · phoneCOB=%@ g (snapshot age %@) · watch COB(post)=%.2f g · replaced %.0f g · Δ(post−phone)=%@ g (observation freshness, not a model split)%@ · [%@]",
+                                                       source, phoneCOBStr, ageStr, postV, seededGrams,
+                                                       vsPhone.map { String(format: "%+.2f", $0) } ?? "—",
+                                                       verdict, manifest))
+                }
+            }
+        }
+    }
+
+    func ingestGrantGlucose(_ grant: LoanGrant) {
+        guard let records = grant.glucoseHistory, !records.isEmpty else { return }
+        let mgdl = LoopUnit.milligramsPerDeciliter
+        let mgdlPerMin = mgdl.unitDivided(by: .minute)
+        let samples: [NewGlucoseSample] = records.map { r in
+            NewGlucoseSample(
+                date: r.startDate,
+                quantity: LoopQuantity(unit: mgdl, doubleValue: r.valueMgdl),
+                condition: nil,
+                trend: nil,
+                trendRate: r.trendRateMgdlPerMin.map { LoopQuantity(unit: mgdlPerMin, doubleValue: $0) },
+                isDisplayOnly: r.isDisplayOnly,
+                wasUserEntered: r.wasUserEntered,
+                syncIdentifier: r.syncIdentifier ?? "loanv2-glucose-\(Int(r.startDate.timeIntervalSince1970 * 1000))")
+        }
+
+        loopManager.notePhoneGlucoseDelivered()
+        Task {
+            do {
+                let stored = try await loopManager.glucoseStore.addGlucoseSamples(samples)
+
+                SportLog.event("glucose", "INGEST src=grant-seed stored=\(stored.count)/\(samples.count) · loan takeover warm-up")
+                SportLog.event("loan", "seeded \(stored.count) glucose sample\(stored.count == 1 ? "" : "s") from the phone (momentum/RC warm-up)")
+            } catch {
+                os_log("Grant glucose ingest failed: %{public}@", log: OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanWatchController"), type: .error, String(describing: error))
+            }
+        }
+    }
+
+    func ingestPredictionSnapshot(_ grant: LoanGrant) {
+        loopManager.stashPhonePredictionSnapshot(grant.predictionSnapshot)
+        guard let s = grant.predictionSnapshot else { return }
+        let now = self.now()
+        SportLog.event("snapshot", String(format:
+            "RX phone@grant — eventual %.0f start %.0f@%.0fs IOB %.2f@%.0fs COB %.0f · impact mom %+.0f ins %+.0f carb %+.0f RC %+.0f · momPts %d rcDisc %d · snapAge %.0fs",
+            s.eventualMgdl, s.startGlucoseMgdl, now.timeIntervalSince(s.startGlucoseDate),
+            s.iobUnits, now.timeIntervalSince(s.iobDate), s.cobGrams,
+            s.impactMomentumMgdl, s.impactInsulinMgdl, s.impactCarbMgdl, s.impactRCMgdl,
+            s.momentumPointCount, s.rcDiscrepancyCount, now.timeIntervalSince(s.snapshotAt)))
     }
 
     func returnToRestingPhase() {
