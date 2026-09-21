@@ -10,82 +10,44 @@
 import Foundation
 import LoopCore
 import OmnipodKit
-import G7SensorKit        // PodLoanConnectClock.podLoanLogSink (pod BLE layer -> watch log)
+import G7SensorKit
 import WatchConnectivity
 import os.log
 
 final class StockLoopSession {
-
     let stack: StockLoopStack.Stack
 
-    /// Background runtime for the whole session.
-    ///
-    /// watchOS suspends a third-party app seconds after the wrist drops. The sensor side no longer
-    /// needs the process awake between bursts — its one request is daemon-held and CoreBluetooth
-    /// state restoration relaunches the app for the link (G7WatchAcquisition) — but the pod
-    /// ladders at a loan's ends still do: an HKWorkoutSession is the only self-service API that
-    /// keeps the process and its BLE links alive across a wrist drop.
-    ///
-    /// Refcounted by reason ("loanWorkout", "takeover", "handback") so overlapping holds cannot
-    /// end the session early.
     private let keepalive = WorkoutKeepalive()
 
-    /// Whole-loan workout session (the "loanWorkout" holder, which spans the loan):
-    /// OFF by default since 2026-09-16 — the 2026-09-15 no-keepalive loan passed, so the app sleeps
-    /// between bursts and the daemon-held sensor request carries each cycle inside the wake.
-    /// "takeover" and "handback" keep their runtime regardless: they are user-present ladders at
-    /// the loan's ends. Dispatch timers in the loan controller do not run while suspended; each
-    /// logs "fired late" when that happens, and the +90 s deferred release after takeover is the
-    /// one to read for first. Diagnostics ▸ Pod loan flips it; read at the next loan start.
     static let loanWorkoutKey = "G7Lab.loan.workout"
     static var loanWorkout: Bool { UserDefaults.standard.bool(forKey: loanWorkoutKey) }
 
     private func setKeepalive(_ holding: Bool, reason: String) {
         if reason == "loanWorkout", !Self.loanWorkout {
             SportLog.event("keepalive", "loan workout holder \(holding ? "not held" : "release ignored") — no workout session during loans (Diagnostics ▸ Pod loan); the app sleeps between bursts")
-            keepalive.release(reason)   // never leave a stale holder behind if the toggle flipped mid-loan
+            keepalive.release(reason)
             return
         }
         holding ? keepalive.acquire(reason) : keepalive.release(reason)
     }
 
-    /// Re-assert the session if something still wants it. Called on every foreground: the one
-    /// moment we KNOW we are executing, since the only other re-assert path is a timer that cannot
-    /// fire while suspended. No-op when nothing holds it.
     func ensureKeepalive() { keepalive.ensureRunning() }
     let loanController: PodLoanWatchController
 
     private let log = OSLog(subsystem: "com.loopkit.Loop", category: "StockLoopSession")
 
     init?() async {
-        // Link policy is automatic: orphan the pod between doses, reclaim every
-        // cycle, and gate that reclaim on G7 acquisition state while the sensor is un-adopted.
-        // Replaced a user toggle whose two arms were each wrong for acquisition — evidence in
-        // docs/E4_TIME_SEPARATION.md.
-
         guard let assembled = await StockLoopStack.assemble() else { return nil }
         stack = assembled
         loanController = PodLoanWatchController(loopManager: stack.loopManager)
 
-        // Route the pod BLE layer into the watch's mirrored log. OmnipodKit logs via os_log,
-        // which never reaches the file the field analysis reads. Watch only — the phone leaves the
-        // sink nil and keeps os_log.
         PodLoanConnectClock.podLoanLogSink = { line in SportLog.event("pod-ble", line) }
 
-        // Main-thread stall detector. Runs from LAUNCH and never stops, unlike the loan-scoped
-        // heartbeat below: a wedged main thread is exactly the condition under which nothing else
-        // in this app can report anything. One ping/second, silent while healthy.
         RuntimeStateLog.startMainStallDetector()
 
-        // The one question the hand-back UI needs answered.
         loanController.isPhoneReachable = { WCSession.default.isReachable }
         stack.loopManager.onCycleLanded = { [weak loanController] in loanController?.renewHold() }
 
-        // The offer superseder's request-kind twin (#120 idiom): a request still queued for a
-        // dark phone after the watch stops wanting it is a delayed detonator — delivered at
-        // reunion inside the phone's 90 s freshness window, it re-grants over whatever loan
-        // the watch is running by then (field 2026-08-31: ghost grant e276 against live e277).
-        // Same safety rule as #120: never cancel a transfer already in flight.
         loanController.cancelQueuedLoanRequests = {
             let stale = WCSession.default.outstandingUserInfoTransfers.filter {
                 LoanMessage.peekKind(transport: $0.userInfo) == "request" && !$0.isTransferring
@@ -95,33 +57,14 @@ final class StockLoopSession {
         }
 
         loanController.send = { [weak loanController] dictionary in
-            // Two channels, chosen per message kind. transferUserInfo is queued and survives
-            // reachability flaps and relaunches — the semantics the cursor/ID machinery assumes —
-            // but it is non-urgent, which strands an interactive handshake. Those take sendMessage
-            // and fall back to the queue on failure, so this is never less reliable.
-            // See LoanMessage.isInteractiveHandshake for which kinds and why.
+
             let session = WCSession.default
-            // ...and not once urgent has already timed out in this hand-back: `isReachable` is
-            // not trustworthy under the one-way wedge, and re-choosing urgent re-pays 15 s per
-            // retry for information we already have.
+
             let wedged = loanController?.urgentSendWedged ?? false
             let urgent = LoanMessage.isInteractiveHandshake(transport: dictionary)
                 && session.isReachable && !wedged
             SportLog.event("wc", "send \(dictionary.keys.joined(separator: ",")) — session \(session.activationState.rawValue), reachable \(session.isReachable), path \(urgent ? "urgent" : "queued")")
 
-            // AT MOST ONE QUEUED OFFER. The resend loop re-offers every 15 s and
-            // transferUserInfo queues every call separately, so an unreachable phone accumulated
-            // one copy per 15 s — a dozen in one observed case — delivered as a burst at wake,
-            // which is the flood defended against downstream. Supersede at the source: when
-            // enqueueing a NEW offer, cancel the still-undelivered PREVIOUS offer transfers.
-            //
-            // ORDER IS LOAD-BEARING, in both directions. Capture the stale list BEFORE enqueueing
-            // (outstandingUserInfoTransfers includes the new transfer immediately, and cancelling
-            // that would leave ZERO queued offers — the first cut of this code had exactly that
-            // bug); cancel AFTER enqueueing, so the queue is never empty in between and the worst
-            // case is both copies delivering — the already-idempotent case. ONLY offers are ever
-            // cancelled: they are resent by design, so a cancelled one is replaced within 15 s;
-            // record streams and status messages are one-shot and are never touched.
             let enqueueSuperseding = { (payload: [String: Any]) in
                 let isOffer = LoanMessage.peekKind(transport: payload) == "handbackOffer"
                 let stale = isOffer
@@ -136,7 +79,7 @@ final class StockLoopSession {
                 SportLog.event("wc", "superseded \(cancelled.count) queued offer(s) with the fresh one (#120)")
             }
 
-            let urgentOnly = dictionary["urgentOnly"] as? Bool == true   // a live hand-back offer is never queued (2026-09-19)
+            let urgentOnly = dictionary["urgentOnly"] as? Bool == true
             guard urgent else {
                 if urgentOnly {
                     SportLog.event("wc", "live hand-back offer NOT queued — urgent path unavailable (reachable \(session.isReachable), wedged \(wedged)); the resend loop retries")
@@ -146,7 +89,7 @@ final class StockLoopSession {
                 return
             }
             session.sendMessage(dictionary, replyHandler: nil, errorHandler: { error in
-                loanController?.noteUrgentSendFailed()   // an erroring send means the link is re-establishing, not one-way wedged
+                loanController?.noteUrgentSendFailed()
                 if urgentOnly {
                     SportLog.event("wc", "urgent send FAILED (\(error.localizedDescription)) — live hand-back offer NOT queued; the resend loop retries")
                     return
@@ -156,32 +99,16 @@ final class StockLoopSession {
             })
         }
 
-        // NO RADIO ARBITER, deliberately. It made pod commands yield to our own G7 reader's
-        // scan/handshake; that reader is gone, and its flags were the arbiter's only
-        // producer.
-        //
-        // Not because the app stopped using the sensor radio — stock G7SensorKit still runs its
-        // own CBCentralManager in-process. What is gone is any signal about WHEN, plus the
-        // component that was actually starving the pod. Whether stock's scanning contends the same
-        // way is UNMEASURED; one 30-minute run says no, which is not a proof.
-
         stack.loopManager.podBeepsOnManualBolusProbe = { [weak self] in
             self?.loanController.podBeepsOnManualBolus ?? false
         }
 
-        // The takeover ladder needs background runtime — fires true on entering .takingOver
-        // and false on every exit, so it spans exactly the ladder. Without it the poll is throttled
-        // the moment the wrist drops and the read budget burns on wall-clock instead of attempts.
         loanController.onTakeoverRadioHold = { [weak self] holding in
             self?.setKeepalive(holding, reason: "takeover")
-            // Log pipeline v4: snapshot at takeover start (grant picture) and at the
-            // verdict — the ~40s window that decides a session, captured either way.
+
             self?.sendLogSnapshot(holding ? "takeover start" : "takeover verdict")
         }
 
-        // Hand-back needs the same runtime: without it the watch stops being reachable when the
-        // wrist drops after End, the phone's ack falls to the queued channel, and the pod stays
-        // held until iOS delivers it.
         loanController.onHandbackRuntimeHold = { [weak self] holding in
             self?.setKeepalive(holding, reason: "handback")
             SportLog.event("loan", holding
@@ -193,77 +120,42 @@ final class StockLoopSession {
             guard let self = self else { return }
             if active {
                 os_log("Loan active: starting G7 transport", log: self.log, type: .default)
-                // The wrist inherits the phone's loop mode from the grant.
-                // Deliberately NOT re-asserted here.
+
                 self.setKeepalive(true, reason: "loanWorkout")
-                // Loop-Failure ladder (stock parity): every live cycle re-defers all four rungs.
+
                 LoopStallWatchdog.refresh()
                 SportLog.event("deadman", "ladder ARMED — 20/40m timeSensitive + 1/2h critical rungs [deadman]")
-                // The glance page is the landing surface during a loan.
+
                 NotificationCenter.default.post(name: .podLoanPhaseDidChange, object: nil)
-                // 5-min pulse independent of readings: the per-reading transfer goes silent
-                // exactly when the session is dry, which is when we most need to hear from it.
+
                 self.startLogPulse()
-                // Suspension detector: a deferred pod release firing minutes late poisons the
-                // BLE stack, and that lateness used to be inferable only from clustered timestamps.
+
                 RuntimeStateLog.startHeartbeat()
             } else {
                 os_log("Loan ended: stopping G7 transport", log: self.log, type: .default)
                 self.setKeepalive(false, reason: "loanWorkout")
-                LoopStallWatchdog.disarm()   // clean end — the phone's ladder re-arms at reclaim
+                LoopStallWatchdog.disarm()
                 SportLog.event("deadman", "ladder CLEARED — loan ended, coverage transfers to the phone [deadman]")
                 self.stopLogPulse()
                 RuntimeStateLog.stopHeartbeat()
-                // Queue the session log at every loan end, so a deleted or reinstalled app
-                // cannot eat it.
+
                 self.sendLogSnapshot("loan end")
-                // Loop mode is PER-SESSION: the next grant re-asserts it from the phone's
-                // inheritance, so a "closed" left over from this session must not survive —
-                // stale, it makes an open-inheriting grant read as a closed→open transition
-                // and fire the temp cancel during grant intake, at a pod mid-takeover.
+
                 self.stack.loopManager.resetClosedLoopForSessionEnd()
-                // The start branch lands the user ON the glance; the end branch must at
-                // least repaint it. The 2 s tick dies on a screen dim and a bare undim does
-                // not revive it, so a phone-initiated revoke arriving in that gap goes
-                // unpainted — the glance holds its last active-loan frame, which reads as
-                // two devices both in control, until a swipe forces an appearance event
-                // (field, 2026-08-14). One render, no timer re-arm: the page may be hidden,
-                // and a hidden page must not tick.
+
                 NotificationCenter.default.post(name: .podLoanPhaseDidChange, object: nil)
             }
         }
-        // R40(e): a relaunch mid-loan resumes it — now, with every hook above wired, and
-        // before the transport-dependent drain (`drainRecoveredIfNeeded`, on WC activation).
+
         loanController.resumeIfNeeded()
 
         let build = BuildDetails.default.codeIdentity
         SportLog.event("session", "Sport Mode ready — build \(build); tap Start to request a loan\(Self.launchForensics())")
         startLinkCensus()
-        // Name the policy at launch: a log that does not say which policy produced it cannot be
-        // compared across builds.
+
         SportLog.event("policy", "link policy AUTOMATIC (#101): pod orphaned between doses, reclaim per cycle, acquisition-gated while un-adopted")
     }
 
-    /// The two numbers that are unrecoverable after the fact.
-    ///
-    /// This app has died four times in one day (2026-08-21): launched, fully initialised, PAINTED
-    /// UI, gone at ~2 s. No crash report in the container, and the log's last line is a genuinely
-    /// idle app rather than a truncated tail — SportLog writes and closes per line, so there is no
-    /// buffer losing the ending. Which means the log tells us everything EXCEPT what we need.
-    ///
-    /// Two numbers change that, and neither can be reconstructed later:
-    ///
-    ///  - SECONDS SINCE THE PREVIOUS LAUNCH. Our log is not truncated on launch, so this is
-    ///    derivable by hand — but only by a human reading timestamps, and it is the single number
-    ///    that separates "the user reopened it" from "it died and something relaunched it". Making
-    ///    it explicit means a relaunch storm is one greppable line.
-    ///  - RESIDENT FOOTPRINT AT THE BANNER. A process killed for memory reports nothing at all, so
-    ///    if jetsam is taking us this is the only trace there will ever be. `phys_footprint` is the
-    ///    field jetsam actually judges, which is why it is used here rather than `resident_size`.
-    ///
-    /// (Idea and the task_vm_info call from the pure/SportMode line, where the phone-side twin —
-    /// three relaunches in four minutes — has the same shape. They ship it for iOS only and could
-    /// not vouch for watchOS, hence the guard: a refused TASK_VM_INFO yields "?" and never a crash.)
     private static let previousLaunchKey = "SportMode.previousLaunchAt"
 
     private static func launchForensics() -> String {
@@ -286,10 +178,6 @@ final class StockLoopSession {
         return String(format: "%.0fMB", Double(info.phys_footprint) / 1024 / 1024)
     }
 
-    // MARK: Log pipeline v4 — event snapshots + loan pulse (2026-07-20)
-
-    /// Queue the on-watch log to the phone now; WCSession holds transfers across
-    /// unreachability. Event-driven, because a dry session produces no readings to ride on.
     func sendLogSnapshot(_ reason: String) {
         guard WCSession.default.activationState == .activated, let url = LogFile.url else { return }
         SportLog.event("log", "snapshot → iPhone (\(reason))")
@@ -304,9 +192,7 @@ final class StockLoopSession {
         timer.schedule(deadline: .now() + 300, repeating: 300, leeway: .seconds(20))
         timer.setEventHandler { [weak self] in
             self?.sendLogSnapshot("loan pulse")
-            // Keepalive self-heal: a dead HKWorkoutSession used to wait for a FOREGROUND
-            // activation, so a background session went reading-dead until the next wrist raise.
-            // ensureRunning is refcount-aware and a no-op when healthy.
+
             self?.keepalive.ensureRunning()
         }
         timer.resume()
@@ -318,27 +204,12 @@ final class StockLoopSession {
         logPulse = nil
     }
 
-
-    /// Route a WC userInfo payload. Returns true when it was a v2 protocol message
-    /// (consumed here); false lets the stock dispatch continue.
     func handleIncomingIfLoanMessage(_ userInfo: [String: Any], channel: LoanTransportChannel) -> Bool {
         guard userInfo[LoanProtocol.userInfoKey] != nil else { return false }
         loanController.handleIncoming(userInfo: userInfo, channel: channel)
         return true
     }
 
-    /// Called on WCSession activation: a relaunch with undrained records sends the
-    /// recovered hand-back (data-first; the session itself is never resurrected).
-    /// LINK CENSUS — one line a minute saying whether this watch can see the phone.
-    ///
-    /// Reachability is only ever logged today as a side effect of a SEND, so the record has
-    /// gaps exactly where nothing was being sent — and "the watch went quiet" and "the watch
-    /// could not reach the phone" are indistinguishable in the log. A fixed cadence makes the
-    /// link's state readable across a whole session, including the stretches where nothing
-    /// happened, which is what a correlation against takeover and settle timings needs.
-    ///
-    /// Deliberately unconditional on a loan: the interesting window includes before Start and
-    /// after hand-back.
     private var linkCensusTimer: DispatchSourceTimer?
 
     private func startLinkCensus() {

@@ -18,16 +18,13 @@ import LoopCore
 import os.log
 
 final class LoanEventJournal {
-
-    /// Everything persisted, as one Codable blob — written atomically on each mutation.
     private struct State: Codable {
         var epoch: Int
         var nextSeq: Int
         var events: [LoanEvent]
-        /// IDs of annulled events that may already have streamed to the phone (§1.3);
-        /// resent until the loan ends — idempotent on the phone.
+
         var tombstones: [UUID]
-        /// Highest contiguous seq the phone has committed (from HandbackAck/§2.6).
+
         var ackedCursor: Int
 
         static func empty(epoch: Int) -> State {
@@ -40,8 +37,6 @@ final class LoanEventJournal {
     private var state: State?
     private let fileURL: URL
 
-    /// Loads any persisted journal — a non-nil result after relaunch IS the recovered
-    /// hand-back trigger (data-first; never resurrect the session).
     init(directory: URL? = nil) {
         let base = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         self.fileURL = base.appendingPathComponent("PodLoanJournalV2.json")
@@ -53,23 +48,17 @@ final class LoanEventJournal {
         }
     }
 
-    // MARK: - Lifecycle
-
-    /// The epoch of the persisted/active loan, if any.
     var activeEpoch: Int? {
         lock.lock(); defer { lock.unlock() }
         return state?.epoch
     }
 
-    /// True when a relaunch found undrained events — the recovered hand-back case.
     var hasUndrainedEvents: Bool {
         lock.lock(); defer { lock.unlock() }
         guard let s = state else { return false }
         return s.events.contains { $0.seq > s.ackedCursor } || !s.tombstones.isEmpty
     }
 
-    /// Starts the ledger for a new loan. Refuses to clobber an undrained prior loan —
-    /// the caller must drain (recovered hand-back) before a new epoch begins.
     func begin(epoch: Int) throws {
         lock.lock(); defer { lock.unlock() }
         if let s = state, s.events.contains(where: { $0.seq > s.ackedCursor }) {
@@ -79,23 +68,12 @@ final class LoanEventJournal {
         persistLocked()
     }
 
-    /// Ends the loan after the final ack: clears the ledger and its file.
     func end() {
         lock.lock(); defer { lock.unlock() }
         state = nil
         try? FileManager.default.removeItem(at: fileURL)
     }
 
-    /// R40 re-entry: FOLDS a parked drain into a new loan by re-tagging the epoch while
-    /// keeping every event, its seq, the acked cursor, and the tombstones. This is the one
-    /// sanctioned way past `begin()`'s refuse-to-clobber: the records are not clobbered,
-    /// they become the new loan's opening stream (seq continuity intact, so the phone's
-    /// contiguous-cursor ack arithmetic just works). Re-tagging beats re-minting because
-    /// identity is what makes every downstream layer idempotent — if a stale queued offer
-    /// for the OLD epoch still delivers later, the phone books the same IDs and the store
-    /// dedupes them. Seize-path only by design: the caller controls the new epoch there
-    /// and guarantees it exceeds the parked one.
-    /// Returns the number of undrained events carried, for the caller's log line.
     @discardableResult
     func adoptEpoch(_ newEpoch: Int) -> Int {
         lock.lock(); defer { lock.unlock() }
@@ -113,10 +91,6 @@ final class LoanEventJournal {
         return carried
     }
 
-    // MARK: - Event minting (intent-before-transmission, §1.2)
-
-    /// Mints and DURABLY persists an event BEFORE the pod command transmits. Returns the
-    /// event whose ID stays stable across every retry and stream/hand-back inclusion.
     func mintEvent(record: LoanDoseRecord, provenance: EventProvenance, at date: Date = Date()) throws -> LoanEvent {
         lock.lock(); defer { lock.unlock() }
         guard var s = state else { throw LoanJournalError.noActiveLoan }
@@ -128,11 +102,6 @@ final class LoanEventJournal {
         return event
     }
 
-    // MARK: - Streaming / hand-back (§2.4, §2.5)
-
-    /// Events the phone has not committed yet — same IDs on every call (retry-stable).
-    /// Whether any event of the active loan — acked or not — already carries this store
-    /// identity. The pump manager re-reports a running dose on every session; it is journaled once.
     func contains(syncIdentifier: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
         return state?.events.contains { $0.record.syncIdentifier == syncIdentifier } ?? false
@@ -155,8 +124,6 @@ final class LoanEventJournal {
         return s.nextSeq - 1
     }
 
-    /// Applies a HandbackAck: advances the cursor (monotonic — a stale/replayed ack can
-    /// never move it backward) and drops tombstones, which the ack's commit covers.
     func applyAck(committedCursor: Int) {
         mutate { s in
             let cursor = committedCursor
@@ -164,8 +131,6 @@ final class LoanEventJournal {
             s.tombstones.removeAll()
         }
     }
-
-    // MARK: - Internals
 
     private func mutate(_ body: (inout State) -> Void) {
         lock.lock(); defer { lock.unlock() }
@@ -175,15 +140,12 @@ final class LoanEventJournal {
         persistLocked()
     }
 
-    /// Must hold `lock`. Atomic write: a crash mid-write never corrupts the ledger.
     private func persistLocked() {
         guard let s = state else { return }
         do {
             let data = try LoanProtocol.encoder.encode(s)
             try data.write(to: fileURL, options: .atomic)
         } catch {
-            // A failed persist is loud but must not block dosing: the in-memory ledger
-            // still drains normally; only the crash-recovery guarantee is degraded.
             os_log("Loan journal persist FAILED: %{public}@", log: log, type: .fault, String(describing: error))
         }
     }

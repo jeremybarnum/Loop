@@ -37,15 +37,11 @@ import WatchKit
 #endif
 
 enum RuntimeStateLog {
-
-    /// Human-readable app runtime state. `.inactive` is the one the old binary logging
-    /// erased — it is the wrist-down-but-frontmost case, where watchOS keeps us
-    /// foreground-ish but dims, and it behaves differently from a true background.
     static func appStateName() -> String {
         #if os(watchOS)
         switch WKExtension.shared().applicationState {
         case .active:     return "active"
-        case .inactive:   return "inactive"   // wrist down / dimmed, still frontmost
+        case .inactive:   return "inactive"
         case .background: return "background"
         @unknown default: return "unknown"
         }
@@ -54,57 +50,27 @@ enum RuntimeStateLog {
         #endif
     }
 
-    /// One compact snapshot appended to every state line, so any dropout can be
-    /// correlated against all of the conditions at once.
     static func snapshot() -> String {
         let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled ? " · LOW-POWER" : ""
-        // Include the keepalive here too (2026-08-04). It was already on the heartbeat/GAP/
-        // deferral lines but NOT on the [app] ACTIVE / RESIGN ACTIVE lines — which are exactly
-        // the ones that show the screen going dark. Jeremy, field: during reclaim "the watch
-        // screen seems to go dark kind of aggressively... it sort of wants to go back to the
-        // clock screen", wrist up, 38% battery. A live HKWorkoutSession keeps the app frontmost
-        // on wrist raise, so whether one was running at that instant decides between "the
-        // session ended when the watch's part finished, and this is ordinary watchOS behaviour"
-        // and "something dropped the session while the hand-back was still in flight".
+
         return "state \(appStateName()) · \(keepaliveTag()) · \(batteryTag())\(lowPower)"
     }
 
-    // MARK: - Suspension detector
-
     private static var timer: DispatchSourceTimer?
     private static var lastTick = Date()
-    /// State observed at the last HEALTHY tick — i.e. the state we were in when execution
-    /// stopped. The GAP line used to snapshot state AFTER the wake, which always reports the
-    /// state we came back to and never the one we went down in (#82).
+
     private static var lastTickState = "unknown"
     private static var lastBackgroundProof = Date.distantPast
-    /// 30 s cadence; anything past 45 s means we were not executing. The margin absorbs
-    /// ordinary timer leeway without masking a real suspension.
+
     private static let interval: TimeInterval = 30
     private static let tolerance: TimeInterval = 45
-    /// One BG-ALIVE line every 2 min: enough to prove background execution across a whole
-    /// night, sparse enough not to bury the log.
+
     private static let backgroundProofInterval: TimeInterval = 120
 
-    /// Set by `WorkoutKeepalive` at init so every runtime line can say whether the keepalive
-    /// that is supposed to be holding us up was actually alive at that moment. Sampled from
-    /// the heartbeat queue, so the implementation must be thread-safe.
     static var keepaliveProbe: (() -> String)?
 
     private static func keepaliveTag() -> String { keepaliveProbe?() ?? "keepalive ?" }
 
-    // MARK: - #86: direct timer-deferral meter
-
-    /// Measure how late a scheduled block ACTUALLY runs.
-    ///
-    /// Until now the deferral was INFERRED from gaps between takeover-ladder reads, which cannot
-    /// separate "watchOS deferred our timer" from "the read itself blocked". This asks for a known
-    /// delay on the same queue kind the ladder uses and reports what it got, so the two become
-    /// distinguishable. Fire-and-forget; nothing waits on it.
-    ///
-    /// Reports only when late by more than `tolerance`, so a healthy run stays quiet — but ALWAYS
-    /// reports on the first probe of an attempt (`label` carrying "start") so each ladder has at
-    /// least one datapoint even when the OS is behaving.
     static func probeTimerDeferral(_ label: String, requested: TimeInterval = 3.0,
                                    tolerance: TimeInterval = 1.0) {
         let asked = Date()
@@ -118,43 +84,18 @@ enum RuntimeStateLog {
         }
     }
 
-    // MARK: - Main-thread stall detector (2026-08-07)
-
-    /// Measure how long MAIN is unresponsive, and say so WHILE it is stuck.
-    ///
-    /// Why this exists: on 2026-08-07 the watch UI froze twice in one afternoon and the log could
-    /// not see either one. The heartbeat above only detects the whole PROCESS not executing (it
-    /// ticks on a utility queue, so a wedged main thread leaves it perfectly healthy and silent),
-    /// and the app-state lines only fire on transitions that a frozen UI never reaches. So a
-    /// frozen wrist produced a log that looked completely normal right up until watchOS killed
-    /// the process — at which point the tail of the log was lost with it, because LogFile.append
-    /// is async and its queue died undrained. Two separate root causes (an unbounded glance
-    /// refresh loop, then `queue.sync` from main onto the pod's delegate queue) both had to be
-    /// found by reading source rather than evidence.
-    ///
-    /// The ping runs on a utility queue and the pong on main, so the detector STAYS ALIVE while
-    /// main is wedged: if a ping is still outstanding at the next tick, it reports the stall in
-    /// progress rather than waiting for main to recover (which, in the kill case, never happens).
-    /// Deliberately avoids WKExtension / WKInterfaceDevice — those are main-thread-only, and an
-    /// instrument that blocks on the thing it is measuring is worthless.
     private static let stallLock = NSLock()
     private static var pingSentAt: Date?
     private static var stallReportedFor: Date?
-    /// Last thing MAIN was seen starting, and when. The stall detector can prove main is wedged
-    /// but not WHERE — build 250 reported a real 2s+ stall that never recovered and gave no clue
-    /// which call it was in, so localising it still came down to reading source and guessing.
-    /// A breadcrumb costs one lock and one string assignment; the stall line then names the last
-    /// main-thread entry point that started and never finished.
+
     private static var mainMark = "—"
     private static var mainMarkAt = Date()
     private static var lastStallReportAt: Date?
 
-    /// Call at the TOP of a main-thread entry point. Cheap enough for UI paths.
     static func mark(_ label: String) {
         stallLock.lock(); mainMark = label; mainMarkAt = Date(); stallLock.unlock()
     }
-    /// Report a stall past this. watchOS's own watchdog kills well before a user would call it a
-    /// hang, and 2s is already long enough to read as "unresponsive" on the wrist.
+
     private static let stallThreshold: TimeInterval = 2.0
     private static var stallTimer: DispatchSourceTimer?
 
@@ -169,15 +110,11 @@ enum RuntimeStateLog {
             stallLock.unlock()
 
             if let sent = outstanding {
-                // Main has not answered the previous ping. Report it ONCE per stall, from here,
-                // while it is still happening — this is the line that survives a watchdog kill.
                 let stuckFor = Date().timeIntervalSince(sent)
                 if stuckFor > stallThreshold, alreadyReported != sent {
                     stallLock.lock()
                     stallReportedFor = sent
-                    // #95 review: seed the re-report clock here — it was only ever ASSIGNED in
-                    // the else-branch that required it non-nil, so "MAIN STILL STALLED" could
-                    // never fire and the log showed one line per stall however long it ran.
+
                     lastStallReportAt = Date()
                     let where_ = mainMark
                     let markAge = Date().timeIntervalSince(mainMarkAt)
@@ -186,9 +123,7 @@ enum RuntimeStateLog {
                         "MAIN STALLED — main thread has not run for %.1fs (still stuck) · last main entry: %@ (%.1fs ago) · %@",
                         stuckFor, where_, markAge, keepaliveTag()))
                 }
-                // Re-report every 10s while it stays stuck, so the log shows the stall GROWING
-                // rather than a single line that could be mistaken for a blip. Build 250 logged
-                // exactly one 2.0s line and then died 61s later, which understated it badly.
+
                 else if stuckFor > stallThreshold, let last = lastStallReportAt,
                         Date().timeIntervalSince(last) >= 10 {
                     stallLock.lock()
@@ -198,7 +133,7 @@ enum RuntimeStateLog {
                     SportLog.event("runtime", String(format:
                         "MAIN STILL STALLED — %.0fs and counting · last main entry: %@", stuckFor, where_))
                 }
-                return   // don't queue a second ping behind the stuck one
+                return
             }
 
             let sent = Date()
@@ -210,8 +145,7 @@ enum RuntimeStateLog {
                 let wasReported = (stallReportedFor == sent)
                 if wasReported { stallReportedFor = nil }
                 stallLock.unlock()
-                // Only speak on recovery if we had already announced the stall, so a healthy run
-                // stays completely silent.
+
                 if wasReported {
                     SportLog.event("runtime", String(format: "MAIN RECOVERED — main was blocked for %.1fs", waited))
                 }
@@ -227,8 +161,6 @@ enum RuntimeStateLog {
         stallLock.lock(); pingSentAt = nil; stallReportedFor = nil; stallLock.unlock()
     }
 
-    /// Start while a session is live — that is the only window where lost runtime can
-    /// cost a reading or strand a pod command.
     static func startHeartbeat() {
         stopHeartbeat()
         lastTick = Date()
@@ -239,7 +171,7 @@ enum RuntimeStateLog {
         t.setEventHandler {
             let now = Date()
             let gap = now.timeIntervalSince(lastTick)
-            let wentDownIn = lastTickState        // captured BEFORE we overwrite it
+            let wentDownIn = lastTickState
             lastTick = now
             let state = appStateName()
             lastTickState = state
@@ -250,11 +182,7 @@ enum RuntimeStateLog {
                     gap, interval, wentDownIn, state, keepaliveTag(), snapshot()))
                 return
             }
-            // A healthy tick while genuinely BACKGROUNDED is the only direct evidence that
-            // WKBackgroundModes=workout-processing is doing its job (#82) — before build 199
-            // the app was suspended within seconds of backgrounding, so this line could never
-            // appear. Absence of BG-ALIVE across a night is the failure signal; one line every
-            // 2 min is the pass signal.
+
             if state == "background", now.timeIntervalSince(lastBackgroundProof) >= backgroundProofInterval {
                 lastBackgroundProof = now
                 SportLog.event("runtime", "BG-ALIVE — executing while backgrounded · \(keepaliveTag()) · \(snapshot())")

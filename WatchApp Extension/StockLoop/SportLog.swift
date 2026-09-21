@@ -25,16 +25,12 @@ import os.log
 import WatchKit
 #endif
 
-
-// MARK: - Logging
-
 private let logFmt: DateFormatter = {
     let f = DateFormatter()
-    f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"   // date + time: a log spanning midnight/days must be unambiguous (2026-07-25)
+    f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
     return f
 }()
 
-/// Timestamped logging: to the Xcode console (NSLog) AND to the active client's log view.
 func log(_ items: Any...) {
     let msg = items.map { "\($0)" }.joined(separator: " ")
     let line = "\(logFmt.string(from: Date())) \(msg)"
@@ -42,9 +38,6 @@ func log(_ items: Any...) {
     LogFile.append(line)
 }
 
-/// Battery %/state tag (watchOS only) — for correlating dead-gaps with power throttling.
-/// e.g. "pwr 41%/batt", "pwr 88%/chg". Off-wrist + low battery is when the workout keepalive
-/// gets throttled, which is exactly when the long read-gaps appear.
 func batteryTag() -> String {
     #if os(watchOS)
     let dev = WKInterfaceDevice.current()
@@ -63,18 +56,14 @@ func batteryTag() -> String {
     #endif
 }
 
-/// The single on-device log file (Documents/g7watch.log): G7 transport AND — via
-/// SportLog — the M5 loan protocol + loop. Read/shared from the diagnostics page
-/// (SportLog.tail), so a TestFlight build needs no Mac/devicectl. Size-capped so it
-/// can't grow unbounded (the review's unbounded-log finding).
 enum LogFile {
     static let url: URL? = FileManager.default
         .urls(for: .documentDirectory, in: .userDomainMask).first?
         .appendingPathComponent("g7watch.log")
 
     private static let queue = DispatchQueue(label: "com.loopkit.Loop.LogFile")
-    private static let maxBytes: UInt64 = 512 * 1024   // rotate near half a MB
-    private static let trimToBytes = 256 * 1024        // keep the most recent quarter-MB
+    private static let maxBytes: UInt64 = 512 * 1024
+    private static let trimToBytes = 256 * 1024
 
     static func append(_ line: String) {
         guard let url else { return }
@@ -86,13 +75,12 @@ enum LogFile {
                 try? h.write(contentsOf: data)
                 try? h.close()
             } else {
-                try? data.write(to: url)   // first line creates the file
+                try? data.write(to: url)
             }
             if size > maxBytes { rotate(url) }
         }
     }
 
-    /// Keep only the most recent `trimToBytes`, cut at a clean line boundary.
     private static func rotate(_ url: URL) {
         guard let all = try? Data(contentsOf: url), all.count > trimToBytes else { return }
         var slice = all.suffix(trimToBytes)
@@ -100,7 +88,6 @@ enum LogFile {
         try? Data(slice).write(to: url)
     }
 
-    /// The tail of the log as text, for the on-wrist viewer / share sheet.
     static func tail(maxBytes: Int = 24 * 1024) -> String {
         return queue.sync {
             guard let url, let all = try? Data(contentsOf: url) else { return "" }

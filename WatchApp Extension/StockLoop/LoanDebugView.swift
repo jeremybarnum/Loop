@@ -10,16 +10,14 @@ import Foundation
 import SwiftUI
 import WatchKit
 import WatchConnectivity
-import HealthKit   // DOSING readout: HKQuantity glucose/eventual
-import LoopKit     // The .milligramsPerDeciliter HKUnit convenience
-import G7SensorKit // CGM HEALTH panel reads the stock manager directly
+import HealthKit
+import LoopKit
+import G7SensorKit
 
 struct CGMHealth {
     let sensorName: String?
     let lastReadingAge: TimeInterval?
-    /// The value and its reading time (Jeremy, 2026-09-06), so a missed window can be told
-    /// from Dexcom's app holding the previous value across one grid point — the two look
-    /// identical on the glance.
+
     let bgLine: String
     let linkState: String
     let lifecycle: String
@@ -34,8 +32,7 @@ struct CGMHealth {
         } else {
             bgLine = "—"
         }
-        // Scanning AND connected are both normal states in the connect-per-reading rhythm: the
-        // sensor hangs up after each reading, so "scanning" between windows is health, not failure.
+
         linkState = manager.isConnected ? "connected" : (manager.isScanning ? "scanning" : "idle")
         lifecycle = String(describing: manager.lifecycleState)
         if let expiry = manager.sensorExpiresAt {
@@ -51,24 +48,18 @@ struct LoanDebugView: View {
     @State private var snapshot: PodLoanWatchController.DebugSnapshot?
     @State private var cgm: CGMHealth?
     @State private var lastAction: String = "—"
-    /// The loop's own IOB (Jeremy 2026-07-19: the dosing math is what matters —
-    /// surface it here until the UI pass wires the main screens).
+
     @State private var iobText: String = "—"
-    /// Live dosing readout — "is it trying to dose?" made visible on-wrist.
-    /// Refreshes on the same 2s timer as everything else.
+
     @State private var dosing: WatchLoopManager.GlanceData?
     @State private var cobText: String = "—"
 
-    /// How the next request reaches the daemon after each reading — see G7WatchAcquisition.relodge.
-    /// `holdApp` is the proven arm (33/33); `peteDelay` is Pete's formula (measured 1 in 4).
     @AppStorage("G7Lab.relodge") private var relodge = "holdApp"
-    /// Whole-loan workout session — see StockLoopSession.loanWorkout. OFF by default.
+
     @AppStorage("G7Lab.loan.workout") private var loanWorkout = false
 
     private let refresh = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
-    /// nil until the stack finishes starting at launch; the readouts render "—" in that window
-    /// rather than blocking on it.
     private var session: StockLoopSession? {
         ExtensionDelegate.sharedIfAvailable()?.stockLoopSession
     }
@@ -77,11 +68,6 @@ struct LoanDebugView: View {
         NavigationStack {
         ScrollView {
             VStack(alignment: .leading, spacing: 4) {
-                // The dosing decision, on-wrist. `recommend` vs `running` is the
-                // tell — high recommend + baseline running + closed = it wants to dose
-                // but isn't enacting; matching = it dosed; loop OPEN = not dosing at all.
-                // Build tag, moved off the glance. "Which build is this?"
-                // is a diagnostic question, and this is the page you are already on when you ask.
                 Text("build \(BuildDetails.default.codeIdentity)")
                     .font(.footnote).foregroundColor(.secondary)
                 Text("DOSING").font(.footnote).foregroundColor(.secondary)
@@ -114,19 +100,12 @@ struct LoanDebugView: View {
 
                 Text("POD LOAN").font(.footnote).foregroundColor(.secondary)
 
-                // The whole-loan workout session (the "loanWorkout" holder) is OFF by default: the
-                // 2026-09-15 no-keepalive loan passed — the app sleeps between bursts and the
-                // daemon-held sensor request carries each cycle inside the wake. Takeover and
-                // hand-back keep their own runtime holds either way. Read at the next loan start
-                // (StockLoopSession.loanWorkout).
                 Button("Keep a workout session running during loans: \(loanWorkout ? "ON" : "OFF") → tap to flip") {
                     loanWorkout.toggle()
                     SportLog.event("lab", "loan workout session = \(loanWorkout ? "ON — the soak holder spans the next loan" : "OFF — the app sleeps between bursts; takeover/hand-back keep their runtime")")
                     lastAction = "loan workout → \(loanWorkout ? "ON" : "OFF") — next loan"
                 }
 
-                // Read Status stays: read-only, no command, no state change — a live pod
-                // reachability ping, which is the one question this screen cannot infer.
                 Button("Read Pod Status") {
                     lastAction = "reading…"
                     session?.loanController.debugReadStatus { ok in
@@ -142,9 +121,6 @@ struct LoanDebugView: View {
 
                 Divider().padding(.vertical, 2)
 
-                // CGM HEALTH — read straight off the stock manager, which is now the only
-                // producer. These are the fields that actually diagnose a CGM outage in the field:
-                // is a sensor known, when did it last deliver, and is the link up right now.
                 Text("CGM HEALTH").font(.footnote).foregroundColor(.secondary)
                 row("sensor", cgm?.sensorName ?? "none")
                 row("last reading", cgm?.lastReadingAge.map { String(format: "%.0fs ago", $0) } ?? "never")
@@ -153,21 +129,13 @@ struct LoanDebugView: View {
                 row("state", cgm?.lifecycle ?? "—")
                 row("expires", cgm?.expiresIn ?? "—")
 
-                // SENSOR — the two choices that still support a live debate (authentication, and
-                // how the next request reaches the daemon) and the one action. Everything
-                // settled or failed came off this page on 2026-09-16.
                 Text("SENSOR").font(.footnote).foregroundColor(.secondary)
 
                 if let needs = G7WatchDirectRead.needsCodeFor {
-                    // The connect reached a sensor we have no pairing code for. The code lives in
-                    // the Dexcom app; it is entered once per sensor in Loop ▸ Dexcom G7 on the phone.
                     Text("Sensor code needed for \(needs) — enter it in Loop ▸ Dexcom G7 on the phone (shown in the Dexcom app).")
                         .font(.caption2).foregroundColor(.red)
                 }
 
-                // RE-LODGE. After each reading the sensor closes the link and advertises a 20–24 s
-                // tail; how the next request reaches the daemon without touching that tail is the
-                // open question with Pete. Read by the kit at each close (G7WatchAcquisition.relodge).
                 Picker("Re-lodge", selection: $relodge) {
                     Text("Pete's start delay").tag("peteDelay")
                     Text("Hold the app 35 s").tag("holdApp")
@@ -183,13 +151,6 @@ struct LoanDebugView: View {
                      : "Hold the app 35 s after link-up, then a plain connect — measured 33 in 33; 35 s of runtime per cycle")
                     .font(.caption2).foregroundColor(.secondary)
 
-
-                // RECONNECT keeps the sensor's identity: it drops our link or the lodged request
-                // and runs ONE bootstrap scan pass for the SAME sensor — the first move for a
-                // client that has stopped delivering. It does NOT clear a parked -70 floor. Nothing
-                // in our process can: that lives in bluetoothd's accept list and only a Bluetooth
-                // toggle, a strong burst or a reboot clears it. If reconnect changes nothing and
-                // the sensor is silent, the watch's own Bluetooth is the next thing to try, not this.
                 Button("Reconnect sensor") {
                     SportLog.event("g7-ble", "*** USER RECONNECT *** dropping the G7 link and re-acquiring the same sensor")
                     ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.cgmManager.reconnectG7()
@@ -200,13 +161,7 @@ struct LoanDebugView: View {
 
                 NavigationLink("Logs") { LogView() }
                     .font(.caption)
-                // The glance demo cycles the glance through every state it can render, so the
-                // layouts can be judged without waiting for the real conditions. It sits on its
-                // own compile condition rather than DEBUG because a clone is built in Debug and
-                // run by someone who has no way to know that a screenful of invented pod and
-                // insulin state is a mockup. Add GLANCE_DEMO to SWIFT_ACTIVE_COMPILATION_CONDITIONS
-                // in a local LoopConfigOverride.xcconfig to get it back; nothing defines it by
-                // default, so it is absent from every build a receiver can make.
+
                 #if GLANCE_DEMO
                 NavigationLink("Glance demo") { GlanceDemoView() }
                     .font(.caption)
@@ -223,25 +178,10 @@ struct LoanDebugView: View {
     }
 
     private func tick() {
-        // Same 2s main-thread timer problem as the glance: the loan queue is the pump's
-        // delegate queue, so a sync read froze the UI for the length of any pod operation.
         session?.loanController.refreshDebugSnapshot()
         snapshot = session?.loanController.mirroredDebugSnapshot ?? snapshot
         cgm = session.map { CGMHealth($0.stack.cgmManager) } ?? cgm
-        // The comment above says this tick was converted to mirrors — but only the
-        // LOAN-queue read was; this line stayed glanceData(), which is
-        // `dataAccessQueue.sync` (WatchLoopManager: "kept for the DEBUG page, which ... can
-        // afford to wait"). It cannot afford to wait: this closure runs on a 2s MAIN-thread
-        // timer, and watchOS keeps page views alive after they are first visited — so from
-        // the first time the diagnostics page was ever opened, MAIN blocked on
-        // dataAccessQueue every 2 seconds, forever, even with a different page frontmost.
-        // A post-carb cycle holds that queue for the whole enact (2-4s when the pod link is
-        // held, ~7s when it must be reclaimed first): tick lands in the window ->
-        // multi-second UI freeze (the recovered 4.1s stall); the longer reclaim window ->
-        // watchdog kill; and when the queue's work item itself waited on a main-bound
-        // completion, MAIN and the queue waited on each other forever (a multi-minute wedge
-        // ending in a force-quit). Same mirror discipline as the glance now: kick the
-        // rebuild, render the last published mirror.
+
         RuntimeStateLog.mark("debug.tick")
         session?.stack.loopManager.refreshGlanceData()
         if let gd = session?.stack.loopManager.mirroredGlanceData {
@@ -253,26 +193,9 @@ struct LoanDebugView: View {
         }
     }
 
-    /// The prediction's four components — INSULIN, carbs, momentum,
-    /// retrospection — on one line, arithmetically reconciled to the `eventual` row above it.
-    ///
-    ///     133 ins-4 carb+0 mom+6 RC+16 r+0 = 151
-    ///
-    /// Every term is mg/dL, forced-sign, and the row LITERALLY ADDS UP: `r` is the closure
-    /// term, so start + ins + carb + mom + RC + r == eventual as rendered. The components come
-    /// from `WatchLoopManager.computePredictionBreakdown()`, which replays `LoopMath`'s own
-    /// per-date arithmetic per contributor (including the momentum blend's (1 − split) scaling
-    /// of the other effects), so the true residual is ~0 and `r` carries only integer rounding.
-    /// A big `r` on the wrist therefore means the decomposition has drifted from the prediction
-    /// — deliberately visible rather than silently absorbed.
-    ///
-    /// Monospaced (the `LogView` register, :248) so the signed terms don't jitter on the 2 s
-    /// refresh; it WRAPS rather than truncating or shrinking, matching this screen's habit —
-    /// no number is ever clipped.
     @ViewBuilder
     private var predictionReconciliation: some View {
         if let b = dosing?.predictionBreakdown {
-            // `-0.0` formats as "-0"; normalize so a zero term reads "+0".
             let s = WatchLoopManager.PredictionBreakdown.round0(b.startMgdl)
             let ins = WatchLoopManager.PredictionBreakdown.round0(b.insulinMgdl)
             let carb = WatchLoopManager.PredictionBreakdown.round0(b.carbMgdl)
@@ -284,10 +207,7 @@ struct LoanDebugView: View {
                         s, ins, carb, mom, rc, r, ev))
                 .font(.system(size: 11, design: .monospaced))
                 .frame(maxWidth: .infinity, alignment: .leading)
-            // Say WHICH retrospective model produced that RC term. The watch
-            // adopts the phone's Integral toggle at takeover, so a mismatch here against the
-            // phone's setting is the signature of the two devices predicting differently — the
-            // thing that adoption exists to prevent, and previously only checkable in the log.
+
             Text(String(format: "RC model: %@ · %d discrepanc%@",
                         (dosing?.retrospectiveCorrectionIsIntegral ?? false) ? "Integral" : "Standard",
                         dosing?.retrospectiveDiscrepancyCount ?? 0,
@@ -312,11 +232,6 @@ struct LoanDebugView: View {
     }
 }
 
-// MARK: - On-wrist log viewer + share (unified g7watch.log via SportLog)
-
-/// Reads the tail of the single on-device log (G7 transport + M5 protocol) and offers
-/// a share sheet — so a TestFlight build's logs can be read and sent from the wrist,
-/// no Mac / devicectl. Newest lines at the top.
 struct LogView: View {
     @State private var text: String = ""
     @State private var sendNote: String?
@@ -324,10 +239,6 @@ struct LogView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 6) {
-                // The full file rides WCSession's queued transfer (works even while the
-                // phone is unreachable — it delivers when contact resumes) and lands in
-                // the phone's Files app (On My iPhone → Loop), where the PHONE's share
-                // sheet has real AirDrop. watchOS has no AirDrop; texting logs was pain.
                 Button {
                     if let url = LogFile.url {
                         WCSession.default.transferFile(url, metadata: ["kind": "g7watch.log"])
@@ -341,12 +252,6 @@ struct LogView: View {
                     Text(note).font(.system(size: 10)).foregroundColor(.secondary)
                 }
 
-                // Share the ALREADY-LOADED text rather than calling LogFile.tail() here.
-                // `item:` is an argument to a View initialiser, so it was re-evaluated on EVERY
-                // body pass — and LogFile.tail() is `queue.sync` onto the log-writer queue plus a
-                // full file read and a 64 KB UTF-8 decode, all on MAIN. That is a main-thread
-                // block whose duration is set by the log-append backlog, which is exactly what
-                // spikes during a loan. `text` is loaded once in onAppear and by Refresh.
                 ShareLink(item: text) {
                     Label("Share log", systemImage: "square.and.arrow.up")
                 }
@@ -367,7 +272,6 @@ struct LogView: View {
     }
 
     private func load() {
-        // Newest first: reverse the tail's lines so the latest events are on top.
         let tail = LogFile.tail()
         text = tail.split(separator: "\n", omittingEmptySubsequences: false)
             .reversed().joined(separator: "\n")

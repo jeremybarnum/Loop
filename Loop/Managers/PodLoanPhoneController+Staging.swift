@@ -13,9 +13,6 @@ import UserNotifications
 import os.log
 
 extension PodLoanPhoneController {
-
-    // MARK: - Staging persistence (trap-cell defense survives phone relaunch)
-
     var stagedFileURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return base.appendingPathComponent("PodLoanStagedRecordsV2.json")

@@ -13,9 +13,6 @@ import UserNotifications
 import os.log
 
 extension PodLoanPhoneController {
-
-    // MARK: - Notifications (the COMPLETE alarm inventory)
-
     func scheduleNotification(id: String, title: String, body: String, delay: TimeInterval, repeats: Bool) {
         let content = UNMutableNotificationContent()
         content.title = title
@@ -30,19 +27,6 @@ extension PodLoanPhoneController {
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])
     }
 
-    /// Both directions of a protocol skew — the watch sent something this build cannot decode,
-    /// or the watch nacked something this build sent — mean the same thing to the user, so they
-    /// share one notice. The cause is named with "may", because the decode failure is all that
-    /// was observed: a mismatched build is the designed reason (the envelope hard-guards
-    /// protocolVersion and throws rather than guessing) and by far the likeliest one, but a
-    /// corrupt payload produces the identical symptom. The check is worth naming because
-    /// installing the two halves is genuinely fiddly and a half-updated pair is the common
-    /// self-inflicted case.
-    ///
-    /// Latched once per skew and released on the first clean decode, for the reason the
-    /// records-not-saved warning is latched: offers resend every 15 s, and `issueNotice` mints
-    /// a fresh UUID per post, so an unlatched warning would stack a new banner every resend
-    /// rather than replacing the last one.
     func warnProtocolMismatch() {
         os_log("Loan protocol skew — payload undecodable in this build", log: log, type: .error)
         guard !hasWarnedProtocolMismatch else { return }
@@ -52,31 +36,10 @@ extension PodLoanPhoneController {
             NSLocalizedString("Loop can't read a message from the watch. The apps may be on different builds — check both are current.", comment: "Phone notice body when a loan message cannot be decoded"))
     }
 
-    /// Shared by the three paths that end an unverifiable session: the pod never answered, it
-    /// answered without an insulin total, or there was no start-of-loan baseline to compare
-    /// against. Those are three internal reasons for one user-facing fact, and previously each
-    /// shipped its own wording — so the same situation read as three different problems. The
-    /// second sentence is the house phrasing already used elsewhere in this file for a latched
-    /// loop, which is what makes it accurate here: nothing reopens it automatically.
     static let sessionUnverifiedBody = NSLocalizedString(
         "Loop couldn't verify the watch's insulin delivery. Automatic dosing is off until you turn it back on.",
         comment: "Phone notice when a watch session's insulin could not be verified after reclaim")
 
-
-    // MARK: - Standing reminders (ruled 2026-08-15)
-    //
-    // Two conditions can outlive the notice that announced them, and both stop mattering after
-    // the insulin action duration:
-    //
-    //   1. A PLACEHOLDER bolus stands in your IOB for insulin the pod proved it delivered and
-    //      no record explains. You may be able to correct it from memory — but only while the
-    //      dose is still within the manual-entry date picker's ±6 h reach, which is the same 6 h
-    //      after which it has decayed out anyway. Two rungs, then silence.
-    //   2. An AUDIT OPENED THE LOOP and nothing in this codebase closes it. One reminder only:
-    //      the first tells someone who missed the original notice; a second would be nagging
-    //      about a decision they have now made.
-
-    /// Arm the placeholder ladder. Cancelled wherever the booking retires.
     func armPlaceholderReminders(units: Double, bookedAt: Date) {
         let amount = String(format: "%.2f", units)
         let time = Self.reminderTimeFormatter.string(from: bookedAt)
@@ -95,10 +58,6 @@ extension PodLoanPhoneController {
         }
     }
 
-    /// Arm the single open-loop reminder. Best-effort cancelled: the phone cannot observe the
-    /// user flipping Closed Loop back on from outside its own work, so this is also cleared at
-    /// launch and at the next grant if dosing is already enabled by then. Worst case is one
-    /// stale reminder, which is why this is a single rung and not a ladder.
     func armOpenLoopReminder() {
         scheduleNotification(
             id: NotificationID.openLoop,
@@ -107,7 +66,6 @@ extension PodLoanPhoneController {
             delay: ReminderLadder.openLoopDelay, repeats: false)
     }
 
-    /// Clear the open-loop reminder if the user has already closed the loop themselves.
     func cancelOpenLoopReminderIfLoopClosed() {
         guard deps.settings().dosingEnabled else { return }
         cancelNotification(id: NotificationID.openLoop)
