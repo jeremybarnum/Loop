@@ -400,6 +400,9 @@ final class WatchLoopManager {
         /// from the pair, so a fresh reading with a stale `directG7At` is the interesting case.
         let directG7At: Date?
         let phoneRelayAt: Date?
+        /// When the current sensor was started, if known. A new sensor is quiet for its warm-up
+        /// by design, and without this the silence hint cannot tell that from a parked radio.
+        let sensorActivatedAt: Date?
         let trend: GlucoseTrend?
         let eventual: LoopQuantity?
         /// IOB read from the BOOK. `predictionBreakdown.iobUnits` is the algorithm's own figure

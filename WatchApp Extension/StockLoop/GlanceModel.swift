@@ -739,8 +739,9 @@ final class GlanceViewModel: ObservableObject {
             // The wedge hint OUTRANKS the countdown: when the watch's Bluetooth is parked there
             // is no next reading to count down to, and telling the user to wait is worse than
             // telling them nothing.
-            if let hint = G7WedgeHint.text(directAge: data.directG7At.map { now.timeIntervalSince($0) },
-                                           relayAge: data.phoneRelayAt.map { now.timeIntervalSince($0) }) {
+            if let hint = G7SilenceHint.text(directAge: data.directG7At.map { now.timeIntervalSince($0) },
+                                             relayAge: data.phoneRelayAt.map { now.timeIntervalSince($0) },
+                                             sensorAge: data.sensorActivatedAt.map { now.timeIntervalSince($0) }) {
                 s.g7EtaText = hint
             }
 
