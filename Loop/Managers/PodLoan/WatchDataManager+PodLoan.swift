@@ -106,7 +106,7 @@ extension WatchDataManager {
         // deliberately released. Refuse loudly rather than letting the request die in a BLE
         // timeout. Delivery only is refused: an attached carb entry still stores below, because
         // dropping it would lose the meal from the record entirely.
-        // (Reconciled from Caitlin's line 2026-09-09. The port had NO guard here: a watch
+        // (Reconciled from the dev line. This line had NO guard here: a watch
         // bolus during a loan went straight to enactBolus against a released pod link.)
         let deliveryRefusedForLoan = bolus.value > 0 && podLoanController.isPodLoanedOut
         if deliveryRefusedForLoan {
@@ -326,7 +326,7 @@ extension WatchDataManager {
             guard let self = self else { return }
             self.appInstalledGlitchWork = nil
             self.appInstalledGlitchNotified = true
-            // Reconciled to Caitlin's line 2026-09-09: the 75-s persistence is still detected and
+            // Reconciled to the dev line: the 75-s persistence is still detected and
             // logged (it was the signature of both of 09-08's silences); it no longer posts.
             PhoneLog.event("link", "appInstalled=false has PERSISTED 75s [appinstalled-glitch]")
         }

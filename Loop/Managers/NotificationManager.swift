@@ -99,7 +99,7 @@ extension NotificationManager {
 
     /// PODLOAN: a watch bolus request arrived while the pod is loaned out — this
     /// phone refused delivery (its pod link is released). Loud, actionable, honest.
-    /// Reconciled from Caitlin's line 2026-09-09; strings verbatim.
+    /// Reconciled from the dev line; strings verbatim.
     static func sendBolusFailureNotificationForPodLoan(units: Double) {
         let notification = UNMutableNotificationContent()
         notification.title = NSLocalizedString("Bolus Not Delivered", comment: "Notification title when a bolus is refused because the pod is on loan")
