@@ -171,19 +171,10 @@ extension PodLoanPhoneController {
         return nil
     }
 
-    /// True during the post-handover BLE settle: the phone owns the pod but cannot yet command
-    /// it. Distinct from `isPodLoanedOut` (which is false here, since state is already .owner),
-    /// so a bolus tapped now would be aimed at a link that is not up.
-    var isReclaimSettlingOnly: Bool {
-        return queue.sync { state == .owner && reclaimStartedAt != nil && reclaimVerifiedAt == nil }
-    }
-
     /// Non-blocking twins of the predicates above, for the tile. See `UISnapshot`.
     /// Mirror-backed and lock-only — safe from any thread. The alert manager's
     /// Loop-Failure suppression gate reads this on every phone cycle completion.
     var isLoanedOutForUI: Bool { return uiState.isLoanedOut }
-
-    var isReclaimSettlingOnlyForUI: Bool { return uiState.isSettlingOnly }
 
     /// The TILE's gate: any reclaim activity at all — the drain/force ladder OR the settle.
     /// The old gate was settle-only, so a dead-watch force showed "Pod on Watch" for the whole

@@ -255,18 +255,6 @@ extension PodLoanWatchController {
             s.momentumPointCount, s.rcDiscrepancyCount, now.timeIntervalSince(s.snapshotAt)))
     }
 
-    /// Titles for seeded pump events (record→DoseEntry lives in the shared
-    /// LoanProtocolV2 `seedDoseEntry`/`seedDoseEntries` so the watch and the tests agree).
-    private static func pumpEventTitle(for type: DoseType) -> String {
-        switch type {
-        case .bolus:     return "Bolus"
-        case .tempBasal: return "Temp Basal"
-        case .basal:     return "Basal"
-        case .suspend:   return "Suspend"
-        case .resume:    return "Resume"
-        }
-    }
-
 
     // MARK: - Hand-back (§3.2 HANDING_BACK)
 

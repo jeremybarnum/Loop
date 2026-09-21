@@ -33,13 +33,6 @@ extension WatchDataManager {
                     // at reconcile. The ForLoanGrant variant additionally drops the future rungs' bookkeeping,
                     // so loan-end inference cannot record alerts that were cancelled.
                     self.deviceManager.alertManager?.clearLoopNotRunningNotificationsForLoanGrant()
-                    // Arm the watch-silence dead-man: during a loan the alarm-worthy failure is the WATCH
-                    // going dark, not the phone failing to loop. Armed ungated because the loan state flips
-                    // after this closure runs, and main-hopped so every watch-silence mutation serializes on
-                    // one queue.
-                    DispatchQueue.main.async { [weak self] in
-                        self?.deviceManager.alertManager?.armWatchSilenceNotifications()
-                    }
                 } else {
                     // This closure runs on the loan controller's serial queue, and the
                     // reschedule below reads a gate that dispatches sync onto that same queue —
@@ -47,8 +40,6 @@ extension WatchDataManager {
                     // .owner by then, so the gate reads open from another queue, and the hop
                     // also serializes this clear against any in-flight re-arm.
                     DispatchQueue.main.async { [weak self] in
-                        // Loan ended — the watch no longer owes us a heartbeat.
-                        self?.deviceManager.alertManager?.clearWatchSilenceNotifications()
                         // Reclaim-gap fix: the "Loop Failure" ladder only re-arms on a SUCCESSFUL
                         // loop, so a phone that fails to resume looping after reclaim — exactly
                         // the case the ladder exists for — would stay silent forever. Re-arm from

@@ -555,7 +555,6 @@ extension PodLoanPhoneController {
             self.sendMessage(.revoke(Revoke(epoch: revokeEpoch)))
             self.reclaimPodConnection()
             self.state = .reclaimPending
-            self.armPausedReminder()
             self.armReclaimLadder()
         }
     }
