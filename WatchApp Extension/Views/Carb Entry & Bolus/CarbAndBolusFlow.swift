@@ -223,11 +223,6 @@ extension CarbAndBolusFlow {
         .transition(.fadeIn(after: 0.175))
     }
 
-    /// Non-blocking read (a view must never sync onto the loan controller's queue).
-    private var loanIsActive: Bool {
-        ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.loanController.isLoanActiveNonBlocking ?? false
-    }
-
     private var saveCarbsAndBolusButton: some View {
         ActionButton(
             title: saveButtonText,
