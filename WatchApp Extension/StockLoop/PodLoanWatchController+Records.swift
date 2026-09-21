@@ -2,6 +2,13 @@
 //  PodLoanWatchController+Records.swift
 //  WatchApp Extension
 //
+//  Minting the loan's journal events and streaming them to the phone.
+//
+//  Everything the wrist does that the phone must eventually know about — doses the pod reported,
+//  carbs added or deleted, override changes — becomes one journal event with a stable identity
+//  and a per-loan sequence number, then rides the next batch home. The journal is the PROTOCOL
+//  record; dosing math reads the LoopKit stores and never this.
+//
 
 import Foundation
 import HealthKit
@@ -14,6 +21,13 @@ import os.log
 
 extension PodLoanWatchController {
 
+    /// Send everything the phone has not acked yet.
+    ///
+    /// A `renewal` batch goes even when there is nothing to say: an empty batch is what tells the
+    /// phone this watch completed a cycle, and the absence of those SEND stamps is what its
+    /// silence warning counts. An empty one is sent urgent-only — it carries no records, so
+    /// nothing is lost if it cannot go now, and queuing it would only delay the batches that do
+    /// carry something.
     func streamRecords(renewal: Bool = false) {
         guard phase == .active, let epoch = epoch else { return }
         let events = journal.unackedEvents()
@@ -21,6 +35,9 @@ extension PodLoanWatchController {
         let empty = events.isEmpty && tombstones.isEmpty
         guard renewal || !empty else { return }
 
+        // Ride the pod's delivery total along when we have one: it lets the phone checkpoint the
+        // loan's insulin mid-flight instead of waiting for the hand-back. Nothing is dialled for
+        // it — this is whatever the last pod session left — so it claims no freshening.
         var odometer: LoanOdometerSnapshot?
         if let start = deliveredAtTakeover, let latest = pumpManager?.podLoanInsulinDelivered,
            let asOf = pumpManager?.podLoanInsulinDeliveredAt {
@@ -37,10 +54,15 @@ extension PodLoanWatchController {
                     urgentOnly: empty)
     }
 
+    /// Called once per completed cycle. The phone judges the watch's silence from the send stamp
+    /// on these batches, so this must keep going on cycles that recorded nothing at all.
     func renewHold() {
         queue.async { self.streamRecords(renewal: true) }
     }
 
+    /// Journal each dose the pump manager reports, ONCE, keyed on the pod-native raw. The running
+    /// temp is re-reported under the same raw on every pod session and must not be re-minted; the
+    /// phone finalizes it from the pod state that comes home with the hand-back.
     func journalPumpEvents(_ events: [NewPumpEvent]) {
         guard phase == .active else { return }
         var minted = 0
@@ -59,6 +81,14 @@ extension PodLoanWatchController {
         if minted > 0 { streamRecords() }
     }
 
+    /// The wire form of a dose. Identity is the hex of the pod-native raw bytes, because LoopKit
+    /// DISCARDS an incoming `syncIdentifier` and derives identity from `raw` itself — anything
+    /// else gives one physical dose two identities and defeats every dedup layer downstream.
+    ///
+    /// `deliveredUnits` and `insulinType` travel explicitly rather than being re-derived on the
+    /// phone: the pod delivers whole pulses and a superseded temp is floored, so a phone working
+    /// from programmed units over-states IOB; and fiasp or lyumjev would silently decay on the
+    /// adult curve.
     private static func loanRecord(for dose: DoseEntry, raw: Data) -> LoanDoseRecord? {
         let identity = raw.map { String(format: "%02x", $0) }.joined()
         switch dose.type {
@@ -76,8 +106,13 @@ extension PodLoanWatchController {
         }
     }
 
+    /// Wrist-entered carbs ride the journal home. The local carb store already has this entry, so
+    /// this cycle's COB sees it; the journal is the durable copy the phone commits.
     func loanDidRecordCarbs(_ entry: NewCarbEntry) {
         let grams = entry.quantity.doubleValue(for: .gram)
+        // The UI-originated journal writers hop with `async`, never `sync`: ordering against the
+        // pump manager's own reports on this queue is what keeps sequence numbers meaningful, and
+        // a sync from the main thread is the stall this queue must never cause.
         queue.async {
             guard self.phase == .active else {
                 SportLog.event("loan", String(format: "carb entry ignored (%.0f g) — no active loan to journal it against", grams))
@@ -98,6 +133,13 @@ extension PodLoanWatchController {
         }
     }
 
+    /// A delete on the wrist must ride the journal too, never be applied locally only: every
+    /// grant replaces the watch's carb store wholesale from the phone, so a delete the phone never
+    /// heard about is RESURRECTED at the next takeover, still driving dosing.
+    ///
+    /// A carb entered on the wrist has no phone-side identity yet, so `syncIdentifier` is nil
+    /// here. The phone cancels an add-and-delete pair inside one drain by their sequence order
+    /// instead of matching an identity it never minted.
     func loanDidDeleteCarb(syncIdentifier: String?, startDate: Date, grams: Double) {
         queue.async {
             guard self.phase == .active else {
@@ -120,6 +162,11 @@ extension PodLoanWatchController {
         }
     }
 
+    /// Override changes ride the journal for the same reason carb deletes do — the next grant
+    /// would otherwise undo them — but only when the phone advertised that it understands the
+    /// record. Without that capability the override stays LIVE on the wrist and the log says so:
+    /// a record the phone's decoder cannot read would throw and strand the loan, which mid-
+    /// exercise is worse than an override that does not follow the pod home.
     func loanDidRecordOverride(_ override: TemporaryScheduleOverride?) {
         let name = override.map { $0.context.presetNameForLog } ?? "cleared"
         queue.async {

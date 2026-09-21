@@ -1,6 +1,13 @@
 //
 //  LoanMessages.swift
-//  Loop
+//  LoopCore — one module, linked by both the phone app and the watch app.
+//
+//  The messages the two apps exchange, and what each one carries.
+//
+//  Every field added since the format froze is Optional, and nil must mean "an older build sent
+//  this, behave as that build's counterpart did" — never "no". The apps install separately, so a
+//  watch newer than its phone is routine, and an older decoder simply drops a key it has never
+//  heard of. A required field added here would strand every session with an older counterpart.
 //
 
 import Foundation
@@ -22,6 +29,8 @@ extension LoanGrant {
     }
 }
 
+/// What the pod itself reported, at a moment. Carried at takeover and again at hand-back so
+/// both sides can see the pod's own account rather than only each other's.
 public struct LoanPodStatus: Codable, Equatable {
     public let timestamp: Date
     public let deliveredUnits: Double?
@@ -39,6 +48,7 @@ public struct LoanPodStatus: Codable, Equatable {
     }
 }
 
+/// How the holder of the pod is dosing.
 public enum LoanDosingMode: String, Codable {
     case closedDirect
     case closedPhoneFed
@@ -47,14 +57,23 @@ public enum LoanDosingMode: String, Codable {
     case suspended
 }
 
+/// The watch asking for the pod.
 public struct LoanRequest: Codable, Equatable {
     public let watchBuild: String
     public let supportedVersions: [Int]
 
+    /// Identifies this request so a redelivered copy can be recognised. The transport can
+    /// deliver the same payload twice; without this the phone treats the second as a new
+    /// request, takes the pod back to grant it again, and the watch ends up holding a grant for
+    /// a pod the phone has re-armed.
     public let requestID: String?
 
+    /// Whether this watch can start a session without the phone. The phone only keeps its
+    /// standing copy refreshed for a watch that says yes.
     public let supportsSeize: Bool?
 
+    /// When the watch sent it. A request that has been sitting in a queue must not be granted:
+    /// the user asked minutes ago and has long since seen it fail.
     public let sentAt: Date?
 
     public init(watchBuild: String,
@@ -70,9 +89,16 @@ public struct LoanRequest: Codable, Equatable {
     }
 }
 
+/// The standing copy the phone keeps on the watch so a session can start without it.
+///
+/// It is a complete grant that has not been activated. The watch stores the newest one and uses
+/// it only when the user confirms a start the phone did not answer.
 public struct DormantGrant: Codable, Equatable {
     public let grant: LoanGrant
     public let issuedAt: Date
+
+    /// Identifies the copy, so that when the phone comes back it can recognise the session as
+    /// one grown from its own credential rather than an unexplained loan.
     public let seizeToken: UUID
 
     public init(grant: LoanGrant, issuedAt: Date, seizeToken: UUID) {
@@ -82,7 +108,13 @@ public struct DormantGrant: Codable, Equatable {
     }
 }
 
+/// Everything the watch needs to run the loop with the pod: the pod itself, the therapy
+/// settings to dose by, and enough history to be right from the first cycle rather than after
+/// a warm-up.
 public struct LoanGrant: Codable, Equatable {
+    /// Which session this is. It increases with every grant, and both sides refuse anything
+    /// stamped with an epoch that is not the one they are running — which is what stops a late
+    /// message from a finished session being applied to a live one.
     public let epoch: Int
 
     public let expiresAt: Date
@@ -96,8 +128,13 @@ public struct LoanGrant: Codable, Equatable {
 
     public let doseHistory: [LoanDoseRecord]
 
+    /// Whether the phone can tell an interim hand-back offer from a final one. An older phone
+    /// drops the flag that distinguishes them and reads the first interim offer as the end of
+    /// the session — taking the pod back while the watch is still dosing.
     public let supportsInterimHandback: Bool?
 
+    /// Whether the phone understands override records. Without it the watch still applies an
+    /// override locally, and says plainly that it will not follow the pod home.
     public let supportsOverrideRecords: Bool?
 
     public let integralRetrospectiveCorrectionEnabled: Bool?
@@ -108,12 +145,18 @@ public struct LoanGrant: Codable, Equatable {
 
     public let lastLoopCompleted: Date?
 
+    /// Recent glucose, so the watch's first prediction has momentum and retrospective
+    /// correction to work from instead of starting cold.
     public let glucoseHistory: [LoanGlucoseRecord]?
 
     public let predictionSnapshot: LoanPredictionSnapshot?
 
     public let activeOverrideRaw: Data?
 
+    /// Basal schedule, sensitivity, carb ratio and the default insulin model, carried
+    /// separately because the settings blob above drops all four. A watch missing schedules
+    /// refuses the loan out loud; one missing the insulin model would dose on a default and say
+    /// nothing, which is worse.
     public let therapySettingsSupplementRaw: Data?
 
     public init(epoch: Int, expiresAt: Date, pumpManagerRawState: Data, podAddress: UInt32,
@@ -169,6 +212,10 @@ public struct TakeoverFailed: Codable, Equatable {
     }
 }
 
+/// The watch's ordinary report: what it has recorded since the phone last acknowledged.
+///
+/// Sent every cycle even when there is nothing new, because an empty batch is still the watch
+/// saying it is alive and looping.
 public struct DoseRecordBatch: Codable, Equatable {
     public let epoch: Int
     public let events: [LoanEvent]
@@ -176,6 +223,8 @@ public struct DoseRecordBatch: Codable, Equatable {
 
     public let odometer: LoanOdometerSnapshot?
 
+    /// When the watch sent it. The phone judges the watch's liveness by this rather than by
+    /// arrival: a batch that spent an hour in a queue proves nothing about now.
     public let sentAt: Date?
 
     public init(epoch: Int, events: [LoanEvent], tombstones: [UUID],
@@ -188,6 +237,10 @@ public struct DoseRecordBatch: Codable, Equatable {
     }
 }
 
+/// The watch offering the pod back, with everything it has not yet had acknowledged.
+///
+/// It is sent repeatedly until the phone acknowledges, and the same offer arriving twice must
+/// be harmless — the phone commits by event identity, not by the offer.
 public struct HandbackOffer: Codable, Equatable {
     public let epoch: Int
     public let handedBackAt: Date
@@ -197,10 +250,17 @@ public struct HandbackOffer: Codable, Equatable {
     public let tombstones: [UUID]
     public let recovered: Bool
 
+    /// Whether the watch has actually let go of the pod. An interim offer (false) means the
+    /// watch is still dosing and only sending its records ahead; the final offer (true) means
+    /// the pod is free. A phone that cannot read this flag must be told so by the grant's
+    /// capability field, or it will reclaim during a session that is still running.
     public let released: Bool?
 
     public let watchClosedLoopEnabled: Bool?
 
+    /// Present when the session grew from the standing copy, so a phone that never granted it
+    /// can recognise its own credential and adopt the session instead of treating the records
+    /// as belonging to nothing.
     public let seizeToken: UUID?
 
     public let lastLoopCompleted: Date?
