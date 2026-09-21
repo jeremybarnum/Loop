@@ -13,46 +13,14 @@ struct ContentView: View {
     @Environment(LoopDataManager.self) var loopManager
 
     @State private var presetToConfirm: SelectablePreset? = nil
-    @State private var selectedPage = UserDefaults.standard.startOnChartPage ? 1 : 0
-    @StateObject private var glanceModel = GlanceViewModel()
-
-    /// The glance's page index. Named rather than written inline because a live loan lands the
-    /// user here, and a bare `2` at that call site would be a silent dependency on page order.
-    private static let sportPage = 2
+    @State var selectedPage = UserDefaults.standard.startOnChartPage ? 1 : 0
+    @StateObject var glanceModel = GlanceViewModel()   // ContentView+PodLoan.swift reads it
 
     /// Mirrored into plain state rather than read from `glanceModel` inside `body`. Reading the
     /// model here would subscribe THE ROOT VIEW to a timer-driven object on the loan path, so
     /// every glance tick would invalidate the whole app — and a publish that arrives off the main
     /// thread would do it from the wrong thread, which SwiftUI does not survive.
-    @State private var loanIsLive = false
-
-    /// Stock's onboarding gate, applied per PAGE instead of to the whole app.
-    ///
-    /// The stock pages have nothing to show until the phone reports both managers onboarded, so
-    /// they still show stock's prompt. Sport Mode and diagnostics stay reachable regardless: the
-    /// wrist has its own stores, its own CGM and its own log, and the diagnostics page is how you
-    /// find out WHY the phone says onboarding is incomplete. Gating it behind the very flag you
-    /// are trying to debug is the wrong way round.
-    ///
-    /// A LIVE LOAN OPENS THE GATE ON ITS OWN. The flag this consults is the PHONE's — set from the
-    /// phone's own CGM and pump onboarding state, and reaching the wrist inside a context update.
-    /// During a loan the phone may be switched off entirely, so it cannot arrive: waiting for it
-    /// blanks precisely the screens the wrist needs while it is the one holding the pod. The watch
-    /// is authoritative then, with its own stores and its own CGM, so the phone's readiness is not
-    /// the question being asked.
-    private var isOnboarded: Bool {
-        let phoneSaysOnboarded = loopManager.activeContext?.isOnboardingCompleted == true
-        let gate = loanIsLive || phoneSaysOnboarded
-        // Bench 2026-09-18: log the DECISION with both inputs, on change only (SwiftUI evaluates
-        // this on every render). Pairs with the "[onboarding-gate]" line in LoopDataManager.
-        let key = "\(gate)|\(loanIsLive)|\(phoneSaysOnboarded)"
-        if key != Self.lastGateKey {
-            Self.lastGateKey = key
-            SportLog.event("gate", "stock pages \(gate ? "SHOWN" : "BEHIND onboarding") — loanIsLive=\(loanIsLive) phoneSaysOnboarded=\(phoneSaysOnboarded) [onboarding-gate]")
-        }
-        return gate
-    }
-    private static var lastGateKey = ""
+    @State var loanIsLive = false   // ContentView+PodLoan.swift maintains it
 
     var body: some View {
         VStack {
@@ -105,11 +73,7 @@ struct ContentView: View {
             PresetConfirmationView(preset: preset)
         }
         .onChange(of: selectedPage, { oldValue, newValue in
-            // Only pages 0/1 are remembered; landing on Sport is a consequence of a live loan,
-            // not a preference to restore on next launch.
-            if newValue < Self.sportPage {
-                UserDefaults.standard.startOnChartPage = newValue == 1
-            }
+            podLoanRememberPage(newValue)
         })
         // A loan activating takes the user to the glance — it is the surface that says what the
         // watch is doing while it holds the pump. Replaces the WatchKit page-navigation call the
@@ -117,9 +81,7 @@ struct ContentView: View {
         // `.receive(on:)` is load-bearing, not tidiness: the phase notification is posted from
         // the loan's own queue, and both statements below mutate view state.
         .onReceive(NotificationCenter.default.publisher(for: .podLoanPhaseDidChange).receive(on: RunLoop.main)) { _ in
-            let live = glanceModel.wantsFocus || glanceModel.loanIsLive   // the controller's flag covers a resume
-            loanIsLive = live
-            if live { selectedPage = Self.sportPage }
+            podLoanPhaseDidChange()
         }
         // Finishing a carb entry or a bolus during a loan returns to the glance.
         //
@@ -129,17 +91,11 @@ struct ContentView: View {
         // that shows the bolus actually delivering, the resulting IOB, and the loan still being
         // held. Landing on a page that shows none of that reads as "did it work?", which is the
         // one question a just-delivered bolus must not raise.
-        //
-        // Gated on `wantsFocus` rather than applied always, so this never yanks the page away from
-        // someone using the watch as a plain remote.
         .onReceive(NotificationCenter.default.publisher(for: .carbAndBolusFlowDidComplete).receive(on: RunLoop.main)) { _ in
-            if glanceModel.wantsFocus { selectedPage = Self.sportPage }
+            podLoanReturnToGlanceAfterFlow()
         }
         .task {
-            // The gate also has to be right on a COLD LAUNCH into a live loan — relaunching
-            // mid-session posts no phase change, and that is exactly when the watch is holding
-            // the pod and needs these pages.
-            loanIsLive = glanceModel.wantsFocus || glanceModel.loanIsLive
+            podLoanSyncGateOnLaunch()
         }
     }
 }

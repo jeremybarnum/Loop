@@ -20,67 +20,18 @@ import ClockKit
 
 class ExtensionDelegate: NSObject, WKApplicationDelegate {
 
-    private let log = OSLog(category: "ExtensionDelegate")
+    let log = OSLog(category: "ExtensionDelegate")
 
-    /// The Sport Mode stack: the watch's own loop, the loan controller, the CGM transport and
-    /// the workout keepalive that holds the app awake between doses.
-    ///
-    /// Optional rather than `lazy` because building it opens the dose store, which is async now.
-    /// It is started at launch — before any loan message can arrive — and a message that lands
-    /// in the gap is logged rather than dropped silently.
-    private(set) var stockLoopSession: StockLoopSession?
-    private var stockLoopSessionStarting = false
-
-    private func startStockLoopSession() {
-        guard stockLoopSession == nil, !stockLoopSessionStarting else { return }
-        stockLoopSessionStarting = true
-        // Built OFF the main actor and hopped back only to publish the result. Opening three
-        // Core Data stores and a BLE central is not main-thread work, and on a watch the launch
-        // window is short enough that doing it there risks the app being killed for being
-        // unresponsive before it has drawn anything.
-        Task.detached(priority: .userInitiated) {
-            let session = await StockLoopSession()
-            await MainActor.run {
-                self.stockLoopSession = session
-                self.stockLoopSessionStarting = false
-                if session == nil {
-                    // Sport Mode is unavailable; the rest of the watch app is not affected.
-                    SportLog.event("session", "SPORT MODE UNAVAILABLE — stack did not assemble")
-                } else {
-                    session?.sessionDidActivate()
-                }
-            }
-        }
-    }
+    /// The Sport Mode stack — built and used by ExtensionDelegate+PodLoan.swift.
+    var stockLoopSession: StockLoopSession?
+    /// Guards a second build while the first is in flight — ExtensionDelegate+PodLoan.swift.
+    var stockLoopSessionStarting = false
 
     private var observers: [NSKeyValueObservation] = []
     private var notifications: [NSObjectProtocol] = []
 
-    /// The live delegate, registered by the delegate itself.
-    ///
-    /// Deliberately NOT `WKApplication.shared().delegate`. Under the SwiftUI application
-    /// lifecycle the delegate is created and owned by `@WKApplicationDelegateAdaptor`, and that
-    /// property is never populated — it reads nil for the whole life of the app even while THIS
-    /// object is receiving every lifecycle callback. The old WatchKit extension installed its
-    /// delegate from Info.plist, which is the only reason the same lookup worked there.
-    ///
-    /// The failure mode is worth remembering because it is silent: every view asking for the
-    /// delegate got nil, so `stockLoopSession` read nil, so the Start button and the diagnostics
-    /// controls did nothing whatsoever — no error, no log line, a UI that renders correctly and is
-    /// completely inert. The launch crash that preceded it was the same nil arriving through
-    /// `shared()`, which is implicitly unwrapped and therefore trapped instead of returning.
-    private static var installed: ExtensionDelegate?
-
     static func shared() -> ExtensionDelegate {
         return sharedIfAvailable()!
-    }
-
-    /// The delegate, or nil if it does not exist yet.
-    ///
-    /// Anything reachable from view construction must ask this way: `shared()` traps on nil, and
-    /// SwiftUI can evaluate a `@StateObject` initializer before the delegate is constructed.
-    static func sharedIfAvailable() -> ExtensionDelegate? {
-        return installed
     }
 
     let loopManager = LoopDataManager.shared
@@ -88,11 +39,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
     override init() {
         super.init()
 
-        // Register FIRST, before any other setup: SwiftUI can construct a view — and a
-        // @StateObject initializer that reaches for the delegate — as soon as this object exists
-        // and before applicationDidFinishLaunching runs. That window is where the launch crash
-        // happened, and registering late would leave it open.
-        Self.installed = self
+        podLoanRegisterSharedInstance()
 
         let session = WCSession.default
         session.delegate = self
@@ -135,12 +82,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
     }
 
     func applicationDidFinishLaunching() {
-        // Start the loan stack HERE, not on first use: the loan's transport callbacks land on
-        // this delegate, and a stack that only builds when something arrives would miss the
-        // message that was meant to build it. It is built off-main and cannot fail the launch:
-        // if it does not assemble, Sport Mode is simply unavailable.
-        SportLog.event("session", "launch: starting Sport Mode stack")
-        startStockLoopSession()
+        podLoanDidFinishLaunching()
         UNUserNotificationCenter.current().delegate = self
         if #available(watchOSApplicationExtension 5.0, *) {
             INRelevantShortcutStore.default.registerShortcuts()
@@ -160,27 +102,12 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         loopManager.requestContextUpdate()
         loopManager.requestGlucoseBackfillIfNecessary()
 
-        // Re-assert the workout session if anything still holds it. This is the one moment we
-        // KNOW we are executing — the only other re-assert path is a timer, which cannot fire
-        // while suspended. No-op when nothing holds it.
-        startStockLoopSession()
-        stockLoopSession?.ensureKeepalive()
-        SportLog.event("lifecycle", "didBecomeActive [lifecycle-crumb]")
-        NotificationCenter.default.post(name: Self.didBecomeActiveNotification, object: self)
+        podLoanDidBecomeActive()
     }
 
     func applicationWillResignActive() {
-        // Breadcrumb for the silent-death investigation: the deaths cluster in the
-        // radio-quiet window, and the app's exact lifecycle state at last breath is the
-        // discriminator between watchdog-on-transition and background-kill theories.
-        SportLog.event("lifecycle", "willResignActive [lifecycle-crumb]")
-        NotificationCenter.default.post(name: Self.willResignActiveNotification, object: self)
+        podLoanWillResignActive()
     }
-
-    /// Foreground transitions, as notifications. A SwiftUI page that only wants to work while
-    /// it is actually being looked at keys its refresh off these.
-    static let didBecomeActiveNotification = Notification.Name("com.loopkit.Loop.LoopWatch.didBecomeActive")
-    static let willResignActiveNotification = Notification.Name("com.loopkit.Loop.LoopWatch.willResignActive")
 
     // NOT always the main thread. The Bluetooth alert task is delivered synchronously from
     // CoreBluetooth's delegate queue: bluetoothd's "peripheral usage" notification (fired the
@@ -196,11 +123,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
             DispatchQueue.main.async { self.handle(backgroundTasks) }
             return
         }
-        let bluetoothOnly = backgroundTasks.allSatisfy { $0 is WKBluetoothAlertRefreshBackgroundTask }
-        if !bluetoothOnly {
-            let kinds = backgroundTasks.map { String(describing: type(of: $0)) }.sorted().joined(separator: ",")
-            SportLog.event("lifecycle", "background tasks [\(kinds)] on main [bt-task]")
-        }
+        podLoanNoteBackgroundTasks(backgroundTasks)
 
         loopManager.requestGlucoseBackfillIfNecessary()
 
@@ -214,13 +137,6 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
                 task.setTaskCompleted(restoredDefaultState: false, estimatedSnapshotExpiration: Date(timeIntervalSinceNow: TimeInterval(minutes: 5)), userInfo: nil)
                 return  // Don't call the standard setTaskCompleted handler
             case let task as WKBluetoothAlertRefreshBackgroundTask:
-                // watchOS 9+: "Updates from Bluetooth are available to the application." The G7
-                // central opts into state restoration, so a daemon-held sensor connect relaunches
-                // the app and this task is how watchOS hands it the wake. ONE task is held per wake
-                // (25 s, or until the system expires it — the grant, ≈20 s on 2026-09-14); every
-                // further delivery in the same wake is completed on arrival and counted. The
-                // 2026-09-14 event run held every one of ~55 deliveries per wake with its own timer
-                // and ledger write, and the pile stalled main 4 s on the next resume.
                 holdBluetoothTask(task)
                 continue  // completed on our own schedule
             case is WKURLSessionRefreshBackgroundTask:
@@ -250,51 +166,11 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
 
     private var pendingConnectivityTasks: [WKWatchConnectivityRefreshBackgroundTask] = []
 
-    // MARK: Bluetooth alert task — one held per wake
+    // MARK: Bluetooth alert task — one held per wake (ExtensionDelegate+BluetoothWake.swift)
 
-    private var heldBluetoothTask: WKBluetoothAlertRefreshBackgroundTask?
-    private var heldBluetoothTaskSince: Date?
-    private var bluetoothDeliveriesThisWake = 0
-    /// A held task older than this is from a previous wake whose 25-s timer never fired (the
-    /// process was suspended under it): complete it and start a fresh hold.
-    private static let bluetoothWakeStaleAfter: TimeInterval = 60
-
-    private func holdBluetoothTask(_ task: WKBluetoothAlertRefreshBackgroundTask) {
-        dispatchPrecondition(condition: .onQueue(.main))
-        bluetoothDeliveriesThisWake += 1
-        if let since = heldBluetoothTaskSince, heldBluetoothTask != nil {
-            if Date().timeIntervalSince(since) < Self.bluetoothWakeStaleAfter {
-                task.setTaskCompletedWithSnapshot(false)   // same wake: coalesced
-                return
-            }
-            completeHeldBluetoothTask("stale — a new wake arrived")
-            bluetoothDeliveriesThisWake = 1
-        }
-        let delivered = Date()
-        heldBluetoothTask = task
-        heldBluetoothTaskSince = delivered
-        SportLog.event("radio", "WOKEN BY BLUETOOTH — WKBluetoothAlertRefreshBackgroundTask; holding one task 25 s [bt-task]")
-        // The system's own lifetime grant for this task, measured: it calls this before it
-        // terminates the task, and the log stamp says how long it gave us.
-        task.expirationHandler = { [weak self] in
-            SportLog.event("radio", String(format: "Bluetooth background task EXPIRED by the system after %.1f s — that is the grant [bt-task]", Date().timeIntervalSince(delivered)))
-            DispatchQueue.main.async { self?.completeHeldBluetoothTask("expired", only: task) }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 25) { [weak self] in self?.completeHeldBluetoothTask("25 s hold over", only: task) }
-    }
-
-    /// Complete the held task. `only` guards a late timer or expiration from completing a
-    /// NEWER hold than the one it was armed for.
-    private func completeHeldBluetoothTask(_ why: String, only: WKBluetoothAlertRefreshBackgroundTask? = nil) {
-        dispatchPrecondition(condition: .onQueue(.main))
-        guard let task = heldBluetoothTask, let since = heldBluetoothTaskSince else { return }
-        if let only = only, only !== task { return }
-        SportLog.event("radio", String(format: "Bluetooth background task completed after %.1f s (%@) · %d deliveries coalesced this wake [bt-task]", Date().timeIntervalSince(since), why, bluetoothDeliveriesThisWake))
-        task.setTaskCompletedWithSnapshot(false)
-        heldBluetoothTask = nil
-        heldBluetoothTaskSince = nil
-        bluetoothDeliveriesThisWake = 0
-    }
+    var heldBluetoothTask: WKBluetoothAlertRefreshBackgroundTask?
+    var heldBluetoothTaskSince: Date?
+    var bluetoothDeliveriesThisWake = 0
 
     private func completePendingConnectivityTasksIfNeeded() {
         if WCSession.default.activationState == .activated && !WCSession.default.hasContentPending {
@@ -378,53 +254,16 @@ extension ExtensionDelegate: WCSessionDelegate {
 
         if activationState == .activated {
             updateContext(session.receivedApplicationContext)
-            stockLoopSession?.sessionDidActivate()
+            podLoanSessionDidActivate()
             Task {
                 await loopManager.requestSettingsUpdate()
             }
         }
     }
 
-    func sessionReachabilityDidChange(_ session: WCSession) {
-        SportLog.event("wc", "REACHABILITY CHANGED — reachable=\(session.isReachable) "
-                           + "activation=\(session.activationState.rawValue)")
-        // R40 reunion: a seized loan PROMPTS (debounced, R40(f)) when the phone genuinely
-        // returns — the controller ignores everything but that case.
-        stockLoopSession?.loanController.noteReachabilityChanged(session.isReachable)
-    }
-
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String : Any]) {
         log.default("didReceiveApplicationContext")
         updateContext(applicationContext)
-    }
-
-    /// The IMMEDIATE channel — and the one the phone's GRANT arrives on.
-    ///
-    /// `sendMessage(_:replyHandler:nil)` is delivered here, NOT to `didReceiveUserInfo`. Without
-    /// this method the interactive half of the loan handshake is dropped by WatchConnectivity with
-    /// no error on either side: the phone logs a grant sent and then reclaims the pod 20s later
-    /// having never been acked, and the wrist sits on "awaiting grant" until its own timeout and
-    /// reports the hand-over never arrived. Both devices behave correctly and the loan still
-    /// cannot start.
-    ///
-    /// Its fingerprint in the watch log is that EVERY inbound line reads `ch=queued` while the
-    /// watch's own sends read `path urgent` — i.e. the fast channel works outbound and silently
-    /// does not exist inbound.
-    ///
-    /// This is the exact mirror of the phone-side gap in WatchDataManager; both halves of the
-    /// urgent channel were lost in the port, and each one hides the other: fixing only the phone
-    /// moves the failure from "no response" to "hand-over never reached the watch".
-    func session(_ session: WCSession, didReceiveMessage message: [String : Any]) {
-        if let stockLoopSession {
-            if stockLoopSession.handleIncomingIfLoanMessage(message, channel: .urgent) { return }
-        } else if message[LoanProtocol.userInfoKey] != nil {
-            // Same recovery as the queued path: a grant that arrives before the stack is up is
-            // logged and the stack started, rather than silently discarded.
-            log.error("Loan payload arrived on the urgent channel before the Sport Mode stack finished starting")
-            startStockLoopSession()
-            return
-        }
-        log.default("Ignoring unexpected sendMessage: %{public}@", String(describing: Array(message.keys)))
     }
 
     // This method is called on a background thread of your app
@@ -434,8 +273,7 @@ extension ExtensionDelegate: WCSessionDelegate {
         if let session = stockLoopSession {
             if session.handleIncomingIfLoanMessage(userInfo, channel: .queued) { return }
         } else if userInfo[LoanProtocol.userInfoKey] != nil {
-            log.error("Loan payload arrived before the Sport Mode stack finished starting")
-            startStockLoopSession()
+            podLoanNoteEarlyPayload()
             return
         }
 
