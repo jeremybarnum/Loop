@@ -326,11 +326,6 @@ extension PodLoanPhoneController {
                 guard let self = self else { return }
                 self.deps.glucoseHistory(glucoseStart) { [weak self] glucose in
                     guard let self = self else { return }
-                    // INSTRUMENTATION ONLY: capture the phone's last-computed prediction
-                    // decomposition (cached read, no recompute) as a fourth nested fetch, so it
-                    // rides in the grant. Default nil closure ⇒ this is a no-op for tests / old builds.
-                    self.deps.predictionSnapshot { [weak self] snapshot in
-                    guard let self = self else { return }
                     self.queue.async {
                         guard let stateData = try? PropertyListSerialization.data(fromPropertyList: pumpRaw, format: .binary, options: 0),
                               let settingsData = try? PropertyListSerialization.data(fromPropertyList: loanSettingsRaw, format: .binary, options: 0) else {
@@ -408,14 +403,12 @@ extension PodLoanPhoneController {
                             phoneClosedLoopEnabled: settings.dosingEnabled,
                             carbHistory: carbs,
                             glucoseHistory: glucose,
-                            predictionSnapshot: snapshot,
                             activeOverrideRaw: overrideData,
                             therapySettingsSupplementRaw: supplementData,
                             // Ring ruling 2026-08-23: the wrist's loop dot starts from the
                             // SYSTEM's recency — this phone looped minutes ago at most.
                             lastLoopCompleted: self.deps.lastLoopCompleted())
                         completion(grant)
-                    }
                     }
                 }
             }

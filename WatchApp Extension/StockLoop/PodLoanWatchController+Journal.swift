@@ -217,7 +217,3 @@ extension PodLoanWatchController {
     }
 
 }
-
-/// Which WCSession channel a message arrived on. `sendMessage` wakes the counterpart
-/// immediately; `transferUserInfo` is queued but guaranteed and relaunch-surviving. They fail
-/// independently, which is the whole reason this is recorded.

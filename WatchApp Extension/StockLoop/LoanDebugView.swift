@@ -125,19 +125,6 @@ struct LoanDebugView: View {
                     lastAction = "loan workout → \(loanWorkout ? "ON" : "OFF") — next loan"
                 }
 
-                // Request Loan / Hand Back removed 2026-07-24 — both are redundant with
-                // the glance's "Start Sport Mode" and hand-back flow (requestLoan /
-                // beginHandback still live on those paths).
-                //
-                // Reset (debug) removed 2026-08-11 (Jeremy: "I've never used it and it seems
-                // dangerous. I'm moving closer to production and want to simplify things").
-                // It was labelled as a local un-wedge but ABANDONED a live loan: it tore down
-                // the pod link and cleared the epoch without handing back, leaving the pod
-                // orphaned on its last command, the phone still believing the watch held it
-                // (`.loaned` has no timeout — the 5-minute T1 only exists in `.grantOffered`),
-                // and any staged-but-unacked doses stranded under an epoch that no longer
-                // existed. A one-tap way to strand insulin records is not a debug convenience.
-                //
                 // Read Status stays: read-only, no command, no state change — a live pod
                 // reachability ping, which is the one question this screen cannot infer.
                 Button("Read Pod Status") {
@@ -158,11 +145,6 @@ struct LoanDebugView: View {
                 // CGM HEALTH — read straight off the stock manager, which is now the only
                 // producer. These are the fields that actually diagnose a CGM outage in the field:
                 // is a sensor known, when did it last deliver, and is the link up right now.
-                //
-                // (Replaces the old G7 IDENTITY panel — bonded peripheral / pairing code /
-                // pre-warm state — all of which described the retired J-PAKE reader. There is no
-                // pairing code to show: the sensor authenticates the DEVICE, and the Dexcom watch
-                // app is what vouches for it.)
                 Text("CGM HEALTH").font(.footnote).foregroundColor(.secondary)
                 row("sensor", cgm?.sensorName ?? "none")
                 row("last reading", cgm?.lastReadingAge.map { String(format: "%.0fs ago", $0) } ?? "never")
@@ -170,17 +152,6 @@ struct LoanDebugView: View {
                 row("link", cgm?.linkState ?? "—")
                 row("state", cgm?.lifecycle ?? "—")
                 row("expires", cgm?.expiresIn ?? "—")
-                // "needs D2W: YES" removed. It was a hardcoded constant from when a non-D2W
-                // path still existed to contrast with; D2W is now the only glucose path, so the
-                // row could only ever read YES. A diagnostic that cannot vary is not a diagnostic
-                // — it is a distraction on a screen read while something is wrong. The requirement
-                // now lives where it is actionable: the Series 6+ eligibility note for testers.
-
-                // Pod-link release toggle REMOVED. The link policy is automatic:
-                // orphan between doses, per-cycle reclaim gated on G7 acquisition state while
-                // un-adopted (StockLoopSession wiring + WatchLoopManager gate). The
-                // toggle experiment that settled it: held link = 0 adoptions in ~130 min;
-                // released = adoption within 7-10 min, twice for two.
 
                 // SENSOR — the two choices that still support a live debate (authentication, and
                 // how the next request reaches the daemon) and the one action. Everything
@@ -225,25 +196,7 @@ struct LoanDebugView: View {
                     lastAction = "sensor reconnect started"
                 }
 
-                // "Re-acquire Sensor (cold)" — stock's forget-and-scan — was removed 2026-09-13.
-                // Its one legitimate use, a sensor change, is handled by the phone's pairing-code
-                // flow adopting the new identity; left on the page it threw away adoption and
-                // put a scan on the air in whatever phase the sensor was in.
-
-
-                // RADIO STRESS RETIRED: the question it existed to
-                // answer — does a pod command every single cycle disturb the CGM? — came back
-                // negative, repeatedly. Contention lives in CONNECT ESTABLISHMENT, not in
-                // dosing traffic against an established link, and that is handled by the
-                // acquisition gate rather than by anything on this screen.
-
                 Divider().padding(.vertical, 2)
-
-                // Retired bench experiments (standalone-G7, clean-teardown, release-pod,
-                // Fake BG sweep, random-temp) lived here through the
-                // diagnostics declutter. Releasing the pod link between doses is now the
-                // production default (StockLoopSession.init); the rest are one git revert
-                // away if a bench drill needs them again.
 
                 NavigationLink("Logs") { LogView() }
                     .font(.caption)
@@ -262,64 +215,41 @@ struct LoanDebugView: View {
         }
         }
         .onReceive(refresh) { _ in
-            // Same 2s main-thread timer problem as the glance: the loan queue is the pump's
-            // delegate queue, so a sync read froze the UI for the length of any pod operation.
-            session?.loanController.refreshDebugSnapshot()
-            snapshot = session?.loanController.mirroredDebugSnapshot ?? snapshot
-            cgm = session.map { CGMHealth($0.stack.cgmManager) } ?? cgm
-            // The comment above says this tick was converted to mirrors — but only the
-            // LOAN-queue read was; this line stayed glanceData(), which is
-            // `dataAccessQueue.sync` (WatchLoopManager: "kept for the DEBUG page, which ... can
-            // afford to wait"). It cannot afford to wait: this closure runs on a 2s MAIN-thread
-            // timer, and watchOS keeps page views alive after they are first visited — so from
-            // the first time the diagnostics page was ever opened, MAIN blocked on
-            // dataAccessQueue every 2 seconds, forever, even with a different page frontmost.
-            // A post-carb cycle holds that queue for the whole enact (2-4s when the pod link is
-            // held, ~7s when it must be reclaimed first): tick lands in the window ->
-            // multi-second UI freeze (the recovered 4.1s stall); the longer reclaim window ->
-            // watchdog kill; and when the queue's work item itself waited on a main-bound
-            // completion, MAIN and the queue waited on each other forever (a multi-minute wedge
-            // ending in a force-quit). Same mirror discipline as the glance now: kick the
-            // rebuild, render the last published mirror.
-            RuntimeStateLog.mark("debug.tick")
-            session?.stack.loopManager.refreshGlanceData()
-            if let gd = session?.stack.loopManager.mirroredGlanceData {
-                dosing = gd
-                iobText = gd.iob.map { String(format: "%.2f U", $0) } ?? "—"
-            }
-            session?.stack.loopManager.glanceCarbsOnBoard { v in
-                DispatchQueue.main.async { cobText = v.map { String(format: "%.0f g", $0) } ?? "—" }
-            }
+            tick()
         }
         .onAppear {
-            // Same 2s main-thread timer problem as the glance: the loan queue is the pump's
-            // delegate queue, so a sync read froze the UI for the length of any pod operation.
-            session?.loanController.refreshDebugSnapshot()
-            snapshot = session?.loanController.mirroredDebugSnapshot ?? snapshot
-            cgm = session.map { CGMHealth($0.stack.cgmManager) } ?? cgm
-            // The comment above says this tick was converted to mirrors — but only the
-            // LOAN-queue read was; this line stayed glanceData(), which is
-            // `dataAccessQueue.sync` (WatchLoopManager: "kept for the DEBUG page, which ... can
-            // afford to wait"). It cannot afford to wait: this closure runs on a 2s MAIN-thread
-            // timer, and watchOS keeps page views alive after they are first visited — so from
-            // the first time the diagnostics page was ever opened, MAIN blocked on
-            // dataAccessQueue every 2 seconds, forever, even with a different page frontmost.
-            // A post-carb cycle holds that queue for the whole enact (2-4s when the pod link is
-            // held, ~7s when it must be reclaimed first): tick lands in the window ->
-            // multi-second UI freeze (the recovered 4.1s stall); the longer reclaim window ->
-            // watchdog kill; and when the queue's work item itself waited on a main-bound
-            // completion, MAIN and the queue waited on each other forever (a multi-minute wedge
-            // ending in a force-quit). Same mirror discipline as the glance now: kick the
-            // rebuild, render the last published mirror.
-            RuntimeStateLog.mark("debug.tick")
-            session?.stack.loopManager.refreshGlanceData()
-            if let gd = session?.stack.loopManager.mirroredGlanceData {
-                dosing = gd
-                iobText = gd.iob.map { String(format: "%.2f U", $0) } ?? "—"
-            }
-            session?.stack.loopManager.glanceCarbsOnBoard { v in
-                DispatchQueue.main.async { cobText = v.map { String(format: "%.0f g", $0) } ?? "—" }
-            }
+            tick()
+        }
+    }
+
+    private func tick() {
+        // Same 2s main-thread timer problem as the glance: the loan queue is the pump's
+        // delegate queue, so a sync read froze the UI for the length of any pod operation.
+        session?.loanController.refreshDebugSnapshot()
+        snapshot = session?.loanController.mirroredDebugSnapshot ?? snapshot
+        cgm = session.map { CGMHealth($0.stack.cgmManager) } ?? cgm
+        // The comment above says this tick was converted to mirrors — but only the
+        // LOAN-queue read was; this line stayed glanceData(), which is
+        // `dataAccessQueue.sync` (WatchLoopManager: "kept for the DEBUG page, which ... can
+        // afford to wait"). It cannot afford to wait: this closure runs on a 2s MAIN-thread
+        // timer, and watchOS keeps page views alive after they are first visited — so from
+        // the first time the diagnostics page was ever opened, MAIN blocked on
+        // dataAccessQueue every 2 seconds, forever, even with a different page frontmost.
+        // A post-carb cycle holds that queue for the whole enact (2-4s when the pod link is
+        // held, ~7s when it must be reclaimed first): tick lands in the window ->
+        // multi-second UI freeze (the recovered 4.1s stall); the longer reclaim window ->
+        // watchdog kill; and when the queue's work item itself waited on a main-bound
+        // completion, MAIN and the queue waited on each other forever (a multi-minute wedge
+        // ending in a force-quit). Same mirror discipline as the glance now: kick the
+        // rebuild, render the last published mirror.
+        RuntimeStateLog.mark("debug.tick")
+        session?.stack.loopManager.refreshGlanceData()
+        if let gd = session?.stack.loopManager.mirroredGlanceData {
+            dosing = gd
+            iobText = gd.iob.map { String(format: "%.2f U", $0) } ?? "—"
+        }
+        session?.stack.loopManager.glanceCarbsOnBoard { v in
+            DispatchQueue.main.async { cobText = v.map { String(format: "%.0f g", $0) } ?? "—" }
         }
     }
 

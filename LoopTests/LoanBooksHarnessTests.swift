@@ -1315,14 +1315,13 @@ final class LoanOverrideTests: XCTestCase {
         let odometer = LoanOdometerSnapshot(deliveredAtStart: 50.00, deliveredLatest: 51.50,
                                             freshenSucceeded: true, asOf: t0.addingTimeInterval(2400))
 
-        let outcome = LoanReconciler.reconcile(LoanReconciler.Input(
-            events: [bolus, bracket, cancel, nextTemp], odometer: odometer, schedule: baseBasal,
-            loanStart: t0, loanEnd: t0.addingTimeInterval(2400)))
+        let expected = LoanReconciler.expectedInsulin(
+            events: [bolus, bracket, cancel, nextTemp], schedule: baseBasal,
+            from: t0, to: t0.addingTimeInterval(2400))
 
-        XCTAssertNil(outcome.residualShortfallUnits,
-                     "honest books must audit clean — pre-fix the discarded cancel left the 2.50 bracket " +
-                     "standing 14.5 phantom minutes (12 pulses = 0.60 U) and booked a false shortfall")
-        XCTAssertNil(outcome.positiveRemainderUnits, "and nothing in the other direction either")
+        XCTAssertEqual(odometer.deliveredLatest - odometer.deliveredAtStart, expected, accuracy: 0.05,
+                       "honest books must audit clean — pre-fix the discarded cancel left the 2.50 bracket " +
+                       "standing 14.5 phantom minutes (12 pulses = 0.60 U) and booked a false shortfall")
     }
 
     override func tearDown() {
@@ -1586,7 +1585,7 @@ final class LoanOverrideTests: XCTestCase {
         // Reconciled alone → cleared.
         let soloOutcome = LoanReconciler.reconcile(LoanReconciler.Input(
             events: [LoanEvent(id: UUID(), seq: 1, provenance: .confirmed, record: decodedClear, loggedAt: now)],
-            odometer: nil, schedule: baseBasal, loanStart: now.addingTimeInterval(-.hours(1)), loanEnd: now))
+            schedule: baseBasal, loanStart: now.addingTimeInterval(-.hours(1)), loanEnd: now))
         XCTAssertEqual(soloOutcome.overrideChange, .cleared)
         XCTAssertTrue(soloOutcome.doses.isEmpty, "an override record is not dose accounting")
 
@@ -1597,7 +1596,7 @@ final class LoanOverrideTests: XCTestCase {
                                  loggedAt: now.addingTimeInterval(-.minutes(20)))
         let clearEvent = LoanEvent(id: UUID(), seq: 2, provenance: .confirmed, record: clear, loggedAt: now)
         let pairOutcome = LoanReconciler.reconcile(LoanReconciler.Input(
-            events: [setEvent, clearEvent], odometer: nil, schedule: baseBasal,
+            events: [setEvent, clearEvent], schedule: baseBasal,
             loanStart: now.addingTimeInterval(-.hours(1)), loanEnd: now))
         XCTAssertEqual(pairOutcome.overrideChange, .cleared,
                        "set→clear in one drain must land as CLEARED — the reverse would resurrect a cancelled override")
@@ -1606,7 +1605,7 @@ final class LoanOverrideTests: XCTestCase {
         let bolus = LoanEvent(id: UUID(), seq: 1, provenance: .confirmed,
                               record: LoanDoseRecord(kind: .bolus, startDate: now, amount: 1.0), loggedAt: now)
         let noneOutcome = LoanReconciler.reconcile(LoanReconciler.Input(
-            events: [bolus], odometer: nil, schedule: baseBasal,
+            events: [bolus], schedule: baseBasal,
             loanStart: now.addingTimeInterval(-.hours(1)), loanEnd: now))
         XCTAssertNil(noneOutcome.overrideChange,
                      "no override record must mean 'do not touch', never 'clear'")

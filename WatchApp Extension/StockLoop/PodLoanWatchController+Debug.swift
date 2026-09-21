@@ -138,13 +138,4 @@ extension PodLoanWatchController {
         }
     }
 
-    // debugReset() REMOVED. Its doc comment claimed it "does NOT touch the pod — just local
-    // state; the phone recovers on its own T1", and both halves were wrong in an active loan: it
-    // called teardownPump(), and `.loaned` on the phone has no T1 (that timer only exists in
-    // `.grantOffered`). What it actually did was abandon a live loan — pod orphaned on its
-    // last command, phone still believing the watch held it, staged-but-unacked doses
-    // stranded under a cleared epoch. The recovery paths that remain are the real ones: the
-    // phone's escape hatch (reclaimNow), the hand-back flow, and an app relaunch.
-    // In git at the commit that removed it, if a genuine wedge ever needs it back.
-
 }

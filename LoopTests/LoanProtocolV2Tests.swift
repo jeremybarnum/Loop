@@ -127,13 +127,6 @@ final class LoanProtocolV2Tests: XCTestCase {
         XCTAssertNil(g2.predictionSnapshot)
     }
 
-    func testEpochAccessorCoversEveryKind() {
-        XCTAssertNil(LoanMessage.request(LoanRequest(watchBuild: "77")).epoch)
-        XCTAssertNil(LoanMessage.nack(ProtocolNack(seenVersion: nil)).epoch)
-        XCTAssertEqual(LoanMessage.revoke(Revoke(epoch: 9)).epoch, 9)
-        XCTAssertEqual(LoanMessage.diag(LoanDiag(epoch: 7, text: "x")).epoch, 7)
-    }
-
     func testForeignPayloadIsNotOurs() throws {
         XCTAssertNil(try LoanMessage.decode(fromTransport: ["somethingElse": Data([1])]))
     }
@@ -282,13 +275,9 @@ final class LoanProtocolV2Tests: XCTestCase {
                   loggedAt: loanStart.addingTimeInterval(offset))
     }
 
-    private func odometer(delivered: Double) -> LoanOdometerSnapshot {
-        LoanOdometerSnapshot(deliveredAtStart: 50, deliveredLatest: 50 + delivered, freshenSucceeded: true)
-    }
-
-    private func reconcile(events: [LoanEvent], delivered: Double) -> LoanReconciler.Outcome {
+    private func reconcile(events: [LoanEvent]) -> LoanReconciler.Outcome {
         LoanReconciler.reconcile(LoanReconciler.Input(
-            events: events, odometer: odometer(delivered: delivered),
+            events: events,
             schedule: flatSchedule, loanStart: loanStart, loanEnd: loanEnd))
     }
 
@@ -297,30 +286,10 @@ final class LoanProtocolV2Tests: XCTestCase {
     /// A confirmed event can NEVER be reduced — same arithmetic, confirmed tag.
     func testConfirmedEventsAreNeverAnnulled() {
         let confirmed = bolusEvent(seq: 1, units: 1.0, provenance: .confirmed, at: 600)
-        let outcome = reconcile(events: [confirmed], delivered: 2.0)
-        XCTAssertEqual(outcome.residualShortfallUnits ?? 0, 1.0, accuracy: 0.01)
+        let outcome = reconcile(events: [confirmed])
         // The record is entered IN FULL (max-exposure: never truncate downward).
         XCTAssertEqual(outcome.doses.count, 1)
         XCTAssertEqual(outcome.doses[0].programmedUnits, 1.0)
-    }
-
-    /// The one-way valve, positive side: timed-late entry, never subtraction.
-    func testPositiveRemainderEntersTimedLate() {
-        let outcome = reconcile(events: [], delivered: 2.5)  // expected 2.0
-        XCTAssertEqual(outcome.positiveRemainderUnits ?? 0, 0.5, accuracy: 0.01)
-        XCTAssertNil(outcome.residualShortfallUnits)
-    }
-
-    /// A stale odometer (freshen failed) disables the audit entirely — records only.
-    func testUnfreshenedOdometerDisablesAudit() {
-        let phantom = bolusEvent(seq: 1, units: 1.0, provenance: .confirmed, at: 600)
-        let outcome = LoanReconciler.reconcile(LoanReconciler.Input(
-            events: [phantom],
-            odometer: LoanOdometerSnapshot(deliveredAtStart: 50, deliveredLatest: 52, freshenSucceeded: false),
-            schedule: flatSchedule, loanStart: loanStart, loanEnd: loanEnd))
-        XCTAssertNil(outcome.residualShortfallUnits)
-        XCTAssertNil(outcome.positiveRemainderUnits)
-        XCTAssertEqual(outcome.doses.count, 1)
     }
 
     // MARK: - Expected-insulin math (journal supersedes schedule, schedule fills gaps)
@@ -371,7 +340,7 @@ final class LoanProtocolV2Tests: XCTestCase {
         let events = temps(count: 3)  // 30-min windows, 5 min apart
         let loanEnd = loanStart.addingTimeInterval(1500)  // 25 min: every window overruns it
         let outcome = LoanReconciler.reconcile(LoanReconciler.Input(
-            events: events, odometer: nil, schedule: flatSchedule,
+            events: events, schedule: flatSchedule,
             loanStart: loanStart, loanEnd: loanEnd))
 
         XCTAssertNil(outcome.openEventID, "nothing is open on a final hand-back")
@@ -391,7 +360,7 @@ final class LoanProtocolV2Tests: XCTestCase {
         let events = temps(count: 3)
         // Drain 12 min in — all three 30-min windows still extend past it; temp[2] is open.
         let outcome = LoanReconciler.reconcile(LoanReconciler.Input(
-            events: events, odometer: nil, schedule: flatSchedule,
+            events: events, schedule: flatSchedule,
             loanStart: loanStart, loanEnd: loanStart.addingTimeInterval(720),
             isFinalHandback: false))
 
@@ -408,7 +377,7 @@ final class LoanProtocolV2Tests: XCTestCase {
     func testSingleCompletedTempKeepsWindow() {
         let event = temps(count: 1)[0]  // [0, 1800]
         let outcome = LoanReconciler.reconcile(LoanReconciler.Input(
-            events: [event], odometer: nil, schedule: flatSchedule,
+            events: [event], schedule: flatSchedule,
             loanStart: loanStart, loanEnd: loanStart.addingTimeInterval(3600)))  // loanEnd well past the window
         XCTAssertEqual(outcome.doses.count, 1)
         XCTAssertFalse(outcome.doses[0].isMutable)

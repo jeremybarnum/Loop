@@ -19,20 +19,9 @@ import LoopKit
 
 enum LoanReconciler {
 
-    /// One pod pulse — the exact-match tolerance.
-    static let pulseTolerance: Double = 0.05
-
     struct Input {
         /// Events not yet committed (seq > cursor), in seq order, tombstones applied.
         let events: [LoanEvent]
-        /// The odometer audit pair; nil or !freshenSucceeded → audit is advisory-only.
-        let odometer: LoanOdometerSnapshot?
-        /// The FULL loan's event set for the odometer audit. With interim drains,
-        /// `events` is only the uncommitted tail — auditing expected-insulin against
-        /// the tail treats committed temps/suspends as schedule and mints phantom
-        /// remainders. nil = use `events` (single-offer drains and tests unchanged).
-        /// Annulment candidates stay TAIL-only: committed records can't be unwritten.
-        var auditEvents: [LoanEvent]? = nil
         /// Grant-frozen basal schedule in its captured timezone
         /// (docs/DESIGN_LOAN_PROTOCOL_V2.md §8).
         let schedule: BasalRateSchedule?
@@ -87,21 +76,6 @@ enum LoanReconciler {
         /// see the `.carbDeleted` case below. Only deletes that survive that cancellation reach
         /// the phone's store, and they are the phone-originated ones by construction.
         var deletedCarbs: [DeletedCarb] = []
-        /// Event IDs annulled by the exact-size fingerprint.
-        /// A positive odometer remainder no record explains — extra delivery the pod made
-        /// beyond the books. Computed and captured here; the consumer deliberately does NOT
-        /// inject it as IOB (that valve is disabled — see its call site in
-        /// PodLoanPhoneController). The asymmetry with the shortfall below still holds:
-        /// extra delivery may only ever ADD to the books, a shortfall may only annul a
-        /// whole ASSUMED record, and neither direction ever reduces a confirmed record or
-        /// reduces anything partially.
-        var positiveRemainderUnits: Double?
-        /// A negative remainder no fingerprint explains (case 3 in `reconcile`) — computed
-        /// and captured, never subtracted from any record. Deliberate: guessed or partial
-        /// reductions are prohibited, because a wrong reduction understates IOB, and
-        /// leaving IOB overstated is the safe direction. The user-facing warning for a
-        /// shortfall comes from the phone's authoritative odometer audit, not this field.
-        var residualShortfallUnits: Double?
         /// The override state this drain hands back, or nil when the drain
         /// carried no `.overrideChange` record at all (→ the phone's own override is left
         /// completely alone). LAST record wins: within one drain the watch may have set,
@@ -123,28 +97,6 @@ enum LoanReconciler {
     static func reconcile(_ input: Input) -> Outcome {
         var outcome = Outcome()
         var events = input.events
-
-        // The odometer audit: compare delivered against the journal +
-        // schedule over the loan window. Only meaningful with a fresh odometer.
-        if let odometer = input.odometer, odometer.freshenSucceeded {
-            let delivered = odometer.deliveredLatest - odometer.deliveredAtStart
-            // Expected-insulin integrates the WHOLE loan's journal (committed
-            // interim drains included), never just the uncommitted tail.
-            let expected = expectedInsulin(events: input.auditEvents ?? events, schedule: input.schedule,
-                                           from: input.loanStart, to: input.loanEnd)
-            let remainder = delivered - expected
-
-            if remainder > pulseTolerance {
-                // Positive: the pod delivered more than recorded → enter IOB timed at
-                // hand-back with zero decay elapsed (deliberately conservative).
-                outcome.positiveRemainderUnits = remainder
-            } else if remainder < -pulseTolerance {
-                // Negative: the records claim more than the pod delivered. Nothing is reduced —
-                // every record is the pump manager's own report — so the whole shortfall
-                // surfaces (IOB stays overstated, the safe direction).
-                outcome.residualShortfallUnits = -remainder
-            }
-        }
 
         // The still-open temp at an INTERIM drain: the latest-starting temp/suspend whose
         // programmed window extends past the loan end (i.e. still running at the drain
@@ -395,5 +347,3 @@ enum LoanReconciler {
         }
     }
 }
-
-// MARK: - Event helpers

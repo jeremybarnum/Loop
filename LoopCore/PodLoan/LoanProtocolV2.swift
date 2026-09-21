@@ -52,7 +52,6 @@ public enum LoanProtocol {
 /// Decode failures that must surface as ProtocolNack + loud alert (§2.9, finding :825).
 public enum LoanProtocolError: Error {
     case undecodable(seenVersion: Int?)
-    case unknownKind(String)
 }
 
 // MARK: - Support types
@@ -991,24 +990,6 @@ public enum LoanMessage: Equatable {
     /// to watches that advertised supportsSeize (older envelope decoders throw on the
     /// unknown kind).
     case dormantGrant(DormantGrant)
-
-    /// The message's epoch, nil only for request/nack/denied (§1.1).
-    public var epoch: Int? {
-        switch self {
-        case .request, .nack, .denied: return nil
-        case .dormantGrant: return nil   // provisional epoch inside; not addressable by epoch
-        case .grant(let m): return m.epoch
-        case .takeoverComplete(let m): return m.epoch
-        case .takeoverFailed(let m): return m.epoch
-        case .doseRecordBatch(let m): return m.epoch
-        case .handbackOffer(let m): return m.epoch
-        case .handbackAck(let m): return m.epoch
-        case .revoke(let m): return m.epoch
-        case .statusQuery(let m): return m.epoch
-        case .statusReport(let m): return m.epoch
-        case .diag(let m): return m.epoch
-        }
-    }
 }
 
 public struct LoanEnvelope: Codable {
