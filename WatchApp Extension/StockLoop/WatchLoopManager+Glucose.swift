@@ -387,12 +387,21 @@ extension WatchLoopManager: CGMManagerDelegate {
     // dead-man alarms are pre-scheduled notifications instead (`LoopStallWatchdog`); they are a
     // different mechanism and do not cover these.
 
+    /// Put it on the wrist. While the watch holds the pod it is the only device that can hear
+    /// the pump, so a pod fault, an occlusion or an empty reservoir has nowhere else to go —
+    /// the phone's alert manager is not watching a pump it does not have.
     func issueAlert(_ alert: LoopKit.Alert) {
         log.default("Alert issued: %{public}@", alert.identifier.value)
+        SportLog.event("alert", "ISSUED \(alert.identifier.value) — \(alert.backgroundContent.title): \(alert.backgroundContent.body)")
+        WatchAlertPresenter.present(alert)
     }
 
+    /// Withdraw it. A driver retracts when the condition clears, and an alarm left standing after
+    /// the pod recovered costs the next one its weight.
     func retractAlert(identifier: LoopKit.Alert.Identifier) {
         log.default("Alert retracted: %{public}@", identifier.value)
+        SportLog.event("alert", "RETRACTED \(identifier.value)")
+        WatchAlertPresenter.retract(identifier)
     }
 
     func doesIssuedAlertExist(identifier: LoopKit.Alert.Identifier) async throws -> Bool {
