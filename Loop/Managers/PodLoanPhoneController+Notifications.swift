@@ -2,7 +2,15 @@
 //  PodLoanPhoneController+Notifications.swift
 //  Loop
 //
-//  Part of PodLoanPhoneController (see PodLoanPhoneController.swift). Split by concern; stored properties live in the core class.
+//  Part of PodLoanPhoneController (see PodLoanPhoneController.swift). Split by concern; stored
+//  properties live in the core class.
+//
+//  The scheduled half of what the phone tells the user about a loan: the reminders that outlive
+//  the moment they were armed in. Anything that has to be seen immediately goes out through
+//  `deps.issueNotice` / `issueUrgentNotice` at its own call site instead.
+//
+//  Each rung owns one identifier, so re-arming replaces rather than stacks and cancelling one
+//  ladder cannot silence another.
 //
 
 import Foundation
@@ -22,11 +30,16 @@ extension PodLoanPhoneController {
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
     }
 
+    /// Clears the pending request AND anything already delivered: a reminder about a condition
+    /// that has cleared is worse than no reminder, because it is still sitting on the lock
+    /// screen describing a state the phone has left.
     func cancelNotification(id: String) {
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id])
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])
     }
 
+    /// One notice per stretch of skew. The flag is cleared by the first message that decodes, so
+    /// a build mismatch is announced once and again if it recurs, rather than on every message.
     func warnProtocolMismatch() {
         os_log("Loan protocol skew — payload undecodable in this build", log: log, type: .error)
         guard !hasWarnedProtocolMismatch else { return }
@@ -36,10 +49,17 @@ extension PodLoanPhoneController {
             NSLocalizedString("Loop can't read a message from the watch. The apps may be on different builds — check both are current.", comment: "Phone notice body when a loan message cannot be decoded"))
     }
 
+    /// One wording for every way the audit can fail to reach a verdict — no baseline, no
+    /// odometer, or a settle that ran out of time. The user's situation is identical in all
+    /// three: the session's insulin is unknown and dosing has stopped.
     static let sessionUnverifiedBody = NSLocalizedString(
         "Loop couldn't verify the watch's insulin delivery. Automatic dosing is off until you turn it back on.",
         comment: "Phone notice when a watch session's insulin could not be verified after reclaim")
 
+    /// Reminds the user that the unexplained-insulin placeholder is a pod total booked at the
+    /// reclaim instant, not real timing, so they can correct it while it still matters. The
+    /// rungs stop inside the insulin action duration — past that the placeholder has decayed
+    /// out of IOB and re-timing it changes nothing.
     func armPlaceholderReminders(units: Double, bookedAt: Date) {
         let amount = String(format: "%.2f", units)
         let time = Self.reminderTimeFormatter.string(from: bookedAt)
@@ -58,6 +78,8 @@ extension PodLoanPhoneController {
         }
     }
 
+    /// Fires ONCE, and does not repeat. The loop being open is a decision the phone already
+    /// announced; a recurring nag about it only teaches the user to swipe these away.
     func armOpenLoopReminder() {
         scheduleNotification(
             id: NotificationID.openLoop,
@@ -66,6 +88,8 @@ extension PodLoanPhoneController {
             delay: ReminderLadder.openLoopDelay, repeats: false)
     }
 
+    /// Run at launch: the user may have closed the loop again in a previous session, and the
+    /// pending reminder would then arrive telling them to do what they have already done.
     func cancelOpenLoopReminderIfLoopClosed() {
         guard deps.settings().dosingEnabled else { return }
         cancelNotification(id: NotificationID.openLoop)

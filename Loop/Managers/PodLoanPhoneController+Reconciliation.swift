@@ -2,7 +2,19 @@
 //  PodLoanPhoneController+Reconciliation.swift
 //  Loop
 //
-//  Part of PodLoanPhoneController (see PodLoanPhoneController.swift). Split by concern; stored properties live in the core class.
+//  Part of PodLoanPhoneController (see PodLoanPhoneController.swift). Split by concern; stored
+//  properties live in the core class.
+//
+//  Getting the watch's insulin into the phone's books, and judging whether it is all there.
+//
+//  Two doors into the dose store, used together on every hand-back: pump events, which is how
+//  doses normally arrive, and an identified upsert that can land records behind the store's
+//  immutable boundary. Both must agree on identity, or one physical dose becomes two.
+//
+//  The verdict is deliberately asymmetric. Insulin the pod delivered that our records do not
+//  contain stops automatic dosing; records claiming more than the pod delivered only warn.
+//  Where no verdict is possible at all, the loop opens and a placeholder keeps IOB conservative
+//  until the real records arrive.
 //
 
 import Foundation
@@ -13,6 +25,12 @@ import UserNotifications
 import os.log
 
 extension PodLoanPhoneController {
+    /// Wraps doses for the ordinary pump-event door.
+    ///
+    /// Identity lives in `raw`, hex-decoded, and nowhere else: LoopKit discards an incoming
+    /// `DoseEntry.syncIdentifier` on this path and derives identity from `raw` instead. Seeding
+    /// `raw` with the identifier's own bytes gives one physical dose two identities — hex and
+    /// hex-of-hex — which blinds every dedup layer underneath and echoes the dose into IOB.
     func newPumpEvents(from doses: [DoseEntry]) -> [NewPumpEvent] {
         doses.compactMap { dose in
             guard let syncID = dose.syncIdentifier else { return nil }
@@ -24,6 +42,12 @@ extension PodLoanPhoneController {
         }
     }
 
+    /// Cuts each rate record at the start of the next one, the way the store's own
+    /// reconciliation would.
+    ///
+    /// The upsert this feeds bypasses that reconciliation, so it has to do the work itself: an
+    /// untruncated span would REPLACE the already-truncated row and inflate IOB, and it would do
+    /// so on every hand-back. Boluses pass through untouched — they do not supersede anything.
     func truncatingOverlaps(_ doses: [DoseEntry]) -> [DoseEntry] {
         var out: [DoseEntry] = []
         var lastRate: DoseEntry?
@@ -47,6 +71,8 @@ extension PodLoanPhoneController {
         return out
     }
 
+    /// What a finished loan dose actually delivered, for records that did not carry it.
+    /// A mutable dose is still running and has no answer yet; leaving it nil is correct.
     private static func resolvedDeliveredUnits(for dose: DoseEntry) -> Double? {
         guard !dose.isMutable else { return nil }
         switch dose.type {
@@ -56,6 +82,16 @@ extension PodLoanPhoneController {
         }
     }
 
+    /// Restates doses in the identity the DOSE STORE uses, for the backfill door.
+    ///
+    /// That door is needed because the pump-event path cannot land a basal-shaped dose behind
+    /// the delivery store's last immutable basal end date. After a force reclaim, a journal that
+    /// arrives late therefore writes its pump-event rows while none of its temps reach the
+    /// books: the bolus survives, the temps vanish, and IOB under-counts.
+    ///
+    /// The identifier is the same bytes the pump-event path ends up with, rendered as hex, so
+    /// both doors name one dose the same way. `deliveredUnits` is stamped here for the same
+    /// reason the truncation above happens here — this path does none of the store's own tidying.
     func storeIdentifiedDoses(from doses: [DoseEntry]) -> [DoseEntry] {
         doses.compactMap { dose in
             guard let syncID = dose.syncIdentifier else { return nil }
@@ -87,14 +123,30 @@ extension PodLoanPhoneController {
         }
     }
 
+    /// Blocking read of the live progress. Anything drawing the tile must use
+    /// `reclaimProgressForUI`, which reads the mirror and never waits.
     var reclaimProgress: ReclaimProgress? {
         return Self.reclaimProgress(from: queue.sync { uiSnapshot() }, now: deps.now())
     }
 
+    /// Insulin the pod delivered that our records cannot account for. Beyond this the loop
+    /// OPENS: there is insulin in the body the algorithm cannot see, and a closed loop would
+    /// stack more on top of it.
     private static let openLoopPositiveResidual: Double = 0.20
 
+    /// Records claiming more delivery than the pod made. This direction only warns. It is
+    /// phantom IOB — self-limiting, it decays out within the insulin action duration, and it
+    /// makes the loop cautious. Opening the loop here would make the real failure, which is
+    /// under-treatment, worse.
     private static let warnNegativeResidual: Double = 0.20
 
+    /// The verdict after a clean hand-back. Both directions speak on the time-sensitive channel
+    /// even though only one stops dosing: a plain notification can be swallowed by a Focus mode,
+    /// leaving a recording failure with no witness at all.
+    ///
+    /// No placeholder is booked here, unlike after a force reclaim. The watch's records did
+    /// arrive, so a residual is a disagreement between two measurements rather than insulin
+    /// missing from the books.
     func applyReconciliationVerdict(residual: Double, epoch: Int) {
         if residual > Self.openLoopPositiveResidual {
             handbackDiag(epoch, String(format:
@@ -115,6 +167,9 @@ extension PodLoanPhoneController {
         }
     }
 
+    /// The verdict after a force reclaim. Same bands and same channel as a clean hand-back; the
+    /// difference is that this is where the pause held since the reclaim is lifted, and that an
+    /// unexplained positive gets a placeholder booked for it as well as an open loop.
     func applyForceReclaimVerdict(residual: Double, epoch: Int) {
         deps.setAutomaticDosingPaused(false)
         if residual > Self.openLoopPositiveResidual {
@@ -146,6 +201,13 @@ extension PodLoanPhoneController {
         }
     }
 
+    /// Books the unexplained insulin as a placeholder so IOB accounts for it while the real
+    /// records are missing.
+    ///
+    /// MANUALLY ENTERED, and stamped at the reclaim instant. Manual doses keep the identifier
+    /// they are given as their store identity — pump events overwrite it — and that is the only
+    /// reason this can be found and deleted later. "Now" gives it zero decay, so IOB
+    /// over-counts rather than under-counts until the truth arrives.
     func bookGapDose(units: Double, epoch: Int) {
         let now = deps.now()
         let sync = Self.gapSyncIdentifier(epoch: epoch)
@@ -169,12 +231,17 @@ extension PodLoanPhoneController {
         }
     }
 
+    /// One placeholder per loan, findable by epoch alone — the delete has nothing else to go on.
     private static func gapSyncIdentifier(epoch: Int) -> String { "PODLOAN-ODOGAP-e\(epoch)" }
 
+    /// Launch-time retry for a placeholder whose delete failed AFTER the real records landed.
     func retryPersistedGapDeleteIfAny() {
         guard let gap = UserDefaults.standard.dictionary(forKey: Keys.gapBooking),
               let gapEpoch = gap["epoch"] as? Int, let booked = gap["units"] as? Double else { return }
 
+        // A standing placeholder is left alone. Only a failed delete earns a retry: otherwise
+        // every launch quietly removes a conservative IOB booking that nothing has replaced —
+        // and having lost the watch for good is exactly when that margin matters most.
         guard gap["deleteFailedAfterRecords"] as? Bool == true else {
             handbackDiag(gapEpoch, String(format: "R37 gap placeholder STANDS — %.2f U still unexplained; the watch never returned, so the booking is left in place", booked))
             return
@@ -199,10 +266,17 @@ extension PodLoanPhoneController {
         }
     }
 
+    /// Retires the placeholder once the watch's real records for THAT loan have been written.
+    ///
+    /// Called after the commit, never before. A moment where both the estimate and the real
+    /// doses are booked over-states IOB briefly, which is survivable; a moment where neither is
+    /// booked is not. A failed delete is recorded so the next launch can try again.
     func retireGapBookingIfExplained(offerEpoch: Int, dosesJustCommitted: [DoseEntry], carbsJustCommitted: Int) {
         guard let gap = UserDefaults.standard.dictionary(forKey: Keys.gapBooking),
               let gapEpoch = gap["epoch"] as? Int, gapEpoch == offerEpoch,
               let booked = gap["units"] as? Double else { return }
+        // An offer that committed nothing is not evidence that the watch's records arrived — an
+        // empty drain would otherwise retire a booking that still stands for real insulin.
         guard !dosesJustCommitted.isEmpty else { return }
 
         let boluses = dosesJustCommitted.filter { $0.type == .bolus }
@@ -238,7 +312,12 @@ extension PodLoanPhoneController {
         }
     }
 
+    /// Keeps a rolling series of hand-back residuals in the log. DIAGNOSTICS ONLY: nothing reads
+    /// it back to change a threshold, and it must not ask anyone to review bounds that have
+    /// already been settled. Callers bank clean hand-backs alone.
     func bankResidual(_ residual: Double, worstWindow: Double, epoch: Int) {
+        // A bounded window of recent loans. Long enough to see a trend, short enough that an old
+        // build's behaviour does not colour the current one.
         var history = (UserDefaults.standard.array(forKey: Keys.residualHistory) as? [Double]) ?? []
         history.append(residual)
         if history.count > 40 { history.removeFirst(history.count - 40) }
@@ -258,6 +337,9 @@ extension PodLoanPhoneController {
             Self.openLoopPositiveResidual))
     }
 
+    /// Blocking reads of the live state. Safe from a message-handling context; never from the
+    /// controller's own queue, which deadlocks, and never from a UI draw path, which would
+    /// freeze behind a stalled settle. The tile reads the mirror instead.
     var isPodLoanedOut: Bool {
         return queue.sync { state != .owner || yieldingToInferredLoan }
     }
@@ -271,30 +353,48 @@ extension PodLoanPhoneController {
         }
     }
 
+    /// Where the audit window currently starts: a pod delivery total and the instant it was
+    /// read. It describes ONE loan and is consumed when that loan is judged.
     struct AuditBase {
         let units: Double
         let asOf: Date
     }
 
+    /// Same band as the final verdict, so a window that would have been acceptable at the end is
+    /// acceptable mid-loan.
     static let checkpointBand: Double = 0.20
 
+    /// Tries to close off the stretch of loan since the last base, using an odometer reading the
+    /// watch sent mid-session. A window that reconciles advances the base, which narrows what
+    /// the final verdict has to explain; one that does not is CARRIED — the base stays put and
+    /// the unreconciled stretch remains inside the window.
     func considerCheckpoint(_ snap: LoanOdometerSnapshot, context: String) {
         guard let asOf = snap.asOf else { return }
         guard let base = auditBase else { return }
+        // A reading no newer than the base closes no window.
         guard asOf > base.asOf else { return }
+        // A total that has gone backwards is not a reading of this pod's progress; advancing the
+        // base onto it would hide real delivery.
         guard snap.deliveredLatest >= base.units else {
             PhoneLog.event("loan", String(format: "e%d [checkpoint] REJECTED (%@): odometer regressed %.3f → %.3f",
                                           epoch, context, base.units, snap.deliveredLatest))
             return
         }
+        // The whole staged set, committed or not: the expectation is about what the pod was
+        // asked to deliver over this window, not about what the phone has written down.
         let events = staged.values
             .filter { !stagedTombstones.contains($0.id) }
             .sorted { $0.seq < $1.seq }
+        // A bolus stamped exactly at this interior boundary belongs to the NEXT window: the pod
+        // had not metered it when this reading was taken, and counting it in both windows would
+        // double it.
         let expected = LoanReconciler.expectedInsulin(events: events, schedule: deps.settings().basalRateSchedule,
                                                       from: base.asOf, to: asOf,
                                                       includingBolusesAtEnd: false)
         let delivered = snap.deliveredLatest - base.units
 
+        // Quantize to milli-units before comparing, so the band turns on the pulse grid rather
+        // than on binary rounding dust.
         let residual = ((delivered - expected) * 1000).rounded() / 1000
         if abs(residual) <= Self.checkpointBand {
             checkpointsThisLoan += 1
@@ -315,9 +415,16 @@ extension PodLoanPhoneController {
         }
     }
 
+    /// A verdict owed against the pod's own delivery total, waiting for the reclaim round-trip
+    /// that can read it.
     struct PendingHandbackAudit {
+        /// `.handback` came from the watch's final offer; `.forceReclaim` from the phone taking
+        /// the pod without one. Only the latter survives a relaunch, and only the latter books a
+        /// placeholder for what it cannot explain.
         enum Flavor: String { case handback, forceReclaim }
         let epoch: Int
+        /// Start of the VERDICT window, which accepted checkpoints may have moved well past the
+        /// start of the loan.
         let deliveredAtStart: Double
         let expected: Double
         let loanMinutes: Double
@@ -326,6 +433,7 @@ extension PodLoanPhoneController {
         let watchFreshened: Bool
         var flavor: Flavor = .handback
 
+        /// The whole loan, start to end, for the drift tripwire. Reported, never acted on.
         var takeoverUnits: Double? = nil
         var wholeLoanExpected: Double? = nil
     }
