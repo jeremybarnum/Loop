@@ -40,19 +40,13 @@ final class WatchSettingsProvider {
     /// Replaced wholesale when a grant lands; never edited piecemeal on the wrist.
     private(set) var storedSettings: StoredSettings
 
-    /// The `LoopSettings` the grant actually carried. Kept alongside because the loan
-    /// protocol speaks in these terms and several call sites want the original.
-    private(set) var loopSettings: LoopSettings
-
     init(settings: LoopSettings = LoopSettings()) {
-        self.loopSettings = settings
         self.storedSettings = Self.stored(from: settings)
     }
 
     /// Apply a new grant. Whole-snapshot replacement is the point: a partial update would
     /// let the wrist dose against a mix of two grants.
     func update(with settings: LoopSettings) {
-        loopSettings = settings
         storedSettings = Self.stored(from: settings)
     }
 

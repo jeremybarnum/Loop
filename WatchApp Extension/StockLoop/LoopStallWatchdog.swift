@@ -83,7 +83,7 @@ enum LoopStallWatchdog {
 
 enum HandbackStuckAlert {
 
-    /// How long to wait for the phone's ack before giving up and resuming on the watch.
+    /// How long to wait for the phone's ack before giving up.
     ///
     /// TWO MINUTES, restored 2026-09-19 after five seconds was tried for half a day and was
     /// wrong. "Is the phone there?" needs no timeout at all — reachability is checked at the
@@ -93,8 +93,6 @@ enum HandbackStuckAlert {
     /// its final offer. At 5 s the watch gave up 2.4 s after SENDING the final offer; the phone
     /// received it 0.6 s later, committed and acked, and both sides held the pod (bench
     /// 2026-09-19 15:31). A short budget here manufactures the split it was meant to prevent.
-    /// The deeper flaw — resuming on ANY timer after a final offer is sent — is open; see
-    /// docs/OWNERSHIP.md.
     static let interval: TimeInterval = 2 * 60
 
     private static let identifier = "sportmode.handbackStuck"
