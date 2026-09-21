@@ -1,8 +1,6 @@
 //
-//  PodLoanWatchController+Journal.swift
+//  PodLoanWatchController+Records.swift
 //  WatchApp Extension
-//
-//  Part of PodLoanWatchController (see PodLoanWatchController.swift). The journal's writers: the pump manager's report (doses), the wrist UI (carbs, overrides).
 //
 
 import Foundation
@@ -15,6 +13,34 @@ import WatchKit
 import os.log
 
 extension PodLoanWatchController {
+
+    func streamRecords(renewal: Bool = false) {
+        guard phase == .active, let epoch = epoch else { return }
+        let events = journal.unackedEvents()
+        let tombstones = journal.pendingTombstones()
+        let empty = events.isEmpty && tombstones.isEmpty
+        guard renewal || !empty else { return }
+
+        var odometer: LoanOdometerSnapshot?
+        if let start = deliveredAtTakeover, let latest = pumpManager?.podLoanInsulinDelivered,
+           let asOf = pumpManager?.podLoanInsulinDeliveredAt {
+            odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest,
+                                            freshenSucceeded: false, asOf: asOf)
+        }
+        if !empty {
+            SportLog.event("handback", String(format: "stream: %d event(s), %d tombstone(s)%@", events.count, tombstones.count,
+                                              odometer.map { String(format: " · odo %.2f U @ %@ [checkpoint]", $0.deliveredLatest, DateFormatter.localizedString(from: $0.asOf ?? .distantPast, dateStyle: .none, timeStyle: .medium)) } ?? ""))
+        }
+
+        sendMessage(.doseRecordBatch(DoseRecordBatch(epoch: epoch, events: events, tombstones: tombstones,
+                                                     odometer: odometer, sentAt: self.now())),
+                    urgentOnly: empty)
+    }
+
+    func renewHold() {
+        queue.async { self.streamRecords(renewal: true) }
+    }
+
     func journalPumpEvents(_ events: [NewPumpEvent]) {
         guard phase == .active else { return }
         var minted = 0
@@ -114,5 +140,4 @@ extension PodLoanWatchController {
             self.streamRecords()
         }
     }
-
 }
