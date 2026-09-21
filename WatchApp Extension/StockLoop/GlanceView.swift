@@ -41,7 +41,6 @@ struct GlanceUIState {
     var cobText: String = "—"
     var tempText: String = "—"
     var loopStatusText: String = ""
-    var loopDotColor: Color = .clear
     var loopFreshness: LoopFreshness = .unknown
 
     /// The eventual/recommendation are older than stock's stale threshold, because no cycle has
@@ -71,12 +70,8 @@ struct GlanceUIState {
     /// invisible: the manual-bolus status, and
     /// "ending…" during an interim hand-back drain, which runs while the phase is still .active.
     var transientText: String? = nil
-    /// G7 pairing code likely wrong (aesVerifyFailed ×2) — glance shows a re-enter banner.
-
-    /// Loop open/close control (active only). `canToggleLoop` is false when the phone
-    /// disallows dosing (the watch can't close what the phone opened) or when suspended.
+    /// Loop open/close control (active only).
     var loopClosed: Bool = false
-    var canToggleLoop: Bool = false
 
     /// Idle-only: why the last Start attempt returned to idle (timeout / refusal).
     var idleNote: String? = nil
@@ -459,7 +454,6 @@ final class GlanceViewModel: ObservableObject {
             // Demo/preview mode: mutate local state so the pill is interactive on the sim.
             state.loopClosed = closed
             state.loopStatusText = closed ? "CLOSED · 0m" : "OPEN"
-            state.loopDotColor = closed ? .glanceGood : .clear
             return
         }
         ExtensionDelegate.sharedIfAvailable()?.stockLoopSession?.stack.loopManager.setClosedLoopEnabled(closed)
@@ -566,9 +560,7 @@ final class GlanceViewModel: ObservableObject {
             state = s
         case .active:
             // Main-safe read, exactly as for the loan snapshot above: publish a mirror from
-            // dataAccessQueue, read the mirror here, never sync onto it. A dose cycle holds that
-            // queue for the whole radio-arbiter poll (up to 15s, :2527), and this line — on a 2s
-            // timer, on MAIN — was what turned that wait into a frozen watch. Nil only before the
+            // dataAccessQueue, read the mirror here, never sync onto it. Nil only before the
             // first mirror lands, in which case we simply skip this tick rather than block.
             RuntimeStateLog.mark("glance.refresh.kickGlance")
             if kickMirror { session.stack.loopManager.refreshGlanceData() }
@@ -602,7 +594,7 @@ final class GlanceViewModel: ObservableObject {
                 s.transientText = text   // e.g. insulin booked at Start; long enough to be seen after the tap
             }
             s.reunionPrompt = snap.reunionPromptVisible
-            // A manual bolus spends most of its wall-clock waiting on the radio arbiter, with
+            // A manual bolus spends most of its wall-clock waiting, with
             // the flow already dismissed. Say so, or the wrist looks idle and the user taps End
             // — which cancels the dose (field: 3x).
             if let startedAt = session.stack.loopManager.manualBolusStartedAt {
@@ -615,8 +607,7 @@ final class GlanceViewModel: ObservableObject {
                 // the G7, so every manual bolus must first re-acquire the pod — scan, connect,
                 // establish session — before it can command it. It ends when the pod ACCEPTS the
                 // command (~1.3 s to accept vs ~8 s to push 0.2 U), which is what fires the
-                // success haptic. It is NOT a radio-arbiter wait: manual boluses are exempt
-                // because the user is standing there (WatchLoopManager :2176).
+                // success haptic.
                 //
                 // So the verb is "starting", not "delivering" or stock's "bolusing" — the pod is
                 // still orphaned and nothing has been commanded yet, and those would be true only
@@ -900,38 +891,13 @@ final class GlanceViewModel: ObservableObject {
 
         // Status line + suspend + open/close.
         s.loopClosed = data.closedLoopEnabled
-        if !data.closedLoopEnabled {
-            // OPEN by choice — advisory. The watch is sovereign in a loan; the phone's
-            // own loop mode does not gate this.
-            s.loopStatusText = NSLocalizedString("OPEN", comment: "Glance loop status: advisory / open loop")
-            s.loopDotColor = .clear
-            s.canToggleLoop = true
-        } else if isStale {
-            s.loopStatusText = NSLocalizedString("PAUSED", comment: "Glance loop status while glucose is stale")
-            s.loopDotColor = .glanceWarn
-            s.canToggleLoop = true
-        } else if let completed = data.lastLoopCompleted {
-            let interval = now.timeIntervalSince(completed)
-            let minutes = max(0, Int(interval / 60))
+        if data.closedLoopEnabled, !isStale, let completed = data.lastLoopCompleted {
             // The PREDICTION is only as current as the last COMPLETED cycle: IOB and COB render live
             // off the stores every tick, while eventual and the recommendation freeze when enacts
             // fail. Measured e141: dosemath IOB 1.10 vs glance 1.20, lastCompletedAge=1622s, with
             // nothing on screen saying the eventual was 27 minutes old. Same treatment glucose
             // already gets — say the age rather than showing a stale number as current.
-            s.predictionStale = LoopCompletionFreshness(age: interval) == .stale
-            s.loopStatusText = String(format: NSLocalizedString("CLOSED · %dm", comment: "Glance loop status with age"), minutes)
-            // Stock's fresh/aging/stale grading (HUDInterfaceController, 6/20 min),
-            // replacing the old binary blank. The eventual stays visible; the dot conveys
-            // how current the prediction is — green fresh · amber aging · red stale — so a
-            // stale loop MARKS its last eventual rather than hiding it (which read as "none").
-            let fresh: TimeInterval = .minutes(6)
-            let aging: TimeInterval = .minutes(20)
-            s.loopDotColor = interval < fresh ? .glanceGood : (interval < aging ? .glanceWarn : .glanceCrit)
-            s.canToggleLoop = true
-        } else {
-            s.loopStatusText = NSLocalizedString("CLOSED · —", comment: "Glance loop status before the first loop")
-            s.loopDotColor = .glanceWarn
-            s.canToggleLoop = true
+            s.predictionStale = LoopCompletionFreshness(age: now.timeIntervalSince(completed)) == .stale
         }
         return s
     }
@@ -943,15 +909,6 @@ struct GlanceView: View {
     @ObservedObject var model: GlanceViewModel
     @State private var confirmingClose = false
     @State private var closeProgress: Double = 0   // crown-to-fill loop-close ceremony
-
-    /// Always-visible build tag so an install is unambiguous on-wrist
-    /// (Jeremy 2026-07-20 — often installs mid-session and needs to know the build).
-    ///
-    /// Was `CFBundleVersion`, which is PINNED in VersionOverride.xcconfig and therefore identical on
-    /// every local build — the tag could not detect staleness, which is the one thing it existed to do.
-    /// Now the superproject SHA plus build time: different code always reads differently, and the phone
-    /// shows the same identifier when the two halves were built together (Jeremy 2026-08-19).
-    static let buildNumber = BuildDetails.default.codeIdentity
 
     /// The stock loop-ring assets (loop_<freshness>_<closed|open>) live in the WatchApp
     /// bundle's DefaultAssets catalog — the parent .app of this extension's .appex. Point
@@ -1520,8 +1477,6 @@ struct GlanceView: View {
     }
 }
 
-// MARK: - On-wrist sensor-code entry (wrong-code recovery)
-
 // MARK: - Palette (true black; calm-blue identity; semantic state colors)
 
 extension Color {
@@ -1638,28 +1593,28 @@ struct GlanceDemoView: View {
         ("Active · in range · CLOSED", previewState { s in
             s.phase = .active; s.bgText = "142"; s.trendSymbol = "↗"; s.bgColor = .inRange
             s.eventualText = "128"; s.iobText = "1.8"; s.cobText = "24"; s.tempText = "+0.75"
-            s.loopFreshness = .fresh; s.loopClosed = true; s.canToggleLoop = true }),
+            s.loopFreshness = .fresh; s.loopClosed = true }),
         ("Active · OPEN (advisory)", previewState { s in
             s.phase = .active; s.bgText = "142"; s.trendSymbol = "↗"; s.bgColor = .inRange
             s.eventualText = "128"; s.iobText = "1.8"; s.cobText = "24"; s.tempText = "—"
-            s.loopFreshness = .fresh; s.loopClosed = false; s.canToggleLoop = true }),
+            s.loopFreshness = .fresh; s.loopClosed = false }),
         ("Active · high", previewState { s in
             s.phase = .active; s.bgText = "214"; s.trendSymbol = "→"; s.bgColor = .high
             s.eventualText = "176"; s.iobText = "2.6"; s.cobText = "31"; s.tempText = "+1.20"
-            s.loopFreshness = .fresh; s.loopClosed = true; s.canToggleLoop = true }),
+            s.loopFreshness = .fresh; s.loopClosed = true }),
         ("Active · low", previewState { s in
             s.phase = .active; s.bgText = "64"; s.trendSymbol = "↘"; s.bgColor = .low
             s.eventualText = "58"; s.iobText = "0.4"; s.cobText = "0"; s.tempText = "0.00"
-            s.loopFreshness = .fresh; s.loopClosed = true; s.canToggleLoop = true }),
+            s.loopFreshness = .fresh; s.loopClosed = true }),
         // BG recency drives the ring, open OR closed (2026-07-24) — open is NOT gray.
         ("Active · aging BG · CLOSED", previewState { s in
             s.phase = .active; s.bgText = "142"; s.trendSymbol = "→"; s.bgColor = .inRange
             s.eventualText = "158"; s.iobText = "1.6"; s.cobText = "18"; s.tempText = "+0.90"
-            s.loopFreshness = .aging; s.loopClosed = true; s.canToggleLoop = true }),
+            s.loopFreshness = .aging; s.loopClosed = true }),
         ("Active · aging BG · OPEN", previewState { s in
             s.phase = .active; s.bgText = "142"; s.trendSymbol = "→"; s.bgColor = .inRange
             s.eventualText = "158"; s.iobText = "1.6"; s.cobText = "18"; s.tempText = "—"
-            s.loopFreshness = .aging; s.loopClosed = false; s.canToggleLoop = true }),
+            s.loopFreshness = .aging; s.loopClosed = false }),
         ("Stale glucose · CLOSED", previewState { s in
             s.phase = .active; s.bgText = "148"; s.bgColor = .dim
             s.staleAgeText = "16 min ago — no direct G7"; s.iobText = "1.8"; s.cobText = "24"
@@ -1688,7 +1643,7 @@ struct GlanceDemoView: View {
             s.phase = .active; s.bgText = "148"; s.bgColor = .dim
             s.staleAgeText = "no direct G7 reading yet"; s.g7EtaText = "G7 in ~1:20"
             s.iobText = "1.8"; s.cobText = "24"
-            s.loopStatusText = "PAUSED"; s.loopDotColor = .glanceWarn }),
+            s.loopStatusText = "PAUSED" }),
     ]
 
     var body: some View {
@@ -1714,7 +1669,7 @@ struct GlanceDemoView: View {
     GlanceView(model: GlanceViewModel(preview: previewState { s in
         s.phase = .active; s.bgText = "142"; s.trendSymbol = "↗"; s.bgColor = .inRange
         s.eventualText = "128"; s.iobText = "1.8"; s.cobText = "24"; s.tempText = "+0.75"
-        s.loopStatusText = "CLOSED · 2m"; s.loopDotColor = .glanceGood
+        s.loopStatusText = "CLOSED · 2m"
     }))
 }
 
@@ -1725,7 +1680,7 @@ struct GlanceDemoView: View {
     GlanceView(model: GlanceViewModel(preview: previewState { s in
         s.phase = .active; s.bgText = "111"; s.trendSymbol = "→"; s.bgColor = .inRange
         s.eventualText = "88"; s.iobText = "1.2"; s.cobText = "8"; s.tempText = "0.00"
-        s.loopStatusText = "CLOSED · 1m"; s.loopDotColor = .glanceGood
+        s.loopStatusText = "CLOSED · 1m"
         // No bar here on purpose: the bar APPEARING is the "it started" signal.
         s.transientText = "starting 0.90 U…"
     }))
@@ -1735,7 +1690,7 @@ struct GlanceDemoView: View {
     GlanceView(model: GlanceViewModel(preview: previewState { s in
         s.phase = .active; s.bgText = "111"; s.trendSymbol = "→"; s.bgColor = .inRange
         s.eventualText = "88"; s.iobText = "1.7"; s.cobText = "8"; s.tempText = "0.00"
-        s.loopStatusText = "CLOSED · 1m"; s.loopDotColor = .glanceGood
+        s.loopStatusText = "CLOSED · 1m"
         // Anchored in the past so the canvas opens mid-delivery instead of at 0%.
         let started = Date().addingTimeInterval(-22)
         s.bolusDelivery = (units: 0.90, startedAt: started, endsAt: started.addingTimeInterval(0.90 / 1.5 * 60))
@@ -1746,7 +1701,7 @@ struct GlanceDemoView: View {
     GlanceView(model: GlanceViewModel(preview: previewState { s in
         s.phase = .active; s.bgText = "111"; s.trendSymbol = "→"; s.bgColor = .inRange
         s.eventualText = "88"; s.iobText = "1.2"; s.cobText = "8"; s.tempText = "0.00"
-        s.loopStatusText = "CLOSED · 1m"; s.loopDotColor = .glanceGood
+        s.loopStatusText = "CLOSED · 1m"
         s.transientText = "taking longer than usual — 0.90 U will deliver"
     }))
 }
@@ -1755,7 +1710,7 @@ struct GlanceDemoView: View {
     GlanceView(model: GlanceViewModel(preview: previewState { s in
         s.phase = .active; s.bgText = "214"; s.trendSymbol = "→"; s.bgColor = .high
         s.eventualText = "176"; s.iobText = "2.6"; s.cobText = "31"; s.tempText = "+1.20"
-        s.loopStatusText = "CLOSED · 1m"; s.loopDotColor = .glanceGood
+        s.loopStatusText = "CLOSED · 1m"
     }))
 }
 
@@ -1763,7 +1718,7 @@ struct GlanceDemoView: View {
     GlanceView(model: GlanceViewModel(preview: previewState { s in
         s.phase = .active; s.bgText = "64"; s.trendSymbol = "↘"; s.bgColor = .low
         s.eventualText = "58"; s.iobText = "0.4"; s.cobText = "0"; s.tempText = "0.00"
-        s.loopStatusText = "CLOSED · 3m"; s.loopDotColor = .glanceGood
+        s.loopStatusText = "CLOSED · 3m"
     }))
 }
 
@@ -1772,7 +1727,7 @@ struct GlanceDemoView: View {
         s.phase = .active; s.bgText = "148"; s.bgColor = .dim
         s.staleAgeText = "9 min ago — no direct G7"
         s.iobText = "1.8"; s.cobText = "24"
-        s.loopStatusText = "PAUSED"; s.loopDotColor = .glanceWarn
+        s.loopStatusText = "PAUSED"
     }))
 }
 
@@ -1780,7 +1735,7 @@ struct GlanceDemoView: View {
     GlanceView(model: GlanceViewModel(preview: previewState { s in
         s.phase = .active; s.bgText = "142"; s.trendSymbol = "↗"; s.bgColor = .inRange
         s.eventualText = "128"; s.iobText = "1.8"; s.cobText = "24"; s.tempText = "—"
-        s.loopStatusText = "OPEN"; s.loopDotColor = .clear; s.loopClosed = false; s.canToggleLoop = true
+        s.loopStatusText = "OPEN"; s.loopClosed = false
     }))
 }
 
@@ -1806,7 +1761,7 @@ struct GlanceDemoView: View {
         s.phase = .active; s.bgText = "148"; s.bgColor = .dim
         s.staleAgeText = "no direct G7 reading yet"; s.g7EtaText = "G7 in ~1:20"
         s.iobText = "1.8"; s.cobText = "24"
-        s.loopStatusText = "PAUSED"; s.loopDotColor = .glanceWarn
+        s.loopStatusText = "PAUSED"
     }))
 }
 #endif

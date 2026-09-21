@@ -4,31 +4,6 @@
 //
 //  Copyright © 2026 LoopKit Authors. All rights reserved.
 //
-//  M4 of the watch-from-stock rebuild (docs/DESIGN_FROM_STOCK_REBUILD.md §1.5/§4 M4).
-//
-//  A MINIATURE OF THE PHONE'S STOCK LoopDataManager POLICY PATHS. Every dosing-relevant
-//  decision here is either (a) the identical LoopKit/DoseMath entry point the phone calls,
-//  or (b) a structural mirror of a named LoopDataManager method, cited inline. Nothing
-//  reimplements policy beside a stock call — the adversarial review's central lesson
-//  (defect density tracks distance from upstream).
-//
-//  Mirrored phone patterns (Loop/Managers/LoopDataManager.swift unless noted):
-//    loop()/loopInternal()                 -> WatchLoopManager.loop()
-//    update(for: .loop) effect refresh     -> updateCachedEffects()
-//    updateRetrospectiveGlucoseEffect()    -> same name (guard-throw instead of force-unwrap)
-//    predictGlucose(using:)                -> same name (no potential-bolus/-carb arms yet)
-//    updatePredictedGlucoseAndRecommendedDose(with:) -> same name
-//    recommendBolusValidatingDataRecency / recommendManualBolus -> same names
-//    enactRecommendedAutomaticDose()       -> same name (enact seam, M4: unconnected)
-//    DoseEnactor.enact(recommendation:with:) (Loop/Managers/DoseEnactor.swift) -> the enactor
-//    DeviceDataManager.cgmManager(_:hasNew:) + processCGMReadingResult
-//        (Loop/Managers/DeviceDataManager.swift:580/:1001) -> CGMManagerDelegate extension
-//
-//  M4 SCOPE: construction + compile proof. The enact seam is typed against the stock
-//  PumpManager protocol (the M2 OmniPumpManager conforms) but `pumpManager` stays nil —
-//  no dosing, no behavior claims. See StockLoopStack.assemble() for the (uninvoked)
-//  wiring entry point.
-//
 
 import Foundation
 import HealthKit
@@ -270,9 +245,6 @@ final class WatchLoopManager {
     /// dose is very much in progress. A user who reads that silence as a hang taps End, and End
     /// cancels the in-flight reclaim — impatience silently destroys the dose. The glance reads
     /// this so the wait is legible.
-    var manualBolusInFlight: Bool {
-        manualBolusLock.lock(); defer { manualBolusLock.unlock() }; return _manualBolusInFlight
-    }
     /// When the in-flight bolus started, so the glance can escalate "delivering…" to an
     /// explanation once the wait stops looking normal. Nil when nothing is in flight.
     var manualBolusStartedAt: Date? {
@@ -564,9 +536,6 @@ final class WatchLoopManager {
         let lastLoopCompleted: Date?
         let suspendThreshold: LoopQuantity?
         let closedLoopEnabled: Bool
-        /// The phone-frozen dosing permission: when false the watch CANNOT close the
-        /// loop (the phone had Closed Loop off at grant).
-        let dosingAllowedByPhone: Bool
         /// Dosing observability (display-only): the temp DoseMath recommends THIS
         /// cycle (nil = none), vs `tempRate` (what the pod is actually running) — the
         /// gap between them is the "is it enacting?" tell. `lastLoopErrorText` is the
@@ -601,11 +570,7 @@ final class WatchLoopManager {
 
     // MARK: - Glance mirror (main must never wait on dataAccessQueue)
 
-    /// The glance must NEVER read `dataAccessQueue` from main. That queue is held for the whole
-    /// of a dose cycle, and `enactRecommendedAutomaticDose` polls the radio arbiter for up to 15 s
-    /// (:2527) before giving up — so a `dataAccessQueue.sync` on a 2 s UI timer freezes the entire
-    /// interface for as long as any cycle waits out the G7 handshake, ~16 s in the worst measured
-    /// case. Almost all of that is the radio wait, not compute.
+    /// The glance must NEVER read `dataAccessQueue` from main.
     ///
     /// Same remedy PodLoanWatchController applies to the loan/pump queue
     /// (`refreshDebugSnapshot`/`mirroredDebugSnapshot`): publish a mirror FROM the queue, read the
@@ -732,7 +697,6 @@ final class WatchLoopManager {
                 lastLoopCompleted: lastLoopCompleted,
                 suspendThreshold: settings.suspendThreshold?.quantity,
                 closedLoopEnabled: _closedLoopEnabled,
-                dosingAllowedByPhone: settings.dosingEnabled,
                 // Read the SNAPSHOT, not the live property: a successful enact nils
                 // `recommendedAutomaticDose` (:889/:1081), so in closed loop the panel's
                 // recommend row was blank essentially always — it showed "no recommendation"
@@ -1165,9 +1129,6 @@ final class WatchLoopManager {
         let direct = mem.0 ?? defaults.object(forKey: Self.lastDirectG7DefaultsKey) as? Date
         return (direct, mem.1)
     }
-    /// The last cycle's binding-constraint summary, for the diagnostic screen. Our screen
-    /// only — never annotated onto a stock surface (the stock-parity ruling).
-    private(set) var lastDosingDerivation: String?
 
     // MARK: - Override-applied schedules (stock parity)
     //
@@ -1189,34 +1150,6 @@ final class WatchLoopManager {
     var basalRateScheduleApplyingOverrideHistory: BasalRateSchedule? {
         settings.basalRateSchedule.map { overrideHistory.resolvingRecentBasalSchedule($0) }
     }
-
-    /// The carb ratio schedule, applying recent overrides relative to the current moment in time.
-    var carbRatioScheduleApplyingOverrideHistory: CarbRatioSchedule? {
-        settings.carbRatioSchedule.map { overrideHistory.resolvingRecentCarbRatioSchedule($0) }
-    }
-
-    /// The insulin sensitivity schedule, applying recent overrides relative to the current moment in time.
-    var insulinSensitivityScheduleApplyingOverrideHistory: InsulinSensitivitySchedule? {
-        settings.insulinSensitivitySchedule.map { overrideHistory.resolvingRecentInsulinSensitivitySchedule($0) }
-    }
-
-    /// Refuse loudly, once per distinct reason — not once per glance tick, and never by
-    /// silently switching the dosing source; that silent switch is banned outright.
-
-    /// Mirrors LoopDataManager's buffer multiplier for combining retrospective discrepancies.
-
-    /// Selected from the loan grant so the watch runs the SAME implementation the phone
-    /// would (`LoopDataManager.retrospectiveCorrection:457`). Frozen for the loan like the
-    /// therapy settings — the phone's re-selection-on-toggle-change has no analog here
-    /// because the flag cannot change mid-loan. Defaults to Standard, which is both the
-    /// pre-existing behavior and what a grant from a phone that doesn't send the flag
-    /// implies. Both implementations compile here (LoopKit watchOS target, M4).
-    /// VESTIGIAL — nothing assigns this and nothing dosing reads it. Kept only so the type stays
-    /// referenced; the live selector is `integralRetrospectiveCorrectionEnabled` below, which is
-    /// what `StoredDataAlgorithmInput` takes. Do not resurrect this as a source of truth without
-    /// giving it a writer first: it read as one for the whole port and misdirected a field
-    /// investigation on 2026-08-18.
-    private var retrospectiveCorrection: RetrospectiveCorrection = StandardRetrospectiveCorrection(effectDuration: LoopMath.retrospectiveCorrectionEffectDuration)
 
     /// Apply the granted RC mode. Hops to dataAccessQueue because
     /// `retrospectiveCorrection` is read there (updateRetrospectiveGlucoseEffect,
@@ -1280,10 +1213,6 @@ final class WatchLoopManager {
     func stashPhonePredictionSnapshot(_ snapshot: LoanPredictionSnapshot?) {
         dataAccessQueue.async { self.phonePredictionSnapshotAtGrant = snapshot }
     }
-
-    /// INSTRUMENTATION ONLY: the three IOB values that should agree at takeover — phone-at-grant,
-    /// watch SEED-IN anchor, watch first-cycle computed — captured so `[iob-diff]` can localize the
-    /// ~0.3U leak. Set at SEED-IN, consumed (and cleared) at the first post-takeover cycle.
 
     /// What the LAST cycle decided, retained after `recommendedAutomaticDose` is cleared by
     /// a successful enact — so display surfaces can show the decision instead of a blank.
@@ -1389,7 +1318,7 @@ final class WatchLoopManager {
     }
 
     /// The takeover SEED-IN anchor, off the book. Completion reports the primed value for the
-    /// [iob-diff] anchors + SEED-IN log.
+    /// SEED-IN log.
     func primeIOBFromStore(at date: Date, _ completion: @escaping (Double?) -> Void) {
         dataAccessQueue.async {
             let iob = self.insulinOnBoardFromStore(at: date)
@@ -2050,8 +1979,8 @@ final class WatchLoopManager {
             automatic.basalAdjustment = adjusted
 
             recommendedAutomaticDose = (recommendation: automatic, date: startDate)
-            lastDosingDerivation = algorithmSummary(input: input, output: output, enacting: adjusted)
-            SportLog.event("dosemath", lastDosingDerivation ?? "")
+            let derivation = algorithmSummary(input: input, output: output, enacting: adjusted)
+            SportLog.event("dosemath", derivation)
             return nil
         }
     }
@@ -2187,8 +2116,7 @@ final class WatchLoopManager {
         return result
     }
 
-    /// Manual bolus: the user is PRESENT — never defers to the radio arbiter
-    /// (unlike the automatic path), capped by the granted therapy maximumBolus
+    /// Manual bolus: the user is PRESENT, capped by the granted therapy maximumBolus
     /// (therapy settings are the only limits), journaled through the same
     /// loan hooks as automatic doses. Completion on main.
     func enactManualBolus(units: Double, activationType: BolusActivationType, completion: @escaping (Error?) -> Void) {
@@ -2213,7 +2141,7 @@ final class WatchLoopManager {
                     if let error = error {
                         SportLog.event("loan", "MANUAL BOLUS FAILED — \(String(describing: error))")
                     } else {
-                        // Shadow ledger: point-ish event; DASH delivers ~1.5 U/min.
+                        // point-ish event; DASH delivers ~1.5 U/min.
                         let acceptedAt = self.now()
                         let deliveryEndsAt = acceptedAt.addingTimeInterval(rounded / 1.5 * 60)
                         SportLog.event("loan", String(format: "MANUAL BOLUS delivering %.2f U — estimated done in %.0fs",

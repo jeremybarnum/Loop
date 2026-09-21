@@ -34,19 +34,11 @@ private let logFmt: DateFormatter = {
     return f
 }()
 
-/// A process-wide sink so the verbatim `log(...)` calls in the ported handshake can be
-/// mirrored into the SwiftUI log view without threading a logger through every function.
-final class LogSink: @unchecked Sendable {
-    static let shared = LogSink()
-    var handler: ((String) -> Void)?
-}
-
 /// Timestamped logging: to the Xcode console (NSLog) AND to the active client's log view.
 func log(_ items: Any...) {
     let msg = items.map { "\($0)" }.joined(separator: " ")
     let line = "\(logFmt.string(from: Date())) \(msg)"
     NSLog("%@", line)
-    LogSink.shared.handler?(line)
     LogFile.append(line)
 }
 

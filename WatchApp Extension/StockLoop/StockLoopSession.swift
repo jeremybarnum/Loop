@@ -194,8 +194,7 @@ final class StockLoopSession {
             if active {
                 os_log("Loan active: starting G7 transport", log: self.log, type: .default)
                 // The wrist inherits the phone's loop mode from the grant.
-                // Deliberately NOT re-asserted here: this also fires on the
-                // hand-back-timeout resume path, where the user's own choice must survive.
+                // Deliberately NOT re-asserted here.
                 self.setKeepalive(true, reason: "loanWorkout")
                 // Loop-Failure ladder (stock parity): every live cycle re-defers all four rungs.
                 LoopStallWatchdog.refresh()
