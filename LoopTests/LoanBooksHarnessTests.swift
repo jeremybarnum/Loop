@@ -1278,7 +1278,7 @@ final class LoanOverrideTests: XCTestCase {
     private let baseISF = InsulinSensitivitySchedule(unit: .milligramsPerDeciliter, dailyItems: [RepeatingScheduleValue(startTime: 0, value: 50.0)])!
     private let baseCR = CarbRatioSchedule(unit: .gram, dailyItems: [RepeatingScheduleValue(startTime: 0, value: 10.0)])!
 
-    /// Field 2026-09-01, Caitlin's first breakfast loan: the stock carb flow brackets a manual
+    /// Field, the dev line's first breakfast loan: the stock carb flow brackets a manual
     /// bolus with a max-temp enact that is cancelled seconds later, and when the cancel takes
     /// the zero-duration form ("temp 0.00 × 0 min") the audit's segment builder DISCARDED the
     /// zero-length record — so the cancelled 2.50 U/hr × 30 min temp stood in the books until
