@@ -2392,6 +2392,9 @@ final class PodLoanPhoneController {
 
     // MARK: - Records (§2.4-2.6)
 
+    /// When a closed loan's records were last answered with a revoke (see handleBatch).
+    private var lastClosedSessionRevokeAt: Date?
+
     private func handleBatch(_ batch: DoseRecordBatch) {
         // OBS-9 (2026-08-13): this guard DISCARDS dose records, and used to do it in total
         // silence — no log on either side. That made a whole class of question unanswerable
@@ -2407,6 +2410,20 @@ final class PodLoanPhoneController {
             // moment the evidence mattered most (the close was about to steal the pod).
             if batch.epoch > epoch, newestForeignLoanEvidence.map({ batch.epoch >= $0.epoch }) ?? true {
                 newestForeignLoanEvidence = (batch.epoch, deps.now())
+            }
+            // Records for a loan this phone has already CLOSED are live proof the watch still
+            // believes it holds the pod — a revoke it never received. Next-dev bench 2026-09-20:
+            // the phone force-reclaimed while the watch was powered off, the queued revoke
+            // arrived 31 minutes late, and both devices ran the pod for 68 minutes while this
+            // branch dropped every batch with a diag only. Say so again. A revoke carries only
+            // the epoch and the watch guards on it, so a watch that did hand back records it and
+            // nothing else happens. Throttled: the watch sends two batches per cycle. Not while
+            // this phone is deliberately standing aside for that watch (the yield posture).
+            if state == .owner, batch.epoch <= epoch, !yieldingToInferredLoan,
+               lastClosedSessionRevokeAt.map({ deps.now().timeIntervalSince($0) >= 20 }) ?? true {
+                lastClosedSessionRevokeAt = deps.now()
+                handbackDiag(batch.epoch, "records from a CLOSED loan — the watch still thinks it holds the pod; revoke e\(batch.epoch) sent again")
+                sendMessage(.revoke(Revoke(epoch: batch.epoch)))
             }
             // PHONE MIRROR detector B (row 6 — WC up): a FUTURE-epoch batch at .owner is
             // live evidence of a loan this phone never granted. The batch itself stays

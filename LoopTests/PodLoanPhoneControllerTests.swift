@@ -1456,6 +1456,35 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed")
     }
 
+    /// Records from a loan the phone has already closed are the watch saying "I still hold the
+    /// pod"; the answer is the revoke, again — not a silent drop. (Next-dev bench 2026-09-20: a
+    /// queued revoke arrived 31 minutes late and both devices ran the pod for 68 minutes.)
+    func testRecordsFromAClosedLoanAreAnsweredWithTheRevoke() throws {
+        let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
+        let grant = try establishLoan(controller)
+        MockPumpManager.testOdometer = 10.0
+        controller.forceReclaimToOwner(reason: "test: pod tile, watch unreachable")
+        waitForState(controller, .owner)
+        func revokes() -> Int {
+            lock.lock(); defer { lock.unlock() }
+            return sent.filter { if case .revoke(let r) = $0 { return r.epoch == grant.epoch }; return false }.count
+        }
+        let before = revokes()
+
+        let batch = try LoanMessage.doseRecordBatch(
+            DoseRecordBatch(epoch: grant.epoch, events: [], tombstones: [])).transportDictionary()
+        controller.handleIncoming(userInfo: batch)
+        controller.handleIncoming(userInfo: batch)   // the watch sends two per cycle
+        waitUntil(timeout: 5, "revoke sent") { revokes() == before + 1 }
+        usleep(200_000)
+        XCTAssertEqual(revokes(), before + 1, "one revoke per cycle's worth of records, not one per batch")
+
+        clock = clock.addingTimeInterval(.minutes(5))
+        controller.handleIncoming(userInfo: batch)
+        waitUntil(timeout: 5, "revoked again next cycle") { revokes() == before + 2 }
+        XCTAssertEqual(controller.state, .owner, "the phone keeps the pod throughout")
+    }
+
     /// An audit consumes its anchors (next-dev line, 2026-09-19: a later take-back audited a
     /// loan that had already closed and booked 3.45 U of recorded insulin a second time).
     func testAnAuditConsumesItsAnchors() throws {
