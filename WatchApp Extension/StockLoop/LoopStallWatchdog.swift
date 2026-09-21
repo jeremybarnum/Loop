@@ -20,30 +20,15 @@ import Foundation
 import UserNotifications
 
 enum LoopStallWatchdog {
-
-    // ─── TUNABLES — safe to change for your own build ────────────────────────
-
-    /// STOCK PARITY (ruling 2026-08-24): the wrist runs the phone's exact ladder —
-    /// 20/40 minutes time-sensitive, 1/2 hours critical, stock's words — instead of a single
-    /// custom 15-minute alert with bespoke copy. Same rungs, same escalation, both devices;
-    /// the mirroring dedupe is ownership, not cleverness: the PHONE's ladder is suppressed for
-    /// the whole loan (AlertManager's loan gate), so during a loan only this one speaks, and
-    /// outside a loan this one is disarmed, so only the phone's does.
-    ///
-    /// The rungs are pre-scheduled from OUTSIDE the app (UNUserNotificationCenter), so a
-    /// suspended or dead watch app still alarms — the dead-man property is unchanged.
     static let rungs: [(interval: TimeInterval, isCritical: Bool)] = [
         (20 * 60, false), (40 * 60, false), (60 * 60, true), (120 * 60, true),
     ]
 
-    /// The first rung, for tests and for anything that reasons about "the" deadline.
     static let interval: TimeInterval = rungs[0].interval
 
     private static let identifier = "com.loopkit.Loop.watch.loopStallWatchdog"
     private static var rungIdentifiers: [String] { rungs.map { "\(identifier).\(Int($0.interval))" } }
 
-    /// Arm the ladder or push every rung forward. Adding requests with the same identifiers
-    /// REPLACES the pending ones, so calling this on every live cycle re-defers the whole ladder.
     static func refresh() {
         let center = WristAlerts.scheduler
         let formatter = DateComponentsFormatter()
@@ -55,8 +40,7 @@ enum LoopStallWatchdog {
             content.title = NSLocalizedString("Loop Failure", comment: "The notification title for a loop failure")
             content.body = String(format: NSLocalizedString("Loop has not completed successfully in %@", comment: "The notification alert describing a long-lasting loop failure. The substitution parameter is the time interval since the last loop"),
                                   formatter.string(from: rung.interval)?.localizedLowercase ?? "\(Int(rung.interval / 60)) minutes")
-            // Critical rungs request .critical; without the Critical Alerts entitlement
-            // watchOS silently downgrades to time-sensitive, which is the acceptable floor.
+
             content.interruptionLevel = rung.isCritical ? .critical : .timeSensitive
             content.sound = rung.isCritical ? .defaultCritical : .default
             content.threadIdentifier = identifier
@@ -66,8 +50,6 @@ enum LoopStallWatchdog {
         }
     }
 
-    /// Disarm — a clean end / hand-back / revoke. The loop is stopping on purpose, and the
-    /// PHONE's ladder re-arms at reclaim, so coverage transfers rather than lapses.
     static func disarm() {
         let center = WristAlerts.scheduler
         center.removePendingRequests(withIdentifiers: rungIdentifiers)
@@ -75,24 +57,7 @@ enum LoopStallWatchdog {
     }
 }
 
-// SensorBlackoutAlert (WS4b, ruled 2026-07-19) DELETED by ruling 2026-08-24: a glucose
-// blackout stalls loop cycles in open and closed mode alike (missingDataError holds the
-// watchdog), so the ladder above reports it on the same rungs — the separate 20-minute
-// repeating alert had become a guaranteed duplicate voice for the same stall. The party
-// finding it answered (a 2.5-hour silent blackout) remains covered, one octave lower.
-
 enum HandbackStuckAlert {
-
-    /// How long to wait for the phone's ack before giving up.
-    ///
-    /// TWO MINUTES, restored 2026-09-19 after five seconds was tried for half a day and was
-    /// wrong. "Is the phone there?" needs no timeout at all — reachability is checked at the
-    /// tap and End fails at once (R41). THIS budget times something else: the wait for a commit
-    /// acknowledgement AFTER the phone has been asked to take the pod, across two offers and a
-    /// pod read. Measured tap-to-closed: 2.4–6.0 s, one at 20.6 s; one ack arrived 12.7 s after
-    /// its final offer. At 5 s the watch gave up 2.4 s after SENDING the final offer; the phone
-    /// received it 0.6 s later, committed and acked, and both sides held the pod (bench
-    /// 2026-09-19 15:31). A short budget here manufactures the split it was meant to prevent.
     static let interval: TimeInterval = 2 * 60
 
     private static let identifier = "sportmode.handbackStuck"
@@ -116,4 +81,3 @@ enum HandbackStuckAlert {
         center.removeDeliveredRequests(withIdentifiers: [identifier])
     }
 }
-

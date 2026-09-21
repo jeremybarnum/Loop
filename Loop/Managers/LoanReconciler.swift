@@ -18,94 +18,49 @@ import HealthKit
 import LoopKit
 
 enum LoanReconciler {
-
     struct Input {
-        /// Events not yet committed (seq > cursor), in seq order, tombstones applied.
         let events: [LoanEvent]
-        /// Grant-frozen basal schedule in its captured timezone
-        /// (docs/DESIGN_LOAN_PROTOCOL_V2.md §8).
+
         let schedule: BasalRateSchedule?
-        /// Loan window: grant/handover stamp → handedBackAt.
+
         let loanStart: Date
         let loanEnd: Date
-        /// False for an interim drain (`released == false`: watch still dosing). On a
-        /// final hand-back / forced reclaim (true) delivery has stopped, so every dose is
-        /// finalized: immutable and clamped to `loanEnd`. On an interim drain the pod keeps
-        /// running, so the still-open temp (`outcome.openEventID`) is SKIPPED here — it
-        /// re-drains and is written on the final drain. Finalizing it early would orphan
-        /// its post-drain delivery and UNDER-count IOB, the dangerous direction.
-        /// See docs/DESIGN_LOAN_ADDPUMPEVENTS.md.
+
         var isFinalHandback: Bool = true
     }
 
-    /// One wrist-side carb deletion, carried to the phone's store.
     struct DeletedCarb: Equatable {
         let syncIdentifier: String?
         let startDate: Date
         let grams: Double
     }
 
-    /// A carb plus the wire identity it travels under.
     struct IdentifiedCarb: Equatable {
         let eventID: UUID
         let entry: NewCarbEntry
     }
 
     struct Outcome: Equatable {
-        /// Insulin records to write (per-event deterministic syncIdentifiers).
         var doses: [DoseEntry] = []
-        /// The interim-drain still-open temp's event ID: ACKed (so the watch's finalize
-        /// gate clears) but NOT written or committed here — it re-drains and is written on
-        /// the final drain (nil on a final hand-back). See below / the design doc.
+
         var openEventID: UUID? = nil
-        /// Carb records to write, each carrying the WATCH JOURNAL EVENT UUID that names it on
-        /// the wire. The store inserts-if-absent on this identity, which is what makes a
-        /// redelivered offer physically unable to duplicate a carb — the identity is minted once
-        /// at authoring on the wrist and survives to the phone's store row.
+
         var carbs: [IdentifiedCarb] = []
-        /// Carbs the WRIST deleted during the loan, as (startDate, grams) natural
-        /// keys plus the phone syncIdentifier when the watch knew one.
-        ///
-        /// Two origins need two keys. A PHONE-originated carb reached the watch through the
-        /// grant carrying the phone's own syncIdentifier, so it can be named directly. A
-        /// WATCH-entered carb has no shared identity at all — `.carb` records carry none, and
-        /// CarbStore mints a fresh syncIdentifier on each side — so it is matched on
-        /// (startDate, grams), which is unique enough inside one loan.
-        ///
-        /// Add-then-delete inside a single drain is CANCELLED here rather than round-tripped:
-        /// see the `.carbDeleted` case below. Only deletes that survive that cancellation reach
-        /// the phone's store, and they are the phone-originated ones by construction.
+
         var deletedCarbs: [DeletedCarb] = []
-        /// The override state this drain hands back, or nil when the drain
-        /// carried no `.overrideChange` record at all (→ the phone's own override is left
-        /// completely alone). LAST record wins: within one drain the watch may have set,
-        /// re-set and cleared, and only the final wrist state is therapy-relevant.
-        /// This is NOT dose accounting — it never touches `doses`.
+
         var overrideChange: OverrideChange?
     }
 
-    /// The two things a drained override record can say. Modelled as an enum rather than a
-    /// `TemporaryScheduleOverride??` so "clear it" and "there was nothing to say" cannot be
-    /// confused at a call site — confusing them would silently cancel a phone override.
     enum OverrideChange: Equatable {
         case set(TemporaryScheduleOverride)
         case cleared
     }
 
-    // MARK: - The pure core
-
     static func reconcile(_ input: Input) -> Outcome {
         var outcome = Outcome()
         var events = input.events
 
-        // The still-open temp at an INTERIM drain: the latest-starting temp/suspend whose
-        // programmed window extends past the loan end (i.e. still running at the drain
-        // instant). It is NOT written here — it re-drains and is written correctly
-        // (clamped, immutable) on the FINAL drain. The phone is paused during the loan, so
-        // its store need only be right at hand-back; writing the open temp now would either
-        // defer it (the save filter) or freeze it at the interim state. The controller
-        // still ACKS it (so the watch's finalize gate clears) but keeps it out of
-        // committedIDs (so it re-drains). On a FINAL hand-back nothing is open.
         let openEventID: UUID? = input.isFinalHandback ? nil : events
             .filter { e in
                 switch e.record.kind {
@@ -118,13 +73,6 @@ enum LoanReconciler {
             .max(by: { $0.record.startDate < $1.record.startDate })?.id
         outcome.openEventID = openEventID
 
-        // Store writes for what remains: records are the truth; confirmed and
-        // surviving-assumed alike enter the record. Overlap truncation is NOT done here —
-        // routing through DoseStore.addPumpEvents runs stock InsulinMath.reconciled() at
-        // the store, which collapses overlaps and trims the last loan temp against the
-        // phone's resumed dose. We only (a) clamp to loanEnd on a final hand-back so a
-        // full-window trailing temp isn't deferred by the save filter, and (b) skip the
-        // interim open temp (written on the final drain). See docs/DESIGN_LOAN_ADDPUMPEVENTS.md.
         for event in events {
             switch event.record.kind {
             case .bolus:
@@ -138,7 +86,7 @@ enum LoanReconciler {
                         syncIdentifier: syncIdentifier(for: event)))
                 }
             case .tempBasal, .suspend:
-                // Skip the interim open temp — it re-drains and is written on the final drain.
+
                 if event.id == openEventID { continue }
                 if let rate = event.record.unitsPerHour, let end = event.record.endDate {
                     let clampedEnd = input.isFinalHandback ? Swift.min(end, input.loanEnd) : end
@@ -161,79 +109,42 @@ enum LoanReconciler {
                             absorptionTime: event.record.absorptionTime)))
                 }
             case .carbDeleted:
-                // The wrist owned the carb store for the length of the loan, so the
-                // drain replays that ownership onto the phone — the same contract as
-                // `.overrideChange`, and for the same reason: without it, `ingestGrantCarbs`
-                // resurrects the deletion at the next takeover.
-                //
-                // ADD-THEN-DELETE CANCELS. A carb entered on the wrist and deleted again before
-                // hand-back must reach the phone as NOTHING, not as an add followed by a delete
-                // the phone cannot resolve (it never minted an identity for that carb, so a
-                // syncIdentifier delete would miss and the carb would survive). Seq order makes
-                // this safe: the `.carb` is always earlier in `events` than its `.carbDeleted`.
+
                 if let grams = event.record.amount {
                     let start = event.record.startDate
                     let before = outcome.carbs.count
                     outcome.carbs.removeAll { $0.entry.startDate == start && $0.entry.quantity.doubleValue(for: .gram) == grams }
-                    guard outcome.carbs.count == before else { break }   // cancelled the pair
+                    guard outcome.carbs.count == before else { break }
                     outcome.deletedCarbs.append(DeletedCarb(
                         syncIdentifier: event.record.syncIdentifier,
                         startDate: start,
                         grams: grams))
                 }
             case .overrideChange:
-                // The wrist owned overrides for the length of the loan, so the
-                // drain replays that ownership onto the phone. Fold in seq order and let the
-                // LAST record win — a set→clear pair inside one drain must land as "cleared",
-                // never as "set" (that is the resurrection this ordering rules out). Writes
-                // nothing to `doses`: an override changes the SCHEDULE insulin is netted
-                // against, and the phone's own override history does that job.
+
                 if event.record.overrideChangeIsClear {
                     outcome.overrideChange = .cleared
                 } else if let override = event.record.overrideChangePayload {
                     outcome.overrideChange = .set(override)
                 }
-                // An undecodable payload falls through deliberately: leave the phone's
-                // override exactly as it is rather than guess (see overrideChangeIsClear).
-                break  // bookkeeping; the temp/suspend records carry the insulin truth
+
+                break
             }
         }
 
         return outcome
     }
 
-    /// The record's own store identity when the watch carried one (its pump manager's raw, as
-    /// hex); the journal's event id otherwise.
     static func syncIdentifier(for event: LoanEvent) -> String {
         return event.record.syncIdentifier ?? "loanv2-\(event.id.uuidString)"
     }
 
-    /// Journal-aware expected insulin over the loan window: journaled temps/suspends
-    /// override the schedule for their spans; the schedule fills the gaps; boluses add.
-    /// The grant-frozen schedule in its captured timezone is the only schedule source
-    /// (docs/DESIGN_LOAN_PROTOCOL_V2.md §8) — nil schedule means the basal
-    /// expectation is unknowable, so only journaled insulin counts (the audit then
-    /// skews conservative: a too-low expectation makes remainders MORE positive,
-    /// which only ever adds IOB).
     static func expectedInsulin(events: [LoanEvent], schedule: BasalRateSchedule?, from start: Date, to end: Date,
                                 includingBolusesAtEnd: Bool = true) -> Double {
         guard end > start else { return 0 }
 
         var total: Double = 0
 
-        // Boluses — clipped to the window like every other contribution. Whole-loan calls
-        // never notice (every loan bolus is inside the loan window by construction), but the
-        // checkpoint audit computes ADJACENT windows over one event set, and an unclipped
-        // bolus would be double-counted into every window after its own.
-        //
-        // The end boundary is caller-declared because the two audit shapes need opposite
-        // rules at the (millisecond-quantized) instant `end` itself:
-        //  - INTERIOR checkpoint boundary (`includingBolusesAtEnd: false`): a bolus stamped
-        //    exactly at the reading belongs to the NEXT window — delivery takes ~40 s/U, so
-        //    the odometer at that instant has metered none of it, and counting it in both
-        //    windows would double-count.
-        //  - FINAL endpoint (default): a bolus stamped exactly at hand-back is part of the
-        //    loan — dropping it would inflate the positive residual and mint a false open.
         for event in events where event.record.kind == .bolus {
             guard event.record.startDate >= start else { continue }
             guard includingBolusesAtEnd ? event.record.startDate <= end
@@ -241,7 +152,6 @@ enum LoanReconciler {
             total += event.record.amount ?? 0
         }
 
-        // Rate segments: journaled temp/suspend windows clipped to the loan window.
         struct Segment { let start: Date; let end: Date; let rate: Double }
         var segments: [Segment] = []
         for event in events {
@@ -251,24 +161,13 @@ enum LoanReconciler {
                       let segEnd = event.record.endDate else { continue }
                 let s = max(event.record.startDate, start)
                 let e = min(segEnd, end)
-                // `>=`, not `>`: a ZERO-DURATION record is a CANCEL (the pod command
-                // "temp 0.00 × 0 min"), and it must enter resolution as a terminator even
-                // though it spans nothing — dropping it left the cancelled temp standing in
-                // the books for its full programmed window. Field 2026-09-01 (Caitlin's
-                // first breakfast loan): the bolus flow's 2.50 U/hr bracket temp was
-                // cancelled after 3 s, the zero-length record was discarded here, and the
-                // phantom ran 9.6 min until the next real temp — 8 pulses = 0.40 U expected
-                // against 0.10 U the pod actually metered on schedule, a locked −0.25
-                // residual, and a false "IOB May Be Overstated" warning on honest books.
-                // A zero-length segment contributes zero delivery on its own (pulsedInsulin
-                // of 0 s is 0); its whole job is the clip.
+
                 if e >= s { segments.append(Segment(start: s, end: e, rate: rate)) }
             default:
                 break
             }
         }
-        // Later journal entries supersede earlier ones for overlapping spans (the pod
-        // runs one program at a time); walk in start order, truncating predecessors.
+
         segments.sort { $0.start < $1.start }
         var resolved: [Segment] = []
         for seg in segments {
@@ -284,7 +183,6 @@ enum LoanReconciler {
             total += pulsedInsulin(rate: seg.rate, seconds: seg.end.timeIntervalSince(seg.start))
         }
 
-        // Schedule fills the uncovered gaps.
         if let schedule = schedule {
             var cursor = start
             for seg in resolved {
@@ -301,44 +199,16 @@ enum LoanReconciler {
         return total
     }
 
-    /// What the POD actually delivers for a basal segment — not `rate × time`.
-    ///
-    /// The pod delivers discrete 0.05 U pulses spaced `3600 × 0.05 / rate` apart, and every
-    /// SetInsulinScheduleCommand RESTARTS that clock (`RateEntry.makeEntries` sets
-    /// `delayUntilFirstPulse` to a full interval). The loop replaces the temp about every
-    /// 5 minutes, so each segment is truncated mid-interval and loses its partial pulse — a
-    /// LOSS every time, never a gain, averaging half a pulse per replacement.
-    ///
-    /// A continuous `rate × time` figure is therefore a biased estimate that OVERSTATES
-    /// expected insulin, and the bias grows with the NUMBER OF TEMP CHANGES — ~0.6 U/hour of
-    /// pure artifact on a long loan. Overstated expected drives the audit residual NEGATIVE,
-    /// which warns the user of phantom IOB on a perfectly healthy loan and can annul assumed
-    /// records that were in fact delivered. (A negative residual never opens the loop — only
-    /// unexplained EXTRA delivery does — so the artifact's cost is false alarms and wrongly
-    /// retired records, not a therapy stop.)
-    ///
-    /// Boluses are unaffected and stay exact: they are commanded directly as a pulse count.
-    ///
-    /// Rate 0 delivers nothing. Rates are already multiples of 0.05 by the time they reach the pod
-    /// (`roundToSupportedBasalRate`), so no rounding is applied here beyond the pulse count itself.
     private static func pulsedInsulin(rate: Double, seconds: TimeInterval) -> Double {
         guard rate > 0, seconds > 0 else { return 0 }
-        let pulseInterval = 3600.0 * podPulseSize / rate       // seconds between pulses
-        let pulses = (seconds / pulseInterval).rounded(.down)  // the partial pulse is never delivered
+        let pulseInterval = 3600.0 * podPulseSize / rate
+        let pulses = (seconds / pulseInterval).rounded(.down)
         return pulses * podPulseSize
     }
 
-    /// The pod's delivery quantum. Mirrors OmnipodKit's `Pod.pulseSize`, restated here because
-    /// this file must not import the pump driver.
     private static let podPulseSize: Double = 0.05
 
     private static func scheduleInsulin(_ schedule: BasalRateSchedule, from: Date, to: Date) -> Double {
-        // Same pulse model per schedule segment. A schedule-covered gap is the pod running its
-        // stored basal program, which is pulsed identically — but note the pod does NOT restart
-        // its pulse clock at our segment boundaries here (it is one continuous program), so this
-        // slightly over-penalises a gap split across schedule items. Immaterial for a flat
-        // schedule, and conservative in the direction that matters: it can only make `expected`
-        // smaller, i.e. make delivery look MORE complete rather than less.
         return schedule.between(start: from, end: to).reduce(0) { partial, item in
             let s = max(item.startDate, from)
             let e = min(item.endDate, to)

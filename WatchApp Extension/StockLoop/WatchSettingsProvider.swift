@@ -30,22 +30,14 @@ import LoopAlgorithm
 import LoopCore
 import Observation
 
-/// Serves the loan grant's settings snapshot to everything that expects a `SettingsProvider`
-/// — principally `TemporaryPresetsManager`, which turns the schedules plus the active
-/// override into the override-applied schedules the loop actually doses from.
 @Observable
 final class WatchSettingsProvider {
-
-    /// The granted snapshot, as the rest of the app's settings machinery expects to see it.
-    /// Replaced wholesale when a grant lands; never edited piecemeal on the wrist.
     private(set) var storedSettings: StoredSettings
 
     init(settings: LoopSettings = LoopSettings()) {
         self.storedSettings = Self.stored(from: settings)
     }
 
-    /// Apply a new grant. Whole-snapshot replacement is the point: a partial update would
-    /// let the wrist dose against a mix of two grants.
     func update(with settings: LoopSettings) {
         storedSettings = Self.stored(from: settings)
     }
@@ -67,10 +59,7 @@ final class WatchSettingsProvider {
     }
 }
 
-// MARK: - SettingsProvider
-
 extension WatchSettingsProvider: SettingsProvider {
-
     var settings: StoredSettings { storedSettings }
 
     var dosingEnabled: Bool { storedSettings.dosingEnabled }
@@ -113,7 +102,6 @@ extension WatchSettingsProvider: SettingsProvider {
         )
     }
 
-    /// See the file note: the wrist authors no settings, so it has no history to sync.
     func executeSettingsQuery(fromQueryAnchor queryAnchor: SettingsStore.QueryAnchor?,
                               limit: Int,
                               completion: @escaping (SettingsStore.SettingsQueryResult) -> Void) {

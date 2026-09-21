@@ -31,11 +31,9 @@ import os.log
 enum PhoneLog {
     private static let oslog = OSLog(subsystem: "com.loopkit.Loop", category: "PhoneLog")
 
-    /// Serial: same reason WatchDataManager's mirror is serial. Interleaved writes corrupt the tail.
     private static let queue = DispatchQueue(label: "com.loopkit.Loop.phoneLog", qos: .utility)
     private static var lastMirror = Date.distantPast
 
-    /// Throttle. A phone-side line is cheap; pushing it to iCloud is not.
     private static let mirrorInterval: TimeInterval = 60
 
     private static let stamp: DateFormatter = {
@@ -44,7 +42,6 @@ enum PhoneLog {
         return f
     }()
 
-    /// Mirrors SportLog.event's shape so both files read alike and one grep spans the pair.
     static func event(_ category: String, _ message: String) {
         os_log("%{public}@ %{public}@", log: oslog, type: .default, category, message)
         let line = "\(stamp.string(from: Date())) [\(category)] \(message)"
@@ -57,9 +54,6 @@ enum PhoneLog {
         }
     }
 
-    /// Force the mirror now — call at moments the analysis will care about (a completed
-    /// hand-back, a failed takeover), so the file on the Mac is current when it is looked at
-    /// rather than up to a minute behind.
     static func flush() {
         queue.async {
             lastMirror = Date()
@@ -67,17 +61,11 @@ enum PhoneLog {
         }
     }
 
-    // MARK: - Files
-
     private static var localURL: URL? {
         guard let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
         return dir.appendingPathComponent("g7phone-latest.log")
     }
 
-    /// Rotate near 2 MB, keeping the most recent 1 MB — the same shape as the watch's LogFile
-    /// (512 KB / 256 KB there), sized for the phone's slower growth (~1.2 MB a week). Without
-    /// this the file grew without bound: the only truncation path was a session start that was
-    /// never called.
     private static let maxBytes: UInt64 = 2 * 1024 * 1024
     private static let trimToBytes = 1024 * 1024
 
@@ -95,7 +83,6 @@ enum PhoneLog {
         if size > maxBytes { rotate(url) }
     }
 
-    /// Keep only the most recent `trimToBytes`, cut at a clean line boundary.
     private static func rotate(_ url: URL) {
         guard let all = try? Data(contentsOf: url), all.count > trimToBytes else { return }
         var slice = all.suffix(trimToBytes)
@@ -106,11 +93,10 @@ enum PhoneLog {
     private static func mirrorToICloud() {
         let fm = FileManager.default
         guard let local = localURL, fm.fileExists(atPath: local.path) else { return }
-        guard let container = fm.url(forUbiquityContainerIdentifier: nil) else { return }   // iCloud off
+        guard let container = fm.url(forUbiquityContainerIdentifier: nil) else { return }
         let dir = container.appendingPathComponent("Documents", isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        // Atomic replace, never remove-then-copy — that is exactly how the watch's latest.log
-        // went MISSING rather than merely stale when a crash landed between the two steps.
+
         let cloudLatest = dir.appendingPathComponent("g7phone-latest.log")
         let tmp = dir.appendingPathComponent(".g7phone-latest.tmp")
         try? fm.removeItem(at: tmp)

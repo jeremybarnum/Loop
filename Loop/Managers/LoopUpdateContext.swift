@@ -22,6 +22,5 @@ extension Notification.Name {
 }
 
 extension LoopUpdateContext {
-    /// userInfo key carrying the raw value of the context that triggered the update.
     static let notificationKey = "com.loudnate.Loop.LoopDataManager.LoopUpdateContext"
 }
