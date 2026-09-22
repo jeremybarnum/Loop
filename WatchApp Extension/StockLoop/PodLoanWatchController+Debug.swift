@@ -57,6 +57,8 @@ extension PodLoanWatchController {
 
     /// Blocking. Not for main — `isLoanActiveNonBlocking` is main's answer.
     var isLoanActive: Bool {
+        RuntimeStateLog.markBlockingIfMain("blocking.isLoanActive")
+        defer { RuntimeStateLog.markBlockingIfMain("blocking.isLoanActive.done") }
         return queue.sync { phase == .active }
     }
 
@@ -104,6 +106,8 @@ extension PodLoanWatchController {
 
     /// Blocking snapshot, for callers already off main (tests, queue-side logging).
     func debugSnapshot() -> DebugSnapshot {
+        RuntimeStateLog.markBlockingIfMain("blocking.debugSnapshot")
+        defer { RuntimeStateLog.markBlockingIfMain("blocking.debugSnapshot.done") }
         return queue.sync { buildDebugSnapshot() }
     }
 

@@ -50,6 +50,8 @@ extension WatchLoopManager {
     /// Blocking read, for tests and other callers that are already off main. Main reads
     /// `mirroredGlanceData` instead — see the file note.
     func glanceData() -> GlanceData {
+        RuntimeStateLog.markBlockingIfMain("blocking.glanceData")
+        defer { RuntimeStateLog.markBlockingIfMain("blocking.glanceData.done") }
         return dataAccessQueue.sync { self.buildGlanceData() }
     }
 
