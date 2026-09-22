@@ -262,7 +262,9 @@ final class WatchLoopManager {
     /// This getter SYNCS onto `dataAccessQueue`. Never call it from the loan controller's queue —
     /// use `closedLoopEnabledNonBlocking` there.
     var closedLoopEnabled: Bool {
-        dataAccessQueue.sync { _closedLoopEnabled }
+        RuntimeStateLog.markBlockingIfMain("blocking.closedLoopEnabled")
+        defer { RuntimeStateLog.markBlockingIfMain("blocking.closedLoopEnabled.done") }
+        return dataAccessQueue.sync { _closedLoopEnabled }
     }
 
     private let closedLoopMirrorLock = NSLock()

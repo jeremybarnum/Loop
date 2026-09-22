@@ -105,6 +105,20 @@ enum RuntimeStateLog {
         stallLock.lock(); mainMark = label; mainMarkAt = Date(); stallLock.unlock()
     }
 
+    /// Mark a call that BLOCKS, and only when it is main that will do the waiting.
+    ///
+    /// The gate is not an optimisation. The mark is one shared slot, so a background caller
+    /// marking its own blocking read would overwrite main's — and the stall report would name a
+    /// call on another thread that was never the problem. Off main this is a thread check and
+    /// nothing else.
+    ///
+    /// Paired with `.done` on the way out so a stall can be attributed to a call still waiting,
+    /// rather than to the last one that finished.
+    static func markBlockingIfMain(_ label: String) {
+        guard Thread.isMainThread else { return }
+        mark(label)
+    }
+
     private static let stallThreshold: TimeInterval = 2.0
     private static var stallTimer: DispatchSourceTimer?
 
