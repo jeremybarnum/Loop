@@ -112,6 +112,17 @@ extension LoopDataManager {
         // The phone's context is always retained for its GLUCOSE, whatever we do about display.
         if !context.isWatchAuthored {
             phoneRelayContext = context
+            // The phone names its sensor in every context (its G7 manager's state, wrapped as
+            // ["managerIdentifier": …, "state": …] — tolerate an unwrapped dictionary). A newer
+            // sensor than this watch holds is adopted on the phone's word (WatchLoopManager
+            // .notePhoneSensor explains the newer-only rule).
+            if let wrapped = context.cgmManagerState {
+                let raw = wrapped["state"] as? [String: Any] ?? wrapped
+                if let phoneSensor = raw["sensorID"] as? String {
+                    ExtensionDelegate.shared().stockLoopSession.stack.loopManager
+                        .notePhoneSensor(id: phoneSensor, activatedAt: raw["activatedAt"] as? Date)
+                }
+            }
         }
         let onLoan = ExtensionDelegate.shared().stockLoopSession.loanController.isLoanActiveNonBlocking
         if onLoan && !context.isWatchAuthored {

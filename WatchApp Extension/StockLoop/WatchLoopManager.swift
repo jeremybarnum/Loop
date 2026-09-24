@@ -1130,6 +1130,34 @@ final class WatchLoopManager {
     }
 
     private func switchToSightedSensor(_ name: String, storedID: String, sightings: Int, span: TimeInterval, directAge: TimeInterval?) {
+        dropPersistedIdentityAndRescan("SENSOR SWITCH — \(storedID) silent \(directAge.map { "\(Int($0 / 60))m" } ?? "forever") while \(name) seen \(sightings)x over \(Int(span / 60))m; dropping the old identity and rescanning (auth gates adoption)")
+    }
+
+    /// BELIEVE THE PHONE ABOUT A SENSOR CHANGE (production line, 2026-09-24; the owner's ruling
+    /// of 2026-09-20). The phone reads the sensor itself and names it in every context it sends.
+    /// When it names a sensor NEWER than the one this watch holds, drop the held identity at
+    /// once and adopt from Dexcom's next link — instead of waiting for the sighting rule above
+    /// (3 sightings over 10 min, 45 min of silence, counted only while this process runs), which
+    /// on 2026-09-19 left the production user without Start for most of a day after a change.
+    /// #104's refusal was about stock's end-of-session INFERENCE on the watch; the phone's
+    /// explicit identity is not an inference.
+    ///
+    /// Newer-only, by activation date: a phone that lags — still naming the old sensor after
+    /// this watch has adopted the new one — must never make the watch discard a correct identity.
+    /// No activation date from the phone, or a phone sensor that is not newer = no action; the
+    /// sighting rule stays the fallback.
+    func notePhoneSensor(id phoneID: String, activatedAt phoneActivated: Date?) {
+        guard let stored = defaults.dictionary(forKey: Self.cgmStateDefaultsKey),
+              let storedID = stored["sensorID"] as? String,
+              storedID != phoneID,
+              let phoneActivated else { return }
+        let storedActivated = stored["activatedAt"] as? Date
+        if let storedActivated, phoneActivated <= storedActivated { return }
+        let f = ISO8601DateFormatter()
+        dropPersistedIdentityAndRescan("SENSOR SWITCH (phone's word) — watch held \(storedID) (activated \(storedActivated.map { f.string(from: $0) } ?? "?")), the phone reports \(phoneID) (activated \(f.string(from: phoneActivated))); dropping the old identity and adopting from Dexcom's next link")
+    }
+
+    private func dropPersistedIdentityAndRescan(_ logLine: String) {
         sensorSightingLock.lock()
         _foreignSensorName = nil; _foreignFirstSeen = nil; _foreignSightings = 0
         sensorSightingLock.unlock()
@@ -1138,7 +1166,7 @@ final class WatchLoopManager {
         // arrives at cgmManagerDidUpdateState, the #104 filter finds no stored ID and lets it
         // through. Clearing after would race the callback and #104 would resurrect the corpse.
         defaults.removeObject(forKey: Self.cgmStateDefaultsKey)
-        SportLog.event("cgm", "SENSOR SWITCH — \(storedID) silent \(directAge.map { "\(Int($0 / 60))m" } ?? "forever") while \(name) seen \(sightings)x over \(Int(span / 60))m; dropping the old identity and rescanning (auth gates adoption)")
+        SportLog.event("cgm", logLine)
 
         DispatchQueue.main.async { [weak self] in
             self?.requestSensorRescan?()

@@ -62,6 +62,47 @@ final class SensorSwitchTests: XCTestCase {
         return manager
     }
 
+    // MARK: - The phone's word (2026-09-24): a NEWER sensor named by the phone is adopted at once
+
+    /// Her 2026-09-19 field note: a sensor change, the phone already on the new sensor, the watch
+    /// still holding the old identity and waiting for its own sighting rule. The phone's context
+    /// names a sensor activated AFTER the one the watch holds, so the watch drops its identity now.
+    func testPhoneNamingANewerSensorDropsTheIdentityAtOnce() {
+        let manager = makeManager(persistedSensor: "DXCMoR")          // activated clock − 24 h
+        let fired = expectation(description: "rescan requested")
+        manager.requestSensorRescan = { fired.fulfill() }
+
+        manager.notePhoneSensor(id: "DXCMLp", activatedAt: clock.addingTimeInterval(-.hours(2)))
+
+        wait(for: [fired], timeout: 2)
+        XCTAssertNil(defaults.dictionary(forKey: WatchLoopManager.cgmStateDefaultsKey),
+                     "the stale identity is gone — the next Dexcom link adopts the new sensor")
+    }
+
+    /// A phone that lags — still naming the OLD sensor after this watch adopted the new one —
+    /// must never make the watch throw away a correct identity.
+    func testALaggingPhoneNamingAnOlderSensorChangesNothing() {
+        let manager = makeManager(persistedSensor: "DXCMLp")          // activated clock − 24 h
+        manager.requestSensorRescan = { XCTFail("no rescan for an older sensor") }
+
+        manager.notePhoneSensor(id: "DXCMoR", activatedAt: clock.addingTimeInterval(-.hours(24 * 9)))
+
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(defaults.dictionary(forKey: WatchLoopManager.cgmStateDefaultsKey)?["sensorID"] as? String, "DXCMLp")
+    }
+
+    /// Same sensor, or a phone that does not say when its sensor started: nothing to act on.
+    func testSameSensorOrUndatedPhoneSensorChangesNothing() {
+        let manager = makeManager(persistedSensor: "DXCMLp")
+        manager.requestSensorRescan = { XCTFail("no rescan") }
+
+        manager.notePhoneSensor(id: "DXCMLp", activatedAt: clock)
+        manager.notePhoneSensor(id: "DXCMQj", activatedAt: nil)
+
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(defaults.dictionary(forKey: WatchLoopManager.cgmStateDefaultsKey)?["sensorID"] as? String, "DXCMLp")
+    }
+
     /// Sight the foreign sensor on the G7's real ~5-minute cadence until thresholds are met.
     private func sightRepeatedly(_ manager: WatchLoopManager, name: String, times: Int) {
         for _ in 0..<times {
