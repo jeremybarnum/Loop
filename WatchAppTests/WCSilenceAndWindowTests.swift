@@ -54,4 +54,25 @@ final class WCSilenceAndWindowTests: XCTestCase {
         XCTAssertGreaterThan(StockLoopSession.G7WindowPolicy.late, StockLoopSession.G7WindowPolicy.early,
                              "the late allowance covers the between-burst connects; the early one only the burst's own jitter")
     }
+
+    /// Field 2026-09-24 15:22: a bracket whose close timer was cancelled stayed "open" at
+    /// "0.5s to close" for 30 minutes and held a Start request the whole time. Past its close
+    /// a bracket holds nothing.
+    func testABracketPastItsCloseHoldsNothing() {
+        defer { StockLoopSession.setBracketForTesting(open: false, closeAt: nil) }
+        StockLoopSession.setBracketForTesting(open: true, closeAt: Date().addingTimeInterval(20))
+        XCTAssertNotNil(StockLoopSession.bracketRemainingNow(), "inside the bracket: held")
+        StockLoopSession.setBracketForTesting(open: true, closeAt: Date().addingTimeInterval(-1))
+        XCTAssertNil(StockLoopSession.bracketRemainingNow(), "past the close: nothing is held, timer or no timer")
+    }
+
+    /// The messages the quiet window must never hold: someone is waiting on each.
+    func testStartRequestsAndHandBackOffersAreNeverHeld() throws {
+        let request = try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary()
+        let offer = try LoanMessage.handbackOffer(HandbackOffer(
+            epoch: 1, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+            events: [], tombstones: [], recovered: false, released: false)).transportDictionary()
+        XCTAssertTrue(LoanMessage.isInteractiveHandshake(transport: request))
+        XCTAssertTrue(LoanMessage.isInteractiveHandshake(transport: offer))
+    }
 }
