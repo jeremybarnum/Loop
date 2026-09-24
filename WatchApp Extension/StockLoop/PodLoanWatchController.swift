@@ -255,8 +255,35 @@ final class PodLoanWatchController {
     }
 
     private var pumpManager: OmniPumpManager?
-    /// Odometer at takeover, for the hand-back snapshot pair (§1.4).
-    private var deliveredAtTakeover: Double?
+    /// Odometer at takeover, for the hand-back snapshot pair (§1.4). PERSISTED: a relaunch
+    /// mid-loan (force-quit, crash, system kill) used to lose it, the parked drain's offer then
+    /// carried no odometer, and the phone ran no audit and no R33 cancel for that loan (field
+    /// 2026-09-24: e95 at 12:46, e103 at 16:23).
+    private var deliveredAtTakeover: Double? {
+        get { defaults.object(forKey: Keys.deliveredAtTakeover) as? Double }
+        set {
+            if let v = newValue { defaults.set(v, forKey: Keys.deliveredAtTakeover) }
+            else { defaults.removeObject(forKey: Keys.deliveredAtTakeover) }
+        }
+    }
+    /// The last pod total this watch read, persisted beside the takeover reading: the end of
+    /// the pair when the drain is offered by a relaunched watch that holds no pump manager.
+    /// The phone audits against its own reclaim read; this is only the cross-check.
+    private var lastPodTotal: (units: Double, asOf: Date?)? {
+        get {
+            guard let u = defaults.object(forKey: Keys.lastPodTotal) as? Double else { return nil }
+            return (u, defaults.object(forKey: Keys.lastPodTotalAt) as? Date)
+        }
+        set {
+            if let v = newValue {
+                defaults.set(v.units, forKey: Keys.lastPodTotal)
+                if let at = v.asOf { defaults.set(at, forKey: Keys.lastPodTotalAt) } else { defaults.removeObject(forKey: Keys.lastPodTotalAt) }
+            } else {
+                defaults.removeObject(forKey: Keys.lastPodTotal)
+                defaults.removeObject(forKey: Keys.lastPodTotalAt)
+            }
+        }
+    }
     /// What the grant's COPY knew of the pod's total (units, when read), and the dose records
     /// it came with — the baseline for the takeover book check. Consumed at ACTIVE.
     private var takeoverCopyTotal: (units: Double, asOf: Date)?
@@ -356,6 +383,9 @@ final class PodLoanWatchController {
         /// amnesia that let back-to-back seizes reuse a spent epoch: 270→270 five times
         /// on tape, then bricked by the split-brain guard at revoked 271).
         static let highWaterEpoch = "PodLoanWatchController.highWaterEpoch"
+        static let deliveredAtTakeover = "PodLoanWatchController.deliveredAtTakeover"
+        static let lastPodTotal = "PodLoanWatchController.lastPodTotal"
+        static let lastPodTotalAt = "PodLoanWatchController.lastPodTotalAt"
     }
 
     /// `defaults` is an init parameter, not just a settable property, because the relaunch
@@ -1024,6 +1054,9 @@ final class PodLoanWatchController {
         epoch = grant.epoch
         // A parked drain's final-offer stamp must not time this loan's ack (09-24: "+446.8s").
         finalOfferSentAt = nil
+        // Nor may its pod readings stand in for this loan's; takeover writes fresh ones.
+        deliveredAtTakeover = nil
+        lastPodTotal = nil
         // The high-water mark records every epoch ever accepted and is never cleared —
         // the memory CLOSED wipes, so a later seize can't re-mint a spent epoch (fix 4a).
         defaults.set(max(defaults.integer(forKey: Keys.highWaterEpoch), grant.epoch), forKey: Keys.highWaterEpoch)
@@ -1288,6 +1321,7 @@ final class PodLoanWatchController {
                     self.revokeCapturedDelivered = nil   // new loan, new baseline — never a stale capture
                     self.revokeCapturedDeliveredAt = nil
                     self.deliveredAtTakeover = delivered
+                    self.lastPodTotal = (delivered, manager.podLoanInsulinDeliveredAt)
                     // Before the first cycle: the ledger write is enqueued behind the grant seed
                     // on the manager's serial queue, and the cycle's read is enqueued after it.
                     self.bookInsulinTheCopyCannotExplain(podTotal: delivered, epoch: grant.epoch)
@@ -2107,7 +2141,7 @@ final class PodLoanWatchController {
             SportLog.event("loan", "HAND-BACK \(why) (final); staying RELEASED — the pod is let go and the records keep offering; the phone resumes when the offer lands\(wedgeSuffix)")
             teardownPump()                 // let go of the pod so the phone can reach it
             finalOfferSentAt = nil
-            deliveredAtTakeover = nil
+            // deliveredAtTakeover stays: the drain's offers need it, or the phone audits nothing.
             onLoanActiveChanged?(false)
             phase = .recoveredDrain        // drain-only, even with no records left: the offer itself is the news
             sendHandbackOffer(freshened: false, recovered: true)
@@ -2246,12 +2280,12 @@ final class PodLoanWatchController {
         guard let epoch = epoch ?? journal.activeEpoch else { return }
         var odometer: LoanOdometerSnapshot?
         if let start = deliveredAtTakeover,
-           let latest = pumpManager?.podLoanInsulinDelivered ?? revokeCapturedDelivered {
+           let latest = pumpManager?.podLoanInsulinDelivered ?? revokeCapturedDelivered ?? lastPodTotal?.units {
             // asOf makes the snapshot a checkpoint candidate for an INTERIM drain; the phone
             // never checkpoints a FINAL offer's snapshot (it is the endpoint under audit).
             // The revoke captures are the fallback for the torn-down-pump path (e181).
             odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest, freshenSucceeded: freshened,
-                                            asOf: pumpManager?.podLoanInsulinDeliveredAt ?? revokeCapturedDeliveredAt)
+                                            asOf: pumpManager?.podLoanInsulinDeliveredAt ?? revokeCapturedDeliveredAt ?? lastPodTotal?.asOf)
         }
         // Verify rounds 1-3: IN-FLIGHT (mint→classification) and chase-pending events
         // stay OUT of interim offers — once the phone commits one, a later annul or
@@ -2414,6 +2448,7 @@ final class PodLoanWatchController {
         phase = .idle
         epoch = nil
         deliveredAtTakeover = nil
+        lastPodTotal = nil
         manualSuspendEnd = nil
         handbackDeadline = nil
         handbackStartedAt = nil
@@ -2475,6 +2510,7 @@ final class PodLoanWatchController {
         // checkpoint-capable too.
         revokeCapturedDelivered = pumpManager?.podLoanInsulinDelivered
         revokeCapturedDeliveredAt = pumpManager?.podLoanInsulinDeliveredAt
+        if let units = revokeCapturedDelivered { lastPodTotal = (units, revokeCapturedDeliveredAt) }
         loopManager.pumpManager = nil
         chaseWorkItem?.cancel()
         pendingUncertainEventID = nil   // liveness: no cross-loan chase residue
@@ -2792,6 +2828,14 @@ final class PodLoanWatchController {
             phase = .active
         }
     }
+    var loopManagerForTesting: WatchLoopManager { loopManager }
+    /// TEST SEAM: the takeover and latest pod totals, as a takeover and a dose cycle leave them.
+    func setPodTotalsForTesting(start: Double, latest: Double) {
+        queue.sync { deliveredAtTakeover = start; lastPodTotal = (latest, Date()) }
+    }
+    func podTotalsForTesting() -> (start: Double?, latest: Double?) {
+        queue.sync { (deliveredAtTakeover, lastPodTotal?.units) }
+    }
     /// TEST SEAM: fire the hand-back budget's expiry without waiting two minutes.
     func expireHandbackForTesting() { queue.sync { handbackTimedOut() } }
     /// TEST SEAM: the final (released) stage, as finalizeHandback leaves it.
@@ -3013,6 +3057,7 @@ final class PodLoanWatchController {
            let asOf = pumpManager?.podLoanInsulinDeliveredAt {
             odometer = LoanOdometerSnapshot(deliveredAtStart: start, deliveredLatest: latest,
                                             freshenSucceeded: false, asOf: asOf)
+            lastPodTotal = (latest, asOf)
         }
         SportLog.event("handback", String(format: "stream: %d event(s), %d tombstone(s)%@", events.count, tombstones.count,
                                           odometer.map { String(format: " · odo %.2f U [checkpoint]", $0.deliveredLatest) } ?? ""))

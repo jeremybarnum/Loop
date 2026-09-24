@@ -147,4 +147,33 @@ final class HandbackSafetyTests: XCTestCase {
         XCTAssertEqual(snap.phase, .active, "the watch never stopped dosing — the loan continues")
         XCTAssertTrue(snap.hasPumpManager)
     }
+
+    // MARK: pod totals survive for the drain (field 2026-09-24, e95 + e103: unaudited hand-backs)
+
+    func testAReleasedDrainStillCarriesThePodTotals() {
+        let c = makeLiveLoan()
+        c.setPodTotalsForTesting(start: 10.0, latest: 10.5)
+        c.isPhoneReachable = { true }
+        var sent: [[String: Any]] = []
+        c.send = { sent.append($0) }
+        c.enterFinalStageForTesting()
+        c.expireHandbackForTesting()          // the final offer went unanswered: released, drain
+
+        XCTAssertEqual(c.debugSnapshot().phase, .recoveredDrain, "precondition: the drain")
+        guard let drain = offers(in: sent).last?.offer else { return XCTFail("the drain offered nothing") }
+        XCTAssertEqual(drain.odometer?.deliveredAtStart, 10.0, "the start survives the release — without it the phone audits nothing")
+        XCTAssertEqual(drain.odometer?.deliveredLatest, 10.5)
+    }
+
+    func testThePodTotalsSurviveARelaunch() {
+        let c = makeLiveLoan()
+        c.setPodTotalsForTesting(start: 10.0, latest: 10.5)
+
+        let relaunched = PodLoanWatchController(loopManager: c.loopManagerForTesting,
+                                                journal: LoanEventJournal(directory: journalDir),
+                                                defaults: defaults)
+        let totals = relaunched.podTotalsForTesting()
+        XCTAssertEqual(totals.start, 10.0, "a relaunched watch still knows where the loan started")
+        XCTAssertEqual(totals.latest, 10.5)
+    }
 }

@@ -827,6 +827,27 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertEqual(persisted ?? .nan, 0.900, accuracy: 0.0001)
     }
 
+    /// Field 2026-09-24 (e95 12:46, e103 16:23): a watch that relaunched mid-loan offered its
+    /// drain with no odometer, and the phone silently ran no audit and no R33 cancel. The
+    /// phone's own takeover reading is the start; its reclaim read is the end.
+    func testAFinalOfferWithoutOdometerIsAuditedFromThePhonesOwnStart() throws {
+        let controller = makeController()
+        let grant = try establishLoan(controller)          // takeover reported 10 U
+        MockPumpManager.testOdometer = 10.4
+
+        let ackSent = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(HandbackOffer(
+            epoch: grant.epoch, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+            events: [], tombstones: [], recovered: true, released: true)).transportDictionary())
+        wait(for: [ackSent], timeout: 5)
+
+        XCTAssertNotNil(diagMatching("auditing from this phone's own start reading 10.000"))
+        waitUntil(timeout: 8, "authoritative audit") { self.diagMatching("reconcile[AUTHORITATIVE]") != nil }
+        let line = diagMatching("reconcile[AUTHORITATIVE]")!
+        XCTAssertTrue(line.contains("delivered=0.400"), "phone reclaim read 10.4 minus the phone's takeover 10.0 — got: \(line)")
+        waitUntil(timeout: 8, "R33 cancel") { self.lock.lock(); defer { self.lock.unlock() }; return self.cancelCalls > 0 }
+    }
+
     /// Phone-enforced: the temp the WATCH programmed is cancelled once — and only once the
     /// pod is provably reachable. The watch cannot do this itself; its link is down by then.
     func testInheritedTempIsCancelledOnTheVerifiedReclaimRoundTrip() throws {

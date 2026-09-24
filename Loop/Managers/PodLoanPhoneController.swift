@@ -2772,7 +2772,19 @@ final class PodLoanPhoneController {
             // The phone, meanwhile, does a real pod round-trip within seconds of reclaim to verify
             // the pod is home (the settle-window chase). It was already reading the odometer and throwing the
             // value away. Take it: same audit, same tolerance, an endpoint that is actually the end.
-            if isFinal, let start = offer.odometer?.deliveredAtStart {
+            // No odometer on the offer (a watch that relaunched mid-loan, or an older build):
+            // audit from this phone's own takeover reading, else its grant reading — the audit's
+            // end is the phone's reclaim read either way. Silently skipping it (the old
+            // behavior) left exactly the loans a watch died in unaudited and their temp running
+            // (field 2026-09-24: e95 12:46, e103 16:23).
+            let phoneStart = (UserDefaults.standard.object(forKey: Keys.deliveredAtTakeover) as? Double)
+                ?? (UserDefaults.standard.object(forKey: Keys.deliveredAtGrant) as? Double)
+            if isFinal, offer.odometer == nil {
+                handbackDiag(offer.epoch, phoneStart.map {
+                    String(format: "final offer carries no pod totals — auditing from this phone's own start reading %.3f U", $0)
+                } ?? "** final offer carries no pod totals and this phone has no start reading — NO AUDIT for this loan **")
+            }
+            if isFinal, let start = offer.odometer?.deliveredAtStart ?? phoneStart {
                 // Since-last-sync: the verdict window runs from the audit base — the last
                 // checkpoint when mid-loan syncs reconciled, the takeover reading when none
                 // did (in which case base.units == start and this is the whole loan, the old
