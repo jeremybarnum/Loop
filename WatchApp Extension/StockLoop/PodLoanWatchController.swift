@@ -257,6 +257,10 @@ final class PodLoanWatchController {
     private var pumpManager: OmniPumpManager?
     /// Odometer at takeover, for the hand-back snapshot pair (§1.4).
     private var deliveredAtTakeover: Double?
+    /// What the grant's COPY knew of the pod's total (units, when read), and the dose records
+    /// it came with — the baseline for the takeover book check. Consumed at ACTIVE.
+    private var takeoverCopyTotal: (units: Double, asOf: Date)?
+    private var takeoverCopyRecords: [LoanDoseRecord] = []
     /// When the current Start attempt began (request sent) — drives the glance
     /// progress bar. Meaningful only while phase is requested/takingOver.
     private var attemptStartedAt: Date?
@@ -1118,6 +1122,15 @@ final class PodLoanWatchController {
             return
         }
 
+        // What the COPY knew of the pod's total, before this watch has read anything — the
+        // baseline for "did the pod deliver insulin this book cannot explain?" at takeover.
+        if let units = manager.podLoanInsulinDelivered, let asOf = manager.podLoanInsulinDeliveredAt {
+            takeoverCopyTotal = (units, asOf)
+        } else {
+            takeoverCopyTotal = nil
+        }
+        takeoverCopyRecords = grant.doseHistory
+
         manager.pumpManagerDelegate = self
         manager.delegateQueue = queue
         pumpManager = manager
@@ -1267,6 +1280,9 @@ final class PodLoanWatchController {
                     self.revokeCapturedDelivered = nil   // new loan, new baseline — never a stale capture
                     self.revokeCapturedDeliveredAt = nil
                     self.deliveredAtTakeover = delivered
+                    // Before the first cycle: the ledger write is enqueued behind the grant seed
+                    // on the manager's serial queue, and the cycle's read is enqueued after it.
+                    self.bookInsulinTheCopyCannotExplain(podTotal: delivered, epoch: grant.epoch)
                     self.phase = .active
                     // R40 reunion identity: the seize is PROVEN only now — persist its token
                     // so the loan's offers echo it and the phone can retro-acknowledge. Every
@@ -2671,6 +2687,83 @@ final class PodLoanWatchController {
     // In git at the commit that removed it, if a genuine wedge ever needs it back.
 
     // MARK: - Internals
+
+    // MARK: - Insulin the copy cannot explain (ported from next-dev ac23c1d1, first half)
+
+    /// Same band as the phone's verdict at reclaim.
+    static let unexplainedInsulinBand = 0.20
+
+    /// The pod is the only shared truth about insulin. The copy this watch starts from is
+    /// seconds old on an ordinary Start and can be half an hour old — or more — on a phoneless
+    /// one (the standing copy is refreshed every 30 minutes), and anything the phone delivered
+    /// after it was made — a meal bolus above all — is in nobody's book here: the watch would
+    /// see glucose rising, no insulin on board, and dose on top of it. The pod's total says how
+    /// much; nothing says when.
+    ///
+    /// Expected delivery between the copy's pod reading and now is what the copy's own records
+    /// explain — the phone's arithmetic (LoanReconciler) for temps, suspends and the schedule,
+    /// and for each bolus the share of its delivery that falls inside the window. That share
+    /// matters: a bolus still delivering when the copy was made has part of itself on each side
+    /// of that reading, and its record starts BEFORE the reading, so the reconciler's
+    /// start-inside-the-window rule alone would leave it out and the watch would book, a second
+    /// time, a bolus the copy already knows. Returns the surplus beyond the band, or 0.
+    static func insulinTheCopyCannotExplain(copyTotal: Double, copyAt: Date, podTotal: Double, now: Date,
+                                            records: [LoanDoseRecord], schedule: BasalRateSchedule?) -> Double {
+        guard now > copyAt, podTotal >= copyTotal else { return 0 }
+        let rateEvents = records.filter { $0.kind != .bolus }.enumerated().map {
+            LoanEvent(id: UUID(), seq: $0.offset + 1, provenance: .confirmed, record: $0.element, loggedAt: now)
+        }
+        var expected = LoanReconciler.expectedInsulin(events: rateEvents, schedule: schedule, from: copyAt, to: now)
+        for bolus in records where bolus.kind == .bolus {
+            guard let amount = bolus.amount, amount > 0 else { continue }
+            let end = bolus.endDate ?? bolus.startDate
+            if end > bolus.startDate {
+                let overlap = min(end, now).timeIntervalSince(max(bolus.startDate, copyAt))
+                if overlap > 0 { expected += amount * overlap / end.timeIntervalSince(bolus.startDate) }
+            } else if bolus.startDate >= copyAt, bolus.startDate <= now {
+                expected += amount
+            }
+        }
+        let unexplained = ((podTotal - copyTotal - expected) * 1000).rounded() / 1000
+        return unexplained > unexplainedInsulinBand ? unexplained : 0
+    }
+
+    /// Booked as a bolus delivered NOW — the latest it could have been, which overstates insulin
+    /// on board and under-doses: the phone's rule at reclaim, mirrored. Unlike the phone it does
+    /// not open the loop: the user has just asked this watch to dose, and a book that errs
+    /// cautious is what makes that safe. NOT journaled — on the phone this insulin is already
+    /// recorded, and a copy handed back would count it twice there. MUST run on `queue`.
+    private func bookInsulinTheCopyCannotExplain(podTotal: Double, epoch: Int) {
+        defer { takeoverCopyTotal = nil; takeoverCopyRecords = [] }
+        guard let copy = takeoverCopyTotal else {
+            SportLog.event("loan", "takeover book check SKIPPED — the copy carried no pod total to compare against")
+            return
+        }
+        let at = self.now()
+        let unexplained = Self.insulinTheCopyCannotExplain(copyTotal: copy.units, copyAt: copy.asOf, podTotal: podTotal, now: at,
+                                                           records: takeoverCopyRecords,
+                                                           schedule: loopManager.settings.basalRateSchedule)
+        let age = at.timeIntervalSince(copy.asOf) / 60
+        guard unexplained > 0 else {
+            SportLog.event("loan", String(format: "takeover book check CLEAN — pod total %.2f → %.2f U over %.1f min is explained by the copy's records and the schedule",
+                                          copy.units, podTotal, age))
+            return
+        }
+        let entry = DoseEntry(type: .bolus, startDate: at, endDate: at, value: unexplained, unit: .units,
+                              deliveredUnits: unexplained,
+                              syncIdentifier: "PODLOAN-WATCHGAP-e\(epoch)",
+                              insulinType: pumpManager?.status.insulinType)
+        loopManager.ledgerRecordEnact(entry)
+        SportLog.event("loan", String(format: "** takeover book check: pod total %.2f → %.2f U over %.1f min; %.2f U the copy cannot explain — BOOKED as a bolus now (insulin on board errs high, dosing errs low) **",
+                                      copy.units, podTotal, age, unexplained))
+        let body = String(format: NSLocalizedString("%.2f U the watch had no record of — counted as insulin on board.", comment: "Watch alert body: unexplained insulin booked at takeover (1: units)"), unexplained)
+        let title = NSLocalizedString("Insulin From Your iPhone", comment: "Watch alert title: unexplained insulin booked at takeover")
+        loopManager.issueAlert(Alert(
+            identifier: Alert.Identifier(managerIdentifier: "PodLoan", alertIdentifier: "takeoverBookCheck"),
+            foregroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
+            backgroundContent: Alert.Content(title: title, body: body, acknowledgeActionButtonLabel: "OK"),
+            trigger: .immediate))
+    }
 
     /// `urgentOnly`: the transport must never QUEUE this message. A live hand-back offer that
     /// lands late is a transfer of ownership for a loan that has since resumed — the 2026-09-18

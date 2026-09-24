@@ -188,6 +188,7 @@
 		43D0E4A22F1A000100000002 /* LoanProtocolV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */; };
 		43D0E4A32F1A000100000003 /* LoanProtocolV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */; };
 		43D0E4A62F1A000100000006 /* LoanReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A42F1A000100000004 /* LoanReconciler.swift */; };
+		FADE0004000000000000FA01 /* LoanReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A42F1A000100000004 /* LoanReconciler.swift */; };
 		43D0E4A72F1A000100000007 /* PodLoanPhoneController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A52F1A000100000005 /* PodLoanPhoneController.swift */; };
 		43D0E4A92F1A000100000009 /* LoanProtocolV2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A82F1A000100000008 /* LoanProtocolV2Tests.swift */; };
 		43D0E4AB2F1A00010000000B /* PodLoanPhoneControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4AA2F1A00010000000A /* PodLoanPhoneControllerTests.swift */; };
@@ -3819,6 +3820,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				FADE00040000000000000021 /* WatchLoopManager.swift in Sources */,
+				FADE0004000000000000FA01 /* LoanReconciler.swift in Sources */,
 				FADE00040000000000000022 /* StockLoopStack.swift in Sources */,
 				FADE00040000000000000023 /* LoanEventJournal.swift in Sources */,
 				FADE00040000000000000024 /* PodLoanWatchController.swift in Sources */,
