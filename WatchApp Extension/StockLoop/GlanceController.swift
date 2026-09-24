@@ -1040,34 +1040,44 @@ struct GlanceView: View {
                     .foregroundColor(.glanceDim)
                 }
             } else {
+            // START IS ALWAYS OFFERED (production line, 2026-09-24, the owner's ruling of
+            // 2026-09-20). Readiness is information beside the button, never instead of it.
+            // The old gate hid Start until this watch had proven a direct read while idle —
+            // and an idle ride-only client often cannot complete one (auth-subscribe streaks of
+            // 76 and 138 in the field), while inside a loan the keepalive makes reads land
+            // (11/11 and 20/20). So the gate was reading the missing runtime as a fault, and on
+            // 2026-09-19 it kept the production user from starting at all after a sensor change.
+            // With no direct reading the loan's loop simply does not dose (stock's 15-minute
+            // recency gate), and the 12-minute No Direct BG watchdog is the backstop.
+            Button { model.startSportMode() } label: {
+                Text("Start Sport Mode")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.glanceAccent)
             switch model.sensorReadiness {
             case .ready:
-                Button { model.startSportMode() } label: {
-                    Text("Start Sport Mode")
-                        .font(.system(size: 17, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.glanceAccent)
+                EmptyView()
             case .wrongSensor:
-                // The stale-identity signature: reconnect is the fix, proven in the field
-                // (78 seconds to first reading). The ONLY state where the button exists.
-                NoDirectBGBlock(scanning: model.rescanInFlight,
-                                reconnect: { model.rescanForSensor() })
+                // The stale-identity signature: the radio keeps seeing a DIFFERENT sensor while
+                // ours is silent. Reconnect is the proven fix (78 s to first reading), offered
+                // beside Start rather than in its place.
+                SensorReadinessNote(
+                    text: NSLocalizedString("Watch hasn't picked up your new sensor yet.", comment: "Glance note: the watch still holds an old sensor identity"),
+                    actionTitle: model.rescanInFlight ? nil : NSLocalizedString("Reconnect sensor", comment: "Glance button: forget the old sensor and adopt the current one"),
+                    action: { model.rescanForSensor() })
             case .unproven:
-                // Not a fault, and NOTHING TO PRESS — foreground runtime re-proves the sensor by
-                // itself within about one transmit window, and the field showed a button here is
-                // worse than patience: tapping it reset a healthy adoption and slowed the first
-                // launch by minutes (2026-08-22). The live counter is the anti-force-quit device;
-                // a static "waiting" screen was read as stale state and killed.
-                // The failure streak tempers that patience (field 2026-08-30): once the sensor
-                // keeps CONNECTING but auth-subscribe keeps dying, waiting is no longer
-                // informative — the view says so and offers the remedy that went 2-for-2
-                // that night (cold re-acquire; it beat both a watch reboot and force-quit,
-                // and unlike force-quit it doesn't kill a live loan).
-                ListeningForSensor(failures: ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.authSubscribeFailureStreak,
-                                   reacquire: { model.rescanForSensor() })
+                // Fresh install, or no recent handshake. Not a fault: the loan's runtime is what
+                // completes the read. Once the sensor keeps connecting but the auth subscribe
+                // keeps dying (streak >= 3), the cold re-acquire that went 2-for-2 in the field
+                // (2026-08-30) is offered — still beside Start, never instead of it.
+                let failures = ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.authSubscribeFailureStreak
+                SensorReadinessNote(
+                    text: NSLocalizedString("No direct G7 reading yet. It connects once Sport Mode is running.", comment: "Glance note: no direct sensor reading proven while idle"),
+                    actionTitle: (failures >= 3 && !model.rescanInFlight) ? NSLocalizedString("Re-acquire sensor", comment: "Glance button: cold re-acquire of the G7 sensor") : nil,
+                    action: { model.rescanForSensor() })
             }
             }
             if let note = model.state.idleNote {
@@ -1677,152 +1687,27 @@ struct GlanceDemoView: View {
 #endif
 
 
-/// Sport Mode is REFUSED without a direct sensor link, and this is the refusal.
-///
-/// Not a warning that can be dismissed: a relay-only loan cannot do the thing Sport Mode exists
-/// for. The phone reads the sensor over BLE and the sensor is on the wearer, so a phone with BG
-/// to relay is already within range of the pod and can simply loop by itself. If the relay
-/// works the loan is unnecessary; if the loan is necessary the relay will not be there.
-///
-/// Two states, because "never connected" is not a fault. On a fresh install, or in the first
-/// minutes after a relaunch, there is legitimately no direct reading yet — showing a warning
-/// screen then reads as "this build is broken" when nothing is wrong.
-///
-/// The question is the whole diagnostic, and it is the one thing the wearer can check in five
-/// seconds. Dexcom showing BG means the sensor talks to this watch fine and OUR client is
-/// following the wrong identity — which the button fixes, exactly as it did in the field on
-/// 2026-08-21 (first direct reading 78 seconds after a manual rescan). Dexcom showing nothing
-/// means the watch is not reaching the sensor at all, which no button of ours can repair.
-///
-/// "Direct" throughout: it is Dexcom's own direct-to-watch wording, so it needs no translation.
-private struct NoDirectBGBlock: View {
-    var scanning: Bool = false
-    let reconnect: () -> Void
+/// Readiness, beside the Start button (never instead of it): one line of fact and, where the
+/// field proved a remedy, one small action.
+private struct SensorReadinessNote: View {
+    let text: String
+    let actionTitle: String?
+    let action: () -> Void
 
     var body: some View {
-        VStack(spacing: 12) {
-            Text("No direct\nconnection")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundColor(.glanceWarn)
-                .multilineTextAlignment(.center)
-
-            Text("Sport Mode needs direct BG.")
-                .font(.system(size: 12))
-                .foregroundColor(.glanceDim)
-                .multilineTextAlignment(.center)
-
-            Text("Is Dexcom showing BG on your watch?")
-                .font(.system(size: 12))
-                .foregroundColor(.glanceInk)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if scanning {
-                Text("Scanning — up to 5 min")
-                    .font(.system(size: 12))
-                    .foregroundColor(.glanceDim)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-            } else {
-                Button(action: reconnect) {
-                    Text("Yes — reconnect")
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.glanceAccent)
-            }
-
-            Text("No? Toggle Bluetooth.")
+        VStack(spacing: 4) {
+            Text(text)
                 .font(.system(size: 11))
                 .foregroundColor(.glanceDim)
-        }
-    }
-}
-
-/// The unproven state: fresh install, or an expired identity just cleared. Rare by design after
-/// gate v3, and deliberately BUTTONLESS — foreground runtime is the mechanism, so the screen's
-/// whole job is to keep the wearer here without inviting an action. The ticking counter is what
-/// distinguishes "alive and listening" from the stale screen that got force-quit in the field.
-private struct ListeningForSensor: View {
-    /// Consecutive auth-subscribe failures (G7CGMManager streak). 0 = still innocent
-    /// waiting; ≥ 1 shows the attempts so the screen visibly reflects work (a Bluetooth
-    /// toggle no longer *looks* ignored); ≥ 3 swaps the screen for the remedy that went
-    /// 2-for-2 in the field (2026-08-30): a cold re-acquire, offered as a button right
-    /// here — it beat both a watch reboot and force-quit, and it can't kill a live loan.
-    /// Force-quit stays as the footer fallback. The 2026-08-22 no-button lesson still
-    /// governs the INNOCENT state; the streak is what proves patience wrong.
-    var failures: Int = 0
-    var reacquire: (() -> Void)? = nil
-
-    @State private var startedAt = Date()
-    private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-    @State private var elapsed: TimeInterval = 0
-    @State private var reacquireTapped = false
-
-    private var stuck: Bool { failures >= 3 }
-
-    var body: some View {
-        // Every Text here is vertically PINNED (fixedSize) — without it, the 40 mm screen
-        // squeezes each two-line string down to one truncated line ("Listening for…",
-        // field photo 2026-08-30). The Spacer is the only thing allowed to compress, and
-        // the geometry is sized so title + subtitle + counter + footer fit under the
-        // glance header on the smallest case.
-        VStack(spacing: 6) {
-            Text(stuck ? "Sensor found,\nnot linking" : "Listening for\nyour sensor")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(stuck ? .glanceWarn : .glanceInk)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-
-            if stuck, let reacquire = reacquire {
-                Button {
-                    reacquireTapped = true
-                    reacquire()   // resets the streak too — the screen returns to innocent listening
-                } label: {
-                    Text(reacquireTapped ? "Re-acquiring…" : "Re-acquire Sensor")
-                        .font(.system(size: 13, weight: .semibold))
+            if let actionTitle {
+                Button(action: action) {
+                    Text(actionTitle).font(.system(size: 12, weight: .semibold))
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.glanceAccent)
-                .disabled(reacquireTapped)
-            } else {
-                Text("Usually under 5 min.\nKeep the app open.")
-                    .font(.system(size: 12))
-                    .foregroundColor(.glanceDim)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
+                .buttonStyle(.plain)
+                .foregroundColor(.glanceAccent)
             }
-
-            Spacer(minLength: 0)
-
-            VStack(spacing: 2) {
-                Text(timeString)
-                    .font(.system(size: 18, weight: .medium).monospacedDigit())
-                    .foregroundColor(.glanceAccent)
-                Text(failures > 0 ? "listening · \(failures) failed tries" : "listening")
-                    .font(.system(size: 10))
-                    .foregroundColor(failures > 0 ? .glanceWarn : .glanceDim)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-
-            Text(stuck ? "Still stuck? Force-quit\nthis app and reopen it." : "No BG in Dexcom either?\nToggle Bluetooth.")
-                .font(.system(size: 10))
-                .foregroundColor(.glanceDim)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
         }
-        .onReceive(tick) { _ in
-            elapsed = Date().timeIntervalSince(startedAt)
-            // The streak reset (scanForNewSensor) flips `stuck` off on the next refresh;
-            // if failures climb again the button must be tappable again, not dead.
-            if reacquireTapped && !stuck { reacquireTapped = false }
-        }
-    }
-
-    private var timeString: String {
-        let s = Int(elapsed)
-        return String(format: "%d:%02d", s / 60, s % 60)
     }
 }
