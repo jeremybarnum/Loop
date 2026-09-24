@@ -36,7 +36,10 @@ final class StockLoopSession {
     /// Re-assert the session if something still wants it. Called on every foreground: the one
     /// moment we KNOW we are executing, since the only other re-assert path is a timer that cannot
     /// fire while suspended. No-op when nothing holds it.
-    func ensureKeepalive() { keepalive.ensureRunning() }
+    func ensureKeepalive() {
+        keepalive.ensureRunning()
+        releaseOverdueBracket()   // a suspended app's close timer may not have run
+    }
     let loanController: PodLoanWatchController
 
     private let log = OSLog(subsystem: "com.loopkit.Loop", category: "StockLoopSession")
@@ -136,8 +139,15 @@ final class StockLoopSession {
                 SportLog.event("wc", "SUPPRESSED (G7Lab.wcSilence) send \(dictionary.keys.joined(separator: ",")) — reachable \(session.isReachable) · backlog \(WCSilence.backlogSummary())")
                 return
             }
-            // Quiet window (2026-09-05): held, replayed the moment the bracket closes.
-            if let self, self.deferIfQuiet("wc send \(dictionary.keys.joined(separator: ","))", hold: { self.deferredSends.append(dictionary) }) {
+            // A bracket past its close whose timer never ran still holds earlier sends; any send
+            // releases them.
+            DispatchQueue.main.async { self?.releaseOverdueBracket() }
+            // Quiet window (2026-09-05): held, replayed the moment the bracket closes — except a
+            // message someone is waiting on. A Start request held here outlives the watch's own
+            // 25 s timeout (field 2026-09-24 15:22: held 30 min, the watch offered Start offline
+            // with the phone beside it, and that takeover failed against the phone's link).
+            if let self, !LoanMessage.isInteractiveHandshake(transport: dictionary),
+               self.deferIfQuiet("wc send \(dictionary.keys.joined(separator: ","))", hold: { self.deferredSends.append(dictionary) }) {
                 return
             }
             let urgent = LoanMessage.isInteractiveHandshake(transport: dictionary) && session.isReachable
@@ -578,7 +588,9 @@ final class StockLoopSession {
     static func bracketRemainingNow() -> TimeInterval? {
         quietLock.lock(); defer { quietLock.unlock() }
         guard _quietOpen, let close = _quietCloseAt else { return nil }
-        return max(0.5, close.timeIntervalSinceNow)
+        // Past its close, the bracket holds nothing, whether or not its close timer ran.
+        let remaining = close.timeIntervalSinceNow
+        return remaining > 0 ? max(0.5, remaining) : nil
     }
     /// What the POD RADIO asks (the reclaim gate, the takeover ladder, the manual bolus): the
     /// bracket, or the extended-phase hold — whichever holds longer. Callable from any queue.
@@ -601,6 +613,11 @@ final class StockLoopSession {
         }
     }
     static var quietWindowOpenNow: Bool { quietRemainingNow() != nil }
+    #if DEBUG
+    static func setBracketForTesting(open: Bool, closeAt: Date?) {
+        quietLock.lock(); _quietOpen = open; _quietCloseAt = closeAt; quietLock.unlock()
+    }
+    #endif
     static var quietBracketOpenNow: Bool { bracketRemainingNow() != nil }
 
     private var quietOpenTimer: DispatchSourceTimer?
@@ -611,6 +628,13 @@ final class StockLoopSession {
     private var deferredCount = 0
 
     private func scheduleQuietWindow() {
+        // Never cancel an open bracket's close without closing it: the held sends are released
+        // only by closeQuietWindow. Field 2026-09-24 15:22: a miss re-scheduled over an open
+        // bracket, its close timer was cancelled, and everything it held ("0.5s to close")
+        // waited 30 min for the next direct read.
+        if Self.quietBracketOpenNow || !deferredSends.isEmpty || deferredSnapshotReason != nil {
+            closeQuietWindow(reason: "re-scheduled")
+        }
         quietOpenTimer?.cancel(); quietOpenTimer = nil
         quietCloseTimer?.cancel(); quietCloseTimer = nil
         guard Self.quietWindowEnabled, let anchor = windowAnchor else { return }
@@ -654,6 +678,13 @@ final class StockLoopSession {
         if let snapshot { sendLogSnapshot(snapshot) }
     }
 
+    private func releaseOverdueBracket() {
+        Self.quietLock.lock()
+        let overdue = Self._quietOpen && (Self._quietCloseAt.map { $0.timeIntervalSinceNow <= 0 } ?? true)
+        Self.quietLock.unlock()
+        if overdue { closeQuietWindow(reason: "overdue — its close timer never ran") }
+    }
+
     /// Called by the send path and the snapshot path: true means "held, will replay at close".
     private func deferIfQuiet(_ what: String, hold: () -> Void) -> Bool {
         guard let remaining = Self.bracketRemainingNow() else { return false }
@@ -680,7 +711,7 @@ final class StockLoopSession {
                 Self.setSlotAnchor(expected)
                 self.armWindowVerdict()
                 // Keep the bracket chained on the sensor's phase through the miss.
-                if !Self.quietWindowOpenNow { self.scheduleQuietWindow() }
+                if !Self.quietBracketOpenNow { self.scheduleQuietWindow() }
             }
         }
         t.resume()
