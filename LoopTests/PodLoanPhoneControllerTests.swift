@@ -2381,58 +2381,6 @@ extension PodLoanPhoneControllerTests {
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "the pod bid re-armed")
     }
 
-    /// Detector A (rows 7/8): foreign pod sessions (the SQN-resync stamp) discovered at
-    /// .owner while the watch is absent by the ladder's own pulse discriminator. One stamp
-    /// fires one yield (the handled-stamp survives), and a reachable watch holds it off
-    /// entirely — with WC up, row 6's batch evidence and the R40(f) prompt own the case.
-    func testForeignSessionsWhileWatchAbsentYieldOnce() {
-        _ = seizeCredentialOutstanding()
-        let controller = makeController(watchReachable: { false }, lastWatchContact: { nil }, now: { self.clock })
-        clock = clock.addingTimeInterval(300)                     // past the launch-restore guard
-        MockPumpManager.testForeignSessionAt = clock.addingTimeInterval(-60)
-
-        controller.considerInferredLoan()
-        waitUntil(timeout: 5, "yield engaged") { controller.yieldingToInferredLoan }
-        XCTAssertTrue(controller.isPodLoanedOut)
-
-        // Same stamp again after a pill-tap recovery: handled, no re-fire. (Terminal-
-        // condition wait — a bare waitForState(.owner) can sample the pre-transition
-        // .owner before reclaimNow's block runs.)
-        controller.reclaimNow()
-        waitUntil(timeout: 5, "force landed") {
-            controller.state == .owner && !controller.yieldingToInferredLoan && !MockPumpManager.testConnectionReleased
-        }
-        controller.considerInferredLoan()
-        usleep(300_000)
-        XCTAssertFalse(controller.yieldingToInferredLoan, "a handled stamp must not re-trigger the posture")
-    }
-
-    /// The false positive the pre-ship verification pass caught: every NORMAL loan leaves
-    /// the same SQN residue detector A reads — the watch drove the pod, and the phone's
-    /// own reclaim observes the foreign sessions, at .owner. Hand back, pocket the phone,
-    /// leave the watch behind, and 330 s later the un-absolved detector would yield the
-    /// phone to a loan that ended properly. Absolution at reconciliation (verified or
-    /// forced) consumes the evidence; genuinely NEW sessions afterward still convict.
-    func testNormalLoanResidueIsAbsolvedNotRediscovered() throws {
-        _ = seizeCredentialOutstanding()
-        let controller = makeController(watchReachable: { false }, lastWatchContact: { nil }, now: { self.clock })
-        _ = try establishLoan(controller)
-        MockPumpManager.testForeignSessionAt = clock   // the loan's own sessions, as the reclaim sees them
-
-        controller.reclaimNow()                        // user takes the pod back; dead branch forces
-        waitUntil(timeout: 5, "force landed") { controller.state == .owner && !MockPumpManager.testConnectionReleased }
-
-        clock = clock.addingTimeInterval(600)          // walk away: past liveness window + launch guard
-        controller.considerInferredLoan()
-        usleep(300_000)
-        XCTAssertFalse(controller.yieldingToInferredLoan,
-                       "the loan's own residue is absolved at the force — a routine day must never yield")
-
-        MockPumpManager.testForeignSessionAt = clock.addingTimeInterval(-30)   // NEW sessions after absolution
-        controller.considerInferredLoan()
-        waitUntil(timeout: 5, "fresh evidence yields") { controller.yieldingToInferredLoan }
-    }
-
     /// The ghost-drain theft, fixed (field 2026-08-31 12:44): a reboot-era FINAL offer
     /// for the old epoch retro-acks and drains while the LIVE successor loan streams.
     /// The batches that arrive mid-drain are remembered as evidence in ANY state, and the
@@ -2670,14 +2618,6 @@ extension PodLoanPhoneControllerTests {
         usleep(300_000)
         XCTAssertFalse(controller.yieldingToInferredLoan, "kill switch holds")
         UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.inferredLoanYieldDisabled")
-
-        // Detector A with a REACHABLE watch: no yield — that is row 6's territory.
-        let reachable = makeController(watchReachable: { true }, lastWatchContact: { self.clock }, now: { self.clock })
-        clock = clock.addingTimeInterval(300)
-        MockPumpManager.testForeignSessionAt = clock.addingTimeInterval(-60)
-        reachable.considerInferredLoan()
-        usleep(300_000)
-        XCTAssertFalse(reachable.yieldingToInferredLoan, "a reachable watch means WC evidence and the prompt own the case")
     }
 }
 
