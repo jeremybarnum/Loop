@@ -554,8 +554,25 @@ final class PodLoanPhoneController {
     private static let requestDedupeWindow: TimeInterval = .minutes(2)
     /// How old a request may be (by its own sentAt stamp) and still earn a grant. The watch
     /// gives up on a request in ≤25 s; anything older arriving here rode the queued channel
-    /// and its sender has long moved on. 90 s = the timeout with generous transit slack.
-    private static let requestTTL: TimeInterval = 90
+    /// and its sender has moved on — possibly to a seized loan, which a grant then collides
+    /// with. 30 s = the watch's timeout plus transit slack. (Was 90 s: field 2026-09-24 13:17,
+    /// a 52 s-old request earned grant e99 over a live seized e99. The watch-side cancel of
+    /// queued requests never fires on hardware — WatchConnectivity reports every queued
+    /// transfer as already transferring — so this age limit is the defence.)
+    private static let requestTTL: TimeInterval = 30
+
+    /// A command in flight on the pod gets this long to finish before a grant releases the
+    /// link; past it the request is denied and the user retries.
+    private static let grantIdleWait: TimeInterval = 15
+    private var grantIdleWaitStartedAt: Date?
+
+    /// How long a seized loan's hand-back waits for the watch to say what it holds.
+    /// Internal for tests, which have no watch to answer.
+    var retroAckProbeTimeout: TimeInterval = 5
+    /// Seized-loan offers held while the watch is asked what it holds (see probeBeforeRetroAck).
+    private var retroAckHeld: [HandbackOffer] = []
+    /// The epoch whose held offers were cleared to take the retro-ack door.
+    private var retroAckClearedEpoch: Int?
 
     /// reclaimConnection() only re-arms the BLE bid; the actual reconnect lands
     /// seconds-to-minutes later. Open a bounded window so the tile keeps showing "Reclaiming…"
@@ -1751,6 +1768,33 @@ final class PodLoanPhoneController {
             deny("This pump can't be loaned to the watch (\(type(of: pump))).")
             return
         }
+        // Never release the link under a command awaiting its reply: the reply is lost, the
+        // command stays unacknowledged, and the phone shows "Unable to Reach Pod" (with its
+        // Discard Pod button) for the whole loan. Field 2026-09-24 13:27: a grant ~4 s after a
+        // phone reading cut off that reading's command. Wait for it, bounded; the watch's
+        // request stays open 25 s.
+        if lendable.isDeviceCommandInFlight {
+            let started = grantIdleWaitStartedAt ?? deps.now()
+            if grantIdleWaitStartedAt == nil {
+                grantIdleWaitStartedAt = started
+                handbackDiag(epoch + 1, "grant WAITING — a pod command from this iPhone is awaiting its reply; releasing now would leave it unacknowledged")
+            }
+            guard deps.now().timeIntervalSince(started) < Self.grantIdleWait else {
+                grantIdleWaitStartedAt = nil
+                deny("The pod is busy with a command from the iPhone. Try Start again in a few seconds.")
+                return
+            }
+            queue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self else { return }
+                guard self.state == .owner else { self.grantIdleWaitStartedAt = nil; return }
+                self.beginGrant()
+            }
+            return
+        }
+        if let started = grantIdleWaitStartedAt {
+            grantIdleWaitStartedAt = nil
+            handbackDiag(epoch + 1, String(format: "grant proceeding — the pod command finished after %.1fs", deps.now().timeIntervalSince(started)))
+        }
         // PHONE MIRROR exit: a fresh request while yielding means the watch is alive and
         // ASKING — a watch that is asking is not looping, so the inferred loan is over.
         // Re-arm the pod bid we released at yield, or the still-returning-pod guard below
@@ -1882,7 +1926,7 @@ final class PodLoanPhoneController {
         }
 
         // Grant above every epoch the watch would refuse (see LoanRequest.watchEpochFloor).
-        if requestedEpochFloor >= epoch {
+        if requestedEpochFloor > epoch {
             handbackDiag(requestedEpochFloor + 1, "grant epoch raised past the watch's e\(requestedEpochFloor) (phone was e\(epoch)) — a seize moved the watch ahead")
             epoch = requestedEpochFloor
         }
@@ -2284,7 +2328,45 @@ final class PodLoanPhoneController {
         reclaimToOwner(alert: nil)
     }
 
+    /// Ask before adopting a seized loan's offer. The token cannot tell a live seized loan from
+    /// one a LATER seize replaced — every seize uses the same credential — and a replaced loan's
+    /// final offer, still in the transfer queue, reaches the phone at reunion first. Adopting it
+    /// reclaims the pod from under the newer loan (field 2026-09-24 12:46: e95's leftover
+    /// offer, phone held the pod 14 s under live e96). The watch answers a query for an older
+    /// epoch with the loan it holds; newer → the offer is withheld and the report's own yield
+    /// takes over. Anything else, or no answer within 5 s, adopts as before.
+    private func probeBeforeRetroAck(_ offer: HandbackOffer) {
+        let first = retroAckHeld.first.map { $0.epoch != offer.epoch } ?? true
+        if first { retroAckHeld = [] }
+        retroAckHeld.append(offer)   // every copy, in order: an interim carries the records
+        guard first else { return }
+        handbackDiag(offer.epoch, "[seize] retro-ack HELD — asking the watch what it holds before reclaiming; a replaced seized loan's leftover offer must not take the pod from a newer one")
+        sendMessage(.statusQuery(StatusQuery(epoch: offer.epoch)))
+        queue.asyncAfter(deadline: .now() + self.retroAckProbeTimeout) { [weak self] in
+            guard let self, self.retroAckHeld.first?.epoch == offer.epoch else { return }
+            self.handbackDiag(offer.epoch, String(format: "[seize] retro-ack probe unanswered after %.0fs — adopting as before", self.retroAckProbeTimeout))
+            self.releaseRetroAckHeld()
+        }
+    }
+
+    private func releaseRetroAckHeld() {
+        let held = retroAckHeld
+        retroAckHeld = []
+        retroAckClearedEpoch = held.first?.epoch
+        held.forEach { handleHandbackOffer($0) }
+        retroAckClearedEpoch = nil
+    }
+
     private func handleStatusReport(_ report: StatusReport) {
+        if let heldEpoch = retroAckHeld.first?.epoch {
+            if report.holdsPod, report.epoch > heldEpoch {
+                handbackDiag(heldEpoch, "[seize] retro-ack WITHHELD — the watch holds newer e\(report.epoch); e\(heldEpoch)'s leftover offer is not adopted (a seize over a parked drain carries its records forward)")
+                retroAckHeld = []
+            } else if report.epoch == heldEpoch || !report.holdsPod {
+                handbackDiag(heldEpoch, "[seize] retro-ack CLEARED — the watch holds nothing newer (e\(report.epoch) holdsPod=\(report.holdsPod))")
+                releaseRetroAckHeld()
+            }
+        }
         // PHONE MIRROR detector C (before the epoch guard — a foreign-epoch report is the
         // whole point): the watch says outright that it holds the pod on a loan ahead of
         // ours. Sent at the reunion prompt and at Keep, so the yield no longer waits for
@@ -2448,6 +2530,11 @@ final class PodLoanPhoneController {
         // stay excluded — a reclaim is this phone actively ENDING whatever loan exists.
         if let token = offer.seizeToken, state == .owner || state == .reclaimPending, offer.epoch > epoch,
            token.uuidString == UserDefaults.standard.string(forKey: Keys.dormantSeizeToken) {
+            guard retroAckClearedEpoch == offer.epoch else {
+                probeBeforeRetroAck(offer)
+                return
+            }
+            retroAckClearedEpoch = nil
             if state == .reclaimPending {
                 // The drain the ladder was waiting for — stand the rungs down before adopting
                 // so the force cannot fire into the hand-back it just received.

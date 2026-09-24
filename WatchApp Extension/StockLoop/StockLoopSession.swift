@@ -110,19 +110,14 @@ final class StockLoopSession {
 
         // The offer superseder's request-kind twin (#120 idiom): a request still queued for a
         // dark phone after the watch stops wanting it is a delayed detonator — delivered at
-        // reunion inside the phone's 90 s freshness window, it re-grants over whatever loan
+        // reunion inside the phone's freshness window, it re-grants over whatever loan
         // the watch is running by then (field 2026-08-31: ghost grant e276 against live e277).
-        // Same safety rule as #120: never cancel a transfer already in flight.
+        // Same safety rule as #120: never cancel a transfer already in flight. On hardware this
+        // finds nothing to cancel — every queued transfer reports isTransferring (field
+        // 2026-09-24) — so the phone's 30 s request age limit is the defence that holds.
         loanController.cancelQueuedLoanRequests = {
             let stale = WCSession.default.outstandingUserInfoTransfers.filter {
                 LoanMessage.peekKind(transport: $0.userInfo) == "request" && !$0.isTransferring
-            }
-            stale.forEach { $0.cancel() }
-            return stale.count
-        }
-        loanController.cancelQueuedHandbackOffers = {
-            let stale = WCSession.default.outstandingUserInfoTransfers.filter {
-                LoanMessage.peekKind(transport: $0.userInfo) == "handbackOffer" && !$0.isTransferring
             }
             stale.forEach { $0.cancel() }
             return stale.count

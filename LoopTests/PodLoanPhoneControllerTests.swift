@@ -25,6 +25,9 @@ extension MockPumpManager: PumpConnectionLendable {
     /// PHONE MIRROR: the books-dirty primitive (SQN-resync stamp) the inferred-loan
     /// detector reads. nil = no foreign sessions observed.
     static var testForeignSessionAt: Date?
+    /// A pod command awaiting its reply — the grant must wait it out.
+    static var testCommandInFlight = false
+    public var isDeviceCommandInFlight: Bool { Self.testCommandInFlight }
     public var isConnectionReleased: Bool { Self.testConnectionReleased }
     public func releaseConnection() { Self.testConnectionReleased = true }
     public func reclaimConnection() { Self.testConnectionReleased = false }
@@ -199,7 +202,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                         lastWatchContact: @escaping () -> Date? = { nil },
                         now: @escaping () -> Date = { Date() },
                         bluetoothPoweredOff: @escaping () -> Bool = { false }) -> PodLoanPhoneController {
-        return PodLoanPhoneController(dependencies: .init(
+        let controller = PodLoanPhoneController(dependencies: .init(
             pumpManager: { [weak self] in self?.pump },
             settings: { [weak self] in self?.settings ?? LoopSettings() },
             setAutomaticDosingPaused: { [weak self] paused in
@@ -284,6 +287,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             lastWatchContactAt: lastWatchContact,
             now: now
         ))
+        // No watch here to answer the retro-ack probe; the unanswered path adopts as before.
+        controller.retroAckProbeTimeout = 0.05
+        return controller
     }
 
     /// Release a hand-back commit parked by `holdPumpEventWrites`.
@@ -2305,7 +2311,34 @@ extension PodLoanPhoneControllerTests {
         lock.lock(); let sentDuringGhost = sent; lock.unlock()
         XCTAssertTrue(sentDuringGhost.isEmpty, "a stale request earns NOTHING — no grant, no denial: \(sentDuringGhost)")
 
+        // Field 2026-09-24 13:17: 52 s old was inside the old 90 s limit and granted over a
+        // live seized loan. The watch gives up at 25 s; 40 s is past it.
+        controller.handleIncoming(userInfo: try LoanMessage.request(
+            LoanRequest(watchBuild: "t", sentAt: clock.addingTimeInterval(-40))).transportDictionary())
+        usleep(400_000)
+        XCTAssertEqual(controller.state, .owner, "a request older than the watch's own patience earns nothing")
+
         try establishLoan(controller)   // fresh (nil-sentAt) request still grants — liveness + back-compat
+    }
+
+    /// Field 2026-09-24 13:27: the grant released the pod link while a command from this
+    /// phone awaited its reply, leaving it unacknowledged — "Unable to Reach Pod" for the
+    /// whole loan. The grant now waits for the command, then proceeds.
+    func testGrantWaitsForAPodCommandInFlight() throws {
+        MockPumpManager.testCommandInFlight = true
+        defer { MockPumpManager.testCommandInFlight = false }
+        let controller = makeController()
+
+        controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
+        usleep(1_200_000)
+        XCTAssertEqual(controller.state, .owner, "no grant while the command is out")
+        XCTAssertFalse(MockPumpManager.testConnectionReleased, "the link is not cut under it")
+
+        let grantSent = expectSend()
+        MockPumpManager.testCommandInFlight = false
+        wait(for: [grantSent], timeout: 5)
+        guard case .grant? = lastSent() else { return XCTFail("expected the grant once the pod is idle, got \(String(describing: lastSent()))") }
+        XCTAssertTrue(MockPumpManager.testConnectionReleased)
     }
 
     // MARK: - Dormant-refresh throttle (R40 seize credential pipe)
@@ -2439,6 +2472,57 @@ extension PodLoanPhoneControllerTests {
         XCTAssertTrue(MockPumpManager.testConnectionReleased, "…but custody NOT resumed — the pod stays the live loan's")
         lock.lock(); let paused = pauseCalls; lock.unlock()
         XCTAssertNotEqual(paused.last, false, "and dosing never resumed under the live loan")
+    }
+
+    /// Field 2026-09-24 12:46: a force-quit seized loan's leftover FINAL offer (e95) reached
+    /// the phone at reunion ahead of anything from the live e96, and the retro-ack reclaimed
+    /// the pod from under e96. The phone now asks first; the watch answers with the newer loan
+    /// it holds, the offer is withheld, and the phone stands aside instead.
+    func testRetroAckIsWithheldWhenTheWatchHoldsANewerLoan() throws {
+        let token = seizeCredentialOutstanding()
+        let controller = makeController()
+        controller.retroAckProbeTimeout = 30
+
+        let query = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: 4, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                          events: [], tombstones: [], recovered: true, released: true,
+                          seizeToken: token)).transportDictionary())
+        wait(for: [query], timeout: 5)
+        guard case .statusQuery(let q)? = lastSent() else { return XCTFail("expected a status query, got \(String(describing: lastSent()))") }
+        XCTAssertEqual(q.epoch, 4)
+        XCTAssertEqual(controller.state, .owner, "nothing adopted while the question is out")
+
+        controller.handleIncoming(userInfo: try LoanMessage.statusReport(StatusReport(
+            epoch: 5, mode: .closedDirect, lastDirectGlucoseAge: nil, lastEventSeq: 0,
+            podFault: nil, holdsPod: true, knowsGrant: true)).transportDictionary())
+        waitUntil(timeout: 5, "yield engaged") { controller.yieldingToInferredLoan }
+
+        XCTAssertEqual(controller.state, .owner, "e4 never adopted")
+        XCTAssertTrue(MockPumpManager.testConnectionReleased, "the pod stays with the newer loan")
+        lock.lock(); let acks = sent.filter { if case .handbackAck = $0 { return true }; return false }; lock.unlock()
+        XCTAssertTrue(acks.isEmpty, "the leftover offer is not acked: \(acks)")
+    }
+
+    /// The ordinary seized hand-back: the watch answers for the same loan, and every held
+    /// copy is adopted in order.
+    func testRetroAckProceedsWhenTheWatchHoldsNothingNewer() throws {
+        let token = seizeCredentialOutstanding()
+        let controller = makeController()
+        controller.retroAckProbeTimeout = 30
+
+        let query = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: 4, handedBackAt: Date(), finalStatus: nil, odometer: nil,
+                          events: [], tombstones: [], recovered: false, released: false,
+                          seizeToken: token)).transportDictionary())
+        wait(for: [query], timeout: 5)
+
+        controller.handleIncoming(userInfo: try LoanMessage.statusReport(StatusReport(
+            epoch: 4, mode: .closedDirect, lastDirectGlucoseAge: nil, lastEventSeq: 0,
+            podFault: nil, holdsPod: true, knowsGrant: true)).transportDictionary())
+        waitUntil(timeout: 5, "retro-ack adopted") { controller.state == .loaned }
+        XCTAssertFalse(controller.yieldingToInferredLoan)
     }
 
     /// Fix 4b: the epoch rides the dormant-refresh fingerprint, so every epoch advance

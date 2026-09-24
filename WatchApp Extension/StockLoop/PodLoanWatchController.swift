@@ -174,17 +174,6 @@ final class PodLoanWatchController {
     /// superseder already prunes (#120); this is the request-kind twin.
     var cancelQueuedLoanRequests: (() -> Int)?
 
-    /// Injected transport cleanup, the offer-kind sibling: cancel still-QUEUED hand-back
-    /// offers, returning how many were cancelled. Called at seize confirm, when every queued
-    /// offer belongs to an OLDER loan — a parked drain the seize is replacing. Delivered at
-    /// reunion, such an offer is retro-acked (same token, epoch ahead of the phone) and the
-    /// phone reclaims the pod from under the NEW seized loan. Field 2026-09-24 12:46: e95's
-    /// queued final offer, force-quit mid-seize, landed ahead of live e96 and the phone held
-    /// the pod for 14 s until e96's records made it yield. Nothing is lost by cancelling:
-    /// undrained events fold into the new loan's stream (handleGrant) and are re-offered
-    /// under its epoch; drained ones the phone already has.
-    var cancelQueuedHandbackOffers: (() -> Int)?
-
     /// The single funnel for "this request is dead to us": every path that stops awaiting a
     /// grant calls this, so a queued copy can never outlive the watch's interest.
     private func cancelStaleQueuedRequests(context: String) {
@@ -592,9 +581,6 @@ final class PodLoanWatchController {
             // that no queued request should ever reach the phone (its grant would collide
             // with the loan being started RIGHT NOW).
             self.cancelStaleQueuedRequests(context: "seize confirmed")
-            if let cancelled = self.cancelQueuedHandbackOffers?(), cancelled > 0 {
-                SportLog.event("seize", "cancelled \(cancelled) queued hand-back offer(s) from the loan this seize replaces — delivered at reunion, one would reclaim the pod from under this loan [seize]")
-            }
             SportLog.event("seize", String(format: "SEIZE confirmed — activating dormant grant (issued %@, epoch %d→%d, lease +%.0fs, token …%@) [seize]",
                                            DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .short, timeStyle: .short),
                                            dormant.grant.epoch, newEpoch, Self.seizeActivationLease,
