@@ -120,6 +120,13 @@ final class StockLoopSession {
             stale.forEach { $0.cancel() }
             return stale.count
         }
+        loanController.cancelQueuedHandbackOffers = {
+            let stale = WCSession.default.outstandingUserInfoTransfers.filter {
+                LoanMessage.peekKind(transport: $0.userInfo) == "handbackOffer" && !$0.isTransferring
+            }
+            stale.forEach { $0.cancel() }
+            return stale.count
+        }
 
         loanController.send = { [weak loanController, weak self] dictionary in
             // Two channels, chosen per message kind. transferUserInfo is queued and survives

@@ -542,4 +542,47 @@ final class SeizeActivationTests: XCTestCase {
         _ = controller.debugSnapshot()
         XCTAssertEqual(cancelCalls, 2, "seize confirm cancels again — the strongest statement that no queued request should ever land")
     }
+
+    /// Field 2026-09-24 12:46: a force-quit seized loan (e95) left its final hand-back offer
+    /// queued; the next seize (e96) did not cancel it, and at reunion the phone retro-acked
+    /// e95 and reclaimed the pod from under live e96. Seize confirm now cancels every queued
+    /// offer — at that moment each one belongs to the loan being replaced — and only then.
+    func testSeizeCancelsQueuedHandbackOffersFromTheLoanItReplaces() {
+        let controller = makeController()
+        controller.send = { _ in }
+        var offerCancels = 0
+        controller.cancelQueuedHandbackOffers = { offerCancels += 1; return 1 }
+        controller.scheduler = { _, label, work in if label == "request-timeout" { work.perform() } }
+
+        controller.handleDormantGrant(fixtureDormant(issuedAt: Date().addingTimeInterval(-600), epoch: 3,
+                                                     completeSettings: true))
+        controller.requestLoan(watchBuild: "offer-cancel-test")
+        _ = controller.debugSnapshot()
+        XCTAssertEqual(offerCancels, 0, "a timed-out request is not a new loan — queued offers keep draining")
+
+        controller.confirmSeize()
+        _ = controller.debugSnapshot()
+        XCTAssertEqual(offerCancels, 1, "the seize replaces the parked loan, so its queued offers die here")
+    }
+
+    /// Field 2026-09-24 12:10: each seize moves the watch's epoch on without the phone, so the
+    /// phone's next grants (e92, e93) were refused by a watch at 93. The request now names the
+    /// highest epoch handleGrant would refuse, so the phone can grant above it.
+    func testRequestCarriesEveryEpochTheWatchWouldRefuse() throws {
+        defaults.set(5, forKey: "PodLoanWatchController.highWaterEpoch")
+        let controller = makeController()
+        var floors: [Int?] = []
+        controller.send = { dict in
+            if let message = try? LoanMessage.decode(fromTransport: dict), case .request(let r) = message {
+                floors.append(r.watchEpochFloor)
+            }
+        }
+        controller.scheduler = { _, _, _ in }
+        controller.handleIncoming(userInfo: try LoanMessage.revoke(Revoke(epoch: 7)).transportDictionary(), channel: .queued)
+        _ = controller.debugSnapshot()
+
+        controller.requestLoan(watchBuild: "floor-test")
+        _ = controller.debugSnapshot()
+        XCTAssertEqual(floors, [7], "max(high-water 5, revoked 7) — a grant at or below 7 would be refused")
+    }
 }

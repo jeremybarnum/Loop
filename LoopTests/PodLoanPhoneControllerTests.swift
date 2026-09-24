@@ -1456,6 +1456,32 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         XCTAssertFalse(MockPumpManager.testConnectionReleased, "pod reclaimed")
     }
 
+    /// Field 2026-09-24 12:10: two seizes had moved the watch to e93 while this phone sat at
+    /// e91; it granted e92, then e93, and the watch refused both as stale — two force reclaims
+    /// before e94 took. A request that names the watch's floor is granted above it; one that
+    /// names none (an older watch) is granted exactly as before.
+    func testGrantEpochClearsTheWatchsFloor() throws {
+        let controller = makeController()
+        func grant(floor: Int?) -> LoanGrant? {
+            for _ in 0..<25 {
+                let sentGrant = expectSend()
+                controller.handleIncoming(userInfo: try! LoanMessage.request(
+                    LoanRequest(watchBuild: "t", watchEpochFloor: floor)).transportDictionary())
+                wait(for: [sentGrant], timeout: 5)
+                if case .grant(let g)? = lastSent() { return g }
+                if case .denied? = lastSent() { usleep(100_000); continue }
+                return nil
+            }
+            return nil
+        }
+        guard let first = grant(floor: 40) else { return XCTFail("expected a grant, got \(String(describing: lastSent()))") }
+        XCTAssertEqual(first.epoch, 41, "granted above the floor the watch named")
+        controller.forceReclaimToOwner(reason: "test: next request")
+        waitForState(controller, .owner)
+        guard let second = grant(floor: nil) else { return XCTFail("expected a grant, got \(String(describing: lastSent()))") }
+        XCTAssertEqual(second.epoch, 42, "no floor: the ordinary +1")
+    }
+
     /// Records from a loan the phone has already closed are the watch saying "I still hold the
     /// pod"; the answer is the revoke, again — not a silent drop. (Next-dev bench 2026-09-20: a
     /// queued revoke arrived 31 minutes late and both devices ran the pod for 68 minutes.)

@@ -486,17 +486,26 @@ public struct LoanRequest: Codable, Equatable {
     /// taps carry different requestIDs. Optional for back-compat: nil (older watch) is
     /// treated as fresh, exactly the pre-field behavior.
     public let sentAt: Date?
+    /// The highest epoch this watch has used or refused — a grant at or below it is
+    /// rejected as stale. A seize moves the watch's epoch on without the phone, so the
+    /// phone's next grants can land at or below it: field 2026-09-24 12:10, grants e92 and
+    /// e93 both refused by a watch at 93, two force reclaims before e94 took. The phone
+    /// grants above this. Optional for back-compat: nil (older watch) grants exactly as
+    /// before.
+    public let watchEpochFloor: Int?
 
     public init(watchBuild: String,
                 supportedVersions: [Int] = [LoanProtocol.version],
                 requestID: String = UUID().uuidString,
                 supportsSeize: Bool? = nil,
-                sentAt: Date? = nil) {
+                sentAt: Date? = nil,
+                watchEpochFloor: Int? = nil) {
         self.watchBuild = watchBuild
         self.supportedVersions = supportedVersions
         self.requestID = requestID
         self.supportsSeize = supportsSeize
         self.sentAt = sentAt
+        self.watchEpochFloor = watchEpochFloor
     }
 }
 
