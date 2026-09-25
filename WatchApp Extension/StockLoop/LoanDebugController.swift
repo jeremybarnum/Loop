@@ -200,8 +200,9 @@ struct LoanDebugView: View {
                     // and the four-way policy (one extended-phase hold now; bench key
                     // `G7Lab.podRadioHoldOff` only), the backlog is in every [g7-window] line, and
                     // the recycle did not clear the one stuck client it was tried on (13:32, 09-07).
-                    ForEach([(G7RidePolicy.key, "Ride-only (no request of ours)", true),
-                             (StockLoopSession.WCSilence.key, "WC silence (diagnosis)", false)], id: \.0) { key, title, def in
+                    // Build 3a: the ride-only switch went with ride-only — the watch reads the sensor
+                    // with its own handshake now.
+                    ForEach([(StockLoopSession.WCSilence.key, "WC silence (diagnosis)", false)], id: \.0) { key, title, def in
                         Button("\(title): \((UserDefaults.standard.object(forKey: key) as? Bool ?? def) ? "ON" : "OFF") → tap to flip") {
                             let now = !((UserDefaults.standard.object(forKey: key) as? Bool) ?? def)
                             UserDefaults.standard.set(now, forKey: key)
@@ -217,21 +218,9 @@ struct LoanDebugView: View {
                                     SportLog.event("lab", "WC silence OFF — sends resume · backlog \(StockLoopSession.WCSilence.backlogSummary())")
                                 }
                             }
-                            // Ride-only: flipping the switch must re-arm the radio at once, either
-                            // way. Field 2026-09-05 17:01 (build 170): switched OFF while adopted
-                            // with no request of ours and no scan, nothing re-armed (re-arm only
-                            // runs after a disconnect or at launch), Dexcom's link came up, we
-                            // neither held a request nor joined — stuck between both behaviours.
-                            // Switching ON likewise drops our standing request immediately instead
-                            // of at the next disconnect.
-                            if key == G7RidePolicy.key {
-                                SportLog.event("g7-ble", "*** ride-only switched \(now ? "ON" : "OFF") — recycling the G7 connection so the new posture takes effect now")
-                                ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.recycleG7ConnectForLab()
-                                lastAction += " · G7 re-armed"
-                            }
                         }
                     }
-                    Text("pod hold: \(StockLoopSession.holdModeText)").font(.caption2).foregroundColor(.secondary)
+                    Text("G7 code: \(G7WatchDirectRead.needsCodeFor.map { "NEEDED for \($0)" } ?? "ok")").font(.caption2).foregroundColor(.secondary)
                     // E1 standalone-G7 soak, restored 2026-09-05 (Jeremy: "give me E1 back"). The
                     // toggle went in the diagnostics declutter; the session methods never did.
                     // Our G7 client under a keepalive with NO grant, NO loan and NO pod central —

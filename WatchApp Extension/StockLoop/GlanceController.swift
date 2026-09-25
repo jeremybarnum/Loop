@@ -25,6 +25,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import G7SensorKit   // G7WatchDirectRead.needsCodeNote
 import WatchKit
 import HealthKit
 import LoopKit
@@ -327,39 +328,11 @@ final class GlanceViewModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
     }
 
-    /// Sport Mode requires the watch's OWN sensor link, and refuses without it — a relay-only
-    /// loan cannot do the thing Sport Mode exists for (the phone close enough to relay is close
-    /// enough to loop by itself; field 2026-08-21: 25 minutes with no cycles, mid-descent).
-    ///
-    /// V2. The first gate demanded a direct reading in the last 15 minutes — a window in which
-    /// a suspended app cannot produce one, so it refused every watch that had been asleep,
-    /// i.e. every watch (field 2026-08-22). The question is now answered from persisted state
-    /// (WatchLoopManager.sensorReadiness): identity present, auth proven within 24 h, radio not
-    /// contradicting the identity. Suspension is no longer treated as evidence.
-    var sensorReadiness: WatchLoopManager.SensorReadiness {
-        isPreview ? .ready
-                  : ExtensionDelegate.shared().stockLoopSession.stack.loopManager.sensorReadiness
-    }
-
-    /// The "yes, Dexcom shows BG" branch of the block screen: the sensor is talking to this
-    /// watch, so OUR client is following the wrong identity — drop it and rescan. This is the
-    /// manual form of the sensor-switch override, and it is exactly what recovered the field
-    /// watch on 2026-08-21 (first direct reading 78 seconds later).
-    /// True from the tap until a reading lands or ~one transmit window passes. Exists because
-    /// the field run showed three taps in 20 seconds for one recovery already in flight — the
-    /// button worked and looked dead, which invites exactly the re-tapping that resets scans.
-    @Published var rescanInFlight = false
-
-    func rescanForSensor() {
-        guard !isPreview, !rescanInFlight else { return }
-        rescanInFlight = true
-        SportLog.event("cgm", "user asked for a sensor rescan from the Sport Mode block screen")
-        ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.scanForNewSensor()
-        // Cleared on a timer, not on success plumbing: if a reading lands the verdict flips to
-        // .ready and this screen is gone anyway; if none lands, one window is when the truth
-        // ("still nothing") is worth showing again. 5.5 min = one window + jitter.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 330) { [weak self] in self?.rescanInFlight = false }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
+    /// The one readiness fact left once the watch reads the sensor itself: it has met a sensor
+    /// it holds no pairing code for. Shown beside Start, never instead of it; the code is entered
+    /// on the phone (Loop ▸ Dexcom G7 ▸ Watch Direct Read) and rides to the watch in the context.
+    var needsCodeNote: String? {
+        isPreview ? nil : G7WatchDirectRead.needsCodeNote
     }
 
     /// R40(b): the deliberate confirm / dismissal for a pending offline start.
@@ -687,16 +660,6 @@ final class GlanceViewModel: ObservableObject {
                       seconds / 60, seconds % 60)
     }
 
-    /// Build 179 (mute record §7c): the indicia of a parked watch stack are two or more
-    /// consecutive expected bursts with no read, with the phone not relaying — Dexcom's own
-    /// app is muted the same way, and the record's only cure short of waiting 20–40 minutes
-    /// is the watch's Bluetooth off and on (ruled wording: it must name the WATCH). Pure,
-    /// pinned by WatchAppTests. Nil = keep the ordinary line.
-    static func wedgeHint(staleAge: TimeInterval?, consecutiveMisses: Int, relayRecent: Bool) -> String? {
-        guard consecutiveMisses >= 2, !relayRecent, let age = staleAge, age >= 8 * 60 else { return nil }
-        return String(format: NSLocalizedString("G7 silent %d min · try toggling watch Bluetooth", comment: "Glance line when the watch has missed two or more sensor bursts with the phone away"), Int(age / 60))
-    }
-
     static func activeState(data: WatchLoopManager.GlanceData, cob: Double?, now: Date, phoneGlucoseDate: Date? = nil) -> GlanceUIState {
         var s = GlanceUIState()
         s.overrideLabel = data.overrideLabel
@@ -761,9 +724,11 @@ final class GlanceViewModel: ObservableObject {
             // promise a clock time with slack instead — the ladder may need a cycle.
             let missedAWindow = (age ?? .infinity) > 8 * 60
             s.g7EtaText = g7EtaText(lastReading: data.glucoseDate ?? phoneGlucoseDate, now: now, firstConnect: missedAWindow)
-            // Build 179: the wedge hint. Not an alert (Jeremy, 2026-09-07) — the provenance
-            // line under a stale number names the one thing that heals a parked watch stack.
-            if let hint = wedgeHint(staleAge: age, consecutiveMisses: data.g7ConsecutiveMisses, relayRecent: data.relayRecent) {
+            // The silence hint. Not an alert — the provenance line under a stale number names
+            // the one thing that heals a parked watch stack (it must name the WATCH's Bluetooth).
+            if let hint = G7SilenceHint.text(directAge: data.directG7At.map { now.timeIntervalSince($0) },
+                                             relayAge: data.phoneRelayAt.map { now.timeIntervalSince($0) },
+                                             sensorAge: data.sensorActivatedAt.map { now.timeIntervalSince($0) }) {
                 s.g7EtaText = hint
             }
         } else if let eventual = data.eventual {
@@ -1057,27 +1022,8 @@ struct GlanceView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.glanceAccent)
-            switch model.sensorReadiness {
-            case .ready:
-                EmptyView()
-            case .wrongSensor:
-                // The stale-identity signature: the radio keeps seeing a DIFFERENT sensor while
-                // ours is silent. Reconnect is the proven fix (78 s to first reading), offered
-                // beside Start rather than in its place.
-                SensorReadinessNote(
-                    text: NSLocalizedString("Watch hasn't picked up your new sensor yet.", comment: "Glance note: the watch still holds an old sensor identity"),
-                    actionTitle: model.rescanInFlight ? nil : NSLocalizedString("Reconnect sensor", comment: "Glance button: forget the old sensor and adopt the current one"),
-                    action: { model.rescanForSensor() })
-            case .unproven:
-                // Fresh install, or no recent handshake. Not a fault: the loan's runtime is what
-                // completes the read. Once the sensor keeps connecting but the auth subscribe
-                // keeps dying (streak >= 3), the cold re-acquire that went 2-for-2 in the field
-                // (2026-08-30) is offered — still beside Start, never instead of it.
-                let failures = ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.authSubscribeFailureStreak
-                SensorReadinessNote(
-                    text: NSLocalizedString("No direct G7 reading yet. It connects once Sport Mode is running.", comment: "Glance note: no direct sensor reading proven while idle"),
-                    actionTitle: (failures >= 3 && !model.rescanInFlight) ? NSLocalizedString("Re-acquire sensor", comment: "Glance button: cold re-acquire of the G7 sensor") : nil,
-                    action: { model.rescanForSensor() })
+            if let note = model.needsCodeNote {
+                SensorReadinessNote(text: note, actionTitle: nil, action: {})
             }
             }
             if let note = model.state.idleNote {

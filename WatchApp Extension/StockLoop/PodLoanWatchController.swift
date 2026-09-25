@@ -1184,21 +1184,6 @@ final class PodLoanWatchController {
         // also believe the temp is running (guards the stale-C5-signature corner across
         // back-to-back loans), and its endDate is the only way to restore a 0 U/hr temp's span.
         let liveTempRecord = grant.seedDoseEntries(finishedBy: self.now()).live.first { $0.type == .tempBasal }
-        // Quiet window (2026-09-05): the takeover's pod scan and handshake are the loudest
-        // thing this app does on the radio; if the expected G7 burst is inside its bracket,
-        // wait for the bracket to close (≤ 60 s) before scanning. The lease keeps running and
-        // the ladder line below says how long it waited.
-        if let remaining = StockLoopSession.quietRemainingNow() {
-            SportLog.event("quiet", String(format: "DEFERRED takeover scan — burst bracket open, %.1fs to close", remaining))
-            queue.asyncAfter(deadline: .now() + remaining + 0.2) { [weak self] in
-                guard let self else { return }
-                if let again = StockLoopSession.quietRemainingNow() {
-                    SportLog.event("quiet", String(format: "takeover still bracketed (%.1fs) — proceeding anyway, the lease will not wait twice", again))
-                }
-                self.startTakeoverScan(manager: manager, grant: grant, liveTempRecord: liveTempRecord)
-            }
-            return
-        }
         startTakeoverScan(manager: manager, grant: grant, liveTempRecord: liveTempRecord)
     }
 
@@ -1418,13 +1403,7 @@ final class PodLoanWatchController {
                     // deferred timer was late — fix the ladder. If didConnect says "never", the
                     // radio genuinely hasn't connected — fix the keepalive. The poll alone cannot
                     // distinguish those, which is why this line exists.
-                    // The G7 stamp exists because Code-11 during a takeover cannot name its
-                    // holder from OmnipodKit's own census — the G7's central is a separate
-                    // manager, and a pending connect camped there is invisible here. One field:
-                    // how long a G7 connect has been pending, or "-" when none is.
-                    let g7Pending = G7RadioCensus.connectPendingSince
-                        .map { String(format: "g7pending=%.0fs", self.now().timeIntervalSince($0)) } ?? "g7pending=-"
-                    SportLog.event("loan", String(format: "takeover read %d/%d driver=%@ (+%.1fs) — pod BLE state %@ · %@ · \(g7Pending) · %@",
+                    SportLog.event("loan", String(format: "takeover read %d/%d driver=%@ (+%.1fs) — pod BLE state %@ · %@ · %@",
                                                   attempt + 1, maxAttempts, driver, readElapsed,
                                                   manager.podLoanConnectionStateDescription,
                                                   PodLoanConnectClock.summary(since: self.attemptStartedAt),

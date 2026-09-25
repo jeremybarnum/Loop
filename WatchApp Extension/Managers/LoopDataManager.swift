@@ -112,16 +112,15 @@ extension LoopDataManager {
         // The phone's context is always retained for its GLUCOSE, whatever we do about display.
         if !context.isWatchAuthored {
             phoneRelayContext = context
-            // The phone names its sensor in every context (its G7 manager's state, wrapped as
-            // ["managerIdentifier": …, "state": …] — tolerate an unwrapped dictionary). A newer
-            // sensor than this watch holds is adopted on the phone's word (WatchLoopManager
-            // .notePhoneSensor explains the newer-only rule).
+            // DIRECT READ: the phone's G7 state rides in every context (wrapped as
+            // ["managerIdentifier": …, "state": …] — tolerate an unwrapped dictionary). It names
+            // the current sensor and carries that sensor's pairing code, entered once on the
+            // phone; the G7 manager adopts a new sensor by identity and authenticates with the
+            // code. The watch never scans to learn a sensor, so it cannot run ahead of the phone.
             if let wrapped = context.cgmManagerState {
                 let raw = wrapped["state"] as? [String: Any] ?? wrapped
-                if let phoneSensor = raw["sensorID"] as? String {
-                    ExtensionDelegate.shared().stockLoopSession.stack.loopManager
-                        .notePhoneSensor(id: phoneSensor, activatedAt: raw["activatedAt"] as? Date)
-                }
+                ExtensionDelegate.shared().stockLoopSession.stack.cgmManager
+                    .receivePairingCode(raw["pairingCode"] as? String, phoneSensorID: raw["sensorID"] as? String)
             }
         }
         let onLoan = ExtensionDelegate.shared().stockLoopSession.loanController.isLoanActiveNonBlocking
