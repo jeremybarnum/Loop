@@ -1115,6 +1115,18 @@ extension DeviceDataManager: CGMManagerDelegate {
     func cgmManagerDidUpdateState(_ manager: CGMManager) {
         dispatchPrecondition(condition: .onQueue(queue))
         rawCGMManager = manager.rawValue
+        // Build 3a.3: a newly saved G7 pairing code is the moment to set up the watch — the user
+        // is at the phone, and the watch must connect to the sensor once while awake.
+        let code = (manager.rawValue["state"] as? [String: Any])?["pairingCode"] as? String
+        let key = "SportMode.lastG7PairingCodeSeen"
+        if code != UserDefaults.standard.string(forKey: key) {
+            UserDefaults.standard.set(code, forKey: key)
+            if code != nil {
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: .G7PairingCodeSaved, object: self)
+                }
+            }
+        }
     }
 
     func credentialStoragePrefix(for manager: CGMManager) -> String {
@@ -1528,6 +1540,8 @@ extension DeviceDataManager: LoopDataManagerDelegate {
 extension Notification.Name {
     static let PumpManagerChanged = Notification.Name(rawValue:  "com.loopKit.notification.PumpManagerChanged")
     static let CGMManagerChanged = Notification.Name(rawValue:  "com.loopKit.notification.CGMManagerChanged")
+    /// Build 3a.3: the G7 manager's pairing code changed to a new value (WatchDataManager sets up the watch).
+    static let G7PairingCodeSaved = Notification.Name(rawValue: "com.loopKit.notification.G7PairingCodeSaved")
     static let PumpEventsAdded = Notification.Name(rawValue:  "com.loopKit.notification.PumpEventsAdded")
 }
 

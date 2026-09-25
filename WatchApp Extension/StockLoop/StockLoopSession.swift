@@ -72,6 +72,11 @@ final class StockLoopSession {
         // The one question the hand-back UI needs answered.
         loanController.isPhoneReachable = { WCSession.default.isReachable }
 
+        // Sensor setup ends at the first reading the watch takes itself.
+        stack.loopManager.onDirectGlucose = { [weak self] _ in
+            DispatchQueue.main.async { self?.endSensorSetup("first direct reading") }
+        }
+
         // The offer superseder's request-kind twin (#120 idiom): a request still queued for a
         // dark phone after the watch stops wanting it is a delayed detonator — delivered at
         // reunion inside the phone's freshness window, it re-grants over whatever loan
@@ -209,6 +214,9 @@ final class StockLoopSession {
                 // Deliberately NOT re-asserted here: this also fires on the
                 // hand-back-timeout resume path, where the user's own choice must survive.
                 self.setKeepalive(true, reason: "soak")
+                // A loan's runtime is also the moment to make the first connection to a sensor
+                // the watch has never read (the loan holds the app awake anyway).
+                DispatchQueue.main.async { self.startSensorSetup(reason: "Sport Mode started") }
                 // Loop-Failure ladder (stock parity): every live cycle re-defers all four rungs.
                 LoopStallWatchdog.refresh()
                 SportLog.event("deadman", "ladder ARMED — 20/40m timeSensitive + 1/2h critical rungs [deadman]")
@@ -341,6 +349,59 @@ final class StockLoopSession {
     private func stopLogPulse() {
         logPulse?.cancel()
         logPulse = nil
+    }
+
+    // MARK: Sensor setup (build 3a.3) — the first connection to a sensor, no wrist held up
+    //
+    // The watch has to discover a sensor once itself (a Bluetooth identity is per device), and
+    // it can only scan while it is awake — across one reading, since the sensor advertises only
+    // around its readings. After that the standing connect request carries every reading with
+    // the app asleep. So once per sensor (new install, sensor change, Forget Sensor) the watch
+    // holds the workout keepalive and runs one sensor search, ending at the first direct reading
+    // or at the cap. It starts when:
+    //   • the phone launches the watch app after a pairing code is saved (HKHealthStore
+    //     .startWatchApp → ExtensionDelegate.handle(workoutConfiguration:)), the automatic path;
+    //   • the user taps Connect sensor on the glance;
+    //   • Sport Mode starts (the loan's keepalive is up anyway).
+    // A workout cannot be started from the background (HK error 14), which is why the phone's
+    // launch is the automatic path rather than the code's arrival here.
+
+    static let sensorSetupCap: TimeInterval = 11 * 60   // two readings and change
+    private(set) var sensorSetupActive = false          // MAIN
+    private var sensorSetupTimer: DispatchSourceTimer?
+
+    /// A sensor and its code are known, but the watch has never authenticated with it — no key.
+    var sensorNeedsSetup: Bool {
+        let s = stack.cgmManager.state
+        return s.sensorID != nil && s.pairingCode != nil && s.sharedKey == nil
+    }
+
+    /// `force`: the phone launched us because a code was saved — it may still be in flight in the
+    /// context, so run even before this watch knows the sensor; the kit arms when the code lands.
+    func startSensorSetup(reason: String, force: Bool = false) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard !sensorSetupActive else { return }
+        guard force || sensorNeedsSetup else { return }
+        if !force, stack.cgmManager.state.sharedKey != nil { return }
+        sensorSetupActive = true
+        let sensor = stack.cgmManager.state.sensorID ?? "the sensor (code on its way)"
+        SportLog.event("setup", "SENSOR SETUP — \(reason): holding the watch awake for the first connection to \(sensor) (≤ \(Int(Self.sensorSetupCap / 60)) min)")
+        setKeepalive(true, reason: "sensorSetup")
+        stack.cgmManager.reconnectG7()
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now() + Self.sensorSetupCap)
+        t.setEventHandler { [weak self] in self?.endSensorSetup("cap reached with no reading — the glance offers Connect sensor again") }
+        t.resume()
+        sensorSetupTimer = t
+    }
+
+    func endSensorSetup(_ why: String) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard sensorSetupActive else { return }
+        sensorSetupActive = false
+        sensorSetupTimer?.cancel(); sensorSetupTimer = nil
+        setKeepalive(false, reason: "sensorSetup")
+        SportLog.event("setup", "sensor setup over — \(why)")
     }
 
     // MARK: Standalone-G7 diagnostic mode

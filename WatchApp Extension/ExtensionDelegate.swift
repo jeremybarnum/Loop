@@ -222,6 +222,16 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         }
     }
 
+    /// The phone launched this app for a workout (HKHealthStore.startWatchApp) because a G7
+    /// pairing code was just saved: run the sensor setup, which holds the workout keepalive
+    /// across the first reading. Build 3a.3.
+    func handle(_ workoutConfiguration: HKWorkoutConfiguration) {
+        SportLog.event("setup", "launched by the phone for a workout — sensor setup")
+        DispatchQueue.main.async {
+            self.stockLoopSession.startSensorSetup(reason: "launched by the phone (pairing code saved)", force: true)
+        }
+    }
+
     func handle(_ userActivity: NSUserActivity) {
         if #available(watchOSApplicationExtension 5.0, *) {
             switch userActivity.activityType {
