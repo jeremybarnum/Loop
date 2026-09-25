@@ -1550,6 +1550,10 @@ final class PodLoanWatchController {
     private func performDeferredTakeoverRelease(epoch grantEpoch: Int, manager: OmniPumpManager, scheduledAt: Date) {
         dispatchPrecondition(condition: .onQueue(queue))
         guard phase == .active, epoch == grantEpoch else { return }
+        if Self.holdPodLinkDuringLoan {
+            SportLog.event("loan", "pod link HELD — +90 s takeover release skipped (bench switch) · pod BLE \(manager.podLoanConnectionStateDescription)")
+            return
+        }
 
         if let busyUntil = doseWindowUntil, busyUntil > now() {
             SportLog.event("loan", String(format: "pod release DEFERRED again — dose in flight (retry in 10s, window closes in %.0fs)",
@@ -1742,8 +1746,21 @@ final class PodLoanWatchController {
     /// Runs on `queue`: armed inside a `queue.async` block and fired by the seam, which
     /// dispatches there. No `dispatchPrecondition` — tests drive timer bodies directly, and
     /// this body needs to stay reachable from them.
+    /// BENCH SWITCH (build 3005, com.StockSportMode only): keep the pod link for the whole loan —
+    /// skip the +90 s takeover release and the +12 s post-dose release; the pre-dose reclaim then
+    /// finds the link up and returns at once. Default OFF (today's release-between-doses). The
+    /// August 2026-08-10 toggle test found a held link starved G7 acquisition under the old
+    /// ride-only client; with direct auth only the first connection (sensor setup) still scans,
+    /// which is what this switch exists to measure. Hand-back teardown is unchanged.
+    static let holdPodLinkKey = "SportMode.bench.holdPodLinkDuringLoan"
+    static var holdPodLinkDuringLoan: Bool { UserDefaults.standard.bool(forKey: holdPodLinkKey) }
+
     private func performPostDoseRelease() {
         postDoseReleaseWork = nil
+        if Self.holdPodLinkDuringLoan {
+            SportLog.event("loan", "pod link HELD — post-dose release skipped (bench switch) · pod BLE \(pumpManager?.podLoanConnectionStateDescription ?? "none")")
+            return
+        }
         // Unconditional — see the takeover-release note above for why the defaults-key gate
         // had to go (absent key = false = hold the link forever on a fresh install, the arm
         // the toggle experiment disproved).

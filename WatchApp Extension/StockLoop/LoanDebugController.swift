@@ -202,7 +202,8 @@ struct LoanDebugView: View {
                     // the recycle did not clear the one stuck client it was tried on (13:32, 09-07).
                     // Build 3a: the ride-only switch went with ride-only — the watch reads the sensor
                     // with its own handshake now.
-                    ForEach([(StockLoopSession.WCSilence.key, "WC silence (diagnosis)", false)], id: \.0) { key, title, def in
+                    ForEach([(StockLoopSession.WCSilence.key, "WC silence (diagnosis)", false),
+                             (PodLoanWatchController.holdPodLinkKey, "Hold pod link during loans", false)], id: \.0) { key, title, def in
                         Button("\(title): \((UserDefaults.standard.object(forKey: key) as? Bool ?? def) ? "ON" : "OFF") → tap to flip") {
                             let now = !((UserDefaults.standard.object(forKey: key) as? Bool) ?? def)
                             UserDefaults.standard.set(now, forKey: key)
