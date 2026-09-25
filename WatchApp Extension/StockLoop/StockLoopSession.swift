@@ -387,6 +387,9 @@ final class StockLoopSession {
         let sensor = stack.cgmManager.state.sensorID ?? "the sensor (code on its way)"
         SportLog.event("setup", "SENSOR SETUP — \(reason): holding the watch awake for the first connection to \(sensor) (≤ \(Int(Self.sensorSetupCap / 60)) min)")
         setKeepalive(true, reason: "sensorSetup")
+        // One search for the whole session, not the kit's one-reading default: both 2026-09-25
+        // Connect-sensor misses (17:24, 17:54) were a single reading the search did not catch.
+        G7WatchAcquisition.bootstrapScanCap = Self.sensorSetupCap
         stack.cgmManager.reconnectG7()
         let t = DispatchSource.makeTimerSource(queue: .main)
         t.schedule(deadline: .now() + Self.sensorSetupCap)
@@ -400,6 +403,7 @@ final class StockLoopSession {
         guard sensorSetupActive else { return }
         sensorSetupActive = false
         sensorSetupTimer?.cancel(); sensorSetupTimer = nil
+        G7WatchAcquisition.bootstrapScanCap = G7WatchAcquisition.defaultBootstrapScanCap
         setKeepalive(false, reason: "sensorSetup")
         SportLog.event("setup", "sensor setup over — \(why)")
     }

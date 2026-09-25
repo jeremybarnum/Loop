@@ -31,7 +31,7 @@ final class WatchDataManager: NSObject {
 
         NotificationCenter.default.addObserver(self, selector: #selector(updateWatch(_:)), name: .LoopDataUpdated, object: deviceManager.loopManager)
         NotificationCenter.default.addObserver(self, selector: #selector(sendSupportedBolusVolumesIfNeeded), name: .PumpManagerChanged, object: deviceManager)
-        NotificationCenter.default.addObserver(self, selector: #selector(g7PairingCodeSaved), name: .G7PairingCodeSaved, object: deviceManager)
+        NotificationCenter.default.addObserver(self, selector: #selector(g7PairingCodeSaved), name: .G7PairingCodeSaved, object: nil)
 
         watchSession?.delegate = self
         watchSession?.activate()
