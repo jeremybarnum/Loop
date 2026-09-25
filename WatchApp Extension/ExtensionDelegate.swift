@@ -21,7 +21,32 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
 
     /// M5: the stock-shaped loop + loan-protocol owner. Inert until a grant arrives
     /// (its stores live in a distinct directory, so it coexists with `loopManager`).
-    private(set) lazy var stockLoopSession = StockLoopSession()
+    ///
+    /// Built exactly once, under a lock. It was a `lazy var`, which is not thread-safe: at a
+    /// relaunch `applicationDidFinishLaunching` (main) and WCSession's activation callback (a
+    /// background queue, `sessionDidActivate`) both touched it first and built TWO stacks — two
+    /// G7 managers, each with its own Bluetooth central under the same restore identity. Every
+    /// relaunch log showed "Sport Mode ready" twice; with the watch reading the sensor itself
+    /// (build 3a) the second central left the sensor search silent after every relaunch
+    /// (field 2026-09-25 14:11 and 14:50). Nothing on this path does `DispatchQueue.main.sync`,
+    /// so a thread that waits here cannot deadlock the builder.
+    var stockLoopSession: StockLoopSession {
+        stockLoopSessionLock.lock(); defer { stockLoopSessionLock.unlock() }
+        if let built = _stockLoopSession { return built }
+        if stockLoopSessionBuilding {
+            // Same-thread re-entry during the build (the recursive lock lets it through): say so,
+            // since it would build a second stack exactly as the race did.
+            SportLog.event("session", "** Sport Mode stack touched re-entrantly while being built — a second stack follows **")
+        }
+        stockLoopSessionBuilding = true
+        let built = StockLoopSession()
+        stockLoopSessionBuilding = false
+        _stockLoopSession = built
+        return built
+    }
+    private let stockLoopSessionLock = NSRecursiveLock()
+    private var _stockLoopSession: StockLoopSession?
+    private var stockLoopSessionBuilding = false
 
     private let log = OSLog(category: "ExtensionDelegate")
 

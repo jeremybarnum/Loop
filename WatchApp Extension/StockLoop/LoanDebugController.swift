@@ -237,6 +237,13 @@ struct LoanDebugView: View {
                         }
                     }
                 }
+                // Build 3a: the kit's own reconnect — drop the link or the lodged request and run
+                // ONE fresh sensor search, keeping the identity and the pairing code.
+                Button("Reconnect sensor") {
+                    SportLog.event("g7-ble", "*** RECONNECT *** asking the G7 kit for one fresh sensor search (identity and code kept)")
+                    ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.reconnectG7()
+                    lastAction = "G7 reconnect started"
+                }
                 Button("Forget Sensor (re-acquire)") {
                     SportLog.event("g7-ble", "*** BENCH RE-ACQUIRE *** forgetting adopted sensor — cold acquisition starts now")
                     ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.scanForNewSensor()
