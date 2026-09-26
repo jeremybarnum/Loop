@@ -276,7 +276,7 @@ final class WatchStoreEffectsTests: XCTestCase {
             cacheLength: .hours(4),
             provenanceIdentifier: "WatchStoreEffectsTests"
         )
-        let now = Date()
+        let now = Date()   // real clock: "recent" momentum is judged against it; no schedule involved
         let samples = (0..<3).map { i in
             NewGlucoseSample(
                 date: now.addingTimeInterval(.minutes(Double(-10 + 5 * i))),
@@ -307,7 +307,7 @@ final class WatchStoreEffectsTests: XCTestCase {
     /// second seed of the same carb leaves COB unchanged.
     func testSeededCarbsAreIdempotentAcrossRetakeovers() {
         let (_, carbStore) = makeStoresFixed()
-        let now = Date()
+        let now = Self.fixtureNow()
         let obj = SyncCarbObject(
             absorptionTime: .hours(3), createdByCurrentApp: false, foodType: nil,
             grams: 25, startDate: now.addingTimeInterval(-.minutes(5)), uuid: nil,
@@ -348,7 +348,7 @@ final class WatchStoreEffectsTests: XCTestCase {
     // the fork delete) so the third gate, if one exists, dies HERE and not on the wrist.
     func testSeededCarbDeleteSkippingAuthorship_theTwoReleaseBug() {
         let (_, carbStore) = makeStoresFixed()
-        let now = Date()
+        let now = Self.fixtureNow()
         let obj = SyncCarbObject(
             absorptionTime: .hours(3), createdByCurrentApp: false, foodType: nil,
             grams: 15, startDate: now.addingTimeInterval(-.minutes(10)), uuid: nil,
@@ -410,7 +410,7 @@ final class WatchStoreEffectsTests: XCTestCase {
     // stage is load-bearing. addCarbEntry mints its own identity; delete must still land.
     func testWatchEnteredCarbDelete_fallsBackToDateGrams() {
         let (_, carbStore) = makeStoresFixed()
-        let now = Date()
+        let now = Self.fixtureNow()
         let addExp = expectation(description: "add")
         var added: StoredCarbEntry?
         carbStore.addCarbEntry(NewCarbEntry(quantity: HKQuantity(unit: .gram(), doubleValue: 8),
@@ -494,7 +494,7 @@ final class WatchStoreEffectsTests: XCTestCase {
     /// same delivered insulin lands twice and IOB inflates.
     func testEpochKeyedInsulinReSeedDoublesIOB_theBugBehindTheClamp() {
         let (doseStore, _) = makeStoresFixed()
-        let now = Date()
+        let now = Self.fixtureNow()
 
         addDoses(grantDoses(epoch: 57, now: now), to: doseStore)
         let afterFirstGrant = iob(doseStore, at: now)
@@ -511,7 +511,7 @@ final class WatchStoreEffectsTests: XCTestCase {
     /// construction, whatever the epoch.
     func testWipeThenSeedKeepsIOBStableAcrossEpochs() {
         let (doseStore, _) = makeStoresFixed()
-        let now = Date()
+        let now = Self.fixtureNow()
 
         func wipeThenSeed(epoch: Int) {
             let wiped = expectation(description: "wipe")
@@ -579,7 +579,7 @@ final class WatchStoreEffectsTests: XCTestCase {
     /// ~0.3 U takeover bump). Guards Fix 1 (phone stops sending it) + Fix 2 (seed reconciles).
     func testHandoverBoundaryDoesNotDoubleSeedIOB() {
         let (doseStore, _) = makeStoresFixed()   // basal 1.0 U/hr
-        let now = Date()
+        let now = Self.fixtureNow()
         let runningTemp = LoanDoseRecord(kind: .tempBasal,
                                          startDate: now.addingTimeInterval(-.minutes(25)),
                                          endDate: now.addingTimeInterval(.minutes(5)),   // open past takeover
@@ -614,7 +614,7 @@ final class WatchStoreEffectsTests: XCTestCase {
     /// seeded on the watch, must yield the same IOB.
     func testHandoverIOBConservationAcrossTakeover() {
         let (doseStore, _) = makeStoresFixed()   // basal 1.0 U/hr
-        let now = Date()
+        let now = Self.fixtureNow()
         let scheduled = HKQuantity(unit: DoseEntry.unitsPerHour, doubleValue: 1.0)
         let phoneDoses: [DoseEntry] = [
             DoseEntry(type: .bolus, startDate: now.addingTimeInterval(-.minutes(30)),
@@ -650,7 +650,7 @@ final class WatchStoreEffectsTests: XCTestCase {
     /// retroactive-netting fix (profile CAN change mid-loan there) is a separate open task.
     func testSeededTempNetsAgainstFrozenGrantSchedule() {
         let (doseStore, _) = makeStoresFixed()   // basalProfile = 1.0 U/hr (the frozen grant schedule)
-        let now = Date()
+        let now = Self.fixtureNow()
         // 3.0 U/hr for 15 min, ending 5 min ago. Net above the 1.0 schedule = 2.0 U/hr → 0.5 U.
         let temp = LoanDoseRecord(kind: .tempBasal, startDate: now.addingTimeInterval(-.minutes(20)),
                                   endDate: now.addingTimeInterval(-.minutes(5)), unitsPerHour: 3.0)
@@ -691,7 +691,7 @@ final class WatchStoreEffectsTests: XCTestCase {
     /// syncId collides with the re-report on the PumpEvent raw uniqueness constraint → ONE dose.
     func testSeedIdentityDedupsPodNativeReReport() {
         let (doseStore, _) = makeStoresFixed()
-        let now = Date()
+        let now = Self.fixtureNow()
         let start = now.addingTimeInterval(-.minutes(30))
         // Identity exactly as OmniBLE builds it: raw = utf8("bolus <units> <ISO8601 start>").
         let podRaw = Data("bolus 1.15 2026-07-28T21:41:30Z".utf8)
@@ -732,7 +732,7 @@ final class WatchStoreEffectsTests: XCTestCase {
     /// so the main test would pass vacuously, this control fails and flags the assumption.
     func testDoubleHexSeedIdentityDuplicates_preFixRegressionShape() {
         let (doseStore, _) = makeStoresFixed()
-        let now = Date()
+        let now = Self.fixtureNow()
         let start = now.addingTimeInterval(-.minutes(30))
         let podRaw = Data("bolus 1.15 2026-07-28T21:41:30Z".utf8)
         let phoneSyncId = podRaw.map { String(format: "%02hhx", $0) }.joined()
@@ -767,7 +767,7 @@ final class WatchStoreEffectsTests: XCTestCase {
     /// constraint (store-trump merge). The full-span future tail must NOT resurrect into IOB.
     func testMutableTempReReportLosesToSeededTrimmedRow() {
         let (doseStore, _) = makeStoresFixed()   // basal 1.0 U/hr
-        let now = Date()
+        let now = Self.fixtureNow()
         let start = now.addingTimeInterval(-.minutes(20))
         let trimEnd = now.addingTimeInterval(-.minutes(10))
         let podRaw = Data("tempBasal 3.0 2026-07-28T21:38:02Z".utf8)   // uniqueKey shape; cancel-stable
@@ -825,12 +825,45 @@ final class WatchStoreEffectsTests: XCTestCase {
     /// the same test returned deltas of 0.0, 0.083 and 0.247 at three clock times on identical
     /// code). An exact multiple of 300 keeps every sum an exact integer in Double, so the
     /// arithmetic is deterministic while the dates stay inside the stores' cache windows.
-    static func gridNow() -> Date {
+    static func gridNow(_ clock: Date = Date()) -> Date {
         // MID-grid, not on-grid: on an exact grid point the before/after bracket degenerates
         // (both neighbours are the same sample) and the two paths return 0 and 3 steps
         // (measured 00:00 2026-09-03). Half a step off the grid, every query date sits
         // strictly between two samples and the delta is exactly one step of delivery.
-        Date(timeIntervalSince1970: (Date().timeIntervalSince1970 / 300).rounded(.down) * 300 + 150)
+        //
+        // Away from local midnight, too: flatSchedule repeats daily, so annotated(with:) splits
+        // a temp at 00:00, and with the query instants just before the split the 5-minute
+        // sampling misplaces a whole step. Pinned 2026-09-26 with fixed anchors: 14:42:30,
+        // 23:42:30 and 00:02:30 read ~0.083; 23:52:30 read 0.000. Every #125 failure on record
+        // fell inside this band (09-02 23:49, 23:53, 23:56; 09-03 00:00; 09-25 23:43, 23:49), so
+        // midnight, not floating-point dust alone, drove most of #125. Fixture spans reach 10 min back
+        // and 20 min forward, so an anchor two hours earlier during 23:00-00:59 clears midnight.
+        let now = fixtureNow(clock)
+        return Date(timeIntervalSince1970: (now.timeIntervalSince1970 / 300).rounded(.down) * 300 + 150)
+    }
+
+    /// The real clock, moved two hours earlier during 23:00-00:59 so no fixture instant sits
+    /// near local midnight (see gridNow). Every schedule-annotated fixture in this file anchors
+    /// on it: the artifact bites when a query lands within ~15 min of the 00:00 split, and this
+    /// keeps every query at least an hour away. Found 2026-09-26 00:04: the supersede test read
+    /// 0.824 against 0.67 ± 0.15 with its query four minutes past midnight.
+    static func fixtureNow(_ clock: Date = Date()) -> Date {
+        let hour = Calendar.current.component(.hour, from: clock)
+        return (hour == 23 || hour == 0) ? clock.addingTimeInterval(-.hours(2)) : clock
+    }
+
+    /// The fixture clock keeps local midnight at least an hour before and half an hour after
+    /// every anchor, at any hour — past the ~15 min where the split misplaces a step, and past
+    /// every fixture's query offsets. Deterministic: sweeps every 5 minutes of a day.
+    func testFixtureAnchorKeepsSpansClearOfMidnight() {
+        let day = Calendar.current.startOfDay(for: Date())
+        for step in 0..<(24 * 12) {
+            let clock = day.addingTimeInterval(TimeInterval(step * 300 + 37))
+            let anchor = Self.fixtureNow(clock)
+            let first = anchor.addingTimeInterval(-.minutes(60)), last = anchor.addingTimeInterval(.minutes(30))
+            XCTAssertTrue(Calendar.current.isDate(first, inSameDayAs: last),
+                          "clock \(clock): fixture span \(first)…\(last) crosses midnight")
+        }
     }
 
     private func makeLedger(basalRate: Double = 1.0) -> SessionInsulinLedger {
@@ -845,7 +878,7 @@ final class WatchStoreEffectsTests: XCTestCase {
     /// 5-min-grid values adjacent to the query date; the ledger evaluates at the date.)
     func testLedgerMatchesDoseStoreIOB() {
         let (doseStore, _) = makeStoresFixed()   // basal 1.0 U/hr
-        let now = Date()
+        let now = Self.fixtureNow()
         let doses = [
             DoseEntry(type: .tempBasal, startDate: now.addingTimeInterval(-.minutes(90)),
                       endDate: now.addingTimeInterval(-.minutes(60)), value: 3.0, unit: .unitsPerHour,
@@ -881,7 +914,7 @@ final class WatchStoreEffectsTests: XCTestCase {
     /// the same supersede fold the hand-back journal applies on the phone.
     func testLedgerSupersedeTruncation() {
         var ledger = makeLedger()
-        let now = Date()
+        let now = Self.fixtureNow()
         let t1Start = now.addingTimeInterval(-.minutes(20))
         ledger.recordEnact(DoseEntry(type: .tempBasal, startDate: t1Start,
                                      endDate: t1Start.addingTimeInterval(.minutes(30)),
