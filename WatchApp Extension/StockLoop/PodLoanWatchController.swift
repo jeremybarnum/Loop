@@ -541,6 +541,9 @@ final class PodLoanWatchController {
     /// out and a dormant grant is stored. The glance renders the deliberate confirm off the
     /// snapshot; confirmSeize()/dismissSeize() consume it. Queue-confined.
     private var seizeOffer: (issuedAt: Date, token: UUID)?
+    /// The build string the last Start carried, so a confirm that turns back into a normal
+    /// request (phone reachable again) sends the same one. Queue-confined.
+    private var lastRequestBuild: String?
     /// True only inside a confirmed seize's activation, to let handleGrant's lease and
     /// staleness guards stand aside for a credential that has neither (a dormant grant has
     /// no 5-minute lease, and its epoch is provisional and forced fresh at activation).
@@ -577,6 +580,18 @@ final class PodLoanWatchController {
     /// activates, anything else stays idle.
     func confirmSeize() {
         queue.async {
+            // The offer outlives the phone's absence: it stays on screen until tapped. Field
+            // 2026-09-24: confirmed ten minutes after it appeared, two seconds after the phone
+            // came back and re-linked the pod — a phone-held pod does not advertise, so that
+            // seize could only fail (110 s), and its epoch then collided with the phone's next
+            // grant. With the phone reachable at the tap, the user's "start" is honoured the
+            // ordinary way: a normal request, which the phone answers by releasing the pod.
+            if self.phase == .idle, self.seizeOffer != nil, self.isPhoneReachable() {
+                self.seizeOffer = nil
+                SportLog.event("seize", "offline start SUPERSEDED at confirm — the phone is reachable again; sending a normal Start request [seize]")
+                self.requestLoan(watchBuild: self.lastRequestBuild ?? "unknown")
+                return
+            }
             // R40 re-entry: the offer can be presented from plain idle OR from a parked
             // drain (.recoveredDrain) — a watch reboot mid-phoneless-loan rests there.
             guard self.phase == .idle || self.phase == .recoveredDrain, let offer = self.seizeOffer,
@@ -820,6 +835,7 @@ final class PodLoanWatchController {
             self.phase = .requested
             self.attemptStartedAt = self.now()
             self.lastIdleNote = nil
+            self.lastRequestBuild = watchBuild
             // Advisory reachability ACCELERATES the timeout, never gates the attempt (R40(b)):
             // a session already reporting unreachable will not deliver a grant in the next
             // 17 s either, and the user is standing there watching "requesting…" — the first
@@ -1444,6 +1460,14 @@ final class PodLoanWatchController {
                     // held and the stall is something else; "off"/"DENIED"/"FAILED" means the
                     // keepalive is the failure.
                     let stalled = self.takeoverMaxReadGap > 20
+                    // Field 2026-09-24: three takeovers in 19 minutes never heard the pod at all
+                    // while the phone re-linked it each time. The same signature on 2026-08-22 was
+                    // cured by a watch Bluetooth toggle, first try — and whether the next Start
+                    // works after one is itself the diagnosis, so the note asks for exactly that.
+                    // Never connected too: a pod reached through the plain auto-connect path
+                    // (not the takeover's adopt) connects without being counted as heard.
+                    let podNeverHeard = !stalled && PodLoanConnectClock.targetAdvertCount == 0
+                        && PodLoanConnectClock.connectCount == 0
                     if stalled {
                         // Say ONLY what was measured. Battery level does NOT track the outcome:
                         // takeovers succeed at 20% with the wrist up, and run unsuspended at 65%
@@ -1453,6 +1477,10 @@ final class PodLoanWatchController {
                         self.lastIdleNote = String(format: NSLocalizedString(
                             "Sport Mode didn't start — the watch app stopped running mid-connect (%@). Your phone still has the pod. Keep the watch awake — wrist up or screen on — and try again.",
                             comment: "Glance: takeover failed because the app was suspended"), batteryTag())
+                    } else if podNeverHeard {
+                        self.lastIdleNote = NSLocalizedString(
+                            "Sport Mode didn't start — the watch couldn't hear the pod. Turn the watch's Bluetooth off and on, then tap Start again. Your phone still has the pod and is still looping.",
+                            comment: "Glance: takeover failed — the watch never heard the pod advertise")
                     } else {
                         // Root-caused, and it is NOT the pod. Every connect
                         // returned CBErrorDomain#11 (connectionLimitReached) — a limit on THIS
@@ -1476,7 +1504,8 @@ final class PodLoanWatchController {
                             comment: "Glance: takeover failed — the pod link never established")
                     }
                     SportLog.event("loan", String(format: "TAKEOVER FAILED — %@ after %d reads in %.1fs [takeover-timing], max inter-read gap %.1fs (event-driven; 8s backstop when no event fires), %@, final BLE state %@, %@, %@, epoch %d%@",
-                                                  stalled ? "ladder STALLED (our polling was deferred; see cb: for whether the link was up)" : "pod unreachable",
+                                                  stalled ? "ladder STALLED (our polling was deferred; see cb: for whether the link was up)"
+                                                      : (podNeverHeard ? "pod NEVER HEARD (zero adverts from it; see probes)" : "pod unreachable"),
                                                   maxAttempts, failSecs, self.takeoverMaxReadGap, batteryTag(),
                                                   manager.podLoanConnectionStateDescription,
                                                   PodLoanConnectClock.summary(since: self.attemptStartedAt),
@@ -1486,7 +1515,8 @@ final class PodLoanWatchController {
                     // ("The watch could not take the pod (…). The phone kept it."), so it carries
                     // the same obligation as the wrist note above: do not blame the pod for a
                     // connection slot we were holding ourselves.
-                    self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: stalled ? "watch app suspended mid-takeover" : "couldn't establish the pod link")))
+                    self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: stalled ? "watch app suspended mid-takeover"
+                                                                        : (podNeverHeard ? "the watch never heard the pod" : "couldn't establish the pod link"))))
                 }
             }
         }

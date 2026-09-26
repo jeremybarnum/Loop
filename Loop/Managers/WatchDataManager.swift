@@ -62,6 +62,9 @@ final class WatchDataManager: NSObject {
     /// the ladder. The AlertManager suppression predicate ORs on this key.
     static let dosingCaptureKey = "PodLoanPhoneController.dosingEnabledBeforeLoan"
 
+    /// PODLOAN diagnostic: hears the released pod's adverts during a takeover (listen-only).
+    private let podAdvertListener = PodAdvertListener()
+
     private(set) lazy var podLoanController: PodLoanPhoneController = {
         let dosingKey = Self.dosingCaptureKey
         let controller = PodLoanPhoneController(dependencies: .init(
@@ -477,7 +480,9 @@ final class WatchDataManager: NSObject {
             endReclaimBackgroundTask: { [weak self] in self?.endReclaimBackgroundTask() },
             isWatchReachable: { [weak self] in self?.watchSession?.isReachable ?? false },
             isBluetoothPoweredOff: { [weak self] in self?.deviceManager.bluetoothProvider.bluetoothState == .poweredOff },
-            lastWatchContactAt: { [weak self] in self?.lockedLastWatchContact.value ?? nil }
+            lastWatchContactAt: { [weak self] in self?.lockedLastWatchContact.value ?? nil },
+            listenForPodAdverts: { [weak self] epoch in self?.podAdvertListener.listen(epoch: epoch) },
+            stopListeningForPodAdverts: { [weak self] epoch, reason in self?.podAdvertListener.stop(epoch: epoch, reason: reason) }
         ))
         // The predicted-low snooze rides in the grant so takeover does not reset the phone's clock
         // and warn again minutes after this side just did. Read through rather than copied, so the

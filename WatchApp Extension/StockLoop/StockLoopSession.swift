@@ -68,6 +68,9 @@ final class StockLoopSession {
         // heartbeat below: a wedged main thread is exactly the condition under which nothing else
         // in this app can report anything. One ping/second, silent while healthy.
         RuntimeStateLog.startMainStallDetector()
+        // Watch Bluetooth off/on, from launch: the never-heard-the-pod note asks for a toggle,
+        // and the log has to show whether one happened.
+        WatchBluetoothStateLog.shared.start()
 
         // The one question the hand-back UI needs answered.
         loanController.isPhoneReachable = { WCSession.default.isReachable }

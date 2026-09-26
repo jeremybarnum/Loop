@@ -193,6 +193,7 @@ final class SeizeActivationTests: XCTestCase {
     func testConfirmAloneNeverPersistsTheReunionToken() {
         let controller = makeController()
         controller.send = { _ in }
+        controller.isPhoneReachable = { false }   // the offer exists because the phone did not answer
         controller.scheduler = { _, _, work in work.perform() }
 
         let token = UUID()
@@ -394,6 +395,7 @@ final class SeizeActivationTests: XCTestCase {
                 sentEpochs.append(f.epoch)
             }
         }
+        controller.isPhoneReachable = { false }   // the offer exists because the phone did not answer
         controller.scheduler = { _, label, work in if label == "request-timeout" { work.perform() } }
 
         // The split-brain guard records a revoke even with no live session.
@@ -529,6 +531,7 @@ final class SeizeActivationTests: XCTestCase {
         controller.send = { _ in }
         var cancelCalls = 0
         controller.cancelQueuedLoanRequests = { cancelCalls += 1; return 1 }
+        controller.isPhoneReachable = { false }   // the offer exists because the phone did not answer
         controller.scheduler = { _, label, work in if label == "request-timeout" { work.perform() } }
 
         controller.handleDormantGrant(fixtureDormant(issuedAt: Date().addingTimeInterval(-600), epoch: 3,
@@ -541,6 +544,40 @@ final class SeizeActivationTests: XCTestCase {
         controller.confirmSeize()
         _ = controller.debugSnapshot()
         XCTAssertEqual(cancelCalls, 2, "seize confirm cancels again — the strongest statement that no queued request should ever land")
+    }
+
+    /// Field 2026-09-24 13:02: the offline offer sat on screen for ten minutes and was confirmed
+    /// two seconds after the phone came back and re-linked the pod. A phone-held pod does not
+    /// advertise, so that seize could only fail. With the phone reachable at the tap, the confirm
+    /// becomes an ordinary request: the offer is consumed and nothing is seized.
+    func testConfirmWithThePhoneBackSendsANormalRequestInstead() {
+        let controller = makeController()
+        var reachable = false
+        controller.isPhoneReachable = { reachable }
+        var requests = 0
+        controller.send = { dict in
+            if let message = try? LoanMessage.decode(fromTransport: dict), case .request = message { requests += 1 }
+        }
+        var timeoutsFired = 0
+        controller.scheduler = { _, label, work in
+            if label == "request-timeout" && timeoutsFired == 0 { timeoutsFired += 1; work.perform() }   // only the first
+        }
+
+        controller.handleDormantGrant(fixtureDormant(issuedAt: Date().addingTimeInterval(-600), epoch: 3,
+                                                     completeSettings: true))
+        controller.requestLoan(watchBuild: "reunion-confirm")
+        XCTAssertNotNil(controller.debugSnapshot().seizeOfferIssuedAt, "precondition: no answer, the offline offer is up")
+        XCTAssertEqual(requests, 1)
+
+        reachable = true                                         // the phone is back before the tap
+        controller.confirmSeize()
+        _ = controller.debugSnapshot()                           // fence 1: the confirm ran
+        let snap = controller.debugSnapshot()                    // fence 2: the request it queued ran
+
+        XCTAssertEqual(requests, 2, "the confirm went out as a normal Start request")
+        XCTAssertNil(snap.seizeOfferIssuedAt, "the offer was consumed")
+        XCTAssertEqual(snap.phase, .requested, "waiting on the phone's grant — not seizing")
+        XCTAssertNil(defaults.string(forKey: "PodLoanWatchController.activeSeizeToken"), "nothing was seized")
     }
 
     /// Field 2026-09-24 12:10: each seize moves the watch's epoch on without the phone, so the
