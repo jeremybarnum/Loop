@@ -63,6 +63,10 @@ final class WatchDataManager: NSObject {
     /// PODLOAN diagnostic: hears the released pod's adverts during a takeover (listen-only).
     private let podAdvertListener = PodAdvertListener()
 
+    /// PODLOAN: last `isWatchAppInstalled` seen, so a not-installed → installed edge can send
+    /// the fresh watch its dormant grant at once. Nil until activation or the first change.
+    private var lastKnownWatchAppInstalled: Bool?
+
     private(set) lazy var podLoanController: PodLoanPhoneController = {
         let dosingKey = Self.dosingCaptureKey
         let controller = PodLoanPhoneController(dependencies: .init(
@@ -1145,6 +1149,12 @@ extension WatchDataManager: WCSessionDelegate {
                     String(describing: session.isWatchAppInstalled),
                     String(describing: session.isPaired),
                     String(describing: session.isReachable))
+
+        let installed = session.isWatchAppInstalled
+        if installed && lastKnownWatchAppInstalled != true {
+            podLoanController.watchAppDidAppear()
+        }
+        lastKnownWatchAppInstalled = installed
     }
 
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
@@ -1157,6 +1167,7 @@ extension WatchDataManager: WCSessionDelegate {
                 sendWatchContextIfNeeded()
                 sendSupportedBolusVolumesIfNeeded()
                 sendPendingSensorCodeIfNeeded(session)
+                lastKnownWatchAppInstalled = session.isWatchAppInstalled
             }
         case .inactive, .notActivated:
             break

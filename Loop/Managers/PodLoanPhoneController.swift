@@ -2033,6 +2033,21 @@ final class PodLoanPhoneController {
         queue.async { [weak self] in self?.queue_considerDormantRefresh() }
     }
 
+    /// The watch app has just appeared (fresh install or reinstall), so its stores are empty:
+    /// no dormant grant, no pod address, and the Start screen cannot warn that the next Start
+    /// is a first contact. Re-open the throttle and send one now rather than waiting for the
+    /// next epoch/settings change or the 30-min floor (bench 2026-09-26: installed 17:10:04,
+    /// Start tapped 17:10:11, first refresh 17:10:40). The refresher's own guards still apply.
+    func watchAppDidAppear() {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            PhoneLog.event("seize", "watch app installed — re-sending the dormant grant now (state=\(self.state)) [seize]")
+            self.lastDormantRefreshAt = nil
+            self.lastDormantSettingsFingerprint = nil
+            self.queue_considerDormantRefresh()
+        }
+    }
+
     private func queue_considerDormantRefresh() {
         guard state == .owner else { return }
         guard UserDefaults.standard.bool(forKey: Keys.watchSupportsSeize) else { return }

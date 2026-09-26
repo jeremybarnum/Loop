@@ -2272,6 +2272,31 @@ extension PodLoanPhoneControllerTests {
         XCTAssertEqual(refreshes.count, 1, "one burst, one refresh — the throttle stamps at enqueue")
     }
 
+    /// A freshly installed watch app has no dormant grant, so its Start screen cannot know the
+    /// pod or warn of a first contact. The install edge must send one past the throttle that
+    /// just held back an identical refresh (bench 2026-09-26: 36 s after install, too late).
+    func testWatchAppInstallSendsTheDormantGrantPastTheThrottle() {
+        UserDefaults.standard.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
+        defer { UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.watchSupportsSeize") }
+        let controller = makeController()
+
+        let firstRefresh = expectSend()
+        controller.considerDormantRefresh()
+        wait(for: [firstRefresh], timeout: 5)
+        controller.considerDormantRefresh()   // throttled: same settings, same epoch, inside the floor
+        usleep(400_000)
+
+        let installRefresh = expectSend()
+        controller.watchAppDidAppear()
+        wait(for: [installRefresh], timeout: 5)
+        usleep(400_000)
+
+        lock.lock()
+        let refreshes = sent.filter { if case .dormantGrant = $0 { return true }; return false }
+        lock.unlock()
+        XCTAssertEqual(refreshes.count, 2, "the throttled ping sends nothing; the install edge sends one")
+    }
+
     // MARK: - PHONE MIRROR (R40(a), the minimum-deviation paradigm)
 
     private func seizeCredentialOutstanding() -> UUID {
