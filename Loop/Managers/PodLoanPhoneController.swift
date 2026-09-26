@@ -233,6 +233,11 @@ final class PodLoanPhoneController {
         /// tests constructing unchanged.
         var lastWatchContactAt: () -> Date? = { nil }
         var now: () -> Date = { Date() }
+        /// PODLOAN diagnostic (2026-09-25): listen for the pod's adverts from the release until
+        /// the watch confirms or reports the takeover (PodAdvertListener). Defaults are no-ops,
+        /// so tests never touch a real Bluetooth central.
+        var listenForPodAdverts: (_ epoch: Int) -> Void = { _ in }
+        var stopListeningForPodAdverts: (_ epoch: Int, _ reason: String) -> Void = { _, _ in }
     }
 
     /// Code-level configuration: when a force-reclaim's odometer audit finds insulin the
@@ -1864,6 +1869,7 @@ final class PodLoanPhoneController {
         let releaseEpoch = epoch + 1
         handbackDiag(releaseEpoch, "GRANT — releasing pod BLE (wasReleased=\(lendable.isConnectionReleased))")
         lendable.releaseConnection()
+        deps.listenForPodAdverts(releaseEpoch)   // PODLOAN diagnostic: is the released pod advertising?
         queue.asyncAfter(deadline: .now() + 3) { [weak self, weak lendable] in
             guard let self = self, let lendable = lendable else { return }
             // `released` is a FLAG — set synchronously by releaseConnection, it says only that we
@@ -2249,6 +2255,7 @@ final class PodLoanPhoneController {
 
     private func handleTakeoverComplete(_ complete: TakeoverComplete) {
         guard complete.epoch == epoch, state == .grantOffered else { return }
+        deps.stopListeningForPodAdverts(complete.epoch, "watch took the pod")
         t1WorkItem?.cancel()
         cancelNotification(id: NotificationID.t1)
         // Bank the watch's post-takeover odometer NOW, while the watch is alive to send it.
@@ -2278,6 +2285,7 @@ final class PodLoanPhoneController {
 
     private func handleTakeoverFailed(_ failed: TakeoverFailed) {
         guard failed.epoch == epoch, state == .grantOffered else { return }
+        deps.stopListeningForPodAdverts(failed.epoch, "watch reported takeover failed: \(failed.reason)")
         t1WorkItem?.cancel()
         cancelNotification(id: NotificationID.t1)
         // Silent: the watch reported this failure, so the wrist the user is looking at already

@@ -197,7 +197,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
     /// from the watch this launch, which is the dead branch.
     func makeController(watchReachable: @escaping () -> Bool = { false },
                         lastWatchContact: @escaping () -> Date? = { nil },
-                        now: @escaping () -> Date = { Date() }) -> PodLoanPhoneController {
+                        now: @escaping () -> Date = { Date() },
+                        listenForPodAdverts: @escaping (Int) -> Void = { _ in },
+                        stopListeningForPodAdverts: @escaping (Int, String) -> Void = { _, _ in }) -> PodLoanPhoneController {
         return PodLoanPhoneController(dependencies: .init(
             pumpManager: { [weak self] in self?.pump },
             settings: { [weak self] in self?.settings ?? LoopSettings() },
@@ -280,7 +282,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
             },
             isWatchReachable: watchReachable,
             lastWatchContactAt: lastWatchContact,
-            now: now
+            now: now,
+            listenForPodAdverts: listenForPodAdverts,
+            stopListeningForPodAdverts: stopListeningForPodAdverts
         ))
     }
 
@@ -1541,6 +1545,27 @@ final class PodLoanPhoneControllerTests: XCTestCase {
 
         XCTAssertFalse(controller.isPodTakeoverInProgress, "confirmed — the tile may now say 'Pod on Watch'")
         XCTAssertTrue(controller.podIsOnLoan)
+    }
+
+    /// PODLOAN diagnostic (2026-09-25): the phone listens for the released pod's adverts from the
+    /// grant's release until the watch confirms the takeover, for the grant's own epoch.
+    func testGrantStartsTheAdvertListenerAndTheTakeoverStopsIt() throws {
+        var listened: [Int] = []
+        var stopped: [Int] = []
+        let controller = makeController(
+            listenForPodAdverts: { [weak self] epoch in self?.lock.lock(); listened.append(epoch); self?.lock.unlock() },
+            stopListeningForPodAdverts: { [weak self] epoch, _ in self?.lock.lock(); stopped.append(epoch); self?.lock.unlock() })
+
+        let grantSent = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
+        wait(for: [grantSent], timeout: 5)
+        guard case .grant(let grant)? = lastSent() else { return XCTFail("expected a grant") }
+        lock.lock(); XCTAssertEqual(listened, [grant.epoch], "listening starts at the release, for this grant"); lock.unlock()
+
+        let status = LoanPodStatus(timestamp: Date(), deliveredUnits: 10, reservoirLevel: nil, isSuspended: false, faultCode: nil)
+        controller.handleIncoming(userInfo: try LoanMessage.takeoverComplete(TakeoverComplete(epoch: grant.epoch, firstPodStatus: status)).transportDictionary())
+        waitForState(controller, .loaned)
+        lock.lock(); XCTAssertEqual(stopped, [grant.epoch], "the watch has the pod — nothing left to hear"); lock.unlock()
     }
 }
 
