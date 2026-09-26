@@ -347,19 +347,16 @@ final class GlanceViewModel: ObservableObject {
                   : ExtensionDelegate.shared().stockLoopSession.stack.loopManager.sensorReadiness
     }
 
-    /// The "yes, Dexcom shows BG" branch of the block screen: the sensor is talking to this
-    /// watch, so OUR client is following the wrong identity — drop it and rescan. This is the
-    /// manual form of the sensor-switch override, and it is exactly what recovered the field
-    /// watch on 2026-08-21 (first direct reading 78 seconds later).
-    /// True from the tap until a reading lands or ~one transmit window passes. Exists because
-    /// the field run showed three taps in 20 seconds for one recovery already in flight — the
-    /// button worked and looked dead, which invites exactly the re-tapping that resets scans.
-    @Published var rescanInFlight = false
+    /// Drop the identity our client follows and adopt the current sensor — the early form of the
+    /// sensor-switch override, run by Start when the sensor is not recognised; it is what
+    /// recovered the field watch on 2026-08-21 (first direct reading 78 seconds later).
+    /// Held for ~one transmit window so repeated Start taps do not reset a recovery in flight.
+    private var rescanInFlight = false
 
     func rescanForSensor() {
         guard !isPreview, !rescanInFlight else { return }
         rescanInFlight = true
-        SportLog.event("cgm", "user asked for a sensor rescan from the Sport Mode block screen")
+        SportLog.event("cgm", "sensor not recognised at Start — forgetting it and listening for the current one")
         ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.scanForNewSensor()
         // Cleared on a timer, not on success plumbing: if a reading lands the verdict flips to
         // .ready and this screen is gone anyway; if none lands, one window is when the truth
@@ -391,6 +388,14 @@ final class GlanceViewModel: ObservableObject {
         // by stale extension code — the failure mode a version bump alone would hide.
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         let session = ExtensionDelegate.shared().stockLoopSession
+        // What the Reconnect / Re-acquire buttons beside Start used to offer, done by the tap:
+        // the stale-identity signature, or setup failing three times running. Only the user's
+        // own sensor can be adopted, and the watch's own switch would fire minutes later anyway.
+        let readiness = sensorReadiness
+        if readiness == .wrongSensor
+            || (readiness == .unproven && session.stack.cgmManager.authSubscribeFailureStreak >= 3) {
+            rescanForSensor()
+        }
         session.loanController.requestLoan(watchBuild: build)
         // Log pipeline v4: the Start tap itself ships a snapshot, and a +35s
         // follow-up captures the request's fate (grant/timeout) even when the
@@ -1051,14 +1056,25 @@ struct GlanceView: View {
                 }
             } else {
             // START IS ALWAYS OFFERED (production line, 2026-09-24, the owner's ruling of
-            // 2026-09-20). Readiness is information beside the button, never instead of it.
+            // 2026-09-20). Readiness never gates or crowds the button.
             // The old gate hid Start until this watch had proven a direct read while idle —
             // and an idle ride-only client often cannot complete one (auth-subscribe streaks of
             // 76 and 138 in the field), while inside a loan the keepalive makes reads land
             // (11/11 and 20/20). So the gate was reading the missing runtime as a fault, and on
             // 2026-09-19 it kept the production user from starting at all after a sensor change.
             // With no direct reading the loan's loop simply does not dose (stock's 15-minute
-            // recency gate), and the 12-minute No Direct BG watchdog is the backstop.
+            // recency gate), and the 12-minute No Direct BG watchdog is the backstop. A sensor the
+            // watch does not recognise is rescanned by the Start tap itself (startSportMode).
+            // First contact with a new pod needs the wrist up (the takeover must FIND the pod,
+            // and finding needs the screen on): the one Start that asks something of the user
+            // says so above the button and wears the attention colour.
+            if let note = model.state.firstContactNote {
+                Text(note)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.glanceAttention)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Button { model.startSportMode() } label: {
                 Text("Start Sport Mode")
                     .font(.system(size: 17, weight: .semibold))
@@ -1066,36 +1082,7 @@ struct GlanceView: View {
                     .padding(.vertical, 8)
             }
             .buttonStyle(.borderedProminent)
-            .tint(.glanceAccent)
-            if let note = model.state.firstContactNote {
-                Text(note)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.glanceWarn)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            switch model.sensorReadiness {
-            case .ready:
-                EmptyView()
-            case .wrongSensor:
-                // The stale-identity signature: the radio keeps seeing a DIFFERENT sensor while
-                // ours is silent. Reconnect is the proven fix (78 s to first reading), offered
-                // beside Start rather than in its place.
-                SensorReadinessNote(
-                    text: NSLocalizedString("Watch hasn't picked up your new sensor yet.", comment: "Glance note: the watch still holds an old sensor identity"),
-                    actionTitle: model.rescanInFlight ? nil : NSLocalizedString("Reconnect sensor", comment: "Glance button: forget the old sensor and adopt the current one"),
-                    action: { model.rescanForSensor() })
-            case .unproven:
-                // Fresh install, or no recent handshake. Not a fault: the loan's runtime is what
-                // completes the read. Once the sensor keeps connecting but the auth subscribe
-                // keeps dying (streak >= 3), the cold re-acquire that went 2-for-2 in the field
-                // (2026-08-30) is offered — still beside Start, never instead of it.
-                let failures = ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.authSubscribeFailureStreak
-                SensorReadinessNote(
-                    text: NSLocalizedString("No direct G7 reading yet. It connects once Sport Mode is running.", comment: "Glance note: no direct sensor reading proven while idle"),
-                    actionTitle: (failures >= 3 && !model.rescanInFlight) ? NSLocalizedString("Re-acquire sensor", comment: "Glance button: cold re-acquire of the G7 sensor") : nil,
-                    action: { model.rescanForSensor() })
-            }
+            .tint(model.state.firstContactNote == nil ? .glanceAccent : .glanceAttention)
             }
             if let note = model.state.idleNote {
                 Text(note)
@@ -1369,7 +1356,7 @@ struct GlanceView: View {
                         if let hint = model.state.startingHintText {
                             Text(hint)
                                 .font(.system(size: 11, weight: model.state.startingHintDone ? .regular : .semibold))
-                                .foregroundColor(model.state.startingHintDone ? .glanceAccent : .glanceWarn)
+                                .foregroundColor(model.state.startingHintDone ? .glanceAccent : .glanceAttention)
                                 .multilineTextAlignment(.center)
                                 .fixedSize(horizontal: false, vertical: true)
                         } else if elapsed > Self.podTakeoverOverrun {
@@ -1428,6 +1415,8 @@ extension Color {
     static let glanceAccent = Color(red: 0.36, green: 0.56, blue: 0.82)   // #5C8FD1 calm blue — retired the burnt-orange identity 2026-07-24 (distinct from the green loop ring)
     static let glanceGood = Color(red: 0.31, green: 0.82, blue: 0.48)
     static let glanceWarn = Color(red: 0.91, green: 0.70, blue: 0.25)
+    /// Burnt orange: a Start or takeover that needs the user (first contact with a new pod).
+    static let glanceAttention = Color(red: 0.86, green: 0.45, blue: 0.16)
     static let glanceCrit = Color(red: 0.88, green: 0.36, blue: 0.31)
 }
 
@@ -1712,25 +1701,4 @@ struct GlanceDemoView: View {
 
 /// Readiness, beside the Start button (never instead of it): one line of fact and, where the
 /// field proved a remedy, one small action.
-private struct SensorReadinessNote: View {
-    let text: String
-    let actionTitle: String?
-    let action: () -> Void
 
-    var body: some View {
-        VStack(spacing: 4) {
-            Text(text)
-                .font(.system(size: 11))
-                .foregroundColor(.glanceDim)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-            if let actionTitle {
-                Button(action: action) {
-                    Text(actionTitle).font(.system(size: 12, weight: .semibold))
-                }
-                .buttonStyle(.plain)
-                .foregroundColor(.glanceAccent)
-            }
-        }
-    }
-}

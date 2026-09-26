@@ -759,11 +759,13 @@ final class PodLoanWatchController {
         defaults.set(data, forKey: DormantKeys.envelope)
         defaults.set(dormant.issuedAt, forKey: DormantKeys.issuedAt)
         defaults.set(dormant.seizeToken.uuidString, forKey: DormantKeys.token)
-        defaults.set(Int(dormant.grant.podAddress), forKey: DormantKeys.podAddress)
-        SportLog.event("seize", String(format: "dormant grant refreshed — issued %@, %d dose record(s), token …%@ [seize]",
+        let podAddress = Self.podAddress(in: dormant.grant)
+        defaults.set(podAddress.map { Int($0) }, forKey: DormantKeys.podAddress)
+        SportLog.event("seize", String(format: "dormant grant refreshed — issued %@, %d dose record(s), token …%@, pod %@ [seize]",
                                        DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .none, timeStyle: .medium),
                                        dormant.grant.doseHistory.count,
-                                       String(dormant.seizeToken.uuidString.suffix(8))))
+                                       String(dormant.seizeToken.uuidString.suffix(8)),
+                                       podAddress.map { String(format: "0x%08x", $0) } ?? "unknown"))
     }
 
     /// The stored seize credential, decoded fresh from defaults — the entry flow (next
@@ -932,7 +934,7 @@ final class PodLoanWatchController {
     #endif
 
     private func handleGrant(_ grant: LoanGrant) {
-        defaults.set(Int(grant.podAddress), forKey: DormantKeys.podAddress)
+        defaults.set(Self.podAddress(in: grant).map { Int($0) }, forKey: DormantKeys.podAddress)
         SportLog.event("loan", "GRANT received — epoch \(grant.epoch), \(grant.pumpManagerRawState.count)B pod state")
 
         // A REAL grant supersedes any seize attempt that never proved out: drop the pending
@@ -2725,12 +2727,19 @@ final class PodLoanWatchController {
     /// The current pod's address: recorded from every dormant grant and grant; read once from
     /// the stored dormant grant for a watch that updated before the address was recorded.
     private func currentPodAddress() -> UInt32? {
-        if let saved = defaults.object(forKey: DormantKeys.podAddress) as? Int {
+        if let saved = defaults.object(forKey: DormantKeys.podAddress) as? Int, saved != 0 {
             return UInt32(truncatingIfNeeded: saved)
         }
-        guard let dormant = storedDormantGrant() else { return nil }
-        defaults.set(Int(dormant.grant.podAddress), forKey: DormantKeys.podAddress)
-        return dormant.grant.podAddress
+        guard let dormant = storedDormantGrant(), let address = Self.podAddress(in: dormant.grant) else { return nil }
+        defaults.set(Int(address), forKey: DormantKeys.podAddress)
+        return address
+    }
+
+    /// The grant's `podAddress` field is always 0 (the phone never fills it); the address rides
+    /// the pump snapshot, under the keys the pod driver's own rebuild reads.
+    static func podAddress(in grant: LoanGrant) -> UInt32? {
+        let snapshot = (try? PropertyListSerialization.propertyList(from: grant.pumpManagerRawState, options: [], format: nil)) as? [String: Any]
+        return ((snapshot?["state"] as? [String: Any])?["podState"] as? [String: Any])?["address"] as? UInt32
     }
 
     static func firstContactExpected(podAddress: UInt32?, hasSavedHandle: (UInt32) -> Bool) -> Bool {
@@ -2739,7 +2748,7 @@ final class PodLoanWatchController {
     }
 
     static let firstContactStartNote = NSLocalizedString(
-        "First Sport Mode on this pod — after tapping Start, keep your wrist up until it says the pod is found.",
+        "New pod — keep your wrist up after Start",
         comment: "Glance note beside Start when the watch has never connected to the current pod")
 
     /// The hint under the takeover bar. Only a takeover that must FIND its pod (first contact,

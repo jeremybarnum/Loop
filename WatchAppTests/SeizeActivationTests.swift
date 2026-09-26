@@ -654,9 +654,19 @@ final class SeizeActivationTests: XCTestCase {
         let controller = makeController()
         controller.send = { _ in }
         XCTAssertFalse(controller.debugSnapshot().podFirstContactExpected, "no pod known yet — say nothing")
-        controller.handleDormantGrant(fixtureDormant(issuedAt: Date(), epoch: 3))
+        // As the phone sends it (bench 2026-09-26, build 1092): the grant's podAddress field is 0 and
+        // the address rides the pump snapshot. A fixture with the field filled hid that bug.
+        let snapshot = try! PropertyListSerialization.data(
+            fromPropertyList: ["state": ["podState": ["address": 0x1F0A2B3C]]], format: .binary, options: 0)
+        let grant = LoanGrant(epoch: 3, expiresAt: Date(), pumpManagerRawState: snapshot, podAddress: 0,
+                              therapySettingsRaw: Data([4, 5]), settingsTimeZoneID: "GMT",
+                              doseHistory: [], boundaryRecord: nil)
+        controller.handleDormantGrant(DormantGrant(grant: grant, issuedAt: Date(), seizeToken: UUID()))
         XCTAssertTrue(controller.debugSnapshot().podFirstContactExpected,
                       "a pod this watch holds no handle for — the note shows beside Start")
+
+        defaults.set(0, forKey: "PodLoanWatchController.currentPodAddress")   // what 1092 stored
+        XCTAssertTrue(controller.debugSnapshot().podFirstContactExpected, "a stored 0 is unknown, not a pod")
     }
 
     func testFirstContactRule() {

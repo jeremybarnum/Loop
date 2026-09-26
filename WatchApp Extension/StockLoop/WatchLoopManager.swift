@@ -1022,7 +1022,7 @@ final class WatchLoopManager {
         /// Identity persisted, auth proven recently, radio not contradicting it. Start.
         case ready
         /// The radio keeps sighting a DIFFERENT sensor while ours is silent — the stale-identity
-        /// signature. The reconnect screen is the fix (and the override may fire on its own).
+        /// signature. Start rescans (and the override may fire on its own).
         case wrongSensor
         /// No persisted identity, or no successful handshake in the recency window. Not a
         /// fault: a fresh install, a just-cleared identity, or a very long gap. Foreground
