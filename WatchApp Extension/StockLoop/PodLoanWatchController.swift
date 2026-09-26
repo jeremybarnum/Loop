@@ -501,6 +501,9 @@ final class PodLoanWatchController {
         static let envelope = "PodLoanWatchController.dormantGrant"
         static let issuedAt = "PodLoanWatchController.dormantGrantIssuedAt"
         static let token = "PodLoanWatchController.dormantGrantToken"
+        /// The current pod's address, from the latest dormant grant or grant — lets the idle
+        /// screen say before Start whether this watch has met the pod (a saved handle).
+        static let podAddress = "PodLoanWatchController.currentPodAddress"
         /// R40: set the moment a seize activates; rides every hand-back offer of the seized
         /// loan so the phone can retro-acknowledge; cleared when the loan CLOSES. Persisted —
         /// a relaunch mid-seized-loan must keep sending it.
@@ -746,6 +749,7 @@ final class PodLoanWatchController {
         defaults.set(data, forKey: DormantKeys.envelope)
         defaults.set(dormant.issuedAt, forKey: DormantKeys.issuedAt)
         defaults.set(dormant.seizeToken.uuidString, forKey: DormantKeys.token)
+        defaults.set(Int(dormant.grant.podAddress), forKey: DormantKeys.podAddress)
         SportLog.event("seize", String(format: "dormant grant refreshed — issued %@, %d dose record(s), token …%@ [seize]",
                                        DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .none, timeStyle: .medium),
                                        dormant.grant.doseHistory.count,
@@ -917,6 +921,7 @@ final class PodLoanWatchController {
     #endif
 
     private func handleGrant(_ grant: LoanGrant) {
+        defaults.set(Int(grant.podAddress), forKey: DormantKeys.podAddress)
         SportLog.event("loan", "GRANT received — epoch \(grant.epoch), \(grant.pumpManagerRawState.count)B pod state")
 
         // A REAL grant supersedes any seize attempt that never proved out: drop the pending
@@ -1185,6 +1190,17 @@ final class PodLoanWatchController {
                 self.takeoverPodReached = true
                 let elapsed = self.attemptStartedAt.map { self.now().timeIntervalSince($0) } ?? -1
                 SportLog.event("loan", String(format: "takeover: pod REACHED (+%.1fs, app %@) — the rest needs no screen", elapsed, RuntimeStateLog.appStateName()))
+                self.notifyUI()
+            }
+        }
+        PodLoanConnectClock.podLoanOnDiscoveryNeeded = { [weak self] in
+            guard let self = self else { return }
+            self.queue.async {
+                // A saved handle the watch no longer knows (e.g. after a restart) turns this into
+                // a first contact: ask for the wrist now rather than waiting for the 8 s tap.
+                guard self.phase == .takingOver, self.epoch == grant.epoch, !self.takeoverFirstContact else { return }
+                self.takeoverFirstContact = true
+                SportLog.event("loan", "takeover: saved handle unusable — discovering the pod after all; the glance asks for the wrist up")
                 self.notifyUI()
             }
         }
@@ -2599,6 +2615,9 @@ final class PodLoanWatchController {
         var takeoverHint: String? = nil
         /// True once the takeover has reached its pod (hint shows as done, not as a warning).
         var takeoverPodReached: Bool = false
+        /// Resting: the current pod is known and this watch holds no handle for it, so the next
+        /// Start must find the pod with the screen on.
+        var podFirstContactExpected: Bool = false
     }
 
     /// True while this watch owns the pod (phase .active) — the carb/bolus flow
@@ -2685,8 +2704,31 @@ final class PodLoanWatchController {
                     ? Self.takeoverHint(firstContact: takeoverFirstContact, podReached: takeoverPodReached,
                                         nudged: takeoverNudges > 0)
                     : nil,
-                takeoverPodReached: phase == .takingOver && takeoverPodReached)
+                takeoverPodReached: phase == .takingOver && takeoverPodReached,
+                podFirstContactExpected: (phase == .idle || phase == .recoveredDrain)
+                    && Self.firstContactExpected(podAddress: currentPodAddress(),
+                                                 hasSavedHandle: OmniPumpManager.podLoanHasSavedHandle(forPodAddress:)))
     }
+
+    /// The current pod's address: recorded from every dormant grant and grant; read once from
+    /// the stored dormant grant for a watch that updated before the address was recorded.
+    private func currentPodAddress() -> UInt32? {
+        if let saved = defaults.object(forKey: DormantKeys.podAddress) as? Int {
+            return UInt32(truncatingIfNeeded: saved)
+        }
+        guard let dormant = storedDormantGrant() else { return nil }
+        defaults.set(Int(dormant.grant.podAddress), forKey: DormantKeys.podAddress)
+        return dormant.grant.podAddress
+    }
+
+    static func firstContactExpected(podAddress: UInt32?, hasSavedHandle: (UInt32) -> Bool) -> Bool {
+        guard let address = podAddress, address != 0 else { return false }
+        return !hasSavedHandle(address)
+    }
+
+    static let firstContactStartNote = NSLocalizedString(
+        "First Sport Mode on this pod — after tapping Start, keep your wrist up until it says the pod is found.",
+        comment: "Glance note beside Start when the watch has never connected to the current pod")
 
     /// The hint under the takeover bar. Only a takeover that must FIND its pod (first contact,
     /// or one the wrist tap has flagged) says anything: finding needs the screen on, and once

@@ -600,4 +600,22 @@ final class SeizeActivationTests: XCTestCase {
         _ = controller.debugSnapshot()
         XCTAssertEqual(floors, [7], "max(high-water 5, revoked 7) — a grant at or below 7 would be refused")
     }
+
+    /// 2026-09-26: the Start screen says BEFORE the tap when this watch has never connected to the
+    /// current pod — the dormant grant names the pod, and no saved handle exists for it.
+    func testTheStartScreenKnowsAFirstContactFromTheDormantGrant() {
+        let controller = makeController()
+        controller.send = { _ in }
+        XCTAssertFalse(controller.debugSnapshot().podFirstContactExpected, "no pod known yet — say nothing")
+        controller.handleDormantGrant(fixtureDormant(issuedAt: Date(), epoch: 3))
+        XCTAssertTrue(controller.debugSnapshot().podFirstContactExpected,
+                      "a pod this watch holds no handle for — the note shows beside Start")
+    }
+
+    func testFirstContactRule() {
+        XCTAssertFalse(PodLoanWatchController.firstContactExpected(podAddress: nil, hasSavedHandle: { _ in false }))
+        XCTAssertFalse(PodLoanWatchController.firstContactExpected(podAddress: 0, hasSavedHandle: { _ in false }))
+        XCTAssertFalse(PodLoanWatchController.firstContactExpected(podAddress: 0x17a6219a, hasSavedHandle: { _ in true }))
+        XCTAssertTrue(PodLoanWatchController.firstContactExpected(podAddress: 0x17a6219a, hasSavedHandle: { _ in false }))
+    }
 }

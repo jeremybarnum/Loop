@@ -106,6 +106,11 @@ arrived.
   connecting").
 - **Failure message.** "The watch never found the pod. Tap Start and keep your wrist up until it
   says the pod is found."
+- **Before the tap (prod-123-diag, 2026-09-26).** The watch records the current pod's address
+  from every dormant grant and grant; when it holds no handle for that address, the Start screen
+  says so under the button. A saved handle the watch no longer knows at takeover (e.g. after a
+  restart) switches the takeover screen to the wrist-up prompt at once
+  (`podLoanOnDiscoveryNeeded`). The idle screen cannot see that case in advance.
 
 **Alternatives considered:** a phone-led "introduce the pod to the watch" step at pod setup
 (removes the first-contact prompt, but changes the phone's pod-setup flow, which stays stock —

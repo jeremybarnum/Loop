@@ -143,6 +143,8 @@ struct GlanceUIState {
     var startingHintText: String? = nil
     /// The hint reports success ("pod found") rather than asking for something.
     var startingHintDone: Bool = false
+    /// Beside Start: this watch has never connected to the current pod.
+    var firstContactNote: String? = nil
     /// G7 prediction: countdown to the next expected G7 transmit ("G7 in ~2:40").
     /// Shown under the bar while starting, and under the stale line while active
     /// without a direct reading. Pod and G7 are deliberately decoupled — the pod bar
@@ -468,6 +470,7 @@ final class GlanceViewModel: ObservableObject {
                 f.unitsStyle = .abbreviated
                 idle.seizeOfferAgeText = f.string(from: Date().timeIntervalSince(issued)) ?? "?"
             }
+            idle.firstContactNote = snap.podFirstContactExpected ? PodLoanWatchController.firstContactStartNote : nil
             state = idle
         case .requested, .takingOver:
             state = Self.startingState(context: ExtensionDelegate.shared().loopManager.activeContext,
@@ -518,6 +521,7 @@ final class GlanceViewModel: ObservableObject {
                 f.unitsStyle = .abbreviated
                 idle.seizeOfferAgeText = f.string(from: Date().timeIntervalSince(issued)) ?? "?"
             }
+            idle.firstContactNote = snap.podFirstContactExpected ? PodLoanWatchController.firstContactStartNote : nil
             state = idle
         case .active:
             // Main-safe read, exactly as for the loan snapshot above: publish a mirror from
@@ -1063,6 +1067,13 @@ struct GlanceView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.glanceAccent)
+            if let note = model.state.firstContactNote {
+                Text(note)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.glanceWarn)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             switch model.sensorReadiness {
             case .ready:
                 EmptyView()
