@@ -621,6 +621,16 @@ final class PodLoanWatchController {
         }
     }
 
+    /// The offline offer answers ONE unanswered request. A grant accepted after it, or a new
+    /// Start, makes it stale; left set, it hid under the loan and resurfaced on the idle screen
+    /// when that loan ended (bench 2026-09-26 e152: the 8 s timeout fired 2 s after the phone
+    /// granted, and the queued grant landed 0.1 s after the offer). Caller is on `queue`.
+    private func withdrawSeizeOffer(reason: String) {
+        guard seizeOffer != nil else { return }
+        seizeOffer = nil
+        SportLog.event("seize", "offline offer WITHDRAWN — \(reason) [seize]")
+    }
+
     // MARK: - R40(f) reunion: the phone's return PROMPTS during a seized loan
 
     /// Kill switch (absent = enabled), same insurance pattern as the OmnipodKit loan
@@ -810,6 +820,7 @@ final class PodLoanWatchController {
             self.attemptStartedAt = self.now()
             self.lastIdleNote = nil
             self.lastRequestBuild = watchBuild
+            self.withdrawSeizeOffer(reason: "a new Start request went out")
             // Advisory reachability ACCELERATES the timeout, never gates the attempt (R40(b)):
             // a session already reporting unreachable will not deliver a grant in the next
             // 17 s either, and the user is standing there watching "requesting…" — the first
@@ -1067,6 +1078,7 @@ final class PodLoanWatchController {
         // find out whether the regime that matters behaves the same way.
         PodLoanConnectClock.appStateProbe = { RuntimeStateLog.appStateName() }
         RuntimeStateLog.probeTimerDeferral("takeover-start")
+        withdrawSeizeOffer(reason: "a grant was accepted")
         phase = .takingOver
         loopManager.settings = decodedSettings!
         // Frozen-at-grant like the therapy settings above: run the RC implementation the

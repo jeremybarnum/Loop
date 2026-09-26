@@ -580,6 +580,53 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertNil(defaults.string(forKey: "PodLoanWatchController.activeSeizeToken"), "nothing was seized")
     }
 
+    /// Bench 2026-09-26 e152: the request timed out 2 s after the phone had granted, the queued
+    /// grant landed 0.1 s after the offline offer, and the loan ran — but the offer was never
+    /// cleared, so it came back on the idle screen when the loan ended. An accepted grant must
+    /// withdraw it. (The fixture's pod bytes fail the rebuild, returning the watch to idle — the
+    /// same screen the loan's end returns to.)
+    func testALateGrantWithdrawsTheOfflineOffer() throws {
+        let controller = makeController()
+        controller.isPhoneReachable = { false }
+        controller.send = { _ in }
+        var timeoutsFired = 0
+        controller.scheduler = { _, label, work in
+            if label == "request-timeout" && timeoutsFired == 0 { timeoutsFired += 1; work.perform() }
+        }
+
+        controller.handleDormantGrant(fixtureDormant(issuedAt: Date().addingTimeInterval(-120), epoch: 3))
+        controller.requestLoan(watchBuild: "late-grant")
+        XCTAssertNotNil(controller.debugSnapshot().seizeOfferIssuedAt, "precondition: the timeout put the offer up")
+
+        let late = fixtureDormant(issuedAt: Date(), epoch: 9, completeSettings: true).grant
+            .withEpoch(9, leaseUntil: Date().addingTimeInterval(300))
+        controller.handleIncoming(userInfo: try LoanMessage.grant(late).transportDictionary(), channel: .queued)
+        let snap = controller.debugSnapshot()
+
+        XCTAssertEqual(snap.phase, .idle, "precondition: the takeover ran and ended back at idle")
+        XCTAssertNil(snap.seizeOfferIssuedAt, "the accepted grant withdrew the offline offer")
+    }
+
+    /// A new Start supersedes an offer left from an earlier unanswered request; its own timeout
+    /// re-offers if the phone is still silent.
+    func testANewStartWithdrawsTheOfflineOffer() {
+        let controller = makeController()
+        controller.send = { _ in }
+        var timeoutsFired = 0
+        controller.scheduler = { _, label, work in
+            if label == "request-timeout" && timeoutsFired == 0 { timeoutsFired += 1; work.perform() }
+        }
+
+        controller.handleDormantGrant(fixtureDormant(issuedAt: Date().addingTimeInterval(-120), epoch: 3))
+        controller.requestLoan(watchBuild: "first")
+        XCTAssertNotNil(controller.debugSnapshot().seizeOfferIssuedAt, "precondition: the offer is up")
+
+        controller.requestLoan(watchBuild: "second")
+        let snap = controller.debugSnapshot()
+        XCTAssertEqual(snap.phase, .requested)
+        XCTAssertNil(snap.seizeOfferIssuedAt, "the new request withdrew the stale offer")
+    }
+
     /// Field 2026-09-24 12:10: each seize moves the watch's epoch on without the phone, so the
     /// phone's next grants (e92, e93) were refused by a watch at 93. The request now names the
     /// highest epoch handleGrant would refuse, so the phone can grant above it.
