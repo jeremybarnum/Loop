@@ -335,25 +335,6 @@ final class GlanceViewModel: ObservableObject {
         isPreview ? nil : G7WatchDirectRead.needsCodeNote
     }
 
-    /// Sensor setup (build 3a.3): the watch knows its sensor and code but has never connected.
-    /// nil = nothing to show.
-    var sensorSetupNote: (text: String, canStart: Bool)? {
-        guard !isPreview else { return nil }
-        let session = ExtensionDelegate.shared().stockLoopSession
-        if session.sensorSetupActive {
-            return (NSLocalizedString("Connecting to your sensor… you can lower your wrist (up to 10 min).", comment: "Glance note while the watch makes its first connection to a sensor"), false)
-        }
-        if session.sensorNeedsSetup {
-            return (NSLocalizedString("Watch hasn't connected to your sensor yet.", comment: "Glance note when the watch has never connected to the current sensor"), true)
-        }
-        return nil
-    }
-
-    func startSensorSetup() {
-        guard !isPreview else { return }
-        ExtensionDelegate.shared().stockLoopSession.startSensorSetup(reason: "Connect sensor tapped on the watch")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
-    }
 
     /// R40(b): the deliberate confirm / dismissal for a pending offline start.
     func confirmSeize() {
@@ -1042,12 +1023,11 @@ struct GlanceView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.glanceAccent)
+            // No note for a sensor the watch has not connected to yet: the search runs by itself at
+            // every Sport Mode start and when the phone saves a code (StockLoopSession), so a note
+            // and a button there only offered by hand what happens anyway (ruled 2026-09-26).
             if let note = model.needsCodeNote {
                 SensorReadinessNote(text: note, actionTitle: nil, action: {})
-            } else if let setup = model.sensorSetupNote {
-                SensorReadinessNote(text: setup.text,
-                                    actionTitle: setup.canStart ? NSLocalizedString("Connect sensor", comment: "Glance button: hold the watch awake for its first connection to the sensor") : nil,
-                                    action: { model.startSensorSetup() })
             }
             }
             if let note = model.state.idleNote {

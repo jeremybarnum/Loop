@@ -364,7 +364,6 @@ final class StockLoopSession {
     // or at the cap. It starts when:
     //   • the phone launches the watch app after a pairing code is saved (HKHealthStore
     //     .startWatchApp → ExtensionDelegate.handle(workoutConfiguration:)), the automatic path;
-    //   • the user taps Connect sensor on the glance;
     //   • Sport Mode starts (the loan's keepalive is up anyway).
     // A workout cannot be started from the background (HK error 14), which is why the phone's
     // launch is the automatic path rather than the code's arrival here.
@@ -396,7 +395,7 @@ final class StockLoopSession {
         stack.cgmManager.reconnectG7()
         let t = DispatchSource.makeTimerSource(queue: .main)
         t.schedule(deadline: .now() + Self.sensorSetupCap)
-        t.setEventHandler { [weak self] in self?.endSensorSetup("cap reached with no reading — the glance offers Connect sensor again") }
+        t.setEventHandler { [weak self] in self?.endSensorSetup("cap reached with no reading — the next Sport Mode start searches again") }
         t.resume()
         sensorSetupTimer = t
     }
