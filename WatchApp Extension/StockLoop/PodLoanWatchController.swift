@@ -787,7 +787,13 @@ final class PodLoanWatchController {
             let reachable = self.isPhoneReachable()
             let timeout: TimeInterval = reachable ? 25 : 8
             SportLog.event("loan", "REQUEST sent (build \(watchBuild)) — awaiting grant\(reachable ? "" : " (phone unreachable — short \(Int(timeout))s timeout)")")
-            self.sendMessage(.request(LoanRequest(watchBuild: watchBuild, supportsSeize: true, sentAt: self.now())))
+            // Every epoch handleGrant would refuse, so the phone can grant above them all.
+            let epochFloor = max(self.epoch ?? 0,
+                                 self.journal.activeEpoch ?? 0,
+                                 self.defaults.integer(forKey: Keys.highWaterEpoch),
+                                 self.lastRevokedEpoch ?? 0)
+            self.sendMessage(.request(LoanRequest(watchBuild: watchBuild, supportsSeize: true, sentAt: self.now(),
+                                                  watchEpochFloor: epochFloor)))
 
             // No grant within the timeout → the phone refused, is busy, or isn't reachable.
             // Return to idle with a visible reason instead of hanging on "requesting…".

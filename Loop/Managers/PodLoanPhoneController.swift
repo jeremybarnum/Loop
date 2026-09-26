@@ -1185,6 +1185,9 @@ final class PodLoanPhoneController {
     private var epoch: Int {
         didSet { UserDefaults.standard.set(epoch, forKey: Keys.epoch) }
     }
+    /// The watch's LoanRequest.watchEpochFloor for the request being granted; consumed by
+    /// the grant.
+    private var requestedEpochFloor = 0
     private var committedCursor: Int {
         didSet { UserDefaults.standard.set(committedCursor, forKey: Keys.cursor) }
     }
@@ -1707,6 +1710,7 @@ final class PodLoanPhoneController {
             sendMessage(.nack(ProtocolNack(seenVersion: request.supportedVersions.max())))
             return
         }
+        requestedEpochFloor = request.watchEpochFloor ?? 0
         guard state == .owner else {
             // A NEW request means the watch is NOT in a loan — so a lingering
             // non-owner state is stale. Recover instead of refusing forever (bug E).
@@ -1878,6 +1882,12 @@ final class PodLoanPhoneController {
             PhoneLog.flush()   // the analysis wants this file current at exactly this moment
         }
 
+        // Grant above every epoch the watch would refuse (see LoanRequest.watchEpochFloor).
+        if requestedEpochFloor > epoch {
+            handbackDiag(requestedEpochFloor + 1, "grant epoch raised past the watch's e\(requestedEpochFloor) (phone was e\(epoch)) — a seize moved the watch ahead")
+            epoch = requestedEpochFloor
+        }
+        requestedEpochFloor = 0
         epoch += 1
         state = .grantOffered
         committedCursor = 0

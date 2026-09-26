@@ -542,4 +542,25 @@ final class SeizeActivationTests: XCTestCase {
         _ = controller.debugSnapshot()
         XCTAssertEqual(cancelCalls, 2, "seize confirm cancels again — the strongest statement that no queued request should ever land")
     }
+
+    /// Field 2026-09-24 12:10: each seize moves the watch's epoch on without the phone, so the
+    /// phone's next grants (e92, e93) were refused by a watch at 93. The request now names the
+    /// highest epoch handleGrant would refuse, so the phone can grant above it.
+    func testRequestCarriesEveryEpochTheWatchWouldRefuse() throws {
+        defaults.set(5, forKey: "PodLoanWatchController.highWaterEpoch")
+        let controller = makeController()
+        var floors: [Int?] = []
+        controller.send = { dict in
+            if let message = try? LoanMessage.decode(fromTransport: dict), case .request(let r) = message {
+                floors.append(r.watchEpochFloor)
+            }
+        }
+        controller.scheduler = { _, _, _ in }
+        controller.handleIncoming(userInfo: try LoanMessage.revoke(Revoke(epoch: 7)).transportDictionary(), channel: .queued)
+        _ = controller.debugSnapshot()
+
+        controller.requestLoan(watchBuild: "floor-test")
+        _ = controller.debugSnapshot()
+        XCTAssertEqual(floors, [7], "max(high-water 5, revoked 7) — a grant at or below 7 would be refused")
+    }
 }
