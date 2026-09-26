@@ -158,3 +158,39 @@ final class PodLoanTimerSeamTests: XCTestCase {
         XCTAssertEqual(controller.phase, .requested)
     }
 }
+
+/// Takeover discovery (2026-09-26): with the screen off the watch cannot FIND a pod (passive
+/// scans never see a DASH pod's service IDs), so a first contact asks for the wrist up, says when
+/// it can come down, and taps the wrist when the takeover sits unfound with the screen off.
+final class TakeoverDiscoveryHintTests: XCTestCase {
+
+    func testAPodTheWatchHasMetSaysNothing() {
+        XCTAssertNil(PodLoanWatchController.takeoverHint(firstContact: false, podReached: false, nudged: false),
+                     "a saved handle connects screen-off — no reason to ask for the wrist")
+        XCTAssertNil(PodLoanWatchController.takeoverHint(firstContact: false, podReached: true, nudged: false))
+    }
+
+    func testFirstContactAsksForTheWristThenReleasesIt() {
+        let asking = PodLoanWatchController.takeoverHint(firstContact: true, podReached: false, nudged: false)
+        XCTAssertEqual(asking?.contains("keep your wrist up"), true)
+        let done = PodLoanWatchController.takeoverHint(firstContact: true, podReached: true, nudged: false)
+        XCTAssertEqual(done?.contains("lower your wrist"), true, "once the pod is reached the rest needs no screen")
+    }
+
+    func testTheWristTapChangesTheAsk() {
+        let nudged = PodLoanWatchController.takeoverHint(firstContact: false, podReached: false, nudged: true)
+        XCTAssertEqual(nudged?.contains("Raise your wrist"), true, "a saved-handle takeover that stalled also gets the ask")
+        let after = PodLoanWatchController.takeoverHint(firstContact: true, podReached: true, nudged: true)
+        XCTAssertEqual(after?.contains("lower your wrist"), true)
+    }
+
+    func testTheTapFiresOnlyWhenItCanHelp() {
+        XCTAssertTrue(PodLoanWatchController.shouldNudgeTakeover(podReached: false, appActive: false, nudgesSoFar: 0))
+        XCTAssertFalse(PodLoanWatchController.shouldNudgeTakeover(podReached: true, appActive: false, nudgesSoFar: 0),
+                       "reached: the rest works with the wrist down")
+        XCTAssertFalse(PodLoanWatchController.shouldNudgeTakeover(podReached: false, appActive: true, nudgesSoFar: 0),
+                       "screen on: the scan is already active")
+        XCTAssertFalse(PodLoanWatchController.shouldNudgeTakeover(podReached: false, appActive: false, nudgesSoFar: 2),
+                       "twice at most")
+    }
+}

@@ -139,6 +139,10 @@ struct GlanceUIState {
     var startedAt: Date? = nil
     /// Starting-only: which stage the bar is in ("reaching iPhone…" / "taking over pod…").
     var startingStageText: String? = nil
+    /// Wrist-up hint under the takeover bar (first contact with a pod, or the wrist tap).
+    var startingHintText: String? = nil
+    /// The hint reports success ("pod found") rather than asking for something.
+    var startingHintDone: Bool = false
     /// G7 prediction: countdown to the next expected G7 transmit ("G7 in ~2:40").
     /// Shown under the bar while starting, and under the stale line while active
     /// without a direct reading. Pod and G7 are deliberately decoupled — the pod bar
@@ -470,6 +474,8 @@ final class GlanceViewModel: ObservableObject {
                                        takingOver: snap.phase == .takingOver,
                                        startedAt: snap.startedAt,
                                        now: Date())
+            state.startingHintText = snap.takeoverHint
+            state.startingHintDone = snap.takeoverPodReached
         case .handingBack:
             var s = GlanceUIState(); s.phase = .handingBack
             // MISSED IN THE FIRST CUT (build 221 shipped without a bar on this screen —
@@ -1349,7 +1355,13 @@ struct GlanceView: View {
                             }
                         }
                         .frame(height: 6)
-                        if elapsed > Self.podTakeoverOverrun {
+                        if let hint = model.state.startingHintText {
+                            Text(hint)
+                                .font(.system(size: 11, weight: model.state.startingHintDone ? .regular : .semibold))
+                                .foregroundColor(model.state.startingHintDone ? .glanceAccent : .glanceWarn)
+                                .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
+                        } else if elapsed > Self.podTakeoverOverrun {
                             Text(NSLocalizedString("taking longer than usual…", comment: "Glance note when the pod takeover overruns the expected ~10s"))
                                 .font(.system(size: 11))
                                 .foregroundColor(.glanceWarn)
