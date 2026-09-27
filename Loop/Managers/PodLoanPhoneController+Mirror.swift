@@ -57,6 +57,13 @@ extension PodLoanPhoneController {
         // Authority and radio travel together: a phone that stopped dosing but kept the pod link
         // would starve the watch that is now doing the dosing.
         (deps.pumpManager() as? PumpConnectionLendable)?.releaseConnection()
+
+        // And the settle window goes with them. A yield that lands inside one leaves a chase
+        // running against a link this phone just let go of on purpose, which escalates at +12s
+        // and takes the radio — and the dosing gate — straight back, with nothing on screen to
+        // say so. The drain that closes an old loan under a live successor opens a window
+        // moments before yielding, so this is the ordinary case, not the exotic one.
+        closeReclaimSettleWindow(reason: "yielding to an inferred loan — this phone is not reaching for the pod")
         syncUIMirror()
         deps.ownershipDidChange()
 

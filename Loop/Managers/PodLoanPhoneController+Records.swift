@@ -523,6 +523,13 @@ extension PodLoanPhoneController {
         cancelNotification(id: NotificationID.duration)
         cancelNotification(id: NotificationID.paused)
 
+        // A force reclaim that deferred behind THIS commit is satisfied by the hand-back that
+        // just landed: its records are committed, its radio comes back below, and its insulin is
+        // judged by the hand-back's own audit. Left set, `drainAfterCommit` runs it moments from
+        // now against an emptied staging area — arming a second audit whose expectation is bare
+        // schedule fill, which reads every unit the watch delivered as unexplained.
+        pendingForceReclaimReason = nil
+
         // A close that finds fresh evidence of a NEWER live loan commits its books but does not
         // resume custody. This is an old loan's final offer arriving late while its successor is
         // already streaming; taking the pod here would reclaim it out from under a watch that is
