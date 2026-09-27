@@ -31,6 +31,16 @@ extension MockPumpManager: PumpConnectionLendable {
     public func reclaimConnection() { Self.testConnectionReleased = false }
     public var lentDeviceInsulinDelivered: Double? { Self.testOdometer }
     public var podLoanLastForeignSessionAt: Date? { Self.testForeignSessionAt }
+    /// Counts settle escalations, and mirrors what the real one does: escalating IS the owner
+    /// asserting the pod back, so it lifts the session gate that stops the phone dosing
+    /// (`OmniPumpManager+PodLoan.swift` — `setState { $0.podConnectionReleased = false }`).
+    /// A test that only counted calls would miss the part that matters.
+    static var testEscalations = 0
+    public func escalateConnectionReclaim() -> String? {
+        Self.testEscalations += 1
+        Self.testConnectionReleased = false
+        return "test escalation"
+    }
     /// Counts the FORCED round-trips (the ones that bypass the freshness optimization), so a
     /// test can assert the settle forces early without forcing on every 2 s tick — the whole
     /// point of the backoff is that reclaim speed is not bought with radio time.
@@ -138,6 +148,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         pump = MockPumpManager()
         MockPumpManager.testConnectionReleased = false
         MockPumpManager.testOdometer = nil
+        MockPumpManager.testEscalations = 0
         UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.deliveredAuthoritative")
         UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.holdRenewedAt")
         UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.holdLapseNoticedAt")
@@ -622,6 +633,47 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                        "duplicates here mirror into every later grant and inflate COB")
     }
 
+    /// A force reclaim that arrives while the FINAL hand-back commit is writing parks behind the
+    /// write (#118 — running it there would re-commit records the write has not recorded yet).
+    /// The commit then closes the loan, and the parked reason used to survive that close and run
+    /// moments later out of `drainAfterCommit`, against a staging area the close had emptied.
+    /// Nothing double-books — the records are committed — but the second audit's expectation is
+    /// bare schedule fill, so every unit the watch delivered reads as unexplained and the loop
+    /// opens after a hand-back that went perfectly.
+    func testForceDeferredBehindTheFinalCommitIsDroppedByTheClose() throws {
+        let controller = makeController()
+        let grant = establishLoan(controller)
+
+        // Park the commit so the force has something to defer behind.
+        holdPumpEventWrites = true
+        let event = makeEvent(seq: 1, units: 0.6, at: clock.addingTimeInterval(-.minutes(3)))
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: grant.epoch, handedBackAt: clock, finalStatus: nil, odometer: nil,
+                          events: [event], tombstones: [], recovered: false)).transportDictionary())
+        waitUntil(timeout: 5, "commit parked") {
+            self.lock.lock(); defer { self.lock.unlock() }; return self.heldPumpEventWrite != nil
+        }
+
+        // The ladder spending its last rung, or a new Start — either lands here mid-write.
+        controller.forceReclaimToOwner(reason: "test: force lands mid-commit")
+        XCTAssertNotNil(controller.pendingForceReclaimReason,
+                        "a force must park behind a write in flight (#118)")
+
+        let ackSent = expectSend()
+        holdPumpEventWrites = false
+        releaseHeldPumpEventWrite()
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+        settle()
+
+        XCTAssertNil(controller.pendingForceReclaimReason,
+                     "the hand-back satisfies the force: records committed, radio back, judged by the close")
+        XCTAssertNil(diagMatching("R37 audit armed"),
+                     "no second audit — its expectation is bare schedule fill against an emptied staging area")
+        XCTAssertNil(diagMatching("R37 force-reclaim audit IMPOSSIBLE"))
+        XCTAssertEqual(openLoopCalls, 0, "a hand-back that went perfectly must not open the loop")
+    }
+
     /// A STALE offer (an epoch the phone has moved past) used to commit its carbs
     /// unconditionally while committedIDs.formUnion sat inside the `if !isStale` branch — so the
     /// carbs landed and nothing was recorded, and each resend added another. The override change
@@ -667,6 +719,39 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         waitUntil(timeout: 5, "audit verdict") { self.pauseCalls.last == false }
         XCTAssertEqual(openLoopCalls, 1, "unverifiable session opens the loop rather than resuming closed")
         XCTAssertTrue(urgentNotices.contains { $0.contains("Unverified") })
+    }
+
+    /// A settle window is the phone proving it got the pod back, and at +12s it stops asking and
+    /// ESCALATES — a scan-and-adopt that also clears `podConnectionReleased`, the gate
+    /// `LoopDataManager` reads to decide whether this phone may dose at all. So a window left
+    /// open across a stand-down does not merely waste radio: twelve seconds after the phone
+    /// announces "Pod Looks Controlled by the Watch", it silently re-arms its own authority to
+    /// dose and goes hunting for a pod the watch is running. Yielding closes the window.
+    func testYieldingToAnInferredLoanClosesTheSettleWindow() throws {
+        let controller = makeController()
+        establishLoan(controller)
+        connectionReady = false                       // the pod never answers: the window stays open
+        controller.reclaimNow()
+        waitForState(controller, .owner)
+        XCTAssertTrue(controller.isReclaimSettling, "the settle window is open to begin with")
+
+        // The phone concludes another controller is running the pod and stands down.
+        controller.engageInferredLoanYield(evidence: "test: evidence of a live foreign loan")
+        waitUntil(timeout: 5, "settle window closed") { !controller.isReclaimSettling }
+        XCTAssertNotNil(diagMatching("settle window CLOSED early"))
+        // The hold the settle was carrying is released with it. Counts are not symmetric here —
+        // production's `begin` ends any previous hold first, so only one is ever outstanding.
+        lock.lock(); let ends = backgroundTaskEnds; lock.unlock()
+        XCTAssertGreaterThanOrEqual(ends, 1, "closing the window releases the background hold it carried")
+
+        // Past the escalation mark, with room for the 2 s chase ticks either side of it.
+        Thread.sleep(forTimeInterval: PodLoanPhoneController.reclaimEscalateAfter + 2)
+
+        XCTAssertEqual(MockPumpManager.testEscalations, 0,
+                       "a phone that has stood down must not escalate for the pod")
+        XCTAssertTrue(MockPumpManager.testConnectionReleased,
+                      "and the dosing gate must stay released — escalating clears it, which is dual control")
+        XCTAssertNil(diagMatching("escalating"))
     }
 
     /// A re-Start while the pod is still returning from the previous reclaim must

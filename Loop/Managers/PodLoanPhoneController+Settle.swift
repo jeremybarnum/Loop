@@ -81,18 +81,7 @@ extension PodLoanPhoneController {
             self.reclaimDisplayAnchor = nil
             self.deps.endReclaimBackgroundTask()
 
-            // "Cannot verify" is not "assume fine". A force reclaim was owed a verdict and the
-            // pod never answered, so dosing resumes only in the sense that the pause is lifted —
-            // the loop itself is opened and the user is told.
-            if let pending = self.pendingHandbackAudit, pending.flavor == .forceReclaim {
-                self.pendingHandbackAudit = nil
-                self.handbackDiag(pending.epoch, "** R37: audit NEVER RAN — pod unreachable through the settle window. Session UNVERIFIED, loop OPENS **")
-                self.deps.setAutomaticDosingPaused(false)
-                self.deps.openLoopForUncertainReconciliation()
-                self.armOpenLoopReminder()
-
-                self.deps.issueUrgentNotice("Watch Session Unverified", Self.sessionUnverifiedBody)
-            }
+            self.resolveOwedForceReclaimAudit(why: "pod unreachable through the settle window")
             self.deps.ownershipDidChange()
         }
         reclaimSettleWork = work
@@ -104,11 +93,56 @@ extension PodLoanPhoneController {
         chaseReclaimVerification(started: started)
     }
 
+    /// Closes the window before it has either verified or timed out, for a phone that has
+    /// stopped trying to hold the pod. Nothing here is bookkeeping: a window left open keeps the
+    /// chase running, and the chase escalates at +12s — which clears `podConnectionReleased`,
+    /// the gate that stops this phone dosing, and sends a scan after a pod another controller is
+    /// running. It also refuses the next Start for the rest of the five minutes, and holds a
+    /// background assertion the whole time.
+    func closeReclaimSettleWindow(reason: String) {
+        guard reclaimStartedAt != nil else { return }
+        handbackDiag(epoch, "settle window CLOSED early — \(reason)")
+
+        reclaimSettleWork?.cancel()
+        reclaimSettleWork = nil
+        reclaimStartedAt = nil
+        reclaimDisplayAnchor = nil
+        reclaimVerifyInFlight = false
+        deps.endReclaimBackgroundTask()
+
+        // The ceiling would have resolved an owed verdict; closing early inherits that duty.
+        resolveOwedForceReclaimAudit(why: reason)
+        syncUIMirror()
+    }
+
+    /// "Cannot verify" is not "assume fine". A force reclaim was owed a verdict and the pod will
+    /// not be answering for it — either it never came back, or the phone has stopped reaching
+    /// for it. Dosing resumes only in the sense that the pause is lifted: the loop itself is
+    /// opened and the user is told.
+    func resolveOwedForceReclaimAudit(why: String) {
+        guard let pending = pendingHandbackAudit, pending.flavor == .forceReclaim else { return }
+        pendingHandbackAudit = nil
+        handbackDiag(pending.epoch, "** R37: audit NEVER RAN — \(why). Session UNVERIFIED, loop OPENS **")
+        deps.setAutomaticDosingPaused(false)
+        deps.openLoopForUncertainReconciliation()
+        armOpenLoopReminder()
+        deps.issueUrgentNotice("Watch Session Unverified", Self.sessionUnverifiedBody)
+    }
+
     /// Polls every couple of seconds until the round-trip lands or the ceiling fires. `started`
     /// identifies the window: a later settle replaces `reclaimStartedAt`, and every rung of the
     /// older chase then retires itself.
     func chaseReclaimVerification(started: Date, attempt: Int = 0) {
         guard reclaimStartedAt == started, reclaimVerifiedAt == nil else { return }
+
+        // Never chase a pod this phone is not trying to hold. Whoever stands down closes the
+        // window, which retires the chase through the guard above; this is the backstop for any
+        // route that stands down without closing it, and it matters because the escalation below
+        // is not a read — it clears `podConnectionReleased` and goes hunting for the pod.
+        guard state == .owner, !yieldingToInferredLoan else {
+            handbackDiag(epoch, "settle chase STOOD DOWN at tick \(attempt) — the phone is not holding the pod (state \(state.rawValue)\(yieldingToInferredLoan ? ", yielded to an inferred loan" : ""))")
+            return
+        }
 
         if reclaimLinkUpAt == nil, deps.isConnectionReady() {
             let up = deps.now()
