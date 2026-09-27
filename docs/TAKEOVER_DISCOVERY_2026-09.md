@@ -128,9 +128,12 @@ release, screen off. Tests: End, wait an hour, Start with the wrist dropped imme
 repeat after a watch reboot and the next day; on a pod change, the first-contact prompt appears
 exactly once.
 
-**Every line is exposed.** Next-dev's takeover also discovers the pod by a 0x4024 scan
-(`beginLoanTakeover`), and without a workout keepalive its screen-off case is worse. It has a
-connect-by-identity routine (`retrieveAndConnectKnownPod`) that the takeover does not use.
+**Next-dev already has the core of this.** Since 08-20 its watch caches its own handle per pod
+address (OmnipodKit `PodLoanBleIdentifierCache`), and each grant dials it with
+`podLoanBeginTakeover(discover: false)` — no scan at all, deliberately no scan backstop (a 09-16
+field lookup race). Only its FIRST contact with a pod discovers, so the first-contact prompt is the
+part that still applies there. (An earlier version of this line said next-dev discovers every
+takeover; it read only the uncalled `retrieveAndConnectKnownPod`. Corrected 2026-09-27.)
 
 ## 6. Instrumentation added on the way (prod-123-diag and 3006)
 
