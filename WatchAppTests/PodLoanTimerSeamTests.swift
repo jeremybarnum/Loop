@@ -155,3 +155,51 @@ final class PodLoanTimerSeamTests: XCTestCase {
         XCTAssertEqual(controller.phase, .requested)
     }
 }
+
+/// Takeover discovery (production line, 2026-09-26): with the screen off the watch cannot FIND a
+/// pod — passive scans never see a DASH pod's service IDs — so a first contact asks for the wrist
+/// up, says when it can come down, and taps the wrist when the takeover sits unfound with the screen
+/// off. A pod this watch has a saved handle for connects with the wrist down and says nothing.
+final class TakeoverDiscoveryHintTests: XCTestCase {
+
+    func testAPodWithASavedHandleSaysNothing() {
+        XCTAssertNil(PodLoanWatchController.takeoverHint(firstContact: false, podReached: false, nudged: false))
+        XCTAssertNil(PodLoanWatchController.takeoverHint(firstContact: false, podReached: true, nudged: true),
+                     "a handle connect needs no screen, so even a slow one asks nothing")
+    }
+
+    func testFirstContactAsksForTheWristThenReleasesIt() {
+        XCTAssertEqual(PodLoanWatchController.takeoverHint(firstContact: true, podReached: false, nudged: false)?
+            .contains("keep your wrist up"), true)
+        XCTAssertEqual(PodLoanWatchController.takeoverHint(firstContact: true, podReached: false, nudged: true)?
+            .contains("Raise your wrist"), true, "after the tap the ask changes")
+        XCTAssertEqual(PodLoanWatchController.takeoverHint(firstContact: true, podReached: true, nudged: true)?
+            .contains("lower your wrist"), true, "once the pod is reached the rest needs no screen")
+    }
+
+    func testTheTapFiresOnlyWhenItCanHelp() {
+        XCTAssertTrue(PodLoanWatchController.shouldNudgeTakeover(podReached: false, appActive: false, nudgesSoFar: 0))
+        XCTAssertFalse(PodLoanWatchController.shouldNudgeTakeover(podReached: true, appActive: false, nudgesSoFar: 0),
+                       "reached: the rest works with the wrist down")
+        XCTAssertFalse(PodLoanWatchController.shouldNudgeTakeover(podReached: false, appActive: true, nudgesSoFar: 0),
+                       "screen on: the scan is already active")
+        XCTAssertFalse(PodLoanWatchController.shouldNudgeTakeover(podReached: false, appActive: false, nudgesSoFar: 2),
+                       "twice at most")
+    }
+
+    /// Production-line lesson 3: the phone sends `podAddress: 0` in every grant, and a fixture that
+    /// set a real one let a test pass while the device failed. This one is shaped like the phone's.
+    func testThePodAddressComesFromTheSnapshotNotTheWireField() throws {
+        let envelope: [String: Any] = ["state": ["podState": ["address": UInt32(0x17A6219A)]]]
+        let raw = try PropertyListSerialization.data(fromPropertyList: envelope, format: .binary, options: 0)
+        let asSent = LoanGrant(epoch: 1, expiresAt: Date(), pumpManagerRawState: raw, podAddress: 0,
+                               therapySettingsRaw: Data(), settingsTimeZoneID: "GMT", doseHistory: [],
+                               therapySettingsSupplementRaw: nil)
+        XCTAssertEqual(PodLoanWatchController.podAddress(in: asSent), 0x17A6219A)
+
+        let fieldOnly = LoanGrant(epoch: 1, expiresAt: Date(), pumpManagerRawState: Data([1, 2, 3]), podAddress: 0x1F0A2B3C,
+                                  therapySettingsRaw: Data(), settingsTimeZoneID: "GMT", doseHistory: [],
+                                  therapySettingsSupplementRaw: nil)
+        XCTAssertNil(PodLoanWatchController.podAddress(in: fieldOnly), "the wire field is never read")
+    }
+}

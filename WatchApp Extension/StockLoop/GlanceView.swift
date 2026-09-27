@@ -241,6 +241,15 @@ struct GlanceView: View {
                     .foregroundColor(.glanceDim)
                 }
             } else {
+            // A new pod has to be FOUND, which needs the screen on: said above the button, in the
+            // attention colour the button then wears too. Every other Start stays blue and bare.
+            if let note = model.state.firstContactNote {
+                Text(note)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.glanceAttention)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Button { model.startSportMode() } label: {
                 Text("Start Sport Mode")
                     .font(.system(size: 17, weight: .semibold))
@@ -248,7 +257,7 @@ struct GlanceView: View {
                     .padding(.vertical, 8)
             }
             .buttonStyle(.borderedProminent)
-            .tint(.glanceAccent)
+            .tint(model.state.firstContactNote == nil ? .glanceAccent : .glanceAttention)
             }
             if let note = model.state.idleNote {
                 Text(note)
@@ -492,6 +501,13 @@ struct GlanceView: View {
                     .foregroundColor(.glanceInk)
                 ProgressView()
             }
+            if let hint = model.state.takeoverHint {
+                Text(hint)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(model.state.takeoverHintDone ? .glanceAccent : .glanceAttention)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let eta = model.state.g7EtaText {
                 Text(eta).font(.system(size: 11)).foregroundColor(.glanceDim)
             }
@@ -539,6 +555,8 @@ extension Color {
     static let glanceGood = Color(red: 0.31, green: 0.82, blue: 0.48)
     static let glanceWarn = Color(red: 0.91, green: 0.70, blue: 0.25)
     static let glanceCrit = Color(red: 0.88, green: 0.36, blue: 0.31)
+    /// Burnt orange: a Start or takeover that needs the user — first contact with a new pod.
+    static let glanceAttention = Color(red: 0.86, green: 0.45, blue: 0.16)
 }
 
 private struct GlanceActionChip: ViewModifier {

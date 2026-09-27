@@ -95,6 +95,13 @@ struct GlanceUIState {
 
     var startingStageText: String? = nil
 
+    /// First contact with a new pod: the takeover must FIND the pod, which works only with the
+    /// screen on. The Start page says so above the button; the takeover page says when the wrist
+    /// can come down (`takeoverHintDone`).
+    var firstContactNote: String? = nil
+    var takeoverHint: String? = nil
+    var takeoverHintDone: Bool = false
+
     /// The provenance/countdown line under the centre block. It carries three different things
     /// depending on state: where the current reading came from, when the next one is due, and the
     /// wedge hint. Only one can show, and the hint wins.
@@ -452,15 +459,19 @@ final class GlanceViewModel: ObservableObject {
                 f.unitsStyle = .abbreviated
                 idle.seizeOfferAgeText = f.string(from: Date().timeIntervalSince(issued)) ?? "?"
             }
+            if snap.podFirstContactExpected { idle.firstContactNote = PodLoanWatchController.firstContactStartNote }
             state = idle
         // Two controller phases, one UI phase. The user is told which STAGE is running, but the
         // page does not change shape between them — a layout that rearranged itself mid-start
         // would make a slow takeover look like something going wrong.
         case .requested, .takingOver:
-            state = Self.startingState(context: ExtensionDelegate.sharedIfAvailable()?.loopManager.activeContext,
-                                       takingOver: snap.phase == .takingOver,
-                                       startedAt: snap.startedAt,
-                                       now: Date())
+            var starting = Self.startingState(context: ExtensionDelegate.sharedIfAvailable()?.loopManager.activeContext,
+                                              takingOver: snap.phase == .takingOver,
+                                              startedAt: snap.startedAt,
+                                              now: Date())
+            starting.takeoverHint = snap.takeoverHint
+            starting.takeoverHintDone = snap.takeoverPodReached
+            state = starting
         // The watch has stopped dosing but the pod has NOT moved: it stays assigned here until
         // the phone acknowledges the records. Both notes say so, because a screen implying the
         // pod is already home would invite the user to put the watch down and walk away.
@@ -493,6 +504,7 @@ final class GlanceViewModel: ObservableObject {
                 f.unitsStyle = .abbreviated
                 restIdle.seizeOfferAgeText = f.string(from: Date().timeIntervalSince(issued)) ?? "?"
             }
+            if snap.podFirstContactExpected { restIdle.firstContactNote = PodLoanWatchController.firstContactStartNote }
             state = restIdle
         // The phone took the pod back. Nothing is left to offer the user and nothing is
         // cancellable — only the records are still owed — so the page says exactly that.

@@ -199,10 +199,13 @@ extension PodLoanWatchController {
             return
         }
         defaults.set(data, forKey: DormantKeys.envelope)
-        SportLog.event("seize", String(format: "dormant grant refreshed — issued %@, %d dose record(s), token …%@ [seize]",
+        let podAddress = Self.podAddress(in: dormant.grant)
+        defaults.set(podAddress.map { Int($0) }, forKey: DormantKeys.podAddress)
+        SportLog.event("seize", String(format: "dormant grant refreshed — issued %@, %d dose record(s), token …%@, pod %@ [seize]",
                                        DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .none, timeStyle: .medium),
                                        dormant.grant.doseHistory.count,
-                                       String(dormant.seizeToken.uuidString.suffix(8))))
+                                       String(dormant.seizeToken.uuidString.suffix(8)),
+                                       podAddress.map { String(format: "%08X", $0) } ?? "unknown"))
     }
 
     /// The stored credential, or nil if none has arrived or it no longer decodes. A credential
@@ -303,6 +306,10 @@ extension PodLoanWatchController {
         /// mid-seized-loan keeps echoing it on every offer — without it the phone cannot
         /// retro-acknowledge a loan it never granted — and cleared only when the loan CLOSES.
         static let activeToken = "PodLoanWatchController.activeSeizeToken"
+
+        /// The current pod's address, from the latest standing copy or grant, so the idle screen
+        /// can say before Start whether this watch has met the pod.
+        static let podAddress = "PodLoanWatchController.currentPodAddress"
     }
 
     /// Whether this loan is a seize, for the log tags: true from the moment an activation begins
