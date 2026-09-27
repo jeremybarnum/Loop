@@ -1378,6 +1378,12 @@ tails for 12 min after a loan starts". Do not add a freshness check by itself. F
 blackouts, two-central hold and the session-end gate are gone; bench key `G7Lab.podRadioHoldOff`.
 Cost per departure: ≤3 windows with a bolus delayed ≤40 s if tapped inside the tail.
 
+**Post-install stall: REFUTED 09-07 22:0x.** Build 180 (identical code to 179) was installed and the
+phone app deliberately NOT opened: it was background-launched at 21:59:17 and delivered its first
+reading at 22:06:45, then every window, relaying to the watch throughout. So the two-hour silence
+after the 179 install (§7e) is a genuine one-off, unexplained and unreproduced; there is no
+install-time rule and no user guidance needed.
+
 **Known hole, accepted (§7e):** the relay is Loop-phone's reading, not Dexcom-phone's
 connection. If Loop-phone is silent while the phone still collects (seen twice on 09-07 after a
 TestFlight install, recovered untouched, not diagnosed), the clock starts early and a departure's
@@ -1410,3 +1416,98 @@ the daemon's ~2 per departure; no −70 unless the daemon's own late failure at 
 judgment / floor writes / links / adds / history from an extract) and `air.sh <pcap> HH:MM`.
 Live watch-log streaming through the phone (pymobiledevice3 companion proxy) works but drops
 most of bluetoothd; a stored-log pull runs at 72 KB/s; neither replaces sysdiagnose.
+
+## 6c. UI-BATCH DELTA for next-dev (checked 09-08 against trees/port-nextdev @ f68174e6)
+
+Not part of the mute fix; a separate batch of small watch-UI changes that landed on the Caitlin
+line in builds 174–176 and never travelled. Jeremy noticed the first one on next-dev. Checked
+item by item against the port; PRESENT/MISSING as of f68174e6:
+
+| item | Caitlin commit | port |
+|---|---|---|
+| Loop-tap haptic: `WKInterfaceDevice.current().play(.click)` first line of `onLoopTap()` | 8d95e80c | **MISSING** (the port has the End/Cancel haptics at GlanceView.swift 324/426, not this one) |
+| Land on the glance: `landedOnGlance` in ExtensionDelegate, first activation of a process calls `becomeCurrentPage()` | 8d95e80c | **MISSING** — and the port is SwiftUI-navigation, not WatchKit pages, so this needs its own mechanism or may be moot |
+| Repaint while inactive: mirror observer armed by `armMirrorObserver()` and NOT torn down in `stopRefreshing()` (only the 2-s tick stops), plus `refreshGlanceData()` after every direct-G7 and phone-relay ingest | 8d95e80c | **MISSING** (port has 1 `refreshGlanceData` call site) |
+| Ring palette parity: stock ring assets `.renderingMode(.template)` + `ringColor` from the phone's palette (fresh #0AB443, aging #E9C244, stale #FF453A) | 4700cbbc | **MISSING** |
+| Override chip as icon + numbers rather than the preset name (symbol, insulin %, target midpoint) | 4700cbbc | **MISSING** |
+| Stuck listening screen offers "Re-acquire Sensor" as a button, force-quit demoted to the footer | dc038d6c | **MISSING** |
+| Diagnostic screen: BG value + reading time (`CGMHealth.bgLine`, `row("bg", …)`) | a5bcfa3b | **MISSING** |
+| Keepalive probe re-pointed on every `acquire` | a5bcfa3b | PRESENT |
+| `TailExposure.notePodLink` routing, wedge hint | mute fix | PRESENT |
+
+All of these are cosmetic or diagnostic; none touches dosing. The haptic is one line.
+
+## 8. IN-APP DETECTION of the daemon's counted failures — what we can see without a sysdiagnose (checked 09-08, nothing built)
+
+Question (Jeremy, 09-08): can the app detect the disconnections that feed bluetoothd's tally,
+without pulling a sysdiagnose? Answer is split, and the split is mechanical.
+
+**Reason 708 (supervision timeout): VISIBLE, exactly, and already in our log.** A 708 kills a link
+we are riding, so it arrives as our own CoreBluetooth callback. Watch log 2026-09-07:
+
+    08:26:55.495 [g7-ble] didDisconnect DXCMbv error=The connection has timed out unexpectedly. [CBErrorDomain#6]
+
+The archive (sysd13) records `reason 708` for that sensor at 08:26:55.480 — 15 ms apart, the same
+event. Across the uploaded watch logs: 17 `CBErrorDomain#6` lines on 8 distinct occasions, against
+1,220 `CBErrorDomain#7` ("The specified device has disconnected from us"), which is the sensor
+ending a read normally and is NOT counted. **Code 6 is a tally point; code 7 is not.** We log both
+today and interpret neither.
+
+**Reason 762 (failed to establish): INVISIBLE.** Checked our log at five archive-confirmed 762s
+(13:16:54.38, 13:17:06.62, 16:17:03.14, 16:22:03.03, 16:22:13.14): zero lines from us at four of
+them; the two at 16:22:03 are an unrelated `[timer]` line. Not a throttling artifact —
+`DeviceLogThrottle` collapses only identical consecutive lines inside 2 s, and the nearest
+preceding line at each instant is 4–16 s earlier with different text. Mechanically: a 762 is a
+link that never became usable, belonging to DEXCOM's connect request; CoreBluetooth delivers a
+connection event only for links that come up. Compare 13:16:49 (the successful read, in our log as
+`connection-event CONNECT` + `didConnect`) with 13:16:54 and 13:17:06 (nothing).
+
+**What could be built (NOT built; Jeremy's call):**
+1. Count `CBError.connectionTimeout` (code 6) disconnects, decayed over the daemon's 20,864-s
+   window. Exact, free, already logged — only the counting and the label are missing.
+2. Estimate the 762s from their cause, which we CAN see: no relay this window → the sensor is in
+   its long tails → the daemon fails ~once per tail. Calibration from 09-07: T1b 4 tails → 4
+   failures; T5 2 → 2; T1c 1 → 2; T4 2 → 3. So 1–1.5 per no-relay window for the first two after
+   the relay stops; report as a lower bound, never as a measurement.
+3. Sum, flag at 5, surface on the diagnostic screen plus one line per window in the log. On both
+   of 09-07's wedges this estimate would have been signalling danger beforehand.
+4. Free calibration: whenever a sysdiagnose IS taken, compare the estimate to the archive.
+
+**Not available:** the daemon's tables are private; nothing in-app makes this exact. The one
+observable that would CONFIRM a parked floor without a sysdiagnose is a brief scan after a missed
+window, outside the tail (sensor advertising + no link = parked). That is a radio change in the
+direction §7 spent a week removing, so it needs preregistration, not a quiet addition.
+
+## 9. THE WEDGE IS PLATFORM-NATIVE — Dexcom alone, Loop deleted, both devices (port line, 2026-09-09 20:21→21:17)
+
+Written by the next-dev port session at Jeremy's request. This section supersedes the port's
+own 09-08/09 scan conclusion (below) and should be read as the investigation's current bottom line.
+
+**Recipe that wedges on demand (three for three on 09-09, 13–16 min each):** judgment at 1 (or
+the count about to reach 5), a departure — phone Bluetooth off AND watch Wi-Fi off so
+WatchConnectivity has no path (`[tail]` must read `phone away`, not the Wi-Fi-masked
+`reachable`) — and wait. `WCSession.isReachable` is the invalid proxy §3o already named.
+
+### 9a. Facts (watch bluetoothd + phone bluetoothd + nRF sniffer, capture `co-sysdiagnose_2026.09.09_21-07-14`)
+
+- Loop DELETED from phone and watch; last `StockSportMode` line in either daemon log 20:03:19; arm began 20:21:16.
+- Fresh sensor `30E473FE` / `DF:49:5D:22:5F:45` (started 18:31, warmup to 19:06). Baseline 19:57: count 0, judgment 0, every floor −100.
+- Phone power-state register (`ffffffff` on / `0` off): off 20:21:16, on 20:33:15, off 20:35:09, on 20:42:41, off 20:47:33, on 21:03:02. Phone bluetoothd logged zero lines in every off-window. Phone's Dexcom app first touched the sensor 21:07:44.
+- Watch daemon restarts in the window: **0**. Every sensor connect owned by `com.dexcom.g7app.watchkitapp` alone.
+- Scored 762s: 20:21:59, 20:22:05, 20:22:11 (within 12 s of the departure — the re-subscribe churn), 20:26:56, 20:36:59, 20:37:07.
+- **20:36:59 count 5 → judgment 0→1. 20:37:07 → `minRSSI=−70`.** 15 min 51 s after cut-off.
+- On the air (sniffer): 20:36:43 burst 27.7 s with a 30-attempt barrage from +12 s; then 20:41→21:06 fourteen bursts (two of 25 s) with **zero** watch attempts. 20:46:58's five attempts were the phone (BT on 20:42:41–20:47:33).
+- Touch-heal ~21:06:30 → 21:06:56 `−100`, count 6, judgment still 1; watch reconnected 21:07:43. The heal clears the floor only.
+- Throughout the mute the Dexcom WATCH app showed a value with the phone icon while the phone had none.
+
+### 9b. What the port line established on the way here (09-08 → 09-09 01:50, all preregistered)
+
+- "Late" is measured from the daemon's connect REQUEST, not the sensor's close. The −70s of 09-08/09 were the SECOND failure of a retry pair, 10–16 s after the first request (00:52:08, 01:17:14). At state 0 the identical second retry wrote `minRSSI=0` (23:42:13, 23:47:14); at state 1 it wrote −70. Same failure, outcome set by state. This morning's +106 s minute-call failure is the same rule with a bigger gap.
+- Two wedges with the C00A pod-fault idle scan ON (00:43, 01:14), one clean run with it OFF (01:50) — which read as confirmation of the scan hypothesis until §9a. With Loop absent entirely the daemon still scored the second attempt. The scan is NOT necessary; whether it aggravates is unresolved at n=1. The watchOS default-OFF shipped in `69bf20f` is harmless but is not a fix.
+- The count reset 6→0 at 23:21:57 on 09-08 coincided with our watch app relaunching and re-registering for connection events. Untested as a deliberate reset; noted as a lead.
+- Debug-level bluetoothd is 150–200k lines/hour, so a capture's usable window is ~3 h whatever the archive's age. With Loop deleted it was ~6 h. Capture within 3 h of the event or the arming is not in it.
+- `devicectl device sysdiagnose` / `devicectl diagnose` fail with `DiagnoseError 0` on both watch and phone (Xcode 26.6); `log collect/stream` have no device option here. The button-combo capture remains the path.
+
+### 9c. Inference (labelled)
+
+The mechanism is Apple's signal-quality gate fed by Dexcom's own re-subscribe behaviour on departure: the watch app's standing accept-list request, the sensor's long post-departure tails, and a daemon that scores a completed-then-dead link as a signal-quality failure. Our keepalive and idle scan can only add opportunities for the daemon's second attempt to complete; they cannot be the cause, because the cause reproduced with neither present. Section 8's in-app detector remains the useful thing to build; §7's pod hold remains correct as harm reduction.

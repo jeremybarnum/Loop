@@ -25,6 +25,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import G7SensorKit   // G7WatchDirectRead.needsCodeNote
 import WatchKit
 import HealthKit
 import LoopKit
@@ -333,37 +334,13 @@ final class GlanceViewModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
     }
 
-    /// Sport Mode requires the watch's OWN sensor link, and refuses without it — a relay-only
-    /// loan cannot do the thing Sport Mode exists for (the phone close enough to relay is close
-    /// enough to loop by itself; field 2026-08-21: 25 minutes with no cycles, mid-descent).
-    ///
-    /// V2. The first gate demanded a direct reading in the last 15 minutes — a window in which
-    /// a suspended app cannot produce one, so it refused every watch that had been asleep,
-    /// i.e. every watch (field 2026-08-22). The question is now answered from persisted state
-    /// (WatchLoopManager.sensorReadiness): identity present, auth proven within 24 h, radio not
-    /// contradicting the identity. Suspension is no longer treated as evidence.
-    var sensorReadiness: WatchLoopManager.SensorReadiness {
-        isPreview ? .ready
-                  : ExtensionDelegate.shared().stockLoopSession.stack.loopManager.sensorReadiness
+    /// The one readiness fact left once the watch reads the sensor itself: it has met a sensor
+    /// it holds no pairing code for. Shown beside Start, never instead of it; the code is entered
+    /// on the phone (Loop ▸ Dexcom G7 ▸ Watch Direct Read) and rides to the watch in the context.
+    var needsCodeNote: String? {
+        isPreview ? nil : G7WatchDirectRead.needsCodeNote
     }
 
-    /// Drop the identity our client follows and adopt the current sensor — the early form of the
-    /// sensor-switch override, run by Start when the sensor is not recognised; it is what
-    /// recovered the field watch on 2026-08-21 (first direct reading 78 seconds later).
-    /// Held for ~one transmit window so repeated Start taps do not reset a recovery in flight.
-    private var rescanInFlight = false
-
-    func rescanForSensor() {
-        guard !isPreview, !rescanInFlight else { return }
-        rescanInFlight = true
-        SportLog.event("cgm", "sensor not recognised at Start — forgetting it and listening for the current one")
-        ExtensionDelegate.shared().stockLoopSession.stack.cgmManager.scanForNewSensor()
-        // Cleared on a timer, not on success plumbing: if a reading lands the verdict flips to
-        // .ready and this screen is gone anyway; if none lands, one window is when the truth
-        // ("still nothing") is worth showing again. 5.5 min = one window + jitter.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 330) { [weak self] in self?.rescanInFlight = false }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.refresh() }
-    }
 
     /// R40(b): the deliberate confirm / dismissal for a pending offline start.
     func confirmSeize() {
@@ -388,14 +365,6 @@ final class GlanceViewModel: ObservableObject {
         // by stale extension code — the failure mode a version bump alone would hide.
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         let session = ExtensionDelegate.shared().stockLoopSession
-        // What the Reconnect / Re-acquire buttons beside Start used to offer, done by the tap:
-        // the stale-identity signature, or setup failing three times running. Only the user's
-        // own sensor can be adopted, and the watch's own switch would fire minutes later anyway.
-        let readiness = sensorReadiness
-        if readiness == .wrongSensor
-            || (readiness == .unproven && session.stack.cgmManager.authSubscribeFailureStreak >= 3) {
-            rescanForSensor()
-        }
         session.loanController.requestLoan(watchBuild: build)
         // Log pipeline v4: the Start tap itself ships a snapshot, and a +35s
         // follow-up captures the request's fate (grant/timeout) even when the
@@ -702,16 +671,6 @@ final class GlanceViewModel: ObservableObject {
                       seconds / 60, seconds % 60)
     }
 
-    /// Build 179 (mute record §7c): the indicia of a parked watch stack are two or more
-    /// consecutive expected bursts with no read, with the phone not relaying — Dexcom's own
-    /// app is muted the same way, and the record's only cure short of waiting 20–40 minutes
-    /// is the watch's Bluetooth off and on (ruled wording: it must name the WATCH). Pure,
-    /// pinned by WatchAppTests. Nil = keep the ordinary line.
-    static func wedgeHint(staleAge: TimeInterval?, consecutiveMisses: Int, relayRecent: Bool) -> String? {
-        guard consecutiveMisses >= 2, !relayRecent, let age = staleAge, age >= 8 * 60 else { return nil }
-        return String(format: NSLocalizedString("G7 silent %d min · try toggling watch Bluetooth", comment: "Glance line when the watch has missed two or more sensor bursts with the phone away"), Int(age / 60))
-    }
-
     static func activeState(data: WatchLoopManager.GlanceData, cob: Double?, now: Date, phoneGlucoseDate: Date? = nil) -> GlanceUIState {
         var s = GlanceUIState()
         s.overrideLabel = data.overrideLabel
@@ -776,9 +735,11 @@ final class GlanceViewModel: ObservableObject {
             // promise a clock time with slack instead — the ladder may need a cycle.
             let missedAWindow = (age ?? .infinity) > 8 * 60
             s.g7EtaText = g7EtaText(lastReading: data.glucoseDate ?? phoneGlucoseDate, now: now, firstConnect: missedAWindow)
-            // Build 179: the wedge hint. Not an alert (Jeremy, 2026-09-07) — the provenance
-            // line under a stale number names the one thing that heals a parked watch stack.
-            if let hint = wedgeHint(staleAge: age, consecutiveMisses: data.g7ConsecutiveMisses, relayRecent: data.relayRecent) {
+            // The silence hint. Not an alert — the provenance line under a stale number names
+            // the one thing that heals a parked watch stack (it must name the WATCH's Bluetooth).
+            if let hint = G7SilenceHint.text(directAge: data.directG7At.map { now.timeIntervalSince($0) },
+                                             relayAge: data.phoneRelayAt.map { now.timeIntervalSince($0) },
+                                             sensorAge: data.sensorActivatedAt.map { now.timeIntervalSince($0) }) {
                 s.g7EtaText = hint
             }
         } else if let eventual = data.eventual {
@@ -1056,15 +1017,14 @@ struct GlanceView: View {
                 }
             } else {
             // START IS ALWAYS OFFERED (production line, 2026-09-24, the owner's ruling of
-            // 2026-09-20). Readiness never gates or crowds the button.
+            // 2026-09-20). Readiness is information beside the button, never instead of it.
             // The old gate hid Start until this watch had proven a direct read while idle —
             // and an idle ride-only client often cannot complete one (auth-subscribe streaks of
             // 76 and 138 in the field), while inside a loan the keepalive makes reads land
             // (11/11 and 20/20). So the gate was reading the missing runtime as a fault, and on
             // 2026-09-19 it kept the production user from starting at all after a sensor change.
             // With no direct reading the loan's loop simply does not dose (stock's 15-minute
-            // recency gate), and the 12-minute No Direct BG watchdog is the backstop. A sensor the
-            // watch does not recognise is rescanned by the Start tap itself (startSportMode).
+            // recency gate), and the 12-minute No Direct BG watchdog is the backstop.
             // First contact with a new pod needs the wrist up (the takeover must FIND the pod,
             // and finding needs the screen on): the one Start that asks something of the user
             // says so above the button and wears the attention colour.
@@ -1083,6 +1043,12 @@ struct GlanceView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(model.state.firstContactNote == nil ? .glanceAccent : .glanceAttention)
+            // No note for a sensor the watch has not connected to yet: the search runs by itself at
+            // every Sport Mode start and when the phone saves a code (StockLoopSession), so a note
+            // and a button there only offered by hand what happens anyway (ruled 2026-09-26).
+            if let note = model.needsCodeNote {
+                SensorReadinessNote(text: note, actionTitle: nil, action: {})
+            }
             }
             if let note = model.state.idleNote {
                 Text(note)
@@ -1701,4 +1667,25 @@ struct GlanceDemoView: View {
 
 /// Readiness, beside the Start button (never instead of it): one line of fact and, where the
 /// field proved a remedy, one small action.
+private struct SensorReadinessNote: View {
+    let text: String
+    let actionTitle: String?
+    let action: () -> Void
 
+    var body: some View {
+        VStack(spacing: 4) {
+            Text(text)
+                .font(.system(size: 11))
+                .foregroundColor(.glanceDim)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            if let actionTitle {
+                Button(action: action) {
+                    Text(actionTitle).font(.system(size: 12, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.glanceAccent)
+            }
+        }
+    }
+}

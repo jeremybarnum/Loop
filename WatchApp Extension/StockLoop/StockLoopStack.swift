@@ -93,8 +93,13 @@ enum StockLoopStack {
             cgmManager = restored
             SportLog.event("cgm", "G7 state RESTORED — sensor \(restored.sensorName ?? "none"), activated \(restored.sensorActivatedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "unknown")")
         } else {
-            cgmManager = G7CGMManager()
-            SportLog.event("cgm", "G7 state fresh — no persisted sensor; acquisition will run (new install or pre-#101 build)")
+            // The watch reads directly and must claim the sensor's WATCH display slot. The kit's
+            // plain init() is the phone's (eavesdropping, phone slot); its restore path sets the
+            // watch slot on watchOS, but a fresh start did not — and the sensor refused the watch
+            // as "already connected to another phone" because the phone's Dexcom app holds the
+            // phone slot (field 2026-09-25 15:12 and 15:17, "display type phone", auth=2 bond=2).
+            cgmManager = G7CGMManager(sessionMode: .direct, displayType: G7WatchDirectRead.displayType)
+            SportLog.event("cgm", "G7 state fresh — no persisted sensor; waiting for the phone's sensor and pairing code (watch display slot)")
         }
         cgmManager.delegateQueue = loopManager.deviceQueue
         cgmManager.cgmManagerDelegate = loopManager

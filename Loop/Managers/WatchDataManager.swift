@@ -22,6 +22,7 @@ final class WatchDataManager: NSObject {
     
     init(deviceManager: DeviceDataManager, healthStore: HKHealthStore) {
         self.deviceManager = deviceManager
+        self.healthStore = healthStore
         self.sleepStore = SleepStore(healthStore: healthStore)
         self.lastBedtimeQuery = UserDefaults.appGroup?.lastBedtimeQuery ?? .distantPast
         self.bedtime = UserDefaults.appGroup?.bedtime
@@ -30,6 +31,7 @@ final class WatchDataManager: NSObject {
 
         NotificationCenter.default.addObserver(self, selector: #selector(updateWatch(_:)), name: .LoopDataUpdated, object: deviceManager.loopManager)
         NotificationCenter.default.addObserver(self, selector: #selector(sendSupportedBolusVolumesIfNeeded), name: .PumpManagerChanged, object: deviceManager)
+        NotificationCenter.default.addObserver(self, selector: #selector(g7PairingCodeSaved), name: .G7PairingCodeSaved, object: nil)
 
         watchSession?.delegate = self
         watchSession?.activate()
@@ -481,6 +483,7 @@ final class WatchDataManager: NSObject {
             beginReclaimBackgroundTask: { [weak self] in self?.beginReclaimBackgroundTask() },
             endReclaimBackgroundTask: { [weak self] in self?.endReclaimBackgroundTask() },
             isWatchReachable: { [weak self] in self?.watchSession?.isReachable ?? false },
+            isBluetoothPoweredOff: { [weak self] in self?.deviceManager.bluetoothProvider.bluetoothState == .poweredOff },
             lastWatchContactAt: { [weak self] in self?.lockedLastWatchContact.value ?? nil },
             listenForPodAdverts: { [weak self] epoch in self?.podAdvertListener.listen(epoch: epoch) },
             stopListeningForPodAdverts: { [weak self] epoch, reason in self?.podAdvertListener.stop(epoch: epoch, reason: reason) }
@@ -552,6 +555,7 @@ final class WatchDataManager: NSObject {
     private let contextDosingDecisionExpirationDuration: TimeInterval = -.minutes(5)
 
     let sleepStore: SleepStore
+    private let healthStore: HKHealthStore
     
     var lastBedtimeQuery: Date {
         didSet {
@@ -597,6 +601,26 @@ final class WatchDataManager: NSObject {
         }
     }
 
+    /// Build 3a.3: a G7 pairing code was saved. Send it to the watch now rather than at the next
+    /// loop cycle, and launch the watch app for a workout so it can hold itself awake across the
+    /// first reading and connect to the sensor (the watch cannot start a workout from the
+    /// background; the phone's launch is the one automatic way in). The watch ends the session
+    /// at its first direct reading or after 11 minutes.
+    @objc private func g7PairingCodeSaved() {
+        guard let session = watchSession, session.isPaired, session.isWatchAppInstalled else {
+            PhoneLog.event("g7", "pairing code saved — no paired watch with Loop installed; nothing to set up")
+            return
+        }
+        PhoneLog.event("g7", "pairing code saved — sending it to the watch now and launching the watch's sensor setup")
+        sendWatchContextIfNeeded()
+        let configuration = HKWorkoutConfiguration()
+        configuration.activityType = .other
+        configuration.locationType = .unknown
+        healthStore.startWatchApp(with: configuration) { launched, error in
+            PhoneLog.event("g7", "watch launch for sensor setup: \(launched ? "OK" : "FAILED")\(error.map { " — \($0.localizedDescription)" } ?? "")")
+        }
+    }
+
     @objc private func updateWatch(_ notification: Notification) {
         guard
             let rawUpdateContext = notification.userInfo?[LoopDataManager.LoopUpdateContextKey] as? LoopDataManager.LoopUpdateContext.RawValue,
@@ -609,8 +633,6 @@ final class WatchDataManager: NSObject {
         // state, watch capability, settings fingerprint, 30-min floor) lives inside it,
         // so this is one enqueued no-op almost always.
         podLoanController.considerDormantRefresh()
-        // PHONE MIRROR detector A rides the same pulse — all gating lives inside it.
-        podLoanController.considerInferredLoan()
 
         // Any update context should trigger a watch update
         sendWatchContextIfNeeded()

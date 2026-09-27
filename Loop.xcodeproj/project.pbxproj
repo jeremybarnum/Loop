@@ -189,6 +189,7 @@
 		43D0E4A22F1A000100000002 /* LoanProtocolV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */; };
 		43D0E4A32F1A000100000003 /* LoanProtocolV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A12F1A000100000001 /* LoanProtocolV2.swift */; };
 		43D0E4A62F1A000100000006 /* LoanReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A42F1A000100000004 /* LoanReconciler.swift */; };
+		FADE0004000000000000FA01 /* LoanReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A42F1A000100000004 /* LoanReconciler.swift */; };
 		43D0E4A72F1A000100000007 /* PodLoanPhoneController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A52F1A000100000005 /* PodLoanPhoneController.swift */; };
 		43D0E4A92F1A000100000009 /* LoanProtocolV2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4A82F1A000100000008 /* LoanProtocolV2Tests.swift */; };
 		43D0E4AB2F1A00010000000B /* PodLoanPhoneControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0E4AA2F1A00010000000A /* PodLoanPhoneControllerTests.swift */; };
@@ -624,6 +625,7 @@
 		FADE00040000000000000025 /* StockLoopSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000015 /* StockLoopSession.swift */; };
 		FADE00040000000000000026 /* LoanDebugController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000016 /* LoanDebugController.swift */; };
 		FADE00040000000000000027 /* GlanceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000017 /* GlanceController.swift */; };
+		E12E1D2899D2462B00C72066 /* G7SilenceHint.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2B9A813F30A4FBFFB28040A /* G7SilenceHint.swift */; };
 		FADE00040000000000000028 /* LoopStallWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000018 /* LoopStallWatchdog.swift */; };
 		FADE00040000000000000069 /* WristAlertScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000068 /* WristAlertScheduler.swift */; };
 		FADE00040000000000000029 /* SportLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE00040000000000000019 /* SportLog.swift */; };
@@ -1511,6 +1513,7 @@
 		FADE00040000000000000015 /* StockLoopSession.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = StockLoopSession.swift; sourceTree = "<group>"; };
 		FADE00040000000000000016 /* LoanDebugController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LoanDebugController.swift; sourceTree = "<group>"; };
 		FADE00040000000000000017 /* GlanceController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = GlanceController.swift; sourceTree = "<group>"; };
+		D2B9A813F30A4FBFFB28040A /* G7SilenceHint.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = "G7SilenceHint.swift"; sourceTree = "<group>"; };
 		FADE00040000000000000018 /* LoopStallWatchdog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LoopStallWatchdog.swift; sourceTree = "<group>"; };
 		FADE00040000000000000068 /* WristAlertScheduler.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = WristAlertScheduler.swift; sourceTree = "<group>"; };
 		FADE00040000000000000019 /* SportLog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SportLog.swift; sourceTree = "<group>"; };
@@ -2843,6 +2846,7 @@
 				FADE00040000000000000015 /* StockLoopSession.swift */,
 				FADE00040000000000000016 /* LoanDebugController.swift */,
 				FADE00040000000000000017 /* GlanceController.swift */,
+				D2B9A813F30A4FBFFB28040A /* G7SilenceHint.swift */,
 				FADE00040000000000000091 /* LoanCarbListController.swift */,
 				FADE00040000000000000060 /* WatchLowGlucoseWarning.swift */,
 				FADE00040000000000000068 /* WristAlertScheduler.swift */,
@@ -3826,12 +3830,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				FADE00040000000000000021 /* WatchLoopManager.swift in Sources */,
+				FADE0004000000000000FA01 /* LoanReconciler.swift in Sources */,
 				FADE00040000000000000022 /* StockLoopStack.swift in Sources */,
 				FADE00040000000000000023 /* LoanEventJournal.swift in Sources */,
 				FADE00040000000000000024 /* PodLoanWatchController.swift in Sources */,
 				FADE00040000000000000025 /* StockLoopSession.swift in Sources */,
 				FADE00040000000000000026 /* LoanDebugController.swift in Sources */,
 				FADE00040000000000000027 /* GlanceController.swift in Sources */,
+				E12E1D2899D2462B00C72066 /* G7SilenceHint.swift in Sources */,
 				FADE00040000000000000092 /* LoanCarbListController.swift in Sources */,
 				FADE00040000000000000061 /* WatchLowGlucoseWarning.swift in Sources */,
 				FADE00040000000000000069 /* WristAlertScheduler.swift in Sources */,

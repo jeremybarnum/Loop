@@ -25,12 +25,11 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
     /// Built exactly once, under a lock. It was a `lazy var`, which is not thread-safe: at a
     /// relaunch `applicationDidFinishLaunching` (main) and WCSession's activation callback (a
     /// background queue, `sessionDidActivate`) both touched it first and built TWO stacks — two
-    /// G7 managers, each with its own Bluetooth central under the same restore identity, and
-    /// "Sport Mode ready" logged twice (production user 2026-09-25 18:48; bench 2026-09-26
-    /// 10:53). On the direct-reading line the second central left the sensor search silent after
-    /// every relaunch (2026-09-25 14:11, 14:50; fixed there as 2f9c83da). Ride-only's exposure is
-    /// unmeasured, but a second stack is never intended. Nothing on this path does
-    /// `DispatchQueue.main.sync`, so a thread that waits here cannot deadlock the builder.
+    /// G7 managers, each with its own Bluetooth central under the same restore identity. Every
+    /// relaunch log showed "Sport Mode ready" twice; with the watch reading the sensor itself
+    /// (build 3a) the second central left the sensor search silent after every relaunch
+    /// (field 2026-09-25 14:11 and 14:50). Nothing on this path does `DispatchQueue.main.sync`,
+    /// so a thread that waits here cannot deadlock the builder.
     var stockLoopSession: StockLoopSession {
         stockLoopSessionLock.lock(); defer { stockLoopSessionLock.unlock() }
         if let built = _stockLoopSession { return built }
@@ -220,6 +219,16 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
                 }
             }
             pendingConnectivityTasks.removeAll()
+        }
+    }
+
+    /// The phone launched this app for a workout (HKHealthStore.startWatchApp) because a G7
+    /// pairing code was just saved: run the sensor setup, which holds the workout keepalive
+    /// across the first reading. Build 3a.3.
+    func handle(_ workoutConfiguration: HKWorkoutConfiguration) {
+        SportLog.event("setup", "launched by the phone for a workout — sensor setup")
+        DispatchQueue.main.async {
+            self.stockLoopSession.startSensorSetup(reason: "launched by the phone (pairing code saved)", force: true)
         }
     }
 

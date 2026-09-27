@@ -1528,6 +1528,10 @@ extension DeviceDataManager: LoopDataManagerDelegate {
 extension Notification.Name {
     static let PumpManagerChanged = Notification.Name(rawValue:  "com.loopKit.notification.PumpManagerChanged")
     static let CGMManagerChanged = Notification.Name(rawValue:  "com.loopKit.notification.CGMManagerChanged")
+    /// Build 3a.4: the user pressed Save on the G7 settings' Watch Direct Read code (posted by
+    /// G7SensorKitUI, which Loop does not import — hence the shared string). WatchDataManager sets
+    /// up the watch.
+    static let G7PairingCodeSaved = Notification.Name(rawValue: "G7SensorKit.watchPairingCodeSaved")
     static let PumpEventsAdded = Notification.Name(rawValue:  "com.loopKit.notification.PumpEventsAdded")
 }
 
