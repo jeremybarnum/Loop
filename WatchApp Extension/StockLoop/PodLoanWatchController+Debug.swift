@@ -53,6 +53,12 @@ extension PodLoanWatchController {
         let seizeOfferIssuedAt: Date?
 
         let reunionPromptVisible: Bool
+
+        /// The wrist-up hint under the takeover bar, or nil; and whether it reports the pod reached.
+        let takeoverHint: String?
+        let takeoverPodReached: Bool
+        /// Resting: the next Start must find a pod this watch has never met.
+        let podFirstContactExpected: Bool
     }
 
     /// Blocking. Not for main — `isLoanActiveNonBlocking` is main's answer.
@@ -132,7 +138,12 @@ extension PodLoanWatchController {
                 startNoteAt: startNote?.at,
                 startNoteText: startNote?.text,
                 seizeOfferIssuedAt: seizeOffer?.issuedAt,
-                reunionPromptVisible: reunionPromptActive)
+                reunionPromptVisible: reunionPromptActive,
+                takeoverHint: phase == .takingOver
+                    ? Self.takeoverHint(firstContact: takeoverFirstContact, podReached: takeoverPodReached, nudged: takeoverNudges > 0)
+                    : nil,
+                takeoverPodReached: phase == .takingOver && takeoverPodReached,
+                podFirstContactExpected: podFirstContactExpected())
     }
 
     /// Force a pod status read from the debug page. nil means there is no pump manager at all,

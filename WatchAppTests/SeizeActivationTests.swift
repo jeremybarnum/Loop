@@ -28,6 +28,7 @@ import HealthKit
 import LoopKit
 import LoopCore
 import LoopAlgorithm
+import OmnipodKit
 @testable import WatchApp
 
 final class SeizeActivationTests: XCTestCase {
@@ -650,5 +651,30 @@ final class SeizeActivationTests: XCTestCase {
         let snap = controller.debugSnapshot()
         XCTAssertEqual(snap.phase, .requested)
         XCTAssertNil(snap.seizeOfferIssuedAt, "the new request withdrew the stale offer")
+    }
+
+    // MARK: - First contact with a new pod (production-line lesson, 2026-09-26)
+
+    /// The Start page asks for the wrist only for a pod this watch holds no handle for. The
+    /// standing copy is shaped the way the phone SENDS it: the wire `podAddress` is 0, and the
+    /// address lives in the pump snapshot.
+    func testTheStartPageAsksForTheWristOnlyForAPodThisWatchHasNotMet() async throws {
+        let address: UInt32 = 0x17A6219A
+        PodLoanBleIdentifierCache.forget(podAddress: address)
+        defer { PodLoanBleIdentifierCache.forget(podAddress: address) }
+        let controller = await makeController()
+        XCTAssertFalse(controller.debugSnapshot().podFirstContactExpected, "no standing copy yet: no pod known, nothing said")
+
+        let envelope: [String: Any] = ["state": ["podState": ["address": address]]]
+        let raw = try PropertyListSerialization.data(fromPropertyList: envelope, format: .binary, options: 0)
+        let grant = LoanGrant(epoch: 3, expiresAt: Date(), pumpManagerRawState: raw, podAddress: 0,
+                              therapySettingsRaw: Data([4, 5]), settingsTimeZoneID: "GMT", doseHistory: [],
+                              therapySettingsSupplementRaw: nil)
+        controller.handleDormantGrant(DormantGrant(grant: grant, issuedAt: Date(), seizeToken: UUID()))
+        XCTAssertTrue(controller.debugSnapshot().podFirstContactExpected,
+                      "a pod with no saved handle has to be found, which needs the screen on")
+
+        PodLoanBleIdentifierCache.store("SAVED-HANDLE", forPodAddress: address)
+        XCTAssertFalse(controller.debugSnapshot().podFirstContactExpected, "a saved handle connects with the wrist down")
     }
 }

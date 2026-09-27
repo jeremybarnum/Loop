@@ -322,6 +322,44 @@ extension PodLoanWatchController {
         SportLog.event("seize", "offline offer WITHDRAWN — \(reason) [seize]")
     }
 
+    /// The grant's `podAddress` field is always 0 — the phone never fills it. The address rides the
+    /// pump snapshot, under the keys the pod driver's own rebuild reads.
+    static func podAddress(in grant: LoanGrant) -> UInt32? {
+        let envelope = (try? PropertyListSerialization.propertyList(from: grant.pumpManagerRawState, options: [], format: nil)) as? [String: Any]
+        return ((envelope?["state"] as? [String: Any])?["podState"] as? [String: Any])?["address"] as? UInt32
+    }
+
+    /// Resting only: the current pod is known and this watch holds no handle for it, so the next
+    /// Start has to find the pod with the screen on.
+    func podFirstContactExpected() -> Bool {
+        guard phase == .idle || phase == .recoveredDrain,
+              let saved = defaults.object(forKey: DormantKeys.podAddress) as? Int, saved != 0 else { return false }
+        return PodLoanBleIdentifierCache.identifier(forPodAddress: UInt32(truncatingIfNeeded: saved)) == nil
+    }
+
+    static let firstContactStartNote = NSLocalizedString(
+        "New pod — keep your wrist up after Start",
+        comment: "Glance note above Start when this watch has never connected to the current pod")
+
+    /// The hint under the takeover bar. Only a first contact says anything: it needs the screen
+    /// on until the pod is reached, and then the wrist can come down.
+    static func takeoverHint(firstContact: Bool, podReached: Bool, nudged: Bool) -> String? {
+        guard firstContact else { return nil }
+        if podReached {
+            return NSLocalizedString("Pod found — you can lower your wrist.", comment: "Glance: takeover reached the pod")
+        }
+        if nudged {
+            return NSLocalizedString("Raise your wrist to finish connecting.", comment: "Glance: first takeover stuck with the screen off")
+        }
+        return NSLocalizedString("First Sport Mode on this pod — keep your wrist up until the pod is found.", comment: "Glance: first takeover of a pod")
+    }
+
+    /// Tap the wrist only when it can help: the pod is not yet reached, the screen is off (with it
+    /// on, the scan is already active), and at most twice per takeover.
+    static func shouldNudgeTakeover(podReached: Bool, appActive: Bool, nudgesSoFar: Int) -> Bool {
+        !podReached && !appActive && nudgesSoFar < 2
+    }
+
     /// Rebuild the phone's settings from the grant.
     ///
     /// The supplement is not optional in practice: `LoopSettings.rawValue` drops the basal, ISF
@@ -594,6 +632,7 @@ extension PodLoanWatchController {
         var cachedHandle: String?
         if var podRaw = rawState["podState"] as? [String: Any],
            let address = podRaw["address"] as? UInt32 {
+            defaults.set(Int(address), forKey: DormantKeys.podAddress)
             cachedHandle = PodLoanBleIdentifierCache.identifier(forPodAddress: address)
             if let cachedHandle {
                 takeoverCachedHandle = (address, cachedHandle)
@@ -641,6 +680,25 @@ extension PodLoanWatchController {
 
         // Scan only when there is no cached handle; with one, the first read dials it directly.
         let discover = takeoverCachedHandle == nil
+        takeoverFirstContact = discover
+        takeoverPodReached = false
+        takeoverNudges = 0
+        // Only a takeover that has to find its pod needs the screen, so only it asks for the wrist,
+        // and only it taps the wrist when it sits unfound with the screen off. Twice at most.
+        if discover {
+            SportLog.event("loan", "takeover: FIRST CONTACT with this pod — finding it needs the watch screen on; the glance asks for the wrist up")
+            for delay in [8.0, 30.0] {
+                schedule(after: delay, label: "takeover-nudge") { [weak self] in
+                    guard let self = self, self.phase == .takingOver, self.epoch == grant.epoch,
+                          Self.shouldNudgeTakeover(podReached: self.takeoverPodReached, appActive: self.isWatchAppActive(),
+                                                   nudgesSoFar: self.takeoverNudges) else { return }
+                    self.takeoverNudges += 1
+                    self.playTakeoverNudge()
+                    SportLog.event("loan", String(format: "takeover: pod not reached after %.0fs with the screen off — tapped the wrist", delay))
+                    self.notifyUI()
+                }
+            }
+        }
         let armed = manager.podLoanBeginTakeover(discover: discover)
         SportLog.event("loan", "pump rebuilt — \(armed ? (discover ? "takeover scan armed" : "cached handle — the first read dials") : "no pod address!")")
 
@@ -666,7 +724,13 @@ extension PodLoanWatchController {
         PodLoanConnectClock.podLoanOnSessionEstablished = { [weak self] in
             guard let self = self else { return }
             self.queue.async {
-                guard self.phase == .takingOver, let action = self.takeoverRetryAction else { return }
+                guard self.phase == .takingOver else { return }
+                // The pod has been reached: whatever is left of the takeover works with the wrist down.
+                if !self.takeoverPodReached {
+                    self.takeoverPodReached = true
+                    if self.takeoverFirstContact { self.notifyUI() }
+                }
+                guard let action = self.takeoverRetryAction else { return }
                 SportLog.event("loan", "takeover: pod session ESTABLISHED (stack event) — reading now instead of waiting for the backstop")
                 self.takeoverRetryAction = nil
                 self.takeoverBackstop?.cancel()
