@@ -216,6 +216,7 @@ final class SeizeActivationTests: XCTestCase {
     /// would otherwise acknowledge a loan that never ran.
     func testConfirmAloneNeverPersistsTheReunionToken() async {
         let controller = await makeController()
+        controller.isPhoneReachable = { false }   // an offline start is one the phone isn't answering
         controller.send = { _ in }
         controller.scheduler = { _, _, work in work.perform() }
 
@@ -268,6 +269,7 @@ final class SeizeActivationTests: XCTestCase {
         let parked = try seeded.mintEvent(record: LoanDoseRecord(kind: .bolus, startDate: Date(), amount: 0.5), provenance: .confirmed)
 
         let controller = await makeController()                          // loads the same journal file
+        controller.isPhoneReachable = { false }   // an offline start is one the phone isn't answering
         var sent = 0
         controller.send = { _ in sent += 1 }
         var labels: [String] = []
@@ -412,6 +414,7 @@ final class SeizeActivationTests: XCTestCase {
     func testSeizeEpochClearsHighWaterAndRevokeMarks() async throws {
         defaults.set(5, forKey: "PodLoanWatchController.highWaterEpoch")
         let controller = await makeController()
+        controller.isPhoneReachable = { false }   // an offline start is one the phone isn't answering
         var sentEpochs: [Int] = []
         controller.send = { dict in
             if let message = try? LoanMessage.decode(fromTransport: dict), case .takeoverFailed(let f) = message {
@@ -550,6 +553,7 @@ final class SeizeActivationTests: XCTestCase {
     /// freshness window and re-grant over the loan this watch is running by then.
     func testTimeoutAndSeizeCancelQueuedRequestTransfers() async {
         let controller = await makeController()
+        controller.isPhoneReachable = { false }   // an offline start is one the phone isn't answering
         controller.send = { _ in }
         var cancelCalls = 0
         controller.cancelQueuedLoanRequests = { cancelCalls += 1; return 1 }
@@ -565,5 +569,86 @@ final class SeizeActivationTests: XCTestCase {
         controller.confirmSeize()
         _ = controller.debugSnapshot()
         XCTAssertEqual(cancelCalls, 2, "seize confirm cancels again — the strongest statement that no queued request should ever land")
+    }
+
+    // MARK: - The offer answers one unanswered request (production-line lessons, 09-24 / 09-26)
+
+    /// Production-line field 2026-09-24: an offline start confirmed ten minutes after the offer
+    /// appeared, two seconds after the phone had re-linked the pod. With the phone reachable at
+    /// the tap, the confirm goes to the phone as an ordinary request and never activates the
+    /// stored credential.
+    func testConfirmWithThePhoneBackSendsAnOrdinaryRequest() async {
+        let controller = await makeController()
+        controller.isPhoneReachable = { false }
+        var requests = 0
+        controller.send = { dict in
+            if let message = try? LoanMessage.decode(fromTransport: dict), case .request(_) = message { requests += 1 }
+        }
+        var timeoutsFired = 0
+        controller.scheduler = { _, label, work in
+            // Only the first timeout runs: it is the one that puts the offer up.
+            if label == "request-timeout" && timeoutsFired == 0 { timeoutsFired += 1; work.perform() }
+        }
+
+        controller.handleDormantGrant(fixtureDormant(issuedAt: Date().addingTimeInterval(-600), completeSettings: true))
+        controller.requestLoan(watchBuild: "reachable-confirm")
+        XCTAssertNotNil(controller.debugSnapshot().seizeOfferIssuedAt, "precondition: the offline offer is up")
+
+        controller.isPhoneReachable = { true }
+        controller.confirmSeize()
+        _ = controller.debugSnapshot()          // drains the confirm, which queues the request behind itself
+        let snap = controller.debugSnapshot()   // drains the request
+
+        XCTAssertEqual(requests, 2, "the confirm went to the phone as a second ordinary request")
+        XCTAssertEqual(snap.phase, .requested, "waiting on the phone's grant, not activating the stored credential")
+        XCTAssertNil(snap.seizeOfferIssuedAt, "the offer was consumed")
+        XCTAssertNil(defaults.string(forKey: "PodLoanWatchController.activeSeizeToken"))
+    }
+
+    /// Production-line bench 2026-09-26: the request timed out 2 s after the phone had granted,
+    /// the queued grant landed 0.1 s after the offline offer, and the loan ran — but the offer
+    /// was never cleared, so it came back on the idle screen when the loan ended. An accepted
+    /// grant withdraws it. (The fixture's pod bytes fail the rebuild, returning the watch to idle
+    /// — the same screen the loan's end returns to.)
+    func testALateGrantWithdrawsTheOfflineOffer() async throws {
+        let controller = await makeController()
+        controller.isPhoneReachable = { false }
+        controller.send = { _ in }
+        var timeoutsFired = 0
+        controller.scheduler = { _, label, work in
+            if label == "request-timeout" && timeoutsFired == 0 { timeoutsFired += 1; work.perform() }
+        }
+
+        controller.handleDormantGrant(fixtureDormant(issuedAt: Date().addingTimeInterval(-120), epoch: 3))
+        controller.requestLoan(watchBuild: "late-grant")
+        XCTAssertNotNil(controller.debugSnapshot().seizeOfferIssuedAt, "precondition: the timeout put the offer up")
+
+        let late = fixtureDormant(issuedAt: Date(), epoch: 9, completeSettings: true).grant
+            .withEpoch(9, leaseUntil: Date().addingTimeInterval(300))
+        controller.handleIncoming(userInfo: try LoanMessage.grant(late).transportDictionary(), channel: .queued)
+        let snap = controller.debugSnapshot()
+
+        XCTAssertEqual(snap.phase, .idle, "precondition: the takeover ran and ended back at idle")
+        XCTAssertNil(snap.seizeOfferIssuedAt, "the accepted grant withdrew the offline offer")
+    }
+
+    /// A new Start supersedes an offer left from an earlier unanswered request; its own timeout
+    /// re-offers if the phone is still silent.
+    func testANewStartWithdrawsTheOfflineOffer() async {
+        let controller = await makeController()
+        controller.send = { _ in }
+        var timeoutsFired = 0
+        controller.scheduler = { _, label, work in
+            if label == "request-timeout" && timeoutsFired == 0 { timeoutsFired += 1; work.perform() }
+        }
+
+        controller.handleDormantGrant(fixtureDormant(issuedAt: Date().addingTimeInterval(-120), epoch: 3))
+        controller.requestLoan(watchBuild: "first")
+        XCTAssertNotNil(controller.debugSnapshot().seizeOfferIssuedAt, "precondition: the offer is up")
+
+        controller.requestLoan(watchBuild: "second")
+        let snap = controller.debugSnapshot()
+        XCTAssertEqual(snap.phase, .requested)
+        XCTAssertNil(snap.seizeOfferIssuedAt, "the new request withdrew the stale offer")
     }
 }

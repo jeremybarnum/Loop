@@ -269,6 +269,7 @@ extension PodLoanWatchController {
             self.phase = .requested
             self.attemptStartedAt = self.now()
             self.lastIdleNote = nil
+            self.withdrawSeizeOffer(reason: "a new Start request went out")
 
             let reachable = self.isPhoneReachable()
 
@@ -309,6 +310,16 @@ extension PodLoanWatchController {
             self.requestTimeoutWork = work
             self.schedule(after: timeout, label: "request-timeout", execute: work)
         }
+    }
+
+    /// The offline offer answers ONE unanswered request. A grant accepted after it, or a new
+    /// Start, makes it stale; left set, it hides under the loan and comes back on the idle screen
+    /// when the loan ends (production-line bench 2026-09-26: the timeout fired 2 s after the
+    /// phone granted, and the queued grant landed 0.1 s after the offer). Caller is on `queue`.
+    private func withdrawSeizeOffer(reason: String) {
+        guard seizeOffer != nil else { return }
+        seizeOffer = nil
+        SportLog.event("seize", "offline offer WITHDRAWN — \(reason) [seize]")
     }
 
     /// Rebuild the phone's settings from the grant.
@@ -481,6 +492,7 @@ extension PodLoanWatchController {
         // unreachable pod produce the same log.
         PodLoanConnectClock.appStateProbe = { RuntimeStateLog.appStateName() }
         RuntimeStateLog.probeTimerDeferral("takeover-start")
+        withdrawSeizeOffer(reason: "a grant was accepted")
         // Force-unwrapped only because the completeness check above has already returned on nil.
         phase = .takingOver
         loopManager.settings = decodedSettings!

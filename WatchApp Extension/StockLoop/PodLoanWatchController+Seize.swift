@@ -46,6 +46,17 @@ extension PodLoanWatchController {
             }
             self.seizeOffer = nil
 
+            // The offer stays up until it is tapped, so the phone can be back by then
+            // (production-line field 2026-09-24: confirmed ten minutes after the offer appeared,
+            // two seconds after the phone had re-linked the pod). A seize here connects by the
+            // saved handle rather than by hearing an advert, so nothing would stop it taking a pod
+            // the phone is looping on. With the phone reachable, the start goes the ordinary way.
+            if self.isPhoneReachable() {
+                SportLog.event("seize", "offline start SUPERSEDED at confirm — the phone is reachable again; sending a normal Start request [seize]")
+                self.requestLoan(watchBuild: BuildDetails.default.codeIdentity)
+                return
+            }
+
             let newEpoch = max(dormant.grant.epoch,
                                (self.epoch ?? 0) + 1,
                                (self.journal.activeEpoch ?? 0) + 1,
