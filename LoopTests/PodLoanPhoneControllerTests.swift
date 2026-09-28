@@ -130,6 +130,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         holdPumpEventWrites = false
         heldPumpEventWrite = nil
         pump = MockPumpManager()
+        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.holdRenewedAt")
+        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.holdLapseNoticedAt")
+        UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.watchSilenceWarningsIssued")
         MockPumpManager.testConnectionReleased = false
         MockPumpManager.testOdometer = nil
         UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.deliveredAuthoritative")
@@ -203,7 +206,8 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                         now: @escaping () -> Date = { Date() },
                         bluetoothPoweredOff: @escaping () -> Bool = { false },
                         listenForPodAdverts: @escaping (Int) -> Void = { _ in },
-                        stopListeningForPodAdverts: @escaping (Int, String) -> Void = { _, _ in }) -> PodLoanPhoneController {
+                        stopListeningForPodAdverts: @escaping (Int, String) -> Void = { _, _ in },
+                        latestGlucose: (() -> Date?)? = nil) -> PodLoanPhoneController {
         let controller = PodLoanPhoneController(dependencies: .init(
             pumpManager: { [weak self] in self?.pump },
             settings: { [weak self] in self?.settings ?? LoopSettings() },
@@ -262,6 +266,7 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                 guard let self = self else { return }
                 self.lock.lock(); self.openLoopCalls += 1; self.lock.unlock()
             },
+            latestGlucoseDate: latestGlucose ?? { now() },   // by default the phone is beside the body
             issueUrgentNotice: { [weak self] title, _ in
                 guard let self = self else { return }
                 self.lock.lock(); self.urgentNotices.append(title); self.lock.unlock()
@@ -1138,6 +1143,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
                                         freshenSucceeded: false, asOf: asOf)
         controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
             DoseRecordBatch(epoch: epoch, events: events, tombstones: [], odometer: snap)).transportDictionary())
+        // Barrier: the checkpoint's audit-base advance runs on the controller's queue; reading
+        // before it has run was the order-dependent flake (next-dev 09-17).
+        controller.queue.sync { }
     }
 
     /// Closes the loan with a final offer whose end odometer the phone then verifies first-hand.
@@ -2387,6 +2395,150 @@ extension PodLoanPhoneControllerTests {
         XCTAssertTrue(MockPumpManager.testConnectionReleased)
     }
 
+    /// A force reclaim that arrives while the FINAL hand-back commit is writing parks behind the
+    /// write (#118). The commit then closes the loan, and the parked reason used to survive that
+    /// close and run moments later out of `drainAfterCommit`, against a staging area the close had
+    /// emptied: a second audit expecting bare schedule fill, so every unit the watch delivered
+    /// read as unexplained and the loop opened after a hand-back that went perfectly. Bench near
+    /// miss 2026-09-27 19:36:59 (only a new grant happened to clear it). Ported from next-dev.
+    func testForceDeferredBehindTheFinalCommitIsDroppedByTheClose() throws {
+        let controller = makeController()
+        let grant = try establishLoan(controller)
+
+        holdPumpEventWrites = true
+        let event = makeEvent(seq: 1, units: 0.6, at: clock.addingTimeInterval(-.minutes(3)))
+        controller.handleIncoming(userInfo: try LoanMessage.handbackOffer(
+            HandbackOffer(epoch: grant.epoch, handedBackAt: clock, finalStatus: nil, odometer: nil,
+                          events: [event], tombstones: [], recovered: false)).transportDictionary())
+        waitUntil(timeout: 5, "commit parked") {
+            self.lock.lock(); defer { self.lock.unlock() }; return self.heldPumpEventWrite != nil
+        }
+
+        controller.forceReclaimToOwner(reason: "test: force lands mid-commit")
+        XCTAssertNotNil(controller.pendingForceReclaimReason,
+                        "a force must park behind a write in flight (#118)")
+
+        let ackSent = expectSend()
+        holdPumpEventWrites = false
+        releaseHeldPumpEventWrite()
+        wait(for: [ackSent], timeout: 5)
+        waitForState(controller, .owner)
+        settle()
+
+        XCTAssertNil(controller.pendingForceReclaimReason,
+                     "the hand-back satisfies the force: records committed, radio back, judged by the close")
+        XCTAssertNil(diagMatching("R37 audit armed"),
+                     "no second audit — its expectation is bare schedule fill against an emptied staging area")
+        XCTAssertNil(diagMatching("R37 force-reclaim audit IMPOSSIBLE"))
+        XCTAssertEqual(openLoopCalls, 0, "a hand-back that went perfectly must not open the loop")
+    }
+
+    /// No handover while this phone's bolus is being delivered (ruled 2026-09-28): the grant is
+    /// refused out loud, the phone keeps the pod (and the user's cancel), nothing is split.
+    func testNoGrantWhileThePhonesBolusIsDelivering() throws {
+        let controller = makeController()
+        // The phone's own bolus, 2 U at 1.5 U/min, 40 s in.
+        let running = DoseEntry(type: .bolus, startDate: Date().addingTimeInterval(-40),
+                                endDate: Date().addingTimeInterval(40), value: 2.0, unit: .units)
+        pump.status.bolusState = .inProgress(running)
+
+        let answered = expectSend()
+        controller.handleIncoming(userInfo: try LoanMessage.request(LoanRequest(watchBuild: "t")).transportDictionary())
+        wait(for: [answered], timeout: 5)
+        guard case .denied(let denial)? = lastSent() else {
+            return XCTFail("expected a refusal, got \(String(describing: lastSent()))")
+        }
+        XCTAssertTrue(denial.reason.contains("bolus"), "the user is told why: \(denial.reason)")
+        XCTAssertEqual(controller.state, .owner, "the phone keeps the pod")
+        XCTAssertFalse(MockPumpManager.testConnectionReleased, "the link is never released under a bolus")
+    }
+
+    // MARK: - A silent watch is warned about, never taken from (ported from next-dev)
+
+    private func holdTick(_ controller: PodLoanPhoneController) {
+        controller.considerHoldLapse()
+        settle(0.3)
+    }
+
+    private func silenceWarnings() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return urgentNotices.filter { $0 == "Watch Not Reporting" }.count
+    }
+
+    /// 2026-09-08: a watch went silent mid-loan and nothing said so for four hours. The phone now
+    /// WARNS — at about twenty, forty and sixty minutes, then stops — and takes nothing.
+    func testASilentWatchIsWarnedAboutAndNeverTakenFrom() throws {
+        let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
+        _ = try establishLoan(controller)
+
+        clock = clock.addingTimeInterval(.minutes(14))
+        holdTick(controller)
+        XCTAssertNil(controller.holdLapseNoticedAt, "inside three cycles: nothing")
+
+        clock = clock.addingTimeInterval(.minutes(2))     // 16 min of silence
+        holdTick(controller)
+        XCTAssertNotNil(controller.holdLapseNoticedAt, "noticed")
+        XCTAssertEqual(silenceWarnings(), 0, "but not yet said: the watch gets one cycle to report")
+
+        clock = clock.addingTimeInterval(.minutes(5))     // 21 min
+        holdTick(controller)
+        XCTAssertEqual(silenceWarnings(), 1, "about twenty minutes")
+
+        clock = clock.addingTimeInterval(.minutes(5))
+        holdTick(controller)
+        XCTAssertEqual(silenceWarnings(), 1, "no repeat inside the cadence")
+
+        clock = clock.addingTimeInterval(.minutes(15))    // 41 min
+        holdTick(controller)
+        XCTAssertEqual(silenceWarnings(), 2, "about forty")
+
+        clock = clock.addingTimeInterval(.minutes(20))    // 61 min
+        holdTick(controller)
+        XCTAssertEqual(silenceWarnings(), 3, "about sixty")
+
+        clock = clock.addingTimeInterval(.minutes(60))
+        holdTick(controller)
+        XCTAssertEqual(silenceWarnings(), 3, "then it stops")
+
+        XCTAssertEqual(controller.state, .loaned, "the pod stays assigned to the watch — taking it back is the user's tap")
+        XCTAssertTrue(MockPumpManager.testConnectionReleased, "and the phone's pod link stays released")
+        lock.lock(); let revoked = sent.contains { if case .revoke = $0 { return true }; return false }; lock.unlock()
+        XCTAssertFalse(revoked, "nothing was sent to the watch either")
+    }
+
+    /// Coming back into range, the phone notices an hour of silence at once — while the watch,
+    /// alive and dosing all along, is one cycle from reporting. No warning on the way back in.
+    func testAWatchThatReportsOnTheWayBackInIsNotWarnedAbout() throws {
+        let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
+        let grant = try establishLoan(controller)
+
+        clock = clock.addingTimeInterval(.minutes(90))
+        holdTick(controller)
+        XCTAssertNotNil(controller.holdLapseNoticedAt, "silence noticed")
+
+        clock = clock.addingTimeInterval(.minutes(3))
+        controller.handleIncoming(userInfo: try LoanMessage.doseRecordBatch(
+            DoseRecordBatch(epoch: grant.epoch, events: [], tombstones: [], sentAt: clock)).transportDictionary())
+        settle(0.3)
+        XCTAssertNil(controller.holdLapseNoticedAt, "the watch reported: the warning stands down")
+
+        clock = clock.addingTimeInterval(.minutes(10))
+        holdTick(controller)
+        XCTAssertEqual(silenceWarnings(), 0)
+    }
+
+    /// Away from the body the phone cannot tell a dead watch from a distant one, so it says nothing.
+    func testAPhoneAwayFromTheBodyDoesNotWarn() throws {
+        let controller = makeController(now: { [weak self] in self?.clock ?? Date() },
+                                        latestGlucose: { [weak self] in self?.clock.addingTimeInterval(-.minutes(30)) })
+        _ = try establishLoan(controller)
+        for _ in 0..<6 {
+            clock = clock.addingTimeInterval(.minutes(15))
+            holdTick(controller)
+        }
+        XCTAssertEqual(silenceWarnings(), 0, "no fresh reading on this phone: it is not beside the user")
+    }
+
     // MARK: - Dormant-refresh throttle (R40 seize credential pipe)
 
     /// The refresh throttle stamps at ENQUEUE, not completion: LoopDataUpdated arrives in
@@ -2435,6 +2587,30 @@ extension PodLoanPhoneControllerTests {
         let refreshes = sent.filter { if case .dormantGrant = $0 { return true }; return false }
         lock.unlock()
         XCTAssertEqual(refreshes.count, 2, "the throttled ping sends nothing; the install edge sends one")
+    }
+
+    /// The watch's standing copy follows the book: a bolus or a carb entry refreshes it without
+    /// waiting for the 30-minute floor, and a burst collapses to one (ported from next-dev).
+    func testTheStandingCopyFollowsTheBook() {
+        UserDefaults.standard.set(true, forKey: "PodLoanPhoneController.watchSupportsSeize")
+        defer { UserDefaults.standard.removeObject(forKey: "PodLoanPhoneController.watchSupportsSeize") }
+        let controller = makeController(now: { [weak self] in self?.clock ?? Date() })
+        func copies() -> Int {
+            lock.lock(); defer { lock.unlock() }
+            return sent.filter { if case .dormantGrant = $0 { return true }; return false }.count
+        }
+        controller.considerDormantRefresh()
+        waitUntil(timeout: 5, "first copy") { copies() == 1 }
+
+        clock = clock.addingTimeInterval(.minutes(2))          // far inside the 30-minute floor
+        controller.considerDormantRefresh()
+        settle()
+        XCTAssertEqual(copies(), 1, "nothing changed — the periodic floor still holds")
+
+        for _ in 0..<5 { controller.considerDormantRefresh(bookChanged: true) }   // carbs, then the bolus, in a burst
+        waitUntil(timeout: 5, "the book changed") { copies() == 2 }
+        usleep(400_000)
+        XCTAssertEqual(copies(), 2, "one burst, one copy")
     }
 
     // MARK: - PHONE MIRROR (R40(a), the minimum-deviation paradigm)

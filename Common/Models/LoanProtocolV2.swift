@@ -893,13 +893,17 @@ public struct DoseRecordBatch: Codable, Equatable {
     /// instead of the whole loan. nil (older watch, or no reading yet) = no checkpoint; the
     /// phone behaves exactly as before.
     public let odometer: LoanOdometerSnapshot?
+    /// When the watch SENT this batch. The phone's silent-watch warning judges by it, so a batch
+    /// that sat in a queue renews nothing. nil from an older watch = judged at arrival.
+    public let sentAt: Date?
 
     public init(epoch: Int, events: [LoanEvent], tombstones: [UUID],
-                odometer: LoanOdometerSnapshot? = nil) {
+                odometer: LoanOdometerSnapshot? = nil, sentAt: Date? = nil) {
         self.epoch = epoch
         self.events = events
         self.tombstones = tombstones
         self.odometer = odometer
+        self.sentAt = sentAt
     }
 }
 
@@ -1314,6 +1318,27 @@ extension LoanDoseRecord {
         // override history already handles for both books).
         case .resume, .carb, .carbDeleted, .plumbingCancel, .boundaryTruncation, .modeChange, .overrideChange:
             return nil
+        }
+    }
+}
+
+// MARK: - No handover while a bolus is being delivered (ruled 2026-09-28)
+//
+// A bolus is recorded once, whole, by the controller that sent it, and finalized from the pod.
+// A handover (Start, End, offline start) that fell inside its delivery would split it across two
+// books by estimate, so none may: the handover is refused and the user taps again when the
+// bolus has finished. The pod finishes a bolus on its own either way.
+public extension PumpManagerStatus.BolusState {
+    /// nil when no bolus is being delivered; otherwise when to try again, for the refusal text.
+    func loanDeliveryWait(now: Date) -> String? {
+        switch self {
+        case .noBolus:
+            return nil
+        case .inProgress(let dose):
+            let minutes = Int((dose.endDate.timeIntervalSince(now) / 60).rounded(.up))
+            return minutes >= 1 ? "in about \(minutes) min" : "in a moment"
+        case .initiating, .canceling:
+            return "in a moment"
         }
     }
 }

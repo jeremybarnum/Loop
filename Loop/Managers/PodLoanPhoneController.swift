@@ -186,6 +186,9 @@ final class PodLoanPhoneController {
         /// Escalated surfacing for the dead-watch reclaim — time-sensitive interruption and
         /// a foreground banner, where `issueNotice` is a quiet list entry. The watch is dead, so
         /// the phone is the only device that can get the user's attention.
+        /// This phone's latest glucose reading time — "is the phone beside the body?" for the
+        /// silent-watch warning. nil = no reading, and no warning.
+        var latestGlucoseDate: () -> Date? = { nil }
         var issueUrgentNotice: (_ title: String, _ body: String) -> Void = { _, _ in }
         /// Book the odometer-gap placeholder as a MANUALLY-ENTERED dose. Deliberately not
         /// the pump-event path: manual doses keep their `syncIdentifier` as their store identity
@@ -254,7 +257,9 @@ final class PodLoanPhoneController {
     static let bookUnattributedInsulinOnForceReclaim = true
 
     private let log = OSLog(subsystem: "com.loopkit.Loop", category: "PodLoanPhoneController")
-    private let queue = DispatchQueue(label: "com.loopkit.Loop.PodLoanPhoneController", qos: .utility)
+    /// Internal (not private) so tests can wait on it: a helper that reads before the queue has
+    /// run its work races (next-dev 09-17 fix of the order-dependent checkpoint tests).
+    let queue = DispatchQueue(label: "com.loopkit.Loop.PodLoanPhoneController", qos: .utility)
     private var deps: Dependencies
 
     // MARK: - Loan → pump-event conversion
@@ -1358,7 +1363,7 @@ final class PodLoanPhoneController {
     /// A force-reclaim requested mid-write. It used to run immediately, read the
     /// not-yet-updated `committedIDs`, and re-commit the same staged records — insulin
     /// survives (raw dedup at the store) but CARBS HAVE NO IDENTITY and double.
-    private var pendingForceReclaimReason: String?
+    private(set) var pendingForceReclaimReason: String?
     private var committedIDs: Set<UUID>
     /// Staged (received, not-yet-committed) events for the current epoch — persisted
     /// on every batch so a phone relaunch keeps the trap-cell defense.
@@ -1773,6 +1778,14 @@ final class PodLoanPhoneController {
             deny("This pump can't be loaned to the watch (\(type(of: pump))).")
             return
         }
+        // No handover while this phone's bolus is being delivered (2026-09-28): the bolus stays
+        // whole in this phone's book and the watch starts with nothing in flight. Refused, not
+        // queued — the user taps Start again when it has finished; cancel stays available here.
+        if let wait = pump.status.bolusState.loanDeliveryWait(now: deps.now()) {
+            PhoneLog.event("loan", "grant REFUSED — this iPhone's bolus is still being delivered (\(wait))")
+            deny("The iPhone is still delivering a bolus. Tap Start again \(wait).")
+            return
+        }
         // Never release the link under a command awaiting its reply: the reply is lost, the
         // command stays unacknowledged, and the phone shows "Unable to Reach Pod" (with its
         // Discard Pod button) for the whole loan. Field 2026-09-24 13:27: a grant ~4 s after a
@@ -1881,6 +1894,8 @@ final class PodLoanPhoneController {
         // defensive/back-compat tolerance ONLY: the watch hand-back journal never mints that kind,
         // so those arms are now vestigial in production (an older phone may still send one).
         let handedOverAt = deps.now()
+        holdRenewedAt = handedOverAt          // the silence clock starts at the handover
+        holdLapseNoticedAt = nil
 
         // §5.3.3: capture the odometer NOW (the phone was polling until this moment)
         // so the post-reclaim re-audit has a loan-start baseline even if the watch
@@ -2040,6 +2055,10 @@ final class PodLoanPhoneController {
     /// Periodic floor between refreshes with unchanged settings. A settings change
     /// refreshes immediately regardless. Tunable.
     private static let dormantRefreshInterval: TimeInterval = .minutes(30)
+    /// Floor on refreshes triggered by the book changing (a bolus, carbs), which can come several
+    /// to a minute. One trailing refresh is scheduled instead, so the last change still lands.
+    private static let bookRefreshFloor: TimeInterval = 30
+    private var trailingDormantRefreshPending = false
 
     /// A coarse fingerprint of everything therapy-relevant the grant snapshot freezes —
     /// when it changes, the dormant grant refreshes immediately (the R40(d) analysis:
@@ -2072,8 +2091,12 @@ final class PodLoanPhoneController {
     /// updates); all gating and throttling lives here. Refreshes only while this phone
     /// OWNS the pod, only to a watch that advertised supportsSeize, and only when the
     /// settings fingerprint changed or the periodic floor elapsed.
-    func considerDormantRefresh() {
-        queue.async { [weak self] in self?.queue_considerDormantRefresh() }
+    ///
+    /// `bookChanged`: insulin or carbs moved. The book matters as much as the settings — carbs or
+    /// a bolus entered minutes before an offline start, and absent from the copy, leave the wrist
+    /// dosing against food and insulin it does not know (ported from next-dev, 09-20).
+    func considerDormantRefresh(bookChanged: Bool = false) {
+        queue.async { [weak self] in self?.queue_considerDormantRefresh(bookChanged: bookChanged) }
     }
 
     /// The watch app has just appeared (fresh install or reinstall), so its stores are empty:
@@ -2091,7 +2114,7 @@ final class PodLoanPhoneController {
         }
     }
 
-    private func queue_considerDormantRefresh() {
+    private func queue_considerDormantRefresh(bookChanged: Bool = false) {
         guard state == .owner else { return }
         guard UserDefaults.standard.bool(forKey: Keys.watchSupportsSeize) else { return }
         guard let pump = deps.pumpManager(),
@@ -2110,7 +2133,20 @@ final class PodLoanPhoneController {
         // four identical rejects until the 30-min floor refresh).
         let fingerprint = Self.settingsFingerprint(settings) + "|e\(epoch)"
         let periodicDue = lastDormantRefreshAt.map { deps.now().timeIntervalSince($0) >= Self.dormantRefreshInterval } ?? true
-        guard periodicDue || fingerprint != lastDormantSettingsFingerprint else { return }
+        let settingsChanged = fingerprint != lastDormantSettingsFingerprint
+        guard periodicDue || settingsChanged || bookChanged else { return }
+        if !periodicDue, !settingsChanged, let last = lastDormantRefreshAt {
+            let wait = Self.bookRefreshFloor - deps.now().timeIntervalSince(last)
+            if wait > 0 {
+                guard !trailingDormantRefreshPending else { return }
+                trailingDormantRefreshPending = true
+                queue.asyncAfter(deadline: .now() + wait) { [weak self] in
+                    self?.trailingDormantRefreshPending = false
+                    self?.queue_considerDormantRefresh(bookChanged: true)
+                }
+                return
+            }
+        }
 
         var loanSettings = settings
         loanSettings.automaticDosingStrategy = .tempBasalOnly   // same override as a live grant
@@ -2183,6 +2219,9 @@ final class PodLoanPhoneController {
             return
         }
         yieldingToInferredLoan = true
+        // First contact with this loan: the silence clock counts from here.
+        holdRenewedAt = deps.now()
+        holdLapseNoticedAt = nil
         // If this loan has to be taken back unheard, its audit runs from THIS phone's own last
         // pod read — never from an earlier loan's anchors (those are cleared when a loan ends).
         // (Known gap, documented not built: the phone's own temp still running at that read is
@@ -2311,6 +2350,7 @@ final class PodLoanPhoneController {
 
     private func handleTakeoverComplete(_ complete: TakeoverComplete) {
         guard complete.epoch == epoch, state == .grantOffered else { return }
+        noteHoldRenewal(sentAt: complete.firstPodStatus.timestamp)
         deps.stopListeningForPodAdverts(complete.epoch, "watch took the pod")
         t1WorkItem?.cancel()
         cancelNotification(id: NotificationID.t1)
@@ -2514,6 +2554,7 @@ final class PodLoanPhoneController {
             }
             return
         }
+        noteHoldRenewal(sentAt: batch.sentAt)
         stage(events: batch.events, tombstones: batch.tombstones)
         // Records synced + odometer observed = a checkpoint candidate: the audit base can
         // advance past a window that reconciles, so a later forced reclaim judges only the
@@ -2570,6 +2611,8 @@ final class PodLoanPhoneController {
             clearInferredLoanYield(reason: "retro-ack — the inferred loan is now the adopted loan e\(offer.epoch)")
             epoch = offer.epoch
             state = .loaned
+            holdRenewedAt = offer.handedBackAt
+            holdLapseNoticedAt = nil
             // The seized loan's audit anchors at ITS OWN seize-time odometer read
             // (offer.odometer.deliveredAtStart); anchors from before the blackout must not
             // widen the window or misattribute the phone's own pre-blackout delivery.
@@ -2635,6 +2678,8 @@ final class PodLoanPhoneController {
         // watch could never drain it and held the pod forever. Every non-stale offer
         // now stages + commits unseen events; only the STATE transitions are gated.
         let isFinal = offer.released ?? true
+        // An interim drain is also the watch checking in, so it renews the silence clock.
+        if !isStale, !isFinal { noteHoldRenewal(sentAt: offer.handedBackAt) }
         let canTransition = state == .loaned || state == .reclaimPending || state == .grantOffered
         // A phone whose Bluetooth is off could not reclaim the pod, so it refuses the hand-back
         // OUT LOUD — interim offers too, which is what makes End fail within a second instead
@@ -3137,6 +3182,12 @@ final class PodLoanPhoneController {
         cancelReclaimLadder()
         cancelNotification(id: NotificationID.duration)
         cancelNotification(id: NotificationID.paused)
+        // A force reclaim that deferred behind THIS commit is satisfied by the hand-back that just
+        // landed: its records are committed, its radio comes back below, and its insulin is judged
+        // by the hand-back's own audit. Left set, `drainAfterCommit` runs it moments from now
+        // against an emptied staging area — a second audit whose expectation is bare schedule
+        // fill, reading every unit the watch delivered as unexplained (next-dev 3c07381a).
+        pendingForceReclaimReason = nil
         // GHOST-DRAIN SUPERSESSION (field 2026-08-31 12:44): the loan that just drained
         // can be a reboot-era ghost whose queued FINAL offer outlived the fold — while the
         // LIVE successor loan is streaming. Closing its books is right; resuming custody
@@ -3861,5 +3912,114 @@ final class PodLoanPhoneController {
 
     private func persistCommittedIDs() {
         UserDefaults.standard.set(committedIDs.map(\.uuidString), forKey: Keys.committedIDs)
+    }
+}
+
+// MARK: - A silent watch is warned about, never taken from (ported from next-dev, 2026-09-28)
+//
+// Every cycle it completes, the watch sends a record batch — empty or not — stamped with when it
+// was sent. When those stop, nobody may be adjusting insulin, so the phone warns: at ~20, 40 and
+// 60 min, only while it is beside the body (its own reading fresh). It never takes the pod back on
+// a timer — a watch alive but unheard is still dosing; taking the pod stays the user's tap.
+
+extension PodLoanPhoneController {
+    /// Three missed cycles. Shorter than this and an ordinary late report reads as silence.
+    static let watchSilenceThreshold: TimeInterval = .minutes(15)
+
+    /// Between noticing the silence and the first warning: one more chance to report, which is
+    /// what a watch does within a cycle of coming back into range.
+    static let watchSilenceGrace: TimeInterval = .minutes(5)
+
+    /// Warnings after the grace, then nothing. Repeating forever trains the user to ignore it.
+    static let watchSilenceWarningOffsets: [TimeInterval] = [0, .minutes(20), .minutes(40)]
+
+    /// How fresh this phone's own sensor reading must be for it to count as near the user.
+    /// A phone left at home hears nothing from the watch AND nothing from the sensor, and must
+    /// not mistake its own absence for the watch's failure.
+    static let nearTheBodyWindow: TimeInterval = .minutes(11)
+
+    private enum HoldKeys {
+        static let renewedAt = "PodLoanPhoneController.holdRenewedAt"
+        static let noticedAt = "PodLoanPhoneController.holdLapseNoticedAt"
+        static let warningsIssued = "PodLoanPhoneController.watchSilenceWarningsIssued"
+    }
+
+    /// When the watch last told us it completed a cycle. Persisted: a phone relaunch mid-session
+    /// must not read as a fresh, silent watch.
+    var holdRenewedAt: Date? {
+        get { UserDefaults.standard.object(forKey: HoldKeys.renewedAt) as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: HoldKeys.renewedAt) }
+    }
+
+    /// When the silence was first noticed, which is what the warning offsets count from.
+    /// Clearing it also clears the warning count, so a watch that returns starts clean.
+    var holdLapseNoticedAt: Date? {
+        get { UserDefaults.standard.object(forKey: HoldKeys.noticedAt) as? Date }
+        set {
+            UserDefaults.standard.set(newValue, forKey: HoldKeys.noticedAt)
+            if newValue == nil { UserDefaults.standard.removeObject(forKey: HoldKeys.warningsIssued) }
+        }
+    }
+
+    /// How many of the warnings have gone out for this stretch of silence.
+    private var watchSilenceWarningsIssued: Int {
+        get { UserDefaults.standard.integer(forKey: HoldKeys.warningsIssued) }
+        set { UserDefaults.standard.set(newValue, forKey: HoldKeys.warningsIssued) }
+    }
+
+    /// Record that the watch reported, judged by the time the message was SENT rather than when
+    /// it arrived — a batch that sat in a queue for an hour renews nothing.
+    func noteHoldRenewal(sentAt: Date?) {
+        let now = deps.now()
+        let stamp = min(sentAt ?? now, now)
+        // Never move the stamp backwards: batches can arrive out of order.
+        guard stamp > (holdRenewedAt ?? .distantPast) else { return }
+        holdRenewedAt = stamp
+        if holdLapseNoticedAt != nil, now.timeIntervalSince(stamp) <= Self.watchSilenceThreshold {
+            holdLapseNoticedAt = nil
+            handbackDiag(epoch, "watch REPORTING again — the silence warning stands down")
+        }
+    }
+
+    /// Called on every phone loop cycle. All the judgement lives below, so this is almost always
+    /// one enqueued no-op.
+    func considerHoldLapse() {
+        queue.async { self.queue_considerHoldLapse() }
+    }
+
+    func queue_considerHoldLapse() {
+        // A loan the watch announced (a phoneless start) counts too: this phone is standing
+        // aside for it, so its silence matters exactly as much as a loan we granted.
+        let told = state == .owner && yieldingToInferredLoan
+        let renewedAt = told ? [holdRenewedAt, newestForeignLoanEvidence?.at].compactMap { $0 }.max() : holdRenewedAt
+        guard state == .loaned || state == .grantOffered || told, let renewed = renewedAt else {
+            if holdLapseNoticedAt != nil { holdLapseNoticedAt = nil }
+            return
+        }
+        let now = deps.now()
+        let silence = now.timeIntervalSince(renewed)
+        // Silent AND near the body. Away from the user the phone cannot tell a dead watch from
+        // a distant one, so it says nothing rather than warning about a session that is fine.
+        guard silence > Self.watchSilenceThreshold,
+              let reading = deps.latestGlucoseDate(), now.timeIntervalSince(reading) <= Self.nearTheBodyWindow else {
+            if holdLapseNoticedAt != nil { holdLapseNoticedAt = nil }
+            return
+        }
+        // First sight of the silence: start the clock, warn at the next cycle that still sees it.
+        guard let noticed = holdLapseNoticedAt else {
+            holdLapseNoticedAt = now
+            handbackDiag(epoch, String(format: "watch SILENT — no report for %.0f min with this phone beside the body; first warning in %.0f min unless it reports",
+                                       silence / 60, Self.watchSilenceGrace / 60))
+            return
+        }
+        let issued = watchSilenceWarningsIssued
+        guard issued < Self.watchSilenceWarningOffsets.count,
+              now.timeIntervalSince(noticed) >= Self.watchSilenceGrace + Self.watchSilenceWarningOffsets[issued] else { return }
+        watchSilenceWarningsIssued = issued + 1
+        handbackDiag(epoch, String(format: "watch SILENT %.0f min — warning %d of %d issued; the pod stays assigned to the watch until the user takes it back",
+                                   silence / 60, issued + 1, Self.watchSilenceWarningOffsets.count))
+        deps.issueUrgentNotice(
+            NSLocalizedString("Watch Not Reporting", comment: "Phone warning title: the watch has stopped reporting loop cycles during a session"),
+            String(format: NSLocalizedString("The watch hasn't reported a loop for %1$.0f minutes. The pod is still assigned to it. If the watch is off or out of battery, tap the pod tile to bring the pod back to this phone.", comment: "Phone warning body: watch silent mid-session (1: minutes)"), (silence / 60).rounded()))
     }
 }

@@ -1209,6 +1209,18 @@ final class PodLoanWatchController {
             return
         }
 
+        // No handover while a bolus is being delivered (2026-09-28). The copy knows of one still
+        // running: refuse before this watch sends anything, and let go of the link the manager's
+        // construction may already be opening. The bolus stays whole in the phone's book.
+        if let wait = manager.status.bolusState.loanDeliveryWait(now: now()) {
+            manager.podLoanOrphanConnection()
+            returnToRestingPhase()
+            lastIdleNote = String(format: NSLocalizedString("A bolus is still being delivered. Tap Start again %@.", comment: "Glance: Start refused while a bolus is delivering"), wait)
+            SportLog.event("loan", "Start REFUSED — the copy shows a bolus still being delivered (\(wait)); nothing sent to the pod\(seizeMarkerActive ? " [seize]" : "")")
+            sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "bolus still being delivered at handover")))
+            return
+        }
+
         // What the COPY knew of the pod's total, before this watch has read anything — the
         // baseline for "did the pod deliver insulin this book cannot explain?" at takeover.
         if let units = manager.podLoanInsulinDelivered, let asOf = manager.podLoanInsulinDeliveredAt {
@@ -1386,6 +1398,17 @@ final class PodLoanWatchController {
                     }
                     SportLog.event("loan", "TAKEOVER ABORTED — grant lease expired mid-takeover after \(attempt + 1) read(s), epoch \(grant.epoch), wedgeSignature=\(PodLoanConnectClock.wedgeSignature)\(self.seizeMarkerActive ? " [seize]" : "")")
                     self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "grant expired mid-takeover")))
+                    return
+                }
+                // No handover while a bolus is being delivered (2026-09-28, A(ii)): the pod reports
+                // one the copy did not know (made before the bolus). Nothing has been sent; let go
+                // and refuse — the bolus stays whole in the book of the controller that sent it.
+                if success, manager.podLoanPodIsBolusing {
+                    self.teardownPump()
+                    self.returnToRestingPhase()
+                    self.lastIdleNote = NSLocalizedString("A bolus is still being delivered. Tap Start again when it finishes.", comment: "Glance: Start refused, the pod reported a bolus in progress")
+                    SportLog.event("loan", "Start REFUSED — the pod reports a bolus still being delivered that the copy did not know; pod let go, nothing sent, epoch \(grant.epoch)\(self.seizeMarkerActive ? " [seize]" : "")")
+                    self.sendMessage(.takeoverFailed(TakeoverFailed(epoch: grant.epoch, reason: "pod reported a bolus in progress at takeover")))
                     return
                 }
                 if success, let delivered = manager.podLoanInsulinDelivered {
@@ -2149,8 +2172,16 @@ final class PodLoanWatchController {
         if defaults.bool(forKey: "sim.fakeLoanFlow") { simDriveHandback(); return }
         #endif
         queue.async {
-            guard self.phase == .active, self.pumpManager != nil else { return }
+            guard self.phase == .active, let manager = self.pumpManager else { return }
             guard !self.handbackRequested else { return }
+            // No handover while the watch's own bolus is being delivered (2026-09-28): it is
+            // recorded whole here and finalized from the pod before the pod goes home.
+            if let wait = manager.status.bolusState.loanDeliveryWait(now: self.now()) {
+                SportLog.event("loan", "End REFUSED — the watch's bolus is still being delivered (\(wait))")
+                self.issueProtocolAlert(title: "Couldn't End Sport Mode",
+                                        body: "A bolus is still being delivered. Tap End again \(wait).")
+                return
+            }
             self.reunionPromptActive = false   // a manual End answers the R40(f) prompt too
             self.handbackRequested = true
             self.handbackResendCount = 0
@@ -3180,7 +3211,13 @@ final class PodLoanWatchController {
 
     /// Best-effort streaming (§2.4): the phone accumulates the record even if the
     /// watch later dies. Loss is harmless — the cursor and IDs absorb redelivery.
-    private func streamRecords() {
+    /// A completed cycle on the watch — the phone's silent-watch warning counts these. Sent even
+    /// when there is nothing new to record, urgent-only: a queued "I'm alive" means nothing late.
+    func renewHold() {
+        queue.async { self.streamRecords(renewal: true) }
+    }
+
+    private func streamRecords(renewal: Bool = false) {
         guard phase == .active, let epoch = epoch else { return }
         // Events that are IN-FLIGHT (mint→classification) or
         // whose verdict chase is LIVE stay out of the stream — the phone's commit set
@@ -3193,7 +3230,8 @@ final class PodLoanWatchController {
             events.removeAll { $0.id == pending }
         }
         let tombstones = journal.pendingTombstones()
-        guard !events.isEmpty || !tombstones.isEmpty else { return }
+        let empty = events.isEmpty && tombstones.isEmpty
+        guard renewal || !empty else { return }
         // What the watch streams to the phone. (Removed the old "implied Σ" — a sum of temp
         // rate×FULL-window with overlaps untruncated. It was a diagnostic-only over-count that fed
         // no logic and consistently mislead: it exceeds physically-possible delivery, so it is NOT a
@@ -3217,9 +3255,13 @@ final class PodLoanWatchController {
                                             freshenSucceeded: false, asOf: asOf)
             lastPodTotal = (latest, asOf)
         }
-        SportLog.event("handback", String(format: "stream: %d event(s), %d tombstone(s)%@", events.count, tombstones.count,
-                                          odometer.map { String(format: " · odo %.2f U [checkpoint]", $0.deliveredLatest) } ?? ""))
-        sendMessage(.doseRecordBatch(DoseRecordBatch(epoch: epoch, events: events, tombstones: tombstones, odometer: odometer)))
+        if !empty {
+            SportLog.event("handback", String(format: "stream: %d event(s), %d tombstone(s)%@", events.count, tombstones.count,
+                                              odometer.map { String(format: " · odo %.2f U [checkpoint]", $0.deliveredLatest) } ?? ""))
+        }
+        sendMessage(.doseRecordBatch(DoseRecordBatch(epoch: epoch, events: events, tombstones: tombstones,
+                                                     odometer: odometer, sentAt: now())),
+                    urgentOnly: empty)
     }
 }
 

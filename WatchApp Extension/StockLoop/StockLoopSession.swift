@@ -74,6 +74,8 @@ final class StockLoopSession {
 
         // The one question the hand-back UI needs answered.
         loanController.isPhoneReachable = { WCSession.default.isReachable }
+        // Each landed cycle renews the watch's hold with the phone (its silent-watch warning).
+        stack.loopManager.onCycleLanded = { [weak loanController] in loanController?.renewHold() }
 
         // Sensor setup ends at the first reading the watch takes itself.
         stack.loopManager.onDirectGlucose = { [weak self] _ in

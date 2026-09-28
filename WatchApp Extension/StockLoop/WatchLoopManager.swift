@@ -954,6 +954,8 @@ final class WatchLoopManager {
     var lastPersistedSensorID: String?
     /// Diagnosis hook (2026-09-04): fired on every direct-G7 arrival so the session's window
     /// monitor can anchor the expected-burst clock on the sensor's own phase.
+    /// A cycle landed (the watchdog was refreshed) — the loan controller renews its hold with the phone.
+    var onCycleLanded: (() -> Void)?
     var onDirectGlucose: ((Date) -> Void)?
     private func noteGlucoseSource(directG7: Bool) {
         bgSourceLock.lock()
@@ -1432,7 +1434,7 @@ final class WatchLoopManager {
             // The dead-man refreshes ONLY on a cycle that both computed AND (if it owed the pod
             // a command) landed it — stock parity, see the note where this used to live.
             let watchdogRefreshed = (error == nil && self.pumpManager != nil)
-            if watchdogRefreshed { LoopStallWatchdog.refresh() }
+            if watchdogRefreshed { LoopStallWatchdog.refresh(); self.onCycleLanded?() }
             let sinceCompleted = self.lastLoopCompleted.map { Int(self.now().timeIntervalSince($0)) }
             // OBS-8: an ENACT-stage failure must not read as a COMPUTE failure. pumpManagerUnconnected
             // is raised by enactRecommendedAutomaticDose but is not wrapped as .enactFailed, so it
@@ -3552,16 +3554,20 @@ extension WatchLoopManager: CGMManagerDelegate {
         completion?(nil)
     }
 
-    // The watch alert path (surfacing PumpManagerAlerts — pod fault/occlusion — and CGM
-    // alerts through watch notifications) is M5 work per design doc §1.3; these minimal
-    // conformances log so nothing is silently swallowed in the meantime.
-
+    /// Put it on the wrist. While the watch holds the pod it is the only device that can hear
+    /// the pump, so a pod fault, an occlusion or an empty reservoir has nowhere else to go.
     func issueAlert(_ alert: LoopKit.Alert) {
         log.default("Alert issued: %{public}@", alert.identifier.value)
+        SportLog.event("alert", "ISSUED \(alert.identifier.value) — \(alert.backgroundContent.title): \(alert.backgroundContent.body)")
+        WatchAlertPresenter.present(alert)
     }
 
+    /// Withdraw it. A driver retracts when the condition clears; an alarm left standing after the
+    /// pod recovered costs the next one its weight.
     func retractAlert(identifier: LoopKit.Alert.Identifier) {
         log.default("Alert retracted: %{public}@", identifier.value)
+        SportLog.event("alert", "RETRACTED \(identifier.value)")
+        WatchAlertPresenter.retract(identifier)
     }
 
     func doesIssuedAlertExist(identifier: LoopKit.Alert.Identifier, completion: @escaping (Swift.Result<Bool, Error>) -> Void) {
