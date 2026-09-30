@@ -12,9 +12,7 @@ enum G7SilenceHint {
     /// A new sensor cannot be read during warm-up.
     static let warmupAllowance: TimeInterval = .hours(2.5)
 
-    /// nil unless the silence is the watch's to fix. `directAge`: since this watch read the sensor;
-    /// `relayAge`: since the phone relayed a reading; `sensorAge`: since the sensor started,
-    /// which tells a parked radio from a sensor change.
+    /// nil unless the watch can fix it. Ages: since this watch's read, the phone's relay, and sensor start.
     static func text(directAge: TimeInterval?, relayAge: TimeInterval?, sensorAge: TimeInterval? = nil) -> String? {
         // Two missed bursts by construction on the G7's 300 s grid, so one skipped window stays quiet.
         guard let age = directAge, age >= 10.5 * 60 else { return nil }

@@ -2,16 +2,8 @@
 //  StockLoopSession.swift
 //  WatchApp Extension
 //
-//  App-lifecycle OWNER of the assembled loop and the loan controller, and the place where the
-//  two are wired to each other and to WatchConnectivity.
-//
-//  ExtensionDelegate holds one lazily. It stays inert — no pod, no dosing — until a loan grant
-//  arrives; the CGM is the exception and runs whenever the app has runtime.
-//
-//  Everything the loan controller needs from the outside world is a closure assigned here, so
-//  the controller itself knows nothing about WCSession, the keepalive or the log. `init` is
-//  therefore an ordering: assemble, install every closure, and only then resume a saved loan —
-//  a resume that ran before the closures were in place would have nothing to send over.
+//  Owns the assembled loop and the loan controller and wires them to each other and to
+//  WatchConnectivity. Every closure is installed before a saved loan resumes.
 //
 
 import Foundation
@@ -24,8 +16,7 @@ import os.log
 final class StockLoopSession {
     let stack: StockLoopStack.Stack
 
-    /// Held only across takeover and hand-back; a loan itself runs without a workout session, so
-    /// timers scheduled across a wrist-down stretch fire late.
+    /// Held only across takeover and hand-back; timers during a loan fire late.
     private let keepalive = WorkoutKeepalive()
 
     /// Holds are refcounted by `reason`, which must be stable per caller.
@@ -33,16 +24,13 @@ final class StockLoopSession {
         holding ? keepalive.acquire(reason) : keepalive.release(reason)
     }
 
-    /// Re-drive the keepalive without taking a hold, for a wake that finds holders but no live
-    /// workout session — the session can be ended by the system while the holders remain.
+    /// Restart a session the system ended while holders remain.
     func ensureKeepalive() { keepalive.ensureRunning() }
     let loanController: PodLoanWatchController
 
     private let log = OSLog(subsystem: "com.loopkit.Loop", category: "StockLoopSession")
 
-    /// Fails only if the stores cannot be opened. There is no degraded mode: without them there
-    /// is no book to dose from, so the app must run as the stock watch app and this page must
-    /// offer nothing — never a Start that leads to a loan with nowhere to record it.
+    /// Fails only if the stores cannot be opened; then there is no Sport Mode at all.
     init?() async {
         guard let assembled = await StockLoopStack.assemble() else { return nil }
         stack = assembled
@@ -54,15 +42,11 @@ final class StockLoopSession {
 
         loanController.isPhoneReachable = { WCSession.default.isReachable }
 
-        // The per-cycle renewal batch is what tells the phone this watch is still alive — the
-        // phone's silence warning and its live/dead discriminator both measure the age of these.
-        // Anything that stops cycles landing therefore also stops the phone hearing from us.
+        // The per-cycle renewal is the phone's liveness signal.
         stack.loopManager.onCycleLanded = { [weak loanController] in loanController?.renewHold() }
 
-        // A queued request for a dark phone is a delayed detonator: delivered at reunion it can
-        // land inside the phone's freshness window and re-grant over a loan this watch is
-        // already running. Only requests NOT YET TRANSFERRING are cancelled — a transfer in
-        // flight is being answered right now, and cancelling it loses the answer.
+        // Cancel queued requests that have not started transferring: delivered at reunion they could
+        // re-grant over a running loan.
         loanController.cancelQueuedLoanRequests = {
             let stale = WCSession.default.outstandingUserInfoTransfers.filter {
                 LoanMessage.peekKind(transport: $0.userInfo) == "request" && !$0.isTransferring
@@ -71,12 +55,7 @@ final class StockLoopSession {
             return stale.count
         }
 
-        // The loan protocol's only way out of this watch. Two channels: sendMessage, which is
-        // immediate but needs a reachable phone, and transferUserInfo, which is queued and will
-        // be delivered whenever the link returns — possibly hours later, which is the hazard the
-        // rules below exist for. Every send is logged with the channel it took, because
-        // "the message never arrived" and "it arrived and a guard dropped it" are otherwise the
-        // same log.
+        // sendMessage when reachable, transferUserInfo otherwise; every send logs its channel.
         loanController.send = { [weak loanController] dictionary in
 
             let session = WCSession.default
@@ -86,13 +65,7 @@ final class StockLoopSession {
                 && session.isReachable && !wedged
             SportLog.event("wc", "send \(dictionary.keys.joined(separator: ",")) — session \(session.activationState.rawValue), reachable \(session.isReachable), path \(urgent ? "urgent" : "queued")")
 
-            // At most one hand-back offer waits in the queue, and only OFFERS are ever superseded:
-            // an offer is resent by design and the newest one describes the whole drain, while a
-            // record stream or a status message is one-shot and cancelling it loses it.
-            //
-            // The order is exact. Capture the stale list BEFORE enqueueing, or the new transfer
-            // is in the list and gets cancelled along with the old ones; cancel AFTER, or the
-            // queue is momentarily empty and a phone that wakes in that instant hears nothing.
+            // At most one queued hand-back offer. Capture the stale list before enqueueing, cancel after.
             let enqueueSuperseding = { (payload: [String: Any]) in
                 let isOffer = LoanMessage.peekKind(transport: payload) == "handbackOffer"
                 let stale = isOffer
@@ -107,11 +80,7 @@ final class StockLoopSession {
                 SportLog.event("wc", "superseded \(cancelled.count) queued offer(s) with the fresh one (#120)")
             }
 
-            // A LIVE hand-back offer is never queued. If the phone cannot be reached now, fail
-            // now and keep the loan: a queued offer is accepted whenever the link returns, with
-            // the phone possibly nowhere near the pod and the loan long since moved on — the
-            // phone then reclaims a loan the watch is still dosing, and both devices dose.
-            // Drains from a loan that has already ended still queue; they carry no such claim.
+            // A live hand-back offer is never queued: accepted late, it would split the pod.
             let urgentOnly = dictionary["urgentOnly"] as? Bool == true
             guard urgent else {
                 if urgentOnly {
@@ -136,10 +105,7 @@ final class StockLoopSession {
             self?.loanController.podBeepsOnManualBolus ?? false
         }
 
-        // Runtime for the whole takeover. The watch has one radio, and without a hold the pod's
-        // session establishment is throttled the moment the wrist drops — the read ladder then
-        // burns its attempts against wall-clock instead of against the pod. The log snapshots
-        // bracket the takeover so the phone has both ends of it even if the watch goes dark.
+        // Runtime for the whole takeover, bracketed by log snapshots.
         loanController.onTakeoverRadioHold = { [weak self] holding in
             self?.setKeepalive(holding, reason: "takeover")
 
@@ -153,10 +119,7 @@ final class StockLoopSession {
                 : "hand-back runtime hold released")
         }
 
-        // Everything that is true for the duration of a loan and false outside one, armed and
-        // disarmed in one place so the two halves cannot drift. Each half is the mirror of the
-        // other: watchdog armed/cleared, log pulse started/stopped, heartbeat on/off, and a
-        // phase notification either way so the pages repaint on the transition itself.
+        // Everything that holds only for the length of a loan, armed and disarmed together.
         loanController.onLoanActiveChanged = { [weak self] active in
             guard let self = self else { return }
             if active {
@@ -179,39 +142,27 @@ final class StockLoopSession {
 
                 self.sendLogSnapshot("loan end")
 
-                // Loop mode is per session. A "closed" left standing makes the NEXT grant — one
-                // that inherits an open phone — read as a closed-to-open transition and fire a
-                // temp cancel at a pod that is still mid-takeover.
+                // Loop mode is per session.
                 self.stack.loopManager.resetClosedLoopForSessionEnd()
 
                 NotificationCenter.default.post(name: .podLoanPhaseDidChange, object: nil)
             }
         }
 
-        // LAST, and only now: a saved loan resumes into a controller whose closures are all in
-        // place, so its first send, keepalive hold and phase notification go somewhere.
+        // Last, with every closure in place.
         loanController.resumeIfNeeded()
 
         let build = BuildDetails.default.codeIdentity
         SportLog.event("session", "Sport Mode ready — build \(build); tap Start to request a loan\(Self.launchForensics())")
         startLinkCensus()
 
-        // There is deliberately NO radio arbiter between the G7 and the pod: the pod link is
-        // taken per cycle and dropped, and the G7 is gated only while it has no sensor to talk
-        // to. Whether the G7's scanning contends with pod BLE on the single watch radio is
-        // UNMEASURED — one clean run is not a proof — so treat a takeover that fails during a
-        // sensor acquisition as a candidate, not a coincidence.
+        // No radio arbiter between G7 and pod; contention during acquisition is unmeasured.
         SportLog.event("policy", "link policy AUTOMATIC (#101): pod orphaned between doses, reclaim per cycle, acquisition-gated while un-adopted")
     }
 
     private static let previousLaunchKey = "SportMode.previousLaunchAt"
 
-    /// Two numbers that cannot be reconstructed after the fact: how long ago this process last
-    /// launched, and its resident footprint. A relaunch loop is only visible as a run of small
-    /// gaps, and a process killed for memory reports nothing at all — the footprint on the
-    /// PREVIOUS launch line is the only evidence of what jetsam saw.
-    ///
-    /// It WRITES the launch stamp as it reads it, so it must be called exactly once per launch.
+    /// Time since the last launch and resident footprint. Writes the stamp: call once per launch.
     private static func launchForensics() -> String {
         let now = Date()
         let previous = UserDefaults.standard.object(forKey: previousLaunchKey) as? Date
@@ -232,9 +183,7 @@ final class StockLoopSession {
         return String(format: "%.0fMB", Double(info.phys_footprint) / 1024 / 1024)
     }
 
-    /// Pushes the wrist's log to the phone at the moments the analysis cares about. `reason` is
-    /// logged first, so the copy that arrives carries the line explaining why it was sent.
-    /// File transfers are queued by WatchConnectivity and survive the phone being away.
+    /// Queued file transfer to the phone; the reason is logged first.
     func sendLogSnapshot(_ reason: String) {
         guard WCSession.default.activationState == .activated, let url = LogFile.url else { return }
         SportLog.event("log", "snapshot → iPhone (\(reason))")
@@ -243,12 +192,7 @@ final class StockLoopSession {
 
     private var logPulse: DispatchSourceTimer?
 
-    /// While a loan runs, ship the log every five minutes: the wrist may be about to go dark, and
-    /// the tail that never left the watch is the part that would have explained why.
-    ///
-    /// The timer also re-drives the keepalive, which is how a hold survives a wake that finds
-    /// holders but no live session. With no whole-loan hold the app is often suspended when this
-    /// is due, so it fires late — that lateness is itself the measurement.
+    /// Every five minutes during a loan; also re-drives the keepalive. Its lateness is data.
     private func startLogPulse() {
         stopLogPulse()
         let timer = DispatchSource.makeTimerSource(queue: .main)
@@ -267,10 +211,7 @@ final class StockLoopSession {
         logPulse = nil
     }
 
-    /// Claims loan traffic and leaves everything else alone — false means "not mine", so the
-    /// caller must go on to the stock watch app's own handling. The channel is carried through
-    /// because the controller logs it: diags arriving while acks do not is a wedged immediate
-    /// channel, and neither arriving is a dead inbound path.
+    /// false: not loan traffic; the caller continues with stock handling.
     func handleIncomingIfLoanMessage(_ userInfo: [String: Any], channel: LoanTransportChannel) -> Bool {
         guard userInfo[LoanProtocol.userInfoKey] != nil else { return false }
         loanController.handleIncoming(userInfo: userInfo, channel: channel)
@@ -279,10 +220,7 @@ final class StockLoopSession {
 
     private var linkCensusTimer: DispatchSourceTimer?
 
-    /// A minute-by-minute record of the link, taken UNCONDITIONALLY of loan state. Reachability
-    /// is otherwise only ever logged as a side effect of a send, so the record goes silent in
-    /// exactly the stretch where nothing was sent — and the phone runs the same census, because
-    /// the two directions have disagreed.
+    /// One line a minute on the link, regardless of loan state.
     private func startLinkCensus() {
         let t = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
         t.schedule(deadline: .now() + 60, repeating: 60, leeway: .seconds(5))
@@ -294,9 +232,7 @@ final class StockLoopSession {
         linkCensusTimer = t
     }
 
-    /// Session activation is the first moment anything can be sent, so it is where the debts of a
-    /// relaunch are settled: a takeover interrupted by the relaunch is failed to the phone, and a
-    /// parked drain re-offers its records. Nothing else kicks either of them.
+    /// The first moment anything can be sent: fail an interrupted takeover, re-offer a parked drain.
     func sessionDidActivate() {
         loanController.drainRecoveredIfNeeded()
     }

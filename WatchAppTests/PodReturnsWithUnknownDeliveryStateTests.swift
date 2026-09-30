@@ -7,9 +7,8 @@ import XCTest
 import LoopKit
 @testable import OmnipodKit
 
-/// A pod that comes back from another controller comes back with its delivery state UNKNOWN.
-/// 2026-09-19: the phone kept "no temp running" from before the loan, skipped the cancel, set a
-/// temp basal over the watch's running one, and the pod faulted 0x31.
+/// A returning pod's delivery state is unknown, so the phone cancels before setting a temp
+/// (fault 0x31, 2026-09-19).
 final class PodReturnsWithUnknownDeliveryStateTests: XCTestCase {
     func testReclaimingThePodForgetsTheDeliveryStatusLastReceived() throws {
         let podState = PodState(address: 0x1f0b3557, firmwareVersion: "2.7.0", iFirmwareVersion: "2.7.0",

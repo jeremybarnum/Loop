@@ -2,17 +2,8 @@
 //  PodLoanTimerSeamTests.swift
 //  WatchAppTests
 //
-//  First behavioral tests against the watch's loan controller — possible because every delayed
-//  execution in PodLoanWatchController now crosses one seam (`scheduler`), so a test can hold
-//  time still or jump it forward deterministically. No sleeps, no 25-second waits.
-//
-//  The determinism trick: every `schedule(after:)` call site already runs ON the controller's
-//  serial queue, so a test scheduler that fires the work item INLINE executes it on the correct
-//  queue with no races. Firing inline is a virtual jump past the timer's deadline.
-//
-//  Construction here is the answer to an open question: WatchLoopManager CAN be stood up in a
-//  test — its init takes three plain stores against a temp-directory PersistenceController and
-//  touches no radio. The recipe is StockLoopStack.makeStores, minus HealthKit.
+//  Every delayed call in PodLoanWatchController crosses `scheduler`; firing inline on the
+//  controller's queue is a virtual jump past the deadline. Stores follow StockLoopStack.makeStores.
 //
 
 import XCTest
@@ -38,9 +29,7 @@ final class PodLoanTimerSeamTests: XCTestCase {
     }
 
     override func tearDown() {
-        // Never unlink a live store's directory synchronously — the async-init race answers
-        // later reads with zero rows (a lesson from the iOS suites). Unique names mean
-        // nothing collides; the OS reclaims temp.
+        // Never unlink a live store's directory synchronously; unique names avoid collisions.
         cacheStore = nil
         cacheDir = nil
         journalDir = nil
@@ -73,8 +62,7 @@ final class PodLoanTimerSeamTests: XCTestCase {
                                       defaults: defaults)
     }
 
-    /// A request schedules its 60 s no-grant timeout (phone reachable) through the seam — the delay crosses as
-    /// data a test can see, instead of vanishing into `asyncAfter`.
+    /// The 60 s request timeout crosses the seam.
     func testRequestTimeoutCrossesTheSeamAt60Seconds() async {
         let controller = await makeController()
 
@@ -95,9 +83,7 @@ final class PodLoanTimerSeamTests: XCTestCase {
         XCTAssertEqual(captured.map(\.1), ["request-timeout"], "and it is the one we think it is")
     }
 
-    /// Virtual time: fire the timeout inline (we are on the controller's queue at schedule
-    /// time) and the controller must return to idle and accept a NEW request — the recovery
-    /// the timeout exists to provide. Without the seam this test would take 60 real seconds.
+    /// A fired timeout returns to idle and a new request is accepted.
     func testFiredTimeoutReturnsToIdleAndANewRequestIsAccepted() async {
         let controller = await makeController()
 
@@ -115,9 +101,7 @@ final class PodLoanTimerSeamTests: XCTestCase {
         wait(for: [secondSend], timeout: 5)
         XCTAssertEqual(sends, 2, "a timed-out request must not wedge the controller in .requested")
 
-        // The send fulfills MID-queue-block; the inline timeout that flips phase back to idle
-        // runs after it in the same block. Poll rather than read immediately — and bound the
-        // poller, because an unbounded one outlives a failed wait and SIGTRAPs the runner.
+        // Poll, bounded: an unbounded poller outlives a failed wait and traps the runner.
         let idled = expectation(description: "returned to idle")
         let deadline = Date().addingTimeInterval(5)
         DispatchQueue.global().async {
@@ -156,10 +140,8 @@ final class PodLoanTimerSeamTests: XCTestCase {
     }
 }
 
-/// Takeover discovery (production line, 2026-09-26): with the screen off the watch cannot FIND a
-/// pod — passive scans never see a DASH pod's service IDs — so a first contact asks for the wrist
-/// up, says when it can come down, and taps the wrist when the takeover sits unfound with the screen
-/// off. A pod this watch has a saved handle for connects with the wrist down and says nothing.
+/// Screen-off scans cannot find a pod, so first contact asks for the wrist and nudges;
+/// a pod with a saved handle connects silently.
 final class TakeoverDiscoveryHintTests: XCTestCase {
 
     func testAPodWithASavedHandleSaysNothing() {

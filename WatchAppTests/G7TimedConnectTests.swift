@@ -20,9 +20,8 @@ private class TestBluetoothManager: G7BluetoothManager {
     }
 }
 
-/// The watch adopts a sensor by identity from the phone, so discovery — where stock latches the
-/// activation time — never runs. 2026-09-19: with it unknown, every reading was named "invalid",
-/// the store kept the first and dropped the rest as duplicates, and the loop ran on a frozen 128.
+/// An adopted sensor skips discovery, where stock latches activation; unlatched, every reading
+/// was "invalid" and glucose froze (2026-09-19).
 final class G7AdoptedSensorActivationTests: XCTestCase {
     private func message(_ hex: String) -> G7GlucoseMessage { G7GlucoseMessage(data: Data(hexadecimalString: hex)!)! }
 

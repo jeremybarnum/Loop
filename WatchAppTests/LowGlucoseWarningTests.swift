@@ -1,24 +1,10 @@
-//  NOT IN THE WatchAppTests TARGET — and deliberately kept anyway.
-//
-//  The behaviour it covers (`WatchLowGlucoseWarning`, `LoanLowBGWarningSettings`) has not been
-//  ported to this tree yet: it lives in the fork's `WatchApp Extension/StockLoop/` and its
-//  settings ride in the fork's `LoanProtocolV2`. Deleting the suite would erase the only record
-//  of what that feature is supposed to do; leaving it in the target would break the build for
-//  everyone. So it sits here, visible in the project navigator, compiling for nobody, until the
-//  feature lands — at which point add it back to the target and it should pass as written.
+//  Not in the WatchAppTests target: the low-glucose warning it covers has not been ported to
+//  this tree. Add it back when the feature lands.
 //
 //  LowGlucoseWarningTests.swift
 //  WatchAppTests
 //
-//  The predicted-low warning's decision, which is a truth table over three predictions and a set
-//  of gates. Table-shaped logic hides table-shaped bugs: a transposed case or an inverted gate
-//  reads perfectly and simply warns about the wrong thing, or stays silent when it should not.
-//
-//  Worth pinning on the wrist specifically because the watch OWNS this warning during a loan —
-//  the phone stands down, so a wrong cell here is not a second opinion, it is the only one.
-//
-//  The evaluator is a pure function of its inputs, so every case below is exact: predictions are
-//  synthesized to cross (or not cross) the warning level on demand, and the clock is injected.
+//  The predicted-low warning's truth table; the watch owns this warning during a loan.
 //
 
 import XCTest
@@ -51,9 +37,7 @@ final class LowGlucoseWarningTests: XCTestCase {
             lastNotificationTime: lastNotification)
     }
 
-    /// A prediction that either dives below the warning level at +20 min or stays flat at 120.
-    /// Anchored to `from` so a test that moves the clock moves the prediction with it — otherwise
-    /// every interval is measured against a curve that already happened.
+    /// Dives below the warning level at +20 min, or stays flat at 120; anchored to `from`.
     private func prediction(crosses: Bool, from: Date? = nil) -> [PredictedGlucoseValue] {
         let anchor = from ?? t0
         return (0..<73).map { i in
@@ -92,14 +76,8 @@ final class LowGlucoseWarningTests: XCTestCase {
 
     func testEveryCellOfTheTruthTable() {
         typealias Outcome = WatchLowGlucoseWarning.Outcome
-        // (P1 zero-temp, P2 observed, P3 observed+zero-temp) -> outcome
-        //
-        // Every row where P2 does not cross is `.none`, and that is structural rather than a
-        // missing case: the "observed absorption does not cross, no warning needed" guard returns
-        // before the table is consulted, on both devices. An advisory class used to sit on the
-        // two (T,F,·) rows and could therefore never fire; it was removed rather than given the
-        // separate timing anchor and snooze it would have needed. Pinned so a future reader sees
-        // the silence is intended and does not "restore" a branch that cannot run.
+        // (P1 zero-temp, P2 observed, P3 observed+zero-temp) -> outcome. P2 not crossing is always
+        // `.none`: that guard returns before the table.
         let table: [(p1: Bool, p2: Bool, p3: Bool, expected: Outcome, why: String)] = [
             (true,  true,  true,  .carbsDefinitelyNeeded, "low lands even with zero temping and full absorption"),
             (true,  true,  false, .carbsDefinitelyNeeded, "privileges the first True; same aggressive warning"),
