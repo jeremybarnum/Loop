@@ -854,6 +854,9 @@ final class PodLoanPhoneControllerTests: XCTestCase {
         connectionReady = true
         waitUntil(timeout: 8, "R33 cancel") { self.lock.lock(); defer { self.lock.unlock() }; return self.cancelCalls > 0 }
         XCTAssertEqual(cancelCalls, 1, "cancel exactly once per loan, on the verified round-trip")
+        // The outcome is logged after a hop onto the controller's queue, so wait for it rather
+        // than reading it the instant the cancel is seen (ship gate 2026-09-30 lost that race).
+        waitUntil(timeout: 5, "R33 outcome logged") { self.diagMatching("R33 temp cancelled") != nil }
         XCTAssertNotNil(diagMatching("R33 temp cancelled"), "the cancel's outcome must be in the log")
 
         // The chase keeps ticking after verification; the audit must not re-fire on later ticks.
