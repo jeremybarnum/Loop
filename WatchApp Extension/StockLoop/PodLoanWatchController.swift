@@ -317,13 +317,13 @@ final class PodLoanWatchController {
     /// handle that is no longer the pod's.
     var takeoverCachedHandle: (address: UInt32, handle: String)?
 
-    /// A takeover with no saved handle has to FIND its pod, and with the screen off watchOS scans
-    /// passively while a DASH pod's service IDs travel only in its scan response (production line,
-    /// 2026-09-26) — so a first contact finds the pod only while the screen is on. These drive the
-    /// wrist-up hint and the tap on the wrist. Queue-confined.
+    /// A first contact must find its pod, which watchOS scans can only do with the screen on.
+    /// These drive the wrist-up hint and taps. Queue-confined.
     var takeoverFirstContact = false
     var takeoverPodReached = false
     var takeoverNudges = 0
+    /// The current pod's address: from the latest standing copy or grant, else read once from the stored copy.
+    lazy var currentPodAddress: UInt32? = storedDormantGrant().flatMap { Self.podAddress(in: $0.grant) }
     /// Seams: is the app on screen right now, and the tap itself.
     var isWatchAppActive: () -> Bool = { RuntimeStateLog.appStateName() == "active" }
     var playTakeoverNudge: () -> Void = { WKInterfaceDevice.current().play(.notification) }

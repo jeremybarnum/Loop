@@ -241,8 +241,7 @@ struct GlanceView: View {
                     .foregroundColor(.glanceDim)
                 }
             } else {
-            // A new pod has to be FOUND, which needs the screen on: said above the button, in the
-            // attention colour the button then wears too. Every other Start stays blue and bare.
+            // First contact needs the screen on: say so above Start, in the attention colour.
             if let note = model.state.firstContactNote {
                 Text(note)
                     .font(.system(size: 12, weight: .medium))
