@@ -129,12 +129,7 @@ class LoopAppManager: NSObject {
         self.state = state.next
     }
 
-    /// launch() re-enters at first unlock; registering BGTasks twice throws.
-    private var hasRegisteredBackgroundTasks = false
-
     func registerBackgroundTasks() {
-        guard !hasRegisteredBackgroundTasks else { return }
-        hasRegisteredBackgroundTasks = true
         let taskIdentifier = CriticalEventLogExportManager.historicalExportBackgroundTaskIdentifier
         let registered = BGTaskScheduler.shared.register(forTaskWithIdentifier: taskIdentifier, using: nil) { task in
             guard let criticalEventLogExportManager = self.criticalEventLogExportManager else {
@@ -1011,8 +1006,7 @@ extension LoopAppManager: TemporaryScheduleOverrideHistoryDelegate {
 
 extension LoopAppManager: ResetLoopManagerDelegate {
     func askUserToConfirmLoopReset() {
-        // nil before launchManagers() on a deferred pre-unlock launch.
-        resetLoopManager?.askUserToConfirmLoopReset()
+        resetLoopManager.askUserToConfirmLoopReset()
     }
     
     func presentConfirmationAlert(confirmAction: @escaping (PumpManager?, @escaping () -> Void) -> Void, cancelAction: @escaping () -> Void) {
