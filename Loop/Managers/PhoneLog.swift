@@ -2,14 +2,8 @@
 //  PhoneLog.swift
 //  Loop
 //
-//  The phone's own field log — the counterpart to the watch's SportLog, and the only record of
-//  what this side of a loan did. os_log alone is unreadable without a sysdiagnose, and a loan
-//  question ("did the phone actually release the pod?") needs both devices' accounts side by
-//  side.
-//
-//  Lines append to a local file immediately, which is cheap; the iCloud mirror is throttled,
-//  because url(forUbiquityContainerIdentifier:) can block. Named g7phone-*.log so it lands
-//  beside the watch's g7watch-*.log in the same container.
+//  The phone's loan log, beside the watch's SportLog: appended locally at once, mirrored to
+//  iCloud (as g7phone-*.log) at most once a minute.
 //
 
 import Foundation
@@ -18,13 +12,11 @@ import os.log
 enum PhoneLog {
     private static let oslog = OSLog(subsystem: "com.loopkit.Loop", category: "PhoneLog")
 
-    /// Serial, and every append and mirror runs on it. Concurrent mirrors interleave their
-    /// copy and replace steps, which leaves the mirrored file missing rather than merely stale.
+    /// Serial: concurrent mirrors can leave the mirrored file missing.
     private static let queue = DispatchQueue(label: "com.loopkit.Loop.phoneLog", qos: .utility)
     private static var lastMirror = Date.distantPast
 
-    /// Ceiling on how often the container is touched. `flush()` is how a caller overrides it at
-    /// a moment worth capturing.
+    /// `flush()` overrides it.
     private static let mirrorInterval: TimeInterval = 60
 
     private static let stamp: DateFormatter = {
@@ -33,8 +25,7 @@ enum PhoneLog {
         return f
     }()
 
-    /// Writes one line, to the system log and to the file. The category is a short tag the field
-    /// analysis greps on, so keep existing ones stable rather than renaming them.
+    /// Categories are grepped by field analysis; keep them stable.
     static func event(_ category: String, _ message: String) {
         os_log("%{public}@ %{public}@", log: oslog, type: .default, category, message)
         let line = "\(stamp.string(from: Date())) [\(category)] \(message)"
@@ -47,9 +38,7 @@ enum PhoneLog {
         }
     }
 
-    /// Mirror now, skipping the throttle. Used at the few moments the analysis cares about —
-    /// a mirror that arrives a minute later has usually already been overtaken by the event
-    /// being investigated.
+    /// Mirror now, ignoring the throttle.
     static func flush() {
         queue.async {
             lastMirror = Date()
@@ -62,13 +51,11 @@ enum PhoneLog {
         return dir.appendingPathComponent("g7phone-latest.log")
     }
 
-    /// Rotate at 2 MB down to 1 MB. Trimming well below the cap keeps rotation rare; trimming
-    /// to just under it would rewrite the whole file on almost every append.
+    /// Rotate at 2 MB down to 1 MB, so rotation stays rare.
     private static let maxBytes: UInt64 = 2 * 1024 * 1024
     private static let trimToBytes = 1024 * 1024
 
-    /// Appends through a file handle, falling back to creating the file. Every failure is
-    /// swallowed: losing a diagnostic line must never disturb the loan it is describing.
+    /// Failures are swallowed: logging must never disturb a loan.
     private static func appendLocally(_ line: String) {
         guard let url = localURL else { return }
         let data = Data((line + "\n").utf8)
@@ -98,8 +85,7 @@ enum PhoneLog {
         let dir = container.appendingPathComponent("Documents", isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        // Copy to a sibling and replace in one step. Removing the published file first leaves a
-        // window in which there is no log in the container at all.
+        // Copy then replace, so the container is never without a log.
         let cloudLatest = dir.appendingPathComponent("g7phone-latest.log")
         let tmp = dir.appendingPathComponent(".g7phone-latest.tmp")
         try? fm.removeItem(at: tmp)
