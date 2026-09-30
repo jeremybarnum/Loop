@@ -194,7 +194,11 @@ enum PhoneLog {
         let previous = UserDefaults.standard.object(forKey: launchStampKey) as? Date
         UserDefaults.standard.set(Date(), forKey: launchStampKey)
         let sinceLast = previous.map { String(format: "%.0fs ago", Date().timeIntervalSince($0)) } ?? "first seen"
-        event("session", "=== Loop phone log START — build \(build) === previous launch \(sinceLast), footprint \(Self.footprintMB), export=\(LogExportFolder.displayName ?? "off")")
+        // The commits, not just the build number: the App Store number names the upload, not the
+        // source, and the two apps install separately (ported from next-dev 8faffc76).
+        let loopSHA = BuildDetails.default.gitRevision.map { String($0.prefix(8)) } ?? "n/a"
+        let workspaceSHA = BuildDetails.default.workspaceGitRevision.map { String($0.prefix(8)) } ?? "n/a"
+        event("session", "=== Loop phone log START — build \(build) (Loop \(loopSHA), workspace \(workspaceSHA)) === previous launch \(sinceLast), footprint \(Self.footprintMB), export=\(LogExportFolder.displayName ?? "off")")
         flush()
     }
 }
