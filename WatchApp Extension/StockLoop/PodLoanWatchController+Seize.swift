@@ -46,11 +46,8 @@ extension PodLoanWatchController {
             }
             self.seizeOffer = nil
 
-            // The offer stays up until it is tapped, so the phone can be back by then
-            // (production-line field 2026-09-24: confirmed ten minutes after the offer appeared,
-            // two seconds after the phone had re-linked the pod). A seize here connects by the
-            // saved handle rather than by hearing an advert, so nothing would stop it taking a pod
-            // the phone is looping on. With the phone reachable, the start goes the ordinary way.
+            // The phone is back: start the ordinary way, so it releases the pod itself (production
+            // line 2026-09-24: a late confirm seized a pod the phone had just re-linked).
             if self.isPhoneReachable() {
                 SportLog.event("seize", "offline start SUPERSEDED at confirm — the phone is reachable again; sending a normal Start request [seize]")
                 self.requestLoan(watchBuild: BuildDetails.default.codeIdentity)
@@ -200,7 +197,7 @@ extension PodLoanWatchController {
         }
         defaults.set(data, forKey: DormantKeys.envelope)
         let podAddress = Self.podAddress(in: dormant.grant)
-        defaults.set(podAddress.map { Int($0) }, forKey: DormantKeys.podAddress)
+        currentPodAddress = podAddress
         SportLog.event("seize", String(format: "dormant grant refreshed — issued %@, %d dose record(s), token …%@, pod %@ [seize]",
                                        DateFormatter.localizedString(from: dormant.issuedAt, dateStyle: .none, timeStyle: .medium),
                                        dormant.grant.doseHistory.count,
@@ -306,10 +303,6 @@ extension PodLoanWatchController {
         /// mid-seized-loan keeps echoing it on every offer — without it the phone cannot
         /// retro-acknowledge a loan it never granted — and cleared only when the loan CLOSES.
         static let activeToken = "PodLoanWatchController.activeSeizeToken"
-
-        /// The current pod's address, from the latest standing copy or grant, so the idle screen
-        /// can say before Start whether this watch has met the pod.
-        static let podAddress = "PodLoanWatchController.currentPodAddress"
     }
 
     /// Whether this loan is a seize, for the log tags: true from the moment an activation begins
