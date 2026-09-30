@@ -64,10 +64,6 @@ struct LoanDebugView: View {
     @State private var dosing: WatchLoopManager.GlanceData?
     @State private var cobText: String = "—"
 
-    // Same defaults key as `StockLoopSession.loanWorkoutKey`, spelled out twice. Change one and
-    // the toggle silently stops reaching the thing it toggles.
-    @AppStorage("G7Lab.loan.workout") private var loanWorkout = false
-
     private let refresh = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     /// Always `sharedIfAvailable()`, never `WKApplication.shared().delegate` — under the SwiftUI
@@ -113,12 +109,6 @@ struct LoanDebugView: View {
                 Divider().padding(.vertical, 2)
 
                 Text("POD LOAN").font(.footnote).foregroundColor(.secondary)
-
-                Button("Keep a workout session running during loans: \(loanWorkout ? "ON" : "OFF") → tap to flip") {
-                    loanWorkout.toggle()
-                    SportLog.event("lab", "loan workout session = \(loanWorkout ? "ON — the soak holder spans the next loan" : "OFF — the app sleeps between bursts; takeover/hand-back keep their runtime")")
-                    lastAction = "loan workout → \(loanWorkout ? "ON" : "OFF") — next loan"
-                }
 
                 Button("Read Pod Status") {
                     lastAction = "reading…"
