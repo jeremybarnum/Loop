@@ -157,7 +157,32 @@ final class PodLoanWatchController {
 
     /// Called by the transport when an urgent send's errorHandler fires (StockLoopSession).
     func noteUrgentSendFailed() {
-        queue.async { self.handbackSawUrgentSendError = true }
+        queue.async {
+            self.handbackSawUrgentSendError = true
+            self.shortenRequestWait(because: "an urgent send failed")
+        }
+    }
+
+    /// The Start wait when the phone is already unreachable (R40(b): reachability shortens the
+    /// wait, never skips it).
+    static let unreachableRequestWait: TimeInterval = 8
+    /// When the pending Start request gives up, so a mid-wait loss of the phone can bring it in.
+    private var requestDeadline: Date?
+
+    /// The phone went away AFTER Start was tapped (bench 2026-09-30: radios off, the watch still
+    /// read reachable at the tap and noticed ~10 s later, then sat out the full 25 s). From that
+    /// moment the request gets the unreachable wait, never more than it had left. Must run on `queue`.
+    private func shortenRequestWait(because reason: String) {
+        guard phase == .requested, let work = requestTimeoutWork, !work.isCancelled,
+              let deadline = requestDeadline else { return }
+        let shortened = now().addingTimeInterval(Self.unreachableRequestWait)
+        guard shortened < deadline.addingTimeInterval(-1) else { return }
+        requestDeadline = shortened
+        SportLog.event("loan", String(format: "REQUEST wait shortened — %@; answer due in %.0fs instead of %.0fs",
+                                      reason, Self.unreachableRequestWait, deadline.timeIntervalSince(now())))
+        schedule(after: Self.unreachableRequestWait, label: "request-timeout-short") {
+            if !work.isCancelled { work.perform() }
+        }
     }
 
     /// Injected transport: dictionary -> WCSession.transferUserInfo (integration step).
@@ -697,7 +722,10 @@ final class PodLoanWatchController {
     /// reachability transition (a dismissal holds until the phone leaves and returns).
     func noteReachabilityChanged(_ reachable: Bool) {
         queue.async {
-            guard reachable else { return }
+            guard reachable else {
+                self.shortenRequestWait(because: "the phone went unreachable")
+                return
+            }
             guard self.phase == .active,
                   self.defaults.string(forKey: DormantKeys.activeToken) != nil,
                   !self.handbackRequested, !self.reunionPromptActive else { return }
@@ -866,7 +894,7 @@ final class PodLoanWatchController {
             // field seize (2026-08-30) spent 25 s twice against a powered-off phone. A
             // reachable-LOOKING dead phone still gets the full window.
             let reachable = self.isPhoneReachable()
-            let timeout: TimeInterval = reachable ? 25 : 8
+            let timeout: TimeInterval = reachable ? 25 : Self.unreachableRequestWait
             SportLog.event("loan", "REQUEST sent (build \(watchBuild)) — awaiting grant\(reachable ? "" : " (phone unreachable — short \(Int(timeout))s timeout)")")
             // Every epoch handleGrant would refuse, so the phone can grant above them all.
             let epochFloor = max(self.epoch ?? 0,
@@ -900,6 +928,7 @@ final class PodLoanWatchController {
                 self.notifyUI()   // offer/note landed within a possibly same-value phase
             }
             self.requestTimeoutWork = work
+            self.requestDeadline = self.now().addingTimeInterval(timeout)
             self.schedule(after: timeout, label: "request-timeout", execute: work)
         }
     }

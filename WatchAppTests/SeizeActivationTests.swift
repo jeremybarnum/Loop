@@ -627,6 +627,49 @@ final class SeizeActivationTests: XCTestCase {
         XCTAssertNil(snap.seizeOfferIssuedAt, "the new request withdrew the stale offer")
     }
 
+    /// Bench 2026-09-30: phone radios off, Start tapped while the watch still read reachable, the
+    /// loss noticed ~10 s later — and the offline offer still waited out the full 25 s. The loss
+    /// now brings the answer in to the unreachable wait from that moment, once.
+    func testThePhoneGoingAwayMidRequestShortensTheWait() {
+        let controller = makeController()
+        controller.isPhoneReachable = { true }
+        controller.send = { _ in }
+        var armed: [(delay: TimeInterval, label: String)] = []
+        var shortWait: DispatchWorkItem?
+        controller.scheduler = { delay, label, work in
+            armed.append((delay, label))
+            if label == "request-timeout-short" { shortWait = work }
+        }
+
+        controller.handleDormantGrant(fixtureDormant(issuedAt: Date().addingTimeInterval(-120), epoch: 3))
+        controller.requestLoan(watchBuild: "radios-off")
+        XCTAssertNil(controller.debugSnapshot().seizeOfferIssuedAt, "precondition: still waiting")   // also the fence
+        XCTAssertEqual(armed.first { $0.label == "request-timeout" }?.delay, 25, "precondition: reachable at the tap")
+
+        controller.noteReachabilityChanged(false)
+        controller.noteUrgentSendFailed()                         // the same loss, seen twice
+        _ = controller.debugSnapshot()                            // fence: both signals handled
+        XCTAssertEqual(armed.filter { $0.label == "request-timeout-short" }.map(\.delay),
+                       [PodLoanWatchController.unreachableRequestWait], "one shortened wait, not one per signal")
+
+        shortWait?.perform()                                      // the shortened wait runs out
+        let snap = controller.debugSnapshot()
+        XCTAssertNotNil(snap.seizeOfferIssuedAt, "the shortened wait ends in the offline offer")
+        XCTAssertEqual(snap.phase, .idle)
+    }
+
+    /// A phone that drops after the request was already answered changes nothing.
+    func testThePhoneGoingAwayWhenNotRequestingArmsNothing() {
+        let controller = makeController()
+        controller.send = { _ in }
+        var labels: [String] = []
+        controller.scheduler = { _, label, _ in labels.append(label) }
+        controller.noteReachabilityChanged(false)
+        controller.noteUrgentSendFailed()
+        _ = controller.debugSnapshot()
+        XCTAssertFalse(labels.contains("request-timeout-short"))
+    }
+
     /// Field 2026-09-24 12:10: each seize moves the watch's epoch on without the phone, so the
     /// phone's next grants (e92, e93) were refused by a watch at 93. The request now names the
     /// highest epoch handleGrant would refuse, so the phone can grant above it.

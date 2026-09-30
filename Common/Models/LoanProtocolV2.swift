@@ -1231,10 +1231,13 @@ extension LoanMessage {
     public var isInteractiveHandshake: Bool {
         switch self {
         case .request, .grant, .denied, .nack, .revoke, .handbackOffer, .handbackAck,
-             .takeoverComplete:
+             .takeoverComplete,
+             // The phone waits 5 s on the answer before a retro-ack reclaims the pod (bench
+             // 2026-09-30 19:24: both queued, the answer missed the wait and the probe did
+             // nothing). A question and its answer are idempotent; unreachable still queues.
+             .statusQuery, .statusReport:
             return true
-        case .takeoverFailed, .doseRecordBatch, .statusQuery,
-             .statusReport, .diag,
+        case .takeoverFailed, .doseRecordBatch, .diag,
              // R40: nobody is watching a spinner for a dormant refresh — background
              // bookkeeping; guaranteed queued delivery is exactly right for it.
              .dormantGrant:

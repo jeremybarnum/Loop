@@ -530,8 +530,16 @@ final class LoanProtocolV2Tests: XCTestCase {
     /// on the guaranteed, relaunch-surviving queue that the cursor/ID machinery is built around.
     func testBackgroundBookkeepingStaysOnTheQueuedChannel() {
         XCTAssertFalse(LoanMessage.doseRecordBatch(DoseRecordBatch(epoch: 1, events: [], tombstones: [])).isInteractiveHandshake)
-        XCTAssertFalse(LoanMessage.statusQuery(StatusQuery(epoch: 1)).isInteractiveHandshake)
         XCTAssertFalse(LoanMessage.diag(LoanDiag(epoch: 1, text: "x")).isInteractiveHandshake)
+    }
+
+    /// The retro-ack probe's question and answer ride the immediate channel: the phone waits
+    /// only 5 s before reclaiming, and on the queued channel the answer missed that wait on the
+    /// bench (2026-09-30 19:24), leaving the probe with nothing to protect.
+    func testTheStatusProbeRidesTheImmediateChannel() {
+        XCTAssertTrue(LoanMessage.statusQuery(StatusQuery(epoch: 1)).isInteractiveHandshake)
+        XCTAssertTrue(LoanMessage.statusReport(StatusReport(epoch: 1, mode: .closedDirect, lastDirectGlucoseAge: 120,
+                                                            lastEventSeq: 0, podFault: nil, holdsPod: true)).isInteractiveHandshake)
     }
 
     // MARK: - Transport kind peek
