@@ -109,7 +109,11 @@ final class StockLoopSession {
         // The one question the hand-back UI needs answered.
         loanController.isPhoneReachable = { WCSession.default.isReachable }
         // Each landed cycle renews the watch's hold with the phone (its silent-watch warning).
-        stack.loopManager.onCycleLanded = { [weak loanController] in loanController?.renewHold() }
+        // It also republishes the glance mirror, which reloads the Sport complications.
+        stack.loopManager.onCycleLanded = { [weak loanController, weak loopManager = stack.loopManager] in
+            loanController?.renewHold()
+            loopManager?.refreshGlanceData()
+        }
 
         // G7 window monitor: anchor the expected-burst clock on every direct reading.
         stack.loopManager.onDirectGlucose = { [weak self] date in

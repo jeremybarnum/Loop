@@ -89,6 +89,15 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
             }
         })
 
+        // During a loan the Sport complications show the WATCH's loop, published through the
+        // glance mirror (refreshed at every landed cycle) — reload them when it lands.
+        notifications.append(NotificationCenter.default.addObserver(forName: WatchLoopManager.glanceMirrorDidUpdate, object: nil, queue: nil) { [weak self] (_) in
+            DispatchQueue.main.async {
+                guard let self, self.stockLoopSession.loanController.isLoanActiveNonBlocking else { return }
+                self.reloadComplicationsIfDue()
+            }
+        })
+
         session.activate()
     }
 
@@ -281,6 +290,11 @@ final class ExtensionDelegate: NSObject, WKExtensionDelegate {
         // 60s: complication timelines are 5-minute-granularity surfaces, and the reload storm
         // was the trigger that drove the deadlock-shaped re-entrant server query in
         // ComplicationController (fixed there — this is the belt to that suspender).
+        reloadComplicationsIfDue()
+    }
+
+    private func reloadComplicationsIfDue() {
+        dispatchPrecondition(condition: .onQueue(.main))
         RuntimeStateLog.mark("app.complicationReload")
         let now = Date()
         if now.timeIntervalSince(lastComplicationReloadAt) >= 60 {
