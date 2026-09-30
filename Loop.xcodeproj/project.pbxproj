@@ -1300,7 +1300,6 @@
 		9A7CE002302D82A800A03F53 /* WatchAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WatchAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9A7CE014302D82A800A03F53 /* DeviceLogThrottleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceLogThrottleTests.swift; sourceTree = "<group>"; };
 		9A7CE015302D82A800A03F53 /* HandbackWedgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandbackWedgeTests.swift; sourceTree = "<group>"; };
-		9A7CE016302D82A800A03F53 /* LowGlucoseWarningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LowGlucoseWarningTests.swift; sourceTree = "<group>"; };
 		9A7CE017302D82A800A03F53 /* PodLoanEpochScopingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanEpochScopingTests.swift; sourceTree = "<group>"; };
 		9A7CE018302D82A800A03F53 /* PodLoanTimerCharacterizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanTimerCharacterizationTests.swift; sourceTree = "<group>"; };
 		9A7CE019302D82A800A03F53 /* PodLoanTimerSeamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLoanTimerSeamTests.swift; sourceTree = "<group>"; };
@@ -2908,7 +2907,6 @@
 				9A7CE030302D82A800A03F53 /* LoanContextPrecedenceTests.swift */,
 				9A7CE014302D82A800A03F53 /* DeviceLogThrottleTests.swift */,
 				9A7CE015302D82A800A03F53 /* HandbackWedgeTests.swift */,
-				9A7CE016302D82A800A03F53 /* LowGlucoseWarningTests.swift */,
 				9A7CE017302D82A800A03F53 /* PodLoanEpochScopingTests.swift */,
 				9A7CE018302D82A800A03F53 /* PodLoanTimerCharacterizationTests.swift */,
 				9A7CE019302D82A800A03F53 /* PodLoanTimerSeamTests.swift */,
